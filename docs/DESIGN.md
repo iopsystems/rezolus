@@ -92,4 +92,4 @@ below this value and the other half would be at or above this value.
 Additionally, the p100 value would represent the highest rate seen between two
 consecutive samplings of the counter.
 
-[1]: https://github.com/twitter/rustcommon
+[1]: https://github.com/pelikan-io/rustcommon

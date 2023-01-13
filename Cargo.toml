@@ -1,7 +1,7 @@
 [package]
 name = "rezolus"
 version = "2.16.4-alpha.0"
-authors = ["Brian Martin <bmartin@twitter.com>"]
+authors = ["Brian Martin <brian@iop.systems>"]
 license = "Apache-2.0"
 publish = false
 edition = "2021"
@@ -24,11 +24,11 @@ num-traits = "0.2.15"
 nvml-wrapper = "0.7.0"
 regex = "1.5.6"
 reqwest = { version = "0.11.10", default-features = false, features = ["blocking"] }
-rustcommon-atomics = { git = "https://github.com/twitter/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
-rustcommon-heatmap = { git = "https://github.com/twitter/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
-rustcommon-logger = { git = "https://github.com/twitter/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
-rustcommon-streamstats = { git = "https://github.com/twitter/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
-rustcommon-time = { git = "https://github.com/twitter/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
+rustcommon-atomics = { git = "https://github.com/pelikan-io/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
+rustcommon-heatmap = { git = "https://github.com/pelikan-io/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
+rustcommon-logger = { git = "https://github.com/pelikan-io/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
+rustcommon-streamstats = { git = "https://github.com/pelikan-io/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
+rustcommon-time = { git = "https://github.com/pelikan-io/rustcommon", rev = "ff5ca96b31461e1b08c59df770ae17903c54c1b2" }
 serde = "1.0.137"
 serde_derive = "1.0.137"
 strum = "0.24.1"
