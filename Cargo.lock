@@ -1182,7 +1182,7 @@ checksum = "7ef03e0a2b150c7a90d01faf6254c9c48a41e95fb2a8c2ac1c6f0d2b9aefc342"
 [[package]]
 name = "rustcommon-atomics"
 version = "1.0.0"
-source = "git+https://github.com/twitter/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
+source = "git+https://github.com/pelikan-io/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
 dependencies = [
  "serde",
 ]
@@ -1190,7 +1190,7 @@ dependencies = [
 [[package]]
 name = "rustcommon-heatmap"
 version = "0.1.1"
-source = "git+https://github.com/twitter/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
+source = "git+https://github.com/pelikan-io/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
 dependencies = [
  "rustcommon-atomics",
  "rustcommon-histogram",
@@ -1201,7 +1201,7 @@ dependencies = [
 [[package]]
 name = "rustcommon-histogram"
 version = "1.0.0"
-source = "git+https://github.com/twitter/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
+source = "git+https://github.com/pelikan-io/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
 dependencies = [
  "rustcommon-atomics",
  "thiserror",
@@ -1210,7 +1210,7 @@ dependencies = [
 [[package]]
 name = "rustcommon-logger"
 version = "1.0.0"
-source = "git+https://github.com/twitter/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
+source = "git+https://github.com/pelikan-io/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
 dependencies = [
  "log 0.4.14",
  "rustcommon-time",
@@ -1219,7 +1219,7 @@ dependencies = [
 [[package]]
 name = "rustcommon-streamstats"
 version = "0.1.0"
-source = "git+https://github.com/twitter/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
+source = "git+https://github.com/pelikan-io/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
 dependencies = [
  "rustcommon-atomics",
  "thiserror",
@@ -1228,7 +1228,7 @@ dependencies = [
 [[package]]
 name = "rustcommon-time"
 version = "0.0.11"
-source = "git+https://github.com/twitter/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
+source = "git+https://github.com/pelikan-io/rustcommon?rev=ff5ca96b31461e1b08c59df770ae17903c54c1b2#ff5ca96b31461e1b08c59df770ae17903c54c1b2"
 dependencies = [
  "lazy_static",
  "libc",

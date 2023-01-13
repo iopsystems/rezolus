@@ -112,7 +112,7 @@ develop new samplers, you should build and run on Linux.
 
 #### Clone and build Rezolus from source
 ```bash
-git clone https://github.com/twitter/rezolus
+git clone https://github.com/iopsystems/rezolus
 cd rezolus
 
 # create an unoptimized development build
@@ -193,40 +193,34 @@ Additionally, you can get the running version on the root-level path `/`
 
 ## Support
 
-Create a [new issue](https://github.com/twitter/rezolus/issues/new) on GitHub.
+Create a [new issue](https://github.com/iopsystems/rezolus/issues/new) on GitHub.
 
 ## Contributing
 
-We feel that a welcoming community is important and we ask that you follow
-Twitter's [Open Source Code of Conduct] in all interactions with the community.
+If you want to submit a patch, please follow these steps:
 
-## Authors
+1. create a new issue
+2. fork on github & clone your fork
+3. create a feature branch on your fork
+4. push your feature branch
+5. create a pull request linked to the issue
 
-* Brian Martin <bmartin@twitter.com>
-
-A full list of [contributors] can be found on GitHub.
-
-Follow [@TwitterOSS](https://twitter.com/twitteross) on Twitter for updates.
 
 ## License
 
-Copyright 2019 Twitter, Inc.
-
-Licensed under the Apache License, Version 2.0:
-https://www.apache.org/licenses/LICENSE-2.0
+This software is licensed under the Apache 2.0 license, see [LICENSE](LICENSE) for details.
 
 ## Security Issues?
 
 Please report sensitive security issues via Twitter's bug-bounty program
 (https://hackerone.com/twitter) rather than GitHub.
 
-[ci-build-badge]: https://img.shields.io/github/workflow/status/twitter/rezolus/CI/master?label=CI
-[ci-build-url]: https://github.com/twitter/rezolus/actions/workflows/cargo.yml?query=branch%3Amaster+event%3Apush
-[cargo manifest]: https://github.com/twitter/rezolus/blob/master/Cargo.toml
-[contributors]: https://github.com/twitter/rezolus/graphs/contributors?type=a
+[ci-build-badge]: https://img.shields.io/github/workflow/status/iopsystems/rezolus/CI/master?label=CI
+[ci-build-url]: https://github.com/iopsystems/rezolus/actions/workflows/cargo.yml?query=branch%3Amaster+event%3Apush
+[cargo manifest]: https://github.com/iopsystems/rezolus/blob/master/Cargo.toml
+[contributors]: https://github.com/iopsystems/rezolus/graphs/contributors?type=a
 [license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
-[license-url]: https://github.com/twitter/rezolus/blob/master/LICENSE
+[license-url]: https://github.com/iopsystems/rezolus/blob/master/LICENSE
 [rust-bcc]: https://github.com/rust-bpf/rust-bcc
 [BPF Compiler Collection]: https://github.com/iovisor/bcc
-[Open Source Code of Conduct]: https://github.com/twitter/code-of-conduct/blob/master/code-of-conduct.md
 [BCC Installation Guide]: https://github.com/iovisor/bcc/blob/master/INSTALL.md
