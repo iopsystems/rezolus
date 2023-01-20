@@ -210,11 +210,6 @@ If you want to submit a patch, please follow these steps:
 
 This software is licensed under the Apache 2.0 license, see [LICENSE](LICENSE) for details.
 
-## Security Issues?
-
-Please report sensitive security issues via Twitter's bug-bounty program
-(https://hackerone.com/twitter) rather than GitHub.
-
 [ci-build-badge]: https://img.shields.io/github/workflow/status/iopsystems/rezolus/CI/master?label=CI
 [ci-build-url]: https://github.com/iopsystems/rezolus/actions/workflows/cargo.yml?query=branch%3Amaster+event%3Apush
 [cargo manifest]: https://github.com/iopsystems/rezolus/blob/master/Cargo.toml
