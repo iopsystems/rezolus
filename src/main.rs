@@ -8,12 +8,8 @@ extern crate ringlog;
 #[macro_use]
 extern crate anyhow;
 
-// use rustcommon_atomics::{Atomic, Ordering};
-use ringlog::MultiLogBuilder;
 use std::sync::Arc;
-
-// use rustcommon_atomics::AtomicBool;
-use ringlog::{LogBuilder, Stdout};
+use ringlog::{LogBuilder, MultiLogBuilder, Stdout};
 use tokio::runtime::Builder;
 
 mod common;
