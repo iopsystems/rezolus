@@ -83,10 +83,7 @@ impl Streamstats {
     /// Return the value closest to the specified percentile. Returns an error
     /// if the value is outside of the histogram range or if the histogram is
     /// empty. Percentile must be within the range 0.0 to 100.0
-    pub fn percentile(
-        &self,
-        percentile: f64,
-    ) -> Result<u64, StreamstatsError> {
+    pub fn percentile(&self, percentile: f64) -> Result<u64, StreamstatsError> {
         if !(0.0..=100.0).contains(&percentile) {
             return Err(StreamstatsError::InvalidPercentile);
         }

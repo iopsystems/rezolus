@@ -2,16 +2,16 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-use clocksource::Nanoseconds;
 use crate::metrics::channel::Channel;
 use crate::metrics::entry::Entry;
 use crate::metrics::outputs::ApproxOutput;
 use crate::metrics::*;
+use clocksource::Nanoseconds;
 
 use core::hash::{Hash, Hasher};
 
-use dashmap::DashMap;
 use clocksource::Instant;
+use dashmap::DashMap;
 
 use std::collections::HashMap;
 

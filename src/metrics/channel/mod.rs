@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-use crate::metrics::*;
 use crate::metrics::entry::Entry;
 use crate::metrics::outputs::ApproxOutput;
 use crate::metrics::summary::SummaryStruct;
@@ -10,6 +9,7 @@ use crate::metrics::traits::*;
 use crate::metrics::MetricsError;
 use crate::metrics::Output;
 use crate::metrics::Summary;
+use crate::metrics::*;
 // use rustcommon_atomics::Arithmetic;
 // use rustcommon_atomics::AtomicU64;
 use clocksource::*;

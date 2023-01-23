@@ -41,13 +41,18 @@ impl Config {
         let matches = Command::new(env!("CARGO_BIN_NAME"))
             .version(env!("CARGO_PKG_VERSION"))
             .about("High-Resolution Systems Performance Telemetry")
-            .arg(Arg::new("CONFIG").help("Configuration file").index(1).action(ArgAction::Set))
+            .arg(
+                Arg::new("CONFIG")
+                    .help("Configuration file")
+                    .index(1)
+                    .action(ArgAction::Set),
+            )
             .arg(
                 Arg::new("verbose")
                     .short('v')
                     .long("verbose")
                     .help("Increase verbosity by one level. Can be used more than once")
-                    .action(clap::builder::ArgAction::Count)
+                    .action(clap::builder::ArgAction::Count),
             )
             .get_matches();
 

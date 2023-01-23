@@ -23,8 +23,8 @@ pub use streamstats::{Streamstats, StreamstatsError};
 pub use summary::Summary;
 pub use traits::Statistic;
 
-pub use core::sync::atomic::*;
 pub use clocksource::*;
+pub use core::sync::atomic::*;
 
 #[cfg(test)]
 mod tests {

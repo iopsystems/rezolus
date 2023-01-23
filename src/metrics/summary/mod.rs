@@ -2,9 +2,9 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-use heatmap::Heatmap;
 use crate::metrics::error::SummaryError;
 use crate::metrics::*;
+use heatmap::Heatmap;
 
 // use rustcommon_heatmap::{AtomicHeatmap, Duration, Instant};
 use crate::metrics::Streamstats;
@@ -24,7 +24,10 @@ impl SummaryStruct {
 
     pub fn percentile(&self, percentile: f64) -> Result<u64, SummaryError> {
         match self {
-            Self::Heatmap(heatmap) => heatmap.percentile(percentile).map_err(SummaryError::from).map(|b| b.high()),
+            Self::Heatmap(heatmap) => heatmap
+                .percentile(percentile)
+                .map_err(SummaryError::from)
+                .map(|b| b.high()),
             Self::Stream(stream) => stream.percentile(percentile).map_err(SummaryError::from),
         }
     }

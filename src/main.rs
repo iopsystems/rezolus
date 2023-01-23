@@ -8,8 +8,8 @@ extern crate ringlog;
 #[macro_use]
 extern crate anyhow;
 
-use std::sync::Arc;
 use ringlog::{LogBuilder, MultiLogBuilder, Stdout};
+use std::sync::Arc;
 use tokio::runtime::Builder;
 
 mod common;
