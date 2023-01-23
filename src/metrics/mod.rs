@@ -11,6 +11,7 @@ mod error;
 mod metrics;
 mod outputs;
 mod source;
+mod streamstats;
 mod summary;
 mod traits;
 
@@ -18,13 +19,12 @@ pub use error::MetricsError;
 pub use metrics::{Metric, Metrics};
 pub use outputs::Output;
 pub use source::Source;
+pub use streamstats::{Streamstats, StreamstatsError};
 pub use summary::Summary;
-pub use traits::{Count, Primitive, Statistic, Value};
+pub use traits::Statistic;
 
-// Re-export atomic trait and types for convenience
-pub use rustcommon_atomics::{Atomic, AtomicU16, AtomicU32, AtomicU64, AtomicU8};
-// Re-export time types for convenience
-pub use rustcommon_time::*;
+pub use core::sync::atomic::*;
+pub use clocksource::*;
 
 #[cfg(test)]
 mod tests {

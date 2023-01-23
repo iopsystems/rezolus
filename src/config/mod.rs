@@ -6,11 +6,13 @@ mod exposition;
 mod general;
 mod samplers;
 
+use clap::Command;
 use std::io::Read;
 use std::net::{SocketAddr, ToSocketAddrs};
 
-use clap::{App, Arg};
-use rustcommon_logger::Level;
+use clap::builder::ArgAction;
+use clap::Arg;
+use ringlog::Level;
 use serde_derive::*;
 
 use crate::*;
@@ -36,35 +38,48 @@ pub struct Config {
 impl Config {
     /// parse command line options and return `Config`
     pub fn new() -> Config {
-        let app = App::new(NAME)
-            .version(VERSION)
-            .author("Brian Martin <bmartin@twitter.com>")
+        let matches = Command::new(env!("CARGO_BIN_NAME"))
+            .version(env!("CARGO_PKG_VERSION"))
             .about("High-Resolution Systems Performance Telemetry")
-            .arg(
-                Arg::new("config")
-                    .long("config")
-                    .value_name("FILE")
-                    .help("TOML config file")
-                    .takes_value(true),
-            )
+            .arg(Arg::new("CONFIG").help("Configuration file").index(1).action(ArgAction::Set))
             .arg(
                 Arg::new("verbose")
                     .short('v')
                     .long("verbose")
                     .help("Increase verbosity by one level. Can be used more than once")
-                    .multiple_occurrences(true),
-            );
+                    .action(clap::builder::ArgAction::Count)
+            )
+            .get_matches();
 
-        let matches = app.get_matches();
+        // let app = App::new(NAME)
+        //     .version(VERSION)
+        //     .author("Brian Martin <bmartin@twitter.com>")
+        //     .about("High-Resolution Systems Performance Telemetry")
+        //     .arg(
+        //         Arg::new("config")
+        //             .long("config")
+        //             .value_name("FILE")
+        //             .help("TOML config file")
+        //             .takes_value(true),
+        //     )
+        //     .arg(
+        //         Arg::new("verbose")
+        //             .short('v')
+        //             .long("verbose")
+        //             .help("Increase verbosity by one level. Can be used more than once")
+        //             .multiple_occurrences(true),
+        //     );
 
-        let mut config = if let Some(file) = matches.value_of("config") {
+        // let matches = app.get_matches();
+
+        let mut config = if let Some(file) = matches.get_one::<String>("CONFIG") {
             Config::load_from_file(file)
         } else {
             println!("NOTE: using builtin base configuration");
             Default::default()
         };
 
-        match matches.occurrences_of("verbose") {
+        match matches.get_count("verbose") {
             0 => {} // don't do anything, default is Info
             1 => {
                 if config.general.logging() == Level::Info {

@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
+use crate::metrics::*;
 use crate::metrics::entry::Entry;
 use crate::metrics::outputs::ApproxOutput;
 use crate::metrics::summary::SummaryStruct;
@@ -9,13 +10,13 @@ use crate::metrics::traits::*;
 use crate::metrics::MetricsError;
 use crate::metrics::Output;
 use crate::metrics::Summary;
-use rustcommon_atomics::Arithmetic;
-use rustcommon_atomics::AtomicU64;
-use rustcommon_time::*;
+// use rustcommon_atomics::Arithmetic;
+// use rustcommon_atomics::AtomicU64;
+use clocksource::*;
 
 use crossbeam::atomic::AtomicCell;
 use dashmap::DashSet;
-use rustcommon_atomics::{Atomic, AtomicBool, Ordering};
+// use rustcommon_atomics::{Atomic, AtomicBool, Ordering};
 
 /// Internal type which stores fields necessary to track a corresponding
 /// statistic.
@@ -69,11 +70,11 @@ impl Channel {
                 self.refreshed.store(time);
                 let v0 = self.reading.load(Ordering::Relaxed);
                 let dt = time - t0;
-                let dv = (value - v0).to_float();
+                let dv = (value - v0) as f64;
                 let rate = (dv
                     / (dt.as_secs() as f64 + dt.subsec_nanos() as f64 / 1_000_000_000.0))
                     .ceil();
-                summary.increment(time, u64::from_float(rate), 1_u8.into());
+                summary.increment(time, rate as u64, 1);
             }
             self.reading.store(value, Ordering::Relaxed);
         } else {

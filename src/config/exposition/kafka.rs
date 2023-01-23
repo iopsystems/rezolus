@@ -3,7 +3,7 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 
 use crate::config::*;
-use rustcommon_atomics::*;
+use core::sync::atomic::*;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
