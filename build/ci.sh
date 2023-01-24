@@ -26,7 +26,7 @@ if [[ $STATIC == true ]]; then
     ZLIB_VERSION="1.2.13"
     XZ_VERSION="5.4.1"
     NCURSES_VERSION="6.3"
-    LIBXML2_SHA="f507d167f1755b7eaea09fb1a44d29aab828b6d1"
+    LIBXML2_VERSION="2.10.3"
     ELFUTILS_VERSION="0.188"
 
     echo "build binutils"
@@ -86,10 +86,10 @@ if [[ $STATIC == true ]]; then
     echo "build libxml2"
     date -u
     if [ ! -d libxml2 ]; then
-        git clone https://gitlab.gnome.org/GNOME/libxml2
+        curl -L -O https://download.gnome.org/sources/libxml2/2.10/libxml2-${LIBXML2_VERSION}.tar.xz
+        tar xf libxml2-${LIBXML2_VERSION}.tar.xz
     fi
-    cd libxml2
-    git checkout ${LIBXML2_SHA}
+    cd libxml2-${LIBXML2_VERSION}
     if [ ! -f Makefile ]; then
         autoreconf -fvi >/dev/null 2>&1
         ./configure --prefix=/usr --without-python >/dev/null 2>&1
@@ -101,7 +101,7 @@ if [[ $STATIC == true ]]; then
     echo "build elfutils"
     date -u
     if [ ! -d elfutils-${ELFUTILS_VERSION} ]; then
-        curl -L -O ftp://sourceware.org/pub/elfutils/0.180/elfutils-${ELFUTILS_VERSION}.tar.bz2
+        curl -L -O ftp://sourceware.org/pub/elfutils/0.188/elfutils-${ELFUTILS_VERSION}.tar.bz2
         tar xjf elfutils-${ELFUTILS_VERSION}.tar.bz2
     fi
     cd elfutils-${ELFUTILS_VERSION}
