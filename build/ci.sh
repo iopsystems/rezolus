@@ -22,17 +22,17 @@ if [[ $STATIC == true ]]; then
     export CPPFLAGS="-P"
     export CFLAGS="-fPIC"
 
-    BINUTILS_VERSION="2.34.90"
-    ZLIB_VERSION="1.2.12"
-    XZ_VERSION="5.2.5"
-    NCURSES_VERSION="6.2"
-    LIBXML2_SHA="41a34e1f4ffae2ce401600dbb5fe43f8fe402641"
-    ELFUTILS_VERSION="0.180"
+    BINUTILS_VERSION="2.40"
+    ZLIB_VERSION="1.2.13"
+    XZ_VERSION="5.4.1"
+    NCURSES_VERSION="6.3"
+    LIBXML2_SHA="f507d167f1755b7eaea09fb1a44d29aab828b6d1"
+    ELFUTILS_VERSION="0.188"
 
     echo "build binutils"
     date -u
     if [ ! -d binutils-${BINUTILS_VERSION} ]; then
-        curl -L -O ftp://sourceware.org/pub/binutils/snapshots/binutils-${BINUTILS_VERSION}.tar.xz
+        curl -L -O https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.xz
         tar xf binutils-${BINUTILS_VERSION}.tar.xz
     fi
     cd binutils-${BINUTILS_VERSION}
