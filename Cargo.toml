@@ -8,35 +8,35 @@ edition = "2021"
 description = "High resolution systems performance telemetry agent"
 
 [dependencies]
-anyhow = "1.0.57"
-async-trait = "0.1.56"
-bcc = { version = "0.0.32", optional = true }
-clap = "4.1.1"
+anyhow = "1.0.68"
+async-trait = "0.1.63"
+bcc = { version = "0.0.33", optional = true }
+clap = "4.1.4"
 clocksource = "0.6.0"
-crossbeam = "0.8.1"
-ctrlc = { version = "3.2.2", features = ["termination"] }
-dashmap = "5.3.4"
+crossbeam = "0.8.2"
+ctrlc = { version = "3.2.4", features = ["termination"] }
+dashmap = "5.4.0"
 heatmap = "0.7.0"
 json = "0.12.4"
-kafka = { version = "0.8.0", optional = true }
-libc = "0.2.126"
+kafka = { version = "0.9.0", optional = true }
+libc = "0.2.139"
 num = "0.4.0"
 num-derive = "0.3.3"
 num-traits = "0.2.15"
-nvml-wrapper = "0.7.0"
-regex = "1.5.6"
-reqwest = { version = "0.11.10", default-features = false, features = ["blocking"] }
+nvml-wrapper = "0.9.0"
+regex = "1.7.1"
+reqwest = { version = "0.11.14", default-features = false, features = ["blocking"] }
 ringlog = "0.1.0"
-serde = "1.0.137"
-serde_derive = "1.0.137"
+serde = "1.0.152"
+serde_derive = "1.0.152"
 strum = "0.24.1"
 strum_macros = "0.24.1"
 sysconf = "0.3.4"
-thiserror = "1.0.31"
-tiny_http = "0.10.0"
-tokio = { version = "1.19.2", features = ["full"] }
-toml = "0.5.9"
-uuid = "0.8.2"
+thiserror = "1.0.38"
+tiny_http = "0.12.0"
+tokio = { version = "1.24.2", features = ["full"] }
+toml = "0.6.0"
+uuid = "1.2.2"
 walkdir = "2.3.2"
 
 [features]
