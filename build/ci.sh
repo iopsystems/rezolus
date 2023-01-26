@@ -22,22 +22,22 @@ if [[ $STATIC == true ]]; then
     export CPPFLAGS="-P"
     export CFLAGS="-fPIC"
 
-    BINUTILS_VERSION="2.40"
-    ZLIB_VERSION="1.2.13"
+    BINUTILS_VERSION="2.34.90"
+    ZLIB_VERSION="1.2.12"
     XZ_VERSION="5.4.1"
-    NCURSES_VERSION="6.3"
-    LIBXML2_VERSION="2.10.3"
-    ELFUTILS_VERSION="0.188"
+    NCURSES_VERSION="6.2"
+    LIBXML2_SHA="41a34e1f4ffae2ce401600dbb5fe43f8fe402641"
+    ELFUTILS_VERSION="0.180"
 
     echo "build binutils"
     date -u
     if [ ! -d binutils-${BINUTILS_VERSION} ]; then
-        curl -L -O https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.xz
+        curl -L -O ftp://sourceware.org/pub/binutils/snapshots/binutils-${BINUTILS_VERSION}.tar.xz
         tar xf binutils-${BINUTILS_VERSION}.tar.xz
     fi
     cd binutils-${BINUTILS_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/ >/dev/null 2>&1
+        ./configure --prefix=/usr >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -50,7 +50,7 @@ if [[ $STATIC == true ]]; then
         tar xzf zlib-${ZLIB_VERSION}.tar.gz
     fi
     cd zlib-${ZLIB_VERSION}
-    ./configure --prefix=/ >/dev/null 2>&1
+    ./configure --prefix=/usr >/dev/null 2>&1
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
     cd ..
@@ -63,7 +63,7 @@ if [[ $STATIC == true ]]; then
     fi
     cd xz-${XZ_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/ >/dev/null 2>&1
+        ./configure --prefix=/usr >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -77,7 +77,7 @@ if [[ $STATIC == true ]]; then
     fi
     cd ncurses-${NCURSES_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/ --with-termlib >/dev/null 2>&1
+        ./configure --prefix=/usr --with-termlib >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -86,13 +86,13 @@ if [[ $STATIC == true ]]; then
     echo "build libxml2"
     date -u
     if [ ! -d libxml2 ]; then
-        curl -L -O https://download.gnome.org/sources/libxml2/2.10/libxml2-${LIBXML2_VERSION}.tar.xz
-        tar xf libxml2-${LIBXML2_VERSION}.tar.xz
+        git clone https://gitlab.gnome.org/GNOME/libxml2
     fi
-    cd libxml2-${LIBXML2_VERSION}
+    cd libxml2
+    git checkout ${LIBXML2_SHA}
     if [ ! -f Makefile ]; then
         autoreconf -fvi >/dev/null 2>&1
-        ./configure --prefix=/ --without-python >/dev/null 2>&1
+        ./configure --prefix=/usr --without-python >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -101,12 +101,12 @@ if [[ $STATIC == true ]]; then
     echo "build elfutils"
     date -u
     if [ ! -d elfutils-${ELFUTILS_VERSION} ]; then
-        curl -L -O ftp://sourceware.org/pub/elfutils/0.188/elfutils-${ELFUTILS_VERSION}.tar.bz2
+        curl -L -O ftp://sourceware.org/pub/elfutils/0.180/elfutils-${ELFUTILS_VERSION}.tar.bz2
         tar xjf elfutils-${ELFUTILS_VERSION}.tar.bz2
     fi
     cd elfutils-${ELFUTILS_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/ --disable-debuginfod >/dev/null 2>&1
+        ./configure --prefix=/usr --disable-debuginfod >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -166,10 +166,10 @@ else
 fi
 mkdir -p _build
 cd _build
-cmake .. -DCMAKE_INSTALL_PREFIX=/
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr
 make
 sudo make install
-find . -name "*.a" -exec sudo cp -v {} /lib/ \;
+find . -name "*.a" -exec sudo cp -v {} /usr/lib/ \;
 cd ../../..
 
 echo "prerequisite build complete"
@@ -178,26 +178,26 @@ date -u
 ## Build and test
 if [ -n "${FEATURES}" ]; then
     if [[ $STATIC == true ]]; then
-        export RUSTFLAGS="-L /lib -L /lib64 -L /lib/llvm-${LLVM}/lib"
+        export RUSTFLAGS="-L /usr/lib -L /usr/lib64 -L /usr/lib/llvm-${LLVM}/lib"
     fi
 
     cargo build --release --features "${FEATURES}"
     cargo test --release --features "${FEATURES}"
 else
     if [[ $STATIC == true ]]; then
-        export RUSTFLAGS="-L /lib -L /lib64 -L /lib/llvm-${LLVM}/lib"
+        export RUSTFLAGS="-L /usr/lib -L /usr/lib64 -L /usr/lib/llvm-${LLVM}/lib"
     fi
 
     cargo build --release
     cargo test --release
 fi
 
-sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus configs/example.toml &
+sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus --config configs/example.toml &
 sleep 180
 curl -s http://localhost:4242/vars
 curl -s http://localhost:4242/vars.json | jq '.' > /dev/null
 sleep 180
-sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus configs/ci.toml &
+sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus --config configs/ci.toml &
 sleep 180
 curl -s http://localhost:4242/vars
 curl -s http://localhost:4242/vars.json | jq '.' > /dev/null
