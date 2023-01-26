@@ -23,7 +23,7 @@ if [[ $STATIC == true ]]; then
     export CFLAGS="-fPIC"
 
     BINUTILS_VERSION="2.34.90"
-    ZLIB_VERSION="1.2.12"
+    ZLIB_VERSION="1.2.13"
     XZ_VERSION="5.4.1"
     NCURSES_VERSION="6.2"
     LIBXML2_SHA="41a34e1f4ffae2ce401600dbb5fe43f8fe402641"
