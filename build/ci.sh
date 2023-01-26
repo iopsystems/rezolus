@@ -37,7 +37,7 @@ if [[ $STATIC == true ]]; then
     fi
     cd binutils-${BINUTILS_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/usr >/dev/null 2>&1
+        ./configure --prefix=/ >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -50,7 +50,7 @@ if [[ $STATIC == true ]]; then
         tar xzf zlib-${ZLIB_VERSION}.tar.gz
     fi
     cd zlib-${ZLIB_VERSION}
-    ./configure --prefix=/usr >/dev/null 2>&1
+    ./configure --prefix=/ >/dev/null 2>&1
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
     cd ..
@@ -63,7 +63,7 @@ if [[ $STATIC == true ]]; then
     fi
     cd xz-${XZ_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/usr >/dev/null 2>&1
+        ./configure --prefix=/ >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -77,7 +77,7 @@ if [[ $STATIC == true ]]; then
     fi
     cd ncurses-${NCURSES_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/usr --with-termlib >/dev/null 2>&1
+        ./configure --prefix=/ --with-termlib >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -92,7 +92,7 @@ if [[ $STATIC == true ]]; then
     cd libxml2-${LIBXML2_VERSION}
     if [ ! -f Makefile ]; then
         autoreconf -fvi >/dev/null 2>&1
-        ./configure --prefix=/usr --without-python >/dev/null 2>&1
+        ./configure --prefix=/ --without-python >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -106,7 +106,7 @@ if [[ $STATIC == true ]]; then
     fi
     cd elfutils-${ELFUTILS_VERSION}
     if [ ! -f Makefile ]; then
-        ./configure --prefix=/usr --disable-debuginfod >/dev/null 2>&1
+        ./configure --prefix=/ --disable-debuginfod >/dev/null 2>&1
     fi
     make -j2 >/dev/null 2>&1
     sudo make install >/dev/null 2>&1
@@ -166,10 +166,10 @@ else
 fi
 mkdir -p _build
 cd _build
-cmake .. -DCMAKE_INSTALL_PREFIX=/usr
+cmake .. -DCMAKE_INSTALL_PREFIX=/
 make
 sudo make install
-find . -name "*.a" -exec sudo cp -v {} /usr/lib/ \;
+find . -name "*.a" -exec sudo cp -v {} /lib/ \;
 cd ../../..
 
 echo "prerequisite build complete"
@@ -178,14 +178,14 @@ date -u
 ## Build and test
 if [ -n "${FEATURES}" ]; then
     if [[ $STATIC == true ]]; then
-        export RUSTFLAGS="-L /usr/lib -L /usr/lib64 -L /usr/lib/llvm-${LLVM}/lib"
+        export RUSTFLAGS="-L /lib -L /lib64 -L /lib/llvm-${LLVM}/lib"
     fi
 
     cargo build --release --features "${FEATURES}"
     cargo test --release --features "${FEATURES}"
 else
     if [[ $STATIC == true ]]; then
-        export RUSTFLAGS="-L /usr/lib -L /usr/lib64 -L /usr/lib/llvm-${LLVM}/lib"
+        export RUSTFLAGS="-L /lib -L /lib64 -L /lib/llvm-${LLVM}/lib"
     fi
 
     cargo build --release
