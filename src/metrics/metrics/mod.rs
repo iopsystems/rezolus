@@ -6,11 +6,12 @@ use crate::metrics::channel::Channel;
 use crate::metrics::entry::Entry;
 use crate::metrics::outputs::ApproxOutput;
 use crate::metrics::*;
+use clocksource::Nanoseconds;
 
 use core::hash::{Hash, Hasher};
 
+use clocksource::Instant;
 use dashmap::DashMap;
-use rustcommon_time::Instant;
 
 use std::collections::HashMap;
 

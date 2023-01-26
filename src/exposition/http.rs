@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::*;
-use rustcommon_logger::*;
+// use rustcommon_logger::*;
 use tiny_http::{Method, Response, Server};
 
 use super::MetricsSnapshot;

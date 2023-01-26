@@ -4,13 +4,14 @@
 
 use crate::metrics::error::SummaryError;
 use crate::metrics::*;
+use heatmap::Heatmap;
 
-use rustcommon_heatmap::{AtomicHeatmap, Duration, Instant};
-use rustcommon_streamstats::AtomicStreamstats;
+// use rustcommon_heatmap::{AtomicHeatmap, Duration, Instant};
+use crate::metrics::Streamstats;
 
 pub(crate) enum SummaryStruct {
-    Heatmap(AtomicHeatmap<u64, AtomicU32>),
-    Stream(AtomicStreamstats<AtomicU64>),
+    Heatmap(Heatmap),
+    Stream(Streamstats),
 }
 
 impl SummaryStruct {
@@ -23,7 +24,10 @@ impl SummaryStruct {
 
     pub fn percentile(&self, percentile: f64) -> Result<u64, SummaryError> {
         match self {
-            Self::Heatmap(heatmap) => heatmap.percentile(percentile).map_err(SummaryError::from),
+            Self::Heatmap(heatmap) => heatmap
+                .percentile(percentile)
+                .map_err(SummaryError::from)
+                .map(|b| b.high()),
             Self::Stream(stream) => stream.percentile(percentile).map_err(SummaryError::from),
         }
     }
@@ -34,11 +38,13 @@ impl SummaryStruct {
         span: Duration<Nanoseconds<u64>>,
         resolution: Duration<Nanoseconds<u64>>,
     ) -> Self {
-        Self::Heatmap(AtomicHeatmap::new(max, precision, span, resolution))
+        let r = ((10_i32.pow((precision - 1).into()) as f64).log2()).ceil() as u32;
+        let n = (max as f64).log2() as u32 + 1;
+        Self::Heatmap(Heatmap::new(0, r, n, span, resolution).expect("failed to create heatmap"))
     }
 
     pub fn stream(samples: usize) -> Self {
-        Self::Stream(AtomicStreamstats::new(samples))
+        Self::Stream(Streamstats::new(samples))
     }
 }
 

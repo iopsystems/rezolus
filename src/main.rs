@@ -3,16 +3,13 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 
 #[macro_use]
-extern crate rustcommon_logger;
+extern crate ringlog;
 
 #[macro_use]
 extern crate anyhow;
 
-use rustcommon_atomics::{Atomic, Ordering};
+use ringlog::{LogBuilder, MultiLogBuilder, Stdout};
 use std::sync::Arc;
-
-use rustcommon_atomics::AtomicBool;
-use rustcommon_logger::Logger;
 use tokio::runtime::Builder;
 
 mod common;
@@ -26,19 +23,26 @@ use config::Config;
 use metrics::*;
 use samplers::*;
 
-pub type Instant = rustcommon_time::Instant<Nanoseconds<u64>>;
-pub type Duration = rustcommon_time::Duration<Nanoseconds<u64>>;
+pub type Instant = clocksource::Instant<Nanoseconds<u64>>;
+pub type Duration = clocksource::Duration<Nanoseconds<u64>>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // get config
     let config = Arc::new(Config::new());
 
     // initialize logging
-    Logger::new()
-        .label(common::NAME)
-        .level(config.logging())
-        .init()
-        .expect("Failed to initialize logger");
+    let log = LogBuilder::new()
+        .output(Box::new(Stdout::new()))
+        .log_queue_depth(4096)
+        .single_message_size(4096)
+        .build()
+        .expect("failed to initialize debug log");
+
+    let mut log = MultiLogBuilder::new()
+        .level_filter(config.logging().to_level_filter())
+        .default(log)
+        .build()
+        .start();
 
     info!("----------");
     info!("{} {}", common::NAME, common::VERSION);
@@ -116,7 +120,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     while runnable.load(Ordering::Relaxed) {
+        clocksource::refresh_clock();
         http.run();
+        let _ = log.flush();
     }
 
     Ok(())

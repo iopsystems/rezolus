@@ -23,8 +23,8 @@ if [[ $STATIC == true ]]; then
     export CFLAGS="-fPIC"
 
     BINUTILS_VERSION="2.34.90"
-    ZLIB_VERSION="1.2.12"
-    XZ_VERSION="5.2.5"
+    ZLIB_VERSION="1.2.13"
+    XZ_VERSION="5.4.1"
     NCURSES_VERSION="6.2"
     LIBXML2_SHA="41a34e1f4ffae2ce401600dbb5fe43f8fe402641"
     ELFUTILS_VERSION="0.180"
@@ -192,12 +192,12 @@ else
     cargo test --release
 fi
 
-sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus --config configs/example.toml &
+sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus configs/example.toml &
 sleep 180
 curl -s http://localhost:4242/vars
 curl -s http://localhost:4242/vars.json | jq '.' > /dev/null
 sleep 180
-sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus --config configs/ci.toml &
+sudo timeout --signal 15 --preserve-status 5.0m target/release/rezolus configs/ci.toml &
 sleep 180
 curl -s http://localhost:4242/vars
 curl -s http://localhost:4242/vars.json | jq '.' > /dev/null

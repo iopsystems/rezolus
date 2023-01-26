@@ -2,8 +2,8 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-use rustcommon_heatmap::HeatmapError;
-use rustcommon_streamstats::StreamstatsError;
+use crate::metrics::StreamstatsError;
+use heatmap::Error as HeatmapError;
 use thiserror::Error;
 
 /// Possible errors returned by operations on a histogram.
@@ -62,6 +62,7 @@ impl From<HeatmapError> for SummaryError {
             HeatmapError::Empty => Self::Empty,
             HeatmapError::InvalidPercentile => Self::InvalidPercentile,
             HeatmapError::OutOfRange => Self::OutOfRange,
+            HeatmapError::InvalidConfig => todo!(),
         }
     }
 }
