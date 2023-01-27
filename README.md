@@ -210,12 +210,12 @@ If you want to submit a patch, please follow these steps:
 
 This software is licensed under the Apache 2.0 license, see [LICENSE](LICENSE) for details.
 
-[ci-build-badge]: https://img.shields.io/github/workflow/status/iopsystems/rezolus/CI/master?label=CI
-[ci-build-url]: https://github.com/iopsystems/rezolus/actions/workflows/cargo.yml?query=branch%3Amaster+event%3Apush
-[cargo manifest]: https://github.com/iopsystems/rezolus/blob/master/Cargo.toml
+[ci-build-badge]: https://img.shields.io/github/workflow/status/iopsystems/rezolus/CI/main?label=CI
+[ci-build-url]: https://github.com/iopsystems/rezolus/actions/workflows/cargo.yml?query=branch%3Amain+event%3Apush
+[cargo manifest]: https://github.com/iopsystems/rezolus/blob/main/Cargo.toml
 [contributors]: https://github.com/iopsystems/rezolus/graphs/contributors?type=a
 [license-badge]: https://img.shields.io/badge/license-Apache%202.0-blue.svg
-[license-url]: https://github.com/iopsystems/rezolus/blob/master/LICENSE
+[license-url]: https://github.com/iopsystems/rezolus/blob/main/LICENSE
 [rust-bcc]: https://github.com/rust-bpf/rust-bcc
 [BPF Compiler Collection]: https://github.com/iovisor/bcc
-[BCC Installation Guide]: https://github.com/iovisor/bcc/blob/master/INSTALL.md
+[BCC Installation Guide]: https://github.com/iovisor/bcc/blob/main/INSTALL.md
