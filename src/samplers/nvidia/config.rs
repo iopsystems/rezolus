@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-use nvml_wrapper::NVML;
+use nvml_wrapper::Nvml;
 use serde_derive::Deserialize;
 use strum::IntoEnumIterator;
 
@@ -55,7 +55,7 @@ impl SamplerConfig for NvidiaConfig {
 
     fn statistics(&self) -> Vec<<Self as SamplerConfig>::Statistic> {
         let mut enabled = Vec::new();
-        if let Ok(nvml) = NVML::builder().init() {
+        if let Ok(nvml) = Nvml::builder().init() {
             let devices = nvml.device_count().unwrap_or(0);
             for statistic in self.statistics.iter() {
                 for id in 0..devices {

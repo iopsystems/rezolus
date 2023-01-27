@@ -6,7 +6,7 @@ use std::convert::TryInto;
 
 use async_trait::async_trait;
 use nvml_wrapper::enum_wrappers::device::*;
-use nvml_wrapper::NVML;
+use nvml_wrapper::Nvml;
 
 use crate::config::SamplerConfig;
 use crate::samplers::Common;
@@ -21,7 +21,7 @@ pub use stat::*;
 #[allow(dead_code)]
 pub struct Nvidia {
     common: Common,
-    nvml: NVML,
+    nvml: Nvml,
     statistics: Vec<NvidiaStatistic>,
 }
 
@@ -31,7 +31,7 @@ impl Sampler for Nvidia {
 
     fn new(common: Common) -> Result<Self, anyhow::Error> {
         let statistics = common.config().samplers().nvidia().statistics();
-        match NVML::builder().init() {
+        match Nvml::builder().init() {
             Ok(nvml) => {
                 #[allow(unused_mut)]
                 let mut sampler = Self {
