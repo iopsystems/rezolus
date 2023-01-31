@@ -33,7 +33,7 @@ listen = "0.0.0.0:4242"
 # reading_suffix = "count"
 
 # specify an HTTP header to be sent with each response from the stats server.
-# http_header = "Access-Control-Allow-Origin: *"
+# http_header = "Access-Control-Allow-Origin: <origin>"
 
 # Per-sampler configuration sections
 [samplers]
