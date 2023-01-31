@@ -114,9 +114,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     debug!("beginning stats exposition");
     let mut http = exposition::Http::new(
-        config.listen().expect("no listen address"),
+        config.clone(),
         metrics,
-        config.general().reading_suffix(),
     );
 
     while runnable.load(Ordering::Relaxed) {
