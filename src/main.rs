@@ -113,10 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     debug!("beginning stats exposition");
-    let mut http = exposition::Http::new(
-        config.clone(),
-        metrics,
-    );
+    let mut http = exposition::Http::new(config.clone(), metrics);
 
     while runnable.load(Ordering::Relaxed) {
         clocksource::refresh_clock();

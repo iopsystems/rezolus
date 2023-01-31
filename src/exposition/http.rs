@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,15 +20,17 @@ pub struct Http {
 }
 
 impl Http {
-    pub fn new(config: Arc<Config>, metrics: Arc<Metrics>, ) -> Self {
+    pub fn new(config: Arc<Config>, metrics: Arc<Metrics>) -> Self {
         let address = config.listen().expect("no listen address");
         let server = tiny_http::Server::http(address);
         if server.is_err() {
             fatal!("Failed to open {} for HTTP Stats listener", address);
         }
         let count_label = config.general().reading_suffix();
-        let header = config.general().http_header()
-            .map(|s| tiny_http::Header::from_str(&s).expect("invalid HTTP header")); 
+        let header = config
+            .general()
+            .http_header()
+            .map(|s| tiny_http::Header::from_str(&s).expect("invalid HTTP header"));
 
         Self {
             snapshot: MetricsSnapshot::new(metrics, count_label),
@@ -50,7 +51,7 @@ impl Http {
             let url = parts[0];
 
             match request.method() {
-                Method::Get => { 
+                Method::Get => {
                     let content = match url {
                         "/" => {
                             debug!("Serving GET on index");
@@ -83,7 +84,7 @@ impl Http {
                         response = response.with_header(header.clone())
                     }
                     let _ = request.respond(response);
-                },
+                }
                 method => {
                     debug!("unsupported request method: {}", method);
                     let mut response = Response::empty(404);
