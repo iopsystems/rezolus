@@ -23,6 +23,7 @@ pub struct General {
     fault_tolerant: AtomicBool,
     #[serde(default = "default_reading_suffix")]
     reading_suffix: String,
+    http_header: Option<String>,
 }
 
 impl General {
@@ -63,6 +64,10 @@ impl General {
             Some(&self.reading_suffix)
         }
     }
+
+    pub fn http_header(&self) -> Option<String> {
+        self.http_header.clone()
+    }
 }
 
 impl Default for General {
@@ -75,6 +80,7 @@ impl Default for General {
             window: default_window(),
             fault_tolerant: default_fault_tolerant(),
             reading_suffix: default_reading_suffix(),
+            http_header: None,
         }
     }
 }
