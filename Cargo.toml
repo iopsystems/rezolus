@@ -39,10 +39,13 @@ toml = "0.6.0"
 uuid = "1.2.2"
 walkdir = "2.3.2"
 
+[build-dependencies]
+libbpf-cargo = { version = "0.12", optional = true }
+
 [features]
 all = ["bpf", "push_kafka"]
 default = []
-bpf = ["bcc"]
+bpf = ["bcc","libbpf-cargo"]
 bpf_static = ["bpf", "bcc/static"]
 bpf_static_llvm_8 = ["bpf", "bcc/llvm_8", "bcc/static"]
 bpf_static_llvm_9 = ["bpf", "bcc/llvm_9", "bcc/static"]
