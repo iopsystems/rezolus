@@ -13,47 +13,47 @@ use crate::config::General as GeneralConfig;
 use crate::config::{Config, SamplerConfig};
 use crate::*;
 
-pub mod cpu;
-pub mod disk;
-pub mod ext4;
-pub mod http;
-pub mod interrupt;
-pub mod krb5kdc;
-pub mod memcache;
-pub mod memory;
-pub mod network;
-pub mod ntp;
-pub mod nvidia;
-pub mod page_cache;
-pub mod process;
-pub mod rezolus;
+// pub mod cpu;
+// pub mod disk;
+// pub mod ext4;
+// pub mod http;
+// pub mod interrupt;
+// pub mod krb5kdc;
+// pub mod memcache;
+// pub mod memory;
+// pub mod network;
+// pub mod ntp;
+// pub mod nvidia;
+// pub mod page_cache;
+// pub mod process;
+// pub mod rezolus;
 pub mod scheduler;
-pub mod softnet;
-pub mod tcp;
-pub mod udp;
-pub mod usercall;
-pub mod xfs;
+// pub mod softnet;
+// pub mod tcp;
+// pub mod udp;
+// pub mod usercall;
+// pub mod xfs;
 
-pub use cpu::Cpu;
-pub use disk::Disk;
-pub use ext4::Ext4;
-pub use http::Http;
-pub use interrupt::Interrupt;
-pub use krb5kdc::Krb5kdc;
-pub use memcache::Memcache;
-pub use memory::Memory;
-pub use network::Network;
-pub use ntp::Ntp;
-pub use nvidia::Nvidia;
-pub use page_cache::PageCache;
-pub use process::Process;
-pub use rezolus::Rezolus;
+// pub use cpu::Cpu;
+// pub use disk::Disk;
+// pub use ext4::Ext4;
+// pub use http::Http;
+// pub use interrupt::Interrupt;
+// pub use krb5kdc::Krb5kdc;
+// pub use memcache::Memcache;
+// pub use memory::Memory;
+// pub use network::Network;
+// pub use ntp::Ntp;
+// pub use nvidia::Nvidia;
+// pub use page_cache::PageCache;
+// pub use process::Process;
+// pub use rezolus::Rezolus;
 pub use scheduler::Scheduler;
-pub use softnet::Softnet;
-pub use tcp::Tcp;
-pub use udp::Udp;
-pub use usercall::Usercall;
-pub use xfs::Xfs;
+// pub use softnet::Softnet;
+// pub use tcp::Tcp;
+// pub use udp::Udp;
+// pub use usercall::Usercall;
+// pub use xfs::Xfs;
 
 #[async_trait]
 pub trait Sampler: Sized + Send {
@@ -66,7 +66,7 @@ pub trait Sampler: Sized + Send {
     fn common(&self) -> &Common;
     fn common_mut(&mut self) -> &mut Common;
 
-    fn spawn(common: Common);
+    // fn spawn(common: Common);
 
     /// Run the sampler and write new observations to the metrics library and
     /// wait until next sample interval

@@ -78,6 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // spawn samplers
     debug!("spawning samplers");
     let common = Common::new(config.clone(), metrics.clone(), runtime);
+
+
     Cpu::spawn(common.clone());
     Disk::spawn(common.clone());
     Ext4::spawn(common.clone());
@@ -92,6 +94,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Nvidia::spawn(common.clone());
     Process::spawn(common.clone());
     Rezolus::spawn(common.clone());
+
+    let scheduler = Scheduler::new(common.clone());
+    runtime.spawn(async move {
+        loop {
+            let _ = scheduler.sample().await;
+        }
+    });
+
     Scheduler::spawn(common.clone());
     Softnet::spawn(common.clone());
     Tcp::spawn(common.clone());

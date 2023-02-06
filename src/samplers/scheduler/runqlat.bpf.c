@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2019 Facebook
+// Copyright (c) 2023 IOP Systems
 #include "../../../vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include "runqlat.h"
 
 #define TASK_RUNNING	0
-
-const volatile __u64 min_us = 0;
-const volatile pid_t targ_pid = 0;
-const volatile pid_t targ_tgid = 0;
 
 // Dummy instance to get skeleton to generate definition for `struct event`
 struct event _event = {0};
@@ -26,7 +23,11 @@ struct {
 	__type(value, u64);
 } start SEC(".maps");
 
-__u64 hist[461] = {};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 461);
+	__type(value, u64);
+} hist SEC(".maps");
 
 // histogram indexing
 static __always_inline uint value_to_index2(u64 value) {
@@ -70,10 +71,6 @@ int trace_enqueue(u32 tgid, u32 pid)
 
 	if (!pid)
 		return 0;
-	if (targ_tgid && targ_tgid != tgid)
-		return 0;
-	if (targ_pid && targ_pid != pid)
-		return 0;
 
 	ts = bpf_ktime_get_ns();
 	bpf_map_update_elem(&start, &pid, &ts, 0);
@@ -115,7 +112,7 @@ int handle__sched_switch(u64 *ctx)
 	struct task_struct *prev = (struct task_struct *)ctx[1];
 	struct task_struct *next = (struct task_struct *)ctx[2];
 	struct event event = {};
-	u64 *tsp, delta_us;
+	u64 *tsp, delta_us, *cnt;
 	long state = get_task_state(prev);
 	u32 pid;
 
@@ -131,15 +128,14 @@ int handle__sched_switch(u64 *ctx)
 		return 0;   /* missed enqueue */
 
 	delta_us = (bpf_ktime_get_ns() - *tsp) / 1000;
-	if (min_us && delta_us <= min_us)
-		return 0;
 
 	event.pid = pid;
 	event.delta_us = delta_us;
 
-	uint idx = value_to_index2(delta_us);
+	u32 idx = value_to_index2(delta_us);
+	cnt = bpf_map_lookup_elem(&hist, &idx);
 
-	__sync_fetch_and_add(&hist[idx], 1);
+	__sync_fetch_and_add(cnt, 1);
 
 	bpf_map_delete_elem(&start, &pid);
 	return 0;
