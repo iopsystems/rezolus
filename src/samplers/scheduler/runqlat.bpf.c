@@ -25,8 +25,10 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 461);
+	__type(key, uint);
 	__type(value, u64);
+	__uint(max_entries, 461);
+	// __type(value_size, 8);
 } hist SEC(".maps");
 
 // histogram indexing

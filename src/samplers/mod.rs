@@ -167,7 +167,7 @@ pub trait Sampler: Sized + Send {
 
 pub struct Common {
     config: Arc<Config>,
-    runtime: Arc<Runtime>,
+    // runtime: Arc<Runtime>,
     hardware_info: Arc<HardwareInfo>,
     interval: Option<Interval>,
     metrics: Arc<Metrics>,
@@ -177,7 +177,7 @@ impl Clone for Common {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
-            runtime: self.runtime.clone(),
+            // runtime: self.runtime.clone(),
             hardware_info: self.hardware_info.clone(),
             interval: None,
             metrics: self.metrics.clone(),
@@ -186,19 +186,19 @@ impl Clone for Common {
 }
 
 impl Common {
-    pub fn new(config: Arc<Config>, metrics: Arc<Metrics>, runtime: Arc<Runtime>) -> Self {
+    pub fn new(config: Arc<Config>, metrics: Arc<Metrics>) -> Self {
         Self {
             config,
             hardware_info: Arc::new(HardwareInfo::new()),
             interval: None,
             metrics,
-            runtime,
+            // runtime,
         }
     }
 
-    pub fn runtime(&self) -> &Runtime {
-        &self.runtime
-    }
+    // pub fn runtime(&self) -> &Runtime {
+    //     &self.runtime
+    // }
 
     pub fn config(&self) -> &Config {
         &self.config

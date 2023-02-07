@@ -342,7 +342,9 @@ impl<'a> Scheduler<'a> {
 
                 let mut bpf = BpfSamplers::default();
 
-                let mut runqlat = RunqlatSkelBuilder::default().open()?.load()?;
+                let mut builder = RunqlatSkelBuilder::default();
+                builder.obj_builder.debug(true);
+                let mut runqlat = builder.open()?.load()?;
                 // let mut open_skel = skel_builder.open()?;
                 // let mut skel = open_skel.load()?;
                 runqlat.attach()?;
@@ -398,7 +400,10 @@ impl<'a> Scheduler<'a> {
 }
 
 #[cfg(not(feature = "bpf"))]
-pub struct BpfSamplers<'a> { _lifetime: PhantomData<'a> }
+pub struct BpfSamplers<'a> {
+    // used to mark the placeholder type with the appropriate lifetime
+    _lifetime: PhantomData<&'a ()>
+}
 
 #[cfg(feature = "bpf")]
 #[derive(Default)]
