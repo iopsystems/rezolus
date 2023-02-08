@@ -4,12 +4,13 @@
 #include "../../../vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
-#include "runqlat.h"
+// #include "runqlat.h"
+#include "../../common/bpf.h"
 
 #define TASK_RUNNING	0
 
-// Dummy instance to get skeleton to generate definition for `struct event`
-struct event _event = {0};
+// // Dummy instance to get skeleton to generate definition for `struct event`
+// struct event _event = {0};
 
 // Kernel 5.14 changed the state field to __state
 struct task_struct___pre_5_14 {
@@ -27,43 +28,57 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 461);
-	// __type(value_size, 8);
+	__uint(max_entries, 731);
 } hist SEC(".maps");
 
-// histogram indexing
-static __always_inline u32 value_to_index2(u64 value) {
-    unsigned int index = 460;
-    if (value < 100) {
-        // 0-99 => [0..100)
-        // 0 => 0
-        // 99 => 99
-        index = value;
-    } else if (value < 1000) {
-        // 100-999 => [100..190)
-        // 100 => 100
-        // 999 => 189
-        index = 90 + value / 10;
-    } else if (value < 10000) {
-        // 1_000-9_999 => [190..280)
-        // 1000 => 190
-        // 9999 => 279
-        index = 180 + value / 100;
-    } else if (value < 100000) {
-        // 10_000-99_999 => [280..370)
-        // 10000 => 280
-        // 99999 => 369
-        index = 270 + value / 1000;
-    } else if (value < 1000000) {
-        // 100_000-999_999 => [370..460)
-        // 100000 => 370
-        // 999999 => 459
-        index = 360 + value / 10000;
-    } else {
-        index = 460;
-    }
-    return index;
-}
+// // histogram indexing
+// static __always_inline u32 value_to_index2(u64 value) {
+//     unsigned int index = 460;
+//     if (value < 100) {
+//         // 0-99 => [0..100)
+//         // 0 => 0
+//         // 99 => 99
+//         index = value;
+//     } else if (value < 1000) {
+//         // 100-999 => [100..190)
+//         // 100 => 100
+//         // 999 => 189
+//         index = 90 + value / 10;
+//     } else if (value < 10000) {
+//         // 1_000-9_999 => [190..280)
+//         // 1000 => 190
+//         // 9999 => 279
+//         index = 180 + value / 100;
+//     } else if (value < 100000) {
+//         // 10_000-99_999 => [280..370)
+//         // 10000 => 280
+//         // 99999 => 369
+//         index = 270 + value / 1000;
+//     } else if (value < 1000000) {
+//         // 100_000-999_999 => [370..460)
+//         // 100_000 => 370
+//         // 999_999 => 459
+//         index = 360 + value / 10000;
+//     } else if (value < 10000000) {
+//         // 1_000_000-9_999_999 => [460..550)
+//         // 1_000_000 => 460
+//         // 9_999_999 => 449
+//         index = 450 + value / 100000;
+//     } else if (value < 100000000) {
+//         // 10_000_000-99_999_999 => [550..640)
+//         // 10_000_000 => 550
+//         // 99_999_999 => 639
+//         index = 540 + value / 1000000;
+//     } else if (value < 100000000) {
+//         // 100_000_000-999_999_999 => [640..730)
+//         // 100_000_000 => 640
+//         // 999_999_999 => 729
+//         index = 630 + value / 10000000;
+//     } else {
+//         index = 730;
+//     }
+//     return index;
+// }
 
 /* record enqueue timestamp */
 static __always_inline
@@ -113,8 +128,8 @@ int handle__sched_switch(u64 *ctx)
 	 */
 	struct task_struct *prev = (struct task_struct *)ctx[1];
 	struct task_struct *next = (struct task_struct *)ctx[2];
-	struct event event = {};
-	u64 *tsp, delta_us, *cnt;
+	// struct event event = {};
+	u64 *tsp, delta_ns, *cnt;
 	long state = get_task_state(prev);
 	u32 pid;
 
@@ -129,12 +144,12 @@ int handle__sched_switch(u64 *ctx)
 	if (!tsp)
 		return 0;   /* missed enqueue */
 
-	delta_us = (bpf_ktime_get_ns() - *tsp) / 1000;
+	delta_ns = bpf_ktime_get_ns() - *tsp;
 
-	event.pid = pid;
-	event.delta_us = delta_us;
+	// event.pid = pid;
+	// event.delta_ns = delta_ns;
 
-	u32 idx = value_to_index2(delta_us);
+	u32 idx = value_to_index2(delta_ns);
 	cnt = bpf_map_lookup_elem(&hist, &idx);
 
 	if (!cnt) {

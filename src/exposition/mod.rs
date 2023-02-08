@@ -23,7 +23,7 @@ pub struct MetricsSnapshot {
     count_label: Option<String>,
 }
 
-impl<'a> MetricsSnapshot {
+impl MetricsSnapshot {
     pub fn new(metrics: Arc<Metrics>, count_label: Option<&str>) -> Self {
         Self {
             metrics,

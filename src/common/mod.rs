@@ -124,6 +124,10 @@ pub fn default_percentiles() -> Vec<f64> {
     vec![1.0, 10.0, 50.0, 90.0, 99.0]
 }
 
+pub fn default_bpf_percentiles() -> Vec<f64> {
+    vec![1.0, 10.0, 50.0, 90.0, 99.0, 99.9, 99.99]
+}
+
 #[allow(dead_code)]
 pub struct KernelInfo {
     release: String,
@@ -143,7 +147,7 @@ impl KernelInfo {
 
     pub fn release_major(&self) -> Result<u32, std::io::Error> {
         let parts: Vec<&str> = self.release.split('.').collect();
-        if let Some(s) = parts.get(0) {
+        if let Some(s) = parts.first() {
             return s
                 .parse::<u32>()
                 .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput));

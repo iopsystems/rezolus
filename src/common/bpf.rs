@@ -107,7 +107,13 @@ pub fn key_to_value(index: u64) -> Option<u64> {
     } else if index < 370 {
         Some((index - 270) * 1_000 + 999)
     } else if index < 460 {
-        Some((index - 360) * 10_000 + 9999)
+        Some((index - 360) * 10_000 + 9_999)
+    } else if index < 550 {
+        Some((index - 450) * 100_000 + 99_999)
+    } else if index < 640 {
+        Some((index - 540) * 1_000_000 + 999_999)
+    } else if index < 730 {
+        Some((index - 630) * 10_000_000 + 9_999_999)
     } else {
         None
     }

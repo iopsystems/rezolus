@@ -6,7 +6,7 @@
 
 struct event {
 	u8 task[TASK_COMM_LEN];
-	__u64 delta_us;
+	__u64 delta_ns;
 	pid_t pid;
 };
 

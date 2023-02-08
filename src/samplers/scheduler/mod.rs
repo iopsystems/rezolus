@@ -285,7 +285,7 @@ impl<'a> Scheduler<'a> {
                         let hist = maps.hist();
                         let mut idx = [0; 4];
                         let mut count = [0; 8];
-                        for i in 0_u32..461_u32 {
+                        for i in 0_u32..731_u32 {
                             match hist.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::empty()) {
                                 Ok(Some(c)) => {
                                     count.copy_from_slice(&c);
@@ -295,7 +295,7 @@ impl<'a> Scheduler<'a> {
                                             let _ = self.metrics().record_bucket(
                                                 &SchedulerStatistic::RunqueueLatency,
                                                 time,
-                                                value * MICROSECOND,
+                                                value,
                                                 count as u32,
                                             );
                                         }
