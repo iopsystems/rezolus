@@ -45,10 +45,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .start();
 
+
     info!("----------");
     info!("{} {}", common::NAME, common::VERSION);
     info!("----------");
     debug!("host cores: {}", hardware_threads().unwrap_or(1));
+
+    let rlimit = libc::rlimit {
+        rlim_cur: 128 << 20,
+        rlim_max: 128 << 20,
+    };
+
+    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
+        eprintln!("Failed to increase rlimit");
+        std::process::exit(2);
+    }
 
     let runnable = Arc::new(AtomicBool::new(true));
     let r = runnable.clone();

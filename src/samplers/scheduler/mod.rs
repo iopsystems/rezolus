@@ -35,11 +35,11 @@ pub use stat::*;
 #[cfg(feature = "bpf")]
 use runqlat::*;
 
-#[cfg(feature = "bpf")]
-use libbpf_rs::Program;
+// #[cfg(feature = "bpf")]
+// use libbpf_rs::Program;
 
-#[cfg(not(feature = "bpf"))]
-type Program = ();
+// #[cfg(not(feature = "bpf"))]
+// type Program = ();
 
 #[allow(dead_code)]
 pub struct Scheduler<'a> {
@@ -56,7 +56,7 @@ pub struct Scheduler<'a> {
 impl<'a> Sampler for Scheduler<'a> {
     type Statistic = SchedulerStatistic;
     fn new(common: Common) -> Result<Self, anyhow::Error> {
-        let fault_tolerant = common.config.general().fault_tolerant();
+        // let fault_tolerant = common.config.general().fault_tolerant();
         let statistics = common.config().samplers().scheduler().statistics();
 
         #[allow(unused_mut)]
@@ -74,25 +74,27 @@ impl<'a> Sampler for Scheduler<'a> {
             sampler.register();
         }
 
-        if let Err(e) = sampler.initialize_bpf() {
-            error!("failed to initialize bpf: {}", e);
-            if !fault_tolerant {
-                return Err(e);
-            }
-        }
+        let _ = sampler.initialize_bpf();
+
+        // if let Err(e) = sampler.initialize_bpf() {
+        //     error!("failed to initialize bpf: {}", e);
+        //     if !fault_tolerant {
+        //         return Err(e);
+        //     }
+        // }
 
         // we initialize perf last so we can delay
-        if sampler.sampler_config().enabled() && sampler.sampler_config().perf_events() {
-            #[cfg(feature = "bpf")]
-            {
-                if let Err(e) = sampler.initialize_bpf_perf() {
-                    error!("failed to initializing bpf perf: {}", e);
-                    if !fault_tolerant {
-                        return Err(format_err!("bpf perf init failure: {}", e));
-                    }
-                }
-            }
-        }
+        // if sampler.sampler_config().enabled() && sampler.sampler_config().perf_events() {
+        //     #[cfg(feature = "bpf")]
+        //     {
+        //         if let Err(e) = sampler.initialize_bpf_perf() {
+        //             error!("failed to initializing bpf perf: {}", e);
+        //             if !fault_tolerant {
+        //                 return Err(format_err!("bpf perf init failure: {}", e));
+        //             }
+        //         }
+        //     }
+        // }
 
         // delay by half the sample interval so that we land between perf
         // counter updates
@@ -144,13 +146,13 @@ impl<'a> Sampler for Scheduler<'a> {
 
         // we do perf sampling first, since it is time critical to keep it
         // between underlying counter updates
-        #[cfg(feature = "bpf")]
-        self.map_result(self.sample_bpf_perf_counters())?;
+        // #[cfg(feature = "bpf")]
+        // self.map_result(self.sample_bpf_perf_counters())?;
 
         let r = self.sample_proc_stat().await;
         self.map_result(r)?;
         #[cfg(feature = "bpf")]
-        self.map_result(self.sample_bpf())?;
+        let _ = self.sample_bpf();
 
         Ok(())
     }
@@ -269,32 +271,45 @@ impl<'a> Scheduler<'a> {
 
     #[cfg(feature = "bpf")]
     fn sample_bpf(&self) -> Result<(), std::io::Error> {
-        // // sample bpf
-        // {
-        //     if self.bpf_last.lock().unwrap().elapsed()
-        //         >= Duration::from_secs(self.general_config().window() as u64)
-        //     {
-        //         if let Some(ref bpf) = self.bpf {
-        //             let bpf = bpf.lock().unwrap();
-        //             let time = Instant::now();
-        //             for statistic in self.statistics.iter().filter(|s| s.bpf_table().is_some()) {
-        //                 if let Ok(mut table) = (*bpf).inner.table(statistic.bpf_table().unwrap()) {
-        //                     for (&value, &count) in &map_from_table(&mut table) {
-        //                         if count > 0 {
-        //                             let _ = self.metrics().record_bucket(
-        //                                 statistic,
-        //                                 time,
-        //                                 value * MICROSECOND,
-        //                                 count,
-        //                             );
-        //                         }
-        //                     }
-        //                 }
-        //             }
-        //         }
-        //         *self.bpf_last.lock().unwrap() = Instant::now();
-        //     }
-        // }
+        // sample bpf
+        {
+            if self.bpf_last.lock().unwrap().elapsed()
+                >= Duration::from_secs(1)
+            {
+                if let Some(ref bpf) = self.bpf {
+                    let mut bpf = bpf.lock().unwrap();
+                    let time = Instant::now();
+
+                    if let Some(runqlat) = &mut bpf.runqlat {
+                        let mut maps = runqlat.maps_mut();
+                        let hist = maps.hist();
+                        let mut idx = [0; 4];
+                        let mut count = [0; 8];
+                        for i in 0_u32..461_u32 {
+                            match hist.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::empty()) {
+                                Ok(Some(c)) => {
+                                    count.copy_from_slice(&c);
+                                    let count = u64::from_ne_bytes(count);
+                                    if count > 0 {
+                                        if let Some(value) = key_to_value(i as u64) {
+                                            let _ = self.metrics().record_bucket(
+                                                &SchedulerStatistic::RunqueueLatency,
+                                                time,
+                                                value * MICROSECOND,
+                                                count as u32,
+                                            );
+                                        }
+                                    }
+                                    let _ = hist.update(&idx, &[0; 8], libbpf_rs::MapFlags::empty());
+                                }
+                                _ => { }
+                            }
+                        }
+                    }
+                }
+                *self.bpf_last.lock().unwrap() = Instant::now();
+            }
+        }
 
         Ok(())
     }
@@ -343,55 +358,13 @@ impl<'a> Scheduler<'a> {
                 let mut bpf = BpfSamplers::default();
 
                 let mut builder = RunqlatSkelBuilder::default();
-                builder.obj_builder.debug(true);
+                // builder.obj_builder.debug(true);
+
                 let mut runqlat = builder.open()?.load()?;
-                // let mut open_skel = skel_builder.open()?;
-                // let mut skel = open_skel.load()?;
                 runqlat.attach()?;
 
-                // skel.pin("rezolus/scheduler/runqlat");
-
                 bpf.runqlat = Some(runqlat);
-
-                // // get info about the running kernel
-                // let kernel_info = KernelInfo::new()?;
-                // let kernel_major = kernel_info.release_major()?;
-                // let kernel_minor = kernel_info.release_minor()?;
-
-                // // load the code and compile
-                // let code = include_str!("bpf.c");
-                // let code = code.replace(
-                //     "VALUE_TO_INDEX2_FUNC",
-                //     include_str!("../../common/value_to_index2.c"),
-                // );
-                // // task_struct changes in kernel 5.14
-                // let code = if kernel_major > 5 || (kernel_major == 5 && kernel_minor >= 14) {
-                //     code.replace("STATE_FIELD", "__state")
-                // } else {
-                //     code.replace("STATE_FIELD", "state")
-                // };
-                // let mut bpf = bcc::BPF::new(&code)?;
-
-                // // collect the set of probes required from the statistics enabled.
-                // let mut probes = HashSet::new();
-                // for statistic in &self.statistics {
-                //     for probe in statistic.bpf_probes_required() {
-                //         probes.insert(probe);
-                //     }
-                // }
-
-                // // load + attach the kernel probes that are required to the bpf instance.
-                // for probe in probes {
-                //     if self.common.config.fault_tolerant() {
-                //         if let Err(e) = probe.try_attach_to_bpf(&mut bpf) {
-                //             warn!("skipping {} with error: {}", probe.name, e);
-                //         }
-                //     } else {
-                //         probe.try_attach_to_bpf(&mut bpf)?;
-                //     }
-                // }
-
-                // self.bpf = Some(Arc::new(Mutex::new(BPF { inner: bpf })));
+                self.bpf = Some(Arc::new(Mutex::new(bpf)));
             }
         }
 

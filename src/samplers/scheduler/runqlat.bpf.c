@@ -25,14 +25,14 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, uint);
+	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 461);
 	// __type(value_size, 8);
 } hist SEC(".maps");
 
 // histogram indexing
-static __always_inline uint value_to_index2(u64 value) {
+static __always_inline u32 value_to_index2(u64 value) {
     unsigned int index = 460;
     if (value < 100) {
         // 0-99 => [0..100)
@@ -136,6 +136,10 @@ int handle__sched_switch(u64 *ctx)
 
 	u32 idx = value_to_index2(delta_us);
 	cnt = bpf_map_lookup_elem(&hist, &idx);
+
+	if (!cnt) {
+		return 0; /* counter was not in the map */
+	}
 
 	__sync_fetch_and_add(cnt, 1);
 
