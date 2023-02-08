@@ -210,7 +210,7 @@ If you want to submit a patch, please follow these steps:
 
 This software is licensed under the Apache 2.0 license, see [LICENSE](LICENSE) for details.
 
-[ci-build-badge]: https://img.shields.io/github/workflow/status/iopsystems/rezolus/CI/main?label=CI
+[ci-build-badge]: https://img.shields.io/github/actions/workflow/status/iopsystems/rezolus/cargo.yml?branch=main
 [ci-build-url]: https://github.com/iopsystems/rezolus/actions/workflows/cargo.yml?query=branch%3Amain+event%3Apush
 [cargo manifest]: https://github.com/iopsystems/rezolus/blob/main/Cargo.toml
 [contributors]: https://github.com/iopsystems/rezolus/graphs/contributors?type=a
