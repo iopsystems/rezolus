@@ -20,6 +20,8 @@ pub struct SchedulerConfig {
     interval: Option<usize>,
     #[serde(default = "crate::common::default_percentiles")]
     percentiles: Vec<f64>,
+    #[serde(default = "crate::common::default_distribution_percentiles")]
+    distribution_percentiles: Vec<f64>,
     #[serde(default)]
     perf_events: bool,
     #[serde(default = "default_statistics")]
@@ -33,6 +35,7 @@ impl Default for SchedulerConfig {
             enabled: Default::default(),
             interval: Default::default(),
             percentiles: crate::common::default_percentiles(),
+            distribution_percentiles: crate::common::default_distribution_percentiles(),
             perf_events: Default::default(),
             statistics: default_statistics(),
         }
@@ -60,6 +63,10 @@ impl SamplerConfig for SchedulerConfig {
 
     fn percentiles(&self) -> &[f64] {
         &self.percentiles
+    }
+
+    fn distribution_percentiles(&self) -> &[f64] {
+        &self.distribution_percentiles
     }
 
     fn perf_events(&self) -> bool {

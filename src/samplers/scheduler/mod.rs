@@ -56,7 +56,7 @@ pub struct Scheduler<'a> {
 impl<'a> Sampler for Scheduler<'a> {
     type Statistic = SchedulerStatistic;
     fn new(common: Common) -> Result<Self, anyhow::Error> {
-        // let fault_tolerant = common.config.general().fault_tolerant();
+        let fault_tolerant = common.config.general().fault_tolerant();
         let statistics = common.config().samplers().scheduler().statistics();
 
         #[allow(unused_mut)]
@@ -74,14 +74,12 @@ impl<'a> Sampler for Scheduler<'a> {
             sampler.register();
         }
 
-        let _ = sampler.initialize_bpf();
-
-        // if let Err(e) = sampler.initialize_bpf() {
-        //     error!("failed to initialize bpf: {}", e);
-        //     if !fault_tolerant {
-        //         return Err(e);
-        //     }
-        // }
+        if let Err(e) = sampler.initialize_bpf() {
+            error!("failed to initialize bpf: {}", e);
+            if !fault_tolerant {
+                return Err(e);
+            }
+        }
 
         // we initialize perf last so we can delay
         // if sampler.sampler_config().enabled() && sampler.sampler_config().perf_events() {
@@ -104,22 +102,6 @@ impl<'a> Sampler for Scheduler<'a> {
 
         Ok(sampler)
     }
-
-    // fn spawn(common: Common) {
-    //     if common.config().samplers().scheduler().enabled() {
-    //         if let Ok(mut sampler) = Self::new(common.clone()) {
-    //             common.runtime().spawn(async move {
-    //                 loop {
-    //                     let _ = sampler.sample().await;
-    //                 }
-    //             });
-    //         } else if !common.config.fault_tolerant() {
-    //             fatal!("failed to initialize scheduler sampler");
-    //         } else {
-    //             error!("failed to initialize scheduler sampler");
-    //         }
-    //     }
-    // }
 
     fn common(&self) -> &Common {
         &self.common
@@ -281,26 +263,39 @@ impl<'a> Scheduler<'a> {
                     let time = Instant::now();
 
                     if let Some(runqlat) = &mut bpf.runqlat {
-                        let mut maps = runqlat.maps_mut();
+                        let mut maps = runqlat.skel.maps_mut();
+
                         let hist = maps.hist();
-                        let mut idx = [0; 4];
-                        let mut count = [0; 8];
+                        let mut current = [0; 8];
+
                         for i in 0_u32..731_u32 {
-                            match hist.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::empty()) {
+                            match hist.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
                                 Ok(Some(c)) => {
-                                    count.copy_from_slice(&c);
-                                    let count = u64::from_ne_bytes(count);
-                                    if count > 0 {
+                                    // convert the index to a usize, as we use it a few
+                                    // times to index into slices
+                                    let i = i as usize;
+
+                                    // convert bytes to the current count of the bucket
+                                    current.copy_from_slice(&c);
+                                    let current = u64::from_ne_bytes(current);
+
+                                    // calculate the delta from previous count
+                                    let delta = current.wrapping_sub(runqlat.hist[i]);
+
+                                    // update the previous count
+                                    runqlat.hist[i] = current;
+
+                                    // update the heatmap
+                                    if delta > 0 {
                                         if let Some(value) = key_to_value(i as u64) {
                                             let _ = self.metrics().record_bucket(
                                                 &SchedulerStatistic::RunqueueLatency,
                                                 time,
                                                 value,
-                                                count as u32,
+                                                delta as u32,
                                             );
                                         }
                                     }
-                                    let _ = hist.update(&idx, &[0; 8], libbpf_rs::MapFlags::empty());
                                 }
                                 _ => { }
                             }
@@ -363,6 +358,11 @@ impl<'a> Scheduler<'a> {
                 let mut runqlat = builder.open()?.load()?;
                 runqlat.attach()?;
 
+                let runqlat = Runqlat {
+                    skel: runqlat,
+                    hist: [0; 761],
+                };
+
                 bpf.runqlat = Some(runqlat);
                 self.bpf = Some(Arc::new(Mutex::new(bpf)));
             }
@@ -381,5 +381,11 @@ pub struct BpfSamplers<'a> {
 #[cfg(feature = "bpf")]
 #[derive(Default)]
 pub struct BpfSamplers<'a> {
-    runqlat: Option<RunqlatSkel<'a>>,
+    runqlat: Option<Runqlat<'a>>,
+}
+
+#[cfg(feature = "bpf")]
+pub struct Runqlat<'a> {
+    skel: RunqlatSkel<'a>,
+    hist: [u64; 761],
 }

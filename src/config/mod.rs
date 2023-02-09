@@ -152,6 +152,7 @@ pub trait SamplerConfig {
     }
     fn interval(&self) -> Option<usize>;
     fn percentiles(&self) -> &[f64];
+    fn distribution_percentiles(&self) -> &[f64];
     fn perf_events(&self) -> bool {
         false
     }

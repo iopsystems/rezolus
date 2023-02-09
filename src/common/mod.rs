@@ -124,7 +124,7 @@ pub fn default_percentiles() -> Vec<f64> {
     vec![1.0, 10.0, 50.0, 90.0, 99.0]
 }
 
-pub fn default_bpf_percentiles() -> Vec<f64> {
+pub fn default_distribution_percentiles() -> Vec<f64> {
     vec![1.0, 10.0, 50.0, 90.0, 99.0, 99.9, 99.99]
 }
 
