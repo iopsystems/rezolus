@@ -287,14 +287,13 @@ impl<'a> Scheduler<'a> {
 
                                     // update the heatmap
                                     if delta > 0 {
-                                        if let Some(value) = key_to_value(i as u64) {
-                                            let _ = self.metrics().record_bucket(
-                                                &SchedulerStatistic::RunqueueLatency,
-                                                time,
-                                                value,
-                                                delta as u32,
-                                            );
-                                        }
+                                        let value = key_to_value(i as u64);
+                                        let _ = self.metrics().record_bucket(
+                                            &SchedulerStatistic::RunqueueLatency,
+                                            time,
+                                            value,
+                                            delta as u32,
+                                        );
                                     }
                                 }
                                 _ => { }

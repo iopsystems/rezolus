@@ -93,7 +93,7 @@ int handle__sched_switch(u64 *ctx)
 
 	delta_ns = bpf_ktime_get_ns() - *tsp;
 
-	u32 idx = value_to_index2(delta_ns);
+	u32 idx = value_to_index(delta_ns);
 	cnt = bpf_map_lookup_elem(&hist, &idx);
 
 	if (!cnt) {

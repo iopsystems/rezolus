@@ -96,28 +96,40 @@ impl Probe {
 }
 
 #[cfg(feature = "bpf")]
-pub fn key_to_value(index: u64) -> Option<u64> {
-    let index = index;
-    if index < 100 {
-        Some(index)
-    } else if index < 190 {
-        Some((index - 90) * 10 + 9)
-    } else if index < 280 {
-        Some((index - 180) * 100 + 99)
-    } else if index < 370 {
-        Some((index - 270) * 1_000 + 999)
-    } else if index < 460 {
-        Some((index - 360) * 10_000 + 9_999)
-    } else if index < 550 {
-        Some((index - 450) * 100_000 + 99_999)
-    } else if index < 640 {
-        Some((index - 540) * 1_000_000 + 999_999)
-    } else if index < 730 {
-        Some((index - 630) * 10_000_000 + 9_999_999)
+pub fn key_to_value(index: u64) -> u64 {
+    let g = index >> 3;
+    let b = index - g * 8 + 1;
+
+    if g < 1 {
+        b - 1
     } else {
-        None
+        (1 << (2 + g)) + (1 << (g - 1)) * b - 1
     }
 }
+
+// #[cfg(feature = "bpf")]
+// pub fn key_to_value(index: u64) -> Option<u64> {
+//     let index = index;
+//     if index < 100 {
+//         Some(index)
+//     } else if index < 190 {
+//         Some((index - 90) * 10 + 9)
+//     } else if index < 280 {
+//         Some((index - 180) * 100 + 99)
+//     } else if index < 370 {
+//         Some((index - 270) * 1_000 + 999)
+//     } else if index < 460 {
+//         Some((index - 360) * 10_000 + 9_999)
+//     } else if index < 550 {
+//         Some((index - 450) * 100_000 + 99_999)
+//     } else if index < 640 {
+//         Some((index - 540) * 1_000_000 + 999_999)
+//     } else if index < 730 {
+//         Some((index - 630) * 10_000_000 + 9_999_999)
+//     } else {
+//         None
+//     }
+// }
 
 // TODO: a result is probably more appropriate
 #[cfg(feature = "bpf")]
@@ -178,9 +190,8 @@ pub fn map_from_table(table: &mut bcc::table::Table) -> std::collections::HashMa
         value.copy_from_slice(&entry.value);
         let value = u64::from_ne_bytes(value);
 
-        if let Some(key) = key_to_value(key as u64) {
-            current.insert(key, value as u32);
-        }
+        let key = key_to_value(key as u64);
+        current.insert(key, value as u32);
 
         // clear the source counter
         let _ = table.set(&mut entry.key, &mut [0_u8; 8]);
