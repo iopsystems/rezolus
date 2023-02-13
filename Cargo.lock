@@ -542,22 +542,13 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "heatmap"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44a040d43defb8644617d52575557275232693a27c594d136b16c12283244683"
-dependencies = [
- "clocksource",
- "histogram 0.7.0",
- "thiserror",
-]
-
-[[package]]
-name = "heatmap"
 version = "0.7.1"
-source = "git+https://github.com/brayniac/rustcommon?branch=heatmap#1da0d2b8356f93ac0551a6deaf985fdeba7749c8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eb03972c2abd3d09b18a58eec103ab2debb59d5f2ca631fa43a87fa726765fa"
 dependencies = [
  "clocksource",
- "histogram 0.7.1",
+ "histogram",
+ "parking_lot",
  "thiserror",
 ]
 
@@ -593,17 +584,9 @@ checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
 
 [[package]]
 name = "histogram"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913e066ae237bc8adb23b539f140ae81152af2dc3ff357ada35af13bcf48f016"
-dependencies = [
- "thiserror",
-]
-
-[[package]]
-name = "histogram"
 version = "0.7.1"
-source = "git+https://github.com/brayniac/rustcommon?branch=heatmap#1da0d2b8356f93ac0551a6deaf985fdeba7749c8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2cddb1ee43e0813fb269066abae4e09550efca332cc2c639369b64c3b2ebd55"
 dependencies = [
  "thiserror",
 ]
@@ -938,12 +921,12 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af0a70e90189b46fa6b104f52d68566059d5dc34f55cd314755249a60727dc34"
+checksum = "c051f99c84bdd165f31c1aaa7717f9d43d21410c08335cb33e97dca98fb7ad79"
 dependencies = [
  "clocksource",
- "heatmap 0.7.0",
+ "heatmap",
  "linkme",
  "metriken-derive",
  "once_cell",
@@ -1442,7 +1425,7 @@ dependencies = [
  "crossbeam",
  "ctrlc",
  "dashmap",
- "heatmap 0.7.1",
+ "heatmap",
  "json",
  "kafka",
  "libbpf-cargo",
@@ -1470,9 +1453,9 @@ dependencies = [
 
 [[package]]
 name = "ringlog"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a481f46b429f20e0dc310ddee227e5e35b86acaff897bfc5db9e37aa35c828be"
+checksum = "82db4b27000bac41d738972779f440ed6176ebe82c935b736594eff989aa60f1"
 dependencies = [
  "ahash",
  "clocksource",

@@ -16,8 +16,8 @@ clocksource = "0.6.0"
 crossbeam = "0.8.2"
 ctrlc = { version = "3.2.4", features = ["termination"] }
 dashmap = "5.4.0"
-# heatmap = "0.7.0"
-heatmap = { git = "https://github.com/brayniac/rustcommon", branch = "heatmap"}
+heatmap = "0.7.1"
+# heatmap = { git = "https://github.com/brayniac/rustcommon", branch = "heatmap"}
 json = "0.12.4"
 kafka = { version = "0.9.0", optional = true }
 libbpf-rs = { version = "*", optional = true }
@@ -28,7 +28,7 @@ num-traits = "0.2.15"
 nvml-wrapper = "0.9.0"
 regex = "1.7.1"
 reqwest = { version = "0.11.14", default-features = false, features = ["blocking"] }
-ringlog = "0.1.0"
+ringlog = "0.1.1"
 serde = "1.0.152"
 serde_derive = "1.0.152"
 strum = "0.24.1"
