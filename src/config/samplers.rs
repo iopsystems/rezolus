@@ -19,7 +19,7 @@ use crate::config::*;
 // use samplers::process::ProcessConfig;
 // use samplers::rezolus::RezolusConfig;
 use samplers::scheduler::SchedulerConfig;
-// use samplers::softnet::SoftnetConfig;
+use samplers::softnet::SoftnetConfig;
 // use samplers::tcp::TcpConfig;
 // use samplers::udp::UdpConfig;
 // use samplers::usercall::UsercallConfig;
@@ -58,8 +58,8 @@ pub struct Samplers {
     // rezolus: RezolusConfig,
     #[serde(default)]
     scheduler: SchedulerConfig,
-    // #[serde(default)]
-    // softnet: SoftnetConfig,
+    #[serde(default)]
+    softnet: SoftnetConfig,
     // #[serde(default)]
     // tcp: TcpConfig,
     // #[serde(default)]
@@ -131,9 +131,9 @@ impl Samplers {
         &self.scheduler
     }
 
-    // pub fn softnet(&self) -> &SoftnetConfig {
-    //     &self.softnet
-    // }
+    pub fn softnet(&self) -> &SoftnetConfig {
+        &self.softnet
+    }
 
     // pub fn tcp(&self) -> &TcpConfig {
     //     &self.tcp

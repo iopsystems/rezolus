@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::io::SeekFrom;
 use std::sync::{Arc, Mutex};
 
-use crate::metrics::{Source, Statistic};
+use crate::metrics::{Source, Statistic as DynStatistic};
 use async_trait::async_trait;
 #[cfg(feature = "bpf")]
 use bcc::perf_event::{Event, SoftwareEvent};
@@ -30,7 +30,7 @@ mod config;
 mod stat;
 
 pub use config::*;
-pub use stat::*;
+pub use stat::Statistic;
 
 #[cfg(feature = "bpf")]
 use runqlat::*;
@@ -49,12 +49,12 @@ pub struct Scheduler<'a> {
     common: Common,
     perf: Option<Arc<Mutex<BPF>>>,
     proc_stat: Option<File>,
-    statistics: Vec<SchedulerStatistic>,
+    statistics: Vec<Statistic>,
 }
 
 #[async_trait]
 impl<'a> Sampler for Scheduler<'a> {
-    type Statistic = SchedulerStatistic;
+    type Statistic = Statistic;
     fn new(common: Common) -> Result<Self, anyhow::Error> {
         let fault_tolerant = common.config.general().fault_tolerant();
         let statistics = common.config().samplers().scheduler().statistics();
@@ -221,10 +221,10 @@ impl<'a> Scheduler<'a> {
             while reader.read_line(&mut line).await? > 0 {
                 let mut split = line.split_whitespace();
                 if let Some(stat) = match split.next() {
-                    Some("ctxt") => Some(SchedulerStatistic::ContextSwitches),
-                    Some("processes") => Some(SchedulerStatistic::ProcessesCreated),
-                    Some("procs_running") => Some(SchedulerStatistic::ProcessesRunning),
-                    Some("procs_blocked") => Some(SchedulerStatistic::ProcessesBlocked),
+                    Some("ctxt") => Some(Statistic::ContextSwitches),
+                    Some("processes") => Some(Statistic::ProcessesCreated),
+                    Some("procs_running") => Some(Statistic::ProcessesRunning),
+                    Some("procs_blocked") => Some(Statistic::ProcessesBlocked),
                     _ => None,
                 } {
                     let value = split.next().map(|v| v.parse().unwrap_or(0)).unwrap_or(0);
@@ -289,7 +289,7 @@ impl<'a> Scheduler<'a> {
                                     if delta > 0 {
                                         let value = key_to_value(i as u64);
                                         let _ = self.metrics().record_bucket(
-                                            &SchedulerStatistic::RunqueueLatency,
+                                            &Statistic::RunqueueLatency,
                                             time,
                                             value,
                                             delta as u32,
@@ -333,7 +333,7 @@ impl<'a> Scheduler<'a> {
         if self.sampler_config().bpf() {
             for statistic in &self.statistics {
                 match statistic {
-                    SchedulerStatistic::RunqueueLatency => {
+                    Statistic::RunqueueLatency => {
                         return true;
                     }
                     _ => {}

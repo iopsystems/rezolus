@@ -23,7 +23,7 @@ use strum_macros::{EnumIter, EnumString, IntoStaticStr};
     Serialize,
 )]
 #[serde(deny_unknown_fields, try_from = "&str", into = "&str")]
-pub enum SoftnetStatistic {
+pub enum Statistic {
     #[strum(serialize = "softnet/processed")]
     Processed = 0,
     #[strum(serialize = "softnet/dropped")]
@@ -38,7 +38,7 @@ pub enum SoftnetStatistic {
     FlowLimitCount = 5,
 }
 
-impl Statistic for SoftnetStatistic {
+impl crate::Statistic for Statistic {
     fn name(&self) -> &str {
         (*self).into()
     }

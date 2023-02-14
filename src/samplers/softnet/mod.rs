@@ -18,17 +18,17 @@ mod config;
 mod stat;
 
 pub use config::*;
-pub use stat::*;
+pub use stat::Statistic;
 
 pub struct Softnet {
     common: Common,
     softnet_stat: Option<File>,
-    statistics: Vec<SoftnetStatistic>,
+    statistics: Vec<Statistic>,
 }
 
 #[async_trait]
 impl Sampler for Softnet {
-    type Statistic = SoftnetStatistic;
+    type Statistic = Statistic;
     fn new(common: Common) -> Result<Self, anyhow::Error> {
         let statistics = common.config().samplers().softnet().statistics();
         let sampler = Self {
@@ -42,21 +42,21 @@ impl Sampler for Softnet {
         Ok(sampler)
     }
 
-    fn spawn(common: Common) {
-        if common.config().samplers().softnet().enabled() {
-            if let Ok(mut sampler) = Self::new(common.clone()) {
-                common.runtime().spawn(async move {
-                    loop {
-                        let _ = sampler.sample().await;
-                    }
-                });
-            } else if !common.config.fault_tolerant() {
-                fatal!("failed to initialize softnet sampler");
-            } else {
-                error!("failed to initialize softnet sampler");
-            }
-        }
-    }
+    // fn spawn(common: Common) {
+    //     if common.config().samplers().softnet().enabled() {
+    //         if let Ok(mut sampler) = Self::new(common.clone()) {
+    //             common.runtime().spawn(async move {
+    //                 loop {
+    //                     let _ = sampler.sample().await;
+    //                 }
+    //             });
+    //         } else if !common.config.fault_tolerant() {
+    //             fatal!("failed to initialize softnet sampler");
+    //         } else {
+    //             error!("failed to initialize softnet sampler");
+    //         }
+    //     }
+    // }
 
     fn common(&self) -> &Common {
         &self.common
@@ -99,7 +99,7 @@ impl Softnet {
             file.seek(SeekFrom::Start(0)).await?;
             let mut reader = BufReader::new(file);
             let mut line = String::new();
-            let mut result = HashMap::<SoftnetStatistic, u64>::new();
+            let mut result = HashMap::<Statistic, u64>::new();
 
             while reader.read_line(&mut line).await? > 0 {
                 for (id, part) in line.split_whitespace().enumerate() {

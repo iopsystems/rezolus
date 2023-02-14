@@ -26,7 +26,7 @@ use crate::common::bpf::*;
     Serialize,
 )]
 #[serde(deny_unknown_fields, try_from = "&str", into = "&str")]
-pub enum SchedulerStatistic {
+pub enum Statistic {
     #[strum(serialize = "scheduler/cpu_migrations")]
     CpuMigrations,
     #[strum(serialize = "scheduler/runqueue/latency")]
@@ -41,71 +41,22 @@ pub enum SchedulerStatistic {
     ProcessesBlocked,
 }
 
-impl SchedulerStatistic {
-    #[allow(dead_code)]
-    pub fn bpf_table(self) -> Option<&'static str> {
-        match self {
-            Self::RunqueueLatency => Some("runqueue_latency"),
-            _ => None,
-        }
-    }
+impl Statistic {
+    // #[allow(dead_code)]
+    // pub fn perf_table(self) -> Option<&'static str> {
+    //     match self {
+    //         Self::CpuMigrations => Some("cpu_migrations"),
+    //         _ => None,
+    //     }
+    // }
 
-    #[allow(dead_code)]
-    pub fn perf_table(self) -> Option<&'static str> {
-        match self {
-            Self::CpuMigrations => Some("cpu_migrations"),
-            _ => None,
-        }
-    }
-
-    #[cfg(feature = "bpf")]
-    pub fn bpf_probes_required(self) -> Vec<Probe> {
-        // define the unique probes below.
-
-        let finish_task_switch = if symbol_lookup("finish_task_switch.isra.0").is_some() {
-            "finish_task_switch.isra.0".to_string()
-        } else {
-            "finish_task_switch".to_string()
-        };
-
-        let finish_task_probe = Probe {
-            name: finish_task_switch,
-            handler: "trace_run".to_string(),
-            probe_type: ProbeType::Kernel,
-            probe_location: ProbeLocation::Entry,
-            binary_path: None,
-            sub_system: None,
-        };
-        let wakeup_probe = Probe {
-            name: "ttwu_do_wakeup".to_string(),
-            handler: "trace_ttwu_do_wakeup".to_string(),
-            probe_type: ProbeType::Kernel,
-            probe_location: ProbeLocation::Entry,
-            binary_path: None,
-            sub_system: None,
-        };
-        let new_task_probe = Probe {
-            name: "wake_up_new_task".to_string(),
-            handler: "trace_wake_up_new_task".to_string(),
-            probe_type: ProbeType::Kernel,
-            probe_location: ProbeLocation::Entry,
-            binary_path: None,
-            sub_system: None,
-        };
-
-        match self {
-            Self::RunqueueLatency => vec![finish_task_probe, wakeup_probe, new_task_probe],
-            _ => Vec::new(),
-        }
-    }
-
-    #[cfg(feature = "bpf")]
-    pub fn event(self) -> Option<Event> {
-        match self {
-            Self::CpuMigrations => Some(Event::Software(SoftwareEvent::CpuMigrations)),
-            _ => None,
-        }
-    }
+    // #[cfg(feature = "bpf")]
+    // pub fn event(self) -> Option<Event> {
+    //     match self {
+    //         Self::CpuMigrations => Some(Event::Software(SoftwareEvent::CpuMigrations)),
+    //         _ => None,
+    //     }
+    // }
 
     pub fn max(&self) -> u64 {
         match self {
@@ -115,7 +66,7 @@ impl SchedulerStatistic {
     }
 }
 
-impl Statistic for SchedulerStatistic {
+impl crate::Statistic for Statistic {
     fn name(&self) -> &str {
         (*self).into()
     }

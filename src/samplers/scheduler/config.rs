@@ -6,8 +6,8 @@ use serde_derive::Deserialize;
 use strum::IntoEnumIterator;
 
 use crate::config::SamplerConfig;
-
-use super::stat::*;
+use super::sampler_config;
+use super::stat::Statistic;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,7 +25,7 @@ pub struct SchedulerConfig {
     #[serde(default)]
     perf_events: bool,
     #[serde(default = "default_statistics")]
-    statistics: Vec<SchedulerStatistic>,
+    statistics: Vec<Statistic>,
 }
 
 impl Default for SchedulerConfig {
@@ -42,52 +42,8 @@ impl Default for SchedulerConfig {
     }
 }
 
-fn default_statistics() -> Vec<SchedulerStatistic> {
-    SchedulerStatistic::iter().collect()
+fn default_statistics() -> Vec<Statistic> {
+    Statistic::iter().collect()
 }
 
-impl SamplerConfig for SchedulerConfig {
-    type Statistic = SchedulerStatistic;
-
-    fn bpf(&self) -> bool {
-        self.bpf
-    }
-
-    fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    fn interval(&self) -> Option<usize> {
-        self.interval
-    }
-
-    fn percentiles(&self) -> &[f64] {
-        &self.percentiles
-    }
-
-    fn distribution_percentiles(&self) -> &[f64] {
-        &self.distribution_percentiles
-    }
-
-    fn perf_events(&self) -> bool {
-        self.perf_events
-    }
-
-    fn statistics(&self) -> Vec<<Self as SamplerConfig>::Statistic> {
-        let mut enabled = Vec::new();
-        for statistic in self.statistics.iter() {
-            if statistic.perf_table().is_some() {
-                if self.perf_events() {
-                    enabled.push(*statistic);
-                }
-            } else if statistic.bpf_table().is_some() {
-                if self.bpf() {
-                    enabled.push(*statistic);
-                }
-            } else {
-                enabled.push(*statistic);
-            }
-        }
-        enabled
-    }
-}
+sampler_config!(SchedulerConfig);

@@ -28,7 +28,7 @@ use crate::*;
 // pub mod process;
 // pub mod rezolus;
 pub mod scheduler;
-// pub mod softnet;
+pub mod softnet;
 // pub mod tcp;
 // pub mod udp;
 // pub mod usercall;
@@ -49,7 +49,7 @@ pub mod scheduler;
 // pub use process::Process;
 // pub use rezolus::Rezolus;
 pub use scheduler::Scheduler;
-// pub use softnet::Softnet;
+pub use softnet::Softnet;
 // pub use tcp::Tcp;
 // pub use udp::Udp;
 // pub use usercall::Usercall;
@@ -223,4 +223,42 @@ impl Common {
     pub fn metrics(&self) -> &Metrics {
         &self.metrics
     }
+}
+
+#[macro_export]
+macro_rules! sampler_config {
+    // `()` indicates that the macro takes no argument.
+    ($t:ty) => {
+        impl SamplerConfig for $t {
+            type Statistic = Statistic;
+
+            fn bpf(&self) -> bool {
+                self.bpf
+            }
+
+            fn enabled(&self) -> bool {
+                self.enabled
+            }
+
+            fn interval(&self) -> Option<usize> {
+                self.interval
+            }
+
+            fn percentiles(&self) -> &[f64] {
+                &self.percentiles
+            }
+
+            fn statistics(&self) -> Vec<<Self as SamplerConfig>::Statistic> {
+                let mut enabled = Vec::new();
+                for statistic in self.statistics.iter() {
+                    enabled.push(*statistic);
+                }
+                enabled
+            }
+
+            fn distribution_percentiles(&self) -> &[f64] {
+                &self.distribution_percentiles
+            }
+        }
+    };
 }

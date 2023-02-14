@@ -107,7 +107,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Process::spawn(common.clone());
     // Rezolus::spawn(common.clone());
 
-    // let scheduler = Scheduler::new(common.clone());
     if let Ok(mut scheduler) = Scheduler::new(common.clone()) {
         runtime.spawn(async move {
             loop {
@@ -116,8 +115,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     };
 
-    // Scheduler::spawn(common.clone());
-    // Softnet::spawn(common.clone());
+    if let Ok(mut softnet) = Softnet::new(common.clone()) {
+        runtime.spawn(async move {
+            loop {
+                let _ = softnet.sample().await;
+            }
+        });
+    };
+    
     // Tcp::spawn(common.clone());
     // Udp::spawn(common.clone());
     // Usercall::spawn(common.clone());

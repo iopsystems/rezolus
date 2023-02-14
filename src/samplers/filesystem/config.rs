@@ -11,7 +11,7 @@ use super::stat::*;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Ext4Config {
+pub struct FilesystemConfig {
     #[serde(default)]
     bpf: bool,
     #[serde(default)]
@@ -21,10 +21,10 @@ pub struct Ext4Config {
     #[serde(default = "crate::common::default_percentiles")]
     percentiles: Vec<f64>,
     #[serde(default = "default_statistics")]
-    statistics: Vec<Ext4Statistic>,
+    statistics: Vec<FilesystemStatistic>,
 }
 
-impl Default for Ext4Config {
+impl Default for FilesystemConfig {
     fn default() -> Self {
         Self {
             bpf: Default::default(),
@@ -36,12 +36,12 @@ impl Default for Ext4Config {
     }
 }
 
-fn default_statistics() -> Vec<Ext4Statistic> {
-    Ext4Statistic::iter().collect()
+fn default_statistics() -> Vec<FilesystemStatistic> {
+    FilesystemStatistic::iter().collect()
 }
 
 impl SamplerConfig for Ext4Config {
-    type Statistic = Ext4Statistic;
+    type Statistic = FilesystemStatistic;
 
     fn bpf(&self) -> bool {
         self.bpf
