@@ -2,8 +2,10 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
+
 use crate::config::*;
 
+use samplers::blockio::BlockIOConfig;
 // use samplers::cpu::CpuConfig;
 // use samplers::disk::DiskConfig;
 use samplers::filesystem::FilesystemConfig;
@@ -28,6 +30,8 @@ use samplers::softnet::SoftnetConfig;
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Samplers {
+    #[serde(default)]
+    blockio: BlockIOConfig,
     // #[serde(default)]
     // cpu: CpuConfig,
     // #[serde(default)]
@@ -71,6 +75,9 @@ pub struct Samplers {
 }
 
 impl Samplers {
+    pub fn blockio(&self) -> &BlockIOConfig {
+        &self.blockio
+    }
     // pub fn cpu(&self) -> &CpuConfig {
     //     &self.cpu
     // }

@@ -107,13 +107,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Process::spawn(common.clone());
     // Rezolus::spawn(common.clone());
 
-    if let Ok(mut filesystem) = Filesystem::new(common.clone()) {
+    if let Ok(mut s) = BlockIO::new(common.clone()) {
         runtime.spawn(async move {
             loop {
-                let _ = filesystem.sample().await;
+                let _ = s.sample().await;
             }
         });
     };
+
+    // if let Ok(mut filesystem) = Filesystem::new(common.clone()) {
+    //     runtime.spawn(async move {
+    //         loop {
+    //             let _ = filesystem.sample().await;
+    //         }
+    //     });
+    // };
 
     if let Ok(mut scheduler) = Scheduler::new(common.clone()) {
         runtime.spawn(async move {

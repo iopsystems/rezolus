@@ -7,12 +7,11 @@
 // can't loop, this is implemented as a binary search
 // with a maximum of 6 branches.
 static __always_inline u32 clz(u64 value) {
-    u64 mask = 1 << 63;
     u32 count = 0;
 
     // quick return if value is 0
     if (!value) {
-        64;
+        return 64;
     }
 
     // binary search to find number of leading zeros
@@ -26,7 +25,7 @@ static __always_inline u32 clz(u64 value) {
                         } else {
                             return 1;
                         }
-                    } else if (value & 0x20000000000000) {
+                    } else if (value & 0x2000000000000000) {
                         return 2;
                     } else {
                         return 3;
@@ -168,7 +167,7 @@ static __always_inline u32 clz(u64 value) {
                 } else {
                     return 49;
                 }
-            } else if (value & 0x000000000000200) {
+            } else if (value & 0x000000000002000) {
                 return 50;
             } else {
                 return 51;

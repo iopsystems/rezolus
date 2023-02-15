@@ -13,6 +13,7 @@ use crate::config::General as GeneralConfig;
 use crate::config::{Config, SamplerConfig};
 use crate::*;
 
+pub mod blockio;
 // pub mod cpu;
 // pub mod disk;
 pub mod filesystem;
@@ -34,6 +35,7 @@ pub mod softnet;
 // pub mod usercall;
 // pub mod xfs;
 
+pub use blockio::BlockIO;
 // pub use cpu::Cpu;
 // pub use disk::Disk;
 pub use filesystem::Filesystem;
