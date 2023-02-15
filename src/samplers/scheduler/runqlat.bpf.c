@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2019 Facebook
-// Copyright (c) 2023 IOP Systems
+// Copyright (c) 2023 IOP Systems, Inc.
 
 #include "../../../vmlinux.h"
 #include <bpf/bpf_core_read.h>
@@ -88,6 +88,9 @@ int handle__sched_switch(u64 *ctx)
 
 	/* fetch timestamp and calculate delta */
 	tsp = bpf_map_lookup_elem(&start, &pid);
+
+	bpf_map_delete_elem(&start, &pid);
+
 	if (!tsp)
 		return 0;   /* missed enqueue */
 
@@ -102,7 +105,6 @@ int handle__sched_switch(u64 *ctx)
 
 	__sync_fetch_and_add(cnt, 1);
 
-	bpf_map_delete_elem(&start, &pid);
 	return 0;
 }
 

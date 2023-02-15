@@ -6,7 +6,7 @@ use crate::config::*;
 
 // use samplers::cpu::CpuConfig;
 // use samplers::disk::DiskConfig;
-// use samplers::ext4::Ext4Config;
+use samplers::filesystem::FilesystemConfig;
 // use samplers::http::HttpConfig;
 // use samplers::interrupt::InterruptConfig;
 // use samplers::krb5kdc::Krb5kdcConfig;
@@ -32,8 +32,8 @@ pub struct Samplers {
     // cpu: CpuConfig,
     // #[serde(default)]
     // disk: DiskConfig,
-    // #[serde(default)]
-    // ext4: Ext4Config,
+    #[serde(default)]
+    filesystem: FilesystemConfig,
     // #[serde(default)]
     // http: HttpConfig,
     // #[serde(default)]
@@ -79,9 +79,9 @@ impl Samplers {
     //     &self.disk
     // }
 
-    // pub fn ext4(&self) -> &Ext4Config {
-    //     &self.ext4
-    // }
+    pub fn filesystem(&self) -> &FilesystemConfig {
+        &self.filesystem
+    }
 
     // pub fn http(&self) -> &HttpConfig {
     //     &self.http
