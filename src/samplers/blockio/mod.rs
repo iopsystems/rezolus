@@ -184,7 +184,6 @@ impl<'a> BlockIO<'a> {
                                         // update the heatmap
                                         if delta > 0 {
                                             let value = key_to_value(i as u64);
-                                            info!("recording: {} @ {} (idx: {}) for {:?}", delta, value, i, statistic);
                                             let _ = self.metrics().record_bucket(
                                                 &statistic,
                                                 time,

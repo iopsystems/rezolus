@@ -33,14 +33,10 @@ impl SummaryStruct {
     }
 
     pub fn heatmap(
-        max: u64,
-        precision: u8,
         span: Duration<Nanoseconds<u64>>,
         resolution: Duration<Nanoseconds<u64>>,
     ) -> Self {
-        let r = ((10_i32.pow((precision - 1).into()) as f64).log2()).ceil() as u32;
-        let n = (max as f64).log2() as u32 + 1;
-        Self::Heatmap(Heatmap::new(0, r, n, span, resolution).expect("failed to create heatmap"))
+        Self::Heatmap(Heatmap::new(0, 4, 64, span, resolution).expect("failed to create heatmap"))
     }
 
     pub fn stream(samples: usize) -> Self {
@@ -50,8 +46,6 @@ impl SummaryStruct {
 
 enum SummaryType {
     Heatmap(
-        u64,
-        u8,
         Duration<Nanoseconds<u64>>,
         Duration<Nanoseconds<u64>>,
     ),
@@ -64,13 +58,11 @@ pub struct Summary {
 
 impl Summary {
     pub fn heatmap(
-        max: u64,
-        precision: u8,
         span: Duration<Nanoseconds<u64>>,
         resolution: Duration<Nanoseconds<u64>>,
     ) -> Summary {
         Self {
-            inner: SummaryType::Heatmap(max, precision, span, resolution),
+            inner: SummaryType::Heatmap(span, resolution),
         }
     }
 
@@ -82,8 +74,8 @@ impl Summary {
 
     pub(crate) fn build(&self) -> SummaryStruct {
         match self.inner {
-            SummaryType::Heatmap(max, precision, span, resolution) => {
-                SummaryStruct::heatmap(max, precision, span, resolution)
+            SummaryType::Heatmap(span, resolution) => {
+                SummaryStruct::heatmap(span, resolution)
             }
             SummaryType::Stream(samples) => SummaryStruct::stream(samples),
         }

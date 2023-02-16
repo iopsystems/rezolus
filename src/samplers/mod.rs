@@ -118,8 +118,6 @@ pub trait Sampler: Sized + Send {
                     self.common().metrics().add_summary(
                         &statistic,
                         Summary::heatmap(
-                            1_000_000_000,
-                            2,
                             Duration::from_secs(
                                 self.common()
                                     .config()
