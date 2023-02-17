@@ -108,32 +108,33 @@ pub trait Sampler: Sized + Send {
             self.common()
                 .metrics()
                 .add_output(&statistic, Output::Reading);
-            let percentiles = if statistic.source() == Source::Distribution {
-                self.sampler_config().distribution_percentiles()
-            } else {
-                self.sampler_config().percentiles()
-            };
+            let percentiles = self.sampler_config().distribution_percentiles();
+            // let percentiles = if statistic.source() == Source::Distribution {
+            //     self.sampler_config().distribution_percentiles()
+            // } else {
+            //     self.sampler_config().percentiles()
+            // };
             if !percentiles.is_empty() {
-                if statistic.source() == Source::Distribution {
-                    self.common().metrics().add_summary(
-                        &statistic,
-                        Summary::heatmap(
-                            Duration::from_secs(
-                                self.common()
-                                    .config()
-                                    .general()
-                                    .window()
-                                    .try_into()
-                                    .unwrap(),
-                            ),
-                            Duration::from_secs(1),
+                // if statistic.source() == Source::Distribution {
+                self.common().metrics().add_summary(
+                    &statistic,
+                    Summary::heatmap(
+                        Duration::from_secs(
+                            self.common()
+                                .config()
+                                .general()
+                                .window()
+                                .try_into()
+                                .unwrap(),
                         ),
-                    );
-                } else {
-                    self.common()
-                        .metrics()
-                        .add_summary(&statistic, Summary::stream(self.samples()));
-                }
+                        Duration::from_secs(1),
+                    ),
+                );
+                // } else {
+                //     self.common()
+                //         .metrics()
+                //         .add_summary(&statistic, Summary::stream(self.samples()));
+                // }
             }
             for percentile in percentiles {
                 self.common()

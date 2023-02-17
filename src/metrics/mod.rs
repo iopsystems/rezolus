@@ -52,6 +52,10 @@ mod tests {
                 Self::Alpha => Some(Summary::stream(1000)),
             }
         }
+
+        fn is_bpf(&self) -> bool {
+            false
+        }
     }
 
     #[test]

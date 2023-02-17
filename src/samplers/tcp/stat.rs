@@ -25,6 +25,10 @@ use crate::common::bpf::*;
 #[serde(deny_unknown_fields, try_from = "&str", into = "&str")]
 #[allow(clippy::enum_variant_names)]
 pub enum Statistic {
+    #[strum(serialize = "tcp/jitter")]
+    Jitter,
+    #[strum(serialize = "tcp/transmit/retransmit_timeout")]
+    RetransmissionTimeout,
     #[strum(serialize = "tcp/srtt")]
     SmoothedRoundTripTime,
 }
@@ -35,6 +39,13 @@ impl crate::Statistic for Statistic {
     }
 
     fn source(&self) -> Source {
-        Source::Distribution
+        match *self {
+            Self::Jitter | Self::SmoothedRoundTripTime => Source::Distribution,
+            _ => Source::Counter,
+        }
+    }
+
+    fn is_bpf(&self) -> bool {
+        true
     }
 }

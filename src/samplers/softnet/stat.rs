@@ -46,4 +46,8 @@ impl crate::Statistic for Statistic {
     fn source(&self) -> Source {
         Source::Counter
     }
+
+    fn is_bpf(&self) -> bool {
+        false
+    }
 }

@@ -5,10 +5,7 @@ fn main() {}
 fn main() {
     use bpf::*;
 
-    blockio();
-    fslat();
-    runqlat();
-    tcp();
+    generate();
 }
 
 #[cfg(feature = "bpf")]
@@ -17,51 +14,23 @@ mod bpf {
     use std::env;
     use std::path::PathBuf;
 
-    pub fn blockio() {
-        const SRC: &str = "src/samplers/blockio/blockio.bpf.c";
+    const SOURCES: &'static [(&str, &str)] = &[
+        ("src/samplers/blockio/blockio.bpf.c", "src/samplers/blockio/blockio.rs"),
+        ("src/samplers/filesystem/fslat.bpf.c", "src/samplers/filesystem/fslat.rs"),
+        ("src/samplers/scheduler/runqlat.bpf.c", "src/samplers/scheduler/runqlat.rs"),
+        ("src/samplers/tcp/rcv_established.bpf.c", "src/samplers/tcp/rcv_established.rs"),
+        ("src/samplers/tcp/retransmit_timer.bpf.c", "src/samplers/tcp/retransmit_timer.rs"),
+    ];
 
-        let out = "src/samplers/blockio/blockio.rs";
-        SkeletonBuilder::new()
-            .source(SRC)
-            .build_and_generate(&out)
-            .unwrap();
-        println!("cargo:rerun-if-changed={SRC}");
-        println!("cargo:rerun-if-changed=src/bpf/bpf.h");
-    }
+    pub fn generate() {
+        for (source, target) in SOURCES {
+            SkeletonBuilder::new()
+                .source(source)
+                .build_and_generate(target)
+                .unwrap();
+            println!("cargo:rerun-if-changed={source}");
+        }
 
-    pub fn fslat() {
-        const SRC: &str = "src/samplers/filesystem/fslat.bpf.c";
-
-        let out = "src/samplers/filesystem/fslat.rs";
-        SkeletonBuilder::new()
-            .source(SRC)
-            .build_and_generate(&out)
-            .unwrap();
-        println!("cargo:rerun-if-changed={SRC}");
-        println!("cargo:rerun-if-changed=src/bpf/bpf.h");
-    }
-
-    pub fn runqlat() {
-        const SRC: &str = "src/samplers/scheduler/runqlat.bpf.c";
-
-        let out = "src/samplers/scheduler/runqlat.rs";
-        SkeletonBuilder::new()
-            .source(SRC)
-            .build_and_generate(&out)
-            .unwrap();
-        println!("cargo:rerun-if-changed={SRC}");
-        println!("cargo:rerun-if-changed=src/bpf/bpf.h");
-    }
-
-    pub fn tcp() {
-        const SRC: &str = "src/samplers/tcp/tcp.bpf.c";
-
-        let out = "src/samplers/tcp/tcp.rs";
-        SkeletonBuilder::new()
-            .source(SRC)
-            .build_and_generate(&out)
-            .unwrap();
-        println!("cargo:rerun-if-changed={SRC}");
         println!("cargo:rerun-if-changed=src/bpf/bpf.h");
     }
 }

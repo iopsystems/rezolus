@@ -10,6 +10,7 @@ use crate::metrics::*;
 pub struct Entry {
     name: String,
     source: Source,
+    is_bpf: bool,
 }
 
 impl Clone for Entry {
@@ -17,6 +18,7 @@ impl Clone for Entry {
         Self {
             name: self.name.clone(),
             source: self.source,
+            is_bpf: self.is_bpf,
         }
     }
 }
@@ -28,6 +30,10 @@ impl Statistic for Entry {
 
     fn source(&self) -> Source {
         self.source
+    }
+
+    fn is_bpf(&self) -> bool {
+        self.is_bpf
     }
 }
 
@@ -42,6 +48,7 @@ impl From<&dyn Statistic> for Entry {
         Self {
             name: statistic.name().to_string(),
             source: statistic.source(),
+            is_bpf: statistic.is_bpf(),
         }
     }
 }

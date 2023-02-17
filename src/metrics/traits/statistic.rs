@@ -23,6 +23,7 @@ pub trait Statistic {
     fn summary(&self) -> Option<Summary> {
         None
     }
+    fn is_bpf(&self) -> bool;
 }
 
 impl Hash for dyn Statistic {

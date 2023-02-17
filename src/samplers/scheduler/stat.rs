@@ -78,4 +78,11 @@ impl crate::Statistic for Statistic {
             _ => Source::Counter,
         }
     }
+
+    fn is_bpf(&self) -> bool {
+        match *self {
+            Self::RunqueueLatency => true,
+            _ => false,
+        }
+    }
 }

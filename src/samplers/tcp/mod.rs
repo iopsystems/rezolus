@@ -3,9 +3,11 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 
 #[cfg(feature = "bpf")]
-mod tcp;
+mod rcv_established;
 
 #[cfg(feature = "bpf")]
+mod retransmit_timer;
+
 use std::collections::HashSet;
 use core::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -28,14 +30,17 @@ pub use config::*;
 pub use stat::Statistic;
 
 #[cfg(feature = "bpf")]
-use tcp::*;
+use rcv_established::*;
+
+#[cfg(feature = "bpf")]
+use retransmit_timer::*;
 
 #[allow(dead_code)]
 pub struct Tcp<'a> {
     bpf: Option<Arc<Mutex<BpfSamplers<'a>>>>,
     bpf_last: Arc<Mutex<Instant>>,
     common: Common,
-    statistics: Vec<Statistic>,
+    statistics: HashSet<Statistic>,
 }
 
 #[async_trait]
@@ -43,7 +48,7 @@ impl<'a> Sampler for Tcp<'a> {
     type Statistic = Statistic;
     fn new(common: Common) -> Result<Self, anyhow::Error> {
         let fault_tolerant = common.config.general().fault_tolerant();
-        let statistics = common.config().samplers().tcp().statistics();
+        let statistics = common.config().samplers().tcp().statistics().drain(..).collect();
 
         #[allow(unused_mut)]
         let mut sampler = Self {
@@ -113,27 +118,43 @@ impl<'a> Tcp<'a> {
     }
 
     fn initialize_bpf(&mut self) -> Result<(), anyhow::Error> {
+        if ! self.enabled() || ! self.sampler_config().bpf() {
+            return Ok(());
+        }
+
         #[cfg(feature = "bpf")]
         {
-            if self.enabled() && self.bpf_enabled() {
-                debug!("initializing bpf");
+            
+            let mut bpf_samplers = BpfSamplers::default();
 
-                let mut bpf_samplers = BpfSamplers::default();
-
-                let mut builder = TcpSkelBuilder::default();
-                // builder.obj_builder.debug(true);
-
+            if self.statistics.contains(&Statistic::Jitter) || self.statistics.contains(&Statistic::SmoothedRoundTripTime) {
+                let mut builder = RcvEstablishedSkelBuilder::default();
                 let mut skel = builder.open()?.load()?;
                 skel.attach()?;
 
-                let bpf = TcpBpf {
+                let bpf = RcvEstablishedBpf {
                     skel,
-                    srtt: [0; 761],
+                    jitter: [0; 496],
+                    srtt: [0; 496],
                 };
 
-                bpf_samplers.bpf = Some(bpf);
-                self.bpf = Some(Arc::new(Mutex::new(bpf_samplers)));
+                bpf_samplers.rcv_established = Some(bpf);
             }
+
+            if self.statistics.contains(&Statistic::RetransmissionTimeout) {
+                let mut builder = RetransmitTimerSkelBuilder::default();
+                let mut skel = builder.open()?.load()?;
+                skel.attach()?;
+
+                let bpf = RetransmitTimerBpf {
+                    skel,
+                    rto: 0,
+                };
+
+                bpf_samplers.retransmit_timer = Some(bpf);
+            }
+            
+            self.bpf = Some(Arc::new(Mutex::new(bpf_samplers)));
         }
 
         Ok(())
@@ -150,19 +171,20 @@ impl<'a> Tcp<'a> {
                     let mut bpf = bpf.lock().unwrap();
                     let time = Instant::now();
 
-                    if let Some(bpf) = &mut bpf.bpf {
+                    if let Some(bpf) = &mut bpf.rcv_established {
                         let mut maps = bpf.skel.maps();
 
                         let mut current = [0; 8];
 
                         let sources = vec![
                             (&mut bpf.srtt, maps.srtt(), Statistic::SmoothedRoundTripTime),
+                            (&mut bpf.jitter, maps.jitter(), Statistic::Jitter),
                         ];
 
                         let mut current = [0; 8];
 
                         for (hist, map, statistic) in sources {
-                            for i in 0_u32..731_u32 {
+                            for i in 0_u32..496_u32 {
                                 match map.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
                                     Ok(Some(c)) => {
                                         // convert the index to a usize, as we use it a few
@@ -196,6 +218,25 @@ impl<'a> Tcp<'a> {
                         }
                         
                     }
+
+                    if let Some(bpf) = &mut bpf.retransmit_timer {
+                        let mut maps = bpf.skel.maps();
+
+                        let mut current = [0; 8];
+
+                        if let Ok(Some(c)) = maps.rto().lookup(&0_u32.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                            current.copy_from_slice(&c);
+                            let current = u64::from_ne_bytes(current);
+
+                            let _ = self.metrics().record_counter(
+                                &Statistic::RetransmissionTimeout,
+                                time,
+                                current,
+                            );
+
+                            bpf.rto = current;
+                        }
+                    }
                 }
                 *self.bpf_last.lock().unwrap() = Instant::now();
             }
@@ -214,11 +255,19 @@ pub struct BpfSamplers<'a> {
 #[cfg(feature = "bpf")]
 #[derive(Default)]
 pub struct BpfSamplers<'a> {
-    bpf: Option<TcpBpf<'a>>,
+    rcv_established: Option<RcvEstablishedBpf<'a>>,
+    retransmit_timer: Option<RetransmitTimerBpf<'a>>,
 }
 
 #[cfg(feature = "bpf")]
-pub struct TcpBpf<'a> {
-    skel: TcpSkel<'a>,
-    srtt: [u64; 761],
+pub struct RcvEstablishedBpf<'a> {
+    skel: RcvEstablishedSkel<'a>,
+    jitter: [u64; 496],
+    srtt: [u64; 496],
+}
+
+#[cfg(feature = "bpf")]
+pub struct RetransmitTimerBpf<'a> {
+    skel: RetransmitTimerSkel<'a>,
+    rto: u64,
 }
