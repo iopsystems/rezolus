@@ -7,8 +7,7 @@ use strum::IntoEnumIterator;
 
 use crate::config::SamplerConfig;
 
-use super::stat::Statistic;
-use super::sampler_config;
+use super::stat::*;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,10 +20,8 @@ pub struct TcpConfig {
     interval: Option<usize>,
     #[serde(default = "crate::common::default_percentiles")]
     percentiles: Vec<f64>,
-    #[serde(default = "crate::common::default_distribution_percentiles")]
-    distribution_percentiles: Vec<f64>,
     #[serde(default = "default_statistics")]
-    statistics: Vec<Statistic>,
+    statistics: Vec<TcpStatistic>,
 }
 
 impl Default for TcpConfig {
@@ -34,14 +31,45 @@ impl Default for TcpConfig {
             enabled: Default::default(),
             interval: Default::default(),
             percentiles: crate::common::default_percentiles(),
-            distribution_percentiles: crate::common::default_distribution_percentiles(),
             statistics: default_statistics(),
         }
     }
 }
 
-fn default_statistics() -> Vec<Statistic> {
-    Statistic::iter().collect()
+fn default_statistics() -> Vec<TcpStatistic> {
+    TcpStatistic::iter().collect()
 }
 
-sampler_config!(TcpConfig);
+impl SamplerConfig for TcpConfig {
+    type Statistic = TcpStatistic;
+
+    fn bpf(&self) -> bool {
+        self.bpf
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn interval(&self) -> Option<usize> {
+        self.interval
+    }
+
+    fn percentiles(&self) -> &[f64] {
+        &self.percentiles
+    }
+
+    fn statistics(&self) -> Vec<<Self as SamplerConfig>::Statistic> {
+        let mut enabled = Vec::new();
+        for statistic in self.statistics.iter() {
+            if statistic.bpf_table().is_some() {
+                if self.bpf() {
+                    enabled.push(*statistic);
+                }
+            } else {
+                enabled.push(*statistic);
+            }
+        }
+        enabled
+    }
+}

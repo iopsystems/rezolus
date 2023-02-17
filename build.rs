@@ -8,6 +8,7 @@ fn main() {
     blockio();
     fslat();
     runqlat();
+    tcp();
 }
 
 #[cfg(feature = "bpf")]
@@ -44,6 +45,18 @@ mod bpf {
         const SRC: &str = "src/samplers/scheduler/runqlat.bpf.c";
 
         let out = "src/samplers/scheduler/runqlat.rs";
+        SkeletonBuilder::new()
+            .source(SRC)
+            .build_and_generate(&out)
+            .unwrap();
+        println!("cargo:rerun-if-changed={SRC}");
+        println!("cargo:rerun-if-changed=src/bpf/bpf.h");
+    }
+
+    pub fn tcp() {
+        const SRC: &str = "src/samplers/tcp/tcp.bpf.c";
+
+        let out = "src/samplers/tcp/tcp.rs";
         SkeletonBuilder::new()
             .source(SRC)
             .build_and_generate(&out)

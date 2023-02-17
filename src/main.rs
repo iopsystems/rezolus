@@ -123,18 +123,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     });
     // };
 
-    if let Ok(mut scheduler) = Scheduler::new(common.clone()) {
+    if let Ok(mut s) = Scheduler::new(common.clone()) {
         runtime.spawn(async move {
             loop {
-                let _ = scheduler.sample().await;
+                let _ = s.sample().await;
             }
         });
     };
 
-    if let Ok(mut softnet) = Softnet::new(common.clone()) {
+    if let Ok(mut s) = Softnet::new(common.clone()) {
         runtime.spawn(async move {
             loop {
-                let _ = softnet.sample().await;
+                let _ = s.sample().await;
+            }
+        });
+    };
+
+    if let Ok(mut s) = Tcp::new(common.clone()) {
+        runtime.spawn(async move {
+            loop {
+                let _ = s.sample().await;
             }
         });
     };

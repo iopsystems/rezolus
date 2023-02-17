@@ -22,7 +22,7 @@ use samplers::filesystem::FilesystemConfig;
 // use samplers::rezolus::RezolusConfig;
 use samplers::scheduler::SchedulerConfig;
 use samplers::softnet::SoftnetConfig;
-// use samplers::tcp::TcpConfig;
+use samplers::tcp::TcpConfig;
 // use samplers::udp::UdpConfig;
 // use samplers::usercall::UsercallConfig;
 // use samplers::xfs::XfsConfig;
@@ -64,8 +64,8 @@ pub struct Samplers {
     scheduler: SchedulerConfig,
     #[serde(default)]
     softnet: SoftnetConfig,
-    // #[serde(default)]
-    // tcp: TcpConfig,
+    #[serde(default)]
+    tcp: TcpConfig,
     // #[serde(default)]
     // udp: UdpConfig,
     // #[serde(default)]
@@ -142,9 +142,9 @@ impl Samplers {
         &self.softnet
     }
 
-    // pub fn tcp(&self) -> &TcpConfig {
-    //     &self.tcp
-    // }
+    pub fn tcp(&self) -> &TcpConfig {
+        &self.tcp
+    }
 
     // pub fn udp(&self) -> &UdpConfig {
     //     &self.udp

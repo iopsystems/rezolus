@@ -1,39 +1,46 @@
-// Copyright 2019 Twitter, Inc.
+// Copyright 2023 IOP Systems, Inc.
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
 #[cfg(feature = "bpf")]
-use std::collections::HashSet;
+mod tcp;
 
+#[cfg(feature = "bpf")]
+use std::collections::HashSet;
+use core::marker::PhantomData;
 use std::sync::{Arc, Mutex};
-use tokio::fs::File;
 
 use async_trait::async_trait;
 
+#[cfg(feature = "bpf")]
 use crate::common::bpf::*;
 use crate::config::SamplerConfig;
-use crate::samplers::{Common, Sampler};
+use crate::samplers::Common;
 use crate::*;
+
+#[cfg(feature = "bpf")]
+use crate::Statistic as Stat;
 
 mod config;
 mod stat;
 
 pub use config::*;
-pub use stat::*;
+pub use stat::Statistic;
+
+#[cfg(feature = "bpf")]
+use tcp::*;
 
 #[allow(dead_code)]
-pub struct Tcp {
-    bpf: Option<Arc<Mutex<BPF>>>,
+pub struct Tcp<'a> {
+    bpf: Option<Arc<Mutex<BpfSamplers<'a>>>>,
     bpf_last: Arc<Mutex<Instant>>,
     common: Common,
-    proc_net_snmp: Option<File>,
-    proc_net_netstat: Option<File>,
-    statistics: Vec<TcpStatistic>,
+    statistics: Vec<Statistic>,
 }
 
 #[async_trait]
-impl Sampler for Tcp {
-    type Statistic = TcpStatistic;
+impl<'a> Sampler for Tcp<'a> {
+    type Statistic = Statistic;
     fn new(common: Common) -> Result<Self, anyhow::Error> {
         let fault_tolerant = common.config.general().fault_tolerant();
         let statistics = common.config().samplers().tcp().statistics();
@@ -43,8 +50,6 @@ impl Sampler for Tcp {
             bpf: None,
             bpf_last: Arc::new(Mutex::new(Instant::now())),
             common,
-            proc_net_snmp: None,
-            proc_net_netstat: None,
             statistics,
         };
 
@@ -60,22 +65,6 @@ impl Sampler for Tcp {
         }
 
         Ok(sampler)
-    }
-
-    fn spawn(common: Common) {
-        if common.config().samplers().tcp().enabled() {
-            if let Ok(mut sampler) = Self::new(common.clone()) {
-                common.runtime().spawn(async move {
-                    loop {
-                        let _ = sampler.sample().await;
-                    }
-                });
-            } else if !common.config.fault_tolerant() {
-                fatal!("failed to initialize tcp sampler");
-            } else {
-                error!("failed to initialize tcp sampler");
-            }
-        }
     }
 
     fn common(&self) -> &Common {
@@ -101,12 +90,6 @@ impl Sampler for Tcp {
 
         debug!("sampling");
 
-        let r = self.sample_snmp().await;
-        self.map_result(r)?;
-
-        let r = self.sample_netstat().await;
-        self.map_result(r)?;
-
         // sample bpf
         #[cfg(feature = "bpf")]
         self.map_result(self.sample_bpf())?;
@@ -115,13 +98,13 @@ impl Sampler for Tcp {
     }
 }
 
-impl Tcp {
+impl<'a> Tcp<'a> {
     // checks that bpf is enabled in config and one or more bpf stats enabled
     #[cfg(feature = "bpf")]
     fn bpf_enabled(&self) -> bool {
         if self.sampler_config().bpf() {
-            for statistic in self.sampler_config().statistics() {
-                if statistic.bpf_table().is_some() {
+            for statistic in &self.statistics {
+                if statistic.source() == Source::Distribution {
                     return true;
                 }
             }
@@ -134,126 +117,108 @@ impl Tcp {
         {
             if self.enabled() && self.bpf_enabled() {
                 debug!("initializing bpf");
-                // load the code and compile
-                let code = include_str!("bpf.c");
-                let code = code.replace(
-                    "VALUE_TO_INDEX2_FUNC",
-                    include_str!("../../common/value_to_index2.c"),
-                );
-                let mut bpf = bcc::BPF::new(&code)?;
 
-                // collect the set of probes required from the statistics enabled.
-                let mut probes = HashSet::new();
-                for statistic in &self.statistics {
-                    for probe in statistic.bpf_probes_required() {
-                        probes.insert(probe);
-                    }
-                }
+                let mut bpf_samplers = BpfSamplers::default();
 
-                // load + attach the kernel probes that are required to the bpf instance.
-                for probe in probes {
-                    if self.common.config.fault_tolerant() {
-                        if let Err(e) = probe.try_attach_to_bpf(&mut bpf) {
-                            warn!("skipping {} with error: {}", probe.name, e);
-                        }
-                    } else {
-                        probe.try_attach_to_bpf(&mut bpf)?;
-                    }
-                }
+                let mut builder = TcpSkelBuilder::default();
+                // builder.obj_builder.debug(true);
 
-                self.bpf = Some(Arc::new(Mutex::new(BPF { inner: bpf })))
+                let mut skel = builder.open()?.load()?;
+                skel.attach()?;
+
+                let bpf = TcpBpf {
+                    skel,
+                    srtt: [0; 761],
+                };
+
+                bpf_samplers.bpf = Some(bpf);
+                self.bpf = Some(Arc::new(Mutex::new(bpf_samplers)));
             }
         }
 
-        Ok(())
-    }
-
-    async fn sample_snmp(&mut self) -> Result<(), std::io::Error> {
-        if self.proc_net_snmp.is_none() {
-            let file = File::open("/proc/net/snmp").await?;
-            self.proc_net_snmp = Some(file);
-        }
-        if let Some(file) = &mut self.proc_net_snmp {
-            let parsed = crate::common::nested_map_from_file(file).await?;
-            let time = Instant::now();
-            for statistic in &self.statistics {
-                if let Some((pkey, lkey)) = statistic.keys() {
-                    if let Some(inner) = parsed.get(pkey) {
-                        if let Some(value) = inner.get(lkey) {
-                            let _ = self.metrics().record_counter(statistic, time, *value);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn sample_netstat(&mut self) -> Result<(), std::io::Error> {
-        if self.proc_net_netstat.is_none() {
-            let file = File::open("/proc/net/netstat").await?;
-            self.proc_net_netstat = Some(file);
-        }
-        if let Some(file) = &mut self.proc_net_netstat {
-            let parsed = crate::common::nested_map_from_file(file).await?;
-            let time = Instant::now();
-            for statistic in &self.statistics {
-                if let Some((pkey, lkey)) = statistic.keys() {
-                    if let Some(inner) = parsed.get(pkey) {
-                        if let Some(value) = inner.get(lkey) {
-                            let _ = self.metrics().record_counter(statistic, time, *value);
-                        }
-                    }
-                }
-            }
-        }
         Ok(())
     }
 
     #[cfg(feature = "bpf")]
     fn sample_bpf(&self) -> Result<(), std::io::Error> {
-        if self.bpf_last.lock().unwrap().elapsed()
-            >= Duration::from_secs(self.general_config().window() as u64)
+        // sample bpf
         {
-            if let Some(ref bpf) = self.bpf {
-                let bpf = bpf.lock().unwrap();
-                let time = Instant::now();
-                for statistic in self.statistics.iter().filter(|s| s.bpf_table().is_some()) {
-                    // if statistic is Counter
-                    match statistic.source() {
-                        Source::Counter => {
-                            if let Ok(table) = &(*bpf).inner.table(statistic.bpf_table().unwrap()) {
-                                let count = crate::common::bpf::parse_u64(
-                                    table.iter().next().unwrap().value,
-                                );
-                                let _ = self.metrics().record_counter(statistic, time, count);
-                            }
-                        }
-                        // if it's distribution
-                        Source::Distribution => {
-                            if let Ok(mut table) =
-                                (*bpf).inner.table(statistic.bpf_table().unwrap())
-                            {
-                                for (&value, &count) in &map_from_table(&mut table) {
-                                    if count > 0 {
-                                        let _ = self.metrics().record_bucket(
-                                            statistic,
-                                            time,
-                                            // in bpf everything is in micro, we convert it back to nano for alignment.
-                                            value * 1000,
-                                            count,
-                                        );
+            if self.bpf_last.lock().unwrap().elapsed()
+                >= Duration::from_secs(1)
+            {
+                if let Some(ref bpf) = self.bpf {
+                    let mut bpf = bpf.lock().unwrap();
+                    let time = Instant::now();
+
+                    if let Some(bpf) = &mut bpf.bpf {
+                        let mut maps = bpf.skel.maps();
+
+                        let mut current = [0; 8];
+
+                        let sources = vec![
+                            (&mut bpf.srtt, maps.srtt(), Statistic::SmoothedRoundTripTime),
+                        ];
+
+                        let mut current = [0; 8];
+
+                        for (hist, map, statistic) in sources {
+                            for i in 0_u32..731_u32 {
+                                match map.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                                    Ok(Some(c)) => {
+                                        // convert the index to a usize, as we use it a few
+                                        // times to index into slices
+                                        let i = i as usize;
+
+                                        // convert bytes to the current count of the bucket
+                                        current.copy_from_slice(&c);
+                                        let current = u64::from_ne_bytes(current);
+
+                                        // calculate the delta from previous count
+                                        let delta = current.wrapping_sub(hist[i]);
+
+                                        // update the previous count
+                                        hist[i] = current;
+
+                                        // update the heatmap
+                                        if delta > 0 {
+                                            let value = key_to_value(i as u64);
+                                            let _ = self.metrics().record_bucket(
+                                                &statistic,
+                                                time,
+                                                value,
+                                                delta as u32,
+                                            );
+                                        }
                                     }
+                                    _ => { }
                                 }
                             }
                         }
-                        _ => (), // we do not support other types
+                        
                     }
                 }
+                *self.bpf_last.lock().unwrap() = Instant::now();
             }
-            *self.bpf_last.lock().unwrap() = Instant::now();
         }
+
         Ok(())
     }
+}
+
+#[cfg(not(feature = "bpf"))]
+pub struct BpfSamplers<'a> {
+    // used to mark the placeholder type with the appropriate lifetime
+    _lifetime: PhantomData<&'a ()>
+}
+
+#[cfg(feature = "bpf")]
+#[derive(Default)]
+pub struct BpfSamplers<'a> {
+    bpf: Option<TcpBpf<'a>>,
+}
+
+#[cfg(feature = "bpf")]
+pub struct TcpBpf<'a> {
+    skel: TcpSkel<'a>,
+    srtt: [u64; 761],
 }
