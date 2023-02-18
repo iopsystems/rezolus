@@ -131,13 +131,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     };
 
-    if let Ok(mut s) = Softnet::new(common.clone()) {
-        runtime.spawn(async move {
-            loop {
-                let _ = s.sample().await;
-            }
-        });
-    };
+    // if let Ok(mut s) = Softnet::new(common.clone()) {
+    //     runtime.spawn(async move {
+    //         loop {
+    //             let _ = s.sample().await;
+    //         }
+    //     });
+    // };
 
     if let Ok(mut s) = Tcp::new(common.clone()) {
         runtime.spawn(async move {

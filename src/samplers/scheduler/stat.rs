@@ -27,18 +27,18 @@ use crate::common::bpf::*;
 )]
 #[serde(deny_unknown_fields, try_from = "&str", into = "&str")]
 pub enum Statistic {
-    #[strum(serialize = "scheduler/cpu_migrations")]
-    CpuMigrations,
+    // #[strum(serialize = "scheduler/cpu_migrations")]
+    // CpuMigrations,
     #[strum(serialize = "scheduler/runqueue/latency")]
     RunqueueLatency,
-    #[strum(serialize = "scheduler/context_switches")]
-    ContextSwitches,
-    #[strum(serialize = "scheduler/processes/created")]
-    ProcessesCreated,
-    #[strum(serialize = "scheduler/processes/running")]
-    ProcessesRunning,
-    #[strum(serialize = "scheduler/processes/blocked")]
-    ProcessesBlocked,
+    // #[strum(serialize = "scheduler/context_switches")]
+    // ContextSwitches,
+    // #[strum(serialize = "scheduler/processes/created")]
+    // ProcessesCreated,
+    // #[strum(serialize = "scheduler/processes/running")]
+    // ProcessesRunning,
+    // #[strum(serialize = "scheduler/processes/blocked")]
+    // ProcessesBlocked,
 }
 
 impl Statistic {
@@ -61,7 +61,7 @@ impl Statistic {
     pub fn max(&self) -> u64 {
         match self {
             Self::RunqueueLatency => SECOND,
-            _ => 1_000_000_000,
+            // _ => 1_000_000_000,
         }
     }
 }
@@ -74,15 +74,15 @@ impl crate::Statistic for Statistic {
     fn source(&self) -> Source {
         match *self {
             Self::RunqueueLatency => Source::Distribution,
-            Self::ProcessesRunning | Self::ProcessesBlocked => Source::Gauge,
-            _ => Source::Counter,
+            // Self::ProcessesRunning | Self::ProcessesBlocked => Source::Gauge,
+            // _ => Source::Counter,
         }
     }
 
     fn is_bpf(&self) -> bool {
         match *self {
             Self::RunqueueLatency => true,
-            _ => false,
+            // _ => false,
         }
     }
 }

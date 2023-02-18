@@ -131,8 +131,8 @@ impl<'a> Sampler for Scheduler<'a> {
         // #[cfg(feature = "bpf")]
         // self.map_result(self.sample_bpf_perf_counters())?;
 
-        let r = self.sample_proc_stat().await;
-        self.map_result(r)?;
+        // let r = self.sample_proc_stat().await;
+        // self.map_result(r)?;
         #[cfg(feature = "bpf")]
         let _ = self.sample_bpf();
 
@@ -206,50 +206,50 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
-    async fn sample_proc_stat(&mut self) -> Result<(), std::io::Error> {
-        if self.proc_stat.is_none() {
-            let file = File::open("/proc/stat").await?;
-            self.proc_stat = Some(file);
-        }
+    // async fn sample_proc_stat(&mut self) -> Result<(), std::io::Error> {
+    //     // if self.proc_stat.is_none() {
+    //     //     let file = File::open("/proc/stat").await?;
+    //     //     self.proc_stat = Some(file);
+    //     // }
 
-        if let Some(file) = &mut self.proc_stat {
-            file.seek(SeekFrom::Start(0)).await?;
-            let mut reader = BufReader::new(file);
-            let mut line = String::new();
-            let mut result = HashMap::new();
+    //     // if let Some(file) = &mut self.proc_stat {
+    //     //     file.seek(SeekFrom::Start(0)).await?;
+    //     //     let mut reader = BufReader::new(file);
+    //     //     let mut line = String::new();
+    //     //     let mut result = HashMap::new();
 
-            while reader.read_line(&mut line).await? > 0 {
-                let mut split = line.split_whitespace();
-                if let Some(stat) = match split.next() {
-                    Some("ctxt") => Some(Statistic::ContextSwitches),
-                    Some("processes") => Some(Statistic::ProcessesCreated),
-                    Some("procs_running") => Some(Statistic::ProcessesRunning),
-                    Some("procs_blocked") => Some(Statistic::ProcessesBlocked),
-                    _ => None,
-                } {
-                    let value = split.next().map(|v| v.parse().unwrap_or(0)).unwrap_or(0);
-                    result.insert(stat, value);
-                }
-                line.clear();
-            }
-            let time = Instant::now();
-            for statistic in &self.statistics {
-                if let Some(value) = result.get(statistic) {
-                    match statistic.source() {
-                        Source::Counter => {
-                            let _ = self.metrics().record_counter(statistic, time, *value);
-                        }
-                        Source::Gauge => {
-                            let _ = self.metrics().record_gauge(statistic, time, *value);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+    //     //     while reader.read_line(&mut line).await? > 0 {
+    //     //         let mut split = line.split_whitespace();
+    //     //         if let Some(stat) = match split.next() {
+    //     //             Some("ctxt") => Some(Statistic::ContextSwitches),
+    //     //             Some("processes") => Some(Statistic::ProcessesCreated),
+    //     //             Some("procs_running") => Some(Statistic::ProcessesRunning),
+    //     //             Some("procs_blocked") => Some(Statistic::ProcessesBlocked),
+    //     //             _ => None,
+    //     //         } {
+    //     //             let value = split.next().map(|v| v.parse().unwrap_or(0)).unwrap_or(0);
+    //     //             result.insert(stat, value);
+    //     //         }
+    //     //         line.clear();
+    //     //     }
+    //     //     let time = Instant::now();
+    //     //     for statistic in &self.statistics {
+    //     //         if let Some(value) = result.get(statistic) {
+    //     //             match statistic.source() {
+    //     //                 Source::Counter => {
+    //     //                     let _ = self.metrics().record_counter(statistic, time, *value);
+    //     //                 }
+    //     //                 Source::Gauge => {
+    //     //                     let _ = self.metrics().record_gauge(statistic, time, *value);
+    //     //                 }
+    //     //                 _ => {}
+    //     //             }
+    //     //         }
+    //     //     }
+    //     // }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     #[cfg(feature = "bpf")]
     fn sample_bpf(&self) -> Result<(), std::io::Error> {
