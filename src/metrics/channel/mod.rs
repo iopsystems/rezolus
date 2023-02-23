@@ -2,20 +2,20 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
+use heatmap::Heatmap;
 use crate::metrics::entry::Entry;
 use crate::metrics::outputs::ApproxOutput;
-use crate::metrics::summary::SummaryStruct;
 use crate::metrics::traits::*;
 use crate::metrics::MetricsError;
 use crate::metrics::Output;
-use crate::metrics::Summary;
 use crate::metrics::*;
-// use rustcommon_atomics::Arithmetic;
-// use rustcommon_atomics::AtomicU64;
 use clocksource::*;
 
 use crossbeam::atomic::AtomicCell;
 use dashmap::DashSet;
+
+type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
+
 // use rustcommon_atomics::{Atomic, AtomicBool, Ordering};
 
 /// Internal type which stores fields necessary to track a corresponding
@@ -25,20 +25,19 @@ pub struct Channel {
     statistic: Entry,
     empty: AtomicBool,
     reading: AtomicU64,
-    summary: Option<SummaryStruct>,
+    heatmap: Heatmap,
     outputs: DashSet<ApproxOutput>,
 }
 
 impl Channel {
     /// Creates an empty channel for a statistic.
     pub fn new(statistic: &dyn Statistic) -> Self {
-        let summary = statistic.summary().map(|v| v.build());
         Self {
             empty: AtomicBool::new(true),
             statistic: Entry::from(statistic),
             reading: Default::default(),
             refreshed: AtomicCell::new(Instant::<Nanoseconds<u64>>::now()),
-            summary,
+            heatmap: Heatmap::new(0, 4, 64, Duration::from_secs(60), Duration::from_secs(1)).expect("failed to create heatmap"),
             outputs: Default::default(),
         }
     }
@@ -49,13 +48,8 @@ impl Channel {
         time: Instant<Nanoseconds<u64>>,
         value: u64,
         count: u32,
-    ) -> Result<(), MetricsError> {
-        if let Some(summary) = &self.summary {
-            summary.increment(time, value, count);
-            Ok(())
-        } else {
-            Err(MetricsError::NoSummary)
-        }
+    ) {
+        self.heatmap.increment(time, value, count);
     }
 
     /// Updates a counter to a new value if the reading is newer than the stored
@@ -66,16 +60,14 @@ impl Channel {
             return;
         }
         if !self.empty.load(Ordering::Relaxed) {
-            if let Some(summary) = &self.summary {
-                self.refreshed.store(time);
-                let v0 = self.reading.load(Ordering::Relaxed);
-                let dt = time - t0;
-                let dv = (value - v0) as f64;
-                let rate = (dv
-                    / (dt.as_secs() as f64 + dt.subsec_nanos() as f64 / 1_000_000_000.0))
-                    .ceil();
-                summary.increment(time, rate as u64, 1);
-            }
+            self.refreshed.store(time);
+            let v0 = self.reading.load(Ordering::Relaxed);
+            let dt = time - t0;
+            let dv = (value - v0) as f64;
+            let rate = (dv
+                / (dt.as_secs() as f64 + dt.subsec_nanos() as f64 / 1_000_000_000.0))
+                .ceil();
+            self.heatmap.increment(time, rate as u64, 1);
             self.reading.store(value, Ordering::Relaxed);
         } else {
             self.reading.store(value, Ordering::Relaxed);
@@ -98,9 +90,7 @@ impl Channel {
                 return;
             }
         }
-        if let Some(summary) = &self.summary {
-            summary.increment(time, value, 1_u8.into());
-        }
+        self.heatmap.increment(time, value, 1_u8.into());
         self.reading.store(value, Ordering::Relaxed);
         self.empty.store(false, Ordering::Relaxed);
         self.refreshed.store(time);
@@ -108,11 +98,7 @@ impl Channel {
 
     /// Returns a percentile across stored readings/rates/...
     pub fn percentile(&self, percentile: f64) -> Result<u64, MetricsError> {
-        if let Some(summary) = &self.summary {
-            summary.percentile(percentile).map_err(MetricsError::from)
-        } else {
-            Err(MetricsError::NoSummary)
-        }
+        self.heatmap.percentile(percentile).map(|v| v.high()).map_err(MetricsError::from)
     }
 
     /// Returns the main reading for the channel (eg: counter, gauge)
@@ -121,19 +107,6 @@ impl Channel {
             Ok(self.reading.load(Ordering::Relaxed))
         } else {
             Err(MetricsError::Empty)
-        }
-    }
-
-    /// Set a summary to be used for an existing channel
-    pub fn set_summary(&mut self, summary: Summary) {
-        let summary = summary.build();
-        self.summary = Some(summary);
-    }
-
-    /// Set a summary to be used for an existing channel
-    pub fn add_summary(&mut self, summary: Summary) {
-        if self.summary.is_none() {
-            self.set_summary(summary);
         }
     }
 

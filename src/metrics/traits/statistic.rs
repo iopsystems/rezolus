@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-use crate::metrics::{Source, Summary};
+use crate::metrics::Source;
 
 use core::hash::{Hash, Hasher};
 
@@ -18,11 +18,6 @@ pub trait Statistic {
     fn name(&self) -> &str;
     /// Indicates which source type the statistic tracks.
     fn source(&self) -> Source;
-    /// Optionally, specify a summary builder which configures a summary
-    /// aggregation for producing additional metrics such as percentiles.
-    fn summary(&self) -> Option<Summary> {
-        None
-    }
     fn is_bpf(&self) -> bool;
 }
 

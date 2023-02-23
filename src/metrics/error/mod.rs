@@ -29,13 +29,13 @@ pub enum MetricsError {
     SourceMismatch,
 }
 
-impl From<SummaryError> for MetricsError {
-    fn from(other: SummaryError) -> Self {
+impl From<heatmap::Error> for MetricsError {
+    fn from(other: heatmap::Error) -> Self {
         match other {
-            SummaryError::Empty => Self::Empty,
-            SummaryError::InvalidPercentile => Self::InvalidPercentile,
-            SummaryError::OutOfRange => Self::OutOfRange,
-            SummaryError::NoSummary => Self::NoSummary,
+            heatmap::Error::Empty => Self::Empty,
+            heatmap::Error::InvalidPercentile => Self::InvalidPercentile,
+            heatmap::Error::OutOfRange => Self::OutOfRange,
+            heatmap::Error::InvalidConfig => unreachable!(),
         }
     }
 }

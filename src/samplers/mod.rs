@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
-use std::convert::TryInto;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -109,33 +108,22 @@ pub trait Sampler: Sized + Send {
                 .metrics()
                 .add_output(&statistic, Output::Reading);
             let percentiles = self.sampler_config().distribution_percentiles();
-            // let percentiles = if statistic.source() == Source::Distribution {
-            //     self.sampler_config().distribution_percentiles()
-            // } else {
-            //     self.sampler_config().percentiles()
-            // };
-            if !percentiles.is_empty() {
-                // if statistic.source() == Source::Distribution {
-                self.common().metrics().add_summary(
-                    &statistic,
-                    Summary::heatmap(
-                        Duration::from_secs(
-                            self.common()
-                                .config()
-                                .general()
-                                .window()
-                                .try_into()
-                                .unwrap(),
-                        ),
-                        Duration::from_secs(1),
-                    ),
-                );
-                // } else {
-                //     self.common()
-                //         .metrics()
-                //         .add_summary(&statistic, Summary::stream(self.samples()));
-                // }
-            }
+            // if !percentiles.is_empty() {
+            //     self.common().metrics().add_summary(
+            //         &statistic,
+            //         Summary::heatmap(
+            //             Duration::from_secs(
+            //                 self.common()
+            //                     .config()
+            //                     .general()
+            //                     .window()
+            //                     .try_into()
+            //                     .unwrap(),
+            //             ),
+            //             Duration::from_secs(1),
+            //         ),
+            //     );
+            // }
             for percentile in percentiles {
                 self.common()
                     .metrics()
