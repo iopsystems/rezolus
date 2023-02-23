@@ -20,6 +20,7 @@ mod bpf {
         ("src/samplers/scheduler/runqlat.bpf.c", "src/samplers/scheduler/runqlat.rs"),
         ("src/samplers/tcp/rcv_established.bpf.c", "src/samplers/tcp/rcv_established.rs"),
         ("src/samplers/tcp/retransmit_timer.bpf.c", "src/samplers/tcp/retransmit_timer.rs"),
+        ("src/samplers/tcp/traffic.bpf.c", "src/samplers/tcp/traffic.rs"),
     ];
 
     pub fn generate() {

@@ -8,6 +8,9 @@ mod rcv_established;
 #[cfg(feature = "bpf")]
 mod retransmit_timer;
 
+#[cfg(feature = "bpf")]
+mod traffic;
+
 use std::collections::HashSet;
 use core::marker::PhantomData;
 use std::sync::{Arc, Mutex};
@@ -34,6 +37,9 @@ use rcv_established::*;
 
 #[cfg(feature = "bpf")]
 use retransmit_timer::*;
+
+#[cfg(feature = "bpf")]
+use traffic::*;
 
 #[allow(dead_code)]
 pub struct Tcp<'a> {
@@ -153,6 +159,26 @@ impl<'a> Tcp<'a> {
 
                 bpf_samplers.retransmit_timer = Some(bpf);
             }
+
+            if self.statistics.contains(&Statistic::RxSize) || self.statistics.contains(&Statistic::RxBytes) || self.statistics.contains(&Statistic::RxPackets) ||
+                self.statistics.contains(&Statistic::TxSize) || self.statistics.contains(&Statistic::TxBytes) || self.statistics.contains(&Statistic::TxPackets)
+            {
+                let mut builder = TrafficSkelBuilder::default();
+                let mut skel = builder.open()?.load()?;
+                skel.attach()?;
+
+                let bpf = TrafficBpf {
+                    skel,
+                    rx_size: [0; 496],
+                    rx_bytes: 0,
+                    rx_packets: 0,
+                    tx_size: [0; 496],
+                    tx_bytes: 0,
+                    tx_packets: 0,
+                };
+
+                bpf_samplers.traffic = Some(bpf);
+            }
             
             self.bpf = Some(Arc::new(Mutex::new(bpf_samplers)));
         }
@@ -237,6 +263,105 @@ impl<'a> Tcp<'a> {
                             bpf.rto = current;
                         }
                     }
+
+                    if let Some(bpf) = &mut bpf.traffic {
+                        let mut maps = bpf.skel.maps();
+
+                        let mut current = [0; 8];
+
+                        let sources = vec![
+                            (&mut bpf.rx_size, maps.rx_size(), Statistic::RxSize),
+                            (&mut bpf.tx_size, maps.tx_size(), Statistic::TxSize),
+                        ];
+
+                        let mut current = [0; 8];
+
+                        for (hist, map, statistic) in sources {
+                            for i in 0_u32..496_u32 {
+                                match map.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                                    Ok(Some(c)) => {
+                                        // convert the index to a usize, as we use it a few
+                                        // times to index into slices
+                                        let i = i as usize;
+
+                                        // convert bytes to the current count of the bucket
+                                        current.copy_from_slice(&c);
+                                        let current = u64::from_ne_bytes(current);
+
+                                        // calculate the delta from previous count
+                                        let delta = current.wrapping_sub(hist[i]);
+
+                                        // update the previous count
+                                        hist[i] = current;
+
+                                        // update the heatmap
+                                        if delta > 0 {
+                                            let value = key_to_value(i as u64);
+                                            let _ = self.metrics().record_bucket(
+                                                &statistic,
+                                                time,
+                                                value,
+                                                delta as u32,
+                                            );
+                                        }
+                                    }
+                                    _ => { }
+                                }
+                            }
+                        }
+
+                        if let Ok(Some(c)) = maps.rx_bytes().lookup(&0_u32.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                            current.copy_from_slice(&c);
+                            let current = u64::from_ne_bytes(current);
+
+                            let _ = self.metrics().record_counter(
+                                &Statistic::RxBytes,
+                                time,
+                                current,
+                            );
+
+                            bpf.rx_bytes = current;
+                        }
+
+                        if let Ok(Some(c)) = maps.rx_packets().lookup(&0_u32.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                            current.copy_from_slice(&c);
+                            let current = u64::from_ne_bytes(current);
+
+                            let _ = self.metrics().record_counter(
+                                &Statistic::RxPackets,
+                                time,
+                                current,
+                            );
+
+                            bpf.rx_packets = current;
+                        }
+
+                        if let Ok(Some(c)) = maps.tx_bytes().lookup(&0_u32.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                            current.copy_from_slice(&c);
+                            let current = u64::from_ne_bytes(current);
+
+                            let _ = self.metrics().record_counter(
+                                &Statistic::TxBytes,
+                                time,
+                                current,
+                            );
+
+                            bpf.tx_bytes = current;
+                        }
+
+                        if let Ok(Some(c)) = maps.tx_packets().lookup(&0_u32.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                            current.copy_from_slice(&c);
+                            let current = u64::from_ne_bytes(current);
+
+                            let _ = self.metrics().record_counter(
+                                &Statistic::TxPackets,
+                                time,
+                                current,
+                            );
+
+                            bpf.tx_packets = current;
+                        }
+                    }
                 }
                 *self.bpf_last.lock().unwrap() = Instant::now();
             }
@@ -257,6 +382,7 @@ pub struct BpfSamplers<'a> {
 pub struct BpfSamplers<'a> {
     rcv_established: Option<RcvEstablishedBpf<'a>>,
     retransmit_timer: Option<RetransmitTimerBpf<'a>>,
+    traffic: Option<TrafficBpf<'a>>,
 }
 
 #[cfg(feature = "bpf")]
@@ -270,4 +396,15 @@ pub struct RcvEstablishedBpf<'a> {
 pub struct RetransmitTimerBpf<'a> {
     skel: RetransmitTimerSkel<'a>,
     rto: u64,
+}
+
+#[cfg(feature = "bpf")]
+pub struct TrafficBpf<'a> {
+    skel: TrafficSkel<'a>,
+    rx_size: [u64; 496],
+    rx_bytes: u64,
+    rx_packets: u64,
+    tx_size: [u64; 496],
+    tx_bytes: u64,
+    tx_packets: u64,
 }

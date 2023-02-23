@@ -31,6 +31,18 @@ pub enum Statistic {
     RetransmissionTimeout,
     #[strum(serialize = "tcp/srtt")]
     SmoothedRoundTripTime,
+    #[strum(serialize = "tcp/rx/size")]
+    RxSize,
+    #[strum(serialize = "tcp/rx/bytes")]
+    RxBytes,
+    #[strum(serialize = "tcp/rx/packets")]
+    RxPackets,
+    #[strum(serialize = "tcp/tx/size")]
+    TxSize,
+    #[strum(serialize = "tcp/tx/bytes")]
+    TxBytes,
+    #[strum(serialize = "tcp/tx/packets")]
+    TxPackets,
 }
 
 impl crate::Statistic for Statistic {
@@ -40,7 +52,7 @@ impl crate::Statistic for Statistic {
 
     fn source(&self) -> Source {
         match *self {
-            Self::Jitter | Self::SmoothedRoundTripTime => Source::Distribution,
+            Self::Jitter | Self::SmoothedRoundTripTime | Self::RxSize | Self::TxSize => Source::Distribution,
             _ => Source::Counter,
         }
     }
