@@ -693,6 +693,7 @@ dependencies = [
  "clap 4.1.6",
  "libbpf-cargo",
  "libbpf-rs",
+ "linkme",
  "ringlog",
 ]
 
