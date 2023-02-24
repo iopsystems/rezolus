@@ -10,8 +10,10 @@ description = "High resolution systems performance telemetry agent"
 [dependencies]
 backtrace = "0.3.67"
 clap = "4.1.4"
+clocksource = "*"
 libbpf-rs = { version = "0.19.1", optional = true }
 linkme = "*"
+metriken = "*"
 ringlog = "*"
 
 [build-dependencies]

@@ -4,12 +4,18 @@ extern crate ringlog;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use std::fmt::Display;
-use std::marker::PhantomData;
+// use std::marker::PhantomData;
 use std::path::Path;
-use std::time::Duration;
-use std::time::Instant;
+// use std::time::Duration;
+// use std::time::Instant;
 
 use linkme::distributed_slice;
+
+type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
+type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
+
+mod common;
+mod samplers;
 
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
@@ -48,30 +54,30 @@ fn main() {
         }
     };
 
+    // initialize and gather the samplers
     let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();
 
     for sampler in SAMPLERS {
         samplers.push(sampler(&config));
     }
 
+    // main loop
     loop {
+        // get current time
         let start = Instant::now();
 
+        // sample each sampler
         for sampler in &mut samplers {
-            sampler.sample(Instant::now());
+            sampler.sample();
         }
 
+        // calculate how long we took during this iteration
         let stop = Instant::now();
+        let elapsed = (stop - start).as_nanos();
 
-        let elapsed = stop - start;
-
-        let sleep = Duration::from_millis(1) - elapsed;
-
-        // for sampler in SAMPLERS {
-        //     sampler.sample(now);
-        // }
-
-        std::thread::sleep(sleep);
+        // calculate how long to sleep and sleep before next iteration
+        let sleep = 100_000 - elapsed;
+        std::thread::sleep(std::time::Duration::from_nanos(sleep));
     }
 }
 
@@ -80,7 +86,7 @@ pub trait Sampler: Display {
     // fn configure(&self, config: &Config) -> Result<(), ()>;
 
     /// Do some sampling and updating of stats
-    fn sample(&mut self, now: Instant);
+    fn sample(&mut self);
 }
 
 pub struct Config {}
@@ -91,51 +97,3 @@ impl Config {
     }
 }
 
-#[distributed_slice(SAMPLERS)]
-fn tcp(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Tcp::new(config))
-}
-
-pub struct Tcp<'a> {
-    next: Instant,
-    interval: Duration,
-    _traffic_stats: TrafficStats<'a>,
-}
-
-impl<'a> Tcp<'a> {
-    fn new(_config: &Config) -> Self {
-        Self {
-            next: Instant::now(),
-            interval: Duration::from_millis(100),
-            _traffic_stats: TrafficStats {
-                _lifetime: PhantomData,
-            },
-        }
-    }
-}
-
-impl Display for Tcp<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "tcp")
-    }
-}
-
-impl<'a> Sampler for Tcp<'a> {
-    fn sample(&mut self, now: Instant) {
-        if now < self.next {
-            return;
-        }
-
-        self.next += self.interval;
-    }
-}
-
-#[cfg(not(feature = "bpf"))]
-pub struct TrafficStats<'a> {
-    _lifetime: PhantomData<&'a ()>,
-}
-
-#[cfg(feature = "bpf")]
-pub struct TrafficStats<'a> {
-    _lifetime: PhantomData<&'a ()>,
-}

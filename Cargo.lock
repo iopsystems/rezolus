@@ -691,9 +691,11 @@ version = "3.0.0-alpha.0"
 dependencies = [
  "backtrace",
  "clap 4.1.6",
+ "clocksource",
  "libbpf-cargo",
  "libbpf-rs",
  "linkme",
+ "metriken",
  "ringlog",
 ]
 
