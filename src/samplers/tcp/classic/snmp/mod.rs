@@ -32,11 +32,18 @@ impl Snmp {
 
 impl Sampler for Snmp {
 	fn sample(&mut self) {
+
 		let now = Instant::now();
 
 		if now < self.next {
 			return;
 		}
+
+		if now > self.next + self.interval {
+			println!("this is not good");
+		}
+
+		SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE.increment();
 
 		let first_run = self.prev == self.next;
 
@@ -53,10 +60,24 @@ impl Sampler for Snmp {
 					self.tcp_rx_segs = v;
 				}
 			}
+		} else {
+			SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE_EX.increment();
 		}
 
+		// determine when to sample next
+		let next = self.next + self.interval;
+		
+		// it's possible we fell behind
+		if next > now {
+			// if we didn't, sample at the next planned time
+			self.next = next;
+		} else {
+			// if we did, sample after the interval has elapsed
+			self.next = now + self.interval;
+		}
+
+		// mark when we last sampled
 		self.prev = now;
-		self.next = now + self.interval;
 	}
 }
 

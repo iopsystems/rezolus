@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate ringlog;
 
+use metriken::Lazy;
 use metriken::Counter;
 use metriken::Gauge;
 use metriken::Heatmap;
@@ -20,10 +21,23 @@ type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 mod common;
 mod samplers;
 
-const PERCENTILES: &[f64] = &[0.50, 0.90, 0.99];
+pub static PERCENTILES: &[(&str, f64)] = &[
+    ("p25", 25.0),
+    ("p50", 50.0),
+    ("p75", 75.0),
+    ("p90", 90.0),
+    ("p99", 99.0),
+    ("p999", 99.9),
+    ("p9999", 99.99),
+];
 
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+
+#[metric(name = "runtime/sample/loop")]
+pub static RUNTIME_SAMPLE_LOOP: Lazy<Counter> = Lazy::new(|| {
+    Counter::new()
+});
 
 fn main() {
     // custom panic hook to terminate whole process after unwinding
@@ -75,6 +89,8 @@ fn main() {
 
     // main loop
     loop {
+        RUNTIME_SAMPLE_LOOP.increment();
+
         // get current time
         let start = Instant::now();
 
@@ -89,7 +105,7 @@ fn main() {
 
         // calculate how long to sleep and sleep before next iteration
         // this wakeup period allows 1kHz sampling
-        let sleep = 1_000_000 - elapsed;
+        let sleep = 1_000_000_u64.saturating_sub(elapsed);
         std::thread::sleep(std::time::Duration::from_nanos(sleep));
     }
 }
@@ -105,14 +121,18 @@ pub fn admin() {
             }
         };
 
+        if metric.name().starts_with("log_") {
+            continue;
+        }
+
         if let Some(counter) = any.downcast_ref::<Counter>() {
             data.push(format!("{}: {}", metric.name(), counter.value()));
         } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
             data.push(format!("{}: {}", metric.name(), gauge.value()));
         } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-            for p in PERCENTILES {
+            for (label, p) in PERCENTILES {
                 let percentile = heatmap.percentile(*p).map(|b| b.high()).unwrap_or(0);
-                data.push(format!("{}_p({:.2}): {}", metric.name(), p, percentile));
+                data.push(format!("{}/{}: {}", metric.name(), label, percentile));
             }
         }
     }
