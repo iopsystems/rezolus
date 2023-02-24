@@ -76,7 +76,7 @@ fn main() {
         let elapsed = (stop - start).as_nanos();
 
         // calculate how long to sleep and sleep before next iteration
-        let sleep = 100_000 - elapsed;
+        let sleep = 1_000_000 - elapsed;
         std::thread::sleep(std::time::Duration::from_nanos(sleep));
     }
 }
