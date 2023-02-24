@@ -1,5 +1,4 @@
-#[macro_use]
-extern crate ringlog;
+use ringlog::*;
 
 use metriken::Lazy;
 use metriken::Counter;
@@ -14,6 +13,7 @@ use std::path::Path;
 // use std::time::Instant;
 
 use linkme::distributed_slice;
+// use common::{counter, counter_with_heatmap, heatmap};
 
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
@@ -34,10 +34,7 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
-#[metric(name = "runtime/sample/loop")]
-pub static RUNTIME_SAMPLE_LOOP: Lazy<Counter> = Lazy::new(|| {
-    Counter::new()
-});
+counter!(RUNTIME_SAMPLE_LOOP, "runtime/sample/loop");
 
 fn main() {
     // custom panic hook to terminate whole process after unwinding
