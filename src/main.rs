@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate ringlog;
 
+use metriken::Counter;
+use metriken::Gauge;
+use metriken::Heatmap;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use std::fmt::Display;
@@ -16,6 +19,8 @@ type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 
 mod common;
 mod samplers;
+
+const PERCENTILES: &[f64] = &[0.50, 0.90, 0.99];
 
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
@@ -61,6 +66,13 @@ fn main() {
         samplers.push(sampler(&config));
     }
 
+    std::thread::spawn(|| {
+        loop {
+            admin();
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    });
+
     // main loop
     loop {
         // get current time
@@ -76,8 +88,39 @@ fn main() {
         let elapsed = (stop - start).as_nanos();
 
         // calculate how long to sleep and sleep before next iteration
+        // this wakeup period allows 1kHz sampling
         let sleep = 1_000_000 - elapsed;
         std::thread::sleep(std::time::Duration::from_nanos(sleep));
+    }
+}
+
+pub fn admin() {
+    let mut data = Vec::new();
+
+    for metric in &metriken::metrics() {
+        let any = match metric.as_any() {
+            Some(any) => any,
+            None => {
+                continue;
+            }
+        };
+
+        if let Some(counter) = any.downcast_ref::<Counter>() {
+            data.push(format!("{}: {}", metric.name(), counter.value()));
+        } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
+            data.push(format!("{}: {}", metric.name(), gauge.value()));
+        } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
+            for p in PERCENTILES {
+                let percentile = heatmap.percentile(*p).map(|b| b.high()).unwrap_or(0);
+                data.push(format!("{}_p({:.2}): {}", metric.name(), p, percentile));
+            }
+        }
+    }
+
+    data.sort();
+
+    for line in data {
+        println!("{}", line);
     }
 }
 
