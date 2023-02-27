@@ -1,4 +1,4 @@
-#[distributed_slice(TCP_SAMPLERS)]
+#[distributed_slice(TCP_BPF_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Traffic::new(config))
 }

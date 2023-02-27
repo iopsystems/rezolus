@@ -32,7 +32,10 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 ];
 
 #[distributed_slice]
-pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+pub static CLASSIC_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+
+#[distributed_slice]
+pub static BPF_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
 counter!(RUNTIME_SAMPLE_LOOP, "runtime/sample/loop");
 
@@ -71,10 +74,16 @@ fn main() {
     };
 
     // initialize and gather the samplers
-    let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();
+    let mut classic_samplers: Vec<Box<dyn Sampler>> = Vec::new();
 
-    for sampler in SAMPLERS {
-        samplers.push(sampler(&config));
+    for sampler in CLASSIC_SAMPLERS {
+        classic_samplers.push(sampler(&config));
+    }
+
+    let mut bpf_samplers: Vec<Box<dyn Sampler>> = Vec::new();
+
+    for sampler in BPF_SAMPLERS {
+        bpf_samplers.push(sampler(&config));
     }
 
     std::thread::spawn(|| {
@@ -92,7 +101,11 @@ fn main() {
         let start = Instant::now();
 
         // sample each sampler
-        for sampler in &mut samplers {
+        for sampler in &mut classic_samplers {
+            sampler.sample();
+        }
+
+        for sampler in &mut bpf_samplers {
             sampler.sample();
         }
 

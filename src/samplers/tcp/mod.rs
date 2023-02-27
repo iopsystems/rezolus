@@ -1,13 +1,22 @@
 use crate::*;
 
 #[distributed_slice]
-pub static TCP_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+pub static TCP_CLASSIC_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+
+#[distributed_slice]
+pub static TCP_BPF_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
 
-#[distributed_slice(SAMPLERS)]
-fn tcp(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Tcp::new(config))
+#[distributed_slice(CLASSIC_SAMPLERS)]
+fn tcp_classic(config: &Config) -> Box<dyn Sampler> {
+    Box::new(Tcp::classic(config))
 }
+
+#[distributed_slice(BPF_SAMPLERS)]
+fn tcp_bpf(config: &Config) -> Box<dyn Sampler> {
+    Box::new(Tcp::bpf(config))
+}
+
 
 #[cfg(feature = "bpf")]
 mod bpf;
@@ -22,8 +31,15 @@ pub struct Tcp {
 }
 
 impl Tcp {
-    fn new(config: &Config) -> Self {
-        let samplers = TCP_SAMPLERS.iter().map(|init| init(config)).collect();
+    fn classic(config: &Config) -> Self {
+        let samplers = TCP_CLASSIC_SAMPLERS.iter().map(|init| init(config)).collect();
+        Self {
+            samplers,
+        }
+    }
+
+    fn bpf(config: &Config) -> Self {
+        let samplers = TCP_BPF_SAMPLERS.iter().map(|init| init(config)).collect();
         Self {
             samplers,
         }

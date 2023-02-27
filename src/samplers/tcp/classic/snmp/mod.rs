@@ -2,9 +2,9 @@ use crate::samplers::tcp::stats::*;
 use crate::*;
 use std::fs::File;
 use crate::common::classic::NestedMap;
-use crate::samplers::tcp::TCP_SAMPLERS;
+use crate::samplers::tcp::*;
 
-#[distributed_slice(TCP_SAMPLERS)]
+#[distributed_slice(TCP_CLASSIC_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Snmp::new(config))
 }
@@ -21,7 +21,7 @@ pub struct Snmp {
 impl Snmp {
 	pub fn new(_config: &Config) -> Self {
 		let now = Instant::now();
-		
+
 		Self {
 			prev: now,
 			next: now,
