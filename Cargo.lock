@@ -694,6 +694,7 @@ dependencies = [
  "clocksource",
  "libbpf-cargo",
  "libbpf-rs",
+ "libbpf-sys",
  "linkme",
  "metriken",
  "ringlog",

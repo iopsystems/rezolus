@@ -1,4 +1,7 @@
+#[cfg(feature = "bpf")]
 pub mod bpf;
+
+#[cfg(not(feature = "bpf"))]
 pub mod classic;
 
 #[macro_export]

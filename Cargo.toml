@@ -12,6 +12,7 @@ backtrace = "0.3.67"
 clap = "4.1.4"
 clocksource = "*"
 libbpf-rs = { version = "0.19.1", optional = true }
+libbpf-sys = { version = "*", optional = true }
 linkme = "*"
 metriken = "*"
 ringlog = "*"
@@ -22,7 +23,7 @@ libbpf-cargo = { version = "0.13.1", optional = true }
 [features]
 all = ["bpf"]
 default = []
-bpf = ["libbpf-cargo","libbpf-rs"]
+bpf = ["libbpf-cargo","libbpf-rs","libbpf-sys"]
 
 [profile.bench]
 debug = true
