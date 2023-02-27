@@ -94,27 +94,34 @@ impl Sampler for Traffic {
         }
 
         if now >= self.dist_next {
-            println!("==================SAMPLE DISTRIBUTIONS=================");
             let distributions = vec![
                 (&mut self.rx_size, maps.rx_size(), &TCP_RX_SIZE),
                 (&mut self.tx_size, maps.tx_size(), &TCP_TX_SIZE),
             ];
 
+            let opts = libbpf_sys::bpf_map_batch_opts {
+                sz: 24 as libbpf_sys::size_t,
+                elem_flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+                flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+            };
+
             for (prev, map, hist) in distributions {
-                println!("sampling: {}", map.name());
                 let mut keys = KEYS.to_owned();
                 let mut out: Vec<u8> = vec![0; 496 * 8];
                 let mut nkeys: u32 = 496;
 
+                let in_batch = std::ptr::null_mut();
+                let mut out_batch = 0_u32;
+
                 let ret = unsafe {
                     libbpf_sys::bpf_map_lookup_batch(
                         map.fd(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        keys.as_ptr() as *mut core::ffi::c_void,
+                        in_batch as *mut core::ffi::c_void,
+                        &mut out_batch as *mut _ as *mut core::ffi::c_void,
+                        keys.as_mut_ptr() as *mut core::ffi::c_void,
                         out.as_mut_ptr() as *mut core::ffi::c_void,
                         &mut nkeys as *mut libbpf_sys::__u32,
-                        std::ptr::null(),
+                        &opts as *const libbpf_sys::bpf_map_batch_opts,
                     )
                 };
 
@@ -126,22 +133,15 @@ impl Sampler for Traffic {
                         keys.set_len(4 * nkeys);
                     }
                 } else {
-                    println!("error: {}", ret);
                     continue;
                 }
-
-                println!("nkeys: {}", nkeys);
 
                 for i in 0..nkeys {
                     key.copy_from_slice(&keys[(i * 4)..((i + 1) * 4)]);
                     current.copy_from_slice(&out[(i * 8)..((i + 1) * 8)]);
 
-
-
                     let k = u32::from_ne_bytes(key) as usize;
                     let c = u64::from_ne_bytes(current);
-
-                    println!("key: {} count: {}", k, c);
 
                     let delta = c.wrapping_sub(prev[k]);
                     prev[k] = c;
