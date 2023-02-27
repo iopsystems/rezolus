@@ -18,8 +18,10 @@ use crate::*;
 pub struct Traffic {
     skel: TrafficSkel<'static>,
     next: Instant,
+    dist_next: Instant,
     prev: Instant,
     interval: Duration,
+    dist_interval: Duration,
     rx_bytes: Option<u64>,
     rx_segments: Option<u64>,
     rx_size: [u64; 496],
@@ -40,7 +42,9 @@ impl Traffic {
             skel,
             next: now,
             prev: now,
+            dist_next: now,
             interval: Duration::from_millis(1),
+            dist_interval: Duration::from_millis(100),
             rx_bytes: None,
             rx_segments: None,
             rx_size: [0; 496],
@@ -63,8 +67,9 @@ impl Sampler for Traffic {
 
         let elapsed = (now - self.prev).as_secs_f64();
 
-        let mut maps = self.skel.maps();
+        let maps = self.skel.maps();
 
+        let mut key = [0; 4];
         let mut current = [0; 8];
 
         let counters = vec![
@@ -88,85 +93,74 @@ impl Sampler for Traffic {
             }
         }
 
-        let distributions = vec![
-            (&mut self.rx_size, maps.rx_size(), &TCP_RX_SIZE),
-            (&mut self.tx_size, maps.tx_size(), &TCP_TX_SIZE),
-        ];
+        if now >= self.dist_next {
+            println!("==================SAMPLE DISTRIBUTIONS=================");
+            let distributions = vec![
+                (&mut self.rx_size, maps.rx_size(), &TCP_RX_SIZE),
+                (&mut self.tx_size, maps.tx_size(), &TCP_TX_SIZE),
+            ];
 
-        let mut key = [0; 4];
-        let mut value = [0; 8];
+            for (prev, map, hist) in distributions {
+                println!("sampling: {}", map.name());
+                let mut keys = KEYS.to_owned();
+                let mut out: Vec<u8> = vec![0; 496 * 8];
+                let mut nkeys: u32 = 496;
 
-        for (prev, map, hist) in distributions {
-            let mut keys = KEYS.to_owned();
-            let mut out: Vec<u8> = vec![0; 496 * 8];
-            let mut nkeys: u32 = 496;
+                let ret = unsafe {
+                    libbpf_sys::bpf_map_lookup_batch(
+                        map.fd(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        keys.as_ptr() as *mut core::ffi::c_void,
+                        out.as_mut_ptr() as *mut core::ffi::c_void,
+                        &mut nkeys as *mut libbpf_sys::__u32,
+                        std::ptr::null(),
+                    )
+                };
 
-            let ret = unsafe {
-                libbpf_sys::bpf_map_lookup_batch(
-                    map.fd(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    keys.as_ptr() as *mut core::ffi::c_void,
-                    out.as_mut_ptr() as *mut core::ffi::c_void,
-                    &mut nkeys as *mut libbpf_sys::__u32,
-                    std::ptr::null(),
-                )
-            };
+                let nkeys = nkeys as usize;
 
-            let nkeys = nkeys as usize;
-
-            if ret == 0 {
-                unsafe {
-                    out.set_len(8 * nkeys);
-                    keys.set_len(4 * nkeys);
+                if ret == 0 {
+                    unsafe {
+                        out.set_len(8 * nkeys);
+                        keys.set_len(4 * nkeys);
+                    }
+                } else {
+                    println!("error: {}", ret);
+                    continue;
                 }
-            } else {
-                continue;
+
+                println!("nkeys: {}", nkeys);
+
+                for i in 0..nkeys {
+                    key.copy_from_slice(&keys[(i * 4)..((i + 1) * 4)]);
+                    current.copy_from_slice(&out[(i * 8)..((i + 1) * 8)]);
+
+
+
+                    let k = u32::from_ne_bytes(key) as usize;
+                    let c = u64::from_ne_bytes(current);
+
+                    println!("key: {} count: {}", k, c);
+
+                    let delta = c.wrapping_sub(prev[k]);
+                    prev[k] = c;
+
+                    if delta > 0 {
+                        let value = key_to_value(k as u64);
+                        hist.increment(now, value as _, delta as _);
+                    }
+                }
             }
 
-            for i in 0..nkeys {
-                key.copy_from_slice(&keys[(i * 4)..((i + 1) * 4)]);
-                current.copy_from_slice(&out[(i * 8)..((i + 1) * 8)]);
+            let next = self.dist_next + self.dist_interval;
 
-                let k = u32::from_ne_bytes(key) as usize;
-                let c = u64::from_ne_bytes(current);
-
-                let delta = c.wrapping_sub(prev[k]);
-                prev[k] = c;
-
-                if delta > 0 {
-                    let value = key_to_value(k as u64);
-                    hist.increment(now, value as _, delta as _);
-                }
+            if next > now {
+                self.dist_next = next;
+            } else {
+                self.dist_next = now + self.dist_interval;
             }
         }
-
-        //     for i in 0_u32..496_u32 {
-
-
-        //         if let Ok(Some(c)) = map.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
-        //             // convert the index to a usize, as we use it a few
-        //             // times to index into slices
-        //             let i = i as usize;
-
-        //             // convert bytes to the current count of the bucket
-        //             current.copy_from_slice(&c);
-        //             let current = u64::from_ne_bytes(current);
-
-        //             // calculate the delta from previous count
-        //             let delta = current.wrapping_sub(prev[i]);
-
-        //             // update the previous count
-        //             prev[i] = current;
-
-        //             // update the heatmap
-        //             if delta > 0 {
-        //                 let value = key_to_value(i as u64);
-        //                 hist.increment(now, value as _, delta as _);
-        //             }
-        //         }
-        //     }
-        // }
 
         // determine when to sample next
         let next = self.next + self.interval;
