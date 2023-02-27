@@ -21,6 +21,7 @@ pub struct Snmp {
 impl Snmp {
 	pub fn new(_config: &Config) -> Self {
 		let now = Instant::now();
+		
 		Self {
 			prev: now,
 			next: now,

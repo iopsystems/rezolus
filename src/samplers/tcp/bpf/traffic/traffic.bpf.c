@@ -2,6 +2,9 @@
 // Copyright (c) 2022 Francis Laniel <flaniel@linux.microsoft.com>
 // Copyright (c) 2023 IOP Systems, Inc.
 
+// This BPF program probes TCP send and receive paths to get the number of
+// segments and bytes transmitted as well as the size distributions.
+
 #include "../../../../common/bpf/vmlinux.h"
 #include "../../../../common/bpf/histogram.h"
 #include <bpf/bpf_helpers.h>
@@ -32,7 +35,7 @@ struct {
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 1);
-} rx_packets SEC(".maps");
+} rx_segments SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -53,7 +56,7 @@ struct {
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 1);
-} tx_packets SEC(".maps");
+} tx_segments SEC(".maps");
 
 static int probe_ip(bool receiving, struct sock *sk, size_t size)
 {
@@ -84,7 +87,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 		}
 
 		idx = 0;
-		cnt = bpf_map_lookup_elem(&rx_packets, &idx);
+		cnt = bpf_map_lookup_elem(&rx_segments, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
@@ -105,7 +108,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 		}
 
 		idx = 0;
-		cnt = bpf_map_lookup_elem(&tx_packets, &idx);
+		cnt = bpf_map_lookup_elem(&tx_segments, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);

@@ -8,29 +8,125 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 /// * "kprobe/tcp_cleanup_rbuf"
 pub struct Traffic<'a> {
     skel: TrafficSkel<'a>,
-    rx_bytes: u64,
-    rx_packets: u64,
+    next: Instant,
+    prev: Instant,
+    rx_bytes: Option<u64>,
+    rx_segments: Option<u64>,
     rx_size: [u64; 496],
-    tx_bytes: u64,
-    tx_packets: u64,
+    tx_bytes: Option<u64>,
+    tx_segments: Option<u64>,
     tx_size: [u64; 496],
 }
 
 impl<'a> Traffic<'a> {
     pub fn new(config: &Config) -> Self {
+        let now = Instant::now();
+
         let mut builder = TrafficSkelBuilder::default();
         let mut skel = builder.open()?.load()?;
         skel.attach()?;
 
         Self {
             skel,
-            rx_bytes: 0,
-            rx_packets: 0,
+            next: now,
+            prev: now,
+            rx_bytes: None,
+            rx_segments: None,
             rx_size: [0; 496],
-            tx_bytes: 0,
-            tx_packets: 0,
+            tx_bytes: None,
+            tx_segments: None,
             tx_size: [0; 496],
         }
+    }   
+}
+
+impl<'a> Sampler for Traffic<'a> {
+    fn sample(&mut self) {
+        let now = Instant::now();
+
+        if now < self.next {
+            return;
+        }
+
+        SAMPLERS_TCP_BPF_TRAFFIC_SAMPLE.increment();
+
+        let elapsed = (now - self.prev).as_secs_f64();
+
+        let mut maps = self.skel.maps();
+
+        let mut current = [0; 8];
+
+        let counters = vec![
+            (&mut self.rx_bytes, maps.rx_bytes(), &TCP_RX_BYTES, &TCP_RX_BYTES_HIST),
+            (&mut self.rx_segments, maps.rx_segments(), &TCP_RX_SEGS, &TCP_RX_SEGS_HIST),
+            (&mut self.tx_bytes, maps.tx_bytes(), &TCP_TX_BYTES, &TCP_TX_BYTES_HIST),
+            (&mut self.tx_segments, maps.tx_segments(), &TCP_TX_SEGS, &TCP_TX_SEGS_HIST),
+        ];
+
+        for (prev, map, cnt, hist) in counters {
+            current.copy_from_slice(&c);
+            let curr = u64::from_ne_bytes(current);
+
+            if let Some(p) = *prev {
+                let delta = curr.wrapping_sub(p);
+                cnt.add(delta);
+                hist.increment(now, (delta as f64 / elapsed) as _, 1);
+            }
+            *prev = Some(curr);
+        }
+
+        let distributions = vec![
+            (&mut self.rx_size, maps.rx_size(), TCP_RX_SIZE),
+            (&mut self.tx_size, maps.tx_size(), TCP_TX_SIZE),
+        ];
+
+        for (prev, map, hist) in distributions {
+            for i in 0_u32..496_u32 {
+                match map.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                    Ok(Some(c)) => {
+                        // convert the index to a usize, as we use it a few
+                        // times to index into slices
+                        let i = i as usize;
+
+                        // convert bytes to the current count of the bucket
+                        current.copy_from_slice(&c);
+                        let current = u64::from_ne_bytes(current);
+
+                        // calculate the delta from previous count
+                        let delta = current.wrapping_sub(hist[i]);
+
+                        // update the previous count
+                        prev[i] = current;
+
+                        // update the heatmap
+                        if delta > 0 {
+                            hist.increment(now, value as _, delta as _);
+                        }
+                    }
+                    _ => { }
+                }
+            }
+        }
+
+        // determine when to sample next
+        let next = self.next + self.interval;
+        
+        // it's possible we fell behind
+        if next > now {
+            // if we didn't, sample at the next planned time
+            self.next = next;
+        } else {
+            // if we did, sample after the interval has elapsed
+            self.next = now + self.interval;
+        }
+
+        // mark when we last sampled
+        self.prev = now;
     }
-    
+}
+
+impl Display for Traffic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "tcp::classic::bpf::traffic")
+    }
 }
