@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use crate::Instant;
 
 pub const KEYS: &[u8] = &[
 	0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6,
@@ -95,6 +97,8 @@ pub const KEYS: &[u8] = &[
 /// This function converts indices back to values for rustcommon histogram with
 /// the parameters `m = 0`, `r = 4`, `n = 64`. This covers the entire range from
 /// 1 to u64::MAX and uses 496 buckets per histogram, which works out to ~4KB
+/// for each histogram. In userspace we will likely have 61 histograms -
+/// bringing the total to ~256KB per stat.
 pub fn key_to_value(index: u64) -> u64 {
     let g = index >> 3;
     let b = index - g * 8 + 1;
@@ -104,4 +108,122 @@ pub fn key_to_value(index: u64) -> u64 {
     } else {
         (1 << (2 + g)) + (1 << (g - 1)) * b - 1
     }
+}
+
+pub fn update_histogram_from_dist(fd: i32, stat: &metriken::Lazy<metriken::Heatmap>, previous: &mut [u64]) {
+	let now = Instant::now();
+
+	let opts = libbpf_sys::bpf_map_batch_opts {
+        sz: 24 as libbpf_sys::size_t,
+        elem_flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+        flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+    };
+
+	let mut keys = KEYS.to_owned();
+    let mut out: Vec<u8> = vec![0; 496 * 8];
+    let mut nkeys: u32 = 496;
+
+    let in_batch = std::ptr::null_mut();
+    let mut out_batch = 0_u32;
+
+    let ret = unsafe {
+        libbpf_sys::bpf_map_lookup_batch(
+            fd,
+            in_batch as *mut core::ffi::c_void,
+            &mut out_batch as *mut _ as *mut core::ffi::c_void,
+            keys.as_mut_ptr() as *mut core::ffi::c_void,
+            out.as_mut_ptr() as *mut core::ffi::c_void,
+            &mut nkeys as *mut libbpf_sys::__u32,
+            &opts as *const libbpf_sys::bpf_map_batch_opts,
+        )
+    };
+
+    let nkeys = nkeys as usize;
+
+    if ret == 0 {
+        unsafe {
+            out.set_len(8 * nkeys);
+            keys.set_len(4 * nkeys);
+        }
+    } else {
+        return;
+    }
+
+    let mut key = [0; 4];
+    let mut current = [0; 8];
+
+    for i in 0..nkeys {
+        key.copy_from_slice(&keys[(i * 4)..((i + 1) * 4)]);
+        current.copy_from_slice(&out[(i * 8)..((i + 1) * 8)]);
+
+        let k = u32::from_ne_bytes(key) as usize;
+        let c = u64::from_ne_bytes(current);
+
+        let delta = c.wrapping_sub(previous[k]);
+        previous[k] = c;
+
+        if delta > 0 {
+            let value = key_to_value(k as u64);
+            stat.increment(now, value as _, delta as _);
+        }
+    }
+}
+
+// note: 
+pub fn read_counters(fd: i32, count: usize) -> HashMap<usize, u64> {
+	let mut result = HashMap::with_capacity(count);
+
+	let opts = libbpf_sys::bpf_map_batch_opts {
+        sz: 24 as libbpf_sys::size_t,
+        elem_flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+        flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+    };
+            
+	let mut keys = Vec::with_capacity(count * 4);
+	for k in 0..count {
+		keys.extend_from_slice(&k.to_ne_bytes());
+	}
+    let mut out: Vec<u8> = vec![0; count * 8];
+    let mut nkeys: u32 = count as _;
+
+    let in_batch = std::ptr::null_mut();
+    let mut out_batch = 0_u32;
+
+    let ret = unsafe {
+        libbpf_sys::bpf_map_lookup_batch(
+            fd,
+            in_batch as *mut core::ffi::c_void,
+            &mut out_batch as *mut _ as *mut core::ffi::c_void,
+            keys.as_mut_ptr() as *mut core::ffi::c_void,
+            out.as_mut_ptr() as *mut core::ffi::c_void,
+            &mut nkeys as *mut libbpf_sys::__u32,
+            &opts as *const libbpf_sys::bpf_map_batch_opts,
+        )
+    };
+
+    let nkeys = nkeys as usize;
+
+    if ret == 0 {
+        unsafe {
+            out.set_len(8 * nkeys);
+            keys.set_len(4 * nkeys);
+        }
+    } else {
+        return result;
+    }
+
+    let mut key = [0; 4];
+    let mut current = [0; 8];
+
+    for i in 0..nkeys {
+        key.copy_from_slice(&keys[(i * 4)..((i + 1) * 4)]);
+        current.copy_from_slice(&out[(i * 8)..((i + 1) * 8)]);
+
+        let k = u32::from_ne_bytes(key) as usize;
+        let c = u64::from_ne_bytes(current);
+
+        result.insert(k, c);
+    }
+
+    result
 }

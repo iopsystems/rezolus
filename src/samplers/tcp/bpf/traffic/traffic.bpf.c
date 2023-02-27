@@ -16,6 +16,19 @@
 #define AF_INET		2	/* Internet IP Protocol 	*/
 #define AF_INET6	10	/* IP version 6			*/
 
+// Combined map for counters
+// - rx_bytes
+// - tx_bytes
+// - rx_segments
+// - tx_segments
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, 4);
+} counters SEC(".maps");
+
+// Histograms
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
@@ -27,36 +40,8 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 1);
-} rx_bytes SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, 1);
-} rx_segments SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, u32);
-	__type(value, u64);
 	__uint(max_entries, 496);
 } tx_size SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, 1);
-} tx_bytes SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, 1);
-} tx_segments SEC(".maps");
 
 static int probe_ip(bool receiving, struct sock *sk, size_t size)
 {
@@ -73,7 +58,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 
 	if (receiving) {
 		idx = 0;
-		cnt = bpf_map_lookup_elem(&rx_bytes, &idx);
+		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, (u64) size);
@@ -86,15 +71,15 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = 0;
-		cnt = bpf_map_lookup_elem(&rx_segments, &idx);
+		idx = 2;
+		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
 		}
 	} else {
-		idx = 0;
-		cnt = bpf_map_lookup_elem(&tx_bytes, &idx);
+		idx = 1;
+		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, (u64) size);
@@ -107,8 +92,8 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = 0;
-		cnt = bpf_map_lookup_elem(&tx_segments, &idx);
+		idx = 3;
+		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);

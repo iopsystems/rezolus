@@ -72,24 +72,23 @@ impl Sampler for Traffic {
         let mut key = [0; 4];
         let mut current = [0; 8];
 
-        let counters = vec![
-            (&mut self.rx_bytes, maps.rx_bytes(), &TCP_RX_BYTES, &TCP_RX_BYTES_HIST),
-            (&mut self.rx_segments, maps.rx_segments(), &TCP_RX_SEGS, &TCP_RX_SEGS_HIST),
-            (&mut self.tx_bytes, maps.tx_bytes(), &TCP_TX_BYTES, &TCP_TX_BYTES_HIST),
-            (&mut self.tx_segments, maps.tx_segments(), &TCP_TX_SEGS, &TCP_TX_SEGS_HIST),
+        let mut counters = vec![
+            (&mut self.rx_bytes, &TCP_RX_BYTES, &TCP_RX_BYTES_HIST),
+            (&mut self.rx_segments, &TCP_RX_SEGS, &TCP_RX_SEGS_HIST),
+            (&mut self.tx_bytes, &TCP_TX_BYTES, &TCP_TX_BYTES_HIST),
+            (&mut self.tx_segments, &TCP_TX_SEGS, &TCP_TX_SEGS_HIST),
         ];
 
-        for (prev, map, cnt, hist) in counters {
-            if let Ok(Some(c)) = map.lookup(&0_u32.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
-                current.copy_from_slice(&c);
-                let curr = u64::from_ne_bytes(current);
+        let counts = read_counters(maps.counters().fd(), counters.len());
 
+        for (id, (prev, cnt, hist)) in counters.iter_mut().enumerate() {
+            if let Some(curr) = counts.get(&id) {
                 if let Some(p) = *prev {
-                    let delta = curr.wrapping_sub(p);
+                    let delta = curr.wrapping_sub(*p);
                     cnt.add(delta);
                     hist.increment(now, (delta as f64 / elapsed) as _, 1);
                 }
-                *prev = Some(curr);
+                **prev = Some(*curr);
             }
         }
 
@@ -99,58 +98,8 @@ impl Sampler for Traffic {
                 (&mut self.tx_size, maps.tx_size(), &TCP_TX_SIZE),
             ];
 
-            let opts = libbpf_sys::bpf_map_batch_opts {
-                sz: 24 as libbpf_sys::size_t,
-                elem_flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
-                flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
-            };
-
             for (prev, map, hist) in distributions {
-                let mut keys = KEYS.to_owned();
-                let mut out: Vec<u8> = vec![0; 496 * 8];
-                let mut nkeys: u32 = 496;
-
-                let in_batch = std::ptr::null_mut();
-                let mut out_batch = 0_u32;
-
-                let ret = unsafe {
-                    libbpf_sys::bpf_map_lookup_batch(
-                        map.fd(),
-                        in_batch as *mut core::ffi::c_void,
-                        &mut out_batch as *mut _ as *mut core::ffi::c_void,
-                        keys.as_mut_ptr() as *mut core::ffi::c_void,
-                        out.as_mut_ptr() as *mut core::ffi::c_void,
-                        &mut nkeys as *mut libbpf_sys::__u32,
-                        &opts as *const libbpf_sys::bpf_map_batch_opts,
-                    )
-                };
-
-                let nkeys = nkeys as usize;
-
-                if ret == 0 {
-                    unsafe {
-                        out.set_len(8 * nkeys);
-                        keys.set_len(4 * nkeys);
-                    }
-                } else {
-                    continue;
-                }
-
-                for i in 0..nkeys {
-                    key.copy_from_slice(&keys[(i * 4)..((i + 1) * 4)]);
-                    current.copy_from_slice(&out[(i * 8)..((i + 1) * 8)]);
-
-                    let k = u32::from_ne_bytes(key) as usize;
-                    let c = u64::from_ne_bytes(current);
-
-                    let delta = c.wrapping_sub(prev[k]);
-                    prev[k] = c;
-
-                    if delta > 0 {
-                        let value = key_to_value(k as u64);
-                        hist.increment(now, value as _, delta as _);
-                    }
-                }
+                update_histogram_from_dist(map.fd(), hist, prev);
             }
 
             let next = self.dist_next + self.dist_interval;
