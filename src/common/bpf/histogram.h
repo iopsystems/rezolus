@@ -3,7 +3,7 @@
 // Function to count leading zeros, since we cannot use the builtin CLZ from
 // within BPF. But since we also can't loop, this is implemented as a binary
 // search with a maximum of 6 branches.
-static __always_inline u32 clz(u64 value) {
+static u32 clz(u64 value) {
     u32 count = 0;
 
     // quick return if value is 0
@@ -209,7 +209,7 @@ static __always_inline u32 clz(u64 value) {
 // crate for m = 0, r = 4, n = 64 this gives us the ability to store counts for
 // values from 1 -> u64::MAX and uses 496 buckets per histogram, which occupies
 // ~4KB of space
-static __always_inline u32 value_to_index(u64 value) {
+static u32 value_to_index(u64 value) {
     u64 h = 63 - clz(value);
     if (h < 4) {
         return value;

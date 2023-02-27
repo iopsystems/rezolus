@@ -1,3 +1,4 @@
+pub mod bpf;
 pub mod classic;
 
 #[macro_export]

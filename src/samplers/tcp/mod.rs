@@ -12,7 +12,9 @@ fn tcp(config: &Config) -> Box<dyn Sampler> {
 #[cfg(feature = "bpf")]
 mod bpf;
 
+#[cfg(not(feature = "bpf"))]
 mod classic;
+
 mod stats;
 
 pub struct Tcp {

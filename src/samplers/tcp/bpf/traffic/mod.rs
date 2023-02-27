@@ -3,13 +3,23 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Traffic::new(config))
 }
 
+mod traffic_bpf;
+
+use traffic_bpf::*;
+
+use common::bpf::*;
+use crate::samplers::tcp::stats::*;
+use crate::samplers::tcp::*;
+use crate::*;
+
 /// Collects TCP Traffic stats using the following kprobes:
 /// * "kprobe/tcp_sendmsg"
 /// * "kprobe/tcp_cleanup_rbuf"
-pub struct Traffic<'a> {
-    skel: TrafficSkel<'a>,
+pub struct Traffic {
+    skel: TrafficSkel<'static>,
     next: Instant,
     prev: Instant,
+    interval: Duration,
     rx_bytes: Option<u64>,
     rx_segments: Option<u64>,
     rx_size: [u64; 496],
@@ -18,18 +28,19 @@ pub struct Traffic<'a> {
     tx_size: [u64; 496],
 }
 
-impl<'a> Traffic<'a> {
+impl Traffic {
     pub fn new(config: &Config) -> Self {
         let now = Instant::now();
 
         let mut builder = TrafficSkelBuilder::default();
-        let mut skel = builder.open()?.load()?;
-        skel.attach()?;
+        let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
+        skel.attach().expect("failed to attach bpf");
 
         Self {
             skel,
             next: now,
             prev: now,
+            interval: Duration::from_millis(1),
             rx_bytes: None,
             rx_segments: None,
             rx_size: [0; 496],
@@ -40,7 +51,7 @@ impl<'a> Traffic<'a> {
     }   
 }
 
-impl<'a> Sampler for Traffic<'a> {
+impl Sampler for Traffic {
     fn sample(&mut self) {
         let now = Instant::now();
 
@@ -64,46 +75,46 @@ impl<'a> Sampler for Traffic<'a> {
         ];
 
         for (prev, map, cnt, hist) in counters {
-            current.copy_from_slice(&c);
-            let curr = u64::from_ne_bytes(current);
+            if let Ok(Some(c)) = map.lookup(&0_u32.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                current.copy_from_slice(&c);
+                let curr = u64::from_ne_bytes(current);
 
-            if let Some(p) = *prev {
-                let delta = curr.wrapping_sub(p);
-                cnt.add(delta);
-                hist.increment(now, (delta as f64 / elapsed) as _, 1);
+                if let Some(p) = *prev {
+                    let delta = curr.wrapping_sub(p);
+                    cnt.add(delta);
+                    hist.increment(now, (delta as f64 / elapsed) as _, 1);
+                }
+                *prev = Some(curr);
             }
-            *prev = Some(curr);
         }
 
         let distributions = vec![
-            (&mut self.rx_size, maps.rx_size(), TCP_RX_SIZE),
-            (&mut self.tx_size, maps.tx_size(), TCP_TX_SIZE),
+            (&mut self.rx_size, maps.rx_size(), &TCP_RX_SIZE),
+            (&mut self.tx_size, maps.tx_size(), &TCP_TX_SIZE),
         ];
 
         for (prev, map, hist) in distributions {
             for i in 0_u32..496_u32 {
-                match map.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
-                    Ok(Some(c)) => {
-                        // convert the index to a usize, as we use it a few
-                        // times to index into slices
-                        let i = i as usize;
+                if let Ok(Some(c)) = map.lookup(&i.to_ne_bytes(), libbpf_rs::MapFlags::ANY) {
+                    // convert the index to a usize, as we use it a few
+                    // times to index into slices
+                    let i = i as usize;
 
-                        // convert bytes to the current count of the bucket
-                        current.copy_from_slice(&c);
-                        let current = u64::from_ne_bytes(current);
+                    // convert bytes to the current count of the bucket
+                    current.copy_from_slice(&c);
+                    let current = u64::from_ne_bytes(current);
 
-                        // calculate the delta from previous count
-                        let delta = current.wrapping_sub(hist[i]);
+                    // calculate the delta from previous count
+                    let delta = current.wrapping_sub(prev[i]);
 
-                        // update the previous count
-                        prev[i] = current;
+                    // update the previous count
+                    prev[i] = current;
 
-                        // update the heatmap
-                        if delta > 0 {
-                            hist.increment(now, value as _, delta as _);
-                        }
+                    // update the heatmap
+                    if delta > 0 {
+                        let value = key_to_value(i as u64);
+                        hist.increment(now, value as _, delta as _);
                     }
-                    _ => { }
                 }
             }
         }
@@ -125,7 +136,7 @@ impl<'a> Sampler for Traffic<'a> {
     }
 }
 
-impl Display for Traffic {
+impl std::fmt::Display for Traffic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         write!(f, "tcp::classic::bpf::traffic")
     }
