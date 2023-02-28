@@ -3,12 +3,11 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Runqlat::new(config))
 }
 
-mod runqlat_bpf;
+mod bpf;
 
-use runqlat_bpf::*;
+use bpf::*;
 
 use common::{Counter, Distribution};
-// use common::bpf::*;
 use super::super::stats::*;
 use super::super::*;
 
@@ -21,7 +20,7 @@ use super::super::*;
 /// stats:
 /// * scheduler/runqueue/latency
 pub struct Runqlat {
-    skel: RunqlatSkel<'static>,
+    skel: ModSkel<'static>,
     distributions: Vec<Distribution>,
 
     next: Instant,
@@ -35,7 +34,7 @@ impl Runqlat {
     pub fn new(_config: &Config) -> Self {
         let now = Instant::now();
 
-        let builder = RunqlatSkelBuilder::default();
+        let builder = ModSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
@@ -66,8 +65,6 @@ impl Sampler for Runqlat {
         if now < self.next {
             return;
         }
-
-        SAMPLERS_SCHEDULER_BPF_RUNQLAT_SAMPLE.increment();
 
         // let elapsed = (now - self.prev).as_secs_f64();
 

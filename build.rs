@@ -15,18 +15,11 @@ mod bpf {
     // use std::path::PathBuf;
 
     const SOURCES: &'static [(&str, &str)] = &[
-        (
-            "src/samplers/scheduler/bpf/runqlat/runqlat.bpf.c",
-            "src/samplers/scheduler/bpf/runqlat/runqlat_bpf.rs",
-        ),
-        (
-            "src/samplers/tcp/bpf/rcv_established/mod.bpf.c",
-            "src/samplers/tcp/bpf/rcv_established/bpf.rs",
-        ),
-        (
-            "src/samplers/tcp/bpf/traffic/traffic.bpf.c",
-            "src/samplers/tcp/bpf/traffic/traffic_bpf.rs",
-        ),
+        ("scheduler", "runqlat"),
+        ("tcp", "receive"),
+        ("tcp", "retransmit"),
+        ("tcp", "traffic"),
+
         // ("src/samplers/blockio/blockio.bpf.c", "src/samplers/blockio/blockio.rs"),
         // ("src/samplers/filesystem/fslat.bpf.c", "src/samplers/filesystem/fslat.rs"),
         // ("src/samplers/scheduler/runqlat.bpf.c", "src/samplers/scheduler/runqlat.rs"),
@@ -36,12 +29,14 @@ mod bpf {
     ];
 
     pub fn generate() {
-        for (source, target) in SOURCES {
+        for (sampler, prog) in SOURCES {
+            let src = format!("src/samplers/{sampler}/bpf/{prog}/mod.bpf.c");
+            let tgt = format!("src/samplers/{sampler}/bpf/{prog}/bpf.rs");
             SkeletonBuilder::new()
-                .source(source)
-                .build_and_generate(target)
+                .source(&src)
+                .build_and_generate(&tgt)
                 .unwrap();
-            println!("cargo:rerun-if-changed={source}");
+            println!("cargo:rerun-if-changed={src}");
         }
 
         println!("cargo:rerun-if-changed=src/common/bpf/histogram.h");

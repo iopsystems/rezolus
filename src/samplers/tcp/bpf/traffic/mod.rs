@@ -3,12 +3,11 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Traffic::new(config))
 }
 
-mod traffic_bpf;
+mod bpf;
 
-use traffic_bpf::*;
+use bpf::*;
 
 use common::{Counter, Distribution};
-// use common::bpf::*;
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
 
@@ -25,7 +24,7 @@ use crate::samplers::tcp::*;
 /// * tcp/transmit/segments
 /// * tcp/transmit/size
 pub struct Traffic {
-    skel: TrafficSkel<'static>,
+    skel: ModSkel<'static>,
     counters: Vec<Counter>,
     distributions: Vec<Distribution>,
 
@@ -40,7 +39,7 @@ impl Traffic {
     pub fn new(_config: &Config) -> Self {
         let now = Instant::now();
 
-        let builder = TrafficSkelBuilder::default();
+        let builder = ModSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
