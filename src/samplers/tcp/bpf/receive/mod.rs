@@ -1,6 +1,6 @@
 #[distributed_slice(TCP_BPF_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(RcvEstablished::new(config))
+    Box::new(Receive::new(config))
 }
 
 mod bpf;
@@ -11,14 +11,14 @@ use common::{Counter, Distribution};
 use super::super::stats::*;
 use super::super::*;
 
-/// Collects TCP Traffic stats using BPF
+/// Collects TCP Receive stats using BPF
 /// Probes:
 /// * "tcp_rcv_established"
 ///
 /// Stats:
 /// * tcp/receive/jitter
 /// * tcp/receive/srtt
-pub struct RcvEstablished {
+pub struct Receive {
     skel: ModSkel<'static>,
     // counters: Vec<Counter>,
     distributions: Vec<Distribution>,
@@ -30,7 +30,7 @@ pub struct RcvEstablished {
     dist_interval: Duration,
 }
 
-impl RcvEstablished {
+impl Receive {
     pub fn new(_config: &Config) -> Self {
         let now = Instant::now();
 
@@ -64,7 +64,7 @@ impl RcvEstablished {
     }   
 }
 
-impl Sampler for RcvEstablished {
+impl Sampler for Receive {
     fn sample(&mut self) {
         let now = Instant::now();
 
@@ -116,8 +116,8 @@ impl Sampler for RcvEstablished {
     }
 }
 
-impl std::fmt::Display for RcvEstablished {
+impl std::fmt::Display for Receive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "tcp::bpf::traffic")
+        write!(f, "tcp::bpf::receive")
     }
 }
