@@ -7,7 +7,7 @@ mod bpf;
 
 use bpf::*;
 
-use common::{Counter, Distribution};
+use common::bpf::{Counter, Distribution};
 use super::super::stats::*;
 use super::super::*;
 
@@ -39,7 +39,7 @@ impl Retransmit {
 
         // these need to be in the same order as in the bpf
         let counters = vec![
-            Counter::new(&TCP_TX_RETRANSMIT, Some(&TCP_TX_RETRANSMIT_HIST)),
+            Counter::new("retransmit", &TCP_TX_RETRANSMIT, Some(&TCP_TX_RETRANSMIT_HIST)),
         ];
 
         // let distributions = vec![
@@ -54,7 +54,7 @@ impl Retransmit {
             next: now,
             prev: now,
             dist_next: now,
-            interval: Duration::from_millis(1),
+            interval: Duration::from_millis(10),
             dist_interval: Duration::from_millis(100),
         }
     }   
@@ -70,15 +70,19 @@ impl Sampler for Retransmit {
 
         let elapsed = (now - self.prev).as_secs_f64();
 
-        let maps = self.skel.maps();
+        // let maps = self.skel.maps();
 
-        let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
-
-        for (id, counter) in self.counters.iter_mut().enumerate() {
-            if let Some(current) = counts.get(&id) {
-                counter.update(now, elapsed, *current);
-            }
+        for counter in self.counters.iter_mut() {
+            counter.update(now, elapsed, &self.skel.obj);
         }
+
+        // let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
+
+        // for (id, counter) in self.counters.iter_mut().enumerate() {
+        //     if let Some(current) = counts.get(id) {
+        //         counter.update(now, elapsed, *current);
+        //     }
+        // }
 
         // // determine if we should sample the distributions
         // if now >= self.dist_next {

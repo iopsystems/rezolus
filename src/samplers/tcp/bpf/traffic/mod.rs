@@ -7,7 +7,7 @@ mod bpf;
 
 use bpf::*;
 
-use common::{Counter, Distribution};
+use common::bpf::{Counter, Distribution};
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
 
@@ -45,10 +45,10 @@ impl Traffic {
 
         // these need to be in the same order as in the bpf
         let counters = vec![
-            Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HIST)),
-            Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HIST)),
-            Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HIST)),
-            Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HIST)),
+            Counter::new("rx_bytes", &TCP_RX_BYTES, Some(&TCP_RX_BYTES_HIST)),
+            Counter::new("tx_bytes", &TCP_TX_BYTES, Some(&TCP_TX_BYTES_HIST)),
+            Counter::new("rx_segments", &TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HIST)),
+            Counter::new("tx_segments", &TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HIST)),
         ];
 
         let distributions = vec![
@@ -63,7 +63,7 @@ impl Traffic {
             next: now,
             prev: now,
             dist_next: now,
-            interval: Duration::from_millis(1),
+            interval: Duration::from_millis(100),
             dist_interval: Duration::from_millis(100),
         }
     }   
@@ -79,15 +79,21 @@ impl Sampler for Traffic {
 
         let elapsed = (now - self.prev).as_secs_f64();
 
-        let maps = self.skel.maps();
+        // let maps = self.skel.maps();
 
-        let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
-
-        for (id, counter) in self.counters.iter_mut().enumerate() {
-            if let Some(current) = counts.get(&id) {
-                counter.update(now, elapsed, *current);
-            }
+        for counter in self.counters.iter_mut() {
+            counter.update(now, elapsed, &self.skel.obj);
         }
+
+        // let counts = crate::common::bpf::read_percpu_counters(maps.counters(), self.counters.len());
+
+        // for (id, counter) in self.counters.iter_mut().enumerate() {
+        //     if let Some(current) = counts.get(id) {
+        //         counter.update(now, elapsed, *current);
+        //     } else{
+        //         println!("none");
+        //     }
+        // }
 
         // determine if we should sample the distributions
         if now >= self.dist_next {

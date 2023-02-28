@@ -7,7 +7,7 @@ mod bpf;
 
 use bpf::*;
 
-use common::{Counter, Distribution};
+use common::bpf::{Counter, Distribution};
 use super::super::stats::*;
 use super::super::*;
 use syscall_numbers::native::*;
@@ -32,7 +32,8 @@ pub struct Syscall {
     dist_interval: Duration,
 }
 
-// This should match the size of the array in the BPF
+// This should match the size of the array in the BPF. Choosen to be adaquate
+// for x86, x86_64, arm, aarch64
 pub const COUNTERS: usize = 512;
 
 impl Syscall {
@@ -44,7 +45,7 @@ impl Syscall {
         skel.attach().expect("failed to attach bpf");
 
         // one counter for total syscalls
-        let total = Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HIST));
+        let total = Counter::new("total", &SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HIST));
 
         // counters are stored in a hashmap by their syscall name
         let mut counters = HashMap::new();
@@ -53,8 +54,26 @@ impl Syscall {
             ("write", &SYSCALL_WRITE),
             ("open", &SYSCALL_OPEN),
             ("close", &SYSCALL_CLOSE),
+            ("recvfrom", &SYSCALL_RECVFROM),
+            ("recvmsg", &SYSCALL_RECVMSG),
+            ("recvmmsg", &SYSCALL_RECVMMSG),
+            ("sendto", &SYSCALL_SENDTO),
+            ("sendmsg", &SYSCALL_SENDMSG),
+            ("shutdown", &SYSCALL_SHUTDOWN),
+            ("bind", &SYSCALL_BIND),
+            ("listen", &SYSCALL_LISTEN),
+            ("epoll_wait", &SYSCALL_EPOLL_WAIT),
+            ("epoll_ctl", &SYSCALL_EPOLL_CTL),
+            ("bpf", &SYSCALL_BPF),
+            ("clock_nanosleep", &SYSCALL_CLOCK_NANOSLEEP),
+            ("madvise", &SYSCALL_MADVISE),
+            ("openat", &SYSCALL_OPENAT),
+            ("futex", &SYSCALL_FUTEX),
+            ("ioctl", &SYSCALL_IOCTL),
+            ("setsockopt", &SYSCALL_SETSOCKOPT),
+            ("accept4", &SYSCALL_ACCEPT4),
         ] {
-            let counter = Counter::new(counter, None);
+            let counter = Counter::new(name, counter, None);
             counters.insert(name.to_owned(), counter);
         }
 
@@ -70,7 +89,7 @@ impl Syscall {
             next: now,
             prev: now,
             dist_next: now,
-            interval: Duration::from_millis(1),
+            interval: Duration::from_millis(50),
             dist_interval: Duration::from_millis(100),
         }
     }   
@@ -88,18 +107,18 @@ impl Sampler for Syscall {
 
         let maps = self.skel.maps();
 
-        let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
+        let counts = crate::common::bpf::read_counters(maps.counters(), COUNTERS);
 
         let mut total: u64 = 0;
-        for (id, count) in counts.iter() {
+        for (id, count) in counts.iter().enumerate() {
             total = total.wrapping_add(*count);
-            if let Some(name) = syscall_numbers::native::sys_call_name(*id as core::ffi::c_long) {
+            if let Some(name) = sys_call_name(id as core::ffi::c_long) {
                 if let Some(counter) = self.counters.get_mut(name) {
-                    counter.update(now, elapsed, *count);
+                    counter.set(now, elapsed, *count);
                 }
             }
         }
-        self.total.update(now, elapsed, total);
+        self.total.set(now, elapsed, total);
 
 
         // for (id, counter) in self.counters.iter_mut().enumerate() {

@@ -10,22 +10,20 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
-#define RETRANSMITS 0
-
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 1);
-} counters SEC(".maps");
+} retransmit SEC(".maps");
 
 SEC("fentry/tcp_retransmit_timer")
 int BPF_PROG(tcp_retransmit, struct sock *sk)
 {
 	u64 *cnt;
 
-	u32 idx = RETRANSMITS;
-	cnt = bpf_map_lookup_elem(&counters, &idx);
+	u32 idx = 0;
+	cnt = bpf_map_lookup_elem(&retransmit, &idx);
 
 	if (cnt) {
 		__sync_fetch_and_add(cnt, 1);
@@ -39,8 +37,8 @@ int BPF_KPROBE(tcp_retransmit_kprobe, struct sock *sk)
 {
 	u64 *cnt;
 
-	u32 idx = RETRANSMITS;
-	cnt = bpf_map_lookup_elem(&counters, &idx);
+	u32 idx = 0;
+	cnt = bpf_map_lookup_elem(&retransmit, &idx);
 
 	if (cnt) {
 		__sync_fetch_and_add(cnt, 1);

@@ -7,7 +7,7 @@ mod bpf;
 
 use bpf::*;
 
-use common::{Counter, Distribution};
+use common::bpf::{Counter, Distribution};
 use super::super::stats::*;
 use super::super::*;
 

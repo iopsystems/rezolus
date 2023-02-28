@@ -18,4 +18,13 @@ counter!(SYSCALL_SENDMSG, "syscall/sendmsg", "send a message on a socket");
 counter!(SYSCALL_SHUTDOWN, "syscall/shutdown", "shut down part of a full-duplex connection");
 counter!(SYSCALL_BIND, "syscall/bind", "bind a name to a socket");
 counter!(SYSCALL_LISTEN, "syscall/listen", "listen for connections on a socket");
-
+counter!(SYSCALL_EPOLL_WAIT, "syscall/epoll_wait", "wait for an I/O event on an epoll file descriptor");
+counter!(SYSCALL_EPOLL_CTL, "syscall/epoll_ctl", "updates the interest list for an epoll file descriptor");
+counter!(SYSCALL_BPF, "syscall/bpf", "perform a command on an extended BPF map or program");
+counter!(SYSCALL_CLOCK_NANOSLEEP, "syscall/clock_nanosleep", "high-resolution sleep with specifiable clock");
+counter!(SYSCALL_MADVISE, "syscall/madvise");
+counter!(SYSCALL_OPENAT, "syscall/openat");
+counter!(SYSCALL_FUTEX, "syscall/futex");
+counter!(SYSCALL_IOCTL, "syscall/ioctl");
+counter!(SYSCALL_SETSOCKOPT, "syscall/setsockopt");
+counter!(SYSCALL_ACCEPT4, "syscall/accept4");

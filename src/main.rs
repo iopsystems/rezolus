@@ -2,9 +2,9 @@ use warp::Filter;
 use ringlog::*;
 
 use metriken::Lazy;
-use metriken::Counter;
-use metriken::Gauge;
-use metriken::Heatmap;
+
+
+
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use std::fmt::Display;
@@ -19,6 +19,7 @@ use linkme::distributed_slice;
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 
+mod admin;
 mod common;
 mod samplers;
 
@@ -74,9 +75,15 @@ fn main() {
         }
     };
 
-    
+    // initialize async runtime
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(1)
+        .build().expect("failed to launch async runtime");
 
-
+    rt.spawn({
+        admin::http()
+    });
 
     // initialize and gather the samplers
     let mut classic_samplers: Vec<Box<dyn Sampler>> = Vec::new();
@@ -90,23 +97,6 @@ fn main() {
     for sampler in BPF_SAMPLERS {
         bpf_samplers.push(sampler(&config));
     }
-
-    // initialize async runtime
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(1)
-        .build().expect("failed to launch async runtime");
-
-    rt.spawn({
-        admin_http()
-    });
-
-    // std::thread::spawn(|| {
-    //     loop {
-    //         admin();
-    //         std::thread::sleep(std::time::Duration::from_secs(1));
-    //     }
-    // });
 
     // main loop
     loop {
@@ -129,94 +119,10 @@ fn main() {
         let elapsed = (stop - start).as_nanos();
 
         // calculate how long to sleep and sleep before next iteration
-        // this wakeup period allows 1kHz sampling
+        // this wakeup period allows a maximum of 1kHz sampling
         let sleep = 1_000_000_u64.saturating_sub(elapsed);
         std::thread::sleep(std::time::Duration::from_nanos(sleep));
     }
-}
-
-async fn admin_http() {
-    let root = warp::path::end().map(|| "rezolus");
-
-    let vars = warp::path("vars").map(human_stats);
-
-    let metrics = warp::path("metrics").map(prometheus_stats);
-
-    let routes = warp::get().and(
-        root
-            .or(vars)
-            .or(metrics),
-    );
-
-    warp::serve(routes).run(([0, 0, 0, 0], 4242)).await;
-
-}
-
-fn prometheus_stats() -> String {
-    let mut data = Vec::new();
-
-    for metric in &metriken::metrics() {
-        let any = match metric.as_any() {
-            Some(any) => any,
-            None => {
-                continue;
-            }
-        };
-
-        if metric.name().starts_with("log_") {
-            continue;
-        }
-
-        if let Some(counter) = any.downcast_ref::<Counter>() {
-            data.push(format!("# TYPE {} counter\n{} {}", metric.name(), metric.name(), counter.value()));
-        } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-            data.push(format!("# TYPE {} gauge\n{} {}", metric.name(), metric.name(), gauge.value()));
-        } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-            for (_label, percentile) in PERCENTILES {
-                let value = heatmap.percentile(*percentile).map(|b| b.high()).unwrap_or(0);
-                data.push(format!("# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}", metric.name(), metric.name(), percentile, value));
-            }
-        }
-    }
-
-    data.sort();
-    let mut content = data.join("\n");
-    content += "\n";
-    let parts: Vec<&str> = content.split('/').collect();
-    parts.join("_")
-}
-
-fn human_stats() -> String {
-    let mut data = Vec::new();
-
-    for metric in &metriken::metrics() {
-        let any = match metric.as_any() {
-            Some(any) => any,
-            None => {
-                continue;
-            }
-        };
-
-        if metric.name().starts_with("log_") {
-            continue;
-        }
-
-        if let Some(counter) = any.downcast_ref::<Counter>() {
-            data.push(format!("{}: {}", metric.name(), counter.value()));
-        } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-            data.push(format!("{}: {}", metric.name(), gauge.value()));
-        } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-            for (label, p) in PERCENTILES {
-                let percentile = heatmap.percentile(*p).map(|b| b.high()).unwrap_or(0);
-                data.push(format!("{}/{}: {}", metric.name(), label, percentile));
-            }
-        }
-    }
-
-    data.sort();
-    let mut content = data.join("\n");
-    content += "\n";
-    content
 }
 
 pub trait Sampler: Display {

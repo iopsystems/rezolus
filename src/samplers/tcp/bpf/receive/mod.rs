@@ -7,7 +7,7 @@ mod bpf;
 
 use bpf::*;
 
-use common::{Counter, Distribution};
+use common::bpf::{Counter, Distribution};
 use super::super::stats::*;
 use super::super::*;
 
@@ -58,7 +58,7 @@ impl Receive {
             next: now,
             prev: now,
             dist_next: now,
-            interval: Duration::from_millis(1),
+            interval: Duration::from_millis(10),
             dist_interval: Duration::from_millis(100),
         }
     }   

@@ -26,6 +26,9 @@
 // 	__type(value, u64);
 // } start SEC(".maps");
 
+// this is fine for all archs we care about: x86, x86_64, arm, aarch64
+// note: there may be some contention, but it's easier than having a ton of
+// percpu arrays that require one syscall each to read.
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);

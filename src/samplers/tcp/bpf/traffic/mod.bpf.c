@@ -21,15 +21,34 @@
 #define TCP_RX_SEGMENTS 2
 #define TCP_TX_SEGMENTS 3
 
-// Combined map for counters
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 4);
-} counters SEC(".maps");
+	__uint(max_entries, 1);
+} rx_bytes SEC(".maps");
 
-// Histograms
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, 1);
+} tx_bytes SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, 1);
+} rx_segments SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, 1);
+} tx_segments SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
@@ -58,8 +77,8 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 
 
 	if (receiving) {
-		idx = TCP_RX_BYTES;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
+		idx = 0;
+		cnt = bpf_map_lookup_elem(&rx_bytes, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, (u64) size);
@@ -72,15 +91,15 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = TCP_RX_SEGMENTS;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
+		idx = 0;
+		cnt = bpf_map_lookup_elem(&rx_segments, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
 		}
 	} else {
-		idx = TCP_TX_BYTES;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
+		idx = 0;
+		cnt = bpf_map_lookup_elem(&tx_bytes, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, (u64) size);
@@ -93,8 +112,8 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = TCP_TX_SEGMENTS;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
+		idx = 0;
+		cnt = bpf_map_lookup_elem(&tx_segments, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
