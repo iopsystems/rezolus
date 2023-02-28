@@ -16,6 +16,8 @@ libbpf-sys = { version = "*", optional = true }
 linkme = "*"
 metriken = "*"
 ringlog = "*"
+tokio = { version = "*", features = ["full"] }
+warp = "*"
 
 [build-dependencies]
 libbpf-cargo = { version = "0.13.1", optional = true }
