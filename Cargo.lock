@@ -1088,6 +1088,7 @@ dependencies = [
  "linkme",
  "metriken",
  "ringlog",
+ "syscall-numbers",
  "tokio",
  "warp",
 ]
@@ -1318,6 +1319,12 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "syscall-numbers"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5107a4311bebea1cce746e0fc3985b7f091b25e5f50246546c485f84979a3818"
 
 [[package]]
 name = "tempfile"
