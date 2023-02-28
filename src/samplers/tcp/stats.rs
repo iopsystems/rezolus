@@ -9,8 +9,10 @@ counter_with_heatmap!(TCP_TX_SEGMENTS, TCP_TX_SEGMENTS_HIST, "tcp/transmit/segme
 
 heatmap!(TCP_RX_SIZE, "tcp/receive/size", "distribution of receive segment sizes");
 heatmap!(TCP_TX_SIZE, "tcp/transmit/size", "distribution of transmit segment sizes");
+heatmap!(TCP_JITTER, "tcp/jitter");
+heatmap!(TCP_SRTT, "tcp/srtt");
 
-counter!(SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE, "samplers/tcp/classic/snmp/sample");
-counter!(SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE_EX, "samplers/tcp/classic/snmp/sample_ex");
+// counter!(SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE, "samplers/tcp/classic/snmp/sample");
+// counter!(SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE_EX, "samplers/tcp/classic/snmp/sample_ex");
 
-counter!(SAMPLERS_TCP_BPF_TRAFFIC_SAMPLE, "samplers/tcp/bpf/traffic/sample");
+// counter!(SAMPLERS_TCP_BPF_TRAFFIC_SAMPLE, "samplers/tcp/bpf/traffic/sample");

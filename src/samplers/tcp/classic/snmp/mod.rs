@@ -46,8 +46,6 @@ impl Sampler for Snmp {
 			return;
 		}
 
-		SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE.increment();
-
 		let elapsed = (now - self.prev).as_secs_f64();
 
 		if let Ok(nested_map) = NestedMap::try_from_procfs(&mut self.file) {
@@ -56,8 +54,6 @@ impl Sampler for Snmp {
 					counter.update(now, elapsed, curr);
 				}
 			}
-		} else {
-			SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE_EX.increment();
 		}
 
 		// determine when to sample next

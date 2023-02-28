@@ -20,6 +20,10 @@ mod bpf {
             "src/samplers/scheduler/bpf/runqlat/runqlat_bpf.rs",
         ),
         (
+            "src/samplers/tcp/bpf/rcv_established/mod.bpf.c",
+            "src/samplers/tcp/bpf/rcv_established/bpf.rs",
+        ),
+        (
             "src/samplers/tcp/bpf/traffic/traffic.bpf.c",
             "src/samplers/tcp/bpf/traffic/traffic_bpf.rs",
         ),
