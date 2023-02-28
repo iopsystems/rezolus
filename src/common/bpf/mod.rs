@@ -131,7 +131,7 @@ pub fn key_to_value(index: u64) -> u64 {
     }
 }
 
-pub fn update_histogram_from_dist(fd: i32, stat: &metriken::Lazy<metriken::Heatmap>, previous: &mut [u64]) {
+pub fn update_histogram_from_dist(map: &libbpf_rs::Map, stat: &metriken::Lazy<metriken::Heatmap>, previous: &mut [u64]) {
 	let now = Instant::now();
 
 	let opts = libbpf_sys::bpf_map_batch_opts {
@@ -149,7 +149,7 @@ pub fn update_histogram_from_dist(fd: i32, stat: &metriken::Lazy<metriken::Heatm
 
     let ret = unsafe {
         libbpf_sys::bpf_map_lookup_batch(
-            fd,
+            map.fd(),
             in_batch as *mut core::ffi::c_void,
             &mut out_batch as *mut _ as *mut core::ffi::c_void,
             keys.as_mut_ptr() as *mut core::ffi::c_void,
@@ -191,7 +191,7 @@ pub fn update_histogram_from_dist(fd: i32, stat: &metriken::Lazy<metriken::Heatm
 }
 
 // note: 
-pub fn read_counters(fd: i32, count: usize) -> HashMap<usize, u64> {
+pub fn read_counters(map: &libbpf_rs::Map, count: usize) -> HashMap<usize, u64> {
 	let mut result = HashMap::with_capacity(count);
 
 	let opts = libbpf_sys::bpf_map_batch_opts {
@@ -211,7 +211,7 @@ pub fn read_counters(fd: i32, count: usize) -> HashMap<usize, u64> {
 
     let ret = unsafe {
         libbpf_sys::bpf_map_lookup_batch(
-            fd,
+            map.fd(),
             in_batch as *mut core::ffi::c_void,
             &mut out_batch as *mut _ as *mut core::ffi::c_void,
             keys.as_mut_ptr() as *mut core::ffi::c_void,

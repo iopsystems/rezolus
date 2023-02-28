@@ -11,8 +11,8 @@ fn main() {
 #[cfg(feature = "bpf")]
 mod bpf {
     use libbpf_cargo::SkeletonBuilder;
-    use std::env;
-    use std::path::PathBuf;
+    // use std::env;
+    // use std::path::PathBuf;
 
     const SOURCES: &'static [(&str, &str)] = &[
         (

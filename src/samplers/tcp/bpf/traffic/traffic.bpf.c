@@ -16,11 +16,12 @@
 #define AF_INET		2	/* Internet IP Protocol 	*/
 #define AF_INET6	10	/* IP version 6			*/
 
+#define TCP_RX_BYTES 0
+#define TCP_TX_BYTES 1
+#define TCP_RX_SEGMENTS 2
+#define TCP_TX_SEGMENTS 3
+
 // Combined map for counters
-// - rx_bytes
-// - tx_bytes
-// - rx_segments
-// - tx_segments
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
@@ -57,7 +58,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 
 
 	if (receiving) {
-		idx = 0;
+		idx = TCP_RX_BYTES;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
@@ -71,14 +72,14 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = 2;
+		idx = TCP_RX_SEGMENTS;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
 		}
 	} else {
-		idx = 1;
+		idx = TCP_TX_BYTES;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
@@ -92,7 +93,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = 3;
+		idx = TCP_TX_SEGMENTS;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {

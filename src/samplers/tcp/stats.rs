@@ -3,9 +3,9 @@ use crate::*;
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 
 counter_with_heatmap!(TCP_RX_BYTES, TCP_RX_BYTES_HIST, "tcp/receive/bytes", "number of bytes received over TCP");
-counter_with_heatmap!(TCP_RX_SEGS, TCP_RX_SEGS_HIST, "tcp/receive/segments", "number of TCP segments received");
+counter_with_heatmap!(TCP_RX_SEGMENTS, TCP_RX_SEGMENTS_HIST, "tcp/receive/segments", "number of TCP segments received");
 counter_with_heatmap!(TCP_TX_BYTES, TCP_TX_BYTES_HIST, "tcp/transmit/bytes", "number of bytes transmitted over TCP");
-counter_with_heatmap!(TCP_TX_SEGS, TCP_TX_SEGS_HIST, "tcp/transmit/segments", "number of TCP segments transmitted");
+counter_with_heatmap!(TCP_TX_SEGMENTS, TCP_TX_SEGMENTS_HIST, "tcp/transmit/segments", "number of TCP segments transmitted");
 
 heatmap!(TCP_RX_SIZE, "tcp/receive/size", "distribution of receive segment sizes");
 heatmap!(TCP_TX_SIZE, "tcp/transmit/size", "distribution of transmit segment sizes");
