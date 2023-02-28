@@ -16,6 +16,10 @@ mod bpf {
 
     const SOURCES: &'static [(&str, &str)] = &[
         (
+            "src/samplers/scheduler/bpf/runqlat/runqlat.bpf.c",
+            "src/samplers/scheduler/bpf/runqlat/runqlat_bpf.rs",
+        ),
+        (
             "src/samplers/tcp/bpf/traffic/traffic.bpf.c",
             "src/samplers/tcp/bpf/traffic/traffic_bpf.rs",
         ),

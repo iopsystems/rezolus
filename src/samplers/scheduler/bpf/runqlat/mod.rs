@@ -1,32 +1,27 @@
-#[distributed_slice(TCP_BPF_SAMPLERS)]
+#[distributed_slice(SCHEDULER_BPF_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Traffic::new(config))
+    Box::new(Runqlat::new(config))
 }
 
-mod traffic_bpf;
+mod runqlat_bpf;
 
-use traffic_bpf::*;
+use runqlat_bpf::*;
 
 use common::{Counter, Distribution};
 // use common::bpf::*;
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
+use super::super::stats::*;
+use super::super::*;
 
-/// Collects TCP Traffic stats using BPF
-/// kprobes:
-/// * "kprobe/tcp_sendmsg"
-/// * "kprobe/tcp_cleanup_rbuf"
+/// Collects Scheduler Runqueue Latency stats using BPF
+/// tracepoints:
+/// * "tp_btf/sched_wakeup"
+/// * "tp_btf/sched_wakeup_new"
+/// * "tp_btf/sched_switch"
 ///
 /// stats:
-/// * tcp/receive/bytes
-/// * tcp/receive/segments
-/// * tcp/receive/size
-/// * tcp/transmit/bytes
-/// * tcp/transmit/segments
-/// * tcp/transmit/size
-pub struct Traffic {
-    skel: TrafficSkel<'static>,
-    counters: Vec<Counter>,
+/// * scheduler/runqueue/latency
+pub struct Runqlat {
+    skel: RunqlatSkel<'static>,
     distributions: Vec<Distribution>,
 
     next: Instant,
@@ -36,30 +31,24 @@ pub struct Traffic {
     dist_interval: Duration,
 }
 
-impl Traffic {
+impl Runqlat {
     pub fn new(_config: &Config) -> Self {
         let now = Instant::now();
 
-        let builder = TrafficSkelBuilder::default();
+        let builder = RunqlatSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
         // these need to be in the same order as in the bpf
-        let counters = vec![
-            Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HIST)),
-            Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HIST)),
-            Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HIST)),
-            Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HIST)),
-        ];
+        // let counters = vec![];
 
         let distributions = vec![
-            Distribution::new("rx_size", &TCP_RX_SIZE),
-            Distribution::new("tx_size", &TCP_TX_SIZE)
+            Distribution::new("latency", &SCHEDULER_RUNQUEUE_LATENCY),
         ];
 
         Self {
             skel,
-            counters,
+            // counters,
             distributions,
             next: now,
             prev: now,
@@ -70,7 +59,7 @@ impl Traffic {
     }   
 }
 
-impl Sampler for Traffic {
+impl Sampler for Runqlat {
     fn sample(&mut self) {
         let now = Instant::now();
 
@@ -78,19 +67,19 @@ impl Sampler for Traffic {
             return;
         }
 
-        SAMPLERS_TCP_BPF_TRAFFIC_SAMPLE.increment();
+        SAMPLERS_SCHEDULER_BPF_RUNQLAT_SAMPLE.increment();
 
-        let elapsed = (now - self.prev).as_secs_f64();
+        // let elapsed = (now - self.prev).as_secs_f64();
 
-        let maps = self.skel.maps();
+        // let maps = self.skel.maps();
 
-        let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
+        // let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
 
-        for (id, counter) in self.counters.iter_mut().enumerate() {
-            if let Some(current) = counts.get(&id) {
-                counter.update(now, elapsed, *current);
-            }
-        }
+        // for (id, counter) in self.counters.iter_mut().enumerate() {
+        //     if let Some(current) = counts.get(&id) {
+        //         counter.update(now, elapsed, *current);
+        //     }
+        // }
 
         // determine if we should sample the distributions
         if now >= self.dist_next {
@@ -124,8 +113,8 @@ impl Sampler for Traffic {
     }
 }
 
-impl std::fmt::Display for Traffic {
+impl std::fmt::Display for Runqlat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "tcp::bpf::traffic")
+        write!(f, "scheduler::bpf::runqlat")
     }
 }
