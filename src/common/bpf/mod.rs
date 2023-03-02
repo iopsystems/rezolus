@@ -5,6 +5,8 @@ mod keys;
 
 pub use keys::KEYS;
 
+use libbpf_rs::Map;
+
 #[cfg(feature = "bpf")]
 /// This function converts indices back to values for rustcommon histogram with
 /// the parameters `m = 0`, `r = 8`, `n = 64`. This covers the entire range from
@@ -151,20 +153,22 @@ pub fn read_counters(map: &libbpf_rs::Map, count: usize) -> Vec<u64> {
 //
 // downside to this is we need to issue one syscall for each counter, but the
 // updates within the bpf program will not be contended
-pub fn read_percpu_counter(map: &libbpf_rs::Map) -> Result<u64, ()> {
+pub fn read_percpu_counter(map: &libbpf_rs::Map, buf: &mut Vec<u8>) -> Result<u64, ()> {
 	let num_cpu = libbpf_rs::num_possible_cpus().expect("failed to get number of cpus");
 
 	let mut result: u64 = 0;
 
 	let key = [0x00, 0x00, 0x00, 0x00];
 
-    let mut out: Vec<u8> = vec![0; num_cpu * 8];
+    // let mut out: Vec<u8> = vec![0; num_cpu * 8];
+    buf.clear();
+    buf.resize(num_cpu * 8, 0);
 
     let ret = unsafe {
         libbpf_sys::bpf_map_lookup_elem(
             map.fd(),
             key.as_ptr() as *mut core::ffi::c_void,
-            out.as_mut_ptr() as *mut core::ffi::c_void,
+            buf.as_mut_ptr() as *mut core::ffi::c_void,
         )
     };
 
@@ -176,7 +180,7 @@ pub fn read_percpu_counter(map: &libbpf_rs::Map) -> Result<u64, ()> {
     let mut current = [0; 8];
 
 	for i in 0..num_cpu {
-        current.copy_from_slice(&out[(i * 8)..((i + 1) * 8)]);
+        current.copy_from_slice(&buf[(i * 8)..((i + 1) * 8)]);
 
         result = result.wrapping_add(u64::from_ne_bytes(current));
     }
@@ -188,23 +192,25 @@ pub struct Counter {
     previous: Option<u64>,
     counter: &'static metriken::Lazy<metriken::Counter>,
     heatmap: Option<&'static metriken::Lazy<metriken::Heatmap>>,
-    map: &'static str,
+    map: &'static Map,
+    buf: Vec<u8>,
 }
 
 impl Counter {
-    pub fn new(map: &'static str, counter: &'static metriken::Lazy<metriken::Counter>, heatmap: Option<&'static metriken::Lazy<metriken::Heatmap>>) -> Self {
+    pub fn new(map: &'static Map, counter: &'static metriken::Lazy<metriken::Counter>, heatmap: Option<&'static metriken::Lazy<metriken::Heatmap>>) -> Self {
         Self {
             previous: None,
             counter,
             heatmap,
             map,
+            buf: Vec::new(),
         }
     }
 
     // updates the counter by reading from it's associated map
-    pub fn update(&mut self, now: Instant, elapsed_s: f64, obj: &libbpf_rs::Object) {
-    	let map = obj.map(self.map).unwrap();
-    	if let Ok(current) = crate::common::bpf::read_percpu_counter(map) {
+    pub fn update(&mut self, now: Instant, elapsed_s: f64) {
+    	// let map = obj.map(self.map).unwrap();
+    	if let Ok(current) = crate::common::bpf::read_percpu_counter(self.map, &mut self.buf) {
 	        if let Some(previous) = self.previous {
 	            let delta = current.wrapping_sub(previous);
 	            self.counter.add(delta);

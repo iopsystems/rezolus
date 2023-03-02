@@ -1087,6 +1087,7 @@ dependencies = [
  "libbpf-sys",
  "linkme",
  "metriken",
+ "once_cell",
  "ringlog",
  "syscall-numbers",
  "tokio",

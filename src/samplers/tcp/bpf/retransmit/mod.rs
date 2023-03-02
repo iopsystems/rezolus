@@ -11,6 +11,35 @@ use common::bpf::{Counter, Distribution};
 use super::super::stats::*;
 use super::super::*;
 
+struct Skel<'a> {
+    skel: Arc<ModSkel<'a>>,
+}
+
+struct Map<'a> {
+    skel: Arc<ModSkel<'a>>,
+    map: &'a libbpf_rs::Map,
+}
+
+impl<'a> Skel<'a> {
+    fn get_map(&self, name: &str) -> Map {
+        let skel = self.skel.clone();
+        Map {
+            skel,
+            map: skel.obj.map(name).expect("map {name} does not exist"),
+        }
+        // self.skel.obj.map(name).expect("map {name} does not exist")
+    }
+}
+
+use once_cell::unsync::Lazy;
+
+// static SKEL: Lazy<ModSkel> = Lazy::new(|| {
+//     let builder = ModSkelBuilder::default();
+//     let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
+//     skel.attach().expect("failed to attach bpf");
+//     skel
+// });
+
 /// Collects TCP Retransmit stats using BPF
 /// Probes:
 /// * "tcp_retransmit_timer"
@@ -18,7 +47,7 @@ use super::super::*;
 /// Stats:
 /// * tcp/transmit/retransmit
 pub struct Retransmit {
-    skel: ModSkel<'static>,
+    skel: Skel<'static>,
     counters: Vec<Counter>,
     // distributions: Vec<Distribution>,
 
@@ -37,9 +66,17 @@ impl Retransmit {
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
+        let skel = Skel {
+            skel,
+        };
+
+        // let builder = ModSkelBuilder::default();
+        // let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
+        // skel.attach().expect("failed to attach bpf");
+
         // these need to be in the same order as in the bpf
         let counters = vec![
-            Counter::new("retransmit", &TCP_TX_RETRANSMIT, Some(&TCP_TX_RETRANSMIT_HIST)),
+            Counter::new(skel.get_map("retransmit"), &TCP_TX_RETRANSMIT, Some(&TCP_TX_RETRANSMIT_HIST)),
         ];
 
         // let distributions = vec![
@@ -73,7 +110,7 @@ impl Sampler for Retransmit {
         // let maps = self.skel.maps();
 
         for counter in self.counters.iter_mut() {
-            counter.update(now, elapsed, &self.skel.obj);
+            counter.update(now, elapsed);
         }
 
         // let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
