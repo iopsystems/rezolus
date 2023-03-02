@@ -16,14 +16,14 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 496);
+	__uint(max_entries, 7424);
 } jitter SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 496);
+	__uint(max_entries, 7424);
 } srtt SEC(".maps");
 
 SEC("fentry/tcp_rcv_established")

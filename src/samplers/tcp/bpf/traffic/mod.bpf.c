@@ -53,14 +53,14 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 496);
+	__uint(max_entries, 7424);
 } rx_size SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 496);
+	__uint(max_entries, 7424);
 } tx_size SEC(".maps");
 
 static int probe_ip(bool receiving, struct sock *sk, size_t size)

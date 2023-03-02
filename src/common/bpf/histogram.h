@@ -206,15 +206,22 @@ static u32 clz(u64 value) {
 }
 
 // base-2 histogram indexing function that is compatible with Rust `histogram`
-// crate for m = 0, r = 4, n = 64 this gives us the ability to store counts for
-// values from 1 -> u64::MAX and uses 496 buckets per histogram, which occupies
-// ~4KB of space
+// crate for m = 0, r = 8, n = 64 this gives us the ability to store counts for
+// values from 1 -> u64::MAX and uses 7424 buckets per histogram, which occupies
+// 58KB of space in kernelspace (where we use 64bit counters)
 static u32 value_to_index(u64 value) {
+    if (value == 0) {
+        return 0;
+    }
+
     u64 h = 63 - clz(value);
-    if (h < 4) {
+    // h < r
+    if (h < 8) {
         return value;
     } else {
-        u64 d = h - 3;
-        return ((d + 1) * 8) + ((value - (1 << h)) >> d);
+        // d = h - r + 1
+        u64 d = h - 7;
+        // ((d + 1) * G + ((value - (1 << h)) >> (m + d)))
+        return ((d + 1) * 128) + ((value - (1 << h)) >> d);
     }
 }

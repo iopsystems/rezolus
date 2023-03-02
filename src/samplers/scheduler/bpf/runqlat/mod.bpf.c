@@ -28,7 +28,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 496);
+	__uint(max_entries, 7424);
 } latency SEC(".maps");
 
 /* record enqueue timestamp */

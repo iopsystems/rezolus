@@ -7,18 +7,22 @@ pub use keys::KEYS;
 
 #[cfg(feature = "bpf")]
 /// This function converts indices back to values for rustcommon histogram with
-/// the parameters `m = 0`, `r = 4`, `n = 64`. This covers the entire range from
-/// 1 to u64::MAX and uses 496 buckets per histogram, which works out to ~4KB
-/// for each histogram. In userspace we will likely have 61 histograms -
-/// bringing the total to ~256KB per stat.
+/// the parameters `m = 0`, `r = 8`, `n = 64`. This covers the entire range from
+/// 1 to u64::MAX and uses 7424 buckets per histogram, which works out to 58KB
+/// for each histogram in kernelspace (64bit counters). In userspace, we will
+/// we will likely have 61 histograms => 1769KB per stat in userspace.
 pub fn key_to_value(index: u64) -> u64 {
-    let g = index >> 3;
-    let b = index - g * 8 + 1;
+	// g = index >> (r - m - 1)
+    let g = index >> 7;
+    // b = index - g * G + 1
+    let b = index - g * 128 + 1;
 
     if g < 1 {
+    	// (1 << m) * b - 1
         b - 1
     } else {
-        (1 << (2 + g)) + (1 << (g - 1)) * b - 1
+    	// (1 << (r - 2 + g)) + (1 << (m + g - 1)) * b - 1
+        (1 << (6 + g)) + (1 << (g - 1)) * b - 1
     }
 }
 
@@ -32,8 +36,8 @@ pub fn update_histogram_from_dist(map: &libbpf_rs::Map, stat: &metriken::Lazy<me
     };
 
 	let mut keys = KEYS.to_owned();
-    let mut out: Vec<u8> = vec![0; 496 * 8];
-    let mut nkeys: u32 = 496;
+    let mut out: Vec<u8> = vec![0; 7424 * 8];
+    let mut nkeys: u32 = 7424;
     keys.truncate(nkeys as usize * 4);
 
     let in_batch = std::ptr::null_mut();
@@ -226,7 +230,7 @@ impl Counter {
 }
 
 pub struct Distribution {
-    previous: [u64; 496],
+    previous: [u64; 7424],
     heatmap: &'static metriken::Lazy<metriken::Heatmap>,
     map: &'static str,
 }
@@ -234,7 +238,7 @@ pub struct Distribution {
 impl Distribution {
     pub const fn new(map: &'static str, heatmap: &'static metriken::Lazy<metriken::Heatmap>) -> Self {
         Self {
-            previous: [0; 496],
+            previous: [0; 7424],
             heatmap,
             map,
         }
