@@ -75,12 +75,59 @@ fn main() {
         }
     };
 
+    // configure debug log
+    let debug_output: Box<dyn Output> = Box::new(Stderr::new());
+    // let debug_output: Box<dyn Output> = if let Some(file) = config.debug().log_file() {
+    //     let backup = config
+    //         .debug()
+    //         .log_backup()
+    //         .unwrap_or(format!("{}.old", file));
+    //     Box::new(
+    //         File::new(&file, &backup, config.debug().log_max_size())
+    //             .expect("failed to open debug log file"),
+    //     )
+    // } else {
+    //     // by default, log to stderr
+    //     Box::new(Stderr::new())
+    // };
+
+    let level = Level::Info;
+
+    let debug_log = if level <= Level::Info {
+        LogBuilder::new().format(ringlog::default_format)
+    } else {
+        LogBuilder::new()
+    }
+    .output(debug_output)
+    // .log_queue_depth(config.debug().log_queue_depth())
+    // .single_message_size(config.debug().log_single_message_size())
+    .build()
+    .expect("failed to initialize debug log");
+
+    let mut log = MultiLogBuilder::new()
+        .level_filter(level.to_level_filter())
+        .default(debug_log)
+        .build()
+        .start();
+
     // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(1)
         .build().expect("failed to launch async runtime");
 
+    // spawn logging thread
+    rt.spawn(async move {
+        // while RUNNING.load(Ordering::Relaxed) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = log.flush();
+        // }
+        // let _ = log.flush();
+    });
+
+    info!("rezolus");
+
+    // spawn admin thread
     rt.spawn({
         admin::http()
     });
@@ -97,6 +144,8 @@ fn main() {
     for sampler in BPF_SAMPLERS {
         bpf_samplers.push(sampler(&config));
     }
+
+    info!("initialization complete");
 
     // main loop
     loop {
