@@ -1,3 +1,3 @@
-// mod scheduler;
+mod scheduler;
 mod syscall;
 mod tcp;

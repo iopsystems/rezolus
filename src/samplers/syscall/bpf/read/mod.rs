@@ -18,12 +18,14 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-// /// Collects Scheduler Runqueue Latency stats using BPF
-// /// tracepoints:
-// /// * "tracepoint/raw_syscalls/sys_exit"
-// ///
-// /// stats:
-// /// * syscall/*
+/// Collects read() syscall stats using BPF
+/// tracepoints:
+/// * "tracepoint/syscalls/sys_enter_read"
+/// * "tracepoint/syscalls/sys_exit_read"
+///
+/// stats:
+/// * syscall/read
+/// * syscall/read/latency
 pub struct Read {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
@@ -50,7 +52,7 @@ impl Read {
             counter_interval: Duration::from_millis(10),
             counter_next: Instant::now(),
             counter_prev: Instant::now(),
-            distribution_interval: Duration::from_millis(10),
+            distribution_interval: Duration::from_millis(100),
             distribution_next: Instant::now(),
             distribution_prev: Instant::now(),
         }

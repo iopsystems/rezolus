@@ -17,6 +17,7 @@ mod bpf {
     const SOURCES: &'static [(&str, &str)] = &[
         ("scheduler", "runqlat"),
         ("syscall", "read"),
+        ("syscall", "write"),
         ("tcp", "receive"),
         ("tcp", "retransmit"),
         ("tcp", "traffic"),

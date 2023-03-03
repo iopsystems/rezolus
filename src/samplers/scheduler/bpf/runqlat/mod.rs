@@ -7,106 +7,112 @@ mod bpf;
 
 use bpf::*;
 
-use common::bpf::{Counter, Distribution};
+use crate::common::*;
+use crate::common::bpf::*;
 use super::super::stats::*;
 use super::super::*;
+
+impl GetMap for ModSkel<'_> {
+    fn map(&self, name: &str) -> &libbpf_rs::Map {
+        self.obj.map(name).unwrap()
+    }
+}
 
 /// Collects Scheduler Runqueue Latency stats using BPF
 /// tracepoints:
 /// * "tp_btf/sched_wakeup"
 /// * "tp_btf/sched_wakeup_new"
 /// * "tp_btf/sched_switch"
-///
 /// stats:
 /// * scheduler/runqueue/latency
 pub struct Runqlat {
-    skel: ModSkel<'static>,
-    distributions: Vec<Distribution>,
-
-    next: Instant,
-    dist_next: Instant,
-    prev: Instant,
-    interval: Duration,
-    dist_interval: Duration,
+    bpf: Bpf<ModSkel<'static>>,
+    counter_interval: Duration,
+    counter_next: Instant,
+    counter_prev: Instant,
+    distribution_interval: Duration,
+    distribution_next: Instant,
+    distribution_prev: Instant,
 }
 
 impl Runqlat {
     pub fn new(_config: &Config) -> Self {
-        let now = Instant::now();
-
         let builder = ModSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
-        // these need to be in the same order as in the bpf
-        // let counters = vec![];
+        let mut bpf = Bpf::from_skel(skel);
 
-        let distributions = vec![
-            Distribution::new("latency", &SCHEDULER_RUNQUEUE_LATENCY),
+        let mut distributions = vec![
+            ("latency", &SCHEDULER_RUNQUEUE_LATENCY),
         ];
 
-        Self {
-            skel,
-            // counters,
-            distributions,
-            next: now,
-            prev: now,
-            dist_next: now,
-            interval: Duration::from_millis(1),
-            dist_interval: Duration::from_millis(100),
+        for (name, heatmap) in distributions.drain(..) {
+            bpf.add_distribution(name, heatmap);
         }
-    }   
+
+        Self {
+            bpf,
+            counter_interval: Duration::from_millis(10),
+            counter_next: Instant::now(),
+            counter_prev: Instant::now(),
+            distribution_interval: Duration::from_millis(100),
+            distribution_next: Instant::now(),
+            distribution_prev: Instant::now(),
+        }
+    }
+
+    pub fn refresh_counters(&mut self, now: Instant) {
+        if now < self.counter_next {
+            return;
+        }
+
+        let elapsed = (now - self.counter_prev).as_secs_f64();
+
+        self.bpf.refresh_counters(now, elapsed);
+
+        // determine when to sample next
+        let next = self.counter_next + self.counter_interval;
+        
+        // check that next sample time is in the future
+        if next > now {
+            self.counter_next = next;
+        } else {
+            self.counter_next = now + self.counter_interval;
+        }
+
+        // mark when we last sampled
+        self.counter_prev = now;
+
+    }
+
+    pub fn refresh_distributions(&mut self, now: Instant) {
+        if now < self.distribution_next {
+            return;
+        }
+
+        self.bpf.refresh_distributions(now);
+
+        // determine when to sample next
+        let next = self.distribution_next + self.distribution_interval;
+        
+        // check that next sample time is in the future
+        if next > now {
+            self.distribution_next = next;
+        } else {
+            self.distribution_next = now + self.distribution_interval;
+        }
+
+        // mark when we last sampled
+        self.distribution_prev = now;
+    }
 }
 
 impl Sampler for Runqlat {
     fn sample(&mut self) {
         let now = Instant::now();
-
-        if now < self.next {
-            return;
-        }
-
-        // let elapsed = (now - self.prev).as_secs_f64();
-
-        // let maps = self.skel.maps();
-
-        // let counts = crate::common::bpf::read_counters(maps.counters(), self.counters.len());
-
-        // for (id, counter) in self.counters.iter_mut().enumerate() {
-        //     if let Some(current) = counts.get(&id) {
-        //         counter.update(now, elapsed, *current);
-        //     }
-        // }
-
-        // determine if we should sample the distributions
-        if now >= self.dist_next {
-            for distribution in self.distributions.iter_mut() {
-                distribution.update(&self.skel.obj);
-            }
-
-            // determine when to sample next
-            let next = self.dist_next + self.dist_interval;
-
-            // check that next sample time is in the future
-            if next > now {
-                self.dist_next = next;
-            } else {
-                self.dist_next = now + self.dist_interval;
-            }
-        }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-        
-        // check that next sample time is in the future
-        if next > now {
-            self.next = next;
-        } else {
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
+        self.refresh_counters(now);
+        self.refresh_distributions(now);
     }
 }
 

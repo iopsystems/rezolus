@@ -1,6 +1,6 @@
 use crate::*;
 
-type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
+// type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 
 // heatmap!(SCHEDULER_RUNQUEUE_LATENCY, "scheduler/runqueue/latency", "distribution of task wait times in the runqueue");
 
@@ -8,6 +8,9 @@ type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 
 counter!(SYSCALL_READ, "syscall/read", "read from file descriptor");
 heatmap!(SYSCALL_READ_LATENCY, "syscall/read/latency", "latency to read from file descriptor");
+
+counter!(SYSCALL_WRITE, "syscall/write", "write to file descriptor");
+heatmap!(SYSCALL_WRITE_LATENCY, "syscall/write/latency", "latency to write to file descriptor");
 
 // counter!(SYSCALL_WRITE, "syscall/write", "write to file descriptor");
 // counter!(SYSCALL_OPEN, "syscall/open", "open and possibly create a file or device");

@@ -1,6 +1,6 @@
-#[distributed_slice(TCP_BPF_SAMPLERS)]
+#[distributed_slice(SYSCALL_BPF_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Receive::new(config))
+    Box::new(Write::new(config))
 }
 
 mod bpf;
@@ -18,14 +18,15 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects TCP Receive stats using BPF
-/// Probes:
-/// * "tcp_rcv_established"
+/// Collects write() syscall stats using BPF
+/// tracepoints:
+/// * "tracepoint/syscalls/sys_enter_write"
+/// * "tracepoint/syscalls/sys_exit_write"
 ///
-/// Stats:
-/// * tcp/receive/jitter
-/// * tcp/receive/srtt
-pub struct Receive {
+/// stats:
+/// * syscall/write
+/// * syscall/write/latency
+pub struct Write {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
     counter_next: Instant,
@@ -35,7 +36,7 @@ pub struct Receive {
     distribution_prev: Instant,
 }
 
-impl Receive {
+impl Write {
     pub fn new(_config: &Config) -> Self {
         let builder = ModSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
@@ -43,14 +44,8 @@ impl Receive {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let mut distributions = vec![
-            ("srtt", &TCP_SRTT),
-            ("jitter", &TCP_JITTER),
-        ];
-
-        for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
-        }
+        bpf.add_percpu_counter("count", Counter::new(&SYSCALL_WRITE, None));
+        bpf.add_distribution("latency", &SYSCALL_WRITE_LATENCY);
 
         Self {
             bpf,
@@ -109,7 +104,7 @@ impl Receive {
     }
 }
 
-impl Sampler for Receive {
+impl Sampler for Write {
     fn sample(&mut self) {
         let now = Instant::now();
         self.refresh_counters(now);
@@ -117,8 +112,8 @@ impl Sampler for Receive {
     }
 }
 
-impl std::fmt::Display for Receive {
+impl std::fmt::Display for Write {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "tcp::bpf::receive")
+        write!(f, "syscall::bpf::write")
     }
 }
