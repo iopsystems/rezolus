@@ -4,6 +4,36 @@ pub mod bpf;
 #[cfg(not(feature = "bpf"))]
 pub mod classic;
 
+type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
+type LazyCounter = metriken::Lazy<metriken::Counter>;
+type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
+
+pub struct Counter {
+    previous: Option<u64>,
+    counter: &'static LazyCounter,
+    heatmap: Option<&'static LazyHeatmap>,
+}
+
+impl Counter {
+    pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static LazyHeatmap>) -> Self {
+        Self {
+            previous: None,
+            counter,
+            heatmap,
+        }
+    } 
+    pub fn set(&mut self, now: Instant, elapsed: f64, value: u64) {
+        if let Some(previous) = self.previous {
+            let delta = value.wrapping_sub(previous);
+            self.counter.add(delta);
+            if let Some(heatmap) = self.heatmap {
+                heatmap.increment(now, (delta as f64 / elapsed) as _, 1);
+            }
+        }
+        self.previous = Some(value);
+    }
+}
+
 #[macro_export]
 #[rustfmt::skip]
 macro_rules! counter {

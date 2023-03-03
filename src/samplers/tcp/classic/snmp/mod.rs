@@ -23,8 +23,8 @@ impl Snmp {
 		let now = Instant::now();
 
 		let counters = vec![
-            (Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HIST)), "Tcp:", "InSegs"),
-            (Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HIST)), "Tcp:", "OutSegs"),
+            (Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HEATMAP)), "Tcp:", "InSegs"),
+            (Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP)), "Tcp:", "OutSegs"),
         ];
 
 		Self {

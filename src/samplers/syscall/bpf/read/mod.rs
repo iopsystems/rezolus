@@ -1,6 +1,6 @@
-#[distributed_slice(TCP_BPF_SAMPLERS)]
+#[distributed_slice(SYSCALL_BPF_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Retransmit::new(config))
+    Box::new(Read::new(config))
 }
 
 mod bpf;
@@ -18,13 +18,13 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects TCP Retransmit stats using BPF
-/// Probes:
-/// * "tcp_retransmit_timer"
-///
-/// Stats:
-/// * tcp/transmit/retransmit
-pub struct Retransmit {
+// /// Collects Scheduler Runqueue Latency stats using BPF
+// /// tracepoints:
+// /// * "tracepoint/raw_syscalls/sys_exit"
+// ///
+// /// stats:
+// /// * syscall/*
+pub struct Read {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
     counter_next: Instant,
@@ -34,7 +34,7 @@ pub struct Retransmit {
     distribution_prev: Instant,
 }
 
-impl Retransmit {
+impl Read {
     pub fn new(_config: &Config) -> Self {
         let builder = ModSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
@@ -42,13 +42,8 @@ impl Retransmit {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let mut percpu_counters = vec![
-            ("retransmit", Counter::new(&TCP_TX_RETRANSMIT, Some(&TCP_TX_RETRANSMIT_HEATMAP))),
-        ];
-
-        for (name, counter) in percpu_counters.drain(..) {
-            bpf.add_percpu_counter(name, counter);
-        }
+        bpf.add_percpu_counter("count", Counter::new(&SYSCALL_READ, None));
+        bpf.add_distribution("latency", &SYSCALL_READ_LATENCY);
 
         Self {
             bpf,
@@ -107,7 +102,7 @@ impl Retransmit {
     }
 }
 
-impl Sampler for Retransmit {
+impl Sampler for Read {
     fn sample(&mut self) {
         let now = Instant::now();
         self.refresh_counters(now);
@@ -115,8 +110,8 @@ impl Sampler for Retransmit {
     }
 }
 
-impl std::fmt::Display for Retransmit {
+impl std::fmt::Display for Read {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "tcp::bpf::retransmit")
+        write!(f, "syscall::bpf::read")
     }
 }
