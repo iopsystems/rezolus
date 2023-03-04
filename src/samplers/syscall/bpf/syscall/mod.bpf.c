@@ -17,22 +17,24 @@ struct {
 	__type(value, u64);
 } start SEC(".maps");
 
+// counts the total number of syscalls
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 1);
-} count SEC(".maps");
+} total SEC(".maps");
 
+// tracks the latency distribution of all syscalls
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 7424);
-} latency SEC(".maps");
+} total_latency SEC(".maps");
 
-SEC("tracepoint/syscalls/sys_enter_read")
-int sys_enter_read(struct trace_event_sys_enter_read *args)
+SEC("tracepoint/raw_syscalls/sys_enter")
+int sys_enter(struct trace_event_raw_sys_enter *args)
 {
 	u64 id = bpf_get_current_pid_tgid();
 	u32 tid = id;
@@ -43,29 +45,41 @@ int sys_enter_read(struct trace_event_sys_enter_read *args)
 	return 0;
 }
 
-SEC("tracepoint/syscalls/sys_exit_read")
-int sys_exit_read(struct trace_event_sys_exit_read *args)
+SEC("tracepoint/raw_syscalls/sys_exit")
+int sys_exit(struct trace_event_raw_sys_exit *args)
 {
 	u64 id = bpf_get_current_pid_tgid();
+	u64 *start_ts, lat = 0;
 	u32 tid = id;
-	u64 *start_ts, lat = 0, idx, *cnt;
 
+	u64 *cnt;
+	u32 idx;
+
+	// this happens when there is an interrupt
+	if (args->id == -1)
+		return 0;
+
+	// update the total counter
 	idx = 0;
-	cnt = bpf_map_lookup_elem(&count, &idx);
+	cnt = bpf_map_lookup_elem(&total, &idx);
 
 	if (cnt) {
 		__sync_fetch_and_add(cnt, 1);
 	}
 
+	// lookup the start time
 	start_ts = bpf_map_lookup_elem(&start, &tid);
-	if (start_ts) {
-		lat = bpf_ktime_get_ns() - *start_ts;
-		idx = value_to_index(lat);
-		cnt = bpf_map_lookup_elem(&latency, &idx);
 
-		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
-		}
+	// possible we missed the start
+	if (!start_ts)
+		return 0;
+
+	lat = bpf_ktime_get_ns() - *start_ts;
+	idx = value_to_index(lat);
+	cnt = bpf_map_lookup_elem(&total_latency, &idx);
+
+	if (cnt) {
+		__sync_fetch_and_add(cnt, 1);
 	}
 
 	return 0;

@@ -1,6 +1,6 @@
 #[distributed_slice(SYSCALL_BPF_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Write::new(config))
+    Box::new(Syscall::new(config))
 }
 
 mod bpf;
@@ -18,15 +18,14 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects write() syscall stats using BPF
+/// Collects Scheduler Runqueue Latency stats using BPF
 /// tracepoints:
-/// * "tracepoint/syscalls/sys_enter_write"
-/// * "tracepoint/syscalls/sys_exit_write"
+/// * "tracepoint/raw_syscalls/sys_enter"
+/// * "tracepoint/raw_syscalls/sys_exit"
 ///
 /// stats:
-/// * syscall/write
-/// * syscall/write/latency
-pub struct Write {
+/// * syscall/*
+pub struct Syscall {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
     counter_next: Instant,
@@ -36,7 +35,7 @@ pub struct Write {
     distribution_prev: Instant,
 }
 
-impl Write {
+impl Syscall {
     pub fn new(_config: &Config) -> Self {
         let builder = ModSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
@@ -44,8 +43,21 @@ impl Write {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        bpf.add_percpu_counter("count", Counter::new(&SYSCALL_WRITE, None));
-        bpf.add_distribution("latency", &SYSCALL_WRITE_LATENCY);
+        let mut percpu_counters = vec![
+            ("total", Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP))),
+        ];
+
+        for (name, counter) in percpu_counters.drain(..) {
+            bpf.add_percpu_counter(name, counter);
+        }
+
+        let mut distributions = vec![
+            ("total_latency", &SYSCALL_TOTAL_LATENCY),
+        ];
+
+        for (name, heatmap) in distributions.drain(..) {
+            bpf.add_distribution(name, heatmap);
+        }
 
         Self {
             bpf,
@@ -104,7 +116,7 @@ impl Write {
     }
 }
 
-impl Sampler for Write {
+impl Sampler for Syscall {
     fn sample(&mut self) {
         let now = Instant::now();
         self.refresh_counters(now);
@@ -112,8 +124,8 @@ impl Sampler for Write {
     }
 }
 
-impl std::fmt::Display for Write {
+impl std::fmt::Display for Syscall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "syscall::bpf::write")
+        write!(f, "syscall::bpf::syscall")
     }
 }
