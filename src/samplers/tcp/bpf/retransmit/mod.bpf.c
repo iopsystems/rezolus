@@ -17,20 +17,20 @@ struct {
 	__uint(max_entries, 1);
 } retransmit SEC(".maps");
 
-SEC("fentry/tcp_retransmit_timer")
-int BPF_PROG(tcp_retransmit, struct sock *sk)
-{
-	u64 *cnt;
+// SEC("fentry/tcp_retransmit_timer")
+// int BPF_PROG(tcp_retransmit, struct sock *sk)
+// {
+// 	u64 *cnt;
 
-	u32 idx = 0;
-	cnt = bpf_map_lookup_elem(&retransmit, &idx);
+// 	u32 idx = 0;
+// 	cnt = bpf_map_lookup_elem(&retransmit, &idx);
 
-	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
-	}
+// 	if (cnt) {
+// 		__sync_fetch_and_add(cnt, 1);
+// 	}
 
-	return 0;
-}
+// 	return 0;
+// }
 
 SEC("kprobe/tcp_retransmit_timer")
 int BPF_KPROBE(tcp_retransmit_kprobe, struct sock *sk)
