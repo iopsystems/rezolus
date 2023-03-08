@@ -43,8 +43,18 @@ impl Runqlat {
 
         let mut bpf = Bpf::from_skel(skel);
 
+        let mut percpu_counters = vec![
+            ("ivcsw", Counter::new(&SCHEDULER_IVCSW, None)),
+            ("vcsw", Counter::new(&SCHEDULER_VCSW, None)),
+        ];
+
+        for (name, counter) in percpu_counters.drain(..) {
+            bpf.add_percpu_counter(name, counter);
+        }
+
         let mut distributions = vec![
-            ("latency", &SCHEDULER_RUNQUEUE_LATENCY),
+            ("runqlat", &SCHEDULER_RUNQUEUE_LATENCY),
+            ("running", &SCHEDULER_RUNNING),
         ];
 
         for (name, heatmap) in distributions.drain(..) {
