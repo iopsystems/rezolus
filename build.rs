@@ -16,6 +16,7 @@ mod bpf {
     // use std::path::PathBuf;
 
     const SOURCES: &'static [(&str, &str)] = &[
+        ("blockio", "biolat"),
         ("scheduler", "runqlat"),
         ("syscall", "syscall"),
         ("tcp", "receive"),
