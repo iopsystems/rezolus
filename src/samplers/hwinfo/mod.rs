@@ -11,14 +11,36 @@ use serde::Serialize;
 #[derive(Serialize)]
 pub struct Hwinfo {
 	memory: Memory,
+	nodes: Vec<Node>,
 }
 
 impl Hwinfo {
 	pub fn new() -> Result<Self> {
 		Ok(Self {
 			memory: Memory::new()?,
+			nodes: get_nodes(),
 		})
 	}
+}
+
+fn get_nodes() -> Vec<Node> {
+	// TODO(bmartin): do something better here
+
+	let mut ret = Vec::new();
+
+	for id in 0..255 {
+		if let Ok(memory) = Memory::node(id) {
+			ret.push(Node { id, memory });
+		}
+	}
+
+	ret
+}
+
+#[derive(Serialize)]
+pub struct Node {
+	id: u64,
+	memory: Memory,
 }
 
 #[derive(Serialize)]
@@ -48,6 +70,25 @@ impl Memory {
 				if parts.len() == 3 {
 					ret.total_bytes = parts[1].parse::<u64>().map(|v| v * 1024).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad value"))?;
 				}
+			}
+		}
+
+		Ok(ret)
+	}
+
+	pub fn node(id: u64) -> Result<Self> {
+		let file = File::open(format!("/sys/devices/system/node/node{id}/meminfo"))?;
+		let reader = BufReader::new(file);
+
+		let mut ret = Self {
+			total_bytes: 0,
+		};
+
+		for line in reader.lines() {
+			let line = line.unwrap();
+			let parts: Vec<&str> = line.split_whitespace().collect();
+			if parts.len() >= 4 && parts[2] == "MemTotal:" {
+				ret.total_bytes = parts[3].parse::<u64>().map(|v| v * 1024).map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad value"))?;
 			}
 		}
 
