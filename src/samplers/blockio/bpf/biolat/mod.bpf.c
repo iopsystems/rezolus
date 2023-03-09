@@ -3,7 +3,6 @@
 
 #include "../../../../common/bpf/vmlinux.h"
 #include "../../../../common/bpf/histogram.h"
-// #include "../../../../common/bpf/core_fixes.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -23,6 +22,13 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, 7424);
 } latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, 7424);
+} size SEC(".maps");
 
 static int __always_inline trace_rq_start(struct request *rq, int issue)
 {
@@ -61,6 +67,14 @@ static int handle_block_rq_issue(__u64 *ctx)
 static int handle_block_rq_complete(struct request *rq, int error, unsigned int nr_bytes)
 {
 	u64 delta, *tsp, *cnt, ts = bpf_ktime_get_ns();
+	u32 idx;
+
+	idx = value_to_index(nr_bytes);
+	cnt = bpf_map_lookup_elem(&size, &idx);
+
+	if (cnt) {
+		__sync_fetch_and_add(cnt, 1);
+	}
 
 	tsp = bpf_map_lookup_elem(&start, &rq);
 	if (!tsp)
@@ -69,8 +83,7 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 	if (*tsp <= ts) {
 		delta = ts - *tsp;
 
-		u32 idx = value_to_index(delta);
-
+		idx = value_to_index(delta);
 		cnt = bpf_map_lookup_elem(&latency, &idx);
 
 		if (cnt) {

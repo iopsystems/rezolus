@@ -18,13 +18,14 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects Scheduler Runqueue Latency stats using BPF
-/// tracepoints:
-/// * "tp_btf/sched_wakeup"
-/// * "tp_btf/sched_wakeup_new"
-/// * "tp_btf/sched_switch"
-/// stats:
-/// * scheduler/runqueue/latency
+/// Collects Scheduler Runqueue Latency stats using BPF and traces:
+/// * `block_rq_insert`
+/// * `block_rq_issue`
+/// * `block_rq_complete`
+///
+/// And produces these stats:
+/// * `blockio/latency`
+/// * `blockio/size`
 pub struct Biolat {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
@@ -43,18 +44,9 @@ impl Biolat {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        // let mut percpu_counters = vec![
-        //     ("ivcsw", Counter::new(&SCHEDULER_IVCSW, None)),
-        //     ("vcsw", Counter::new(&SCHEDULER_VCSW, None)),
-        // ];
-
-        // for (name, counter) in percpu_counters.drain(..) {
-        //     bpf.add_percpu_counter(name, counter);
-        // }
-
         let mut distributions = vec![
             ("latency", &BLOCKIO_LATENCY),
-            // ("running", &SCHEDULER_RUNNING),
+            ("size", &BLOCKIO_SIZE),
         ];
 
         for (name, heatmap) in distributions.drain(..) {

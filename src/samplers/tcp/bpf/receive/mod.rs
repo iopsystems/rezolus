@@ -18,13 +18,12 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects TCP Receive stats using BPF
-/// Probes:
-/// * "tcp_rcv_established"
+/// Collects TCP Receive stats using BPF and traces:
+/// * `tcp_rcv_established`
 ///
-/// Stats:
-/// * tcp/receive/jitter
-/// * tcp/receive/srtt
+/// And produces these stats:
+/// * `tcp/receive/jitter`
+/// * `tcp/receive/srtt`
 pub struct Receive {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,

@@ -1,6 +1,6 @@
-#[distributed_slice(SYSCALL_BPF_SAMPLERS)]
+#[distributed_slice(BLOCKIO_BPF_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Syscall::new(config))
+    Box::new(Cachestat::new(config))
 }
 
 mod bpf;
@@ -19,13 +19,16 @@ impl GetMap for ModSkel<'_> {
 }
 
 /// Collects Scheduler Runqueue Latency stats using BPF and traces:
-/// * `raw_syscalls/sys_enter`
-/// * `raw_syscalls/sys_exit`
+/// * `block_rq_insert`
+/// * `block_rq_issue`
+/// * `block_rq_complete`
 ///
 /// And produces these stats:
-/// * `syscall/total`
-/// * `syscall/total/latency`
-pub struct Syscall {
+/// * `blockio/cache/total`
+/// * `blockio/cache/miss`
+/// * `blockio/cache/mbd`
+/// * `blockio/cache/dirtied`
+pub struct Cachestat {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
     counter_next: Instant,
@@ -35,7 +38,7 @@ pub struct Syscall {
     distribution_prev: Instant,
 }
 
-impl Syscall {
+impl Cachestat {
     pub fn new(_config: &Config) -> Self {
         let builder = ModSkelBuilder::default();
         let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
@@ -44,19 +47,14 @@ impl Syscall {
         let mut bpf = Bpf::from_skel(skel);
 
         let mut percpu_counters = vec![
-            ("total", Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP))),
+            ("total", Counter::new(&BLOCKIO_CACHE_TOTAL, None)),
+            ("miss", Counter::new(&BLOCKIO_CACHE_MISS, None)),
+            ("mbd", Counter::new(&BLOCKIO_CACHE_MBD, None)),
+            ("dirtied", Counter::new(&BLOCKIO_CACHE_DIRTIED, None)),
         ];
 
         for (name, counter) in percpu_counters.drain(..) {
             bpf.add_percpu_counter(name, counter);
-        }
-
-        let mut distributions = vec![
-            ("total_latency", &SYSCALL_TOTAL_LATENCY),
-        ];
-
-        for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
         }
 
         Self {
@@ -116,7 +114,7 @@ impl Syscall {
     }
 }
 
-impl Sampler for Syscall {
+impl Sampler for Cachestat {
     fn sample(&mut self) {
         let now = Instant::now();
         self.refresh_counters(now);
@@ -124,8 +122,8 @@ impl Sampler for Syscall {
     }
 }
 
-impl std::fmt::Display for Syscall {
+impl std::fmt::Display for Cachestat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "syscall::bpf::syscall")
+        write!(f, "blockio::bpf::cachestat")
     }
 }

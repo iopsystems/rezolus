@@ -18,18 +18,17 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects TCP Traffic stats using BPF
-/// kprobes:
-/// * "kprobe/tcp_sendmsg"
-/// * "kprobe/tcp_cleanup_rbuf"
+/// Collects TCP Traffic stats using BPF and traces:
+/// * `tcp_sendmsg`
+/// * `tcp_cleanup_rbuf`
 ///
-/// stats:
-/// * tcp/receive/bytes
-/// * tcp/receive/segments
-/// * tcp/receive/size
-/// * tcp/transmit/bytes
-/// * tcp/transmit/segments
-/// * tcp/transmit/size
+/// And produces these stats:
+/// * `tcp/receive/bytes`
+/// * `tcp/receive/segments`
+/// * `tcp/receive/size`
+/// * `tcp/transmit/bytes`
+/// * `tcp/transmit/segments`
+/// * `tcp/transmit/size`
 pub struct Traffic {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,

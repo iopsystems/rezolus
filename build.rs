@@ -17,6 +17,7 @@ mod bpf {
 
     const SOURCES: &'static [(&str, &str)] = &[
         ("blockio", "biolat"),
+        // ("blockio", "cachestat"),
         ("scheduler", "runqlat"),
         ("syscall", "syscall"),
         ("tcp", "receive"),

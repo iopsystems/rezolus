@@ -18,13 +18,16 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects Scheduler Runqueue Latency stats using BPF
-/// tracepoints:
-/// * "tp_btf/sched_wakeup"
-/// * "tp_btf/sched_wakeup_new"
-/// * "tp_btf/sched_switch"
-/// stats:
-/// * scheduler/runqueue/latency
+/// Collects Scheduler Runqueue Latency stats using BPF and traces:
+/// * `sched_wakeup`
+/// * `sched_wakeup_new`
+/// * `sched_switch`
+///
+/// And produces these stats:
+/// * `scheduler/runqueue/latency`
+/// * `scheduler/running`
+/// * `scheduler/context_switch/involuntary`
+/// * `scheduler/context_switch/voluntary`
 pub struct Runqlat {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,

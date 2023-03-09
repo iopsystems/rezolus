@@ -18,12 +18,11 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects TCP Retransmit stats using BPF
-/// Probes:
-/// * "tcp_retransmit_timer"
+/// Collects TCP Retransmit stats using BPF and traces:
+/// * `tcp_retransmit_timer`
 ///
-/// Stats:
-/// * tcp/transmit/retransmit
+/// And produces these stats:
+/// * `tcp/transmit/retransmit`
 pub struct Retransmit {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
