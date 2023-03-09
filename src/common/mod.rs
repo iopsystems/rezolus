@@ -1,8 +1,11 @@
 #[cfg(feature = "bpf")]
 pub mod bpf;
 
-#[cfg(not(feature = "bpf"))]
+
 pub mod classic;
+
+mod noop;
+pub use noop::Noop;
 
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 type LazyCounter = metriken::Lazy<metriken::Counter>;

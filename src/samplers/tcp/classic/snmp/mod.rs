@@ -1,3 +1,4 @@
+use crate::common::Noop;
 use crate::samplers::tcp::stats::*;
 use crate::*;
 use std::fs::File;
@@ -7,7 +8,12 @@ use crate::samplers::tcp::*;
 
 #[distributed_slice(TCP_CLASSIC_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Snmp::new(config))
+	// if we have bpf enabled, we don't need to run this sampler at all
+	if config.bpf() {
+		Box::new(Noop::new(config))
+	} else {
+		Box::new(Snmp::new(config))
+	}
 }
 
 pub struct Snmp {

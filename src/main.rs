@@ -178,5 +178,15 @@ impl Config {
     pub fn load(_file: &dyn AsRef<Path>) -> Result<Self, String> {
         Ok(Self {})
     }
+
+    #[cfg(feature = "bpf")]
+    pub fn bpf(&self) -> bool {
+        true
+    }
+
+    #[cfg(not(feature = "bpf"))]
+    pub fn bpf(&self) -> bool {
+        false
+    }
 }
 
