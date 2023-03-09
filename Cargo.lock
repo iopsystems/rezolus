@@ -1106,6 +1106,8 @@ dependencies = [
  "metriken",
  "ouroboros",
  "ringlog",
+ "serde",
+ "serde_json",
  "syscall-numbers",
  "tokio",
  "warp",

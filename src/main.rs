@@ -1,3 +1,5 @@
+// use serde::*;
+
 use ringlog::*;
 use metriken::Lazy;
 use backtrace::Backtrace;
@@ -11,7 +13,7 @@ type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 
 mod admin;
 mod common;
-mod samplers;
+pub mod samplers;
 
 pub static PERCENTILES: &[(&str, f64)] = &[
     ("p25", 25.0),

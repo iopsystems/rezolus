@@ -16,6 +16,8 @@ libbpf-sys = { version = "*", optional = true }
 linkme = "*"
 metriken = "*"
 ouroboros = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
 syscall-numbers = "3.0.0"
 ringlog = "*"
 tokio = { version = "*", features = ["full"] }
