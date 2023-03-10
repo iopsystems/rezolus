@@ -21,6 +21,7 @@ serde_json = "*"
 syscall-numbers = "3.0.0"
 ringlog = "*"
 tokio = { version = "*", features = ["full"] }
+walkdir = "*"
 warp = "*"
 
 [build-dependencies]

@@ -1,3 +1,6 @@
+use walkdir::DirEntry;
+use std::ffi::OsStr;
+use std::collections::HashMap;
 use std::path::Path;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -8,6 +11,8 @@ use std::io::Result;
 // use serde_json::Result;
 
 use serde::Serialize;
+
+use walkdir::WalkDir;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,6 +57,7 @@ pub struct Hwinfo {
 	caches: Vec<Vec<Cache>>,
 	cpus: Vec<Cpu>,
 	memory: Memory,
+	network: Vec<Interface>,
 	nodes: Vec<Node>,
 }
 
@@ -61,6 +67,7 @@ impl Hwinfo {
 			caches: get_caches()?,
 			cpus: get_cpus()?,
 			memory: Memory::new()?,
+			network: get_interfaces(),
 			nodes: get_nodes()?,
 		})
 	}
@@ -133,7 +140,7 @@ fn get_nodes() -> Result<Vec<Node>> {
 
 fn get_caches() -> Result<Vec<Vec<Cache>>> {
 	// This is sufficient for up to four caches: L1i, L1d, L2, L3
-	let max_cache_index = 3; // inclusive
+	let max_cache_index = 4; // inclusive
 
 	let mut ret = vec![vec![]; max_cache_index];
 
@@ -155,10 +162,10 @@ fn get_caches() -> Result<Vec<Vec<Cache>>> {
 }
 
 fn get_cpus() -> Result<Vec<Cpu>> {
-	let mut ret = Vec::new();
+	let mut tmp = HashMap::new();
 
+	// first read from /sys and build up some basic information
 	let ids = read_list("/sys/devices/system/cpu/online")?;
-
 	for id in ids {
 		let core_id = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/core_id"))?;
 		let die_id = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/die_id"))?;
@@ -171,17 +178,6 @@ fn get_cpus() -> Result<Vec<Cpu>> {
 		let core_siblings = read_list(format!("/sys/devices/system/cpu/cpu{id}/topology/core_siblings_list"))?;
 		let thread_siblings = read_list(format!("/sys/devices/system/cpu/cpu{id}/topology/thread_siblings_list"))?;
 
-		let microcode = match read_string(format!("/sys/devices/system/cpu/cpu{id}/microcode/version")) {
-			Ok(s) => {
-				let parts: Vec<&str> = s.split('x').collect();
-				match u64::from_str_radix(parts[parts.len() - 1], 16) {
-					Ok(v) => Some(v),
-					Err(_) => None,
-				}
-			}
-			Err(_) => None
-		};
-
 		let mut caches = Vec::new();
 
 		for index in 0..4 {
@@ -190,7 +186,7 @@ fn get_cpus() -> Result<Vec<Cpu>> {
 			}
 		}
 		
-		ret.push(Cpu {
+		tmp.insert(id, Cpu {
 			id,
 			core_id,
 			die_id,
@@ -200,10 +196,71 @@ fn get_cpus() -> Result<Vec<Cpu>> {
 			package_cpus,
 			core_siblings,
 			thread_siblings,
-			microcode,
+			microcode: None,
+			vendor: None,
+			model_name: None,
+			features: None,
 			caches,
 		});
 	}
+
+	// there's a lot of information that's easier to get from /proc/cpuinfo
+
+	let file = File::open("/proc/cpuinfo")?;
+	let reader = BufReader::new(file);
+
+	let mut id: Option<usize> = None;
+
+	for line in reader.lines() {
+		if line.is_err() {
+			break;
+		}
+
+		let line = line.unwrap();
+
+		let parts: Vec<String> = line.split(':').map(|v| v.trim().to_owned()).collect();
+
+		if parts.len() == 2 {
+			match parts[0].as_str() {
+				"processor" => {
+					if let Ok(v) = parts[1].parse() { id = Some(v); }
+				}
+				"vendor_id" => {
+					if let Some(id) = id {
+						if let Some(cpu) = tmp.get_mut(&id) {
+							cpu.vendor = Some(parts[1].clone());
+						}
+					}
+				}
+				"model name" => {
+					if let Some(id) = id {
+						if let Some(cpu) = tmp.get_mut(&id) {
+							cpu.model_name = Some(parts[1].clone());
+						}
+					}
+				}
+				"microcode" => {
+					if let Some(id) = id {
+						if let Some(cpu) = tmp.get_mut(&id) {
+							cpu.microcode = Some(parts[1].clone());
+						}
+					}
+				}
+				"flags" | "Features" => {
+					if let Some(id) = id {
+						if let Some(cpu) = tmp.get_mut(&id) {
+							cpu.features = Some(parts[1].clone());
+						}
+					}
+				}
+				_ => {}
+			}
+		}
+	}
+
+	let mut ret: Vec<Cpu> = tmp.drain().map(|(_, v)| v).collect();
+
+	ret.sort_by(|a, b| a.id.cmp(&b.id));
 
 	Ok(ret)
 }
@@ -230,9 +287,102 @@ pub struct Cpu {
 	core_siblings: Vec<usize>,
 	thread_siblings: Vec<usize>,
 
-	microcode: Option<u64>,
+	microcode: Option<String>,
+	vendor: Option<String>,
+	model_name: Option<String>,
+	features: Option<String>,
 
 	caches: Vec<Cache>,
+}
+
+#[derive(Serialize)]
+pub struct Interface {
+	name: String,
+	carrier: bool,
+	speed: Option<usize>,
+	mtu: usize,
+	queues: Queues,
+}
+
+#[derive(Serialize)]
+struct Queues {
+	tx: usize,
+	rx: usize,
+	combined: usize,
+}
+
+fn get_interfaces() -> Vec<Interface> {
+	let mut ret = Vec::new();
+	let walker = WalkDir::new("/sys/class/net/").follow_links(true).max_depth(1).into_iter();
+	for entry in walker.filter_entry(|e| !is_hidden(e)) {
+		if entry.is_err() {
+			continue;
+		}
+		let entry = entry.unwrap();
+	    if entry.file_type().is_dir() {
+	    	if let Ok(Some(net)) = get_interface(entry.file_name()) {
+	    		ret.push(net);
+	    	}
+	    }
+	}
+
+	ret
+}
+
+fn is_hidden(entry: &DirEntry) -> bool {
+    entry.file_name()
+         .to_str()
+         .map(|s| s.starts_with('.'))
+         .unwrap_or(false)
+}
+
+fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
+	let name = name.to_str().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad interface name"))?;
+
+	// skip any that aren't "up"
+	let operstate = read_string(format!("/sys/class/net/{name}/operstate"))?;
+	if operstate != "up" {
+		return Ok(None);
+	}
+
+	// get metadata we want
+	let carrier = read_usize(format!("/sys/class/net/{name}/carrier")).map(|v| v == 1)?;
+	let mtu = read_usize(format!("/sys/class/net/{name}/mtu"))?;
+	let speed = read_usize(format!("/sys/class/net/{name}/speed")).ok();
+
+	// count rx queues
+	let mut queues = Queues {
+		tx: 0,
+		rx: 0,
+		combined: 0,
+	};
+
+	let walker = WalkDir::new(format!("/sys/class/net/{name}/queues")).follow_links(true).max_depth(1).into_iter();
+	for entry in walker.filter_entry(|e| !is_hidden(e)) {
+		if entry.is_err() {
+			continue;
+		}
+		let entry = entry.unwrap();
+	    if entry.file_type().is_dir() {
+	    	if let Some(name) = entry.file_name().to_str() {
+	    		if name.starts_with("tx-") {
+	    			queues.tx += 1;
+	    		} else if name.starts_with("rx-") {
+	    			queues.rx += 1;
+	    		} else {
+	    			queues.combined += 1;
+	    		}
+	    	}
+	    }
+	}
+
+	Ok(Some(Interface {
+		name: name.to_string(),
+		carrier,
+		mtu,
+		speed,
+		queues,
+	}))
 }
 
 #[derive(Serialize)]
