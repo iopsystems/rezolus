@@ -171,6 +171,17 @@ fn get_cpus() -> Result<Vec<Cpu>> {
 		let core_siblings = read_list(format!("/sys/devices/system/cpu/cpu{id}/topology/core_siblings_list"))?;
 		let thread_siblings = read_list(format!("/sys/devices/system/cpu/cpu{id}/topology/thread_siblings_list"))?;
 
+		let microcode = match read_string(format!("/sys/devices/system/cpu/cpu{id}/microcode/version")) {
+			Ok(s) => {
+				let parts: Vec<&str> = s.split('x').collect();
+				match u64::from_str_radix(parts[parts.len() - 1], 16) {
+					Ok(v) => Some(v),
+					Err(_) => None,
+				}
+			}
+			Err(_) => None
+		};
+
 		let mut caches = Vec::new();
 
 		for index in 0..4 {
@@ -189,6 +200,7 @@ fn get_cpus() -> Result<Vec<Cpu>> {
 			package_cpus,
 			core_siblings,
 			thread_siblings,
+			microcode,
 			caches,
 		});
 	}
@@ -217,6 +229,8 @@ pub struct Cpu {
 
 	core_siblings: Vec<usize>,
 	thread_siblings: Vec<usize>,
+
+	microcode: Option<u64>,
 
 	caches: Vec<Cache>,
 }

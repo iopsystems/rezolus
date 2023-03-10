@@ -47,6 +47,7 @@ mod filters {
             .and_then(handlers::human_stats)
     }
 
+    /// GET /hardware_info
     pub fn hardware_info(
         hwinfo: Option<Arc<Hwinfo>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
