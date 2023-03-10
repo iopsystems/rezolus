@@ -18,7 +18,13 @@ mod filters {
     pub fn admin(
         // ratelimit: Option<Arc<Ratelimiter>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        let hwinfo = Hwinfo::new().ok().map(Arc::new);
+        let hwinfo = match Hwinfo::new() {
+            Ok(v) => Some(Arc::new(v)),
+            Err(_) => {
+                // eprintln!("error: {e}");
+                None
+            }
+        };
 
         prometheus_stats()
             .or(human_stats())
@@ -61,7 +67,7 @@ mod filters {
 mod handlers {
     use super::*;
     use core::convert::Infallible;
-    use warp::http::StatusCode;
+    // use warp::http::StatusCode;
 
     pub async fn prometheus_stats() -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();

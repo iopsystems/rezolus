@@ -9,8 +9,47 @@ use std::io::Result;
 
 use serde::Serialize;
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheType {
+	Data,
+	Instruction,
+	Unified,
+}
+
+#[derive(Clone, Serialize)]
+pub struct Cache {
+	coherency_line_size: usize,
+	number_of_sets: usize,
+	shared_cpus: Vec<usize>,
+	size: String,
+	r#type: CacheType,
+	ways_of_associativity: usize,
+}
+
+impl Cache {
+	pub fn new(cpu: usize, index: usize) -> Result<Self> {
+		let coherency_line_size = read_usize(format!("/sys/devices/system/cpu/cpu{cpu}/cache/index{index}/coherency_line_size"))?;
+		let number_of_sets = read_usize(format!("/sys/devices/system/cpu/cpu{cpu}/cache/index{index}/number_of_sets"))?;
+		let shared_cpus = read_list(format!("/sys/devices/system/cpu/cpu{cpu}/cache/index{index}/shared_cpu_list"))?;
+		let size = read_string(format!("/sys/devices/system/cpu/cpu{cpu}/cache/index{index}/size"))?;
+		let r#type = read_cache_type(format!("/sys/devices/system/cpu/cpu{cpu}/cache/index{index}/type"))?;
+		let ways_of_associativity = read_usize(format!("/sys/devices/system/cpu/cpu{cpu}/cache/index{index}/ways_of_associativity"))?;
+		
+		Ok(Cache {
+			coherency_line_size,
+			number_of_sets,
+			shared_cpus,
+			size,
+			r#type,
+			ways_of_associativity,
+		})
+	}
+}
+
 #[derive(Serialize)]
 pub struct Hwinfo {
+	caches: Vec<Vec<Cache>>,
 	cpus: Vec<Cpu>,
 	memory: Memory,
 	nodes: Vec<Node>,
@@ -19,6 +58,7 @@ pub struct Hwinfo {
 impl Hwinfo {
 	pub fn new() -> Result<Self> {
 		Ok(Self {
+			caches: get_caches()?,
 			cpus: get_cpus()?,
 			memory: Memory::new()?,
 			nodes: get_nodes()?,
@@ -31,6 +71,25 @@ fn read_usize(path: impl AsRef<Path>) -> Result<usize> {
 	let raw = raw.trim();
 
 	raw.parse().map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "not a number"))
+}
+
+fn read_string(path: impl AsRef<Path>) -> Result<String> {
+	let raw = std::fs::read_to_string(path)?;
+	let raw = raw.trim();
+
+	Ok(raw.to_string())
+}
+
+fn read_cache_type(path: impl AsRef<Path>) -> Result<CacheType> {
+	let raw = std::fs::read_to_string(path)?;
+	let raw = raw.trim();
+
+	match raw {
+		"Data" | "data" => Ok(CacheType::Data),
+		"Instruction" | "instruction" => Ok(CacheType::Instruction),
+		"Unified" | "unified" => Ok(CacheType::Unified),
+		_ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unexpected cache type")),
+	}
 }
 
 fn read_list(path: impl AsRef<Path>) -> Result<Vec<usize>> {
@@ -72,6 +131,29 @@ fn get_nodes() -> Result<Vec<Node>> {
 	Ok(ret)
 }
 
+fn get_caches() -> Result<Vec<Vec<Cache>>> {
+	// This is sufficient for up to four caches: L1i, L1d, L2, L3
+	let max_cache_index = 3; // inclusive
+
+	let mut ret = vec![vec![]; max_cache_index];
+
+	let cpu_ids = read_list("/sys/devices/system/cpu/online")?;
+	
+	for (index, caches) in ret.iter_mut().enumerate() {
+		for cpu_id in &cpu_ids {
+			let cache = Cache::new(*cpu_id, index)?;
+
+			if cache.shared_cpus[0] != *cpu_id {
+				continue;
+			}
+
+			caches.push(cache);
+		}
+	}
+
+	Ok(ret)
+}
+
 fn get_cpus() -> Result<Vec<Cpu>> {
 	let mut ret = Vec::new();
 
@@ -88,6 +170,14 @@ fn get_cpus() -> Result<Vec<Cpu>> {
 
 		let core_siblings = read_list(format!("/sys/devices/system/cpu/cpu{id}/topology/core_siblings_list"))?;
 		let thread_siblings = read_list(format!("/sys/devices/system/cpu/cpu{id}/topology/thread_siblings_list"))?;
+
+		let mut caches = Vec::new();
+
+		for index in 0..4 {
+			if let Ok(cache) = Cache::new(id, index) {
+				caches.push(cache);
+			}
+		}
 		
 		ret.push(Cpu {
 			id,
@@ -99,6 +189,7 @@ fn get_cpus() -> Result<Vec<Cpu>> {
 			package_cpus,
 			core_siblings,
 			thread_siblings,
+			caches,
 		});
 	}
 
@@ -126,6 +217,8 @@ pub struct Cpu {
 
 	core_siblings: Vec<usize>,
 	thread_siblings: Vec<usize>,
+
+	caches: Vec<Cache>,
 }
 
 #[derive(Serialize)]
