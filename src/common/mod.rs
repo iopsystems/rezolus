@@ -8,8 +8,9 @@ mod noop;
 pub use noop::Noop;
 
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
-type LazyCounter = metriken::Lazy<metriken::Counter>;
-type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
+pub type LazyCounter = metriken::Lazy<metriken::Counter>;
+pub type LazyGauge = metriken::Lazy<metriken::Gauge>;
+pub type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
 
 pub struct Counter {
     previous: Option<u64>,
@@ -37,6 +38,28 @@ impl Counter {
     }
 }
 
+// pub struct Gauge {
+//     gauge: &'static LazyGauge,
+//     heatmap: Option<&'static LazyHeatmap>,
+// }
+
+// impl Gauge {
+//     pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static LazyHeatmap>) -> Self {
+//         Self {
+//             previous: None,
+//             counter,
+//             heatmap,
+//         }
+//     } 
+//     pub fn set(&mut self, now: Instant, value: i64) {
+//         let delta = value.wrapping_sub(previous);
+//         self.counter.add(delta);
+//         if let Some(heatmap) = self.heatmap {
+//             heatmap.increment(now, (delta as f64 / elapsed) as _, 1);
+//         }
+//     }
+// }
+
 #[macro_export]
 #[rustfmt::skip]
 macro_rules! counter {
@@ -56,6 +79,29 @@ macro_rules! counter {
         )]
         pub static $ident: Lazy<metriken::Counter> = metriken::Lazy::new(|| {
         	metriken::Counter::new()
+        });
+    };
+}
+
+#[macro_export]
+#[rustfmt::skip]
+macro_rules! gauge {
+    ($ident:ident, $name:tt) => {
+        #[metriken::metric(
+            name = $name,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Gauge> = metriken::Lazy::new(|| {
+            metriken::Gauge::new()
+        });
+    };
+    ($ident:ident, $name:tt, $description:tt) => {
+        #[metriken::metric(
+            name = $name,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Gauge> = metriken::Lazy::new(|| {
+            metriken::Gauge::new()
         });
     };
 }
@@ -95,4 +141,17 @@ macro_rules! counter_with_heatmap {
 		self::counter!($counter, $name, $description);
 		self::heatmap!($heatmap, $name, $description);
 	}
+}
+
+#[macro_export]
+#[rustfmt::skip]
+macro_rules! gauge_with_heatmap {
+    ($gauge:ident, $heatmap:ident, $name:tt) => {
+        self::gauge!($gauge, $name);
+        self::heatmap!($heatmap, $name);
+    };
+    ($gauge:ident, $heatmap:ident, $name:tt, $description:tt) => {
+        self::gauge!($gauge, $name, $description);
+        self::heatmap!($heatmap, $name, $description);
+    }
 }
