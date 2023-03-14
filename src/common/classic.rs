@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::io::Read;
 use std::iter::zip;
 use std::io::{Error, ErrorKind};

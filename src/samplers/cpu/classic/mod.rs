@@ -1,2 +1,2 @@
 #[cfg(target_os = "linux")]
-pub mod snmp;
+pub mod proc_stat;
