@@ -27,7 +27,7 @@ impl ProcCpuinfo {
 			file: File::open("/proc/cpuinfo").expect("file not found"),
 			prev: now,
 			next: now,
-			interval: Duration::from_millis(100),
+			interval: Duration::from_millis(1000),
 		}
 	}
 }

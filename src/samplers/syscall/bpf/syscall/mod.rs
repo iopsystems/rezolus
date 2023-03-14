@@ -64,7 +64,7 @@ impl Syscall {
             counter_interval: Duration::from_millis(10),
             counter_next: Instant::now(),
             counter_prev: Instant::now(),
-            distribution_interval: Duration::from_millis(100),
+            distribution_interval: Duration::from_millis(200),
             distribution_next: Instant::now(),
             distribution_prev: Instant::now(),
         }
