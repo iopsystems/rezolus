@@ -12,3 +12,5 @@ counter_with_heatmap!(CPU_USAGE_SOFTIRQ, CPU_USAGE_SOFTIRQ_HEATMAP, "cpu/usage/s
 counter_with_heatmap!(CPU_USAGE_STEAL, CPU_USAGE_STEAL_HEATMAP, "cpu/usage/steal");
 counter_with_heatmap!(CPU_USAGE_GUEST, CPU_USAGE_GUEST_HEATMAP, "cpu/usage/guest");
 counter_with_heatmap!(CPU_USAGE_GUEST_NICE, CPU_USAGE_GUEST_NICE_HEATMAP, "cpu/usage/guest_nice");
+
+heatmap!(CPU_FREQUENCY, "cpu/frequency", "distribution of instantaneous CPU frequencies");

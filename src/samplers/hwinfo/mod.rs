@@ -300,7 +300,7 @@ pub struct Interface {
 	name: String,
 	carrier: bool,
 	speed: Option<usize>,
-	node: usize,
+	node: Option<usize>,
 	mtu: usize,
 	queues: Queues,
 }
@@ -348,7 +348,7 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
 
 	// get metadata we want
 	let carrier = read_usize(format!("/sys/class/net/{name}/carrier")).map(|v| v == 1)?;
-	let node = read_usize(format!("/sys/class/net/{name}/device/numa_node"))?;
+	let node = read_usize(format!("/sys/class/net/{name}/device/numa_node")).ok();
 	let mtu = read_usize(format!("/sys/class/net/{name}/mtu"))?;
 	let speed = read_usize(format!("/sys/class/net/{name}/speed")).ok();
 
