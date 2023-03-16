@@ -1,10 +1,10 @@
 use crate::*;
 
-sampler!(Syscall, "syscall", SYSCALL_SAMPLERS);
-
-mod stats;
+sampler!(BlockIO, "block_io", BLOCK_IO_SAMPLERS);
 
 #[cfg(feature = "bpf")]
 mod bpf {
     mod latency;
 }
+
+mod stats;

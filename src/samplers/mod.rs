@@ -1,5 +1,5 @@
 
-mod blockio;
+mod block_io;
 mod cpu;
 pub mod hwinfo;
 mod memory;

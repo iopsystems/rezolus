@@ -16,10 +16,10 @@ mod bpf {
     // use std::path::PathBuf;
 
     const SOURCES: &'static [(&str, &str)] = &[
-        ("blockio", "biolat"),
+        ("block_io", "latency"),
         // ("blockio", "cachestat"),
-        ("scheduler", "runqlat"),
-        ("syscall", "syscall"),
+        ("scheduler", "runqueue"),
+        ("syscall", "latency"),
         ("tcp", "receive"),
         ("tcp", "retransmit"),
         ("tcp", "traffic"),
@@ -33,8 +33,8 @@ mod bpf {
 
     pub fn generate() {
         for (sampler, prog) in SOURCES {
-            let src = format!("src/samplers/{sampler}/bpf/{prog}/mod.bpf.c");
-            let tgt = format!("src/samplers/{sampler}/bpf/{prog}/bpf.rs");
+            let src = format!("src/samplers/{sampler}/{prog}/mod.bpf.c");
+            let tgt = format!("src/samplers/{sampler}/{prog}/bpf.rs");
             SkeletonBuilder::new()
                 .source(&src)
                 .build_and_generate(&tgt)

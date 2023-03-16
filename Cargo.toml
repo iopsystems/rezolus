@@ -22,6 +22,7 @@ sysconf = "0.3.4"
 syscall-numbers = "3.0.0"
 ringlog = "*"
 tokio = { version = "*", features = ["full"] }
+toml = "*"
 walkdir = "*"
 warp = "*"
 

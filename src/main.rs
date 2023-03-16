@@ -1,19 +1,19 @@
-// use serde::*;
-
 use ringlog::*;
 use metriken::Lazy;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use std::fmt::Display;
-use std::path::Path;
 use linkme::distributed_slice;
 
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 
-mod admin;
+mod exposition;
+mod config;
 mod common;
-pub mod samplers;
+mod samplers;
+
+use config::Config;
 
 pub static PERCENTILES: &[(&str, f64)] = &[
     ("p25", 25.0),
@@ -26,10 +26,10 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 ];
 
 #[distributed_slice]
-pub static CLASSIC_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
-#[distributed_slice]
-pub static BPF_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+// #[distributed_slice]
+// pub static BPF_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
 counter!(RUNTIME_SAMPLE_LOOP, "runtime/sample/loop");
 
@@ -110,32 +110,31 @@ fn main() {
 
     // spawn logging thread
     rt.spawn(async move {
-        // while RUNNING.load(Ordering::Relaxed) {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let _ = log.flush();
-        // }
-        // let _ = log.flush();
+        }
     });
 
     info!("rezolus");
 
-    // spawn admin thread
+    // spawn http exposition thread
     rt.spawn({
-        admin::http()
+        exposition::http()
     });
 
     // initialize and gather the samplers
-    let mut classic_samplers: Vec<Box<dyn Sampler>> = Vec::new();
+    let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();
 
-    for sampler in CLASSIC_SAMPLERS {
-        classic_samplers.push(sampler(&config));
+    for sampler in SAMPLERS {
+        samplers.push(sampler(&config));
     }
 
-    let mut bpf_samplers: Vec<Box<dyn Sampler>> = Vec::new();
+    // let mut bpf_samplers: Vec<Box<dyn Sampler>> = Vec::new();
 
-    for sampler in BPF_SAMPLERS {
-        bpf_samplers.push(sampler(&config));
-    }
+    // for sampler in BPF_SAMPLERS {
+    //     bpf_samplers.push(sampler(&config));
+    // }
 
     info!("initialization complete");
 
@@ -147,11 +146,7 @@ fn main() {
         let start = Instant::now();
 
         // sample each sampler
-        for sampler in &mut classic_samplers {
-            sampler.sample();
-        }
-
-        for sampler in &mut bpf_samplers {
+        for sampler in &mut samplers {
             sampler.sample();
         }
 
@@ -166,29 +161,12 @@ fn main() {
     }
 }
 
-pub trait Sampler: Display {
+pub trait Sampler {
     // #[allow(clippy::result_unit_err)]
     // fn configure(&self, config: &Config) -> Result<(), ()>;
 
     /// Do some sampling and updating of stats
     fn sample(&mut self);
+
+    // fn name(&self) -> &str;
 }
-
-pub struct Config {}
-
-impl Config {
-    pub fn load(_file: &dyn AsRef<Path>) -> Result<Self, String> {
-        Ok(Self {})
-    }
-
-    #[cfg(feature = "bpf")]
-    pub fn bpf(&self) -> bool {
-        true
-    }
-
-    #[cfg(not(feature = "bpf"))]
-    pub fn bpf(&self) -> bool {
-        false
-    }
-}
-

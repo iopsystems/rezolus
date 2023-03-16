@@ -4,8 +4,8 @@ pub mod bpf;
 
 pub mod classic;
 
-mod noop;
-pub use noop::Noop;
+mod nop;
+pub use nop::Nop;
 
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 pub type LazyCounter = metriken::Lazy<metriken::Counter>;
@@ -154,4 +154,41 @@ macro_rules! gauge_with_heatmap {
         self::gauge!($gauge, $name, $description);
         self::heatmap!($heatmap, $name, $description);
     }
+}
+
+#[macro_export]
+#[rustfmt::skip]
+macro_rules! sampler {
+    ($ident:ident, $name:tt, $slice:ident) => {
+        #[distributed_slice]
+        pub static $slice: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+
+        #[distributed_slice(SAMPLERS)]
+        fn init(config: &Config) -> Box<dyn Sampler> {
+            Box::new($ident::new(config))
+        }
+
+        pub struct $ident {
+            samplers: Vec<Box<dyn Sampler>>,
+        }
+
+        impl $ident {
+            fn new(config: &Config) -> Self {
+                let samplers = $slice.iter().map(|init| init(config)).collect();
+                Self {
+                    samplers,
+                }
+            }
+        }
+
+        impl Sampler for $ident {
+            fn sample(&mut self) {
+                for sampler in &mut self.samplers {
+                    sampler.sample()
+                }
+            }
+
+            // fn name(&self) -> &str { $name }
+        }
+    };
 }
