@@ -11,7 +11,7 @@ description = "High resolution systems performance telemetry agent"
 backtrace = "0.3.67"
 clap = "4.1.4"
 clocksource = "0.6.0"
-libbpf-rs = { version = "0.20.0", optional = true }
+libbpf-rs = { version = "0.19.1", optional = true }
 libbpf-sys = { version = "1.1.1", optional = true }
 linkme = "*"
 metriken = "0.1.3"

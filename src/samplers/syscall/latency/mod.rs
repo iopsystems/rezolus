@@ -1,4 +1,4 @@
-#[distributed_slice(SYSCALL_BPF_SAMPLERS)]
+#[distributed_slice(SYSCALL_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Syscall::new(config))
 }
@@ -7,10 +7,10 @@ mod bpf;
 
 use bpf::*;
 
-use crate::common::*;
+use super::stats::*;
+use super::*;
 use crate::common::bpf::*;
-use super::super::stats::*;
-use super::super::*;
+use crate::common::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -38,22 +38,25 @@ pub struct Syscall {
 impl Syscall {
     pub fn new(_config: &Config) -> Self {
         let builder = ModSkelBuilder::default();
-        let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
+        let mut skel = builder
+            .open()
+            .expect("failed to open bpf builder")
+            .load()
+            .expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let mut percpu_counters = vec![
-            ("total", Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP))),
-        ];
+        let mut percpu_counters = vec![(
+            "total",
+            Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),
+        )];
 
         for (name, counter) in percpu_counters.drain(..) {
             bpf.add_percpu_counter(name, counter);
         }
 
-        let mut distributions = vec![
-            ("total_latency", &SYSCALL_TOTAL_LATENCY),
-        ];
+        let mut distributions = vec![("total_latency", &SYSCALL_TOTAL_LATENCY)];
 
         for (name, heatmap) in distributions.drain(..) {
             bpf.add_distribution(name, heatmap);
@@ -81,7 +84,7 @@ impl Syscall {
 
         // determine when to sample next
         let next = self.counter_next + self.counter_interval;
-        
+
         // check that next sample time is in the future
         if next > now {
             self.counter_next = next;
@@ -91,7 +94,6 @@ impl Syscall {
 
         // mark when we last sampled
         self.counter_prev = now;
-
     }
 
     pub fn refresh_distributions(&mut self, now: Instant) {
@@ -103,7 +105,7 @@ impl Syscall {
 
         // determine when to sample next
         let next = self.distribution_next + self.distribution_interval;
-        
+
         // check that next sample time is in the future
         if next > now {
             self.distribution_next = next;
@@ -121,11 +123,5 @@ impl Sampler for Syscall {
         let now = Instant::now();
         self.refresh_counters(now);
         self.refresh_distributions(now);
-    }
-}
-
-impl std::fmt::Display for Syscall {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "syscall::bpf::syscall")
     }
 }

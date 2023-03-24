@@ -1,4 +1,4 @@
-#[distributed_slice(SCHEDULER_BPF_SAMPLERS)]
+#[distributed_slice(SCHEDULER_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Runqlat::new(config))
 }
@@ -7,10 +7,10 @@ mod bpf;
 
 use bpf::*;
 
-use crate::common::*;
+use super::stats::*;
+use super::*;
 use crate::common::bpf::*;
-use super::super::stats::*;
-use super::super::*;
+use crate::common::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -41,7 +41,11 @@ pub struct Runqlat {
 impl Runqlat {
     pub fn new(_config: &Config) -> Self {
         let builder = ModSkelBuilder::default();
-        let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
+        let mut skel = builder
+            .open()
+            .expect("failed to open bpf builder")
+            .load()
+            .expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
         let mut bpf = Bpf::from_skel(skel);
@@ -86,7 +90,7 @@ impl Runqlat {
 
         // determine when to sample next
         let next = self.counter_next + self.counter_interval;
-        
+
         // check that next sample time is in the future
         if next > now {
             self.counter_next = next;
@@ -96,7 +100,6 @@ impl Runqlat {
 
         // mark when we last sampled
         self.counter_prev = now;
-
     }
 
     pub fn refresh_distributions(&mut self, now: Instant) {
@@ -108,7 +111,7 @@ impl Runqlat {
 
         // determine when to sample next
         let next = self.distribution_next + self.distribution_interval;
-        
+
         // check that next sample time is in the future
         if next > now {
             self.distribution_next = next;
@@ -126,11 +129,5 @@ impl Sampler for Runqlat {
         let now = Instant::now();
         self.refresh_counters(now);
         self.refresh_distributions(now);
-    }
-}
-
-impl std::fmt::Display for Runqlat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "scheduler::bpf::runqlat")
     }
 }

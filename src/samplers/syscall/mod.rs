@@ -5,6 +5,4 @@ sampler!(Syscall, "syscall", SYSCALL_SAMPLERS);
 mod stats;
 
 #[cfg(feature = "bpf")]
-mod bpf {
-    mod latency;
-}
+mod latency;

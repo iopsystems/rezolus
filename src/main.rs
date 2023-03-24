@@ -1,16 +1,16 @@
-use ringlog::*;
-use metriken::Lazy;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
-use std::fmt::Display;
 use linkme::distributed_slice;
+use metriken::Lazy;
+use ringlog::*;
+use std::fmt::Display;
 
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 
-mod exposition;
-mod config;
 mod common;
+mod config;
+mod exposition;
 mod samplers;
 
 use config::Config;
@@ -106,7 +106,8 @@ fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(1)
-        .build().expect("failed to launch async runtime");
+        .build()
+        .expect("failed to launch async runtime");
 
     // spawn logging thread
     rt.spawn(async move {
@@ -119,9 +120,7 @@ fn main() {
     info!("rezolus");
 
     // spawn http exposition thread
-    rt.spawn({
-        exposition::http()
-    });
+    rt.spawn({ exposition::http() });
 
     // initialize and gather the samplers
     let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();

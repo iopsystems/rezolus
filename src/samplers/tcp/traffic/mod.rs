@@ -1,4 +1,4 @@
-#[distributed_slice(TCP_BPF_SAMPLERS)]
+#[distributed_slice(TCP_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Traffic::new(config))
 }
@@ -7,10 +7,10 @@ mod bpf;
 
 use bpf::*;
 
-use crate::common::*;
+use super::stats::*;
+use super::*;
 use crate::common::bpf::*;
-use super::super::stats::*;
-use super::super::*;
+use crate::common::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -42,26 +42,39 @@ pub struct Traffic {
 impl Traffic {
     pub fn new(_config: &Config) -> Self {
         let builder = ModSkelBuilder::default();
-        let mut skel = builder.open().expect("failed to open bpf builder").load().expect("failed to load bpf program");
+        let mut skel = builder
+            .open()
+            .expect("failed to open bpf builder")
+            .load()
+            .expect("failed to load bpf program");
         skel.attach().expect("failed to attach bpf");
 
         let mut bpf = Bpf::from_skel(skel);
 
         let mut percpu_counters = vec![
-            ("rx_bytes", Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HEATMAP))),
-            ("tx_bytes", Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HEATMAP))),
-            ("rx_segments", Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HEATMAP))),
-            ("tx_segments", Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP))),
+            (
+                "rx_bytes",
+                Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HEATMAP)),
+            ),
+            (
+                "tx_bytes",
+                Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HEATMAP)),
+            ),
+            (
+                "rx_segments",
+                Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HEATMAP)),
+            ),
+            (
+                "tx_segments",
+                Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP)),
+            ),
         ];
 
         for (name, counter) in percpu_counters.drain(..) {
             bpf.add_percpu_counter(name, counter);
         }
 
-        let mut distributions = vec![
-            ("rx_size", &TCP_RX_SIZE),
-            ("tx_size", &TCP_TX_SIZE),
-        ];
+        let mut distributions = vec![("rx_size", &TCP_RX_SIZE), ("tx_size", &TCP_TX_SIZE)];
 
         for (name, heatmap) in distributions.drain(..) {
             bpf.add_distribution(name, heatmap);
@@ -89,7 +102,7 @@ impl Traffic {
 
         // determine when to sample next
         let next = self.counter_next + self.counter_interval;
-        
+
         // check that next sample time is in the future
         if next > now {
             self.counter_next = next;
@@ -99,7 +112,6 @@ impl Traffic {
 
         // mark when we last sampled
         self.counter_prev = now;
-
     }
 
     pub fn refresh_distributions(&mut self, now: Instant) {
@@ -111,7 +123,7 @@ impl Traffic {
 
         // determine when to sample next
         let next = self.distribution_next + self.distribution_interval;
-        
+
         // check that next sample time is in the future
         if next > now {
             self.distribution_next = next;
@@ -129,11 +141,5 @@ impl Sampler for Traffic {
         let now = Instant::now();
         self.refresh_counters(now);
         self.refresh_distributions(now);
-    }
-}
-
-impl std::fmt::Display for Traffic {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "tcp::bpf::traffic")
     }
 }

@@ -1,7 +1,6 @@
 #[cfg(feature = "bpf")]
 pub mod bpf;
 
-
 pub mod classic;
 
 mod nop;
@@ -25,7 +24,7 @@ impl Counter {
             counter,
             heatmap,
         }
-    } 
+    }
     pub fn set(&mut self, now: Instant, elapsed: f64, value: u64) {
         if let Some(previous) = self.previous {
             let delta = value.wrapping_sub(previous);
@@ -50,7 +49,7 @@ impl Counter {
 //             counter,
 //             heatmap,
 //         }
-//     } 
+//     }
 //     pub fn set(&mut self, now: Instant, value: i64) {
 //         let delta = value.wrapping_sub(previous);
 //         self.counter.add(delta);

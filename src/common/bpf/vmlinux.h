@@ -128147,11 +128147,13 @@ struct bpf_spin_lock {
 
 struct bpf_timer {
 	long: 64;
-	long: 64;};
+	long: 64;
+};
 
 struct bpf_dynptr {
 	long: 64;
-	long: 64;};
+	long: 64;
+};
 
 struct bpf_pidns_info {
 	__u32 pid;

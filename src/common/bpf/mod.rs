@@ -16,16 +16,16 @@ use keys::KEYS;
 /// for each histogram in kernelspace (64bit counters). In userspace, we will
 /// we will likely have 61 histograms => 1769KB per stat in userspace.
 pub fn key_to_value(index: u64) -> u64 {
-	// g = index >> (r - m - 1)
+    // g = index >> (r - m - 1)
     let g = index >> 7;
     // b = index - g * G + 1
     let b = index - g * 128 + 1;
 
     if g < 1 {
-    	// (1 << m) * b - 1
+        // (1 << m) * b - 1
         b - 1
     } else {
-    	// (1 << (r - 2 + g)) + (1 << (m + g - 1)) * b - 1
+        // (1 << (r - 2 + g)) + (1 << (m + g - 1)) * b - 1
         (1 << (6 + g)) + (1 << (g - 1)) * b - 1
     }
 }
@@ -123,7 +123,7 @@ impl<'a> CounterSet<'a> {
             map,
             key_buf: Vec::new(),
             val_buf: Vec::new(),
-            counters,            
+            counters,
         }
     }
 
@@ -197,7 +197,7 @@ impl<'a> PercpuCounter<'a> {
         Self {
             map,
             buf: Vec::new(),
-            counter,            
+            counter,
         }
     }
 
@@ -261,24 +261,28 @@ impl<T: 'static + GetMap> Bpf<T> {
             percpu_counters_builder: |_| Vec::new(),
             counter_sets_builder: |_| Vec::new(),
             distributions_builder: |_| Vec::new(),
-        }.build()
+        }
+        .build()
     }
 
     pub fn add_percpu_counter(&mut self, name: &str, counter: Counter) {
         self.with_mut(|this| {
-            this.percpu_counters.push(PercpuCounter::new(this.skel.map(name), counter));
+            this.percpu_counters
+                .push(PercpuCounter::new(this.skel.map(name), counter));
         })
     }
 
     pub fn add_counter_set(&mut self, name: &str, counters: Vec<Counter>) {
         self.with_mut(|this| {
-            this.counter_sets.push(CounterSet::new(this.skel.map(name), counters));
+            this.counter_sets
+                .push(CounterSet::new(this.skel.map(name), counters));
         })
     }
 
     pub fn add_distribution(&mut self, name: &str, heatmap: &'static LazyHeatmap) {
         self.with_mut(|this| {
-            this.distributions.push(Distribution::new(this.skel.map(name), heatmap));
+            this.distributions
+                .push(Distribution::new(this.skel.map(name), heatmap));
         })
     }
 
@@ -304,7 +308,7 @@ impl<T: 'static + GetMap> Bpf<T> {
     }
 
     pub fn refresh_distributions(&mut self, now: Instant) {
-    	self.with_mut(|this| {
+        self.with_mut(|this| {
             for distribution in this.distributions.iter_mut() {
                 distribution.refresh(now);
             }

@@ -4,5 +4,5 @@ sampler!(Cpu, "cpu", CPU_SAMPLERS);
 
 mod stats;
 
-mod cpuinfo;
-mod stat;
+mod proc_cpuinfo;
+mod proc_stat;

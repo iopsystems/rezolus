@@ -4,5 +4,5 @@ sampler!(Memory, "memory", MEMORY_SAMPLERS);
 
 mod stats;
 
-mod meminfo;
-mod vmstat;
+mod proc_meminfo;
+mod proc_vmstat;

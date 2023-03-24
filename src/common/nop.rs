@@ -2,14 +2,14 @@ use crate::*;
 
 static NAME: &str = "nop";
 
-pub struct Nop { }
+pub struct Nop {}
 
 impl Nop {
-	pub fn new(_config: &Config) -> Self {
-		Self { }
-	}
+    pub fn new(_config: &Config) -> Self {
+        Self {}
+    }
 }
 
 impl Sampler for Nop {
-	fn sample(&mut self) { }
+    fn sample(&mut self) {}
 }

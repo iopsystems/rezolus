@@ -14,5 +14,3 @@ counter!(MEMORY_NUMA_FOREIGN, "memory/numa/foreign");
 counter!(MEMORY_NUMA_INTERLEAVE, "memory/numa/interleave");
 counter!(MEMORY_NUMA_LOCAL, "memory/numa/local");
 counter!(MEMORY_NUMA_OTHER, "memory/numa/other");
-
-

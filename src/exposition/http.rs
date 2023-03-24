@@ -1,8 +1,8 @@
-use crate::PERCENTILES;
-use warp::Filter;
-use metriken::{Counter, Gauge, Heatmap};
 use crate::samplers::hwinfo::Hwinfo;
+use crate::PERCENTILES;
+use metriken::{Counter, Gauge, Heatmap};
 use std::sync::Arc;
+use warp::Filter;
 
 /// HTTP exposition
 pub async fn http() {
@@ -15,8 +15,7 @@ mod filters {
     use super::*;
 
     /// The combined set of http endpoint filters
-    pub fn http(
-        // ratelimit: Option<Arc<Ratelimiter>>,
+    pub fn http(// ratelimit: Option<Arc<Ratelimiter>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         let hwinfo = match Hwinfo::new() {
             Ok(v) => Some(Arc::new(v)),
@@ -156,9 +155,7 @@ mod handlers {
         Ok(content)
     }
 
-    pub async fn hwinfo(
-        hwinfo: Option<Arc<Hwinfo>>,
-    ) -> Result<impl warp::Reply, Infallible> {
+    pub async fn hwinfo(hwinfo: Option<Arc<Hwinfo>>) -> Result<impl warp::Reply, Infallible> {
         if let Some(hwinfo) = hwinfo {
             Ok(warp::reply::json(&*hwinfo))
         } else {
