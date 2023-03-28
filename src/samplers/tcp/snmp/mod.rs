@@ -3,7 +3,6 @@ use crate::common::Counter;
 use crate::common::Nop;
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
-use crate::*;
 use std::fs::File;
 
 #[distributed_slice(TCP_SAMPLERS)]

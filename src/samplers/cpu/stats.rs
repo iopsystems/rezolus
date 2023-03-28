@@ -34,3 +34,6 @@ heatmap!(
     "cpu/frequency",
     "distribution of instantaneous CPU frequencies"
 );
+
+counter!(CPU_CYCLES, "cpu/cycles");
+counter!(CPU_INSTRUCTIONS, "cpu/instructions");

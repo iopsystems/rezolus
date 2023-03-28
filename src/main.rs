@@ -3,7 +3,6 @@ use clap::{Arg, Command};
 use linkme::distributed_slice;
 use metriken::Lazy;
 use ringlog::*;
-use std::fmt::Display;
 
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
@@ -120,7 +119,7 @@ fn main() {
     info!("rezolus");
 
     // spawn http exposition thread
-    rt.spawn({ exposition::http() });
+    rt.spawn(exposition::http());
 
     // initialize and gather the samplers
     let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();
