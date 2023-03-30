@@ -1,7 +1,7 @@
 use crate::*;
 
-static NAME: &str = "nop";
-
+/// A no-op sampler which can be used when a sampler may be conditionally
+/// disabled.
 pub struct Nop {}
 
 impl Nop {

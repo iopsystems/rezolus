@@ -19,15 +19,17 @@ struct {
 
 // counts the total number of syscalls
 struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 1);
-} total SEC(".maps");
+	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
+} counters SEC(".maps");
 
 // tracks the latency distribution of all syscalls
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 7424);
@@ -60,8 +62,8 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 		return 0;
 
 	// update the total counter
-	idx = 0;
-	cnt = bpf_map_lookup_elem(&total, &idx);
+	idx = 8 * bpf_get_smp_processor_id();
+	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
 		__sync_fetch_and_add(cnt, 1);

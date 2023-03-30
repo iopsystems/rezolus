@@ -1,8 +1,8 @@
 use super::stats::*;
 use super::*;
 use crate::common::Counter;
-use perf_event::{Builder, Group};
 use perf_event::events::Hardware;
+use perf_event::{Builder, Group};
 
 #[distributed_slice(CPU_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
@@ -23,8 +23,22 @@ impl Cpi {
 
         let mut group = Group::new().expect("couldn't init perf group");
         let counters = vec![
-            (Counter::new(&CPU_CYCLES, None), Builder::new().group(&mut group).kind(Hardware::CPU_CYCLES).build().expect("failed to init cycles counter")),
-            (Counter::new(&CPU_INSTRUCTIONS, None), Builder::new().group(&mut group).kind(Hardware::INSTRUCTIONS).build().expect("failed to init instructions counter")),
+            (
+                Counter::new(&CPU_CYCLES, None),
+                Builder::new()
+                    .group(&mut group)
+                    .kind(Hardware::CPU_CYCLES)
+                    .build()
+                    .expect("failed to init cycles counter"),
+            ),
+            (
+                Counter::new(&CPU_INSTRUCTIONS, None),
+                Builder::new()
+                    .group(&mut group)
+                    .kind(Hardware::INSTRUCTIONS)
+                    .build()
+                    .expect("failed to init instructions counter"),
+            ),
         ];
         group.enable().expect("couldn't enable perf counters");
 

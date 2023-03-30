@@ -3,7 +3,9 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Retransmit::new(config))
 }
 
-mod bpf;
+mod bpf {
+    include!("./bpf.rs");
+}
 
 use bpf::*;
 
@@ -45,14 +47,12 @@ impl Retransmit {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let mut percpu_counters = vec![(
-            "retransmit",
-            Counter::new(&TCP_TX_RETRANSMIT, Some(&TCP_TX_RETRANSMIT_HEATMAP)),
+        let counters = vec![Counter::new(
+            &TCP_TX_RETRANSMIT,
+            Some(&TCP_TX_RETRANSMIT_HEATMAP),
         )];
 
-        for (name, counter) in percpu_counters.drain(..) {
-            bpf.add_percpu_counter(name, counter);
-        }
+        bpf.add_memmap_counter_set("counters", counters);
 
         Self {
             bpf,

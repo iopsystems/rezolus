@@ -35,6 +35,18 @@ static __always_inline __s64 get_task_state(void *task)
 	return BPF_CORE_READ((struct task_struct___o *)task, state);
 }
 
+#define IVCSW 0
+#define VCSW 1
+
+// counters
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
+} counters SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 65536);
@@ -51,6 +63,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 7424);
@@ -58,24 +71,27 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, 7424);
 } running SEC(".maps");
 
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, 1);
-} ivcsw SEC(".maps");
+// struct {
+// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+// 	// __uint(map_flags, BPF_F_MMAPABLE);
+// 	__type(key, u32);
+// 	__type(value, u64);
+// 	__uint(max_entries, 1);
+// } ivcsw SEC(".maps");
 
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, 1);
-} vcsw SEC(".maps");
+// struct {
+// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+// 	// __uint(map_flags, BPF_F_MMAPABLE);
+// 	__type(key, u32);
+// 	__type(value, u64);
+// 	__uint(max_entries, 1);
+// } vcsw SEC(".maps");
 
 /* record enqueue timestamp */
 static __always_inline
@@ -133,8 +149,8 @@ int handle__sched_switch(u64 *ctx)
 	// - calculate how long prev task was running, update hist
 	if (get_task_state(prev) == TASK_RUNNING) {
 		// count involuntary context switch
-		u32 idx = 0;
-		cnt = bpf_map_lookup_elem(&ivcsw, &idx);
+		u32 idx = 8 * bpf_get_smp_processor_id() + IVCSW;
+		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
@@ -159,8 +175,8 @@ int handle__sched_switch(u64 *ctx)
 		}
 	} else {
 		// count voluntary context switch
-		u32 idx = 0;
-		cnt = bpf_map_lookup_elem(&vcsw, &idx);
+		u32 idx = 8 * bpf_get_smp_processor_id() + VCSW;
+		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);

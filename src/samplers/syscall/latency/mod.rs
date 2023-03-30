@@ -3,7 +3,9 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Syscall::new(config))
 }
 
-mod bpf;
+mod bpf {
+    include!("./bpf.rs");
+}
 
 use bpf::*;
 
@@ -47,19 +49,14 @@ impl Syscall {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let mut percpu_counters = vec![(
-            "total",
-            Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),
-        )];
+        let counters = vec![Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP))];
 
-        for (name, counter) in percpu_counters.drain(..) {
-            bpf.add_percpu_counter(name, counter);
-        }
+        bpf.add_memmap_counter_set("counters", counters);
 
         let mut distributions = vec![("total_latency", &SYSCALL_TOTAL_LATENCY)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+            bpf.add_memmap_distribution(name, heatmap);
         }
 
         Self {

@@ -3,7 +3,9 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Receive::new(config))
 }
 
-mod bpf;
+mod bpf {
+    include!("./bpf.rs");
+}
 
 use bpf::*;
 
@@ -48,7 +50,7 @@ impl Receive {
         let mut distributions = vec![("srtt", &TCP_SRTT), ("jitter", &TCP_JITTER)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+            bpf.add_memmap_distribution(name, heatmap);
         }
 
         Self {

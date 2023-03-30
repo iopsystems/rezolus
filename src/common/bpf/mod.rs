@@ -3,7 +3,7 @@
 pub use ouroboros::*;
 
 use super::*;
-use std::collections::HashMap;
+use std::os::fd::FromRawFd;
 
 mod keys;
 
@@ -110,6 +110,60 @@ impl<'a> Distribution<'a> {
     }
 }
 
+pub struct MemmapDistribution<'a> {
+    map: &'a libbpf_rs::Map,
+    mmap: memmap2::MmapMut,
+    prev: [u64; 7424],
+    heatmap: &'static LazyHeatmap,
+}
+
+impl<'a> MemmapDistribution<'a> {
+    pub fn new(map: &'a libbpf_rs::Map, heatmap: &'static LazyHeatmap) -> Self {
+        let fd = map.fd();
+        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+        let mmap = unsafe {
+            memmap2::MmapOptions::new()
+                .len(61440)
+                .map_mut(&file)
+                .expect("failed to mmap() bpf distribution")
+        };
+
+        // let mmap = unsafe { memmap2::MmapOptions::new::map(&file).expect("failed to memmap distribution") };
+
+        Self {
+            map,
+            mmap,
+            prev: [0; 7424],
+            heatmap,
+        }
+    }
+
+    pub fn refresh(&mut self, now: Instant) {
+        for (idx, prev) in self.prev.iter_mut().enumerate() {
+            let start = idx * 8;
+            let val = u64::from_ne_bytes([
+                self.mmap[start + 0],
+                self.mmap[start + 1],
+                self.mmap[start + 2],
+                self.mmap[start + 3],
+                self.mmap[start + 4],
+                self.mmap[start + 5],
+                self.mmap[start + 6],
+                self.mmap[start + 7],
+            ]);
+
+            let delta = val - *prev;
+
+            *prev = val;
+
+            if delta > 0 {
+                let value = key_to_value(idx as u64);
+                self.heatmap.increment(now, value as _, delta as _);
+            }
+        }
+    }
+}
+
 pub struct CounterSet<'a> {
     map: &'a libbpf_rs::Map,
     key_buf: Vec<u8>,
@@ -186,6 +240,124 @@ impl<'a> CounterSet<'a> {
     }
 }
 
+pub struct MemmapCounterSet<'a> {
+    map: &'a libbpf_rs::Map,
+    mmap: memmap2::MmapMut,
+    values: Vec<u64>,
+    cachelines: usize,
+    counters: Vec<Counter>,
+}
+
+impl<'a> MemmapCounterSet<'a> {
+    pub fn new(map: &'a libbpf_rs::Map, counters: Vec<Counter>) -> Self {
+        let ncounters = counters.len();
+        let cachelines = (ncounters as f64 / 8.0).ceil() as usize;
+
+        let fd = map.fd();
+        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+        let mmap = unsafe {
+            memmap2::MmapOptions::new()
+                .len(cachelines * 65536)
+                .map_mut(&file)
+                .expect("failed to mmap() bpf counterset")
+        };
+
+        Self {
+            map,
+            mmap,
+            cachelines,
+            counters,
+            values: vec![0; ncounters],
+        }
+    }
+
+    pub fn refresh(&mut self, now: Instant, elapsed: f64) {
+        for value in self.values.iter_mut() {
+            *value = 0;
+        }
+
+        for cpu in 0..1024 {
+            for idx in 0..self.counters.len() {
+                let start = (cpu * self.cachelines * 64) + (idx * 8);
+                let value = u64::from_ne_bytes([
+                    self.mmap[start + 0],
+                    self.mmap[start + 1],
+                    self.mmap[start + 2],
+                    self.mmap[start + 3],
+                    self.mmap[start + 4],
+                    self.mmap[start + 5],
+                    self.mmap[start + 6],
+                    self.mmap[start + 7],
+                ]);
+
+                self.values[idx] = self.values[idx].wrapping_add(value);
+            }
+        }
+
+        for (value, counter) in self.values.iter().zip(self.counters.iter_mut()) {
+            counter.set(now, elapsed, *value);
+        }
+    }
+
+    // pub fn refresh(&mut self, now: Instant, elapsed: f64) {
+    //     let ncounters = self.counters.len();
+
+    //     let opts = libbpf_sys::bpf_map_batch_opts {
+    //         sz: 24 as libbpf_sys::size_t,
+    //         elem_flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+    //         flags: libbpf_sys::BPF_ANY as libbpf_sys::__u64,
+    //     };
+
+    //     self.key_buf.clear();
+    //     self.key_buf.extend_from_slice(&KEYS[0..(ncounters * 4)]);
+
+    //     self.val_buf.clear();
+    //     self.val_buf.resize(ncounters * 8, 0);
+
+    //     let mut nkeys: u32 = ncounters as _;
+    //     let in_batch = std::ptr::null_mut();
+    //     let mut out_batch = 0_u32;
+
+    //     let ret = unsafe {
+    //         libbpf_sys::bpf_map_lookup_batch(
+    //             self.map.fd(),
+    //             in_batch as *mut core::ffi::c_void,
+    //             &mut out_batch as *mut _ as *mut core::ffi::c_void,
+    //             self.key_buf.as_mut_ptr() as *mut core::ffi::c_void,
+    //             self.val_buf.as_mut_ptr() as *mut core::ffi::c_void,
+    //             &mut nkeys as *mut libbpf_sys::__u32,
+    //             &opts as *const libbpf_sys::bpf_map_batch_opts,
+    //         )
+    //     };
+
+    //     let nkeys = nkeys as usize;
+
+    //     if ret == 0 {
+    //         unsafe {
+    //             self.val_buf.set_len(8 * nkeys);
+    //             self.key_buf.set_len(4 * nkeys);
+    //         }
+    //     } else {
+    //         return;
+    //     }
+
+    //     let mut key = [0; 4];
+    //     let mut current = [0; 8];
+
+    //     for i in 0..nkeys {
+    //         key.copy_from_slice(&self.key_buf[(i * 4)..((i + 1) * 4)]);
+    //         current.copy_from_slice(&self.val_buf[(i * 8)..((i + 1) * 8)]);
+
+    //         let k = u32::from_ne_bytes(key) as usize;
+    //         let c = u64::from_ne_bytes(current);
+
+    //         if let Some(counter) = self.counters.get_mut(k) {
+    //             counter.set(now, elapsed, c)
+    //         }
+    //     }
+    // }
+}
+
 pub struct PercpuCounter<'a> {
     map: &'a libbpf_rs::Map,
     buf: Vec<u8>,
@@ -247,7 +419,13 @@ pub struct Bpf<T: 'static> {
     counter_sets: Vec<CounterSet<'this>>,
     #[borrows(skel)]
     #[covariant]
+    memmap_counter_sets: Vec<MemmapCounterSet<'this>>,
+    #[borrows(skel)]
+    #[covariant]
     distributions: Vec<Distribution<'this>>,
+    #[borrows(skel)]
+    #[covariant]
+    memmap_distributions: Vec<MemmapDistribution<'this>>,
 }
 
 pub trait GetMap {
@@ -260,7 +438,9 @@ impl<T: 'static + GetMap> Bpf<T> {
             skel,
             percpu_counters_builder: |_| Vec::new(),
             counter_sets_builder: |_| Vec::new(),
+            memmap_counter_sets_builder: |_| Vec::new(),
             distributions_builder: |_| Vec::new(),
+            memmap_distributions_builder: |_| Vec::new(),
         }
         .build()
     }
@@ -279,10 +459,24 @@ impl<T: 'static + GetMap> Bpf<T> {
         })
     }
 
+    pub fn add_memmap_counter_set(&mut self, name: &str, counters: Vec<Counter>) {
+        self.with_mut(|this| {
+            this.memmap_counter_sets
+                .push(MemmapCounterSet::new(this.skel.map(name), counters));
+        })
+    }
+
     pub fn add_distribution(&mut self, name: &str, heatmap: &'static LazyHeatmap) {
         self.with_mut(|this| {
             this.distributions
                 .push(Distribution::new(this.skel.map(name), heatmap));
+        })
+    }
+
+    pub fn add_memmap_distribution(&mut self, name: &str, heatmap: &'static LazyHeatmap) {
+        self.with_mut(|this| {
+            this.memmap_distributions
+                .push(MemmapDistribution::new(this.skel.map(name), heatmap));
         })
     }
 
@@ -299,7 +493,13 @@ impl<T: 'static + GetMap> Bpf<T> {
             for counter_set in this.counter_sets.iter_mut() {
                 counter_set.refresh(now, elapsed);
             }
-        })
+        });
+
+        self.with_mut(|this| {
+            for counter_set in this.memmap_counter_sets.iter_mut() {
+                counter_set.refresh(now, elapsed);
+            }
+        });
     }
 
     pub fn refresh_counters(&mut self, now: Instant, elapsed: f64) {
@@ -312,6 +512,11 @@ impl<T: 'static + GetMap> Bpf<T> {
             for distribution in this.distributions.iter_mut() {
                 distribution.refresh(now);
             }
-        })
+        });
+        self.with_mut(|this| {
+            for distribution in this.memmap_distributions.iter_mut() {
+                distribution.refresh(now);
+            }
+        });
     }
 }

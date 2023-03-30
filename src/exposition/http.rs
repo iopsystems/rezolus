@@ -15,14 +15,10 @@ mod filters {
     use super::*;
 
     /// The combined set of http endpoint filters
-    pub fn http(// ratelimit: Option<Arc<Ratelimiter>>,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    pub fn http() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         let hwinfo = match Hwinfo::new() {
             Ok(v) => Some(Arc::new(v)),
-            Err(_) => {
-                // eprintln!("error: {e}");
-                None
-            }
+            Err(_) => None,
         };
 
         prometheus_stats()
@@ -67,7 +63,6 @@ mod filters {
 mod handlers {
     use super::*;
     use core::convert::Infallible;
-    // use warp::http::StatusCode;
 
     pub async fn prometheus_stats() -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
@@ -86,7 +81,7 @@ mod handlers {
 
             if let Some(counter) = any.downcast_ref::<Counter>() {
                 data.push(format!(
-                    "# TYPE {} counter\n{} {}",
+                    "# TYPE {}_total counter\n{}_total {}",
                     metric.name(),
                     metric.name(),
                     counter.value()
@@ -159,7 +154,6 @@ mod handlers {
         if let Some(hwinfo) = hwinfo {
             Ok(warp::reply::json(&*hwinfo))
         } else {
-            // Ok(warp::reply::json(()))
             Ok(warp::reply::json(&false))
         }
     }

@@ -3,7 +3,9 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Runqlat::new(config))
 }
 
-mod bpf;
+mod bpf {
+    include!("./bpf.rs");
+}
 
 use bpf::*;
 
@@ -50,14 +52,12 @@ impl Runqlat {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let mut percpu_counters = vec![
-            ("ivcsw", Counter::new(&SCHEDULER_IVCSW, None)),
-            ("vcsw", Counter::new(&SCHEDULER_VCSW, None)),
+        let counters = vec![
+            Counter::new(&SCHEDULER_IVCSW, None),
+            Counter::new(&SCHEDULER_VCSW, None),
         ];
 
-        for (name, counter) in percpu_counters.drain(..) {
-            bpf.add_percpu_counter(name, counter);
-        }
+        bpf.add_memmap_counter_set("counters", counters);
 
         let mut distributions = vec![
             ("runqlat", &SCHEDULER_RUNQUEUE_LATENCY),
@@ -65,7 +65,7 @@ impl Runqlat {
         ];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+            bpf.add_memmap_distribution(name, heatmap);
         }
 
         Self {

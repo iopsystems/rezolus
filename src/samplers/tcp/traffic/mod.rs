@@ -3,7 +3,9 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Traffic::new(config))
 }
 
-mod bpf;
+mod bpf {
+    include!("./bpf.rs");
+}
 
 use bpf::*;
 
@@ -51,33 +53,19 @@ impl Traffic {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let mut percpu_counters = vec![
-            (
-                "rx_bytes",
-                Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HEATMAP)),
-            ),
-            (
-                "tx_bytes",
-                Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HEATMAP)),
-            ),
-            (
-                "rx_segments",
-                Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HEATMAP)),
-            ),
-            (
-                "tx_segments",
-                Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP)),
-            ),
+        let counters = vec![
+            Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HEATMAP)),
+            Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HEATMAP)),
+            Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HEATMAP)),
+            Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP)),
         ];
 
-        for (name, counter) in percpu_counters.drain(..) {
-            bpf.add_percpu_counter(name, counter);
-        }
+        bpf.add_memmap_counter_set("counters", counters);
 
         let mut distributions = vec![("rx_size", &TCP_RX_SIZE), ("tx_size", &TCP_TX_SIZE)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+            bpf.add_memmap_distribution(name, heatmap);
         }
 
         Self {

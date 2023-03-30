@@ -1,11 +1,11 @@
-static NAME: &str = "blockio::latency";
-
 #[distributed_slice(BLOCK_IO_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     Box::new(Biolat::new(config))
 }
 
-mod bpf;
+mod bpf {
+    include!("./bpf.rs");
+}
 
 use bpf::*;
 
@@ -52,7 +52,7 @@ impl Biolat {
         let mut distributions = vec![("latency", &BLOCKIO_LATENCY), ("size", &BLOCKIO_SIZE)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+            bpf.add_memmap_distribution(name, heatmap);
         }
 
         Self {
