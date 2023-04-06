@@ -1,7 +1,5 @@
 use crate::*;
 
-type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
-
 counter_with_heatmap!(
     TCP_RX_BYTES,
     TCP_RX_BYTES_HEATMAP,
@@ -45,8 +43,3 @@ heatmap!(
 );
 heatmap!(TCP_JITTER, "tcp/jitter");
 heatmap!(TCP_SRTT, "tcp/srtt");
-
-// counter!(SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE, "samplers/tcp/classic/snmp/sample");
-// counter!(SAMPLERS_TCP_CLASSIC_SNMP_SAMPLE_EX, "samplers/tcp/classic/snmp/sample_ex");
-
-// counter!(SAMPLERS_TCP_BPF_TRAFFIC_SAMPLE, "samplers/tcp/bpf/traffic/sample");

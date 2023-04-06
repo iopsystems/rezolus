@@ -1,7 +1,5 @@
 use crate::*;
 
-type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
-
 counter_with_heatmap!(CPU_USAGE_USER, CPU_USAGE_USER_HEATMAP, "cpu/usage/user");
 counter_with_heatmap!(CPU_USAGE_NICE, CPU_USAGE_NICE_HEATMAP, "cpu/usage/nice");
 counter_with_heatmap!(

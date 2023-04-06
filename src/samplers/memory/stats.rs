@@ -1,7 +1,5 @@
 use crate::*;
 
-// type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
-
 gauge!(MEMORY_TOTAL, "memory/total");
 gauge!(MEMORY_FREE, "memory/free");
 gauge!(MEMORY_AVAILABLE, "memory/available");
