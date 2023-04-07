@@ -37,28 +37,6 @@ impl Counter {
     }
 }
 
-// pub struct Gauge {
-//     gauge: &'static LazyGauge,
-//     heatmap: Option<&'static LazyHeatmap>,
-// }
-
-// impl Gauge {
-//     pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static LazyHeatmap>) -> Self {
-//         Self {
-//             previous: None,
-//             counter,
-//             heatmap,
-//         }
-//     }
-//     pub fn set(&mut self, now: Instant, value: i64) {
-//         let delta = value.wrapping_sub(previous);
-//         self.counter.add(delta);
-//         if let Some(heatmap) = self.heatmap {
-//             heatmap.increment(now, (delta as f64 / elapsed) as _, 1);
-//         }
-//     }
-// }
-
 #[macro_export]
 #[rustfmt::skip]
 macro_rules! counter {
@@ -186,8 +164,6 @@ macro_rules! sampler {
                     sampler.sample()
                 }
             }
-
-            // fn name(&self) -> &str { $name }
         }
     };
 }
