@@ -11,6 +11,16 @@ pub type LazyCounter = metriken::Lazy<metriken::Counter>;
 pub type LazyGauge = metriken::Lazy<metriken::Gauge>;
 pub type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
 
+#[allow(dead_code)]
+static PAGE_SIZE: once_cell::sync::Lazy<usize> = once_cell::sync::Lazy::new(|| {
+    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+});
+
+#[cfg(target_os = "linux")]
+static CACHE_LINESIZE: once_cell::sync::Lazy<usize> = once_cell::sync::Lazy::new(|| {
+    unsafe { libc::sysconf(libc::_SC_LEVEL1_DCACHE_LINESIZE) as usize }
+});
+
 pub struct Counter {
     previous: Option<u64>,
     counter: &'static LazyCounter,
@@ -36,28 +46,6 @@ impl Counter {
         self.previous = Some(value);
     }
 }
-
-// pub struct Gauge {
-//     gauge: &'static LazyGauge,
-//     heatmap: Option<&'static LazyHeatmap>,
-// }
-
-// impl Gauge {
-//     pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static LazyHeatmap>) -> Self {
-//         Self {
-//             previous: None,
-//             counter,
-//             heatmap,
-//         }
-//     }
-//     pub fn set(&mut self, now: Instant, value: i64) {
-//         let delta = value.wrapping_sub(previous);
-//         self.counter.add(delta);
-//         if let Some(heatmap) = self.heatmap {
-//             heatmap.increment(now, (delta as f64 / elapsed) as _, 1);
-//         }
-//     }
-// }
 
 #[macro_export]
 #[rustfmt::skip]
@@ -186,8 +174,6 @@ macro_rules! sampler {
                     sampler.sample()
                 }
             }
-
-            // fn name(&self) -> &str { $name }
         }
     };
 }
