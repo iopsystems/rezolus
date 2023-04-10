@@ -7,263 +7,83 @@ env:
   cache: 0
 
 jobs:
-  focal-llvm_9-bcc_v0_15_0:
-    name: focal / llvm 9 / bcc 0.15.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.15.0"
-      DIST: focal
-      FEATURES: bpf_v0_15_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_16_0:
-    name: focal / llvm 9 / bcc 0.16.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.16.0"
-      DIST: focal
-      FEATURES: bpf_v0_16_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_17_0:
-    name: focal / llvm 9 / bcc 0.17.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.17.0"
-      DIST: focal
-      FEATURES: bpf_v0_17_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_18_0:
-    name: focal / llvm 9 / bcc 0.18.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.18.0"
-      DIST: focal
-      FEATURES: bpf_v0_18_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_19_0:
-    name: focal / llvm 9 / bcc 0.19.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.19.0"
-      DIST: focal
-      FEATURES: bpf_v0_19_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_20_0:
-    name: focal / llvm 9 / bcc 0.20.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.20.0"
-      DIST: focal
-      FEATURES: bpf_v0_20_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_21_0:
-    name: focal / llvm 9 / bcc 0.21.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.21.0"
-      DIST: focal
-      FEATURES: bpf_v0_21_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_22_0:
-    name: focal / llvm 9 / bcc 0.22.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.22.0"
-      DIST: focal
-      FEATURES: bpf_v0_22_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_23_0:
-    name: focal / llvm 9 / bcc 0.23.0
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.23.0"
-      DIST: focal
-      FEATURES: bpf_v0_23_0
-      LLVM: 9
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  focal-llvm_9-bcc_v0_23_0-static:
-    name: focal / llvm 9 / bcc 0.23.0 / static
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.23.0"
-      DIST: focal
-      FEATURES: bpf_v0_23_0 bpf_static
-      LLVM: 9
-      STATIC: true
-    steps:
-    - uses: actions/checkout@v2
-    - name: BCC Build Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          deps
-        key: ${{ env.DIST }}-${{ env.LLVM }}-${{ env.BCC }}-static
-    - uses: Swatinem/rust-cache@v1
-    - name: Run CI
-      run: bash -e build/ci.sh
-  memcache-smoketest:
-    name: memcache smoketest
-    runs-on: ubuntu-20.04
-    env:
-      BCC: "0.23.0"
-      DIST: focal
-      FEATURES: bpf_v0_23_0
-      LLVM: 9
-    services:
-      memcached:
-        image: memcached
-        ports:
-          - 11211:11211
+  build:
+    strategy:
+      matrix:
+        os: [ ubuntu-20.04, ubuntu-22.04 ]
+        profile: [ release, debug ]
+    name: build-${{ matrix.os }}-${{ matrix.profile }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Update cargo flags
+        if: ${{ matrix.profile == 'release' }}
+        run: echo 'CARGO_FLAGS=--release' >> $GITHUB_ENV
+        shell: bash
+      - name: Update cargo flags
+        if: ${{ matrix.profile == 'debug' }}
+        run: echo 'CARGO_FLAGS=' >> $GITHUB_ENV
+        shell: bash
+
       - uses: Swatinem/rust-cache@v1
-      - name: Build
-        run: bash build/ci.sh
-      - name: Smoketest
-        run: target/release/rezolus configs/memcache.toml & sleep 180; curl -s http://localhost:4242/vars
-  macos:
-    name: macos
-    runs-on: macos-latest
+        with:
+          key: ${{ matrix.profile }}
+      - uses: actions-rs/cargo@v1
+        name: build
+        with:
+          command: test
+          args: ${{ env.CARGO_FLAGS }} --workspace --tests --no-run
+      - uses: actions-rs/cargo@v1
+        name: test
+        with:
+          command: test
+          args: ${{ env.CARGO_FLAGS }} --workspace --tests
+
+  # Fast clippy check to ensure things compile
+  check:
+    strategy:
+      matrix:
+        os: [ ubuntu-20.04, macos-11 ]
+    name: check-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@v1
-      - name: Build
-        run: cargo build --release
-      - name: Smoketest
-        run: target/release/rezolus configs/macos.toml & sleep 180; curl -s http://localhost:4242/vars
-  musl:
-    name: musl
-    runs-on: ubuntu-20.04
-    steps:
-      - uses: actions/checkout@v2
-      - uses: Swatinem/rust-cache@v1
-      - name: install rust musl toolchain
-        run: rustup target add x86_64-unknown-linux-musl
-      - name: update apt
-        run: sudo apt-get update
-      - name: install musl-tools
-        run: sudo apt-get install -y musl-tools
-      - name: build
-        run: cargo build --release --target x86_64-unknown-linux-musl
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: --release
+
   rustfmt:
-    runs-on: ubuntu-latest
-    steps:
+  name: rustfmt
+  runs-on: ubuntu-latest
+  steps:
     - uses: actions/checkout@v2
-    - name: install rustfmt
-      run: rustup component add rustfmt
-    - name: rustfmt
-      run: cargo fmt -- --check
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+    - uses: actions-rs/cargo@v1
+      with:
+        command: fmt
+        args: --all -- --check
+
+  # Note: We could run these using the pull_request_target trigger. I haven't
+  #       done this since I'm not sure if it would be secure.
+  #
+  # See this link for more details on this
+  # https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
   clippy:
+    name: clippy
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: install clippy
-      run: rustup component add clippy
-    - name: clippy
-      run: cargo clippy || cargo clippy
-  # audit:
-  #   name: audit
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - uses: actions/checkout@v2
-  #   - name: install
-  #     run: cargo install cargo-audit
-  #   - name: audit
-  #     run: cargo audit --ignore RUSTSEC-2020-0031
+      - uses: actions/checkout@v2
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
