@@ -120,6 +120,10 @@ jobs:
         run: echo 'FEATURE_FLAGS=default,bpf' >> $GITHUB_ENV
         shell: bash
 
+      - name: Install dependencies
+        shell: bash
+        run: sudo apt-get -y install libelf-dev
+
       - name: build
         shell: bash
         run: |
