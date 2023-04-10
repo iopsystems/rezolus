@@ -50,7 +50,7 @@ impl Receive {
         let mut distributions = vec![("srtt", &TCP_SRTT), ("jitter", &TCP_JITTER)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_memmap_distribution(name, heatmap);
+            bpf.add_distribution(name, heatmap);
         }
 
         Self {

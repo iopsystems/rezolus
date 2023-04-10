@@ -57,7 +57,7 @@ impl Runqlat {
             Counter::new(&SCHEDULER_VCSW, None),
         ];
 
-        bpf.add_memmap_counter_set("counters", counters);
+        bpf.add_counters("counters", counters);
 
         let mut distributions = vec![
             ("runqlat", &SCHEDULER_RUNQUEUE_LATENCY),
@@ -65,7 +65,7 @@ impl Runqlat {
         ];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_memmap_distribution(name, heatmap);
+            bpf.add_distribution(name, heatmap);
         }
 
         Self {

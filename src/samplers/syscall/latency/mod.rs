@@ -51,12 +51,12 @@ impl Syscall {
 
         let counters = vec![Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP))];
 
-        bpf.add_memmap_counter_set("counters", counters);
+        bpf.add_counters("counters", counters);
 
         let mut distributions = vec![("total_latency", &SYSCALL_TOTAL_LATENCY)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_memmap_distribution(name, heatmap);
+            bpf.add_distribution(name, heatmap);
         }
 
         Self {
