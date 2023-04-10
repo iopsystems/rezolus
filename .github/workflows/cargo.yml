@@ -4,7 +4,7 @@ on: [ push, pull_request ]
 
 env:
   CARGO_TERM_COLOR: always
-  cache: 0
+  RUST_BACKTRACE: full
 
 jobs:
   build:
@@ -36,12 +36,12 @@ jobs:
         name: build
         with:
           command: test
-          args: ${{ env.CARGO_FLAGS }} --workspace --tests --no-run
+          args: ${{ env.CARGO_FLAGS }} --workspace --tests --bins --examples --no-run
       - uses: actions-rs/cargo@v1
         name: test
         with:
           command: test
-          args: ${{ env.CARGO_FLAGS }} --workspace --tests
+          args: ${{ env.CARGO_FLAGS }} --workspace --tests --bins --examples
 
   # Fast clippy check to ensure things compile
   check:
@@ -62,17 +62,17 @@ jobs:
           args: --release
 
   rustfmt:
-  name: rustfmt
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v2
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-    - uses: actions-rs/cargo@v1
-      with:
-        command: fmt
-        args: --all -- --check
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
 
   # Note: We could run these using the pull_request_target trigger. I haven't
   #       done this since I'm not sure if it would be secure.
@@ -85,5 +85,14 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/audit-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
