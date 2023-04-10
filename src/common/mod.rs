@@ -11,16 +11,6 @@ pub type LazyCounter = metriken::Lazy<metriken::Counter>;
 pub type LazyGauge = metriken::Lazy<metriken::Gauge>;
 pub type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
 
-#[allow(dead_code)]
-static PAGE_SIZE: once_cell::sync::Lazy<usize> = once_cell::sync::Lazy::new(|| {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
-});
-
-#[cfg(target_os = "linux")]
-static CACHE_LINESIZE: once_cell::sync::Lazy<usize> = once_cell::sync::Lazy::new(|| {
-    unsafe { libc::sysconf(libc::_SC_LEVEL1_DCACHE_LINESIZE) as usize }
-});
-
 pub struct Counter {
     previous: Option<u64>,
     counter: &'static LazyCounter,
