@@ -1,5 +1,5 @@
 use super::*;
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::FromRawFd;
 use ouroboros::*;
 
 mod counters;
@@ -22,7 +22,6 @@ static MAX_CPUS: usize = 1024;
 /// NOTE: this *must* remain in-sync across both C and Rust components of BPF
 /// code.
 const HISTOGRAM_BUCKETS: usize = 7424;
-const HISTOGRAM_BYTES: usize = HISTOGRAM_BUCKETS * std::mem::size_of::<u64>();
 const HISTOGRAM_PAGES: usize = 15;
 
 /// This function converts indices back to values for rustcommon histogram with

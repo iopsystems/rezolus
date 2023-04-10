@@ -20,7 +20,7 @@ use super::*;
 ///
 /// The distribution should be given some meaningful name in the BPF program.
 pub struct Distribution<'a> {
-    map: &'a libbpf_rs::Map,
+    _map: &'a libbpf_rs::Map,
     mmap: memmap2::MmapMut,
     prev: [u64; HISTOGRAM_BUCKETS],
     heatmap: &'static LazyHeatmap,
