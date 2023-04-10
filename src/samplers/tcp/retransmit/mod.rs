@@ -52,7 +52,7 @@ impl Retransmit {
             Some(&TCP_TX_RETRANSMIT_HEATMAP),
         )];
 
-        bpf.add_memmap_counter_set("counters", counters);
+        bpf.add_counters("counters", counters);
 
         Self {
             bpf,

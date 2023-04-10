@@ -615,7 +615,7 @@ dependencies = [
  "cargo_metadata",
  "clap 3.2.23",
  "libbpf-sys",
- "memmap2 0.5.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "memmap2",
  "num_enum",
  "regex",
  "scroll",
@@ -718,13 +718,6 @@ name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
-
-[[package]]
-name = "memmap2"
-version = "0.5.10"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "memmap2"
@@ -1126,7 +1119,7 @@ dependencies = [
  "libbpf-sys",
  "libc",
  "linkme",
- "memmap2 0.5.10",
+ "memmap2",
  "metriken",
  "once_cell",
  "ouroboros",

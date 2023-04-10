@@ -60,12 +60,12 @@ impl Traffic {
             Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP)),
         ];
 
-        bpf.add_memmap_counter_set("counters", counters);
+        bpf.add_counters("counters", counters);
 
         let mut distributions = vec![("rx_size", &TCP_RX_SIZE), ("tx_size", &TCP_TX_SIZE)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_memmap_distribution(name, heatmap);
+            bpf.add_distribution(name, heatmap);
         }
 
         Self {

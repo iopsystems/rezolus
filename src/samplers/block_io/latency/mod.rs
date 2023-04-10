@@ -52,7 +52,7 @@ impl Biolat {
         let mut distributions = vec![("latency", &BLOCKIO_LATENCY), ("size", &BLOCKIO_SIZE)];
 
         for (name, heatmap) in distributions.drain(..) {
-            bpf.add_memmap_distribution(name, heatmap);
+            bpf.add_distribution(name, heatmap);
         }
 
         Self {
