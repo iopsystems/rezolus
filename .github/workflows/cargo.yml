@@ -136,7 +136,7 @@ jobs:
         if: ${{ matrix.profile == 'debug' }}
         shell: bash
         run: |
-          cargo test --workspace --features ${{ env.FEATURE_FLAGS }} --doc --locked -- --test-threads 16
+          cargo test --workspace --features ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
 
   check-success:
     name: verify all tests pass
