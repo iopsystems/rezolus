@@ -38,7 +38,7 @@ impl<'a> Distribution<'a> {
         };
 
         Self {
-            map,
+            _map: map,
             mmap,
             prev: [0; HISTOGRAM_BUCKETS],
             heatmap,

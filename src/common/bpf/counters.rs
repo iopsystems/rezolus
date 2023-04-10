@@ -42,7 +42,7 @@ impl<'a> Counters<'a> {
         };
 
         Self {
-            map,
+            _map: map,
             mmap,
             cachelines,
             counters,
