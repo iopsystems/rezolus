@@ -11,7 +11,7 @@ env:
 jobs:
   # First stage: these are quick jobs that give immediate feedback on a PR.
   check:
-    name: check-${{ matrix.os }}
+    name: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
