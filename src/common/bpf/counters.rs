@@ -57,7 +57,8 @@ impl<'a> Counters<'a> {
 
         for cpu in 0..MAX_CPUS {
             for idx in 0..self.counters.len() {
-                let start = (cpu * self.cachelines * CACHELINE_SIZE) + (idx * std::mem::size_of::<u64>());
+                let start =
+                    (cpu * self.cachelines * CACHELINE_SIZE) + (idx * std::mem::size_of::<u64>());
                 let value = u64::from_ne_bytes([
                     self.mmap[start + 0],
                     self.mmap[start + 1],

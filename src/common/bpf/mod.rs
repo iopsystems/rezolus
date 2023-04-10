@@ -1,6 +1,6 @@
 use super::*;
-use std::os::fd::FromRawFd;
 use ouroboros::*;
+use std::os::fd::FromRawFd;
 
 mod counters;
 mod distribution;
@@ -43,7 +43,6 @@ pub fn key_to_value(index: u64) -> u64 {
         (1 << (6 + g)) + (1 << (g - 1)) * b - 1
     }
 }
-
 
 #[self_referencing]
 pub struct Bpf<T: 'static> {
