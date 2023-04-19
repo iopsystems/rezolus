@@ -104,6 +104,10 @@ macro_rules! gauge {
 #[rustfmt::skip]
 /// A convenience macro for constructing a lazily initialized
 /// `metriken::Heatmap` given an identifier, name, and optional description.
+///
+/// The heatmap configuration used here can record counts for all 64bit integer
+/// values with a maximum error of 0.78%. The heatmap covers a moving window of
+/// one minute with one second resolution.
 macro_rules! heatmap {
     ($ident:ident, $name:tt) => {
         #[metriken::metric(
