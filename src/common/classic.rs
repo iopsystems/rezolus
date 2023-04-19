@@ -7,11 +7,16 @@ use std::io::Seek;
 use std::io::{Error, ErrorKind};
 use std::iter::zip;
 
+/// A type that wraps values associated with a nested set of string keys. It is
+/// intended to be constructed by parsing from a file with a specific format and
+/// allows the caller to access the values in a more straightforward way and
+/// enables reuse of the parsing logic when files have a common format.
 pub struct NestedMap {
     inner: HashMap<String, HashMap<String, u64>>,
 }
 
 impl NestedMap {
+    /// Returns the value for the given pkey and lkey if one exists.
     pub fn get(&self, pkey: &str, lkey: &str) -> Option<u64> {
         self.inner.get(pkey)?.get(lkey).copied()
     }

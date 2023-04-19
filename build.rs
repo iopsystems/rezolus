@@ -7,6 +7,9 @@ fn main() {
 mod bpf {
     use libbpf_cargo::SkeletonBuilder;
 
+    // `SOURCES` lists all BPF programs and the sampler that contains them.
+    // Each entry `(sampler, program)` maps to a unique path in the `samplers`
+    // directory.
     const SOURCES: &'static [(&str, &str)] = &[
         ("block_io", "latency"),
         ("scheduler", "runqueue"),

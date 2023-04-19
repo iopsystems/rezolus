@@ -4,13 +4,20 @@ pub mod bpf;
 pub mod classic;
 
 mod nop;
+
 pub use nop::Nop;
 
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
+
 pub type LazyCounter = metriken::Lazy<metriken::Counter>;
 pub type LazyGauge = metriken::Lazy<metriken::Gauge>;
 pub type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
 
+/// A `Counter` is a wrapper type that enables us to automatically calculate
+/// percentiles for secondly rates between subsequent counter observations.
+///
+/// To do this, it contains the current reading, previous reading, and
+/// optionally a heatmap to store rate observations.
 pub struct Counter {
     previous: Option<u64>,
     counter: &'static LazyCounter,
@@ -18,6 +25,8 @@ pub struct Counter {
 }
 
 impl Counter {
+    /// Construct a new counter that wraps a `metriken` counter and optionally a
+    /// `metriken` heatmap.
     pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static LazyHeatmap>) -> Self {
         Self {
             previous: None,
@@ -25,6 +34,10 @@ impl Counter {
             heatmap,
         }
     }
+
+    /// Updates the counter by setting the current value to a new value. If this
+    /// counter has a heatmap it also calculates the rate since the last reading
+    /// and increments the heatmap.
     pub fn set(&mut self, now: Instant, elapsed: f64, value: u64) {
         if let Some(previous) = self.previous {
             let delta = value.wrapping_sub(previous);
@@ -39,6 +52,8 @@ impl Counter {
 
 #[macro_export]
 #[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized
+/// `metriken::Counter` given an identifier, name, and optional description.
 macro_rules! counter {
     ($ident:ident, $name:tt) => {
         #[metriken::metric(
@@ -62,6 +77,8 @@ macro_rules! counter {
 
 #[macro_export]
 #[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized
+/// `metriken::Gauge` given an identifier, name, and optional description.
 macro_rules! gauge {
     ($ident:ident, $name:tt) => {
         #[metriken::metric(
@@ -85,6 +102,8 @@ macro_rules! gauge {
 
 #[macro_export]
 #[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized
+/// `metriken::Heatmap` given an identifier, name, and optional description.
 macro_rules! heatmap {
     ($ident:ident, $name:tt) => {
         #[metriken::metric(
@@ -109,6 +128,8 @@ macro_rules! heatmap {
 
 #[macro_export]
 #[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized counter with a
+/// heatmap which will track secondly rates for the same counter.
 macro_rules! counter_with_heatmap {
 	($counter:ident, $heatmap:ident, $name:tt) => {
 		self::counter!($counter, $name);
@@ -122,6 +143,8 @@ macro_rules! counter_with_heatmap {
 
 #[macro_export]
 #[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized gauge with a
+/// heatmap which will track instantaneous readings for the same gauge.
 macro_rules! gauge_with_heatmap {
     ($gauge:ident, $heatmap:ident, $name:tt) => {
         self::gauge!($gauge, $name);
@@ -135,6 +158,9 @@ macro_rules! gauge_with_heatmap {
 
 #[macro_export]
 #[rustfmt::skip]
+/// A convenience macro for defining a top-level sampler which will contain
+/// other samplers. For instance, this is used for the top-level `cpu` sampler
+/// which then contains other related samplers for perf events, cpu usage, etc.
 macro_rules! sampler {
     ($ident:ident, $name:tt, $slice:ident) => {
         #[distributed_slice]
