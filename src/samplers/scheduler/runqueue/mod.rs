@@ -4,7 +4,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 }
 
 mod bpf {
-    include!("./bpf.rs");
+    include!(concat!(env!("OUT_DIR"), "/scheduler_runqueue.bpf.rs"));
 }
 
 use bpf::*;

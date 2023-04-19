@@ -17,9 +17,11 @@ mod bpf {
     ];
 
     pub fn generate() {
+        let out_dir = std::env::var("OUT_DIR").unwrap();
+
         for (sampler, prog) in SOURCES {
             let src = format!("src/samplers/{sampler}/{prog}/mod.bpf.c");
-            let tgt = format!("src/samplers/{sampler}/{prog}/bpf.rs");
+            let tgt = format!("{out_dir}/{sampler}_{prog}.bpf.rs");
             SkeletonBuilder::new()
                 .source(&src)
                 .build_and_generate(&tgt)

@@ -4,7 +4,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 }
 
 mod bpf {
-    include!("./bpf.rs");
+    include!(concat!(env!("OUT_DIR"), "/tcp_traffic.bpf.rs"));
 }
 
 use bpf::*;
