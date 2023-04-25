@@ -1,159 +1,79 @@
-// Copyright 2019 Twitter, Inc.
-// Licensed under the Apache License, Version 2.0
-// http://www.apache.org/licenses/LICENSE-2.0
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
+use std::path::Path;
 
-mod exposition;
-mod general;
-mod samplers;
-
-use clap::Command;
-use std::io::Read;
-use std::net::{SocketAddr, ToSocketAddrs};
-
-use clap::builder::ArgAction;
-use clap::Arg;
-use ringlog::Level;
-use serde_derive::*;
-
-use crate::*;
-
-use config::exposition::*;
-pub use config::general::General;
-use config::samplers::*;
-
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const NAME: &str = env!("CARGO_PKG_NAME");
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Deserialize)]
+// #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(default)]
-    exposition: Exposition,
-    #[serde(default)]
     general: General,
-    #[serde(default)]
-    samplers: Samplers,
+    samplers: HashMap<String, SamplerConfig>,
 }
 
 impl Config {
-    /// parse command line options and return `Config`
-    pub fn new() -> Config {
-        let matches = Command::new(env!("CARGO_BIN_NAME"))
-            .version(env!("CARGO_PKG_VERSION"))
-            .about("High-Resolution Systems Performance Telemetry")
-            .arg(
-                Arg::new("CONFIG")
-                    .help("Configuration file")
-                    .index(1)
-                    .action(ArgAction::Set),
-            )
-            .arg(
-                Arg::new("verbose")
-                    .short('v')
-                    .long("verbose")
-                    .help("Increase verbosity by one level. Can be used more than once")
-                    .action(clap::builder::ArgAction::Count),
-            )
-            .get_matches();
+    pub fn load(path: &dyn AsRef<Path>) -> Result<Self, String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| {
+                eprintln!("unable to open config file: {e}");
+                std::process::exit(1);
+            })
+            .unwrap();
 
-        // let app = App::new(NAME)
-        //     .version(VERSION)
-        //     .author("Brian Martin <bmartin@twitter.com>")
-        //     .about("High-Resolution Systems Performance Telemetry")
-        //     .arg(
-        //         Arg::new("config")
-        //             .long("config")
-        //             .value_name("FILE")
-        //             .help("TOML config file")
-        //             .takes_value(true),
-        //     )
-        //     .arg(
-        //         Arg::new("verbose")
-        //             .short('v')
-        //             .long("verbose")
-        //             .help("Increase verbosity by one level. Can be used more than once")
-        //             .multiple_occurrences(true),
-        //     );
-
-        // let matches = app.get_matches();
-
-        let mut config = if let Some(file) = matches.get_one::<String>("CONFIG") {
-            Config::load_from_file(file)
-        } else {
-            println!("NOTE: using builtin base configuration");
-            Default::default()
-        };
-
-        match matches.get_count("verbose") {
-            0 => {} // don't do anything, default is Info
-            1 => {
-                if config.general.logging() == Level::Info {
-                    config.general.set_logging(Level::Debug);
-                }
-            }
-            _ => config.general.set_logging(Level::Trace),
-        }
-
-        config
+        toml::from_str(&content).map_err(|e| {
+            eprintln!("failed to parse config file: {e}");
+            std::process::exit(1);
+        })
     }
 
-    /// get listen address
-    pub fn listen(&self) -> Option<SocketAddr> {
-        self.general
-            .listen()
-            .map(|v| v.to_socket_addrs().unwrap().next().unwrap())
-    }
-
-    /// get logging level
-    pub fn logging(&self) -> Level {
-        self.general.logging()
-    }
-
-    #[allow(dead_code)]
-    pub fn exposition(&self) -> &Exposition {
-        &self.exposition
+    pub fn sampler_config(&self, name: &str) -> Option<&SamplerConfig> {
+        self.samplers.get(name)
     }
 
     pub fn general(&self) -> &General {
         &self.general
     }
 
-    pub fn samplers(&self) -> &Samplers {
-        &self.samplers
+    #[cfg(feature = "bpf")]
+    pub fn bpf(&self) -> bool {
+        true
     }
 
-    pub fn fault_tolerant(&self) -> bool {
-        self.general().fault_tolerant()
+    #[cfg(not(feature = "bpf"))]
+    pub fn bpf(&self) -> bool {
+        false
     }
+}
+#[derive(Deserialize)]
+pub struct General {
+    listen: String,
+}
 
-    fn load_from_file(filename: &str) -> Config {
-        let mut file = std::fs::File::open(filename).expect("failed to open workload file");
-        let mut content = String::new();
-        file.read_to_string(&mut content).expect("failed to read");
-        let toml = toml::from_str(&content);
-        match toml {
-            Ok(toml) => toml,
-            Err(e) => {
-                println!("Failed to parse TOML config: {}", filename);
-                println!("{}", e);
+impl General {
+    pub fn listen(&self) -> SocketAddr {
+        self.listen
+            .to_socket_addrs()
+            .map_err(|e| {
+                eprintln!("bad listen address: {e}");
                 std::process::exit(1);
-            }
-        }
+            })
+            .unwrap()
+            .next()
+            .ok_or_else(|| {
+                eprintln!("could not resolve socket addr");
+                std::process::exit(1);
+            })
+            .unwrap()
     }
 }
 
-pub trait SamplerConfig {
-    type Statistic;
-    fn bpf(&self) -> bool {
-        false
+#[derive(Deserialize)]
+pub struct SamplerConfig {
+    enabled: bool,
+}
+
+impl SamplerConfig {
+    pub fn enabled(&self) -> bool {
+        self.enabled
     }
-    fn enabled(&self) -> bool {
-        false
-    }
-    fn interval(&self) -> Option<usize>;
-    fn percentiles(&self) -> &[f64];
-    fn perf_events(&self) -> bool {
-        false
-    }
-    fn statistics(&self) -> Vec<<Self as config::SamplerConfig>::Statistic>;
 }

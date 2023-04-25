@@ -1,100 +1,160 @@
-// Copyright 2019 Twitter, Inc.
-// Licensed under the Apache License, Version 2.0
-// http://www.apache.org/licenses/LICENSE-2.0
-
-use std::str::FromStr;
+use crate::samplers::hwinfo::Hwinfo;
+use crate::PERCENTILES;
+use metriken::{Counter, Gauge, Heatmap};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use warp::Filter;
 
-use crate::*;
-// use rustcommon_logger::*;
-use tiny_http::{Method, Response, Server};
+/// HTTP exposition
+pub async fn http() {
+    let http = filters::http();
 
-use super::MetricsSnapshot;
-
-pub struct Http {
-    snapshot: MetricsSnapshot,
-    server: Server,
-    updated: Instant,
-    header: Option<tiny_http::Header>,
+    warp::serve(http).run(([0, 0, 0, 0], 4242)).await;
 }
 
-impl Http {
-    pub fn new(config: Arc<Config>, metrics: Arc<Metrics>) -> Self {
-        let address = config.listen().expect("no listen address");
-        let server = tiny_http::Server::http(address);
-        if server.is_err() {
-            fatal!("Failed to open {} for HTTP Stats listener", address);
-        }
-        let count_label = config.general().reading_suffix();
-        let header = config
-            .general()
-            .http_header()
-            .map(|s| tiny_http::Header::from_str(&s).expect("invalid HTTP header"));
+mod filters {
+    use super::*;
 
-        Self {
-            snapshot: MetricsSnapshot::new(metrics, count_label),
-            server: server.unwrap(),
-            updated: Instant::now(),
-            header,
-        }
+    /// The combined set of http endpoint filters
+    pub fn http() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        let hwinfo = match Hwinfo::new() {
+            Ok(v) => Some(Arc::new(v)),
+            Err(_) => None,
+        };
+
+        prometheus_stats()
+            .or(human_stats())
+            .or(hardware_info(hwinfo))
     }
 
-    pub fn run(&mut self) {
-        if let Ok(Some(request)) = self.server.try_recv() {
-            if self.updated.elapsed() >= Duration::from_millis(500) {
-                self.snapshot.refresh();
-                self.updated = Instant::now();
-            }
-            let url = request.url();
-            let parts: Vec<&str> = url.split('?').collect();
-            let url = parts[0];
+    /// GET /metrics
+    pub fn prometheus_stats(
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path!("metrics")
+            .and(warp::get())
+            .and_then(handlers::prometheus_stats)
+    }
 
-            match request.method() {
-                Method::Get => {
-                    let content = match url {
-                        "/" => {
-                            debug!("Serving GET on index");
-                            format!(
-                                "Welcome to {}\nVersion: {}\n",
-                                crate::config::NAME,
-                                crate::config::VERSION,
-                            )
-                        }
-                        "/metrics" => {
-                            debug!("Serving Prometheus compatible stats");
-                            self.snapshot.prometheus()
-                        }
-                        "/metrics.json" | "/vars.json" | "/admin/metrics.json" => {
-                            debug!("Serving machine readable stats");
-                            self.snapshot.json(false)
-                        }
-                        "/vars" => {
-                            debug!("Serving human readable stats");
-                            self.snapshot.human()
-                        }
-                        url => {
-                            debug!("GET on non-existent url: {}", url);
-                            debug!("Serving machine readable stats");
-                            self.snapshot.json(false)
-                        }
-                    };
-                    let mut response = Response::from_string(content);
-                    if let Some(header) = &self.header {
-                        response = response.with_header(header.clone())
-                    }
-                    let _ = request.respond(response);
+    /// GET /vars
+    pub fn human_stats(
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path!("vars")
+            .and(warp::get())
+            .and_then(handlers::human_stats)
+    }
+
+    /// GET /hardware_info
+    pub fn hardware_info(
+        hwinfo: Option<Arc<Hwinfo>>,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path!("hardware_info")
+            .and(warp::get())
+            .and(with_hwinfo(hwinfo))
+            .and_then(handlers::hwinfo)
+    }
+
+    fn with_hwinfo(
+        hwinfo: Option<Arc<Hwinfo>>,
+    ) -> impl Filter<Extract = (Option<Arc<Hwinfo>>,), Error = std::convert::Infallible> + Clone
+    {
+        warp::any().map(move || hwinfo.clone())
+    }
+}
+
+mod handlers {
+    use super::*;
+    use core::convert::Infallible;
+
+    pub async fn prometheus_stats() -> Result<impl warp::Reply, Infallible> {
+        let mut data = Vec::new();
+
+        for metric in &metriken::metrics() {
+            let any = match metric.as_any() {
+                Some(any) => any,
+                None => {
+                    continue;
                 }
-                method => {
-                    debug!("unsupported request method: {}", method);
-                    let mut response = Response::empty(404);
-                    if let Some(header) = &self.header {
-                        response = response.with_header(header.clone())
-                    }
-                    let _ = request.respond(response);
+            };
+
+            if metric.name().starts_with("log_") {
+                continue;
+            }
+
+            if let Some(counter) = any.downcast_ref::<Counter>() {
+                data.push(format!(
+                    "# TYPE {}_total counter\n{}_total {}",
+                    metric.name(),
+                    metric.name(),
+                    counter.value()
+                ));
+            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
+                data.push(format!(
+                    "# TYPE {} gauge\n{} {}",
+                    metric.name(),
+                    metric.name(),
+                    gauge.value()
+                ));
+            } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
+                for (_label, percentile) in PERCENTILES {
+                    let value = heatmap
+                        .percentile(*percentile)
+                        .map(|b| b.high())
+                        .unwrap_or(0);
+                    data.push(format!(
+                        "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
+                        metric.name(),
+                        metric.name(),
+                        percentile,
+                        value
+                    ));
                 }
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        data.sort();
+        let mut content = data.join("\n");
+        content += "\n";
+        let parts: Vec<&str> = content.split('/').collect();
+        Ok(parts.join("_"))
+    }
+
+    pub async fn human_stats() -> Result<impl warp::Reply, Infallible> {
+        let mut data = Vec::new();
+
+        for metric in &metriken::metrics() {
+            let any = match metric.as_any() {
+                Some(any) => any,
+                None => {
+                    continue;
+                }
+            };
+
+            if metric.name().starts_with("log_") {
+                continue;
+            }
+
+            if let Some(counter) = any.downcast_ref::<Counter>() {
+                data.push(format!("{}: {}", metric.name(), counter.value()));
+            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
+                data.push(format!("{}: {}", metric.name(), gauge.value()));
+            } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
+                for (label, p) in PERCENTILES {
+                    let percentile = heatmap.percentile(*p).map(|b| b.high()).unwrap_or(0);
+                    data.push(format!("{}/{}: {}", metric.name(), label, percentile));
+                }
+            }
+        }
+
+        data.sort();
+        let mut content = data.join("\n");
+        content += "\n";
+        Ok(content)
+    }
+
+    pub async fn hwinfo(hwinfo: Option<Arc<Hwinfo>>) -> Result<impl warp::Reply, Infallible> {
+        if let Some(hwinfo) = hwinfo {
+            Ok(warp::reply::json(&*hwinfo))
+        } else {
+            Ok(warp::reply::json(&false))
+        }
     }
 }

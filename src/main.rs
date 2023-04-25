@@ -1,125 +1,170 @@
-// Copyright 2019 Twitter, Inc.
-// Licensed under the Apache License, Version 2.0
-// http://www.apache.org/licenses/LICENSE-2.0
+use backtrace::Backtrace;
+use clap::{Arg, Command};
+use linkme::distributed_slice;
+use metriken::Lazy;
+use ringlog::*;
 
-#[macro_use]
-extern crate ringlog;
-
-#[macro_use]
-extern crate anyhow;
-
-use ringlog::{LogBuilder, MultiLogBuilder, Stdout};
-use std::sync::Arc;
-use tokio::runtime::Builder;
+type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
+type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 
 mod common;
 mod config;
 mod exposition;
-mod metrics;
 mod samplers;
 
-use common::*;
 use config::Config;
-use metrics::*;
-use samplers::*;
 
-pub type Instant = clocksource::Instant<Nanoseconds<u64>>;
-pub type Duration = clocksource::Duration<Nanoseconds<u64>>;
+pub static PERCENTILES: &[(&str, f64)] = &[
+    ("p25", 25.0),
+    ("p50", 50.0),
+    ("p75", 75.0),
+    ("p90", 90.0),
+    ("p99", 99.0),
+    ("p999", 99.9),
+    ("p9999", 99.99),
+];
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // get config
-    let config = Arc::new(Config::new());
+#[distributed_slice]
+pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
-    // initialize logging
-    let log = LogBuilder::new()
-        .output(Box::new(Stdout::new()))
-        .log_queue_depth(4096)
-        .single_message_size(4096)
-        .build()
-        .expect("failed to initialize debug log");
+// #[distributed_slice]
+// pub static BPF_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+
+counter!(RUNTIME_SAMPLE_LOOP, "runtime/sample/loop");
+
+fn main() {
+    // custom panic hook to terminate whole process after unwinding
+    std::panic::set_hook(Box::new(|s| {
+        eprintln!("{s}");
+        eprintln!("{:?}", Backtrace::new());
+        std::process::exit(101);
+    }));
+
+    // parse command line options
+    let matches = Command::new(env!("CARGO_BIN_NAME"))
+        .version(env!("CARGO_PKG_VERSION"))
+        .long_about("Rezolus provides high-resolution systems performance telemetry.")
+        .arg(
+            Arg::new("CONFIG")
+                .help("Server configuration file")
+                .action(clap::ArgAction::Set)
+                .required(true)
+                .index(1),
+        )
+        .get_matches();
+
+    // load config from file
+    let config = {
+        let file = matches.get_one::<String>("CONFIG").unwrap();
+        debug!("loading config: {}", file);
+        match Config::load(file) {
+            Ok(c) => c,
+            Err(error) => {
+                eprintln!("error loading config file: {file}\n{error}");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    // configure debug log
+    let debug_output: Box<dyn Output> = Box::new(Stderr::new());
+    // let debug_output: Box<dyn Output> = if let Some(file) = config.debug().log_file() {
+    //     let backup = config
+    //         .debug()
+    //         .log_backup()
+    //         .unwrap_or(format!("{}.old", file));
+    //     Box::new(
+    //         File::new(&file, &backup, config.debug().log_max_size())
+    //             .expect("failed to open debug log file"),
+    //     )
+    // } else {
+    //     // by default, log to stderr
+    //     Box::new(Stderr::new())
+    // };
+
+    let level = Level::Info;
+
+    let debug_log = if level <= Level::Info {
+        LogBuilder::new().format(ringlog::default_format)
+    } else {
+        LogBuilder::new()
+    }
+    .output(debug_output)
+    // .log_queue_depth(config.debug().log_queue_depth())
+    // .single_message_size(config.debug().log_single_message_size())
+    .build()
+    .expect("failed to initialize debug log");
 
     let mut log = MultiLogBuilder::new()
-        .level_filter(config.logging().to_level_filter())
-        .default(log)
+        .level_filter(level.to_level_filter())
+        .default(debug_log)
         .build()
         .start();
 
-    info!("----------");
-    info!("{} {}", common::NAME, common::VERSION);
-    info!("----------");
-    debug!("host cores: {}", hardware_threads().unwrap_or(1));
-
-    let runnable = Arc::new(AtomicBool::new(true));
-    let r = runnable.clone();
-
-    // initialize signal handler
-    debug!("initializing signal handler");
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::Relaxed);
-    })
-    .expect("Failed to set handler for SIGINT / SIGTERM");
-
-    // initialize metrics
-    debug!("initializing metrics");
-    let metrics = Arc::new(Metrics::new());
-
     // initialize async runtime
-    debug!("initializing async runtime");
-    let runtime = Arc::new(
-        Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(config.general().threads())
-            .max_blocking_threads(config.general().threads())
-            .thread_name("rezolus-worker")
-            .build()
-            .unwrap(),
-    );
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(1)
+        .build()
+        .expect("failed to launch async runtime");
 
-    // spawn samplers
-    debug!("spawning samplers");
-    let common = Common::new(config.clone(), metrics.clone(), runtime);
-    Cpu::spawn(common.clone());
-    Disk::spawn(common.clone());
-    Ext4::spawn(common.clone());
-    Http::spawn(common.clone());
-    Interrupt::spawn(common.clone());
-    Krb5kdc::spawn(common.clone());
-    Memcache::spawn(common.clone());
-    Memory::spawn(common.clone());
-    PageCache::spawn(common.clone());
-    Network::spawn(common.clone());
-    Ntp::spawn(common.clone());
-    Nvidia::spawn(common.clone());
-    Process::spawn(common.clone());
-    Rezolus::spawn(common.clone());
-    Scheduler::spawn(common.clone());
-    Softnet::spawn(common.clone());
-    Tcp::spawn(common.clone());
-    Udp::spawn(common.clone());
-    Usercall::spawn(common.clone());
-    Xfs::spawn(common);
-
-    #[cfg(feature = "push_kafka")]
-    {
-        if config.exposition().kafka().enabled() {
-            let mut kafka_producer =
-                exposition::KafkaProducer::new(config.clone(), metrics.clone());
-            let _ = std::thread::Builder::new()
-                .name("kafka".to_string())
-                .spawn(move || loop {
-                    kafka_producer.run();
-                });
+    // spawn logging thread
+    rt.spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let _ = log.flush();
         }
+    });
+
+    info!("rezolus");
+
+    // spawn http exposition thread
+    rt.spawn(exposition::http());
+
+    // initialize and gather the samplers
+    let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();
+
+    for sampler in SAMPLERS {
+        samplers.push(sampler(&config));
     }
 
-    debug!("beginning stats exposition");
-    let mut http = exposition::Http::new(config.clone(), metrics);
+    // let mut bpf_samplers: Vec<Box<dyn Sampler>> = Vec::new();
 
-    while runnable.load(Ordering::Relaxed) {
-        clocksource::refresh_clock();
-        http.run();
-        let _ = log.flush();
+    // for sampler in BPF_SAMPLERS {
+    //     bpf_samplers.push(sampler(&config));
+    // }
+
+    info!("initialization complete");
+
+    // main loop
+    loop {
+        RUNTIME_SAMPLE_LOOP.increment();
+
+        // get current time
+        let start = Instant::now();
+
+        // sample each sampler
+        for sampler in &mut samplers {
+            sampler.sample();
+        }
+
+        // calculate how long we took during this iteration
+        let stop = Instant::now();
+        let elapsed = (stop - start).as_nanos();
+
+        // calculate how long to sleep and sleep before next iteration
+        // this wakeup period allows a maximum of 1kHz sampling
+        let sleep = 1_000_000_u64.saturating_sub(elapsed);
+        std::thread::sleep(std::time::Duration::from_nanos(sleep));
     }
+}
 
-    Ok(())
+pub trait Sampler {
+    // #[allow(clippy::result_unit_err)]
+    // fn configure(&self, config: &Config) -> Result<(), ()>;
+
+    /// Do some sampling and updating of stats
+    fn sample(&mut self);
+
+    // fn name(&self) -> &str;
 }

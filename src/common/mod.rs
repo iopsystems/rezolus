@@ -1,163 +1,199 @@
-// Copyright 2019 Twitter, Inc.
-// Licensed under the Apache License, Version 2.0
-// http://www.apache.org/licenses/LICENSE-2.0
-
-use std::collections::HashMap;
-use std::io::BufRead;
-use std::io::SeekFrom;
-
-use dashmap::DashMap;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader};
-
+#[cfg(feature = "bpf")]
 pub mod bpf;
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const NAME: &str = env!("CARGO_PKG_NAME");
+pub mod classic;
 
-pub const SECOND: u64 = 1_000 * MILLISECOND;
-pub const MILLISECOND: u64 = 1_000 * MICROSECOND;
-pub const MICROSECOND: u64 = 1_000 * NANOSECOND;
-pub const NANOSECOND: u64 = 1;
+mod nop;
 
-pub struct HardwareInfo {
-    numa_mapping: DashMap<u64, u64>,
+pub use nop::Nop;
+
+type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
+
+pub type LazyCounter = metriken::Lazy<metriken::Counter>;
+pub type LazyGauge = metriken::Lazy<metriken::Gauge>;
+pub type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
+
+/// A `Counter` is a wrapper type that enables us to automatically calculate
+/// percentiles for secondly rates between subsequent counter observations.
+///
+/// To do this, it contains the current reading, previous reading, and
+/// optionally a heatmap to store rate observations.
+pub struct Counter {
+    previous: Option<u64>,
+    counter: &'static LazyCounter,
+    heatmap: Option<&'static LazyHeatmap>,
 }
 
-impl HardwareInfo {
-    pub fn new() -> Self {
-        let numa_mapping = DashMap::new();
-        let mut node = 0;
-        loop {
-            let path = format!("/sys/devices/system/node/node{}/cpulist", node);
-            if let Ok(f) = std::fs::File::open(path) {
-                let mut reader = std::io::BufReader::new(f);
-                let mut line = String::new();
-                if reader.read_line(&mut line).is_ok() {
-                    let ranges: Vec<&str> = line.trim().split(',').collect();
-                    for range in ranges {
-                        let parts: Vec<&str> = range.split('-').collect();
-                        if parts.len() == 1 {
-                            if let Ok(id) = parts[0].parse() {
-                                numa_mapping.insert(id, node);
-                            }
-                        } else if parts.len() == 2 {
-                            if let Ok(start) = parts[0].parse() {
-                                if let Ok(stop) = parts[1].parse() {
-                                    for id in start..=stop {
-                                        numa_mapping.insert(id, node);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                break;
+impl Counter {
+    /// Construct a new counter that wraps a `metriken` counter and optionally a
+    /// `metriken` heatmap.
+    pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static LazyHeatmap>) -> Self {
+        Self {
+            previous: None,
+            counter,
+            heatmap,
+        }
+    }
+
+    /// Updates the counter by setting the current value to a new value. If this
+    /// counter has a heatmap it also calculates the rate since the last reading
+    /// and increments the heatmap.
+    pub fn set(&mut self, now: Instant, elapsed: f64, value: u64) {
+        if let Some(previous) = self.previous {
+            let delta = value.wrapping_sub(previous);
+            self.counter.add(delta);
+            if let Some(heatmap) = self.heatmap {
+                heatmap.increment(now, (delta as f64 / elapsed) as _, 1);
             }
-            node += 1;
         }
-        Self { numa_mapping }
-    }
-
-    pub fn get_numa(&self, core: u64) -> Option<u64> {
-        self.numa_mapping.get(&core).map(|v| *v.value())
+        self.previous = Some(value);
     }
 }
 
-/// helper function to discover the number of hardware threads
-pub fn hardware_threads() -> Result<u64, ()> {
-    let path = "/sys/devices/system/cpu/present";
-    let f =
-        std::fs::File::open(path).map_err(|e| debug!("failed to open file ({:?}): {}", path, e))?;
-    let mut f = std::io::BufReader::new(f);
-
-    let mut line = String::new();
-    f.read_line(&mut line)
-        .map_err(|_| debug!("failed to read line"))?;
-    let line = line.trim();
-    let a: Vec<&str> = line.split('-').collect();
-    a.last()
-        .unwrap_or(&"0")
-        .parse::<u64>()
-        .map_err(|e| debug!("could not parse num cpus from file ({:?}): {}", path, e))
-        .map(|i| i + 1)
+#[macro_export]
+#[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized
+/// `metriken::Counter` given an identifier, name, and optional description.
+macro_rules! counter {
+    ($ident:ident, $name:tt) => {
+        #[metriken::metric(
+            name = $name,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Counter> = metriken::Lazy::new(|| {
+        	metriken::Counter::new()
+        });
+    };
+    ($ident:ident, $name:tt, $description:tt) => {
+        #[metriken::metric(
+            name = $name,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Counter> = metriken::Lazy::new(|| {
+        	metriken::Counter::new()
+        });
+    };
 }
 
-/// helper function to create a nested map from files with the form of
-/// pkey1 lkey1 lkey2 ... lkeyN
-/// pkey1 value1 value2 ... valueN
-/// pkey2 ...
-pub async fn nested_map_from_file(
-    file: &mut File,
-) -> Result<HashMap<String, HashMap<String, u64>>, std::io::Error> {
-    file.seek(SeekFrom::Start(0)).await?;
-    let mut ret = HashMap::<String, HashMap<String, u64>>::new();
-    let mut reader = BufReader::new(file);
-    let mut keys = String::new();
-    let mut values = String::new();
-    while reader.read_line(&mut keys).await? > 0 {
-        if reader.read_line(&mut values).await? > 0 {
-            let mut keys_split = keys.trim().split_whitespace();
-            let mut values_split = values.trim().split_whitespace();
+#[macro_export]
+#[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized
+/// `metriken::Gauge` given an identifier, name, and optional description.
+macro_rules! gauge {
+    ($ident:ident, $name:tt) => {
+        #[metriken::metric(
+            name = $name,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Gauge> = metriken::Lazy::new(|| {
+            metriken::Gauge::new()
+        });
+    };
+    ($ident:ident, $name:tt, $description:tt) => {
+        #[metriken::metric(
+            name = $name,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Gauge> = metriken::Lazy::new(|| {
+            metriken::Gauge::new()
+        });
+    };
+}
 
-            if let Some(pkey) = keys_split.next() {
-                let _ = values_split.next();
-                if !ret.contains_key(pkey) {
-                    ret.insert(pkey.to_string(), Default::default());
-                }
-                let inner = ret.get_mut(pkey).unwrap();
-                for key in keys_split {
-                    if let Some(Ok(value)) = values_split.next().map(|v| v.parse()) {
-                        inner.insert(key.to_owned(), value);
-                    }
+#[macro_export]
+#[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized
+/// `metriken::Heatmap` given an identifier, name, and optional description.
+///
+/// The heatmap configuration used here can record counts for all 64bit integer
+/// values with a maximum error of 0.78%. The heatmap covers a moving window of
+/// one minute with one second resolution.
+macro_rules! heatmap {
+    ($ident:ident, $name:tt) => {
+        #[metriken::metric(
+            name = $name,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Heatmap> = metriken::Lazy::new(|| {
+        	metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_secs(100)).unwrap()
+        });
+    };
+    ($ident:ident, $name:tt, $description:tt) => {
+        #[metriken::metric(
+            name = $name,
+            description = $description,
+            crate = metriken
+        )]
+        pub static $ident: Lazy<metriken::Heatmap> = metriken::Lazy::new(|| {
+        	metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_secs(100)).unwrap()
+        });
+    };
+}
+
+#[macro_export]
+#[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized counter with a
+/// heatmap which will track secondly rates for the same counter.
+macro_rules! counter_with_heatmap {
+	($counter:ident, $heatmap:ident, $name:tt) => {
+		self::counter!($counter, $name);
+		self::heatmap!($heatmap, $name);
+	};
+	($counter:ident, $heatmap:ident, $name:tt, $description:tt) => {
+		self::counter!($counter, $name, $description);
+		self::heatmap!($heatmap, $name, $description);
+	}
+}
+
+#[macro_export]
+#[rustfmt::skip]
+/// A convenience macro for constructing a lazily initialized gauge with a
+/// heatmap which will track instantaneous readings for the same gauge.
+macro_rules! gauge_with_heatmap {
+    ($gauge:ident, $heatmap:ident, $name:tt) => {
+        self::gauge!($gauge, $name);
+        self::heatmap!($heatmap, $name);
+    };
+    ($gauge:ident, $heatmap:ident, $name:tt, $description:tt) => {
+        self::gauge!($gauge, $name, $description);
+        self::heatmap!($heatmap, $name, $description);
+    }
+}
+
+#[macro_export]
+#[rustfmt::skip]
+/// A convenience macro for defining a top-level sampler which will contain
+/// other samplers. For instance, this is used for the top-level `cpu` sampler
+/// which then contains other related samplers for perf events, cpu usage, etc.
+macro_rules! sampler {
+    ($ident:ident, $name:tt, $slice:ident) => {
+        #[distributed_slice]
+        pub static $slice: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+
+        #[distributed_slice(SAMPLERS)]
+        fn init(config: &Config) -> Box<dyn Sampler> {
+            Box::new($ident::new(config))
+        }
+
+        pub struct $ident {
+            samplers: Vec<Box<dyn Sampler>>,
+        }
+
+        impl $ident {
+            fn new(config: &Config) -> Self {
+                let samplers = $slice.iter().map(|init| init(config)).collect();
+                Self {
+                    samplers,
                 }
             }
-            keys.clear();
-            values.clear();
         }
-    }
-    Ok(ret)
-}
 
-pub fn default_percentiles() -> Vec<f64> {
-    vec![1.0, 10.0, 50.0, 90.0, 99.0]
-}
-
-#[allow(dead_code)]
-pub struct KernelInfo {
-    release: String,
-}
-
-#[allow(dead_code)]
-impl KernelInfo {
-    pub fn new() -> Result<Self, std::io::Error> {
-        let output = std::process::Command::new("uname").args(["-r"]).output()?;
-        let release = std::str::from_utf8(&output.stdout)
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-
-        Ok(Self {
-            release: release.to_string(),
-        })
-    }
-
-    pub fn release_major(&self) -> Result<u32, std::io::Error> {
-        let parts: Vec<&str> = self.release.split('.').collect();
-        if let Some(s) = parts.get(0) {
-            return s
-                .parse::<u32>()
-                .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        impl Sampler for $ident {
+            fn sample(&mut self) {
+                for sampler in &mut self.samplers {
+                    sampler.sample()
+                }
+            }
         }
-        Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
-    }
-
-    pub fn release_minor(&self) -> Result<u32, std::io::Error> {
-        let parts: Vec<&str> = self.release.split('.').collect();
-        if let Some(s) = parts.get(1) {
-            return s
-                .parse::<u32>()
-                .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput));
-        }
-        Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
-    }
+    };
 }
