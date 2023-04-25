@@ -39,7 +39,7 @@ impl ProcMeminfo {
             gauges,
             prev: now,
             next: now,
-            interval: Duration::from_millis(100),
+            interval: Duration::from_millis(10),
         }
     }
 }

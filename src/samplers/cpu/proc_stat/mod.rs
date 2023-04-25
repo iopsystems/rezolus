@@ -75,7 +75,7 @@ impl ProcStat {
             nanos_per_tick,
             prev: now,
             next: now,
-            interval: Duration::from_millis(100),
+            interval: Duration::from_millis(10),
         }
     }
 }
