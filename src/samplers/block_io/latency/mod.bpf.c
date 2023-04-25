@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2020 Wenbo Zhang
+// Copyright (c) 2023 The Rezolus Authors
 
 #include "../../../common/bpf/vmlinux.h"
 #include "../../../common/bpf/histogram.h"

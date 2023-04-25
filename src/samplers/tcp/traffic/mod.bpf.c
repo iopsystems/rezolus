@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2022 Francis Laniel <flaniel@linux.microsoft.com>
-// Copyright (c) 2023 IOP Systems, Inc.
+// Copyright (c) 2023 The Rezolus Authors
+
+// NOTICE: this file is based off `tcptop.bpf.c` from the BCC project
+// <https://github.com/iovisor/bcc/> and has been modified for use within
+// Rezolus.
 
 // This BPF program probes TCP send and receive paths to get the number of
 // segments and bytes transmitted as well as the size distributions.

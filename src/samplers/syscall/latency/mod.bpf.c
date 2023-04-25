@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2020 Anton Protopopov
-// Copyright (c) 2023 IOP Systems, Inc.
+// Copyright (c) 2023 The Rezolus Authors
 //
 // Based on syscount(8) from BCC by Sasha Goldshtein
+
+// NOTICE: this file is based off `syscount.bpf.c` from the BCC project
+// <https://github.com/iovisor/bcc/> and has been modified for use within
+// Rezolus.
+
+// This BPF program tracks syscall enter and exit to provide metrics about
+// syscall counts and latencies.
 
 #include "../../../common/bpf/vmlinux.h"
 #include "../../../common/bpf/histogram.h"

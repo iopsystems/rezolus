@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-// Copyright (c) 2023 IOP Systems, Inc.
+// Copyright (c) 2023 The Rezolus Authors
 
 // This BPF program probes TCP retransmit path to gather statistics.
 
@@ -18,21 +18,6 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
 } counters SEC(".maps");
-
-// SEC("fentry/tcp_retransmit_timer")
-// int BPF_PROG(tcp_retransmit, struct sock *sk)
-// {
-// 	u64 *cnt;
-
-// 	u32 idx = 0;
-// 	cnt = bpf_map_lookup_elem(&retransmit, &idx);
-
-// 	if (cnt) {
-// 		__sync_fetch_and_add(cnt, 1);
-// 	}
-
-// 	return 0;
-// }
 
 SEC("kprobe/tcp_retransmit_timer")
 int BPF_KPROBE(tcp_retransmit_kprobe, struct sock *sk)

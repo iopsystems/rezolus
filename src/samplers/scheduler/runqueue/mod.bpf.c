@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2019 Facebook
-// Copyright (c) 2023 IOP Systems, Inc.
+// Copyright (c) 2023 The Rezolus Authors
+
+// NOTICE: this file is based off `runqslower.bpf.c` from the BCC project
+// <https://github.com/iovisor/bcc/> and has been modified for use within
+// Rezolus.
 
 // This BPF program probes enqueue and dequeue from the scheduler runqueue
 // to calculate the runqueue latency.
