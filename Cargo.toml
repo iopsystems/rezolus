@@ -1,7 +1,6 @@
 [package]
 name = "rezolus"
 version = "3.0.0-alpha.0"
-authors = ["Brian Martin <brian@iop.systems>"]
 license = "MIT OR Apache-2.0"
 publish = false
 edition = "2021"
