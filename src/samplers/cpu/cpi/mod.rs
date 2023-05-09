@@ -1,12 +1,16 @@
 use super::stats::*;
 use super::*;
-use crate::common::Counter;
+use crate::common::{Counter, Nop};
 use perf_event::events::Hardware;
 use perf_event::{Builder, Group};
 
 #[distributed_slice(CPU_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Cpi::new(config))
+    if let Ok(cpi) = Cpi::new(config) {
+        Box::new(cpi)
+    } else {
+        Box::new(Nop {})
+    }
 }
 
 pub struct Cpi {
@@ -18,37 +22,62 @@ pub struct Cpi {
 }
 
 impl Cpi {
-    pub fn new(_config: &Config) -> Self {
+    pub fn new(_config: &Config) -> Result<Self, ()> {
         let now = Instant::now();
 
-        let mut group = Group::new().expect("couldn't init perf group");
-        let counters = vec![
-            (
-                Counter::new(&CPU_CYCLES, None),
-                Builder::new()
-                    .group(&mut group)
-                    .kind(Hardware::CPU_CYCLES)
-                    .build()
-                    .expect("failed to init cycles counter"),
-            ),
-            (
-                Counter::new(&CPU_INSTRUCTIONS, None),
-                Builder::new()
-                    .group(&mut group)
-                    .kind(Hardware::INSTRUCTIONS)
-                    .build()
-                    .expect("failed to init instructions counter"),
-            ),
-        ];
-        group.enable().expect("couldn't enable perf counters");
+        // initialize a group for the perf counters
+        let mut group = match Group::new() {
+            Ok(g) => g,
+            Err(_) => {
+                error!("couldn't init perf group");
+                return Err(());
+            }
+        };
 
-        Self {
+        // initialize the counters
+        let mut counters = vec![];
+
+        match Builder::new()
+            .group(&mut group)
+            .kind(Hardware::CPU_CYCLES)
+            .build()
+        {
+            Ok(counter) => {
+                counters.push((Counter::new(&CPU_CYCLES, None), counter));
+            }
+            Err(_) => {
+                error!("failed to initialize cpu cycles perf counter");
+                return Err(());
+            }
+        }
+
+        match Builder::new()
+            .group(&mut group)
+            .kind(Hardware::INSTRUCTIONS)
+            .build()
+        {
+            Ok(counter) => {
+                counters.push((Counter::new(&CPU_INSTRUCTIONS, None), counter));
+            }
+            Err(_) => {
+                error!("failed to initialize cpu instructions perf counter");
+                return Err(());
+            }
+        }
+
+        // enable the counters in the group
+        if group.enable().is_err() {
+            error!("couldn't enable perf counter group");
+            return Err(());
+        }
+
+        Ok(Self {
             prev: now,
             next: now,
             interval: Duration::from_millis(10),
             group,
             counters,
-        }
+        })
     }
 }
 
