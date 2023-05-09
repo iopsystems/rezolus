@@ -115,7 +115,7 @@ macro_rules! heatmap {
             crate = metriken
         )]
         pub static $ident: Lazy<metriken::Heatmap> = metriken::Lazy::new(|| {
-        	metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_secs(100)).unwrap()
+            metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_millis(100)).unwrap()
         });
     };
     ($ident:ident, $name:tt, $description:tt) => {
@@ -125,7 +125,7 @@ macro_rules! heatmap {
             crate = metriken
         )]
         pub static $ident: Lazy<metriken::Heatmap> = metriken::Lazy::new(|| {
-        	metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_secs(100)).unwrap()
+            metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_millis(100)).unwrap()
         });
     };
 }
