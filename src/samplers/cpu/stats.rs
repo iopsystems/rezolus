@@ -33,7 +33,11 @@ heatmap!(
     "distribution of instantaneous CPU frequencies"
 );
 
-gauge!(CPU_CORES, "cpu/cores", "the count of logical cores that are online");
+gauge!(
+    CPU_CORES,
+    "cpu/cores",
+    "the count of logical cores that are online"
+);
 
 counter!(CPU_CYCLES, "cpu/cycles");
 counter!(CPU_INSTRUCTIONS, "cpu/instructions");
