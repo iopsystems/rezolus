@@ -49,7 +49,11 @@ impl Syscall {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let counters = vec![Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP))];
+        let counters = vec![
+            Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),
+            Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HEATMAP)),
+            Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HEATMAP)),
+        ];
 
         bpf.add_counters("counters", counters);
 
