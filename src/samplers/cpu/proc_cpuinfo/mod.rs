@@ -64,6 +64,8 @@ impl ProcCpuinfo {
         let mut data = String::new();
         self.file.read_to_string(&mut data)?;
 
+        let mut online_cores = 0;
+
         let lines = data.lines();
 
         for line in lines {
@@ -76,8 +78,11 @@ impl ProcCpuinfo {
                 {
                     CPU_FREQUENCY.increment(now, freq, 1);
                 }
+                online_cores += 1;
             }
         }
+
+        CPU_CORES.set(online_cores);
 
         Ok(())
     }

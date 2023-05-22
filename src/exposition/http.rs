@@ -1,7 +1,6 @@
-use crate::samplers::hwinfo::Hwinfo;
 use crate::PERCENTILES;
 use metriken::{Counter, Gauge, Heatmap};
-use std::sync::Arc;
+
 use warp::Filter;
 
 /// HTTP exposition
@@ -16,14 +15,7 @@ mod filters {
 
     /// The combined set of http endpoint filters
     pub fn http() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        let hwinfo = match Hwinfo::new() {
-            Ok(v) => Some(Arc::new(v)),
-            Err(_) => None,
-        };
-
-        prometheus_stats()
-            .or(human_stats())
-            .or(hardware_info(hwinfo))
+        prometheus_stats().or(human_stats()).or(hardware_info())
     }
 
     /// GET /metrics
@@ -44,19 +36,10 @@ mod filters {
 
     /// GET /hardware_info
     pub fn hardware_info(
-        hwinfo: Option<Arc<Hwinfo>>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path!("hardware_info")
             .and(warp::get())
-            .and(with_hwinfo(hwinfo))
             .and_then(handlers::hwinfo)
-    }
-
-    fn with_hwinfo(
-        hwinfo: Option<Arc<Hwinfo>>,
-    ) -> impl Filter<Extract = (Option<Arc<Hwinfo>>,), Error = std::convert::Infallible> + Clone
-    {
-        warp::any().map(move || hwinfo.clone())
     }
 }
 
@@ -150,9 +133,9 @@ mod handlers {
         Ok(content)
     }
 
-    pub async fn hwinfo(hwinfo: Option<Arc<Hwinfo>>) -> Result<impl warp::Reply, Infallible> {
-        if let Some(hwinfo) = hwinfo {
-            Ok(warp::reply::json(&*hwinfo))
+    pub async fn hwinfo() -> Result<impl warp::Reply, Infallible> {
+        if let Ok(hwinfo) = crate::samplers::hwinfo::hardware_info() {
+            Ok(warp::reply::json(hwinfo))
         } else {
             Ok(warp::reply::json(&false))
         }
