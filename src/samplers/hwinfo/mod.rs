@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -21,6 +22,14 @@ use memory::*;
 use net::*;
 use node::*;
 
+lazy_static! {
+    pub static ref HWINFO: Result<Hwinfo> = Hwinfo::new();
+}
+
+pub fn hardware_info() -> std::result::Result<&'static Hwinfo, &'static std::io::Error> {
+    HWINFO.as_ref()
+}
+
 #[derive(Serialize)]
 pub struct Hwinfo {
     caches: Vec<Vec<Cache>>,
@@ -31,7 +40,7 @@ pub struct Hwinfo {
 }
 
 impl Hwinfo {
-    pub fn new() -> Result<Self> {
+    fn new() -> Result<Self> {
         Ok(Self {
             caches: get_caches()?,
             cpus: get_cpus()?,

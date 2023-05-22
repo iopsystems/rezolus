@@ -1114,6 +1114,7 @@ dependencies = [
  "backtrace",
  "clap 4.1.8",
  "clocksource",
+ "lazy_static",
  "libbpf-cargo",
  "libbpf-rs",
  "libbpf-sys",
