@@ -24,10 +24,6 @@ struct {
 	__type(value, u64);
 } start SEC(".maps");
 
-#define SYSCALL_TOTAL 0
-#define SYSCALL_READ 1
-#define SYSCALL_WRITE 2
-
 // counters for syscalls
 // 0 - total
 // 1 - read, recvfrom, readv, pread64, recvmsg, preadv, recvmmsg
@@ -65,6 +61,51 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 SEC("tracepoint/raw_syscalls/sys_exit")
 int sys_exit(struct trace_event_raw_sys_exit *args)
 {
+	// This LUT works only on x86_64 and translates a sycall number to a counter
+	// group. Current groups:
+	// 0 - total
+	// 1 - read related (read/recvfrom/readv/...)
+	// 2 - write related (write/sendmsg/writev/...)
+	// 3 - poll related (poll/select/epoll/...)
+	// 4 - reserved for future use
+	// 5 - reserved for future use
+	// 6 - reserved for future use
+	// 7 - reserved for future use
+	static const u32 syscall_lookup[512] = {
+		1, 2, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 1, 2, 1, 2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 2, 1,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 3, 0, 0, 0, 1, 2, 0, 0, 1, 0, 0, 0, 0, 0,
+		0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	};
+
 	u64 id = bpf_get_current_pid_tgid();
 	u64 *start_ts, lat = 0;
 	u32 tid = id;
@@ -72,49 +113,32 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	u64 *cnt;
 	u32 idx;
 
-	// this happens when there is an interrupt
-	if (args->id == -1)
+	if (args->id < 0)
 		return 0;
 
+	u32 syscall_id = args->id;
+
 	// update the total counter
-	idx = 8 * bpf_get_smp_processor_id() + SYSCALL_TOTAL;
+	idx = 8 * bpf_get_smp_processor_id();
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
 		__sync_fetch_and_add(cnt, 1);
 	}
 
-	// check if: read, recvfrom, readv, pread64, recvmsg, preadv, recvmmsg
-	if (args -> id == 0) ||
-		(args -> id == 45) ||
-		(args -> id == 19) ||
-		(args -> id == 17) ||
-		(args -> id == 47) ||
-		(args -> id == 295) ||
-		(args -> id == 299)
-	{
-		idx = 8 * bpf_get_smp_processor_id() + SYSCALL_READ;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
+	// for some syscalls, we track counts by "family" of syscall. check the
+	// lookup table and increment the appropriate counter
+	idx = 0;
+	if (syscall_id < 512) {
+		u32 counter_idx = syscall_lookup[syscall_id];
 
-		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
-		}
-	}
+		if (counter_idx < 8) {
+			idx = 8 * bpf_get_smp_processor_id() + counter_idx;
+			cnt = bpf_map_lookup_elem(&counters, &idx);
 
-	// check if: write, sendto, writev, pwrite64, sendmsg, pwritev, sendmmsg
-	if (args -> id == 1) ||
-		(args -> id == 44) ||
-		(args -> id == 20) ||
-		(args -> id == 18) ||
-		(args -> id == 46) ||
-		(args -> id == 296) ||
-		(args -> id == 307)
-	{
-		idx = 8 * bpf_get_smp_processor_id() + SYSCALL_WRITE;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
+			if (cnt) {
+				__sync_fetch_and_add(cnt, 1);
+			}
 		}
 	}
 
