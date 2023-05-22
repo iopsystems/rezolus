@@ -18,6 +18,12 @@ counter_with_heatmap!(
     "syscall/write",
     "tracks write related syscalls"
 );
+counter_with_heatmap!(
+    SYSCALL_POLL,
+    SYSCALL_POLL_HEATMAP,
+    "syscall/poll",
+    "tracks poll related syscalls"
+);
 heatmap!(
     SYSCALL_TOTAL_LATENCY,
     "syscall/total/latency",

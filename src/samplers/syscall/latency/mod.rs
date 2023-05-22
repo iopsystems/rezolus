@@ -53,6 +53,7 @@ impl Syscall {
             Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),
             Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HEATMAP)),
             Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HEATMAP)),
+            Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HEATMAP)),
         ];
 
         bpf.add_counters("counters", counters);
