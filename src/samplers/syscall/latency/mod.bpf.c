@@ -28,7 +28,8 @@ struct {
 // 0 - total
 // 1 - read, recvfrom, readv, pread64, recvmsg, preadv, recvmmsg
 // 2 - write, sendto, writev, pwrite64, sendmsg, pwritev, sendmmsg
-// 3 - poll, select, epoll_create, epoll_wait, epoll_ctl, epoll_pwait
+// 3 - poll, select, epoll_create, epoll_wait, epoll_ctl, epoll_pwait,
+//     epoll_create1, ppoll, pselect6
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
