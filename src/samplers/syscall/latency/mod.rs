@@ -65,26 +65,26 @@ impl Syscall {
             if let Some(syscall_name) = syscall_numbers::native::sys_call_name(syscall_id as i64) {
                 let group = match syscall_name {
                     // read related
-                    "read" | "pread64" | "readv" | "recvfrom" | "recvmsg" | "preadv"
-                    | "recvmmsg" | "preadv2" => 1,
+                    "pread64" | "preadv" | "preadv2" | "read" | "readv" | "recvfrom"
+                    | "recvmmsg" | "recvmsg" => 1,
                     // write related
-                    "write" | "pwrite64" | "writev" | "sendto" | "sendmsg" | "pwritev"
-                    | "sendmmsg" | "pwritev2" => 2,
+                    "pwrite64" | "pwritev" | "pwritev2" | "sendmmsg" | "sendmsg" | "sendto"
+                    | "write" | "writev" => 2,
                     // poll/select/epoll
-                    "poll" | "select" | "epoll_create" | "epoll_create1" | "epoll_ctl"
-                    | "epoll_ctl_old" | "epoll_wait" | "epoll_wait_old" | "pselect6" | "ppoll"
-                    | "epoll_pwait" | "epoll_pwait2" | "pselect6_time64" | "ppoll_time64" => 3,
+                    "epoll_create" | "epoll_create1" | "epoll_ctl" | "epoll_ctl_old"
+                    | "epoll_pwait" | "epoll_pwait2" | "epoll_wait" | "epoll_wait_old" | "poll"
+                    | "ppoll" | "ppoll_time64" | "pselect6" | "pselect6_time64" | "select" => 3,
                     // locking
                     "futex" => 4,
                     // time
-                    "clock_gettime" | "clock_settime" | "clock_getres" | "clock_adjtime"
-                    | "gettimeofday" | "settimeofday" | "adjtimex" | "time" => 5,
+                    "adjtimex" | "clock_adjtime" | "clock_getres" | "clock_gettime"
+                    | "clock_settime" | "gettimeofday" | "settimeofday" | "time" => 5,
                     // sleep
-                    "nanosleep" | "clock_nanosleep" => 6,
+                    "clock_nanosleep" | "nanosleep" => 6,
                     // socket creation and management
-                    "socket" | "connect" | "accept" | "shutdown" | "bind" | "listen"
-                    | "getsockname" | "getpeername" | "socketpair" | "setsockopt"
-                    | "getsockopt" => 7,
+                    "accept" | "bind" | "connect" | "getpeername" | "getsockname"
+                    | "getsockopt" | "listen" | "setsockopt" | "shutdown" | "socket"
+                    | "socketpair" => 7,
                     _ => {
                         // no group defined for these syscalls
                         0
