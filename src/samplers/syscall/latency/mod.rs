@@ -14,6 +14,8 @@ use super::*;
 use crate::common::bpf::*;
 use crate::common::*;
 
+use std::os::fd::FromRawFd;
+
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         self.obj.map(name).unwrap()
@@ -48,6 +50,21 @@ impl Syscall {
         skel.attach().expect("failed to attach bpf");
 
         let mut bpf = Bpf::from_skel(skel);
+
+        let fd = bpf.map("syscall_lut").fd();
+        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+        let mmap = unsafe {
+            memmap2::MmapOptions::new()
+                .len(1024)
+                .map_mut(&file)
+                .expect("failed to mmap() bpf syscall lut")
+        };
+
+        // let syscall_lut = mmap.as_mut() as *u8 as *u64;
+
+        // for (syscall_id, bytes) in syscall_lut.chunks_exact_mut(8).iter_mut().enumerate() {
+        //    *bytes = [0, 0, 0, 0, 0, 0, 0, 0];  
+        // }
 
         let counters = vec![
             Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),
