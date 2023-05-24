@@ -64,13 +64,27 @@ impl Syscall {
             let counter_offset = bytes.as_mut_ptr() as *mut u32;
             if let Some(syscall_name) = syscall_numbers::native::sys_call_name(syscall_id as i64) {
                 let group = match syscall_name {
+                    // read related
                     "read" | "pread64" | "readv" | "recvfrom" | "recvmsg" | "preadv"
                     | "recvmmsg" | "preadv2" => 1,
+                    // write related
                     "write" | "pwrite64" | "writev" | "sendto" | "sendmsg" | "pwritev"
                     | "sendmmsg" | "pwritev2" => 2,
+                    // poll/select/epoll
                     "poll" | "select" | "epoll_create" | "epoll_create1" | "epoll_ctl"
                     | "epoll_ctl_old" | "epoll_wait" | "epoll_wait_old" | "pselect6" | "ppoll"
                     | "epoll_pwait" | "epoll_pwait2" | "pselect6_time64" | "ppoll_time64" => 3,
+                    // locking
+                    "futex" => 4,
+                    // time
+                    "clock_gettime" | "clock_settime" | "clock_getres" | "clock_adjtime"
+                    | "gettimeofday" | "settimeofday" | "adjtimex" | "time" => 5,
+                    // sleep
+                    "nanosleep" | "clock_nanosleep" => 6,
+                    // socket creation and management
+                    "socket" | "connect" | "accept" | "shutdown" | "bind" | "listen"
+                    | "getsockname" | "getpeername" | "socketpair" | "setsockopt"
+                    | "getsockopt" => 7,
                     _ => {
                         // no group defined for these syscalls
                         0
@@ -91,6 +105,10 @@ impl Syscall {
             Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HEATMAP)),
             Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HEATMAP)),
             Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HEATMAP)),
+            Counter::new(&SYSCALL_LOCKING, Some(&SYSCALL_LOCKING_HEATMAP)),
+            Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HEATMAP)),
+            Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HEATMAP)),
+            Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HEATMAP)),
         ];
 
         bpf.add_counters("counters", counters);
