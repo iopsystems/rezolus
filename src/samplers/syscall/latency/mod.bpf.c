@@ -17,20 +17,29 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
+#define MAX_SYSCALL_ID 1024
+#define COUNTER_GROUP_WIDTH 16
+#define MAX_CPUS 1024
+#define MAX_TRACKED_PIDS 65536 
+#define HISTOGRAM_BUCKETS 7424
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 65536);
+	__uint(max_entries, MAX_TRACKED_PIDS);
 	__type(key, u32);
 	__type(value, u64);
 } start SEC(".maps");
 
-// counts the total number of syscalls
+// counters for syscalls
+// 0 - total
+// 1..COUNTER_GROUP_WIDTH - grouped syscalls defined in userspace in the
+//                          `syscall_lut` map
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
+	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 // tracks the latency distribution of all syscalls
@@ -39,8 +48,17 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } total_latency SEC(".maps");
+
+// provides a lookup table from syscall id to a counter index offset
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u32);
+	__uint(max_entries, MAX_SYSCALL_ID);
+} syscall_lut SEC(".maps");
 
 SEC("tracepoint/raw_syscalls/sys_enter")
 int sys_enter(struct trace_event_raw_sys_enter *args)
@@ -64,16 +82,38 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	u64 *cnt;
 	u32 idx;
 
-	// this happens when there is an interrupt
-	if (args->id == -1)
+	if (args->id < 0)
 		return 0;
 
+	u32 syscall_id = args->id;
+
 	// update the total counter
-	idx = 8 * bpf_get_smp_processor_id();
+	idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
 		__sync_fetch_and_add(cnt, 1);
+	}
+
+	// for some syscalls, we track counts by "family" of syscall. check the
+	// lookup table and increment the appropriate counter
+	idx = 0;
+	if (syscall_id < MAX_SYSCALL_ID) {
+		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
+
+		if (counter_offset && *counter_offset < COUNTER_GROUP_WIDTH) {
+			idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + *counter_offset;
+			cnt = bpf_map_lookup_elem(&counters, &idx);
+
+			if (cnt) {
+				__sync_fetch_and_add(cnt, 1);
+			}
+		} else {
+			// syscall counter offset was outside of the expected range
+			// this indicates that the LUT contains invalid values
+		}
+	} else {
+		// syscall id was out of the expected range
 	}
 
 	// lookup the start time
