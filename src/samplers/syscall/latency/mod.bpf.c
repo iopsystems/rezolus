@@ -17,11 +17,11 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define MAX_SYSCALL_ID 1024
-#define COUNTER_GROUP_WIDTH 16
-#define MAX_CPUS 1024
-#define MAX_TRACKED_PIDS 65536 
+#define COUNTER_GROUP_WIDTH 8
 #define HISTOGRAM_BUCKETS 7424
+#define MAX_CPUS 1024
+#define MAX_SYSCALL_ID 1024
+#define MAX_TRACKED_PIDS 65536 
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
