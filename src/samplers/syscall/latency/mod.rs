@@ -53,18 +53,38 @@ impl Syscall {
 
         let fd = bpf.map("syscall_lut").fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
-        let mmap = unsafe {
+        let mut syscall_lut = unsafe {
             memmap2::MmapOptions::new()
                 .len(1024)
                 .map_mut(&file)
                 .expect("failed to mmap() bpf syscall lut")
         };
 
-        // let syscall_lut = mmap.as_mut() as *u8 as *u64;
-
-        // for (syscall_id, bytes) in syscall_lut.chunks_exact_mut(8).iter_mut().enumerate() {
-        //    *bytes = [0, 0, 0, 0, 0, 0, 0, 0];  
-        // }
+        for (syscall_id, bytes) in syscall_lut.chunks_exact_mut(4).enumerate() {
+            let counter_offset = bytes.as_mut_ptr() as *mut u32;
+            if let Some(syscall_name) = syscall_numbers::native::sys_call_name(syscall_id as i64) {
+                let group = match syscall_name {
+                    "read" | "pread64" | "readv" | "recvfrom" | "recvmsg" | "preadv"
+                    | "recvmmsg" | "preadv2" => 1,
+                    "write" | "pwrite64" | "writev" | "sendto" | "sendmsg" | "pwritev"
+                    | "sendmmsg" | "pwritev2" => 2,
+                    "poll" | "select" | "epoll_create" | "epoll_ctl_old" | "epoll_wait_old"
+                    | "epoll_wait" | "epoll_ctl" | "pselect6" | "ppoll" | "epoll_pwait"
+                    | "epoll_pwait2" | "epoll_create1" => 3,
+                    _ => {
+                        // no group defined for these syscalls
+                        0
+                    }
+                };
+                unsafe {
+                    *counter_offset = group;
+                }
+            } else {
+                unsafe {
+                    *counter_offset = 0;
+                }
+            }
+        }
 
         let counters = vec![
             Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),

@@ -70,9 +70,7 @@ impl<T: 'static + GetMap> Bpf<T> {
     }
 
     pub fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.with_mut(|this| { 
-            this.skel.map(name)
-        }
+        self.with(|this| this.skel.map(name))
     }
 
     pub fn add_counters(&mut self, name: &str, counters: Vec<Counter>) {
