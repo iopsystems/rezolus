@@ -68,9 +68,9 @@ impl Syscall {
                     | "recvmmsg" | "preadv2" => 1,
                     "write" | "pwrite64" | "writev" | "sendto" | "sendmsg" | "pwritev"
                     | "sendmmsg" | "pwritev2" => 2,
-                    "poll" | "select" | "epoll_create" | "epoll_ctl_old" | "epoll_wait_old"
-                    | "epoll_wait" | "epoll_ctl" | "pselect6" | "ppoll" | "epoll_pwait"
-                    | "epoll_pwait2" | "epoll_create1" => 3,
+                    "poll" | "select" | "epoll_create" | "epoll_create1" | "epoll_ctl"
+                    | "epoll_ctl_old" | "epoll_wait" | "epoll_wait_old" | "pselect6" | "ppoll"
+                    | "epoll_pwait" | "epoll_pwait2" | "pselect6_time64" | "ppoll_time64" => 3,
                     _ => {
                         // no group defined for these syscalls
                         0
