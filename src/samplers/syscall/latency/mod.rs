@@ -105,7 +105,7 @@ impl Syscall {
             Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HEATMAP)),
             Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HEATMAP)),
             Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HEATMAP)),
-            Counter::new(&SYSCALL_LOCKING, Some(&SYSCALL_LOCKING_HEATMAP)),
+            Counter::new(&SYSCALL_LOCK, Some(&SYSCALL_LOCK_HEATMAP)),
             Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HEATMAP)),
             Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HEATMAP)),
             Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HEATMAP)),
