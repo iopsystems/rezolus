@@ -14,7 +14,13 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 
-#define TASK_RUNNING	0
+#define COUNTER_GROUP_WIDTH 8
+#define HISTOGRAM_BUCKETS 7424
+#define MAX_CPUS 1024
+#define MAX_TRACKED_PIDS 65536 
+
+#define IVCSW 0
+#define TASK_RUNNING 0
 
 /**
  * commit 2f064a59a1 ("sched: Change task_struct::state") changes
@@ -39,28 +45,25 @@ static __always_inline __s64 get_task_state(void *task)
 	return BPF_CORE_READ((struct task_struct___o *)task, state);
 }
 
-#define IVCSW 0
-#define VCSW 1
-
 // counters
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
+	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 65536);
+	__uint(max_entries, MAX_TRACKED_PIDS);
 	__type(key, u32);
 	__type(value, u64);
 } enqueued_at SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 65536);
+	__uint(max_entries, MAX_TRACKED_PIDS);
 	__type(key, u32);
 	__type(value, u64);
 } running_at SEC(".maps");
@@ -70,7 +73,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } runqlat SEC(".maps");
 
 struct {
@@ -78,24 +81,8 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } running SEC(".maps");
-
-// struct {
-// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-// 	// __uint(map_flags, BPF_F_MMAPABLE);
-// 	__type(key, u32);
-// 	__type(value, u64);
-// 	__uint(max_entries, 1);
-// } ivcsw SEC(".maps");
-
-// struct {
-// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-// 	// __uint(map_flags, BPF_F_MMAPABLE);
-// 	__type(key, u32);
-// 	__type(value, u64);
-// 	__uint(max_entries, 1);
-// } vcsw SEC(".maps");
 
 /* record enqueue timestamp */
 static __always_inline
@@ -153,7 +140,7 @@ int handle__sched_switch(u64 *ctx)
 	// - calculate how long prev task was running, update hist
 	if (get_task_state(prev) == TASK_RUNNING) {
 		// count involuntary context switch
-		u32 idx = 8 * bpf_get_smp_processor_id() + IVCSW;
+		u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + IVCSW;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
@@ -176,14 +163,6 @@ int handle__sched_switch(u64 *ctx)
 			}
 
 			bpf_map_delete_elem(&running_at, &pid);
-		}
-	} else {
-		// count voluntary context switch
-		u32 idx = 8 * bpf_get_smp_processor_id() + VCSW;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
 		}
 	}
 	

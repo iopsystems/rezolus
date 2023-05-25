@@ -15,8 +15,3 @@ counter!(
     "scheduler/context_switch/involuntary",
     "count of involuntary context switches"
 );
-counter!(
-    SCHEDULER_VCSW,
-    "scheduler/context_switch/voluntary",
-    "count of voluntary context switches"
-);
