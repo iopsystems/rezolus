@@ -37,10 +37,8 @@ impl Cpi {
         // initialize the counters
         let mut counters = vec![];
 
-        match Builder::new()
-            .group(&mut group)
-            .kind(Hardware::CPU_CYCLES)
-            .build()
+        match Builder::new(Hardware::CPU_CYCLES)
+            .build_with_group(&mut group)
         {
             Ok(counter) => {
                 counters.push((Counter::new(&CPU_CYCLES, None), counter));
@@ -51,10 +49,8 @@ impl Cpi {
             }
         }
 
-        match Builder::new()
-            .group(&mut group)
-            .kind(Hardware::INSTRUCTIONS)
-            .build()
+        match Builder::new(Hardware::INSTRUCTIONS)
+            .build_with_group(&mut group)
         {
             Ok(counter) => {
                 counters.push((Counter::new(&CPU_INSTRUCTIONS, None), counter));
