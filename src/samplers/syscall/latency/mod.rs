@@ -55,13 +55,13 @@ impl Syscall {
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mut syscall_lut = unsafe {
             memmap2::MmapOptions::new()
-                .len(1024)
+                .len(1024 * 8)
                 .map_mut(&file)
                 .expect("failed to mmap() bpf syscall lut")
         };
 
-        for (syscall_id, bytes) in syscall_lut.chunks_exact_mut(4).enumerate() {
-            let counter_offset = bytes.as_mut_ptr() as *mut u32;
+        for (syscall_id, bytes) in syscall_lut.chunks_exact_mut(8).enumerate() {
+            let counter_offset = bytes.as_mut_ptr() as *mut u64;
             if let Some(syscall_name) = syscall_numbers::native::sys_call_name(syscall_id as i64) {
                 let group = match syscall_name {
                     // read related
@@ -99,6 +99,8 @@ impl Syscall {
                 }
             }
         }
+
+        let _ = syscall_lut.flush();
 
         let counters = vec![
             Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),
