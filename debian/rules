@@ -1,0 +1,25 @@
+#!/usr/bin/make -f
+
+TARGET  ?= $(shell cargo metadata --format-version 1 | jq -r .target_directory)
+PROFILE ?= release
+
+# The debug profile is the only one whose directory under target does not match
+# the profile name so we need to special case it.
+ifeq (${PROFILE}, dev)
+BINDIR = "${TARGET}/debug"
+else
+BINDIR = "${TARGET}/${PROFILE}"
+endif
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	@
+
+override_dh_auto_build:
+	cargo build --profile ${PROFILE} --bins
+
+override_dh_auto_install:
+	mkdir -p debian/tmp
+	ln -s "${BINDIR}" debian/tmp/target
