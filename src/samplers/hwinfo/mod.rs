@@ -49,6 +49,9 @@ impl Hwinfo {
             nodes: get_nodes()?,
         })
     }
+    pub fn get_cpusize(&self) -> usize {
+        return self.cpus.len();
+    }
 }
 
 fn read_usize(path: impl AsRef<Path>) -> Result<usize> {
