@@ -144,7 +144,7 @@ impl Cpi {
             Ok(hwinfo) => hwinfo.get_cpusize(),
             Err(_) => return Err(()),
         };
- 
+
         for cpu in 0..nr_cpu {
             let mut group = match PerfGroup::new(cpu) {
                 Ok(g) => g,
@@ -239,7 +239,8 @@ impl Sampler for Cpi {
                             cur_group_data[cpu][&(self.groups[cpu].instructions)];
                         let prev_instructions =
                             prev_group_data[cpu][&(self.groups[cpu].instructions)];
-                        let cpu_ipc = (cur_instructions - prev_instructions) * 1000 / (cur_cycles - prev_cycles);
+                        let cpu_ipc = (cur_instructions - prev_instructions) * 1000
+                            / (cur_cycles - prev_cycles);
                         ipc += cpu_ipc as i64;
                         let cur_mperf = cur_group_data[cpu][&(self.groups[cpu].mperf)];
                         let prev_mperf = prev_group_data[cpu][&(self.groups[cpu].mperf)];
