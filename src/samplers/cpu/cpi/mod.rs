@@ -239,8 +239,7 @@ impl Sampler for Cpi {
                             cur_group_data[cpu][&(self.groups[cpu].instructions)];
                         let prev_instructions =
                             prev_group_data[cpu][&(self.groups[cpu].instructions)];
-                        let cpu_ipc = (cur_cycles - prev_cycles) * 1000
-                            / (cur_instructions - prev_instructions);
+                        let cpu_ipc = (cur_instructions - prev_instructions) * 1000 / (cur_cycles - prev_cycles);
                         ipc += cpu_ipc as i64;
                         let cur_mperf = cur_group_data[cpu][&(self.groups[cpu].mperf)];
                         let prev_mperf = prev_group_data[cpu][&(self.groups[cpu].mperf)];
@@ -253,8 +252,8 @@ impl Sampler for Cpi {
                         ipns += (cpu_ipc as f64 * ratio) as i64;
                     }
                     RUNNINGFREQUENCY.set(avg_frequency / nr_cpu);
-                    IPC.set(ipc / nr_cpu);
-                    IPNS.set(ipns / nr_cpu);
+                    IPKC.set(ipc / nr_cpu);
+                    IPKNS.set(ipns / nr_cpu);
                 }
             }
         }

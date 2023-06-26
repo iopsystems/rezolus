@@ -41,8 +41,8 @@ gauge!(
 
 counter!(CPU_CYCLES, "cpu/cycles");
 counter!(CPU_INSTRUCTIONS, "cpu/instructions");
-gauge!(IPC, "cpu/ipc", "Average Instructions Per Cycle");
-gauge!(IPNS, "cpu/ipns", "Average Instructions Per Nanosecond");
+gauge!(IPKC, "cpu/ipkc", "Average Instructions Per Thousand Cycle");
+gauge!(IPKNS, "cpu/ipkns", "Average Instructions Per Thousand Nanosecond");
 gauge!(
     BASEFREQUENCY,
     "cpu/base_frequency",
