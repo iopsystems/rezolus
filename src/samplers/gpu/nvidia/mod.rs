@@ -29,7 +29,6 @@ impl Nvidia {
         let now = Instant::now();
         let nvml = Nvml::init().map_err(|e| {
             error!("error initializing: {e}");
-            ()
         })?;
 
         Ok(Self {
