@@ -1,6 +1,6 @@
 use super::stats::*;
 use super::*;
-use crate::common::{Counter, Nop};
+use crate::common::Nop;
 use perf_event::events::x86::{Msr, MsrId};
 use perf_event::events::Hardware;
 use perf_event::{Builder, GroupData, ReadFormat};
@@ -15,23 +15,34 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
-/// Per-cpu perf event group consists of a set of perf counters
+/// Per-cpu perf event group that measure all tasks on one CPU
 struct PerfGroup {
-    cpu: usize,
+    /// The CPU this group measures
+    _cpuid: usize,
+    /// Executed cycles and also the group leader
     cycles: perf_event::Counter,
+    /// Retired instructions
     instructions: perf_event::Counter,
+    /// Timestamp counter
     tsc: perf_event::Counter,
+    /// Actual performance frequency clock
     aperf: perf_event::Counter,
+    /// Maximum performance frequency clock
     mperf: perf_event::Counter,
+    /// prev holds the previous reading and this has the last reading    
+    prev: Result<GroupData, std::io::Error>,
+    this: Result<GroupData, std::io::Error>,
 }
 
 impl PerfGroup {
-    pub fn new(cpu: usize) -> Result<Self, ()> {
+    /// Create and enable the group on the cpu
+    pub fn new(cpuid: usize) -> Result<Self, ()> {
         let mut cycles = match Builder::new(Hardware::CPU_CYCLES)
-            .one_cpu(cpu)
+            .one_cpu(cpuid)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
+            .pinned(true)
             .read_format(
                 ReadFormat::TOTAL_TIME_ENABLED | ReadFormat::TOTAL_TIME_RUNNING | ReadFormat::GROUP,
             )
@@ -39,13 +50,13 @@ impl PerfGroup {
         {
             Ok(counter) => counter,
             Err(_) => {
-                error!("failed to initialize cpu cycles perf counter");
+                error!("failed to create the cycles event on CPU{cpuid}");
                 return Err(());
             }
         };
 
         let instructions = match Builder::new(Hardware::INSTRUCTIONS)
-            .one_cpu(cpu)
+            .one_cpu(cpuid)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
@@ -53,24 +64,30 @@ impl PerfGroup {
         {
             Ok(counter) => counter,
             Err(_) => {
-                error!("failed to initialize cpu instructions perf counter");
+                error!("failed to create the instructions event on CPU{cpuid}");
                 return Err(());
             }
         };
 
         let tsc_event = match Msr::new(MsrId::TSC) {
             Ok(e) => e,
-            Err(_) => return Err(()),
+            Err(_) => {
+                error!("failed to find the tsc event on CPU{cpuid}");
+                return Err(());
+            }
         };
         let tsc = match Builder::new(tsc_event)
-            .one_cpu(cpu)
+            .one_cpu(cpuid)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
             .build_with_group(&mut cycles)
         {
             Ok(e) => e,
-            Err(_) => return Err(()),
+            Err(_) => {
+                error!("Failed to create the tsc event on CPU{cpuid}");
+                return Err(());
+            }
         };
 
         let aperf_event = match Msr::new(MsrId::APERF) {
@@ -78,14 +95,17 @@ impl PerfGroup {
             Err(_) => return Err(()),
         };
         let aperf = match Builder::new(aperf_event)
-            .one_cpu(cpu)
+            .one_cpu(cpuid)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
             .build_with_group(&mut cycles)
         {
             Ok(e) => e,
-            Err(_) => return Err(()),
+            Err(_) => {
+                error!("Failed to create the aperf event on CPU{cpuid}");
+                return Err(());
+            }
         };
 
         let mperf_event = match Msr::new(MsrId::MPERF) {
@@ -93,30 +113,119 @@ impl PerfGroup {
             Err(_) => return Err(()),
         };
         let mperf = match Builder::new(mperf_event)
-            .one_cpu(cpu)
+            .one_cpu(cpuid)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
             .build_with_group(&mut cycles)
         {
             Ok(e) => e,
-            Err(_) => return Err(()),
+            Err(_) => {
+                error!("failed to create the mperf event on CPU{cpuid}");
+                return Err(());
+            }
         };
-        // enable the group
-        match cycles.enable_group() {
-            Ok(_) => Ok(Self {
-                cpu,
-                cycles,
-                instructions,
-                tsc,
-                aperf,
-                mperf,
-            }),
-            Err(_) => Err(()),
+
+        if let Err(_) = cycles.enable_group() {
+            error!("failed to enable the perf group on CPU{cpuid}");
+            return Err(());
         }
+        let prev = cycles.read_group();
+        let this = cycles.read_group();
+        return Ok(Self {
+            _cpuid: cpuid,
+            cycles,
+            instructions,
+            tsc,
+            aperf,
+            mperf,
+            prev,
+            this,
+        });
     }
+
     pub fn read_group(&mut self) -> Result<GroupData, std::io::Error> {
         return self.cycles.read_group();
+    }
+
+    pub fn update_group(&mut self) {
+        std::mem::swap(&mut self.prev, &mut self.this);
+        self.this = self.read_group();
+    }
+
+    pub fn get_metrics(&mut self) -> Option<(u64, u64, u64, u64, u64, u64)> {
+        let (prev, this) = match (&mut self.prev, &mut self.this) {
+            (Ok(prev), Ok(this)) => (prev, this),
+            (_, _) => return None,
+        };
+
+        // When the CPU is offline, this.len() becomes 1
+        if this.len() == 1 || this.len() != prev.len() {
+            return None;
+        }
+
+        let enabled_us = match (this.time_enabled(), prev.time_enabled()) {
+            (Some(this), Some(prev)) => (this.as_micros() - prev.as_micros()) as u64,
+            (_, _) => return None,
+        };
+
+        let running_us = match (this.time_running(), prev.time_running()) {
+            (Some(this), Some(prev)) => (this.as_micros() - prev.as_micros()) as u64,
+            (_, _) => return None,
+        };
+
+        if running_us != enabled_us {
+            return None;
+        }
+
+        let cycles = match (this.get(&self.cycles), prev.get(&self.cycles)) {
+            (Some(this_counter), Some(prev_counter)) => {
+                (this_counter.value() - prev_counter.value()) as u64
+            }
+            (_, _) => return None,
+        };
+        let instructions = match (this.get(&self.instructions), prev.get(&self.instructions)) {
+            (Some(this_counter), Some(prev_counter)) => {
+                (this_counter.value() - prev_counter.value()) as u64
+            }
+            (_, _) => return None,
+        };
+        if cycles == 0 || instructions == 0 {
+            return None;
+        }
+        let tsc = match (this.get(&self.tsc), prev.get(&self.tsc)) {
+            (Some(this_counter), Some(prev_counter)) => {
+                (this_counter.value() - prev_counter.value()) as u64
+            }
+            (_, _) => return None,
+        };
+        let mperf = match (this.get(&self.mperf), prev.get(&self.mperf)) {
+            (Some(this_counter), Some(prev_counter)) => {
+                (this_counter.value() - prev_counter.value()) as u64
+            }
+            (_, _) => return None,
+        };
+        let aperf = match (this.get(&self.aperf), prev.get(&self.aperf)) {
+            (Some(this_counter), Some(prev_counter)) => {
+                (this_counter.value() - prev_counter.value()) as u64
+            }
+            (_, _) => return None,
+        };
+
+        // computer IPKC IPUS BASE_FREQUENCY RUNNING_FREQUENCY
+        let ipkc = (instructions * 1000) / cycles;
+        let base_frequency_mhz = tsc / running_us;
+        let running_frequency_mhz = (base_frequency_mhz * aperf) / mperf;
+        let ipus = (ipkc * aperf) / mperf;
+
+        return Some((
+            cycles,
+            instructions,
+            ipkc,
+            ipus,
+            base_frequency_mhz,
+            running_frequency_mhz,
+        ));
     }
 }
 
@@ -125,10 +234,6 @@ pub struct Cpi {
     next: Instant,
     interval: Duration,
     groups: Vec<PerfGroup>,
-    // we need to keep the last perf event readings because we need to compute gauge IPC, IPNS, and running CPU frequency.
-    prev_group_data: Option<Vec<GroupData>>,
-    total_cycles: Counter,
-    total_instructions: Counter,
 }
 
 impl Cpi {
@@ -136,25 +241,26 @@ impl Cpi {
         let now = Instant::now();
         // initialize the groups
         let mut groups = vec![];
-        let mut prev_group_data = vec![];
-        let total_cycles = Counter::new(&CPU_CYCLES, None);
-        let total_instructions = Counter::new(&CPU_INSTRUCTIONS, None);
 
-        let nr_cpu = match hardware_info() {
-            Ok(hwinfo) => hwinfo.get_cpusize(),
+        let cpus = match hardware_info() {
+            Ok(hwinfo) => hwinfo.get_cpus(),
             Err(_) => return Err(()),
         };
 
-        for cpu in 0..nr_cpu {
-            let mut group = match PerfGroup::new(cpu) {
-                Ok(g) => g,
-                Err(_) => return Err(()),
+        for cpu in cpus {
+            match PerfGroup::new(cpu.get_cpuid()) {
+                Ok(g) => groups.push(g),
+                Err(_) => {
+                    warn!("Failed to create the perf group on CPU {}", cpu.get_cpuid());
+                    // we want to continue because it's possible that this CPU is offline
+                    continue;
+                }
             };
-            match group.read_group() {
-                Ok(r) => prev_group_data.push(r),
-                Err(_) => return Err(()),
-            }
-            groups.push(group);
+        }
+
+        if groups.len() == 0 {
+            error!("Failed to create the perf group on any CPU");
+            return Err(());
         }
 
         return Ok(Self {
@@ -162,9 +268,6 @@ impl Cpi {
             next: now,
             interval: Duration::from_millis(10),
             groups,
-            prev_group_data: Some(prev_group_data),
-            total_cycles,
-            total_instructions,
         });
     }
 }
@@ -177,89 +280,46 @@ impl Sampler for Cpi {
             return;
         }
 
-        let elapsed = (now - self.prev).as_secs_f64();
-
+        let mut nr_active_groups: u64 = 0;
         let mut total_cycles = 0;
         let mut total_instructions = 0;
-        let mut base_frequency = 1;
-        let mut cur_group_data = vec![];
+        let mut avg_ipkc = 0;
+        let mut avg_ipus = 0;
+        let mut avg_base_frequency = 0;
+        let mut avg_running_frequency = 0;
+
         for group in &mut self.groups {
-            match group.read_group() {
-                Ok(counts) => {
-                    let running_us;
-                    match (counts.time_enabled(), counts.time_running()) {
-                        (Some(enable_time), Some(running_time)) => {
-                            if enable_time.as_nanos() != running_time.as_nanos() {
-                                error!("The perf group {} is not always running", group.cpu);
-                                continue;
-                            }
-                            running_us = running_time.as_micros()
-                        }
-                        (_, _) => {
-                            error!(
-                                "The perf group {} has no enabled time and running time",
-                                group.cpu
-                            );
-                            continue;
-                        }
-                    }
-                    if counts.time_enabled() != counts.time_running() {}
-                    let cycles = counts[&(group.cycles)];
-                    let instructions = counts[&(group.instructions)];
-
-                    total_cycles += cycles;
-                    total_instructions += instructions;
-                    let tsc = counts[&(group.tsc)];
-                    base_frequency = tsc / running_us as u64;
-                    BASEFREQUENCY.set(base_frequency as i64);
-                    cur_group_data.push(counts);
-                }
-                Err(e) => {
-                    error!("error in sampling the perf group: {e}");
-                }
-            };
-        }
-
-        if cur_group_data.len() == self.groups.len() {
-            // update total cycles and instructions
-            self.total_cycles.set(now, elapsed, total_cycles);
-            self.total_instructions
-                .set(now, elapsed, total_instructions);
-            // update the IPC and IPNS
-            if let Some(prev_group_data) = &self.prev_group_data {
-                let nr_cpu = cur_group_data.len() as i64;
-                if cur_group_data.len() == prev_group_data.len() {
-                    let mut ipc: i64 = 0;
-                    let mut avg_frequency = 0;
-                    let mut ipns: i64 = 0;
-                    for cpu in 0..cur_group_data.len() {
-                        let cur_cycles = cur_group_data[cpu][&(self.groups[cpu].cycles)];
-                        let prev_cycles = prev_group_data[cpu][&(self.groups[cpu].cycles)];
-                        let cur_instructions =
-                            cur_group_data[cpu][&(self.groups[cpu].instructions)];
-                        let prev_instructions =
-                            prev_group_data[cpu][&(self.groups[cpu].instructions)];
-                        let cpu_ipc = (cur_instructions - prev_instructions) * 1000
-                            / (cur_cycles - prev_cycles);
-                        ipc += cpu_ipc as i64;
-                        let cur_mperf = cur_group_data[cpu][&(self.groups[cpu].mperf)];
-                        let prev_mperf = prev_group_data[cpu][&(self.groups[cpu].mperf)];
-                        let cur_aperf = cur_group_data[cpu][&(self.groups[cpu].aperf)];
-                        let prev_aperf = prev_group_data[cpu][&(self.groups[cpu].aperf)];
-                        let ratio =
-                            (cur_aperf - prev_aperf) as f64 / (cur_mperf - prev_mperf) as f64;
-                        let running_frequency = (ratio * base_frequency as f64) as i64;
-                        avg_frequency += running_frequency;
-                        ipns += (cpu_ipc as f64 * ratio) as i64;
-                    }
-                    RUNNINGFREQUENCY.set(avg_frequency / nr_cpu);
-                    IPKC.set(ipc / nr_cpu);
-                    IPKNS.set(ipns / nr_cpu);
-                }
+            group.update_group();
+            if let Some((
+                cycles,
+                instructions,
+                ipkc,
+                ipus,
+                base_frequency_mhz,
+                running_frequency_mhz,
+            )) = group.get_metrics()
+            {
+                nr_active_groups += 1;
+                total_cycles += cycles;
+                total_instructions += instructions;
+                avg_ipkc += ipkc;
+                avg_ipus += ipus;
+                avg_base_frequency += base_frequency_mhz;
+                avg_running_frequency += running_frequency_mhz;
+                CPU_IPKC.increment(now, ipkc, 1);
+                CPU_IPUS.increment(now, ipus, 1);
+                CPU_RUNNING_FREQUENCY.increment(now, running_frequency_mhz, 1);
             }
         }
+        // we increase the total cycles executed in the last sampling period instead of using the cycle perf event value to handle offlined CPUs.
+        CPU_CYCLES.set(CPU_CYCLES.value() + total_cycles);
+        CPU_INSTRUCTIONS.set(CPU_INSTRUCTIONS.value() + total_instructions);
+        CPU_ACTIVE_PERF_GROUPS.set(nr_active_groups as i64);
+        CPU_AVG_IPKC.set((avg_ipkc / nr_active_groups) as i64);
+        CPU_AVG_IPUS.set((avg_ipus / nr_active_groups) as i64);
+        CPU_AVG_BASE_FREQUENCY.set((avg_base_frequency / nr_active_groups) as i64);
+        CPU_AVG_RUNNING_FREQUENCY.set((avg_running_frequency / nr_active_groups) as i64);
 
-        self.prev_group_data = Some(cur_group_data);
         // determine when to sample next
         let next = self.next + self.interval;
 

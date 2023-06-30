@@ -23,6 +23,12 @@ pub struct Cpu {
     caches: Vec<Cache>,
 }
 
+impl Cpu {
+    pub fn get_cpuid(&self) -> usize {
+        return self.id;
+    }
+}
+
 pub fn get_cpus() -> Result<Vec<Cpu>> {
     let mut tmp = HashMap::new();
 

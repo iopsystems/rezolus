@@ -39,21 +39,61 @@ gauge!(
     "the count of logical cores that are online"
 );
 
-counter!(CPU_CYCLES, "cpu/cycles");
-counter!(CPU_INSTRUCTIONS, "cpu/instructions");
-gauge!(IPKC, "cpu/ipkc", "Average Instructions Per Thousand Cycle");
-gauge!(
-    IPKNS,
-    "cpu/ipkns",
-    "Average Instructions Per Thousand Nanosecond"
+counter!(
+    CPU_CYCLES,
+    "cpu/cycles",
+    "total executed CPU cycles on all CPUs"
 );
+counter!(
+    CPU_INSTRUCTIONS,
+    "cpu/instructions",
+    "total retired instructions on all CPUs"
+);
+
 gauge!(
-    BASEFREQUENCY,
+    CPU_ACTIVE_PERF_GROUPS,
+    "cpu/active_perf_groups",
+    "The number of active perf groups"
+);
+
+gauge!(
+    CPU_AVG_IPKC,
+    "cpu/avg_ipkc",
+    "average Instructions Per Thousand Cycles: SUM(IPKC_CPU0...N)/N)"
+);
+
+heatmap!(
+    CPU_IPKC,
+    "cpu/ipkc",
+    "distribution of per-CPU IPKC (Instructions Per Thousand Cycles)"
+);
+
+gauge!(
+    CPU_AVG_IPUS,
+    "cpu/avg_ipus",
+    "Average Instructions Per Microsecond: SUM(IPUS_CPU0...N)/N"
+);
+
+heatmap!(
+    CPU_IPUS,
+    "cpu/ipus",
+    "distribution of per-CPU IPUS (Instructions Per Microsecond)"
+);
+
+gauge!(
+    CPU_AVG_BASE_FREQUENCY,
     "cpu/base_frequency",
-    "The base CPU frequency"
+    "Average base CPU frequency"
 );
-gauge!(
-    RUNNINGFREQUENCY,
+
+heatmap!(
+    CPU_RUNNING_FREQUENCY,
     "cpu/running_frequency",
-    "Average running CPU frequency"
+    "distribution of the per-CPU running CPU frequency"
+);
+
+gauge!(
+    CPU_AVG_RUNNING_FREQUENCY,
+    "cpu/avg_running_frequency",
+    "Average running CPU frequency: SUM(RUNNING_FREQUENCY_CPU0...N)/N"
 );
