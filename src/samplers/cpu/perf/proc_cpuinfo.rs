@@ -1,12 +1,6 @@
-use super::stats::*;
 use super::*;
 use std::fs::File;
 use std::io::{Read, Seek};
-
-#[distributed_slice(CPU_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(ProcCpuinfo::new(config))
-}
 
 pub struct ProcCpuinfo {
     prev: Instant,
@@ -16,15 +10,18 @@ pub struct ProcCpuinfo {
 }
 
 impl ProcCpuinfo {
-    pub fn new(_config: &Config) -> Self {
+    pub fn new(_config: &Config) -> Result<Self, ()> {
         let now = Instant::now();
+        let file = File::open("/proc/cpuinfo").map_err(|e| {
+            error!("failed to open /proc/cpuinfo: {e}");
+        })?;
 
-        Self {
-            file: File::open("/proc/cpuinfo").expect("file not found"),
+        Ok(Self {
+            file,
             prev: now,
             next: now,
             interval: Duration::from_millis(50),
-        }
+        })
     }
 }
 
@@ -68,6 +65,8 @@ impl ProcCpuinfo {
 
         let lines = data.lines();
 
+        let mut frequency = 0;
+
         for line in lines {
             let parts: Vec<&str> = line.split_whitespace().collect();
 
@@ -76,13 +75,15 @@ impl ProcCpuinfo {
                     .get(3)
                     .map(|v| v.parse::<f64>().map(|v| v.floor() as u64))
                 {
-                    CPU_FREQUENCY.increment(now, freq, 1);
+                    CPU_FREQUENCY_HEATMAP.increment(now, freq, 1);
+                    frequency += freq;
                 }
                 online_cores += 1;
             }
         }
 
         CPU_CORES.set(online_cores);
+        CPU_FREQUENCY_AVERAGE.set(frequency as i64 / online_cores);
 
         Ok(())
     }
