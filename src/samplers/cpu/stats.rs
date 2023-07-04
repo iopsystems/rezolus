@@ -27,17 +27,63 @@ counter_with_heatmap!(
     "cpu/usage/guest_nice"
 );
 
-heatmap!(
-    CPU_FREQUENCY,
-    "cpu/frequency",
-    "distribution of instantaneous CPU frequencies"
-);
-
 gauge!(
     CPU_CORES,
     "cpu/cores",
     "the count of logical cores that are online"
 );
 
-counter!(CPU_CYCLES, "cpu/cycles");
-counter!(CPU_INSTRUCTIONS, "cpu/instructions");
+counter!(
+    CPU_CYCLES,
+    "cpu/cycles",
+    "total executed CPU cycles on all CPUs"
+);
+counter!(
+    CPU_INSTRUCTIONS,
+    "cpu/instructions",
+    "total retired instructions on all CPUs"
+);
+
+gauge!(
+    CPU_PERF_GROUPS_ACTIVE,
+    "cpu/perf_groups/active",
+    "the number of active perf groups"
+);
+
+gauge!(
+    CPU_IPKC_AVERAGE,
+    "cpu/ipkc/average",
+    "average IPKC (Instructions Per Thousand Cycles): SUM(IPKC_CPU0...N)/N)"
+);
+heatmap!(
+    CPU_IPKC_HEATMAP,
+    "cpu/ipkc",
+    "distribution of per-CPU IPKC (Instructions Per Thousand Cycles)"
+);
+
+gauge!(
+    CPU_IPUS_AVERAGE,
+    "cpu/ipus/average",
+    "average IPUS (Instructions Per Microsecond): SUM(IPUS_CPU0...N)/N"
+);
+heatmap!(
+    CPU_IPUS_HEATMAP,
+    "cpu/ipus",
+    "distribution of per-CPU IPUS (Instructions Per Microsecond)"
+);
+
+gauge!(
+    CPU_BASE_FREQUENCY_AVERAGE,
+    "cpu/base_frequency/average",
+    "average base CPU frequency"
+);
+gauge!(
+    CPU_FREQUENCY_AVERAGE,
+    "cpu/frequency/average",
+    "average running CPU frequency: SUM(RUNNING_FREQUENCY_CPU0...N)/N"
+);
+heatmap!(
+    CPU_FREQUENCY_HEATMAP,
+    "cpu/frequency",
+    "distribution of the per-CPU running frequencies"
+);

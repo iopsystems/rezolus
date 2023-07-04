@@ -49,6 +49,10 @@ impl Hwinfo {
             nodes: get_nodes()?,
         })
     }
+
+    pub fn get_cpus(&self) -> &Vec<Cpu> {
+        return &self.cpus;
+    }
 }
 
 fn read_usize(path: impl AsRef<Path>) -> Result<usize> {
