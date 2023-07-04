@@ -17,11 +17,11 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define MAX_SYSCALL_ID 1024
-#define COUNTER_GROUP_WIDTH 16
-#define MAX_CPUS 1024
-#define MAX_TRACKED_PIDS 65536 
+#define COUNTER_GROUP_WIDTH 8
 #define HISTOGRAM_BUCKETS 7424
+#define MAX_CPUS 1024
+#define MAX_SYSCALL_ID 1024
+#define MAX_TRACKED_PIDS 65536 
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -56,7 +56,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
-	__type(value, u32);
+	__type(value, u64);
 	__uint(max_entries, MAX_SYSCALL_ID);
 } syscall_lut SEC(".maps");
 
@@ -102,7 +102,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
 
 		if (counter_offset && *counter_offset < COUNTER_GROUP_WIDTH) {
-			idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + *counter_offset;
+			idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + ((u32)*counter_offset);
 			cnt = bpf_map_lookup_elem(&counters, &idx);
 
 			if (cnt) {

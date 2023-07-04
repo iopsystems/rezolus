@@ -52,10 +52,7 @@ impl Runqlat {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let counters = vec![
-            Counter::new(&SCHEDULER_IVCSW, None),
-            Counter::new(&SCHEDULER_VCSW, None),
-        ];
+        let counters = vec![Counter::new(&SCHEDULER_IVCSW, None)];
 
         bpf.add_counters("counters", counters);
 

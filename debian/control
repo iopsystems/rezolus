@@ -1,0 +1,10 @@
+Source: rezolus
+Section: devel
+Priority: optional
+Maintainer: IOP Systems <team@iop.systems>
+Build-Depends: build-essential, debhelper (>= 10), jq
+
+Package: rezolus
+Architecture: any
+Description: High resolution systems performance telemetry agent
+Depends: ${shlibs:Depends}, ${misc:Depends}
