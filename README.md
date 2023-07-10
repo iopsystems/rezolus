@@ -51,7 +51,7 @@ find an answer to, please open a
 ## Building
 
 Rezolus is built using the Rust toolchain. If you do not have the Rust toolchain
-installed, please see [rust-lang.org][https://www.rust-lang.org/] to get
+installed, please see [rust-lang.org][rust-lang.org] to get
 started with Rust.
 
 ### Build Dependencies
@@ -138,3 +138,4 @@ Detailed licensing information can be found in the
 [license mit]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-MIT
 [new issue]: https://github.com/iopsystems/rezolus/issues/new
 [new pull request]: https://github.com/iopsystems/rpc-perf/compare
+[rust-lang.org]: https://www.rust-lang.org/
