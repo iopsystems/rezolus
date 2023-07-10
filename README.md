@@ -131,6 +131,7 @@ Rezolus is dual-licensed under the [Apache License v2.0][license apache] and the
 Detailed licensing information can be found in the
 [COPYRIGHT document][copyright]
 
+[config]: https://github.com/iopsystems/rezolus/blob/main/config.toml
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT
 [create a fork]: https://github.com/iopsystems/rpc-perf/fork
 [license apache]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-APACHE
