@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: package
+
+"on":
+  push:
+    paths:
+      - .github/actions/**
+      - .github/workflows/package.yml
+      - debian/**
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Debian package release number'
+        default: '1'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  RUST_BACKTRACE: 1
+  # Most docker images seem to get this right but not ubuntu:focal
+  DEBIAN_FRONTEND: noninteractive
+
+  # Use zstd maximum compression for versions of dpkg which support it.
+  #
+  # Note that dpkg only checks these environment variables after version 1.21.10
+  DPKG_DEB_COMPRESSOR_TYPE: zstd
+  DPKG_DEB_COMPRESSOR_LEVEL: 22
+
+  PROTOC_VERSION: "23.4"
+
+jobs:
+  build-deb:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.distro }}
+    strategy:
+      matrix:
+        distro:
+          - debian:buster   # oldstable
+          - debian:bullseye # stable
+          - debian:bookworm # testing
+
+          # - ubuntu:trusty   # LTS until Apr 2024
+          # - ubuntu:xenial   # LTS until Apr 2026
+          - ubuntu:bionic   # LTS until Apr 2028
+          - ubuntu:focal    # LTS until Apr 2030
+          - ubuntu:jammy    # LTS until Apr 2032
+          - ubuntu:kinetic  # Previous release
+          - ubuntu:lunar    # Current release
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: setup some variables
+        id: vars
+        shell: bash
+        run: |
+          echo  distro="$(echo '${{ matrix.distro }}' | cut -d : -f 1)" >> "$GITHUB_OUTPUT"
+          echo release="$(echo '${{ matrix.distro }}' | cut -d : -f 2)" >> "$GITHUB_OUTPUT"
+
+      - name: Install apt dependencies
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential pkg-config libssl-dev jq debhelper lsb-release \
+            cmake libclang-dev clang
+
+      - name: install rust
+        shell: bash
+        run: |
+          curl https://static.rust-lang.org/rustup/rustup-init.sh -o rustup-init.sh
+          chmod +x rustup-init.sh
+
+          ./rustup-init.sh -y
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
+          rm -f rustup-init.sh
+
+      - name: check cargo
+        shell: bash
+        run: |
+          echo "::group::rustc -vV"
+          rustc -vV
+          echo "::endgroup::"
+          echo "::group::cargo -vV"
+          cargo -vV
+          echo "::endgroup::"
+
+      - name: set release env var
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          echo 'RELEASE=${{ github.event.inputs.release }}' >> $GITHUB_ENV
+
+      - name: generate changelog
+        shell: bash
+        run: ./debian/gen-changelog.sh > debian/changelog
+
+      - name: build debs
+        shell: bash
+        run: dpkg-buildpackage -b -us -uc
+
+      - name: copy debs
+        shell: bash
+        run: |
+          shopt -s nullglob
+          mkdir -p target/debian
+          cp ../*.deb ../*.ddeb target/debian/
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: target/debian/*
+          name: ${{ steps.vars.outputs.distro }}_${{ steps.vars.outputs.release }}_all
+
+  upload-to-apt-repo:
+    if: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    needs:
+      - build-deb
+    steps:
+      - uses: actions/checkout@v3
+      - uses: google-github-actions/auth@v1
+        id: auth
+        with:
+          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
+      - uses: google-github-actions/setup-gcloud@v1
+      - uses: actions/download-artifact@v3
+        with:
+          path: target/debian/
+
+      - name: configure artifact registry
+        run: |
+          gcloud config set artifacts/repository systemslab
+          gcloud config set artifacts/location us
+
+      - name: upload package
+        run: |
+          for artifact in target/debian/*/*; do
+            name="$(basename "$artifact")"
+            distro="$(echo "$artifact" | cut -d _ -f 1)"
+            release="$(echo "$artifact" | cut -d _ -f 2)"
+
+            echo "::group::upload $release $name"
+            gcloud artifacts apt upload "$release" --source "$artifact"
+            echo "::endgroup::"
+          done
