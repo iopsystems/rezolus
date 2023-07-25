@@ -23,11 +23,11 @@ pub struct Distribution<'a> {
     _map: &'a libbpf_rs::Map,
     mmap: memmap2::MmapMut,
     prev: [u64; HISTOGRAM_BUCKETS],
-    heatmap: &'static LazyHeatmap,
+    heatmap: &'static Heatmap,
 }
 
 impl<'a> Distribution<'a> {
-    pub fn new(map: &'a libbpf_rs::Map, heatmap: &'static LazyHeatmap) -> Self {
+    pub fn new(map: &'a libbpf_rs::Map, heatmap: &'static Heatmap) -> Self {
         let fd = map.fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mmap = unsafe {
@@ -65,7 +65,7 @@ impl<'a> Distribution<'a> {
 
             if delta > 0 {
                 let value = key_to_value(idx as u64);
-                self.heatmap.increment(now, value as _, delta as _);
+                let _ = self.heatmap.add(now, value as _, delta as _);
             }
         }
     }

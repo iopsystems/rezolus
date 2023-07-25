@@ -63,12 +63,21 @@ mod handlers {
             }
 
             if let Some(counter) = any.downcast_ref::<Counter>() {
-                data.push(format!(
-                    "# TYPE {}_total counter\n{}_total {}",
-                    metric.name(),
-                    metric.name(),
-                    counter.value()
-                ));
+                if metric.metadata().is_empty() {
+                    data.push(format!(
+                        "# TYPE {}_total counter\n{}_total {}",
+                        metric.name(),
+                        metric.name(),
+                        counter.value()
+                    ));
+                } else {
+                    data.push(format!(
+                        "# TYPE {} counter\n{} {}",
+                        metric.name(),
+                        metric.formatted(metriken::Format::Prometheus),
+                        counter.value()
+                    ));
+                }
             } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
                 data.push(format!(
                     "# TYPE {} gauge\n{} {}",
@@ -78,22 +87,21 @@ mod handlers {
                 ));
             } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
                 for (_label, percentile) in PERCENTILES {
-                    let value = heatmap
-                        .percentile(*percentile)
-                        .map(|b| b.high())
-                        .unwrap_or(0);
-                    data.push(format!(
-                        "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
-                        metric.name(),
-                        metric.name(),
-                        percentile,
-                        value
-                    ));
+                    if let Some(Ok(bucket)) = heatmap.percentile(*percentile) {
+                        data.push(format!(
+                            "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
+                            metric.name(),
+                            metric.name(),
+                            percentile,
+                            bucket.high()
+                        ));
+                    }
                 }
             }
         }
 
         data.sort();
+        data.dedup();
         let mut content = data.join("\n");
         content += "\n";
         let parts: Vec<&str> = content.split('/').collect();
@@ -116,13 +124,27 @@ mod handlers {
             }
 
             if let Some(counter) = any.downcast_ref::<Counter>() {
-                data.push(format!("{}: {}", metric.name(), counter.value()));
+                data.push(format!(
+                    "{}: {}",
+                    metric.formatted(metriken::Format::Simple),
+                    counter.value()
+                ));
             } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                data.push(format!("{}: {}", metric.name(), gauge.value()));
+                data.push(format!(
+                    "{}: {}",
+                    metric.formatted(metriken::Format::Simple),
+                    gauge.value()
+                ));
             } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
                 for (label, p) in PERCENTILES {
-                    let percentile = heatmap.percentile(*p).map(|b| b.high()).unwrap_or(0);
-                    data.push(format!("{}/{}: {}", metric.name(), label, percentile));
+                    if let Some(Ok(bucket)) = heatmap.percentile(*p) {
+                        data.push(format!(
+                            "{}/{}: {}",
+                            metric.formatted(metriken::Format::Simple),
+                            label,
+                            bucket.high()
+                        ));
+                    }
                 }
             }
         }

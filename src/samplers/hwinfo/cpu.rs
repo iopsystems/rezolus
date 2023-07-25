@@ -24,8 +24,20 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    pub fn get_cpuid(&self) -> usize {
-        return self.id;
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn core(&self) -> usize {
+        self.core_id
+    }
+
+    pub fn die(&self) -> usize {
+        self.die_id
+    }
+
+    pub fn package(&self) -> usize {
+        self.package_id
     }
 }
 
