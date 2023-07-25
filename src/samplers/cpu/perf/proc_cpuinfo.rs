@@ -70,20 +70,26 @@ impl ProcCpuinfo {
         for line in lines {
             let parts: Vec<&str> = line.split_whitespace().collect();
 
+            if let Some(&"processor") = parts.first() {
+                online_cores += 1;
+            }
+
             if let (Some(&"cpu"), Some(&"MHz")) = (parts.first(), parts.get(1)) {
                 if let Some(Ok(freq)) = parts
                     .get(3)
                     .map(|v| v.parse::<f64>().map(|v| v.floor() as u64))
                 {
-                    CPU_FREQUENCY_HEATMAP.increment(now, freq, 1);
+                    let _ = CPU_FREQUENCY_HEATMAP.increment(now, freq, 1);
                     frequency += freq;
                 }
-                online_cores += 1;
             }
         }
 
         CPU_CORES.set(online_cores);
-        CPU_FREQUENCY_AVERAGE.set(frequency as i64 / online_cores);
+
+        if frequency != 0 && online_cores != 0 {
+            CPU_FREQUENCY_AVERAGE.set(frequency as i64 / online_cores);
+        }
 
         Ok(())
     }
