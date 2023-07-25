@@ -19,6 +19,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: check-${{ matrix.os }}
+      - name: Install dependencies
+        shell: bash
+        run: sudo apt-get -y install libelf-dev
       - name: cargo check
         run: |
           cargo check --all-targets
