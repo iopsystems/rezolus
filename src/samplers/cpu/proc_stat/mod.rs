@@ -1,12 +1,20 @@
 use super::stats::*;
 use super::*;
 use crate::common::Counter;
+use crate::common::Nop;
+use crate::samplers::hwinfo::hardware_info;
+use metriken::DynBoxedMetric;
+use metriken::MetricBuilder;
 use std::fs::File;
 use std::io::{Read, Seek};
 
 #[distributed_slice(CPU_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(ProcStat::new(config))
+    if let Ok(procstat) = ProcStat::new(config) {
+        Box::new(procstat)
+    } else {
+        Box::new(Nop {})
+    }
 }
 
 pub struct ProcStat {
@@ -15,68 +23,81 @@ pub struct ProcStat {
     interval: Duration,
     nanos_per_tick: u64,
     file: File,
-    counters: Vec<(Counter, usize)>,
+    counters_total: Vec<Counter>,
+    counters_percpu: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
 }
 
 impl ProcStat {
-    pub fn new(_config: &Config) -> Self {
+    pub fn new(_config: &Config) -> Result<Self, ()> {
         let now = Instant::now();
 
-        let counters = vec![
-            (
-                Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HEATMAP)),
-                1,
-            ),
-            (
-                Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HEATMAP)),
-                2,
-            ),
-            (
-                Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HEATMAP)),
-                3,
-            ),
-            (
-                Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HEATMAP)),
-                4,
-            ),
-            (
-                Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HEATMAP)),
-                5,
-            ),
-            (
-                Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HEATMAP)),
-                6,
-            ),
-            (
-                Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HEATMAP)),
-                7,
-            ),
-            (
-                Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HEATMAP)),
-                8,
-            ),
-            (
-                Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HEATMAP)),
-                9,
-            ),
-            (
-                Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HEATMAP)),
-                10,
-            ),
+        let cpus = match hardware_info() {
+            Ok(hwinfo) => hwinfo.get_cpus(),
+            Err(_) => return Err(()),
+        };
+
+        let counters_total = vec![
+            Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HEATMAP)),
+            Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HEATMAP)),
+            Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HEATMAP)),
+            Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HEATMAP)),
+            Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HEATMAP)),
+            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HEATMAP)),
+            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HEATMAP)),
+            Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HEATMAP)),
+            Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HEATMAP)),
+            Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HEATMAP)),
         ];
 
-        let nanos_per_tick = 1_000_000_000
-            / (sysconf::raw::sysconf(sysconf::raw::SysconfVariable::ScClkTck)
-                .expect("Failed to get system clock tick rate") as u64);
+        let mut counters_percpu = Vec::with_capacity(cpus.len());
 
-        Self {
+        for cpu in cpus {
+            let states = [
+                "user",
+                "nice",
+                "system",
+                "idle",
+                "io_wait",
+                "irq",
+                "softirq",
+                "steal",
+                "guest",
+                "guest_nice",
+            ];
+
+            let counters: Vec<DynBoxedMetric<metriken::Counter>> = states
+                .iter()
+                .map(|state| {
+                    MetricBuilder::new("cpu/usage")
+                        .metadata("id", format!("{}", cpu.id()))
+                        .metadata("core", format!("{}", cpu.core()))
+                        .metadata("die", format!("{}", cpu.die()))
+                        .metadata("package", format!("{}", cpu.package()))
+                        .metadata("state", *state)
+                        .formatter(cpu_metric_formatter)
+                        .build(metriken::Counter::new())
+                })
+                .collect();
+
+            counters_percpu.push(counters);
+        }
+
+        let sc_clk_tck =
+            sysconf::raw::sysconf(sysconf::raw::SysconfVariable::ScClkTck).map_err(|_| {
+                error!("Failed to get system clock tick rate");
+            })?;
+
+        let nanos_per_tick = 1_000_000_000 / (sc_clk_tck as u64);
+
+        Ok(Self {
             file: File::open("/proc/stat").expect("file not found"),
-            counters,
+            counters_total,
+            counters_percpu,
             nanos_per_tick,
             prev: now,
             next: now,
             interval: Duration::from_millis(10),
-        }
+        })
     }
 }
 
@@ -123,10 +144,24 @@ impl ProcStat {
         for line in lines {
             let parts: Vec<&str> = line.split_whitespace().collect();
 
-            if let Some(&"cpu") = parts.first() {
-                for (counter, field) in &mut self.counters {
-                    if let Some(Ok(v)) = parts.get(*field).map(|v| v.parse::<u64>()) {
+            if parts.is_empty() {
+                continue;
+            }
+
+            let header = parts.first().unwrap();
+
+            if *header == "cpu" {
+                for (field, counter) in self.counters_total.iter_mut().enumerate() {
+                    if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
                         counter.set(now, elapsed, v.wrapping_mul(self.nanos_per_tick))
+                    }
+                }
+            } else if header.starts_with("cpu") {
+                if let Ok(id) = header.replace("cpu", "").parse::<usize>() {
+                    for (field, counter) in self.counters_percpu[id].iter_mut().enumerate() {
+                        if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
+                            counter.set(v.wrapping_mul(self.nanos_per_tick));
+                        }
                     }
                 }
             }

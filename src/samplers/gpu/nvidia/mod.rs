@@ -85,7 +85,7 @@ impl Nvidia {
                 if let Ok(power_usage) = device.power_usage() {
                     // current power usage in mW
                     GPU_POWER_USAGE.set(power_usage as _);
-                    GPU_POWER_USAGE_HEATMAP.increment(now, power_usage as _, 1);
+                    let _ = GPU_POWER_USAGE_HEATMAP.increment(now, power_usage as _);
                 }
 
                 /*
@@ -95,7 +95,7 @@ impl Nvidia {
                 if let Ok(temperature) = device.temperature(TemperatureSensor::Gpu) {
                     // current die temperature in C
                     GPU_TEMPERATURE.set(temperature as _);
-                    GPU_TEMPERATURE_HEATMAP.increment(now, temperature as _, 1);
+                    let _ = GPU_TEMPERATURE_HEATMAP.increment(now, temperature as _);
                 }
 
                 /*
@@ -105,21 +105,15 @@ impl Nvidia {
                 if let Ok(pcie_throughput_rx) = device.pcie_throughput(PcieUtilCounter::Receive) {
                     // current pcie receive throughput scaled to Bytes/s
                     GPU_PCIE_THROUGHPUT_RX.set(pcie_throughput_rx as i64 * KB);
-                    GPU_PCIE_THROUGHPUT_RX_HEATMAP.increment(
-                        now,
-                        (pcie_throughput_rx as i64 * KB) as _,
-                        1,
-                    );
+                    let _ = GPU_PCIE_THROUGHPUT_RX_HEATMAP
+                        .increment(now, (pcie_throughput_rx as i64 * KB) as _);
                 }
 
                 if let Ok(pcie_throughput_tx) = device.pcie_throughput(PcieUtilCounter::Send) {
                     // current pcie transmit throughput scaled to Bytes/s
                     GPU_PCIE_THROUGHPUT_TX.set(pcie_throughput_tx as i64 * KB);
-                    GPU_PCIE_THROUGHPUT_TX_HEATMAP.increment(
-                        now,
-                        (pcie_throughput_tx as i64 * KB) as _,
-                        1,
-                    );
+                    let _ = GPU_PCIE_THROUGHPUT_TX_HEATMAP
+                        .increment(now, (pcie_throughput_tx as i64 * KB) as _);
                 }
 
                 if let Ok(link_width) = device.current_pcie_link_width() {
@@ -138,11 +132,8 @@ impl Nvidia {
                         if pcie_link_bandwidth > 0 {
                             // current device pcie bandwidth scaled to Bytes/s
                             GPU_PCIE_BANDWIDTH.set(pcie_link_bandwidth * link_width as i64);
-                            GPU_PCIE_BANDWIDTH_HEATMAP.increment(
-                                now,
-                                (pcie_link_bandwidth * link_width as i64) as _,
-                                1,
-                            );
+                            let _ = GPU_PCIE_BANDWIDTH_HEATMAP
+                                .increment(now, (pcie_link_bandwidth * link_width as i64) as _);
                         }
                     }
                 }
@@ -157,57 +148,62 @@ impl Nvidia {
                     GPU_MEMORY_TOTAL.set(memory_info.total as _);
                     GPU_MEMORY_USED.set(memory_info.used as _);
 
-                    GPU_MEMORY_FREE_HEATMAP.increment(now, memory_info.free as _, 1);
-                    GPU_MEMORY_TOTAL_HEATMAP.increment(now, memory_info.total as _, 1);
-                    GPU_MEMORY_USED_HEATMAP.increment(now, memory_info.used as _, 1);
+                    let _ = GPU_MEMORY_FREE_HEATMAP.increment(now, memory_info.free as _);
+                    let _ = GPU_MEMORY_TOTAL_HEATMAP.increment(now, memory_info.total as _);
+                    let _ = GPU_MEMORY_USED_HEATMAP.increment(now, memory_info.used as _);
                 }
 
                 if let Ok(frequency) = device.clock_info(Clock::Graphics) {
                     // current clock frequency scaled to Hz
                     GPU_CLOCK_GRAPHICS.set(frequency as i64 * MHZ);
-                    GPU_CLOCK_GRAPHICS_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ =
+                        GPU_CLOCK_GRAPHICS_HEATMAP.increment(now, (frequency as i64 * MHZ) as _);
                 }
 
                 if let Ok(frequency) = device.clock_info(Clock::SM) {
                     // current clock frequency scaled to Hz
                     GPU_CLOCK_COMPUTE.set(frequency as i64 * MHZ);
-                    GPU_CLOCK_COMPUTE_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ = GPU_CLOCK_COMPUTE_HEATMAP.increment(now, (frequency as i64 * MHZ) as _);
                 }
 
                 if let Ok(frequency) = device.clock_info(Clock::Memory) {
                     // current clock frequency scaled to Hz
                     GPU_CLOCK_MEMORY.set(frequency as i64 * MHZ);
-                    GPU_CLOCK_MEMORY_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ = GPU_CLOCK_MEMORY_HEATMAP.increment(now, (frequency as i64 * MHZ) as _);
                 }
 
                 if let Ok(frequency) = device.clock_info(Clock::Video) {
                     // current clock frequency scaled to Hz
                     GPU_CLOCK_VIDEO.set(frequency as i64 * MHZ);
-                    GPU_CLOCK_VIDEO_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ = GPU_CLOCK_VIDEO_HEATMAP.increment(now, (frequency as i64 * MHZ) as _);
                 }
 
                 if let Ok(frequency) = device.max_clock_info(Clock::Graphics) {
                     // max clock frequency scaled to Hz
                     GPU_MAX_CLOCK_GRAPHICS.set(frequency as i64 * MHZ);
-                    GPU_MAX_CLOCK_GRAPHICS_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ = GPU_MAX_CLOCK_GRAPHICS_HEATMAP
+                        .increment(now, (frequency as i64 * MHZ) as _);
                 }
 
                 if let Ok(frequency) = device.max_clock_info(Clock::SM) {
                     // max clock frequency scaled to Hz
                     GPU_MAX_CLOCK_COMPUTE.set(frequency as i64 * MHZ);
-                    GPU_MAX_CLOCK_COMPUTE_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ =
+                        GPU_MAX_CLOCK_COMPUTE_HEATMAP.increment(now, (frequency as i64 * MHZ) as _);
                 }
 
                 if let Ok(frequency) = device.max_clock_info(Clock::Memory) {
                     // max clock frequency scaled to Hz
                     GPU_MAX_CLOCK_MEMORY.set(frequency as i64 * MHZ);
-                    GPU_MAX_CLOCK_MEMORY_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ =
+                        GPU_MAX_CLOCK_MEMORY_HEATMAP.increment(now, (frequency as i64 * MHZ) as _);
                 }
 
                 if let Ok(frequency) = device.max_clock_info(Clock::Video) {
                     // max clock frequency scaled to Hz
                     GPU_MAX_CLOCK_VIDEO.set(frequency as i64 * MHZ);
-                    GPU_MAX_CLOCK_VIDEO_HEATMAP.increment(now, (frequency as i64 * MHZ) as _, 1);
+                    let _ =
+                        GPU_MAX_CLOCK_VIDEO_HEATMAP.increment(now, (frequency as i64 * MHZ) as _);
                 }
             }
         }

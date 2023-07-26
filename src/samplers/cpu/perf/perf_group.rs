@@ -39,6 +39,8 @@ impl GroupData {
 }
 
 pub struct Reading {
+    /// The CPU this reading is from
+    pub id: usize,
     pub cycles: u64,
     pub instructions: u64,
     pub ipkc: u64,
@@ -50,7 +52,7 @@ pub struct Reading {
 /// Per-cpu perf event group that measure all tasks on one CPU
 pub struct PerfGroup {
     /// The CPU this group measures
-    _cpuid: usize,
+    id: usize,
     /// Executed cycles and also the group leader
     cycles: perf_event::Counter,
     /// Retired instructions
@@ -67,9 +69,9 @@ pub struct PerfGroup {
 
 impl PerfGroup {
     /// Create and enable the group on the cpu
-    pub fn new(cpuid: usize) -> Result<Self, ()> {
+    pub fn new(id: usize) -> Result<Self, ()> {
         let mut cycles = Builder::new(Hardware::CPU_CYCLES)
-            .one_cpu(cpuid)
+            .one_cpu(id)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
@@ -79,69 +81,69 @@ impl PerfGroup {
             )
             .build()
             .map_err(|e| {
-                error!("failed to create the cycles event on CPU{cpuid}: {e}");
+                error!("failed to create the cycles event on CPU{id}: {e}");
             })?;
 
         let instructions = Builder::new(Hardware::INSTRUCTIONS)
-            .one_cpu(cpuid)
+            .one_cpu(id)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
             .build_with_group(&mut cycles)
             .map_err(|e| {
-                error!("failed to create the instructions event on CPU{cpuid}: {e}");
+                error!("failed to create the instructions event on CPU{id}: {e}");
             })?;
 
         let tsc_event = Msr::new(MsrId::TSC)
             .map_err(|e| error!("failed to create perf event for tsc msr: {e}"))?;
         let tsc = Builder::new(tsc_event)
-            .one_cpu(cpuid)
+            .one_cpu(id)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
             .build_with_group(&mut cycles)
             .map_err(|e| {
-                error!("failed to create the tsc counter on CPU{cpuid}: {e}");
+                error!("failed to create the tsc counter on CPU{id}: {e}");
             })?;
 
         let aperf_event = Msr::new(MsrId::APERF)
             .map_err(|e| error!("failed to create perf event for aperf msr: {e}"))?;
         let aperf = Builder::new(aperf_event)
-            .one_cpu(cpuid)
+            .one_cpu(id)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
             .build_with_group(&mut cycles)
             .map_err(|e| {
-                error!("failed to create the aperf counter on CPU{cpuid}: {e}");
+                error!("failed to create the aperf counter on CPU{id}: {e}");
             })?;
 
         let mperf_event = Msr::new(MsrId::MPERF)
             .map_err(|e| error!("failed to create perf event for mperf msr: {e}"))?;
         let mperf = Builder::new(mperf_event)
-            .one_cpu(cpuid)
+            .one_cpu(id)
             .any_pid()
             .exclude_hv(false)
             .exclude_kernel(false)
             .build_with_group(&mut cycles)
             .map_err(|e| {
-                error!("failed to create the mperf counter on CPU{cpuid}: {e}");
+                error!("failed to create the mperf counter on CPU{id}: {e}");
             })?;
 
         cycles.enable_group().map_err(|e| {
-            error!("failed to enable the perf group on CPU{cpuid}: {e}");
+            error!("failed to enable the perf group on CPU{id}: {e}");
         })?;
 
         let prev = cycles
             .read_group()
             .map_err(|e| {
-                warn!("failed to read the perf group on CPU{cpuid}: {e}");
+                warn!("failed to read the perf group on CPU{id}: {e}");
             })
             .map(|inner| GroupData { inner })
             .ok();
 
         return Ok(Self {
-            _cpuid: cpuid,
+            id,
             cycles,
             instructions,
             tsc,
@@ -209,6 +211,7 @@ impl PerfGroup {
         self.prev = Some(current);
 
         Ok(Reading {
+            id: self.id,
             cycles,
             instructions,
             ipkc,

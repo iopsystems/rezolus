@@ -1,6 +1,7 @@
 use super::stats::*;
 use super::*;
 use crate::common::Nop;
+use metriken::{DynBoxedMetric, MetricBuilder};
 use perf_event::events::x86::{Msr, MsrId};
 use perf_event::events::Hardware;
 use perf_event::{Builder, ReadFormat};
@@ -32,24 +33,49 @@ pub struct Perf {
     next: Instant,
     interval: Duration,
     groups: Vec<PerfGroup>,
+    counters: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
 }
 
 impl Perf {
     pub fn new(_config: &Config) -> Result<Self, ()> {
         let now = Instant::now();
-        // initialize the groups
-        let mut groups = vec![];
 
         let cpus = match hardware_info() {
             Ok(hwinfo) => hwinfo.get_cpus(),
             Err(_) => return Err(()),
         };
 
+        let mut groups = Vec::with_capacity(cpus.len());
+        let mut counters = Vec::with_capacity(cpus.len());
+
+        let metrics = [
+            "cpu/cycles",
+            "cpu/instructions",
+            "cpu/ipkc",
+            "cpu/ipus",
+            "cpu/frequency",
+        ];
+
         for cpu in cpus {
-            match PerfGroup::new(cpu.get_cpuid()) {
+            counters.push(
+                metrics
+                    .iter()
+                    .map(|metric| {
+                        MetricBuilder::new(*metric)
+                            .metadata("id", format!("{}", cpu.id()))
+                            .metadata("core", format!("{}", cpu.core()))
+                            .metadata("die", format!("{}", cpu.die()))
+                            .metadata("package", format!("{}", cpu.package()))
+                            .formatter(cpu_metric_formatter)
+                            .build(metriken::Counter::new())
+                    })
+                    .collect(),
+            );
+
+            match PerfGroup::new(cpu.id()) {
                 Ok(g) => groups.push(g),
                 Err(_) => {
-                    warn!("Failed to create the perf group on CPU {}", cpu.get_cpuid());
+                    warn!("Failed to create the perf group on CPU {}", cpu.id());
                     // we want to continue because it's possible that this CPU is offline
                     continue;
                 }
@@ -66,6 +92,7 @@ impl Perf {
             next: now,
             interval: Duration::from_millis(10),
             groups,
+            counters,
         });
     }
 }
@@ -95,9 +122,15 @@ impl Sampler for Perf {
                 avg_ipus += reading.ipus;
                 avg_base_frequency += reading.base_frequency_mhz;
                 avg_running_frequency += reading.running_frequency_mhz;
-                CPU_IPKC_HEATMAP.increment(now, reading.ipkc, 1);
-                CPU_IPUS_HEATMAP.increment(now, reading.ipus, 1);
-                CPU_FREQUENCY_HEATMAP.increment(now, reading.running_frequency_mhz, 1);
+                let _ = CPU_IPKC_HEATMAP.increment(now, reading.ipkc);
+                let _ = CPU_IPUS_HEATMAP.increment(now, reading.ipus);
+                let _ = CPU_FREQUENCY_HEATMAP.increment(now, reading.running_frequency_mhz);
+
+                self.counters[reading.id][0].set(reading.cycles);
+                self.counters[reading.id][1].set(reading.instructions);
+                self.counters[reading.id][2].set(reading.ipkc);
+                self.counters[reading.id][3].set(reading.ipus);
+                self.counters[reading.id][4].set(reading.running_frequency_mhz);
             }
         }
 

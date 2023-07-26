@@ -5,13 +5,11 @@ pub mod classic;
 
 mod nop;
 
+use metriken::Heatmap;
+use metriken::LazyCounter;
 pub use nop::Nop;
 
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
-
-pub type LazyCounter = metriken::Lazy<metriken::Counter>;
-pub type LazyGauge = metriken::Lazy<metriken::Gauge>;
-pub type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
 
 /// A `Counter` is a wrapper type that enables us to automatically calculate
 /// percentiles for secondly rates between subsequent counter observations.
@@ -21,13 +19,13 @@ pub type LazyHeatmap = metriken::Lazy<metriken::Heatmap>;
 pub struct Counter {
     previous: Option<u64>,
     counter: &'static LazyCounter,
-    heatmap: Option<&'static LazyHeatmap>,
+    heatmap: Option<&'static Heatmap>,
 }
 
 impl Counter {
     /// Construct a new counter that wraps a `metriken` counter and optionally a
     /// `metriken` heatmap.
-    pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static LazyHeatmap>) -> Self {
+    pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static Heatmap>) -> Self {
         Self {
             previous: None,
             counter,
@@ -43,7 +41,7 @@ impl Counter {
             let delta = value.wrapping_sub(previous);
             self.counter.add(delta);
             if let Some(heatmap) = self.heatmap {
-                heatmap.increment(now, (delta as f64 / elapsed) as _, 1);
+                let _ = heatmap.increment(now, (delta as f64 / elapsed) as _);
             }
         }
         self.previous = Some(value);
@@ -114,9 +112,7 @@ macro_rules! heatmap {
             name = $name,
             crate = metriken
         )]
-        pub static $ident: Lazy<metriken::Heatmap> = metriken::Lazy::new(|| {
-            metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_millis(100)).unwrap()
-        });
+        pub static $ident: metriken::Heatmap = metriken::Heatmap::new(0, 8, 64, core::time::Duration::from_secs(1), core::time::Duration::from_millis(100));
     };
     ($ident:ident, $name:tt, $description:tt) => {
         #[metriken::metric(
@@ -124,9 +120,7 @@ macro_rules! heatmap {
             description = $description,
             crate = metriken
         )]
-        pub static $ident: Lazy<metriken::Heatmap> = metriken::Lazy::new(|| {
-            metriken::Heatmap::new(0, 8, 64, Duration::from_secs(1), Duration::from_millis(100)).unwrap()
-        });
+        pub static $ident: metriken::Heatmap = metriken::Heatmap::new(0, 8, 64, core::time::Duration::from_secs(1), core::time::Duration::from_millis(100));
     };
 }
 

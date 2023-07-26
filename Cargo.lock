@@ -472,9 +472,9 @@ dependencies = [
 
 [[package]]
 name = "heatmap"
-version = "0.7.4"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd5215fe8c60b67071fb8d7fe407631449641f2010152db16088c05ae00a00c2"
+checksum = "fdeff4026a4e69d8ae19b51fa661841da47c3448ba67ad44affe893a2c985e31"
 dependencies = [
  "clocksource",
  "histogram",
@@ -514,9 +514,9 @@ checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
 
 [[package]]
 name = "histogram"
-version = "0.7.2"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c9ff99982ffdd3056847e7dd1f3e6ceae8826fb0af27d91f29cb7b119820177"
+checksum = "d0978bb4ae7b21dded5037bc688271ec01443b6eb2c7713aad75fce2cf670923"
 dependencies = [
  "thiserror",
 ]
@@ -811,23 +811,24 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf9ec8699ded843c60ea478d0c41583b447700524f93d5c74bfb1edf8347fd6d"
+checksum = "b9d170fab855458882d2086de239300a0ea4d5ef457afed89bebfe0257f87bdf"
 dependencies = [
- "clocksource",
  "heatmap",
+ "histogram",
  "linkme",
  "metriken-derive",
  "once_cell",
  "parking_lot",
+ "phf",
 ]
 
 [[package]]
 name = "metriken-derive"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e58941ebb3d827378ea64a769df9cf65e47f75d78227969d70431c19578e5dc"
+checksum = "0213a7a12e01c66357d1f3491e2d7d74b2373540ea0a4bfd928a4c0e5e02f432"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1065,6 +1066,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "phf"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ade2d8b8f33c7333b51bcf0428d37e217e9f32192ae4772156f65063b8ce03dc"
+dependencies = [
+ "phf_macros",
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48e4cc64c2ad9ebe670cb8fd69dd50ae301650392e81c05f9bfcb2d5bdbc24b0"
+dependencies = [
+ "phf_shared",
+ "rand",
+]
+
+[[package]]
+name = "phf_macros"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3444646e286606587e49f3bcf1679b8cef1dc2c5ecc29ddacaffc305180d464b"
+dependencies = [
+ "phf_generator",
+ "phf_shared",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.11",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90fcb95eef784c2ac79119d1dd819e162b5da872ce6f3c3abe1e8ca1c082f72b"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1248,9 +1291,9 @@ dependencies = [
 
 [[package]]
 name = "ringlog"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82db4b27000bac41d738972779f440ed6176ebe82c935b736594eff989aa60f1"
+checksum = "c90d3d1e4db43daedfdae26373e7b4cb4f56b26f217fc8f661e4f439827b4a46"
 dependencies = [
  "ahash",
  "clocksource",
@@ -1418,6 +1461,12 @@ checksum = "d8229b473baa5980ac72ef434c4415e70c4b5e71b423043adb4ba059f89c99a1"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "siphasher"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bd3e3206899af3f8b12af284fafc038cc1dc2b41d1b89dd17297221c5d225de"
 
 [[package]]
 name = "slab"
