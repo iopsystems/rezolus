@@ -63,12 +63,21 @@ mod handlers {
             }
 
             if let Some(counter) = any.downcast_ref::<Counter>() {
-                data.push(format!(
-                    "# TYPE {} counter\n{} {}",
-                    metric.name(),
-                    metric.formatted(metriken::Format::Prometheus),
-                    counter.value()
-                ));
+                if metric.metadata().is_empty() {
+                    data.push(format!(
+                        "# TYPE {}_total counter\n{}_total {}",
+                        metric.name(),
+                        metric.name(),
+                        counter.value()
+                    ));
+                } else {
+                    data.push(format!(
+                        "# TYPE {} counter\n{} {}",
+                        metric.name(),
+                        metric.formatted(metriken::Format::Prometheus),
+                        counter.value()
+                    ));
+                }
             } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
                 data.push(format!(
                     "# TYPE {} gauge\n{} {}",
