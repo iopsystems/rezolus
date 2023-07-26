@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2023 Wenbo Zhang
+// Copyright (c) 2023 The Rezolus Authors
 
 // NOTICE: this file is based off `tcppktlat.bpf.c` from the BCC project
 // <https://github.com/iovisor/bcc/> and has been modified for use within
