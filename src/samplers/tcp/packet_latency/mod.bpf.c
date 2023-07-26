@@ -18,12 +18,7 @@
 
 #define MAX_ENTRIES	10240
 #define AF_INET		2
-
-const volatile pid_t targ_pid = 0;
-const volatile pid_t targ_tid = 0;
-const volatile __u16 targ_sport = 0;
-const volatile __u16 targ_dport = 0;
-const volatile __u64 targ_min_us = 0;
+#define NO_EXIST    1
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -51,12 +46,6 @@ static int handle_tcp_probe(struct sock *sk, struct sk_buff *skb)
 	u64 sock_ident, ts, len, doff;
 	const struct tcphdr *th;
 
-	if (targ_sport && targ_sport != BPF_CORE_READ(inet, inet_sport)) {
-		return 0;
-	}
-	if (targ_dport && targ_dport != BPF_CORE_READ(sk, __sk_common.skc_dport)) {
-		return 0;
-	}
 	th = (const struct tcphdr*)BPF_CORE_READ(skb, data);
 	doff = BPF_CORE_READ_BITFIELD_PROBED(th, doff);
 	len = BPF_CORE_READ(skb, len);
@@ -66,7 +55,7 @@ static int handle_tcp_probe(struct sock *sk, struct sk_buff *skb)
 	}
 	sock_ident = get_sock_ident(sk);
 	ts = bpf_ktime_get_ns();
-	bpf_map_update_elem(&start, &sock_ident, &ts, 0);
+	bpf_map_update_elem(&start, &sock_ident, &ts, NO_EXIST);
 	return 0;
 }
 
