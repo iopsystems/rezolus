@@ -43,3 +43,5 @@ heatmap!(
 );
 heatmap!(TCP_JITTER, "tcp/jitter");
 heatmap!(TCP_SRTT, "tcp/srtt");
+
+heatmap!(TCP_PACKET_LATENCY, "tcp/packet_latency");

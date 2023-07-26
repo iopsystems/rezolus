@@ -14,6 +14,7 @@ mod bpf {
         ("block_io", "latency"),
         ("scheduler", "runqueue"),
         ("syscall", "latency"),
+        ("tcp", "packet_latency"),
         ("tcp", "receive"),
         ("tcp", "retransmit"),
         ("tcp", "traffic"),
