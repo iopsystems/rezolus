@@ -90,8 +90,9 @@ int trace_enqueue(u32 tgid, u32 pid)
 {
 	u64 ts;
 
-	if (!pid)
+	if (!pid) {
 		return 0;
+	}
 
 	ts = bpf_ktime_get_ns();
 	bpf_map_update_elem(&enqueued_at, &pid, &ts, 0);

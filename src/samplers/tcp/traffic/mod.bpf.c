@@ -59,8 +59,9 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 	family = BPF_CORE_READ(sk, __sk_common.skc_family);
 
 	/* drop */
-	if (family != AF_INET && family != AF_INET6)
+	if (family != AF_INET && family != AF_INET6) {
 		return 0;
+	}
 
 
 	if (receiving) {
@@ -125,8 +126,9 @@ int BPF_KPROBE(tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
 SEC("kprobe/tcp_cleanup_rbuf")
 int BPF_KPROBE(tcp_cleanup_rbuf, struct sock *sk, int copied)
 {
-	if (copied <= 0)
+	if (copied <= 0) {
 		return 0;
+	}
 
 	return probe_ip(true, sk, copied);
 }
