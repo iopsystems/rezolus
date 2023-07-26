@@ -82,8 +82,9 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	u64 *cnt;
 	u32 idx;
 
-	if (args->id < 0)
+	if (args->id < 0) {
 		return 0;
+	}
 
 	u32 syscall_id = args->id;
 
@@ -120,8 +121,9 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	start_ts = bpf_map_lookup_elem(&start, &tid);
 
 	// possible we missed the start
-	if (!start_ts)
+	if (!start_ts) {
 		return 0;
+	}
 
 	lat = bpf_ktime_get_ns() - *start_ts;
 	idx = value_to_index(lat);

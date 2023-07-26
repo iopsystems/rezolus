@@ -51,16 +51,19 @@ static int handle_tcp_probe(struct sock *sk, struct sk_buff *skb)
 	u64 sock_ident, ts, len, doff;
 	const struct tcphdr *th;
 
-	if (targ_sport && targ_sport != BPF_CORE_READ(inet, inet_sport))
+	if (targ_sport && targ_sport != BPF_CORE_READ(inet, inet_sport)) {
 		return 0;
-	if (targ_dport && targ_dport != BPF_CORE_READ(sk, __sk_common.skc_dport))
+	}
+	if (targ_dport && targ_dport != BPF_CORE_READ(sk, __sk_common.skc_dport)) {
 		return 0;
+	}
 	th = (const struct tcphdr*)BPF_CORE_READ(skb, data);
 	doff = BPF_CORE_READ_BITFIELD_PROBED(th, doff);
 	len = BPF_CORE_READ(skb, len);
 	/* `doff * 4` means `__tcp_hdrlen` */
-	if (len <= doff * 4)
+	if (len <= doff * 4) {
 		return 0;
+	}
 	sock_ident = get_sock_ident(sk);
 	ts = bpf_ktime_get_ns();
 	bpf_map_update_elem(&start, &sock_ident, &ts, 0);
@@ -79,13 +82,15 @@ static int handle_tcp_rcv_space_adjust(void *ctx, struct sock *sk)
 	u16 family;
 
 	tsp = bpf_map_lookup_elem(&start, &sock_ident);
-	if (!tsp)
+	if (!tsp) {
 		return 0;
+	}
 
 	now = bpf_ktime_get_ns();
 
-	if (*tsp > now)
+	if (*tsp > now) {
 		goto cleanup;
+	}
 
 	delta_ns = (now - *tsp);
 

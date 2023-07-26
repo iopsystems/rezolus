@@ -43,28 +43,12 @@ static int __always_inline trace_rq_start(struct request *rq, int issue)
 
 static int handle_block_rq_insert(__u64 *ctx)
 {
-	// /**
-	//  * commit a54895fa (v5.11-rc1) changed tracepoint argument list
-	//  * from TP_PROTO(struct request_queue *q, struct request *rq)
-	//  * to TP_PROTO(struct request *rq)
-	//  */
-	// if (LINUX_KERNEL_VERSION < KERNEL_VERSION(5, 11, 0))
-	// 	return trace_rq_start((void *)ctx[1], false);
-	// else
-		return trace_rq_start((void *)ctx[0], false);
+	return trace_rq_start((void *)ctx[0], false);
 }
 
 static int handle_block_rq_issue(__u64 *ctx)
 {
-	// /**
-	//  * commit a54895fa (v5.11-rc1) changed tracepoint argument list
-	//  * from TP_PROTO(struct request_queue *q, struct request *rq)
-	//  * to TP_PROTO(struct request *rq)
-	//  */
-	// if (LINUX_KERNEL_VERSION < KERNEL_VERSION(5, 11, 0))
-	// 	return trace_rq_start((void *)ctx[1], true);
-	// else
-		return trace_rq_start((void *)ctx[0], true);
+	return trace_rq_start((void *)ctx[0], true);
 }
 
 static int handle_block_rq_complete(struct request *rq, int error, unsigned int nr_bytes)
@@ -80,8 +64,9 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 	}
 
 	tsp = bpf_map_lookup_elem(&start, &rq);
-	if (!tsp)
+	if (!tsp) {
 		return 0;
+	}
 
 	if (*tsp <= ts) {
 		delta = ts - *tsp;
