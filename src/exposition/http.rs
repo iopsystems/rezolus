@@ -82,7 +82,7 @@ mod handlers {
                 data.push(format!(
                     "# TYPE {} gauge\n{} {}",
                     metric.name(),
-                    metric.name(),
+                    metric.formatted(metriken::Format::Prometheus),
                     gauge.value()
                 ));
             } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {

@@ -1,66 +1,113 @@
-use crate::*;
+use metriken::{metric, Format, Gauge, LazyGauge, MetricEntry};
 
-gauge_with_heatmap!(
-    GPU_CLOCK_GRAPHICS,
-    GPU_CLOCK_GRAPHICS_HEATMAP,
-    "gpu/clock/graphics"
-);
-gauge_with_heatmap!(
-    GPU_CLOCK_COMPUTE,
-    GPU_CLOCK_COMPUTE_HEATMAP,
-    "gpu/clock/compute"
-);
-gauge_with_heatmap!(
-    GPU_CLOCK_MEMORY,
-    GPU_CLOCK_MEMORY_HEATMAP,
-    "gpu/clock/memory"
-);
-gauge_with_heatmap!(GPU_CLOCK_VIDEO, GPU_CLOCK_VIDEO_HEATMAP, "gpu/clock/video");
-gauge_with_heatmap!(
-    GPU_MAX_CLOCK_GRAPHICS,
-    GPU_MAX_CLOCK_GRAPHICS_HEATMAP,
-    "gpu/clock/graphics/max"
-);
-gauge_with_heatmap!(
-    GPU_MAX_CLOCK_COMPUTE,
-    GPU_MAX_CLOCK_COMPUTE_HEATMAP,
-    "gpu/clock/compute/max"
-);
-gauge_with_heatmap!(
-    GPU_MAX_CLOCK_MEMORY,
-    GPU_MAX_CLOCK_MEMORY_HEATMAP,
-    "gpu/clock/memory/max"
-);
-gauge_with_heatmap!(
-    GPU_MAX_CLOCK_VIDEO,
-    GPU_MAX_CLOCK_VIDEO_HEATMAP,
-    "gpu/clock/video/max"
-);
+#[metric(
+    name = "gpu/memory",
+    description = "The total amount of GPU memory free.",
+    formatter = gpu_metric_formatter,
+    metadata = { state = "free" }
+)]
+pub static GPU_MEMORY_FREE: LazyGauge = LazyGauge::new(Gauge::default);
 
-gauge_with_heatmap!(GPU_MEMORY_FREE, GPU_MEMORY_FREE_HEATMAP, "gpu/memory/free");
-gauge_with_heatmap!(
-    GPU_MEMORY_TOTAL,
-    GPU_MEMORY_TOTAL_HEATMAP,
-    "gpu/memory/total"
-);
-gauge_with_heatmap!(GPU_MEMORY_USED, GPU_MEMORY_USED_HEATMAP, "gpu/memory/used");
+#[metric(
+    name = "gpu/memory",
+    description = "The total amount of GPU memory used.",
+    formatter = gpu_metric_formatter,
+    metadata = { state = "used" }
+)]
+pub static GPU_MEMORY_USED: LazyGauge = LazyGauge::new(Gauge::default);
 
-gauge_with_heatmap!(
-    GPU_PCIE_BANDWIDTH,
-    GPU_PCIE_BANDWIDTH_HEATMAP,
-    "gpu/pcie/bandwidth"
-);
-gauge_with_heatmap!(
-    GPU_PCIE_THROUGHPUT_RX,
-    GPU_PCIE_THROUGHPUT_RX_HEATMAP,
-    "gpu/pcie/throughput/receive"
-);
-gauge_with_heatmap!(
-    GPU_PCIE_THROUGHPUT_TX,
-    GPU_PCIE_THROUGHPUT_TX_HEATMAP,
-    "gpu/pcie/throughput/transmit"
-);
+#[metric(
+    name = "gpu/pcie/bandwidth",
+    description = "The total PCIe bandwidth in Bytes/s.",
+    formatter = gpu_metric_formatter,
+    metadata = { direction = "receive" }
+)]
+pub static GPU_PCIE_BANDWIDTH: LazyGauge = LazyGauge::new(Gauge::default);
 
-gauge_with_heatmap!(GPU_POWER_USAGE, GPU_POWER_USAGE_HEATMAP, "gpu/power/usage");
+#[metric(
+    name = "gpu/pcie/throughput",
+    description = "The current PCIe throughput in Bytes/s.",
+    formatter = gpu_metric_formatter,
+    metadata = { direction = "receive" }
+)]
+pub static GPU_PCIE_THROUGHPUT_RX: LazyGauge = LazyGauge::new(Gauge::default);
 
-gauge_with_heatmap!(GPU_TEMPERATURE, GPU_TEMPERATURE_HEATMAP, "gpu/temperature");
+#[metric(
+    name = "gpu/pcie/throughput",
+    description = "The current PCIe throughput in Bytes/s.",
+    formatter = gpu_metric_formatter,
+    metadata = { direction = "transmit" }
+)]
+pub static GPU_PCIE_THROUGHPUT_TX: LazyGauge = LazyGauge::new(Gauge::default);
+
+#[metric(
+    name = "gpu/power/usage",
+    description = "The current power usage in milliwatts (mW).",
+    formatter = gpu_metric_formatter
+)]
+pub static GPU_POWER_USAGE: LazyGauge = LazyGauge::new(Gauge::default);
+
+/// A function to format the gpu metrics that allows for export of both total
+/// and per-GPU metrics.
+///
+/// For the `Simple` format, the metrics will be formatted according to the
+/// a pattern which depends on the metric metadata:
+/// `{name}/gpu{id}` eg: `gpu/energy_consumption/gpu0`
+/// `{name}/total` eg: `gpu/energy_consumption/total`
+///
+/// For the `Prometheus` format, if the metric has an `id` set in the metadata,
+/// the metric name is left as-is. Otherwise, `/total` is appended. Note: we
+/// rely on the exposition logic to convert the `/`s to `_`s in the metric name.
+pub fn gpu_metric_formatter(metric: &MetricEntry, format: Format) -> String {
+    match format {
+        Format::Simple => {
+            let name = if let Some(direction) = metric.metadata().get("direction") {
+                format!("{}/{direction}", metric.name())
+            } else {
+                metric.name().to_string()
+            };
+
+            let name = if let Some(state) = metric.metadata().get("state") {
+                format!("{name}/{state}")
+            } else {
+                name
+            };
+
+            let name = if let Some(ty) = metric.metadata().get("type") {
+                format!("{name}/{ty}")
+            } else {
+                name
+            };
+
+            if metric.metadata().contains_key("id") {
+                format!(
+                    "{name}/gpu{}",
+                    metric.metadata().get("id").unwrap_or("unknown"),
+                )
+            } else {
+                format!("{name}/total",)
+            }
+        }
+        Format::Prometheus => {
+            let metadata: Vec<String> = metric
+                .metadata()
+                .iter()
+                .map(|(key, value)| format!("{key}=\"{value}\""))
+                .collect();
+            let metadata = metadata.join(", ");
+
+            let name = if metric.metadata().contains_key("id") {
+                metric.name().to_string()
+            } else {
+                format!("{}/total", metric.name())
+            };
+
+            if metadata.is_empty() {
+                name
+            } else {
+                format!("{}{{{metadata}}}", name)
+            }
+        }
+        _ => metriken::default_formatter(metric, format),
+    }
+}
