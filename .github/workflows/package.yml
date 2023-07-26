@@ -67,7 +67,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y curl build-essential pkg-config libssl-dev jq debhelper lsb-release \
-            cmake libclang-dev clang
+            cmake libclang-dev clang libelf-dev
 
       - name: install rust
         shell: bash
