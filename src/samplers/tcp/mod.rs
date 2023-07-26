@@ -6,11 +6,11 @@ mod stats;
 
 mod snmp;
 
-#[cfg(feature = "bpf")]
+#[cfg(all(feature = "bpf", target_os = "linux"))]
 mod receive;
 
-#[cfg(feature = "bpf")]
+#[cfg(all(feature = "bpf", target_os = "linux"))]
 mod retransmit;
 
-#[cfg(feature = "bpf")]
+#[cfg(all(feature = "bpf", target_os = "linux"))]
 mod traffic;

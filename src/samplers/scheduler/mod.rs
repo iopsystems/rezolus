@@ -4,5 +4,5 @@ sampler!(Scheduler, "scheduler", SCHEDULER_SAMPLERS);
 
 mod stats;
 
-#[cfg(feature = "bpf")]
+#[cfg(all(feature = "bpf", target_os = "linux"))]
 mod runqueue;

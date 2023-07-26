@@ -1,4 +1,4 @@
-#[cfg(feature = "bpf")]
+#[cfg(all(feature = "bpf", target_os = "linux"))]
 pub mod bpf;
 
 pub mod classic;

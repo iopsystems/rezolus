@@ -56,18 +56,24 @@ started with Rust.
 
 ### Build Dependencies
 
-For a default build of Rezolus, in addition to the rust toolchain, you will
+A default build of Rezolus that targets Linux systems will have BPF support
+enabled by default. For this build, in addition to the rust toolchain, you will
 need:
 
 * clang >= 11.0
-
-To build with eBPF support, the following additional dependencies are required:
-
 * libelf-dev >= 0.183
 * make >= 4.3
 * pkg-config >= 0.29.2
 
-Debian and Ubuntu users can install all the required dependencies with:
+When building for non-Linux systems or without the default features to disable
+the `bpf` feature, the only dependencies aside from the rust toolchain are:
+
+To build with eBPF support, the following additional dependencies are required:
+
+* clang >= 11.0
+
+Debian and Ubuntu users can install all the required dependencies for a default
+build with:
 
 ```bash
 sudo apt install clang libelf-dev make pkg-config
