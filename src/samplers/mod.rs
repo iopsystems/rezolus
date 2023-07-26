@@ -1,5 +1,6 @@
 mod block_io;
 mod cpu;
+#[cfg(target_os = "linux")]
 mod gpu;
 pub mod hwinfo;
 mod memory;
