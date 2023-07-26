@@ -4,7 +4,7 @@
 #ifndef __CORE_FIXES_BPF_H
 #define __CORE_FIXES_BPF_H
 
-#include <vmlinux.h>
+#include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
 
 /**

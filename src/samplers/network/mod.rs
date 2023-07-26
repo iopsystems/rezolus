@@ -7,9 +7,6 @@ mod stats;
 mod snmp;
 
 #[cfg(all(feature = "bpf", target_os = "linux"))]
-mod packet_latency;
-
-#[cfg(all(feature = "bpf", target_os = "linux"))]
 mod receive;
 
 #[cfg(all(feature = "bpf", target_os = "linux"))]
