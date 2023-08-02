@@ -15,7 +15,6 @@ endif
 	dh $@
 
 override_dh_auto_clean:
-	@
 
 override_dh_auto_build:
 	cargo build --profile ${PROFILE} --bins
