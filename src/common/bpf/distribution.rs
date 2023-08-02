@@ -28,7 +28,7 @@ pub struct Distribution<'a> {
 
 impl<'a> Distribution<'a> {
     pub fn new(map: &'a libbpf_rs::Map, heatmap: &'static Heatmap) -> Self {
-        let fd = map.fd();
+        let fd = map.as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mmap = unsafe {
             memmap2::MmapOptions::new()

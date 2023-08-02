@@ -1,6 +1,8 @@
 use super::*;
 use ouroboros::*;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+
+pub use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 
 mod counters;
 mod distribution;

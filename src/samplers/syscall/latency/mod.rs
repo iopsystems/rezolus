@@ -14,7 +14,7 @@ use super::*;
 use crate::common::bpf::*;
 use crate::common::*;
 
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -51,7 +51,7 @@ impl Syscall {
 
         let mut bpf = Bpf::from_skel(skel);
 
-        let fd = bpf.map("syscall_lut").fd();
+        let fd = bpf.map("syscall_lut").as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mut syscall_lut = unsafe {
             memmap2::MmapOptions::new()
