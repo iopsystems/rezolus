@@ -44,6 +44,8 @@ and provide signals for optimization efforts.
 
 ## Getting Help
 
+Join our [Discord server][discord] to ask questions and have discussions.
+
 If you have a problem using Rezolus or a question about Rezolus that you can't
 find an answer to, please open a
 [new issue on GitHub][new issue]
@@ -140,6 +142,7 @@ Detailed licensing information can be found in the
 [config]: https://github.com/iopsystems/rezolus/blob/main/config.toml
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT
 [create a fork]: https://github.com/iopsystems/rpc-perf/fork
+[discord]: https://discord.gg/cJEqqErM
 [license apache]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-APACHE
 [license mit]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-MIT
 [new issue]: https://github.com/iopsystems/rezolus/issues/new
