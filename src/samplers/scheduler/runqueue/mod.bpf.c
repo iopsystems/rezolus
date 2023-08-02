@@ -9,7 +9,7 @@
 // This BPF program probes enqueue and dequeue from the scheduler runqueue
 // to calculate the runqueue latency.
 
-#include "../../../common/bpf/vmlinux.h"
+#include <vmlinux.h>
 #include "../../../common/bpf/histogram.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
