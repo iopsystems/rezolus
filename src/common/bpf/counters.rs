@@ -32,7 +32,7 @@ impl<'a> Counters<'a> {
         let ncounters = counters.len();
         let cachelines = (ncounters as f64 / std::mem::size_of::<u64>() as f64).ceil() as usize;
 
-        let fd = map.fd();
+        let fd = map.as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mmap = unsafe {
             memmap2::MmapOptions::new()
