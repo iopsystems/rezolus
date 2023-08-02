@@ -53,10 +53,11 @@ find an answer to, please open a
 ## Building
 
 Rezolus is built using the Rust toolchain. If you do not have the Rust toolchain
-installed, please see [rust-lang.org][rust-lang.org] to get
-started with Rust.
+installed, please see [rust-lang.org][rust-lang.org] to get started with Rust.
 
 ### Build Dependencies
+
+Rust >= 1.70.0
 
 A default build of Rezolus that targets Linux systems will have BPF support
 enabled by default. For this build, in addition to the rust toolchain, you will
@@ -69,8 +70,6 @@ need:
 
 When building for non-Linux systems or without the default features to disable
 the `bpf` feature, the only dependencies aside from the rust toolchain are:
-
-To build with eBPF support, the following additional dependencies are required:
 
 * clang >= 11.0
 
@@ -86,12 +85,17 @@ sudo apt install clang libelf-dev make pkg-config
 * clone this repository or transfer the contents of the repository to your build
   machine
 * change directory into the repository root
-* run `cargo build` in release mode, optionally enabling the bpf feature
+* run `cargo build` in release mode
 
 ```bash
 git clone https://github.com/iopsystems/rezolus
 cd rezolus
-cargo build --release --features bpf
+cargo build --release
+```
+
+**NOTE**: If you want to disable BPF support, you should build Rezolus with:
+```bash
+cargo build --release --no-default-features
 ```
 
 ### Configuration
