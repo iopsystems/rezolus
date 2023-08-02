@@ -40,13 +40,13 @@ jobs:
     strategy:
       matrix:
         distro:
-          - debian:buster   # oldstable
-          - debian:bullseye # stable
-          - debian:bookworm # testing
+          - debian:bullseye # oldstable
+          - debian:bookworm # stable
+          - debian:trixie   # testing
 
           # - ubuntu:trusty   # LTS until Apr 2024
           # - ubuntu:xenial   # LTS until Apr 2026
-          - ubuntu:bionic   # LTS until Apr 2028
+          # - ubuntu:bionic   # LTS until Apr 2028
           - ubuntu:focal    # LTS until Apr 2030
           - ubuntu:jammy    # LTS until Apr 2032
           - ubuntu:kinetic  # Previous release
