@@ -75,13 +75,13 @@ pub fn get_caches() -> Result<Vec<Vec<Cache>>> {
 
     for (index, caches) in ret.iter_mut().enumerate() {
         for cpu_id in &cpu_ids {
-            let cache = Cache::new(*cpu_id, index)?;
+            if let Ok(cache) = Cache::new(*cpu_id, index) {
+                if cache.shared_cpus[0] != *cpu_id {
+                    continue;
+                }
 
-            if cache.shared_cpus[0] != *cpu_id {
-                continue;
+                caches.push(cache);
             }
-
-            caches.push(cache);
         }
     }
 

@@ -5,12 +5,6 @@ pub struct Memory {
     total_bytes: u64,
 }
 
-// impl Memory {
-// 	pub fn total_bytes(&self) -> u64 {
-// 		self.total_bytes
-// 	}
-// }
-
 impl Memory {
     pub fn new() -> Result<Self> {
         let file = File::open("/proc/meminfo")?;

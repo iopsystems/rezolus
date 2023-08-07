@@ -48,20 +48,27 @@ pub fn get_cpus() -> Result<Vec<Cpu>> {
     let ids = read_list("/sys/devices/system/cpu/online")?;
     for id in ids {
         let core_id = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/core_id"))?;
-        let die_id = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/die_id"))?;
         let package_id = read_usize(format!(
             "/sys/devices/system/cpu/cpu{id}/topology/physical_package_id"
         ))?;
 
+        // if the platform does not expose die topology, use the package id
+        let die_id = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/die_id"))
+            .unwrap_or(package_id);
+
         let core_cpus = read_list(format!(
             "/sys/devices/system/cpu/cpu{id}/topology/core_cpus_list"
-        ))?;
-        let die_cpus = read_list(format!(
-            "/sys/devices/system/cpu/cpu{id}/topology/die_cpus_list"
         ))?;
         let package_cpus = read_list(format!(
             "/sys/devices/system/cpu/cpu{id}/topology/package_cpus_list"
         ))?;
+
+        // if the platform does not expose die topology, treat all cpus in same
+        // package as on the same die
+        let die_cpus = read_list(format!(
+            "/sys/devices/system/cpu/cpu{id}/topology/die_cpus_list"
+        ))
+        .unwrap_or(package_cpus.clone());
 
         let core_siblings = read_list(format!(
             "/sys/devices/system/cpu/cpu{id}/topology/core_siblings_list"
