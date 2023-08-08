@@ -1,6 +1,10 @@
 #[distributed_slice(TCP_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Receive::new(config))
+    if let Ok(s) = Receive::new(config) {
+        Box::new(s)
+    } else {
+        Box::new(Nop {})
+    }
 }
 
 mod bpf {
@@ -36,14 +40,15 @@ pub struct Receive {
 }
 
 impl Receive {
-    pub fn new(_config: &Config) -> Self {
+    pub fn new(_config: &Config) -> Result<Self, ()> {
         let builder = ModSkelBuilder::default();
         let mut skel = builder
             .open()
-            .expect("failed to open bpf builder")
+            .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
-            .expect("failed to load bpf program");
-        skel.attach().expect("failed to attach bpf");
+            .map_err(|e| error!("failed to load bpf program: {e}"))?;
+
+        skel.attach().map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
         let mut bpf = Bpf::from_skel(skel);
 
@@ -53,7 +58,7 @@ impl Receive {
             bpf.add_distribution(name, heatmap);
         }
 
-        Self {
+        Ok(Self {
             bpf,
             counter_interval: Duration::from_millis(10),
             counter_next: Instant::now(),
@@ -61,7 +66,7 @@ impl Receive {
             distribution_interval: Duration::from_millis(50),
             distribution_next: Instant::now(),
             distribution_prev: Instant::now(),
-        }
+        })
     }
 
     pub fn refresh_counters(&mut self, now: Instant) {

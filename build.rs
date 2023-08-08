@@ -30,14 +30,14 @@ mod bpf {
             #[cfg(target_arch = "x86_64")]
             SkeletonBuilder::new()
                 .source(&src)
-                .clang_args("-I src/common/bpf/x86_64")
+                .clang_args("-I src/common/bpf/x86_64 -fno-unwind-tables")
                 .build_and_generate(&tgt)
                 .unwrap();
 
             #[cfg(target_arch = "aarch64")]
             SkeletonBuilder::new()
                 .source(&src)
-                .clang_args("-I src/common/bpf/aarch64")
+                .clang_args("-I src/common/bpf/aarch64 -fno-unwind-tables")
                 .build_and_generate(&tgt)
                 .unwrap();
 
