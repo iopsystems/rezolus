@@ -1,6 +1,10 @@
 #[distributed_slice(BLOCK_IO_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    Box::new(Biolat::new(config))
+    if let Ok(s) = Biolat::new(config) {
+        Box::new(s)
+    } else {
+        Box::new(Nop {})
+    }
 }
 
 mod bpf {
@@ -12,6 +16,7 @@ use bpf::*;
 use super::stats::*;
 use super::*;
 use crate::common::bpf::*;
+use crate::common::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -38,14 +43,16 @@ pub struct Biolat {
 }
 
 impl Biolat {
-    pub fn new(_config: &Config) -> Self {
+    pub fn new(_config: &Config) -> Result<Self, ()> {
         let builder = ModSkelBuilder::default();
         let mut skel = builder
             .open()
-            .expect("failed to open bpf builder")
+            .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
-            .expect("failed to load bpf program");
-        skel.attach().expect("failed to attach bpf");
+            .map_err(|e| error!("failed to load bpf program: {e}"))?;
+
+        skel.attach()
+            .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
         let mut bpf = Bpf::from_skel(skel);
 
@@ -55,7 +62,7 @@ impl Biolat {
             bpf.add_distribution(name, heatmap);
         }
 
-        Self {
+        Ok(Self {
             bpf,
             counter_interval: Duration::from_millis(10),
             counter_next: Instant::now(),
@@ -63,7 +70,7 @@ impl Biolat {
             distribution_interval: Duration::from_millis(50),
             distribution_next: Instant::now(),
             distribution_prev: Instant::now(),
-        }
+        })
     }
 
     pub fn refresh_counters(&mut self, now: Instant) {
