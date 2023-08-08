@@ -45,13 +45,15 @@ pub struct Biolat {
 impl Biolat {
     pub fn new(_config: &Config) -> Result<Self, ()> {
         let builder = ModSkelBuilder::default();
-        llet mut skel = builder
+        let mut skel = builder
             .open()
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         skel.attach().map_err(|e| error!("failed to attach bpf program: {e}"))?;
+
+        let mut bpf = Bpf::from_skel(skel);
 
         let mut distributions = vec![("latency", &BLOCKIO_LATENCY), ("size", &BLOCKIO_SIZE)];
 

@@ -54,6 +54,8 @@ impl Syscall {
 
         skel.attach().map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
+        let mut bpf = Bpf::from_skel(skel);
+
         let fd = bpf.map("syscall_lut").as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mut syscall_lut = unsafe {

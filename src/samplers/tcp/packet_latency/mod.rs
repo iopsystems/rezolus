@@ -51,6 +51,8 @@ impl PacketLatency {
 
         skel.attach().map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
+        let mut bpf = Bpf::from_skel(skel);
+
         let mut distributions = vec![("latency", &TCP_PACKET_LATENCY)];
 
         for (name, heatmap) in distributions.drain(..) {
