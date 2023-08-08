@@ -54,7 +54,8 @@ impl Traffic {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
-        skel.attach().map_err(|e| error!("failed to attach bpf program: {e}"))?;
+        skel.attach()
+            .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
         let mut bpf = Bpf::from_skel(skel);
 
