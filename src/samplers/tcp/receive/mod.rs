@@ -16,6 +16,7 @@ use bpf::*;
 use super::stats::*;
 use super::*;
 use crate::common::bpf::*;
+use crate::common::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
