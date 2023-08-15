@@ -1301,7 +1301,7 @@ checksum = "456c603be3e8d448b072f410900c09faf164fbce2d480456f50eea6e25f9c848"
 
 [[package]]
 name = "rezolus"
-version = "3.3.2"
+version = "3.3.3-alpha.0"
 dependencies = [
  "backtrace",
  "clap",
