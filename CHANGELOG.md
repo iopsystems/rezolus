@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [3.3.3] - 2023-08-08
+
+### Added
+
+- Packaging support for `aarch64`
+
+### Fixed
+
+- Updated dependencies to pull-in fixes and improvements.
+
 ## [3.3.2] - 2023-08-08
 
 ### Fixed
@@ -47,7 +57,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.3.2...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.3.3...HEAD
+[3.3.3]: https://github.com/iopsystems/rezolus/compare/v3.3.2...v3.3.3
 [3.3.2]: https://github.com/iopsystems/rezolus/compare/v3.3.1...v3.3.2
 [3.3.1]: https://github.com/iopsystems/rezolus/compare/v3.3.0...v3.3.1
 [3.3.0]: https://github.com/iopsystems/rezolus/compare/v3.2.0...v3.3.0
