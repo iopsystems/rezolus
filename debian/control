@@ -2,7 +2,13 @@ Source: rezolus
 Section: devel
 Priority: optional
 Maintainer: IOP Systems <team@iop.systems>
-Build-Depends: build-essential, debhelper (>= 10), jq
+Standards-Version: 4.6.2
+Build-Depends: 
+    debhelper (>= 10),
+    pkg-config,
+    libelf-dev,
+    libelf-dev:native,
+    clang:native
 
 Package: rezolus
 Architecture: any

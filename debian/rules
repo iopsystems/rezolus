@@ -1,24 +1,38 @@
 #!/usr/bin/make -f
 
-TARGET  ?= $(shell cargo metadata --format-version 1 | jq -r .target_directory)
+include debian/cargo/cross-compile.mk
+
+export CARGO_HOME       := debian/cargo_home
+export CARGO_TARGET_DIR := debian/cargo_target
+
+TRIPLE  := $(DEB_HOST_RUST_TYPE)
 PROFILE ?= release
+CARGO   ?= cargo
+CARGOFLAGS ?= --locked
 
 # The debug profile is the only one whose directory under target does not match
 # the profile name so we need to special case it.
-ifeq (${PROFILE}, dev)
-BINDIR = "${TARGET}/debug"
+ifeq ($(strip ${PROFILE}), dev)
+DIRNAME := debug
 else
-BINDIR = "${TARGET}/${PROFILE}"
+DIRNAME := $(PROFILE)
 endif
+
+BINDIR := $(CARGO_TARGET_DIR)/$(TRIPLE)/$(DIRNAME)
 
 %:
 	dh $@
 
 override_dh_auto_clean:
+	rm -f debian/cargo_home/config.toml
+
+override_dh_auto_configure:
+	@mkdir -p debian/cargo_home
+	bash debian/cargo/create-config.sh > debian/cargo_home/config.toml
 
 override_dh_auto_build:
-	cargo build --profile ${PROFILE} --bins
+	$(CARGO) build --target $(DEB_HOST_RUST_TYPE) --profile $(PROFILE) --bins $(CARGOFLAGS)
 
 override_dh_auto_install:
-	mkdir -p debian/tmp
-	ln -s "${BINDIR}" debian/tmp/target
+	@mkdir -p debian/tmp/bin
+	cp -f "$(BINDIR)/rezolus" debian/tmp/bin/
