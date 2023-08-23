@@ -34,50 +34,88 @@ env:
 
 jobs:
   build-deb:
-    name: ${{ matrix.distro }}
+    name: "${{ matrix.distro }}:${{ matrix.release }}"
     runs-on: ubuntu-latest
-    container: ${{ matrix.distro }}
+    container: "${{ matrix.distro }}:${{ matrix.release }}"
     strategy:
       matrix:
-        distro:
-          - debian:bullseye # oldstable
-          - debian:bookworm # stable
-          - debian:trixie   # testing
+        include:
+          - { distro: debian, release: buster }
+          - { distro: debian, release: bullseye }
+          - { distro: debian, release: bookworm }
 
-          # - ubuntu:trusty   # LTS until Apr 2024
-          # - ubuntu:xenial   # LTS until Apr 2026
-          # - ubuntu:bionic   # LTS until Apr 2028
-          - ubuntu:focal    # LTS until Apr 2030
-          - ubuntu:jammy    # LTS until Apr 2032
-          - ubuntu:kinetic  # Previous release
-          - ubuntu:lunar    # Current release
+          # trusty and xenial are too old to properly support cross compiling
+          # (or a compiler that supports C++17).
+          # - { distro: ubuntu, release: trusty  } # LTS until Apr 2024
+          # - { distro: ubuntu, release: xenial  } # LTS until Apr 2026
+          - { distro: ubuntu, release: bionic  } # LTS until Apr 2028
+          - { distro: ubuntu, release: focal   } # LTS until Apr 2030
+          - { distro: ubuntu, release: jammy   } # LTS until Apr 2032
+          - { distro: ubuntu, release: kinetic } # Previous release
+          - { distro: ubuntu, release: lunar   } # Current release
       fail-fast: false
+    env:
+      # dpkg-buildpackage issues a warning if we attempt to cross compile and
+      # tests are still enabled. Disabling the test step fixes this.
+      #
+      # Note that we don't run tests anyway so this doesn't really change
+      # anything for us.
+      DEB_BUILD_OPTS: nocheck
     steps:
       - uses: actions/checkout@v3
 
-      - name: setup some variables
-        id: vars
-        shell: bash
+      - name: modify /etc/apt/sources.list
+        if: ${{ matrix.distro == 'ubuntu' }}
         run: |
-          echo  distro="$(echo '${{ matrix.distro }}' | cut -d : -f 1)" >> "$GITHUB_OUTPUT"
-          echo release="$(echo '${{ matrix.distro }}' | cut -d : -f 2)" >> "$GITHUB_OUTPUT"
+          cat /etc/apt/sources.list             | \
+            sed 's/^deb /deb [arch=amd64] /g'   | \
+            grep '^deb '                          \
+            > amd64.list
+          
+          cat /etc/apt/sources.list             | \
+            sed 's/^deb /deb [arch=arm64] /g'   | \
+            grep archive.ubuntu.com             | \
+            grep '^deb '                        | \
+            sed 's|archive.ubuntu.com/ubuntu|ports.ubuntu.com|g' \
+            > arm64.list
 
-      - name: Install apt dependencies
-        shell: bash
+          cat amd64.list arm64.list > /etc/apt/sources.list
+          rm amd64.list arm64.list
+
+      - name: enable arm64 dpkg architecture
+        run: dpkg --add-architecture arm64
+
+      - name: install buildsystem apt dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential pkg-config libssl-dev jq debhelper lsb-release \
-            cmake libclang-dev clang libelf-dev
+          apt-get install -y            \
+            build-essential             \
+            crossbuild-essential-arm64  \
+            curl jq lsb-release unzip gpg
 
       - name: install rust
-        shell: bash
         run: |
-          curl https://static.rust-lang.org/rustup/rustup-init.sh -o rustup-init.sh
-          chmod +x rustup-init.sh
+          curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
 
-          ./rustup-init.sh -y
-          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH
-          rm -f rustup-init.sh
+      - name: enable additional rustup targets
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      # Newer clang versions need a newer version of libstdc++ then bionic provides.
+      - name: install a newer libstc++ version needed for clang
+        if: ${{ matrix.release == 'bionic' }}
+        run: |
+          apt-get -q install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
+      # bpf-rs needs a newer version of clang than is available in older distro releases
+      - name: install a newer clang version
+        run: |
+          curl -sSL https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+          cat > /etc/apt/sources.list.d/llvm.list <<EOM
+            deb http://apt.llvm.org/$(lsb_release -sc)/ llvm-toolchain-$(lsb_release -sc) main
+          EOM
+          apt-get -q update
 
       - name: check cargo
         shell: bash
@@ -95,13 +133,25 @@ jobs:
         run: |
           echo 'RELEASE=${{ github.event.inputs.release }}' >> $GITHUB_ENV
 
+      # Changelogs with revisions cause dpkg-source to emit an error when
+      # building. We only use the source package to install the build deps
+      # so building it with an invalid version is ok.
+      - name: build source package
+        run: dpkg-source --build .
+
       - name: generate changelog
         shell: bash
         run: ./debian/gen-changelog.sh > debian/changelog
 
-      - name: build debs
-        shell: bash
-        run: dpkg-buildpackage -b -us -uc
+      - name: install arm64 build dependencies
+        run: apt-get build-dep -y -a arm64 ../rezolus*.dsc
+      - name: build arm64 package
+        run: dpkg-buildpackage -b -us -uc --host-arch arm64
+
+      - name: install x86_64 build dependencies
+        run: apt-get build-dep -y -a amd64 ../rezolus*.dsc
+      - name: build x86_64 package
+        run: dpkg-buildpackage -b -us -uc --host-arch amd64
 
       - name: copy debs
         shell: bash
@@ -113,7 +163,7 @@ jobs:
       - uses: actions/upload-artifact@v3
         with:
           path: target/debian/*
-          name: ${{ steps.vars.outputs.distro }}_${{ steps.vars.outputs.release }}_all
+          name: ${{ matrix.distro }}_${{ matrix.release }}_all
 
   upload-to-apt-repo:
     if: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}

@@ -1,2 +1,2 @@
-target/rezolus usr/bin/
+bin/rezolus usr/bin/
 config.toml etc/rezolus/

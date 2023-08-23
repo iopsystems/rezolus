@@ -1,4 +1,6 @@
 /*/
+!/cargo/
+!/source/
 debhelper-build-stamp
 files
 *.debhelper

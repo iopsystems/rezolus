@@ -1,0 +1,5 @@
+--tar-ignore=.git
+--tar-ignore=target
+--tar-ignore=.vscode
+--tar-ignore=debian/cargo_home
+--tar-ignore=debian/cargo_target

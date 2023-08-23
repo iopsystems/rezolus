@@ -22,27 +22,27 @@ mod bpf {
 
     pub fn generate() {
         let out_dir = std::env::var("OUT_DIR").unwrap();
+        let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
         for (sampler, prog) in SOURCES {
             let src = format!("src/samplers/{sampler}/{prog}/mod.bpf.c");
             let tgt = format!("{out_dir}/{sampler}_{prog}.bpf.rs");
 
-            #[cfg(target_arch = "x86_64")]
-            SkeletonBuilder::new()
-                .source(&src)
-                .clang_args("-I src/common/bpf/x86_64 -fno-unwind-tables")
-                .build_and_generate(&tgt)
-                .unwrap();
-
-            #[cfg(target_arch = "aarch64")]
-            SkeletonBuilder::new()
-                .source(&src)
-                .clang_args("-I src/common/bpf/aarch64 -fno-unwind-tables")
-                .build_and_generate(&tgt)
-                .unwrap();
-
-            #[cfg(all(not(target_arch = "aarch64"), not(target_arch = "x86_64")))]
-            panic!("BPF support only available for x86_64 and aarch64 architectures");
+            if target_arch == "x86_64" {
+                SkeletonBuilder::new()
+                    .source(&src)
+                    .clang_args("-Isrc/common/bpf/x86_64 -fno-unwind-tables -D__TARGET_ARCH_x86")
+                    .build_and_generate(&tgt)
+                    .unwrap();
+            } else if target_arch == "aarch64" {
+                SkeletonBuilder::new()
+                    .source(&src)
+                    .clang_args("-Isrc/common/bpf/aarch64 -fno-unwind-tables -D__TARGET_ARCH_arm64")
+                    .build_and_generate(&tgt)
+                    .unwrap();
+            } else {
+                panic!("BPF support only available for x86_64 and aarch64 architectures");
+            }
 
             println!("cargo:rerun-if-changed={src}");
         }
