@@ -1,13 +1,10 @@
-// use crate::common::Noop;
 use super::stats::*;
 use super::*;
-use crate::common::Counter;
+use crate::common::{Counter, Nop};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
-use std::io::Seek;
+use std::io::{Read, Seek};
 
-#[cfg(target_os = "linux")]
 #[distributed_slice(MEMORY_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     if let Ok(s) = ProcVmstat::new(config) {
