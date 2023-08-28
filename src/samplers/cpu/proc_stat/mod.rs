@@ -17,6 +17,8 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
+const NAME: &str = "cpu::proc_stat";
+
 pub struct ProcStat {
     prev: Instant,
     next: Instant,
@@ -28,7 +30,12 @@ pub struct ProcStat {
 }
 
 impl ProcStat {
-    pub fn new(_config: &Config) -> Result<Self, ()> {
+    pub fn new(config: &Config) -> Result<Self, ()> {
+        // check if sampler should be enabled
+        if !config.enabled(NAME) {
+            return Err(());
+        }
+
         let now = Instant::now();
 
         let cpus = match hardware_info() {
@@ -96,7 +103,7 @@ impl ProcStat {
             nanos_per_tick,
             prev: now,
             next: now,
-            interval: Duration::from_millis(10),
+            interval: config.interval(NAME),
         })
     }
 }

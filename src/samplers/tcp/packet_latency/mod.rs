@@ -11,6 +11,8 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_packet_latency.bpf.rs"));
 }
 
+const NAME: &str = "tcp::packet_latency";
+
 use bpf::*;
 
 use super::stats::*;
@@ -42,7 +44,12 @@ pub struct PacketLatency {
 }
 
 impl PacketLatency {
-    pub fn new(_config: &Config) -> Result<Self, ()> {
+    pub fn new(config: &Config) -> Result<Self, ()> {
+        // check if sampler should be enabled
+        if !config.enabled(NAME) {
+            return Err(());
+        }
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
             .open()
@@ -63,10 +70,10 @@ impl PacketLatency {
 
         Ok(Self {
             bpf,
-            counter_interval: Duration::from_millis(10),
+            counter_interval: config.interval(NAME),
             counter_next: Instant::now(),
             counter_prev: Instant::now(),
-            distribution_interval: Duration::from_millis(50),
+            distribution_interval: config.distribution_interval(NAME),
             distribution_next: Instant::now(),
             distribution_prev: Instant::now(),
         })
