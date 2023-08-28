@@ -22,10 +22,18 @@ impl Config {
             })
             .unwrap();
 
-        toml::from_str(&content).map_err(|e| {
+        let config: Config = toml::from_str(&content).map_err(|e| {
             eprintln!("failed to parse config file: {e}");
             std::process::exit(1);
-        })
+        }).unwrap();
+
+        config.sampler_defaults.check();
+
+        for (name, config) in config.samplers.iter() {
+            config.check(name);
+        }
+
+        Ok(config)
     }
 
     pub fn sampler_defaults(&self) -> &SamplerDefaults {
@@ -99,12 +107,12 @@ pub fn enabled() -> bool {
     true
 }
 
-pub fn interval() -> core::time::Duration {
-    core::time::Duration::from_millis(10)
+pub fn interval() -> String {
+    "10ms".into()
 }
 
-pub fn distribution_interval() -> core::time::Duration {
-    core::time::Duration::from_millis(50)
+pub fn distribution_interval() -> String {
+    "50ms".into()
 }
 
 #[derive(Deserialize)]
@@ -112,22 +120,43 @@ pub struct SamplerDefaults {
     #[serde(default = "enabled")]
     enabled: bool,
     #[serde(default = "interval")]
-    interval: core::time::Duration,
+    interval: String,
     #[serde(default = "distribution_interval")]
-    distribution_interval: core::time::Duration,
+    distribution_interval: String,
 }
 
 impl SamplerDefaults {
+    pub fn check(&self) {
+        if let Err(e) = self.interval.parse::<humantime::Duration>() {
+            eprintln!("could not parse sampler default interval: {e}");
+            std::process::exit(1);
+        }
+        if self.interval() < Duration::from_millis(1) {
+            eprintln!("sampler default interval is too short. Minimum interval is: 1ms");
+            std::process::exit(1);
+        }
+
+        if let Err(e) = self.distribution_interval.parse::<humantime::Duration>() {
+            eprintln!("could not parse sampler default interval: {e}");
+            std::process::exit(1);
+        }
+
+        if self.distribution_interval() < Duration::from_millis(1) {
+            eprintln!("sampler default distribution interval is too short. Minimum interval is: 1ms");
+            std::process::exit(1);
+        }
+    }
+
     pub fn enabled(&self) -> bool {
         self.enabled
     }
 
     pub fn interval(&self) -> Duration {
-        Duration::from_nanos(self.interval.as_nanos() as _)
+        Duration::from_nanos(self.interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
     }
 
     pub fn distribution_interval(&self) -> Duration {
-        Duration::from_nanos(self.distribution_interval.as_nanos() as _)
+        Duration::from_nanos(self.distribution_interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
     }
 }
 
@@ -135,21 +164,42 @@ impl SamplerDefaults {
 pub struct SamplerConfig {
     enabled: bool,
     #[serde(default = "interval")]
-    interval: core::time::Duration,
+    interval: String,
     #[serde(default = "distribution_interval")]
-    distribution_interval: core::time::Duration,
+    distribution_interval: String,
 }
 
 impl SamplerConfig {
+    pub fn check(&self, name: &str) {
+        if let Err(e) = self.interval.parse::<humantime::Duration>() {
+            eprintln!("{name} sampler interval is not valid: {e}");
+            std::process::exit(1);
+        }
+        if self.interval() < Duration::from_millis(1) {
+            eprintln!("{name} sampler interval is too short. Minimum interval is: 1ms");
+            std::process::exit(1);
+        }
+
+        if let Err(e) = self.distribution_interval.parse::<humantime::Duration>() {
+            eprintln!("{name} sampler distribution interval is not valid: {e}");
+            std::process::exit(1);
+        }
+
+        if self.distribution_interval() < Duration::from_millis(1) {
+            eprintln!("{name} sampler distribution interval is too short. Minimum interval is: 1ms");
+            std::process::exit(1);
+        }
+    }
+
     pub fn enabled(&self) -> bool {
         self.enabled
     }
 
     pub fn interval(&self) -> Duration {
-        Duration::from_nanos(self.interval.as_nanos() as _)
+        Duration::from_nanos(self.interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
     }
 
     pub fn distribution_interval(&self) -> Duration {
-        Duration::from_nanos(self.distribution_interval.as_nanos() as _)
+        Duration::from_nanos(self.distribution_interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
     }
 }

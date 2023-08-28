@@ -1,4 +1,14 @@
 [general]
 listen = "0.0.0.0:4242"
 
-[samplers]
+# The sampler defaults
+[sampler-defaults]
+enabled = true
+interval = "10ms"
+distribution_interval_ms = "50ms"
+
+[[samplers.block_io]]
+enabled = true
+interval = "10ms"
+distribution_interval_ms = "50ms"
+
