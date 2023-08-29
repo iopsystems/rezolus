@@ -22,10 +22,12 @@ impl Config {
             })
             .unwrap();
 
-        let config: Config = toml::from_str(&content).map_err(|e| {
-            eprintln!("failed to parse config file: {e}");
-            std::process::exit(1);
-        }).unwrap();
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| {
+                eprintln!("failed to parse config file: {e}");
+                std::process::exit(1);
+            })
+            .unwrap();
 
         config.sampler_defaults.check();
 
@@ -142,7 +144,9 @@ impl SamplerDefaults {
         }
 
         if self.distribution_interval() < Duration::from_millis(1) {
-            eprintln!("sampler default distribution interval is too short. Minimum interval is: 1ms");
+            eprintln!(
+                "sampler default distribution interval is too short. Minimum interval is: 1ms"
+            );
             std::process::exit(1);
         }
     }
@@ -152,11 +156,21 @@ impl SamplerDefaults {
     }
 
     pub fn interval(&self) -> Duration {
-        Duration::from_nanos(self.interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
+        Duration::from_nanos(
+            self.interval
+                .parse::<humantime::Duration>()
+                .unwrap()
+                .as_nanos() as _,
+        )
     }
 
     pub fn distribution_interval(&self) -> Duration {
-        Duration::from_nanos(self.distribution_interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
+        Duration::from_nanos(
+            self.distribution_interval
+                .parse::<humantime::Duration>()
+                .unwrap()
+                .as_nanos() as _,
+        )
     }
 }
 
@@ -186,7 +200,9 @@ impl SamplerConfig {
         }
 
         if self.distribution_interval() < Duration::from_millis(1) {
-            eprintln!("{name} sampler distribution interval is too short. Minimum interval is: 1ms");
+            eprintln!(
+                "{name} sampler distribution interval is too short. Minimum interval is: 1ms"
+            );
             std::process::exit(1);
         }
     }
@@ -196,10 +212,20 @@ impl SamplerConfig {
     }
 
     pub fn interval(&self) -> Duration {
-        Duration::from_nanos(self.interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
+        Duration::from_nanos(
+            self.interval
+                .parse::<humantime::Duration>()
+                .unwrap()
+                .as_nanos() as _,
+        )
     }
 
     pub fn distribution_interval(&self) -> Duration {
-        Duration::from_nanos(self.distribution_interval.parse::<humantime::Duration>().unwrap().as_nanos() as _)
+        Duration::from_nanos(
+            self.distribution_interval
+                .parse::<humantime::Duration>()
+                .unwrap()
+                .as_nanos() as _,
+        )
     }
 }
