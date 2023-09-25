@@ -27,9 +27,6 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
-// #[distributed_slice]
-// pub static BPF_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
-
 counter!(RUNTIME_SAMPLE_LOOP, "runtime/sample/loop");
 
 fn main() {
@@ -68,19 +65,6 @@ fn main() {
 
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
-    // let debug_output: Box<dyn Output> = if let Some(file) = config.debug().log_file() {
-    //     let backup = config
-    //         .debug()
-    //         .log_backup()
-    //         .unwrap_or(format!("{}.old", file));
-    //     Box::new(
-    //         File::new(&file, &backup, config.debug().log_max_size())
-    //             .expect("failed to open debug log file"),
-    //     )
-    // } else {
-    //     // by default, log to stderr
-    //     Box::new(Stderr::new())
-    // };
 
     let level = Level::Info;
 
@@ -90,8 +74,6 @@ fn main() {
         LogBuilder::new()
     }
     .output(debug_output)
-    // .log_queue_depth(config.debug().log_queue_depth())
-    // .single_message_size(config.debug().log_single_message_size())
     .build()
     .expect("failed to initialize debug log");
 
@@ -128,12 +110,6 @@ fn main() {
         samplers.push(sampler(&config));
     }
 
-    // let mut bpf_samplers: Vec<Box<dyn Sampler>> = Vec::new();
-
-    // for sampler in BPF_SAMPLERS {
-    //     bpf_samplers.push(sampler(&config));
-    // }
-
     info!("initialization complete");
 
     // main loop
@@ -160,11 +136,6 @@ fn main() {
 }
 
 pub trait Sampler {
-    // #[allow(clippy::result_unit_err)]
-    // fn configure(&self, config: &Config) -> Result<(), ()>;
-
     /// Do some sampling and updating of stats
     fn sample(&mut self);
-
-    // fn name(&self) -> &str;
 }
