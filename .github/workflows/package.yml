@@ -51,7 +51,6 @@ jobs:
           - { distro: ubuntu, release: bionic  } # LTS until Apr 2028
           - { distro: ubuntu, release: focal   } # LTS until Apr 2030
           - { distro: ubuntu, release: jammy   } # LTS until Apr 2032
-          - { distro: ubuntu, release: kinetic } # Previous release
           - { distro: ubuntu, release: lunar   } # Current release
       fail-fast: false
     env:
