@@ -196,3 +196,36 @@ jobs:
             gcloud artifacts apt upload "$release" --source "$artifact"
             echo "::endgroup::"
           done
+
+  upload-release-artifacts:
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    needs:
+      - build-deb
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/download-artifact@v3
+        with:
+          path: target/debian/
+
+      - name: upload packages
+        shell: bash
+        run: |
+          set -x
+          shopt -s nullglob
+
+          url="$(echo '${{ github.event.release.upload_url }}' | sed -e 's/{.*}//g')"
+
+          for artifact in target/debian/**; do
+            name="$(basename "$artifact")"
+            distro="$(echo "$artifact" | cut -d _ -f 1)"
+            release="$(echo "$artifact" | cut -d _ -f 2)"
+
+            curl -L -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/octet-stream" \
+              -H "X-Github-Api-Version: 2022-11-28" \
+              "$url?name=$distro-$release-$artifact" \
+              --data-binary "@$artifact"
+          done
