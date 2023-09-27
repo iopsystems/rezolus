@@ -111,7 +111,7 @@ impl Sampler for ProcStat {
 
         let elapsed = (now - self.prev).as_secs_f64();
 
-        if self.sample_proc_stat(now, elapsed).is_err() {
+        if self.sample_proc_stat(elapsed).is_err() {
             return;
         }
 
@@ -133,7 +133,7 @@ impl Sampler for ProcStat {
 }
 
 impl ProcStat {
-    fn sample_proc_stat(&mut self, now: Instant, elapsed: f64) -> Result<(), std::io::Error> {
+    fn sample_proc_stat(&mut self, elapsed: f64) -> Result<(), std::io::Error> {
         self.file.rewind()?;
 
         let mut data = String::new();
@@ -153,7 +153,7 @@ impl ProcStat {
             if *header == "cpu" {
                 for (field, counter) in self.counters_total.iter_mut().enumerate() {
                     if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
-                        counter.set(now, elapsed, v.wrapping_mul(self.nanos_per_tick))
+                        counter.set(elapsed, v.wrapping_mul(self.nanos_per_tick))
                     }
                 }
             } else if header.starts_with("cpu") {

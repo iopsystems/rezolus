@@ -1,5 +1,5 @@
 use crate::PERCENTILES;
-use metriken::{Counter, Gauge, Heatmap};
+use metriken::{AtomicHistogram, Counter, Gauge, RwLockHistogram};
 
 use warp::Filter;
 
@@ -85,20 +85,36 @@ mod handlers {
                     metric.formatted(metriken::Format::Prometheus),
                     gauge.value()
                 ));
-            } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+            } else if let Some(histogram) = any.downcast_ref::<AtomicHistogram>() {
+                if let Some(snapshot) = histogram.snapshot() {
+                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                if let Some(Ok(result)) = heatmap.percentiles(&percentiles) {
-                    for (percentile, value) in
-                        result.iter().zip(PERCENTILES.iter().map(|(_, v)| *v))
-                    {
-                        data.push(format!(
-                            "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
-                            metric.name(),
-                            metric.name(),
-                            value,
-                            percentile.bucket().high()
-                        ));
+                    if let Ok(result) = snapshot.percentiles(&percentiles) {
+                        for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
+                            data.push(format!(
+                                "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
+                                metric.name(),
+                                metric.name(),
+                                percentile,
+                                value,
+                            ));
+                        }
+                    }
+                }
+            } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
+                if let Some(snapshot) = histogram.snapshot() {
+                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                    if let Ok(result) = snapshot.percentiles(&percentiles) {
+                        for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
+                            data.push(format!(
+                                "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
+                                metric.name(),
+                                metric.name(),
+                                percentile,
+                                value,
+                            ));
+                        }
                     }
                 }
             }
@@ -139,18 +155,42 @@ mod handlers {
                     metric.formatted(metriken::Format::Simple),
                     gauge.value()
                 ));
-            } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+            } else if let Some(histogram) = any.downcast_ref::<AtomicHistogram>() {
+                if let Some(snapshot) = histogram.snapshot() {
+                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                if let Some(Ok(result)) = heatmap.percentiles(&percentiles) {
-                    for (percentile, label) in result.iter().zip(PERCENTILES.iter().map(|(l, _)| l))
-                    {
-                        data.push(format!(
-                            "{}/{}: {}",
-                            metric.formatted(metriken::Format::Simple),
-                            label,
-                            percentile.bucket().high()
-                        ));
+                    if let Ok(result) = snapshot.percentiles(&percentiles) {
+                        for (value, label) in result
+                            .iter()
+                            .map(|(_, b)| b.end())
+                            .zip(PERCENTILES.iter().map(|(l, _)| l))
+                        {
+                            data.push(format!(
+                                "{}/{}: {}",
+                                metric.formatted(metriken::Format::Simple),
+                                label,
+                                value
+                            ));
+                        }
+                    }
+                }
+            } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
+                if let Some(snapshot) = histogram.snapshot() {
+                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                    if let Ok(result) = snapshot.percentiles(&percentiles) {
+                        for (value, label) in result
+                            .iter()
+                            .map(|(_, b)| b.end())
+                            .zip(PERCENTILES.iter().map(|(l, _)| l))
+                        {
+                            data.push(format!(
+                                "{}/{}: {}",
+                                metric.formatted(metriken::Format::Simple),
+                                label,
+                                value
+                            ));
+                        }
                     }
                 }
             }

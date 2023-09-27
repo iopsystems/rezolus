@@ -31,17 +31,17 @@ counter_with_heatmap!(
     "number of TCP segments retransmitted"
 );
 
-heatmap!(
+bpfhistogram!(
     TCP_RX_SIZE,
     "tcp/receive/size",
     "distribution of receive segment sizes"
 );
-heatmap!(
+bpfhistogram!(
     TCP_TX_SIZE,
     "tcp/transmit/size",
     "distribution of transmit segment sizes"
 );
-heatmap!(TCP_JITTER, "tcp/jitter");
-heatmap!(TCP_SRTT, "tcp/srtt");
+bpfhistogram!(TCP_JITTER, "tcp/jitter");
+bpfhistogram!(TCP_SRTT, "tcp/srtt");
 
-heatmap!(TCP_PACKET_LATENCY, "tcp/packet_latency");
+bpfhistogram!(TCP_PACKET_LATENCY, "tcp/packet_latency");

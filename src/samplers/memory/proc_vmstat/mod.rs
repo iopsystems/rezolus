@@ -58,7 +58,7 @@ impl Sampler for ProcVmstat {
 
         let elapsed = (now - self.prev).as_secs_f64();
 
-        if self.sample_proc_vmstat(now, elapsed).is_err() {
+        if self.sample_proc_vmstat(elapsed).is_err() {
             return;
         }
 
@@ -80,7 +80,7 @@ impl Sampler for ProcVmstat {
 }
 
 impl ProcVmstat {
-    fn sample_proc_vmstat(&mut self, now: Instant, elapsed: f64) -> Result<(), std::io::Error> {
+    fn sample_proc_vmstat(&mut self, elapsed: f64) -> Result<(), std::io::Error> {
         self.file.rewind()?;
 
         let mut data = String::new();
@@ -97,7 +97,7 @@ impl ProcVmstat {
 
             if let Some(counter) = self.counters.get_mut(*parts.first().unwrap()) {
                 if let Some(Ok(v)) = parts.get(1).map(|v| v.parse::<u64>()) {
-                    counter.set(now, elapsed, v);
+                    counter.set(elapsed, v);
                 }
             }
         }

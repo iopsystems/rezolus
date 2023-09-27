@@ -48,7 +48,7 @@ counter_with_heatmap!(
     "syscall/socket",
     "tracks socket related syscalls (accept, connect, bind, setsockopt, ...)"
 );
-heatmap!(
+bpfhistogram!(
     SYSCALL_TOTAL_LATENCY,
     "syscall/total/latency",
     "latency of all syscalls"

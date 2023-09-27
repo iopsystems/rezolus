@@ -22,12 +22,12 @@ use super::*;
 pub struct Distribution<'a> {
     _map: &'a libbpf_rs::Map,
     mmap: memmap2::MmapMut,
-    prev: [u64; HISTOGRAM_BUCKETS],
-    heatmap: &'static Heatmap,
+    buffer: [u64; HISTOGRAM_BUCKETS],
+    histogram: &'static RwLockHistogram,
 }
 
 impl<'a> Distribution<'a> {
-    pub fn new(map: &'a libbpf_rs::Map, heatmap: &'static Heatmap) -> Self {
+    pub fn new(map: &'a libbpf_rs::Map, histogram: &'static RwLockHistogram) -> Self {
         let fd = map.as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mmap = unsafe {
@@ -40,13 +40,13 @@ impl<'a> Distribution<'a> {
         Self {
             _map: map,
             mmap,
-            prev: [0; HISTOGRAM_BUCKETS],
-            heatmap,
+            buffer: [0; HISTOGRAM_BUCKETS],
+            histogram,
         }
     }
 
-    pub fn refresh(&mut self, now: Instant) {
-        for (idx, prev) in self.prev.iter_mut().enumerate() {
+    pub fn refresh(&mut self) {
+        for idx in 0..HISTOGRAM_BUCKETS {
             let start = idx * std::mem::size_of::<u64>();
             let val = u64::from_ne_bytes([
                 self.mmap[start + 0],
@@ -59,14 +59,9 @@ impl<'a> Distribution<'a> {
                 self.mmap[start + 7],
             ]);
 
-            let delta = val - *prev;
-
-            *prev = val;
-
-            if delta > 0 {
-                let value = key_to_value(idx as u64);
-                let _ = self.heatmap.add(now, value as _, delta as _);
-            }
+            self.buffer[idx] = val;
         }
+
+        let _ = self.histogram.update_from(&self.buffer);
     }
 }

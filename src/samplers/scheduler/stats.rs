@@ -1,11 +1,11 @@
 use crate::*;
 
-heatmap!(
+bpfhistogram!(
     SCHEDULER_RUNQUEUE_LATENCY,
     "scheduler/runqueue/latency",
     "distribution of task wait times in the runqueue"
 );
-heatmap!(
+bpfhistogram!(
     SCHEDULER_RUNNING,
     "scheduler/running",
     "distribution of task on-cpu time"

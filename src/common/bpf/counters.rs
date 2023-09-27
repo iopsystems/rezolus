@@ -50,7 +50,7 @@ impl<'a> Counters<'a> {
         }
     }
 
-    pub fn refresh(&mut self, now: Instant, elapsed: f64) {
+    pub fn refresh(&mut self, elapsed: f64) {
         for value in self.values.iter_mut() {
             *value = 0;
         }
@@ -75,7 +75,7 @@ impl<'a> Counters<'a> {
         }
 
         for (value, counter) in self.values.iter().zip(self.counters.iter_mut()) {
-            counter.set(now, elapsed, *value);
+            counter.set(elapsed, *value);
         }
     }
 }

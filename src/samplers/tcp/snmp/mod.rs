@@ -63,7 +63,7 @@ impl Sampler for Snmp {
         if let Ok(nested_map) = NestedMap::try_from_procfs(&mut self.file) {
             for (counter, pkey, lkey) in self.counters.iter_mut() {
                 if let Some(curr) = nested_map.get(pkey, lkey) {
-                    counter.set(now, elapsed, curr);
+                    counter.set(elapsed, curr);
                 }
             }
         }

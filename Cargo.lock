@@ -548,7 +548,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "810bf487a6208ba59a521f186cf1af91ee03711518671f8a01ed51c3651d8194"
 dependencies = [
  "clocksource",
- "histogram",
+ "histogram 0.7.4",
  "parking_lot",
  "thiserror",
 ]
@@ -572,6 +572,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e673d137229619d5c2c8903b6ed5852b43636c0017ff2e66b1aafb8ccf04b80b"
 dependencies = [
  "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "histogram"
+version = "0.8.0"
+source = "git+https://github.com/brayniac/rustcommon?branch=metriken-histograms#94519075f41cee206c6f16a6f0cc6c3030481896"
+dependencies = [
  "thiserror",
 ]
 
@@ -862,7 +870,20 @@ checksum = "daa97a9e24ba40ec25d997efe33ce88c5d27eace316539a58a0271806e1dce36"
 dependencies = [
  "heatmap",
  "linkme",
- "metriken-derive",
+ "metriken-derive 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "once_cell",
+ "parking_lot",
+ "phf",
+]
+
+[[package]]
+name = "metriken"
+version = "0.2.4"
+source = "git+https://github.com/brayniac/rustcommon?branch=metriken-histograms#94519075f41cee206c6f16a6f0cc6c3030481896"
+dependencies = [
+ "histogram 0.8.0",
+ "linkme",
+ "metriken-derive 0.2.0 (git+https://github.com/brayniac/rustcommon?branch=metriken-histograms)",
  "once_cell",
  "parking_lot",
  "phf",
@@ -873,6 +894,17 @@ name = "metriken-derive"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0213a7a12e01c66357d1f3491e2d7d74b2373540ea0a4bfd928a4c0e5e02f432"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "metriken-derive"
+version = "0.2.0"
+source = "git+https://github.com/brayniac/rustcommon?branch=metriken-histograms#94519075f41cee206c6f16a6f0cc6c3030481896"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1329,7 +1361,7 @@ dependencies = [
  "libc",
  "linkme",
  "memmap2 0.5.10",
- "metriken",
+ "metriken 0.2.4 (git+https://github.com/brayniac/rustcommon?branch=metriken-histograms)",
  "nvml-wrapper",
  "once_cell",
  "ouroboros",
@@ -1354,7 +1386,7 @@ dependencies = [
  "ahash",
  "clocksource",
  "log",
- "metriken",
+ "metriken 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "mpmc",
 ]
 
