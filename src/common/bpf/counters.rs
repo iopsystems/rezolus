@@ -55,22 +55,37 @@ impl<'a> Counters<'a> {
             *value = 0;
         }
 
-        for cpu in 0..MAX_CPUS {
-            for idx in 0..self.counters.len() {
-                let start =
-                    (cpu * self.cachelines * CACHELINE_SIZE) + (idx * std::mem::size_of::<u64>());
-                let value = u64::from_ne_bytes([
-                    self.mmap[start + 0],
-                    self.mmap[start + 1],
-                    self.mmap[start + 2],
-                    self.mmap[start + 3],
-                    self.mmap[start + 4],
-                    self.mmap[start + 5],
-                    self.mmap[start + 6],
-                    self.mmap[start + 7],
-                ]);
+        let counters_per_cpu = self.cachelines * CACHELINE_SIZE / std::mem::size_of::<u64>();
 
-                self.values[idx] = self.values[idx].wrapping_add(value);
+        let (_prefix, values, _suffix) = unsafe { self.mmap.align_to::<u64>() };
+
+        // if the number of aligned u64 values matches the total number of
+        // per-cpu counters, then we can use a more efficient update strategy
+        if values.len() == MAX_CPUS * counters_per_cpu {
+            for cpu in 0..MAX_CPUS {
+                for idx in 0..self.counters.len() {
+                    self.values[idx] =
+                        self.values[idx].wrapping_add(values[idx + cpu * counters_per_cpu]);
+                }
+            }
+        } else {
+            for cpu in 0..MAX_CPUS {
+                for idx in 0..self.counters.len() {
+                    let start = (cpu * self.cachelines * CACHELINE_SIZE)
+                        + (idx * std::mem::size_of::<u64>());
+                    let value = u64::from_ne_bytes([
+                        self.mmap[start + 0],
+                        self.mmap[start + 1],
+                        self.mmap[start + 2],
+                        self.mmap[start + 3],
+                        self.mmap[start + 4],
+                        self.mmap[start + 5],
+                        self.mmap[start + 6],
+                        self.mmap[start + 7],
+                    ]);
+
+                    self.values[idx] = self.values[idx].wrapping_add(value);
+                }
             }
         }
 
