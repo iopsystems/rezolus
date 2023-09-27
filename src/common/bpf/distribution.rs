@@ -51,8 +51,8 @@ impl<'a> Distribution<'a> {
 
         let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
 
-        if values.len() == HISTOGRAM_BUCKETS {
-            let _ = self.histogram.update_from(&values);
+        if buckets.len() == HISTOGRAM_BUCKETS {
+            let _ = self.histogram.update_from(&buckets);
         } else {
             for (idx, bucket) in self.buffer.iter_mut().enumerate() {
                 let start = idx * std::mem::size_of::<u64>();
