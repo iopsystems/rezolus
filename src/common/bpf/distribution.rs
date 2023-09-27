@@ -46,22 +46,40 @@ impl<'a> Distribution<'a> {
     }
 
     pub fn refresh(&mut self) {
-        for idx in 0..HISTOGRAM_BUCKETS {
-            let start = idx * std::mem::size_of::<u64>();
-            let val = u64::from_ne_bytes([
-                self.mmap[start + 0],
-                self.mmap[start + 1],
-                self.mmap[start + 2],
-                self.mmap[start + 3],
-                self.mmap[start + 4],
-                self.mmap[start + 5],
-                self.mmap[start + 6],
-                self.mmap[start + 7],
-            ]);
+        // If the mmap'd region is properly aligned we can more efficiently
+        // update the histogram. Otherwise, fall-back to the old strategy.
 
-            self.buffer[idx] = val;
+        let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
+
+        if values.len() == HISTOGRAM_BUCKETS {
+            let _ = self.histogram.update_from(&values);
+
+            for (value, bucket) in values.iter().zip(buckets.iter()) {
+                bucket.store(*value, Ordering::Relaxed)
+            }
+        } else {
+            for (idx, bucket) in buckets.iter().enumerate() {
+                let start = idx * std::mem::size_of::<u64>();
+
+                if start + 7 >= self.mmap.len() {
+                    break;
+                }
+
+                let val = u64::from_ne_bytes([
+                    self.mmap[start + 0],
+                    self.mmap[start + 1],
+                    self.mmap[start + 2],
+                    self.mmap[start + 3],
+                    self.mmap[start + 4],
+                    self.mmap[start + 5],
+                    self.mmap[start + 6],
+                    self.mmap[start + 7],
+                ]);
+
+                bucket.store(val, Ordering::Relaxed);
+            }
+
+            let _ = self.histogram.update_from(&self.buffer);
         }
-
-        let _ = self.histogram.update_from(&self.buffer);
     }
 }

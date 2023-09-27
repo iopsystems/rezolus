@@ -20,32 +20,12 @@ const CACHELINE_SIZE: usize = 64;
 static MAX_CPUS: usize = 1024;
 
 /// The number of histogram buckets based on a rustcommon histogram with the
-/// parameters `m = 0`, `r = 8`, `n = 64`.
+/// parameters `grouping_power = 7` `max_value_power = 64`.
 ///
 /// NOTE: this *must* remain in-sync across both C and Rust components of BPF
 /// code.
 const HISTOGRAM_BUCKETS: usize = 7424;
 const HISTOGRAM_PAGES: usize = 15;
-
-/// This function converts indices back to values for rustcommon histogram with
-/// the parameters `m = 0`, `r = 8`, `n = 64`. This covers the entire range from
-/// 1 to u64::MAX and uses 7424 buckets per histogram, which works out to 58KB
-/// for each histogram in kernelspace (64bit counters). In userspace, we will
-/// we will likely have 61 histograms => 1769KB per stat in userspace.
-// pub fn key_to_value(index: u64) -> u64 {
-//     // g = index >> (r - m - 1)
-//     let g = index >> 7;
-//     // b = index - g * G + 1
-//     let b = index - g * 128 + 1;
-
-//     if g < 1 {
-//         // (1 << m) * b - 1
-//         b - 1
-//     } else {
-//         // (1 << (r - 2 + g)) + (1 << (m + g - 1)) * b - 1
-//         (1 << (6 + g)) + (1 << (g - 1)) * b - 1
-//     }
-// }
 
 #[self_referencing]
 pub struct Bpf<T: 'static> {
