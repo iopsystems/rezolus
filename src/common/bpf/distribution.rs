@@ -53,10 +53,6 @@ impl<'a> Distribution<'a> {
 
         if values.len() == HISTOGRAM_BUCKETS {
             let _ = self.histogram.update_from(&values);
-
-            for (value, bucket) in values.iter().zip(buckets.iter()) {
-                bucket.store(*value, Ordering::Relaxed)
-            }
         } else {
             for (idx, bucket) in self.buffer.iter_mut().enumerate() {
                 let start = idx * std::mem::size_of::<u64>();
@@ -76,7 +72,7 @@ impl<'a> Distribution<'a> {
                     self.mmap[start + 7],
                 ]);
 
-                bucket = val;
+                *bucket = val;
             }
 
             let _ = self.histogram.update_from(&self.buffer);
