@@ -86,14 +86,18 @@ mod handlers {
                     gauge.value()
                 ));
             } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-                for (_label, percentile) in PERCENTILES {
-                    if let Some(Ok(bucket)) = heatmap.percentile(*percentile) {
+                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                if let Some(Ok(result)) = heatmap.percentiles(&percentiles) {
+                    for (percentile, value) in
+                        result.iter().zip(PERCENTILES.iter().map(|(_, v)| *v))
+                    {
                         data.push(format!(
                             "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
                             metric.name(),
                             metric.name(),
-                            percentile,
-                            bucket.high()
+                            value,
+                            percentile.bucket().high()
                         ));
                     }
                 }
@@ -136,13 +140,16 @@ mod handlers {
                     gauge.value()
                 ));
             } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-                for (label, p) in PERCENTILES {
-                    if let Some(Ok(bucket)) = heatmap.percentile(*p) {
+                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                if let Some(Ok(result)) = heatmap.percentiles(&percentiles) {
+                    for (percentile, label) in result.iter().zip(PERCENTILES.iter().map(|(l, _)| l))
+                    {
                         data.push(format!(
                             "{}/{}: {}",
                             metric.formatted(metriken::Format::Simple),
                             label,
-                            bucket.high()
+                            percentile.bucket().high()
                         ));
                     }
                 }

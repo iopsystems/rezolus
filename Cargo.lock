@@ -543,9 +543,9 @@ dependencies = [
 
 [[package]]
 name = "heatmap"
-version = "0.7.7"
+version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ff337aee5a51159480a1c9bc225f36a7d87543023aa118d5843ece2f125bccb"
+checksum = "810bf487a6208ba59a521f186cf1af91ee03711518671f8a01ed51c3651d8194"
 dependencies = [
  "clocksource",
  "histogram",
@@ -856,9 +856,9 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d081482206e965281c71f40f1899160b9578bb8f7688b7821b144a43bc3e701a"
+checksum = "daa97a9e24ba40ec25d997efe33ce88c5d27eace316539a58a0271806e1dce36"
 dependencies = [
  "heatmap",
  "linkme",
