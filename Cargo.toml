@@ -60,3 +60,6 @@ members = [
     ".",
     "crates/*"
 ]
+
+[workspace.dependencies]
+systeminfo = { path = "crates/systeminfo" }

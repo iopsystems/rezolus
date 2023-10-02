@@ -1,10 +1,12 @@
 //! Gather a comprehensive description of the current system.
-//! 
+//!
 
 use std::io;
 
 #[macro_use]
 extern crate serde;
+
+pub mod hwinfo;
 
 /// Read the [`SystemInfo`] for the current system.
 pub fn systeminfo() -> io::Result<SystemInfo> {
@@ -12,13 +14,15 @@ pub fn systeminfo() -> io::Result<SystemInfo> {
 }
 
 #[non_exhaustive]
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SystemInfo {
-
+    pub hwinfo: crate::hwinfo::HwInfo,
 }
 
 impl SystemInfo {
     pub fn new() -> io::Result<Self> {
-        todo!()
+        Ok(Self {
+            hwinfo: crate::hwinfo::HwInfo::new()?,
+        })
     }
 }

@@ -13,6 +13,7 @@ cli = [
 [dependencies]
 serde = { version = "1.0.188", features = ["derive"] }
 serde_json = { version = "1.0.107", optional = true }
+walkdir = "2.4.0"
 
 
 [[bin]]
