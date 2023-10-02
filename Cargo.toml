@@ -57,5 +57,6 @@ codegen-units = 1
 
 [workspace]
 members = [
-    "."
+    ".",
+    "crates/*"
 ]
