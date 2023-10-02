@@ -1345,6 +1345,7 @@ dependencies = [
  "serde_json",
  "syscall-numbers",
  "sysconf",
+ "systeminfo",
  "tokio",
  "toml",
  "walkdir",
