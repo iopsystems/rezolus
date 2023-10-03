@@ -1,4 +1,8 @@
-use super::*;
+use std::path::Path;
+
+use super::util::*;
+use crate::error::ErrorSource;
+use crate::{Error, Result};
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,17 +56,16 @@ impl Cache {
 }
 
 fn read_cache_type(path: impl AsRef<Path>) -> Result<CacheType> {
-    let raw = std::fs::read_to_string(path)?;
+    let path = path.as_ref();
+
+    let raw = std::fs::read_to_string(path).map_err(|e| Error::unreadable(e, path))?;
     let raw = raw.trim();
 
     match raw {
-        "Data" | "data" => Ok(CacheType::Data),
-        "Instruction" | "instruction" => Ok(CacheType::Instruction),
-        "Unified" | "unified" => Ok(CacheType::Unified),
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "unexpected cache type",
-        )),
+        _ if raw.eq_ignore_ascii_case("data") => Ok(CacheType::Data),
+        _ if raw.eq_ignore_ascii_case("instruction") => Ok(CacheType::Instruction),
+        _ if raw.eq_ignore_ascii_case("unified") => Ok(CacheType::Unified),
+        _ => Err(Error::unparseable(ErrorSource::None, path)),
     }
 }
 

@@ -1,4 +1,11 @@
-use super::*;
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
+
+use super::util::*;
+use super::Cache;
+use crate::{Error, Result};
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,7 +50,7 @@ impl Cpu {
 }
 
 pub fn get_cpus() -> Result<Vec<Cpu>> {
-    let mut tmp = HashMap::new();
+    let mut tmp = BTreeMap::new();
 
     // first read from /sys and build up some basic information
     let ids = read_list("/sys/devices/system/cpu/online")?;
@@ -109,63 +116,62 @@ pub fn get_cpus() -> Result<Vec<Cpu>> {
 
     // there's a lot of information that's easier to get from /proc/cpuinfo
 
-    let file = File::open("/proc/cpuinfo")?;
-    let reader = BufReader::new(file);
+    let path = "/proc/cpuinfo";
+    let file = File::open(path).map_err(|e| Error::unreadable(e, path))?;
+    let mut reader = BufReader::new(file);
 
     let mut id: Option<usize> = None;
+    let mut line = String::new();
 
-    for line in reader.lines() {
-        if line.is_err() {
-            break;
+    while reader
+        .read_line(&mut line)
+        .map_err(|e| Error::unreadable(e, path))?
+        != 0
+    {
+        let line = ClearGuard::new(&mut line);
+        let parts: Vec<&str> = line.split(':').map(|v| v.trim()).collect();
+
+        if parts.len() != 2 {
+            continue;
         }
 
-        let line = line.unwrap();
-
-        let parts: Vec<String> = line.split(':').map(|v| v.trim().to_owned()).collect();
-
-        if parts.len() == 2 {
-            match parts[0].as_str() {
-                "processor" => {
-                    if let Ok(v) = parts[1].parse() {
-                        id = Some(v);
-                    }
+        match parts[0] {
+            "processor" => {
+                if let Ok(v) = parts[1].parse() {
+                    id = Some(v);
                 }
-                "vendor_id" => {
-                    if let Some(id) = id {
-                        if let Some(cpu) = tmp.get_mut(&id) {
-                            cpu.vendor = Some(parts[1].clone());
-                        }
-                    }
-                }
-                "model name" => {
-                    if let Some(id) = id {
-                        if let Some(cpu) = tmp.get_mut(&id) {
-                            cpu.model_name = Some(parts[1].clone());
-                        }
-                    }
-                }
-                "microcode" => {
-                    if let Some(id) = id {
-                        if let Some(cpu) = tmp.get_mut(&id) {
-                            cpu.microcode = Some(parts[1].clone());
-                        }
-                    }
-                }
-                "flags" | "Features" => {
-                    if let Some(id) = id {
-                        if let Some(cpu) = tmp.get_mut(&id) {
-                            cpu.features = Some(parts[1].clone());
-                        }
-                    }
-                }
-                _ => {}
             }
+            "vendor_id" => {
+                if let Some(id) = id {
+                    if let Some(cpu) = tmp.get_mut(&id) {
+                        cpu.vendor = Some(parts[1].to_owned());
+                    }
+                }
+            }
+            "model name" => {
+                if let Some(id) = id {
+                    if let Some(cpu) = tmp.get_mut(&id) {
+                        cpu.model_name = Some(parts[1].to_owned());
+                    }
+                }
+            }
+            "microcode" => {
+                if let Some(id) = id {
+                    if let Some(cpu) = tmp.get_mut(&id) {
+                        cpu.microcode = Some(parts[1].to_owned());
+                    }
+                }
+            }
+            "flags" | "Features" => {
+                if let Some(id) = id {
+                    if let Some(cpu) = tmp.get_mut(&id) {
+                        cpu.features = Some(parts[1].to_owned());
+                    }
+                }
+            }
+            _ => (),
         }
     }
 
-    let mut ret: Vec<Cpu> = tmp.drain().map(|(_, v)| v).collect();
-
-    ret.sort_by(|a, b| a.id.cmp(&b.id));
-
-    Ok(ret)
+    Ok(tmp.into_values().collect())
 }

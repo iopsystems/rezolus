@@ -1,9 +1,6 @@
 //! Gather a comprehensive description of the current system.
 //!
 
-use crate::error::{ErrorKind, ErrorSource};
-use std::io;
-
 #[macro_use]
 extern crate serde;
 
@@ -26,7 +23,7 @@ pub struct SystemInfo {
 impl SystemInfo {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            hwinfo: crate::hwinfo::HwInfo::new().map_err(Error::io)?,
+            hwinfo: crate::hwinfo::HwInfo::new()?,
         })
     }
 }
