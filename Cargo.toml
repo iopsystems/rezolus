@@ -1,12 +1,18 @@
 [package]
 name = "rezolus"
-version = "3.3.4-alpha.0"
-license = "MIT OR Apache-2.0"
+version = { workspace = true }
+license = { workspace = true }
 publish = false
 edition = "2021"
 description = "High resolution systems performance telemetry agent"
 
+[workspace.package]
+version = "3.4.0"
+license = "MIT OR Apache-2.0"
+
 [dependencies]
+systeminfo = { workspace = true }
+
 backtrace = "0.3.69"
 clap = "4.3.24"
 clocksource = "0.6.0"
@@ -25,7 +31,7 @@ syscall-numbers = "3.1.0"
 tokio = { version = "1.32.0", features = ["full"] }
 toml = "0.7.6"
 walkdir = "2.3.3"
-warp = "0.3.5"
+warp = "0.3.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.21.2", optional = true }
@@ -50,3 +56,12 @@ codegen-units = 1
 debug = true
 lto = true
 codegen-units = 1
+
+[workspace]
+members = [
+    ".",
+    "crates/*"
+]
+
+[workspace.dependencies]
+systeminfo = { path = "crates/systeminfo" }
