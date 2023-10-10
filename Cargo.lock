@@ -1323,7 +1323,7 @@ checksum = "e5ea92a5b6195c6ef2a0295ea818b312502c6fc94dde986c5553242e18fd4ce2"
 
 [[package]]
 name = "rezolus"
-version = "3.4.0"
+version = "3.4.1-alpha.0"
 dependencies = [
  "backtrace",
  "clap",
@@ -1644,7 +1644,7 @@ dependencies = [
 
 [[package]]
 name = "systeminfo"
-version = "3.4.0"
+version = "3.4.1-alpha.0"
 dependencies = [
  "serde",
  "serde_json",
