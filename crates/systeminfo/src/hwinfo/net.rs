@@ -1,4 +1,9 @@
-use super::*;
+use std::ffi::OsStr;
+
+use walkdir::WalkDir;
+
+use super::util::*;
+use crate::{Error, Result};
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -20,9 +25,7 @@ pub struct Queues {
 }
 
 fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
-    let name = name.to_str().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "bad interface name")
-    })?;
+    let name = name.to_str().ok_or_else(Error::invalid_interface_name)?;
 
     // skip any that aren't "up"
     let operstate = read_string(format!("/sys/class/net/{name}/operstate"))?;
