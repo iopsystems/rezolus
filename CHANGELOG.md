@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [3.4.0] - 2023-10-10
+
+### Changed
+
+- Moved to fetching multiple percentiles at once to reduce overhead.
+- Refactor of the hardware info sampler into a separate crate to allow reuse and
+  make improvements to that sampler.
+
+### Fixed
+
+- Update `warp` to address RUSTSEC-2023-0065.
+
 ## [3.3.3] - 2023-08-08
 
 ### Added
