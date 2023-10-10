@@ -1,26 +1,27 @@
 use super::*;
 
-#[derive(Serialize)]
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Cpu {
-    id: usize,
+    pub id: usize,
 
-    core_id: usize,
-    die_id: usize,
-    package_id: usize,
+    pub core_id: usize,
+    pub die_id: usize,
+    pub package_id: usize,
 
-    core_cpus: Vec<usize>,
-    die_cpus: Vec<usize>,
-    package_cpus: Vec<usize>,
+    pub core_cpus: Vec<usize>,
+    pub die_cpus: Vec<usize>,
+    pub package_cpus: Vec<usize>,
 
-    core_siblings: Vec<usize>,
-    thread_siblings: Vec<usize>,
+    pub core_siblings: Vec<usize>,
+    pub thread_siblings: Vec<usize>,
 
-    microcode: Option<String>,
-    vendor: Option<String>,
-    model_name: Option<String>,
-    features: Option<String>,
+    pub microcode: Option<String>,
+    pub vendor: Option<String>,
+    pub model_name: Option<String>,
+    pub features: Option<String>,
 
-    caches: Vec<Cache>,
+    pub caches: Vec<Cache>,
 }
 
 impl Cpu {

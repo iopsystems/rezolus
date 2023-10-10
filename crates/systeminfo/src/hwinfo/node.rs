@@ -1,10 +1,11 @@
 use super::*;
 
-#[derive(Serialize)]
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
-    id: usize,
-    memory: Memory,
-    cpus: Vec<usize>,
+    pub id: usize,
+    pub memory: Memory,
+    pub cpus: Vec<usize>,
 }
 
 pub fn get_nodes() -> Result<Vec<Node>> {

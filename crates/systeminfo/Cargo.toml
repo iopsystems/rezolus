@@ -1,0 +1,22 @@
+[package]
+name = "systeminfo"
+edition = "2021"
+version = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[features]
+cli = [
+    "dep:serde_json"
+]
+
+[dependencies]
+serde = { version = "1.0.188", features = ["derive"] }
+serde_json = { version = "1.0.107", optional = true }
+walkdir = "2.4.0"
+
+
+[[bin]]
+name = "systeminfo"
+path = "src/main.rs"
+required-features = ["cli"]

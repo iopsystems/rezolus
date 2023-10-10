@@ -1,20 +1,22 @@
 use super::*;
 
-#[derive(Serialize)]
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Interface {
-    name: String,
-    carrier: bool,
-    speed: Option<usize>,
-    node: Option<usize>,
-    mtu: usize,
-    queues: Queues,
+    pub name: String,
+    pub carrier: bool,
+    pub speed: Option<usize>,
+    pub node: Option<usize>,
+    pub mtu: usize,
+    pub queues: Queues,
 }
 
-#[derive(Serialize)]
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Queues {
-    tx: usize,
-    rx: usize,
-    combined: usize,
+    pub tx: usize,
+    pub rx: usize,
+    pub combined: usize,
 }
 
 fn get_interface(name: &OsStr) -> Result<Option<Interface>> {

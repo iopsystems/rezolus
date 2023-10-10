@@ -1,8 +1,9 @@
 pub use super::*;
 
-#[derive(Serialize)]
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Memory {
-    total_bytes: u64,
+    pub total_bytes: u64,
 }
 
 impl Memory {

@@ -1,16 +1,17 @@
 use super::*;
 
-#[derive(Clone, Serialize)]
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Cache {
-    coherency_line_size: usize,
-    number_of_sets: usize,
-    shared_cpus: Vec<usize>,
-    size: String,
-    r#type: CacheType,
-    ways_of_associativity: usize,
+    pub coherency_line_size: usize,
+    pub number_of_sets: usize,
+    pub shared_cpus: Vec<usize>,
+    pub size: String,
+    pub r#type: CacheType,
+    pub ways_of_associativity: usize,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheType {
     Data,
