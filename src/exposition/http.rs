@@ -45,10 +45,16 @@ mod filters {
 
 mod handlers {
     use super::*;
+    use crate::SNAPSHOTS;
     use core::convert::Infallible;
 
     pub async fn prometheus_stats() -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
+
+        let snapshots = SNAPSHOTS.read().await;
+
+        let previous = snapshots.front();
+        let current = snapshots.back();
 
         for metric in &metriken::metrics() {
             let any = match metric.as_any() {
@@ -85,36 +91,41 @@ mod handlers {
                     metric.formatted(metriken::Format::Prometheus),
                     gauge.value()
                 ));
-            } else if let Some(histogram) = any.downcast_ref::<AtomicHistogram>() {
-                if let Some(snapshot) = histogram.snapshot() {
-                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+            } else if any.downcast_ref::<AtomicHistogram>().is_some()
+                || any.downcast_ref::<RwLockHistogram>().is_some()
+            {
+                if current.is_none() {
+                    continue;
+                }
 
-                    if let Ok(result) = snapshot.percentiles(&percentiles) {
-                        for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
-                            data.push(format!(
-                                "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
-                                metric.name(),
-                                metric.name(),
-                                percentile,
-                                value,
-                            ));
+                let snapshot = match (
+                    current.unwrap().get(metric.name()),
+                    previous.map(|p| p.get(metric.name())),
+                ) {
+                    (Some(current), Some(Some(previous))) => {
+                        if snapshots.len() < 61 {
+                            current.clone()
+                        } else {
+                            current.wrapping_sub(previous).unwrap()
                         }
                     }
-                }
-            } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                if let Some(snapshot) = histogram.snapshot() {
-                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+                    (Some(current), Some(None)) | (Some(current), None) => current.clone(),
+                    _ => {
+                        continue;
+                    }
+                };
 
-                    if let Ok(result) = snapshot.percentiles(&percentiles) {
-                        for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
-                            data.push(format!(
-                                "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
-                                metric.name(),
-                                metric.name(),
-                                percentile,
-                                value,
-                            ));
-                        }
+                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                if let Ok(result) = snapshot.percentiles(&percentiles) {
+                    for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
+                        data.push(format!(
+                            "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
+                            metric.name(),
+                            metric.name(),
+                            percentile,
+                            value,
+                        ));
                     }
                 }
             }
@@ -130,6 +141,11 @@ mod handlers {
 
     pub async fn human_stats() -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
+
+        let snapshots = SNAPSHOTS.read().await;
+
+        let previous = snapshots.front();
+        let current = snapshots.back();
 
         for metric in &metriken::metrics() {
             let any = match metric.as_any() {
@@ -155,42 +171,44 @@ mod handlers {
                     metric.formatted(metriken::Format::Simple),
                     gauge.value()
                 ));
-            } else if let Some(histogram) = any.downcast_ref::<AtomicHistogram>() {
-                if let Some(snapshot) = histogram.snapshot() {
-                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+            } else if any.downcast_ref::<AtomicHistogram>().is_some()
+                || any.downcast_ref::<RwLockHistogram>().is_some()
+            {
+                if current.is_none() {
+                    continue;
+                }
 
-                    if let Ok(result) = snapshot.percentiles(&percentiles) {
-                        for (value, label) in result
-                            .iter()
-                            .map(|(_, b)| b.end())
-                            .zip(PERCENTILES.iter().map(|(l, _)| l))
-                        {
-                            data.push(format!(
-                                "{}/{}: {}",
-                                metric.formatted(metriken::Format::Simple),
-                                label,
-                                value
-                            ));
+                let snapshot = match (
+                    current.unwrap().get(metric.name()),
+                    previous.map(|p| p.get(metric.name())),
+                ) {
+                    (Some(current), Some(Some(previous))) => {
+                        if snapshots.len() < 61 {
+                            current.clone()
+                        } else {
+                            current.wrapping_sub(previous).unwrap()
                         }
                     }
-                }
-            } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                if let Some(snapshot) = histogram.snapshot() {
-                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+                    (Some(current), Some(None)) | (Some(current), None) => current.clone(),
+                    _ => {
+                        continue;
+                    }
+                };
 
-                    if let Ok(result) = snapshot.percentiles(&percentiles) {
-                        for (value, label) in result
-                            .iter()
-                            .map(|(_, b)| b.end())
-                            .zip(PERCENTILES.iter().map(|(l, _)| l))
-                        {
-                            data.push(format!(
-                                "{}/{}: {}",
-                                metric.formatted(metriken::Format::Simple),
-                                label,
-                                value
-                            ));
-                        }
+                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                if let Ok(result) = snapshot.percentiles(&percentiles) {
+                    for (value, label) in result
+                        .iter()
+                        .map(|(_, b)| b.end())
+                        .zip(PERCENTILES.iter().map(|(l, _)| l))
+                    {
+                        data.push(format!(
+                            "{}/{}: {}",
+                            metric.formatted(metriken::Format::Simple),
+                            label,
+                            value
+                        ));
                     }
                 }
             }

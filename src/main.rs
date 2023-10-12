@@ -3,9 +3,18 @@ use clap::{Arg, Command};
 use linkme::distributed_slice;
 use metriken::Lazy;
 use ringlog::*;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
+
+type HistogramSnapshots = HashMap<String, metriken::histogram::Snapshot>;
+
+static SNAPSHOTS: Lazy<Arc<RwLock<VecDeque<HistogramSnapshots>>>> =
+    Lazy::new(|| Arc::new(RwLock::new(VecDeque::new())));
 
 mod common;
 mod config;
@@ -95,6 +104,47 @@ fn main() {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let _ = log.flush();
+        }
+    });
+
+    // spawn thread to maintain histogram snapshots
+    rt.spawn(async {
+        loop {
+            // build a current snapshot for all histograms
+
+            let mut current = HashMap::new();
+
+            for metric in metriken::metrics().iter() {
+                let any = if let Some(any) = metric.as_any() {
+                    any
+                } else {
+                    continue;
+                };
+
+                if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>() {
+                    if let Some(snapshot) = histogram.snapshot() {
+                        current.insert(metric.name().to_string(), snapshot);
+                    }
+                } else if let Some(histogram) = any.downcast_ref::<metriken::RwLockHistogram>() {
+                    if let Some(snapshot) = histogram.snapshot() {
+                        current.insert(metric.name().to_string(), snapshot);
+                    }
+                }
+            }
+
+            // acquire a lock and update the snapshots
+
+            let mut snapshots = SNAPSHOTS.write().await;
+
+            // we maintain 1 minute of history, which requires 61 secondly
+            // snapshots
+            if snapshots.len() == 61 {
+                let _ = snapshots.pop_front();
+            }
+
+            snapshots.push_back(current);
+
+            tokio::time::sleep(core::time::Duration::from_secs(1)).await;
         }
     });
 
