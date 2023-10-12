@@ -4,7 +4,6 @@ use linkme::distributed_slice;
 use metriken::Lazy;
 use ringlog::*;
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
