@@ -82,7 +82,7 @@ impl Snapshots {
                 if let Some(snapshot) = histogram.snapshot() {
                     if let Some(previous) = self.previous.get(&key) {
                         self.deltas
-                            .insert(key, snapshot.wrapping_sub(previous).unwrap());
+                            .insert(key.clone(), snapshot.wrapping_sub(previous).unwrap());
                     }
 
                     current.insert(key, snapshot);
@@ -91,7 +91,7 @@ impl Snapshots {
                 if let Some(snapshot) = histogram.snapshot() {
                     if let Some(previous) = self.previous.get(&key) {
                         self.deltas
-                            .insert(key, snapshot.wrapping_sub(previous).unwrap());
+                            .insert(key.clone(), snapshot.wrapping_sub(previous).unwrap());
                     }
 
                     current.insert(key, snapshot);
