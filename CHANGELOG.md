@@ -69,7 +69,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.3.3...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.4.0...HEAD
+[3.3.3]: https://github.com/iopsystems/rezolus/compare/v3.3.3...v3.4.0
 [3.3.3]: https://github.com/iopsystems/rezolus/compare/v3.3.2...v3.3.3
 [3.3.2]: https://github.com/iopsystems/rezolus/compare/v3.3.1...v3.3.2
 [3.3.1]: https://github.com/iopsystems/rezolus/compare/v3.3.0...v3.3.1
