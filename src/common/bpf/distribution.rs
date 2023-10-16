@@ -32,7 +32,7 @@ impl<'a> Distribution<'a> {
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mmap = unsafe {
             memmap2::MmapOptions::new()
-                .len(HISTOGRAM_PAGES * PAGE_SIZE) // TODO(bmartin): double check this...
+                .len(HISTOGRAM_PAGES * PAGE_SIZE)
                 .map_mut(&file)
                 .expect("failed to mmap() bpf distribution")
         };
@@ -54,6 +54,8 @@ impl<'a> Distribution<'a> {
         if buckets.len() == HISTOGRAM_BUCKETS {
             let _ = self.histogram.update_from(&buckets);
         } else {
+            warn!("mmap region misaligned or did not have expected number of values");
+
             for (idx, bucket) in self.buffer.iter_mut().enumerate() {
                 let start = idx * std::mem::size_of::<u64>();
 

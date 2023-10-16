@@ -69,6 +69,8 @@ impl<'a> Counters<'a> {
                 }
             }
         } else {
+            warn!("mmap region misaligned or did not have expected number of values");
+
             for cpu in 0..MAX_CPUS {
                 for idx in 0..self.counters.len() {
                     let start = (cpu * self.cachelines * CACHELINE_SIZE)
