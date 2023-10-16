@@ -17,7 +17,7 @@ use ringlog::*;
 /// This distribution must also be indexed into using the `value_to_index`
 /// helper from `histogram.h`. This results in a histogram that uses 64bit
 /// counters and covers the entire range of u64 values. This histogram occupies
-/// 60KB in kernel space and an additional ~3.5MB in user space.
+/// 60KB in kernel space and an additional 60KB in user space.
 ///
 /// The distribution should be given some meaningful name in the BPF program.
 pub struct Distribution<'a> {
