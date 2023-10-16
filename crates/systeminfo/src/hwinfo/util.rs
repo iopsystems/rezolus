@@ -89,7 +89,7 @@ impl<'a> Deref for ClearGuard<'a> {
     type Target = String;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
