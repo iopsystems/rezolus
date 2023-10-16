@@ -60,18 +60,18 @@ impl Traffic {
         let mut bpf = Bpf::from_skel(skel);
 
         let counters = vec![
-            Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HEATMAP)),
-            Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HEATMAP)),
-            Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HEATMAP)),
-            Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP)),
+            Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HISTOGRAM)),
+            Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HISTOGRAM)),
+            Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HISTOGRAM)),
+            Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HISTOGRAM)),
         ];
 
         bpf.add_counters("counters", counters);
 
         let mut distributions = vec![("rx_size", &TCP_RX_SIZE), ("tx_size", &TCP_TX_SIZE)];
 
-        for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+        for (name, histogram) in distributions.drain(..) {
+            bpf.add_distribution(name, histogram);
         }
 
         Ok(Self {
@@ -92,7 +92,7 @@ impl Traffic {
 
         let elapsed = (now - self.counter_prev).as_secs_f64();
 
-        self.bpf.refresh_counters(now, elapsed);
+        self.bpf.refresh_counters(elapsed);
 
         // determine when to sample next
         let next = self.counter_next + self.counter_interval;
@@ -113,7 +113,7 @@ impl Traffic {
             return;
         }
 
-        self.bpf.refresh_distributions(now);
+        self.bpf.refresh_distributions();
 
         // determine when to sample next
         let next = self.distribution_next + self.distribution_interval;

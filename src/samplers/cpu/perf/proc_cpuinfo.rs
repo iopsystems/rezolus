@@ -33,7 +33,7 @@ impl Sampler for ProcCpuinfo {
             return;
         }
 
-        if self.sample_proc_cpuinfo(now).is_err() {
+        if self.sample_proc_cpuinfo().is_err() {
             return;
         }
 
@@ -55,7 +55,7 @@ impl Sampler for ProcCpuinfo {
 }
 
 impl ProcCpuinfo {
-    fn sample_proc_cpuinfo(&mut self, now: Instant) -> Result<(), std::io::Error> {
+    fn sample_proc_cpuinfo(&mut self) -> Result<(), std::io::Error> {
         self.file.rewind()?;
 
         let mut data = String::new();
@@ -79,7 +79,7 @@ impl ProcCpuinfo {
                     .get(3)
                     .map(|v| v.parse::<f64>().map(|v| v.floor() as u64))
                 {
-                    let _ = CPU_FREQUENCY_HEATMAP.increment(now, freq);
+                    let _ = CPU_FREQUENCY_HISTOGRAM.increment(freq);
                     frequency += freq;
                 }
             }

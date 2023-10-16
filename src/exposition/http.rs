@@ -1,5 +1,5 @@
 use crate::PERCENTILES;
-use metriken::{Counter, Gauge, Heatmap};
+use metriken::{AtomicHistogram, Counter, Gauge, RwLockHistogram};
 
 use warp::Filter;
 
@@ -45,10 +45,20 @@ mod filters {
 
 mod handlers {
     use super::*;
+    use crate::SNAPSHOTS;
     use core::convert::Infallible;
+    use std::time::UNIX_EPOCH;
 
     pub async fn prometheus_stats() -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
+
+        let snapshots = SNAPSHOTS.read().await;
+
+        let timestamp = snapshots
+            .timestamp
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
 
         for metric in &metriken::metrics() {
             let any = match metric.as_any() {
@@ -58,47 +68,43 @@ mod handlers {
                 }
             };
 
-            if metric.name().starts_with("log_") {
+            let name = metric.name();
+
+            if name.starts_with("log_") {
                 continue;
             }
-
             if let Some(counter) = any.downcast_ref::<Counter>() {
                 if metric.metadata().is_empty() {
                     data.push(format!(
-                        "# TYPE {}_total counter\n{}_total {}",
-                        metric.name(),
-                        metric.name(),
+                        "# TYPE {name}_total counter\n{name}_total {}",
                         counter.value()
                     ));
                 } else {
                     data.push(format!(
-                        "# TYPE {} counter\n{} {}",
-                        metric.name(),
+                        "# TYPE {name} counter\n{} {}",
                         metric.formatted(metriken::Format::Prometheus),
                         counter.value()
                     ));
                 }
             } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
                 data.push(format!(
-                    "# TYPE {} gauge\n{} {}",
-                    metric.name(),
+                    "# TYPE {name} gauge\n{} {}",
                     metric.formatted(metriken::Format::Prometheus),
                     gauge.value()
                 ));
-            } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+            } else if any.downcast_ref::<AtomicHistogram>().is_some()
+                || any.downcast_ref::<RwLockHistogram>().is_some()
+            {
+                if let Some(delta) = snapshots.deltas.get(metric.name()) {
+                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                if let Some(Ok(result)) = heatmap.percentiles(&percentiles) {
-                    for (percentile, value) in
-                        result.iter().zip(PERCENTILES.iter().map(|(_, v)| *v))
-                    {
-                        data.push(format!(
-                            "# TYPE {} gauge\n{}{{percentile=\"{:02}\"}} {}",
-                            metric.name(),
-                            metric.name(),
-                            value,
-                            percentile.bucket().high()
-                        ));
+                    if let Ok(result) = delta.percentiles(&percentiles) {
+                        for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
+                            data.push(format!(
+                                "# TYPE {name} gauge\n{name}{{percentile=\"{:02}\"}} {value} {timestamp}",
+                                percentile,
+                            ));
+                        }
                     }
                 }
             }
@@ -114,6 +120,8 @@ mod handlers {
 
     pub async fn human_stats() -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
+
+        let snapshots = SNAPSHOTS.read().await;
 
         for metric in &metriken::metrics() {
             let any = match metric.as_any() {
@@ -139,18 +147,25 @@ mod handlers {
                     metric.formatted(metriken::Format::Simple),
                     gauge.value()
                 ));
-            } else if let Some(heatmap) = any.downcast_ref::<Heatmap>() {
-                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+            } else if any.downcast_ref::<AtomicHistogram>().is_some()
+                || any.downcast_ref::<RwLockHistogram>().is_some()
+            {
+                if let Some(delta) = snapshots.deltas.get(metric.name()) {
+                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                if let Some(Ok(result)) = heatmap.percentiles(&percentiles) {
-                    for (percentile, label) in result.iter().zip(PERCENTILES.iter().map(|(l, _)| l))
-                    {
-                        data.push(format!(
-                            "{}/{}: {}",
-                            metric.formatted(metriken::Format::Simple),
-                            label,
-                            percentile.bucket().high()
-                        ));
+                    if let Ok(result) = delta.percentiles(&percentiles) {
+                        for (value, label) in result
+                            .iter()
+                            .map(|(_, b)| b.end())
+                            .zip(PERCENTILES.iter().map(|(l, _)| l))
+                        {
+                            data.push(format!(
+                                "{}/{}: {}",
+                                metric.formatted(metriken::Format::Simple),
+                                label,
+                                value
+                            ));
+                        }
                     }
                 }
             }

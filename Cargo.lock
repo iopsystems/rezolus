@@ -548,18 +548,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "heatmap"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "810bf487a6208ba59a521f186cf1af91ee03711518671f8a01ed51c3651d8194"
-dependencies = [
- "clocksource",
- "histogram",
- "parking_lot",
- "thiserror",
-]
-
-[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -573,11 +561,10 @@ checksum = "443144c8cdadd93ebf52ddb4056d257f5b52c04d3c804e657d19eb73fc33668b"
 
 [[package]]
 name = "histogram"
-version = "0.7.4"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e673d137229619d5c2c8903b6ed5852b43636c0017ff2e66b1aafb8ccf04b80b"
+checksum = "8bbe54c811e0443ccedc269b633a9495a03e04c20082b26f6c1cc4d27bfd0678"
 dependencies = [
- "serde",
  "thiserror",
 ]
 
@@ -862,11 +849,11 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.2.4"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daa97a9e24ba40ec25d997efe33ce88c5d27eace316539a58a0271806e1dce36"
+checksum = "20cdbc5c288bcf449bdf639e712c24305ec3bcd5765b80f6f1bbd38038ba89ac"
 dependencies = [
- "heatmap",
+ "histogram",
  "linkme",
  "metriken-derive",
  "once_cell",
@@ -1354,9 +1341,9 @@ dependencies = [
 
 [[package]]
 name = "ringlog"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c90d3d1e4db43daedfdae26373e7b4cb4f56b26f217fc8f661e4f439827b4a46"
+checksum = "987665e9638b6e3c9bf753fd2da5058c8fa0e734221582d8790e3b7d0e1c3394"
 dependencies = [
  "ahash",
  "clocksource",
