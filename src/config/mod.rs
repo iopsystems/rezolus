@@ -9,7 +9,7 @@ use std::path::Path;
 // #[serde(deny_unknown_fields)]
 pub struct Config {
     general: General,
-    sampler_defaults: SamplerDefaults,
+    defaults: SamplerDefaults,
     samplers: HashMap<String, SamplerConfig>,
 }
 
@@ -29,7 +29,7 @@ impl Config {
             })
             .unwrap();
 
-        config.sampler_defaults.check();
+        config.defaults.check();
 
         for (name, config) in config.samplers.iter() {
             config.check(name);
@@ -38,8 +38,8 @@ impl Config {
         Ok(config)
     }
 
-    pub fn sampler_defaults(&self) -> &SamplerDefaults {
-        &self.sampler_defaults
+    pub fn defaults(&self) -> &SamplerDefaults {
+        &self.defaults
     }
 
     pub fn sampler_config(&self, name: &str) -> Option<&SamplerConfig> {
@@ -64,21 +64,21 @@ impl Config {
         self.samplers
             .get(name)
             .map(|c| c.enabled())
-            .unwrap_or(self.sampler_defaults.enabled())
+            .unwrap_or(self.defaults.enabled())
     }
 
     pub fn interval(&self, name: &str) -> Duration {
         self.samplers
             .get(name)
             .map(|c| c.interval())
-            .unwrap_or(self.sampler_defaults.interval())
+            .unwrap_or(self.defaults.interval())
     }
 
     pub fn distribution_interval(&self, name: &str) -> Duration {
         self.samplers
             .get(name)
             .map(|c| c.distribution_interval())
-            .unwrap_or(self.sampler_defaults.distribution_interval())
+            .unwrap_or(self.defaults.distribution_interval())
     }
 }
 
