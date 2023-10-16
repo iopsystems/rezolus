@@ -1,0 +1,15 @@
+version: 1
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Group together all dependency updates into a single PR
+      cargo-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10
+    versioning-strategy: auto
+    allow:
+      - dependency-type: all
