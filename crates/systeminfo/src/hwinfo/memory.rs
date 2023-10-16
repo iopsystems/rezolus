@@ -47,7 +47,7 @@ impl Memory {
                 continue;
             };
 
-            if !parts.next().is_none() {
+            if parts.next().is_some() {
                 continue;
             }
 

@@ -35,6 +35,6 @@ impl HwInfo {
     }
 
     pub fn get_cpus(&self) -> &Vec<Cpu> {
-        return &self.cpus;
+        &self.cpus
     }
 }
