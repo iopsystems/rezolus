@@ -52,9 +52,8 @@ impl<'a> Counters<'a> {
     }
 
     pub fn refresh(&mut self, elapsed: f64) {
-        for value in self.values.iter_mut() {
-            *value = 0;
-        }
+        // reset the values of the combined counters to zero
+        self.values.fill(0);
 
         let counters_per_cpu = self.cachelines * CACHELINE_SIZE / std::mem::size_of::<u64>();
 
@@ -65,6 +64,7 @@ impl<'a> Counters<'a> {
         if values.len() == MAX_CPUS * counters_per_cpu {
             for cpu in 0..MAX_CPUS {
                 for idx in 0..self.counters.len() {
+                    // add this CPU's counter to the combined value for this counter
                     self.values[idx] =
                         self.values[idx].wrapping_add(values[idx + cpu * counters_per_cpu]);
                 }
@@ -87,11 +87,13 @@ impl<'a> Counters<'a> {
                         self.mmap[start + 7],
                     ]);
 
+                    // add this CPU's counter to the combined value for this counter
                     self.values[idx] = self.values[idx].wrapping_add(value);
                 }
             }
         }
 
+        // set each counter to its new combined value
         for (value, counter) in self.values.iter().zip(self.counters.iter_mut()) {
             counter.set(elapsed, *value);
         }
