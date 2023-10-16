@@ -23,7 +23,7 @@ use ringlog::*;
 pub struct Distribution<'a> {
     _map: &'a libbpf_rs::Map,
     mmap: memmap2::MmapMut,
-    buffer: [u64; HISTOGRAM_BUCKETS],
+    buffer: Vec<u64>,
     histogram: &'static RwLockHistogram,
 }
 
@@ -41,7 +41,7 @@ impl<'a> Distribution<'a> {
         Self {
             _map: map,
             mmap,
-            buffer: [0; HISTOGRAM_BUCKETS],
+            buffer: Vec::new(),
             histogram,
         }
     }
@@ -56,6 +56,8 @@ impl<'a> Distribution<'a> {
             let _ = self.histogram.update_from(&buckets);
         } else {
             warn!("mmap region misaligned or did not have expected number of values");
+
+            self.buffer.resize(HISTOGRAM_BUCKETS, 0);
 
             for (idx, bucket) in self.buffer.iter_mut().enumerate() {
                 let start = idx * std::mem::size_of::<u64>();
