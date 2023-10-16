@@ -43,7 +43,8 @@ impl Snapshots {
 
             let key = metric.name().to_string();
 
-            let snapshot = if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>() {
+            let snapshot = if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>()
+            {
                 histogram.snapshot()
             } else if let Some(histogram) = any.downcast_ref::<metriken::RwLockHistogram>() {
                 histogram.snapshot()
