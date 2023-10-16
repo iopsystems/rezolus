@@ -109,22 +109,22 @@ impl Syscall {
         let _ = syscall_lut.flush();
 
         let counters = vec![
-            Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HEATMAP)),
-            Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HEATMAP)),
-            Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HEATMAP)),
-            Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HEATMAP)),
-            Counter::new(&SYSCALL_LOCK, Some(&SYSCALL_LOCK_HEATMAP)),
-            Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HEATMAP)),
-            Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HEATMAP)),
-            Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HEATMAP)),
+            Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HISTOGRAM)),
+            Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HISTOGRAM)),
+            Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HISTOGRAM)),
+            Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HISTOGRAM)),
+            Counter::new(&SYSCALL_LOCK, Some(&SYSCALL_LOCK_HISTOGRAM)),
+            Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HISTOGRAM)),
+            Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HISTOGRAM)),
+            Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HISTOGRAM)),
         ];
 
         bpf.add_counters("counters", counters);
 
         let mut distributions = vec![("total_latency", &SYSCALL_TOTAL_LATENCY)];
 
-        for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+        for (name, histogram) in distributions.drain(..) {
+            bpf.add_distribution(name, histogram);
         }
 
         Ok(Self {

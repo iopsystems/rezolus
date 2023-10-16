@@ -55,7 +55,7 @@ impl Retransmit {
 
         let counters = vec![Counter::new(
             &TCP_TX_RETRANSMIT,
-            Some(&TCP_TX_RETRANSMIT_HEATMAP),
+            Some(&TCP_TX_RETRANSMIT_HISTOGRAM),
         )];
 
         bpf.add_counters("counters", counters);

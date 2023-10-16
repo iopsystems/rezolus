@@ -29,12 +29,12 @@ impl Snmp {
 
         let counters = vec![
             (
-                Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HEATMAP)),
+                Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HISTOGRAM)),
                 "Tcp:",
                 "InSegs",
             ),
             (
-                Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HEATMAP)),
+                Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HISTOGRAM)),
                 "Tcp:",
                 "OutSegs",
             ),

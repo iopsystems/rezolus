@@ -58,8 +58,8 @@ impl Biolat {
 
         let mut distributions = vec![("latency", &BLOCKIO_LATENCY), ("size", &BLOCKIO_SIZE)];
 
-        for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+        for (name, histogram) in distributions.drain(..) {
+            bpf.add_distribution(name, histogram);
         }
 
         Ok(Self {

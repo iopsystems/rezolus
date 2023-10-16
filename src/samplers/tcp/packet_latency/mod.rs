@@ -57,8 +57,8 @@ impl PacketLatency {
 
         let mut distributions = vec![("latency", &TCP_PACKET_LATENCY)];
 
-        for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+        for (name, histogram) in distributions.drain(..) {
+            bpf.add_distribution(name, histogram);
         }
 
         Ok(Self {

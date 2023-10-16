@@ -13,33 +13,33 @@ pub use nop::Nop;
 /// percentiles for secondly rates between subsequent counter observations.
 ///
 /// To do this, it contains the current reading, previous reading, and
-/// optionally a heatmap to store rate observations.
+/// optionally a histogram to store rate observations.
 pub struct Counter {
     previous: Option<u64>,
     counter: &'static LazyCounter,
-    heatmap: Option<&'static AtomicHistogram>,
+    histogram: Option<&'static AtomicHistogram>,
 }
 
 impl Counter {
     /// Construct a new counter that wraps a `metriken` counter and optionally a
-    /// `metriken` heatmap.
-    pub fn new(counter: &'static LazyCounter, heatmap: Option<&'static AtomicHistogram>) -> Self {
+    /// `metriken` histogram.
+    pub fn new(counter: &'static LazyCounter, histogram: Option<&'static AtomicHistogram>) -> Self {
         Self {
             previous: None,
             counter,
-            heatmap,
+            histogram,
         }
     }
 
     /// Updates the counter by setting the current value to a new value. If this
-    /// counter has a heatmap it also calculates the rate since the last reading
-    /// and increments the heatmap.
+    /// counter has a histogram it also calculates the rate since the last reading
+    /// and increments the histogram.
     pub fn set(&mut self, elapsed: f64, value: u64) {
         if let Some(previous) = self.previous {
             let delta = value.wrapping_sub(previous);
             self.counter.add(delta);
-            if let Some(heatmap) = self.heatmap {
-                let _ = heatmap.increment((delta as f64 / elapsed) as _);
+            if let Some(histogram) = self.histogram {
+                let _ = histogram.increment((delta as f64 / elapsed) as _);
             }
         }
         self.previous = Some(value);
@@ -99,12 +99,12 @@ macro_rules! gauge {
 #[macro_export]
 #[rustfmt::skip]
 /// A convenience macro for constructing a lazily initialized
-/// `metriken::Heatmap` given an identifier, name, and optional description.
+/// `metriken::AtomicHistogram` given an identifier, name, and optional
+/// description.
 ///
-/// The heatmap configuration used here can record counts for all 64bit integer
-/// values with a maximum error of 0.78%. The heatmap covers a moving window of
-/// one minute with one second resolution.
-macro_rules! heatmap {
+/// The histogram configuration used here can record counts for all 64bit
+/// integer values with a maximum error of 0.78%.
+macro_rules! histogram {
     ($ident:ident, $name:tt) => {
         #[metriken::metric(
             name = $name,
@@ -125,11 +125,11 @@ macro_rules! heatmap {
 #[macro_export]
 #[rustfmt::skip]
 /// A convenience macro for constructing a lazily initialized
-/// `metriken::Heatmap` given an identifier, name, and optional description.
+/// `metriken::RwLockHistogram` given an identifier, name, and optional
+/// description.
 ///
-/// The heatmap configuration used here can record counts for all 64bit integer
-/// values with a maximum error of 0.78%. The heatmap covers a moving window of
-/// one minute with one second resolution.
+/// The histogram configuration used here can record counts for all 64bit
+/// integer values with a maximum error of 0.78%.
 macro_rules! bpfhistogram {
     ($ident:ident, $name:tt) => {
         #[metriken::metric(
@@ -151,30 +151,30 @@ macro_rules! bpfhistogram {
 #[macro_export]
 #[rustfmt::skip]
 /// A convenience macro for constructing a lazily initialized counter with a
-/// heatmap which will track secondly rates for the same counter.
-macro_rules! counter_with_heatmap {
-	($counter:ident, $heatmap:ident, $name:tt) => {
+/// histogram which will track secondly rates for the same counter.
+macro_rules! counter_with_histogram {
+	($counter:ident, $histogram:ident, $name:tt) => {
 		self::counter!($counter, $name);
-		self::heatmap!($heatmap, $name);
+		self::histogram!($histogram, $name);
 	};
-	($counter:ident, $heatmap:ident, $name:tt, $description:tt) => {
+	($counter:ident, $histogram:ident, $name:tt, $description:tt) => {
 		self::counter!($counter, $name, $description);
-		self::heatmap!($heatmap, $name, $description);
+		self::histogram!($histogram, $name, $description);
 	}
 }
 
 #[macro_export]
 #[rustfmt::skip]
 /// A convenience macro for constructing a lazily initialized gauge with a
-/// heatmap which will track instantaneous readings for the same gauge.
-macro_rules! gauge_with_heatmap {
-    ($gauge:ident, $heatmap:ident, $name:tt) => {
+/// histogram which will track instantaneous readings for the same gauge.
+macro_rules! gauge_with_histogram {
+    ($gauge:ident, $histogram:ident, $name:tt) => {
         self::gauge!($gauge, $name);
-        self::heatmap!($heatmap, $name);
+        self::histogram!($histogram, $name);
     };
-    ($gauge:ident, $heatmap:ident, $name:tt, $description:tt) => {
+    ($gauge:ident, $histogram:ident, $name:tt, $description:tt) => {
         self::gauge!($gauge, $name, $description);
-        self::heatmap!($heatmap, $name, $description);
+        self::histogram!($histogram, $name, $description);
     }
 }
 

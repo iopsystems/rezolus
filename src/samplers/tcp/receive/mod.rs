@@ -56,8 +56,8 @@ impl Receive {
 
         let mut distributions = vec![("srtt", &TCP_SRTT), ("jitter", &TCP_JITTER)];
 
-        for (name, heatmap) in distributions.drain(..) {
-            bpf.add_distribution(name, heatmap);
+        for (name, histogram) in distributions.drain(..) {
+            bpf.add_distribution(name, histogram);
         }
 
         Ok(Self {

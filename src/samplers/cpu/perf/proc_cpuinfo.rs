@@ -79,7 +79,7 @@ impl ProcCpuinfo {
                     .get(3)
                     .map(|v| v.parse::<f64>().map(|v| v.floor() as u64))
                 {
-                    let _ = CPU_FREQUENCY_HEATMAP.increment(freq);
+                    let _ = CPU_FREQUENCY_HISTOGRAM.increment(freq);
                     frequency += freq;
                 }
             }
