@@ -15,7 +15,7 @@ pub static CPU_CORES: LazyGauge = LazyGauge::new(Gauge::default);
 )]
 pub static CPU_USAGE_USER: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_USER_HEATMAP, "cpu/usage/user");
+histogram!(CPU_USAGE_USER_HISTOGRAM, "cpu/usage/user");
 
 #[metric(
     name = "cpu/usage",
@@ -25,7 +25,7 @@ heatmap!(CPU_USAGE_USER_HEATMAP, "cpu/usage/user");
 )]
 pub static CPU_USAGE_NICE: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_NICE_HEATMAP, "cpu/usage/nice");
+histogram!(CPU_USAGE_NICE_HISTOGRAM, "cpu/usage/nice");
 
 #[metric(
     name = "cpu/usage",
@@ -35,7 +35,7 @@ heatmap!(CPU_USAGE_NICE_HEATMAP, "cpu/usage/nice");
 )]
 pub static CPU_USAGE_SYSTEM: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_SYSTEM_HEATMAP, "cpu/usage/system");
+histogram!(CPU_USAGE_SYSTEM_HISTOGRAM, "cpu/usage/system");
 
 #[metric(
     name = "cpu/usage",
@@ -45,7 +45,7 @@ heatmap!(CPU_USAGE_SYSTEM_HEATMAP, "cpu/usage/system");
 )]
 pub static CPU_USAGE_IDLE: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_IDLE_HEATMAP, "cpu/usage/idle");
+histogram!(CPU_USAGE_IDLE_HISTOGRAM, "cpu/usage/idle");
 
 #[metric(
     name = "cpu/usage",
@@ -55,7 +55,7 @@ heatmap!(CPU_USAGE_IDLE_HEATMAP, "cpu/usage/idle");
 )]
 pub static CPU_USAGE_IO_WAIT: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_IO_WAIT_HEATMAP, "cpu/usage/io_wait");
+histogram!(CPU_USAGE_IO_WAIT_HISTOGRAM, "cpu/usage/io_wait");
 
 #[metric(
     name = "cpu/usage",
@@ -65,7 +65,7 @@ heatmap!(CPU_USAGE_IO_WAIT_HEATMAP, "cpu/usage/io_wait");
 )]
 pub static CPU_USAGE_IRQ: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_IRQ_HEATMAP, "cpu/usage/irq");
+histogram!(CPU_USAGE_IRQ_HISTOGRAM, "cpu/usage/irq");
 
 #[metric(
     name = "cpu/usage",
@@ -75,7 +75,7 @@ heatmap!(CPU_USAGE_IRQ_HEATMAP, "cpu/usage/irq");
 )]
 pub static CPU_USAGE_SOFTIRQ: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_SOFTIRQ_HEATMAP, "cpu/usage/softirq");
+histogram!(CPU_USAGE_SOFTIRQ_HISTOGRAM, "cpu/usage/softirq");
 
 #[metric(
     name = "cpu/usage",
@@ -85,7 +85,7 @@ heatmap!(CPU_USAGE_SOFTIRQ_HEATMAP, "cpu/usage/softirq");
 )]
 pub static CPU_USAGE_STEAL: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_STEAL_HEATMAP, "cpu/usage/steal");
+histogram!(CPU_USAGE_STEAL_HISTOGRAM, "cpu/usage/steal");
 
 #[metric(
     name = "cpu/usage",
@@ -95,7 +95,7 @@ heatmap!(CPU_USAGE_STEAL_HEATMAP, "cpu/usage/steal");
 )]
 pub static CPU_USAGE_GUEST: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_GUEST_HEATMAP, "cpu/usage/guest");
+histogram!(CPU_USAGE_GUEST_HISTOGRAM, "cpu/usage/guest");
 
 #[metric(
     name = "cpu/usage",
@@ -105,7 +105,7 @@ heatmap!(CPU_USAGE_GUEST_HEATMAP, "cpu/usage/guest");
 )]
 pub static CPU_USAGE_GUEST_NICE: LazyCounter = LazyCounter::new(Counter::default);
 
-heatmap!(CPU_USAGE_GUEST_NICE_HEATMAP, "cpu/usage/guest_nice");
+histogram!(CPU_USAGE_GUEST_NICE_HISTOGRAM, "cpu/usage/guest_nice");
 
 #[metric(
     name = "cpu/cycles",
@@ -133,8 +133,8 @@ pub static CPU_PERF_GROUPS_ACTIVE: LazyGauge = LazyGauge::new(Gauge::default);
 )]
 pub static CPU_IPKC_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
-heatmap!(
-    CPU_IPKC_HEATMAP,
+histogram!(
+    CPU_IPKC_HISTOGRAM,
     "cpu/ipkc",
     "distribution of per-CPU IPKC (Instructions Per Thousand Cycles)"
 );
@@ -145,8 +145,8 @@ heatmap!(
 )]
 pub static CPU_IPUS_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
-heatmap!(
-    CPU_IPUS_HEATMAP,
+histogram!(
+    CPU_IPUS_HISTOGRAM,
     "cpu/ipus",
     "Distribution of per-CPU IPUS (Instructions Per Microsecond)"
 );
@@ -163,8 +163,8 @@ pub static CPU_BASE_FREQUENCY_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default
 )]
 pub static CPU_FREQUENCY_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
-heatmap!(
-    CPU_FREQUENCY_HEATMAP,
+histogram!(
+    CPU_FREQUENCY_HISTOGRAM,
     "cpu/frequency",
     "Distribution of the per-CPU running frequencies"
 );

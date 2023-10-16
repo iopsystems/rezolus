@@ -1,16 +1,21 @@
-use super::*;
+use std::path::Path;
 
-#[derive(Clone, Serialize)]
+use super::util::*;
+use crate::error::ErrorSource;
+use crate::{Error, Result};
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Cache {
-    coherency_line_size: usize,
-    number_of_sets: usize,
-    shared_cpus: Vec<usize>,
-    size: String,
-    r#type: CacheType,
-    ways_of_associativity: usize,
+    pub coherency_line_size: usize,
+    pub number_of_sets: usize,
+    pub shared_cpus: Vec<usize>,
+    pub size: String,
+    pub r#type: CacheType,
+    pub ways_of_associativity: usize,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheType {
     Data,
@@ -51,17 +56,16 @@ impl Cache {
 }
 
 fn read_cache_type(path: impl AsRef<Path>) -> Result<CacheType> {
-    let raw = std::fs::read_to_string(path)?;
+    let path = path.as_ref();
+
+    let raw = std::fs::read_to_string(path).map_err(|e| Error::unreadable(e, path))?;
     let raw = raw.trim();
 
     match raw {
-        "Data" | "data" => Ok(CacheType::Data),
-        "Instruction" | "instruction" => Ok(CacheType::Instruction),
-        "Unified" | "unified" => Ok(CacheType::Unified),
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "unexpected cache type",
-        )),
+        _ if raw.eq_ignore_ascii_case("data") => Ok(CacheType::Data),
+        _ if raw.eq_ignore_ascii_case("instruction") => Ok(CacheType::Instruction),
+        _ if raw.eq_ignore_ascii_case("unified") => Ok(CacheType::Unified),
+        _ => Err(Error::unparseable(ErrorSource::None, path)),
     }
 }
 

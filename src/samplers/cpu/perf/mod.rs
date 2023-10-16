@@ -129,9 +129,9 @@ impl Sampler for Perf {
                 avg_ipus += reading.ipus;
                 avg_base_frequency += reading.base_frequency_mhz;
                 avg_running_frequency += reading.running_frequency_mhz;
-                let _ = CPU_IPKC_HEATMAP.increment(now, reading.ipkc);
-                let _ = CPU_IPUS_HEATMAP.increment(now, reading.ipus);
-                let _ = CPU_FREQUENCY_HEATMAP.increment(now, reading.running_frequency_mhz);
+                let _ = CPU_IPKC_HISTOGRAM.increment(reading.ipkc);
+                let _ = CPU_IPUS_HISTOGRAM.increment(reading.ipus);
+                let _ = CPU_FREQUENCY_HISTOGRAM.increment(reading.running_frequency_mhz);
 
                 self.counters[reading.id][0].set(reading.cycles);
                 self.counters[reading.id][1].set(reading.instructions);

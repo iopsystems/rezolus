@@ -44,16 +44,16 @@ impl ProcStat {
         };
 
         let counters_total = vec![
-            Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HEATMAP)),
-            Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HEATMAP)),
-            Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HEATMAP)),
-            Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HEATMAP)),
-            Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HEATMAP)),
-            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HEATMAP)),
-            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HEATMAP)),
-            Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HEATMAP)),
-            Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HEATMAP)),
-            Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HEATMAP)),
+            Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HISTOGRAM)),
         ];
 
         let mut counters_percpu = Vec::with_capacity(cpus.len());
@@ -118,7 +118,7 @@ impl Sampler for ProcStat {
 
         let elapsed = (now - self.prev).as_secs_f64();
 
-        if self.sample_proc_stat(now, elapsed).is_err() {
+        if self.sample_proc_stat(elapsed).is_err() {
             return;
         }
 
@@ -140,7 +140,7 @@ impl Sampler for ProcStat {
 }
 
 impl ProcStat {
-    fn sample_proc_stat(&mut self, now: Instant, elapsed: f64) -> Result<(), std::io::Error> {
+    fn sample_proc_stat(&mut self, elapsed: f64) -> Result<(), std::io::Error> {
         self.file.rewind()?;
 
         let mut data = String::new();
@@ -160,7 +160,7 @@ impl ProcStat {
             if *header == "cpu" {
                 for (field, counter) in self.counters_total.iter_mut().enumerate() {
                     if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
-                        counter.set(now, elapsed, v.wrapping_mul(self.nanos_per_tick))
+                        counter.set(elapsed, v.wrapping_mul(self.nanos_per_tick))
                     }
                 }
             } else if header.starts_with("cpu") {

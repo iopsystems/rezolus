@@ -3,9 +3,105 @@ use clap::{Arg, Command};
 use linkme::distributed_slice;
 use metriken::Lazy;
 use ringlog::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::SystemTime;
+use tokio::sync::RwLock;
 
 type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
 type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
+
+type HistogramSnapshots = HashMap<String, metriken::histogram::Snapshot>;
+
+static SNAPSHOTS: Lazy<Arc<RwLock<Snapshots>>> =
+    Lazy::new(|| Arc::new(RwLock::new(Snapshots::new())));
+
+pub struct Snapshots {
+    timestamp: SystemTime,
+    previous: HistogramSnapshots,
+    deltas: HistogramSnapshots,
+}
+
+impl Default for Snapshots {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Snapshots {
+    pub fn new() -> Self {
+        let timestamp = SystemTime::now();
+
+        let mut current = HashMap::new();
+
+        for metric in metriken::metrics().iter() {
+            let any = if let Some(any) = metric.as_any() {
+                any
+            } else {
+                continue;
+            };
+
+            let key = metric.name().to_string();
+
+            let snapshot = if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>()
+            {
+                histogram.snapshot()
+            } else if let Some(histogram) = any.downcast_ref::<metriken::RwLockHistogram>() {
+                histogram.snapshot()
+            } else {
+                None
+            };
+
+            if let Some(snapshot) = snapshot {
+                current.insert(key, snapshot);
+            }
+        }
+
+        let deltas = current.clone();
+
+        Self {
+            timestamp,
+            previous: current,
+            deltas,
+        }
+    }
+
+    pub fn update(&mut self) {
+        self.timestamp = SystemTime::now();
+
+        let mut current = HashMap::new();
+
+        for metric in metriken::metrics().iter() {
+            let any = if let Some(any) = metric.as_any() {
+                any
+            } else {
+                continue;
+            };
+
+            let key = metric.name().to_string();
+
+            let snapshot = if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>()
+            {
+                histogram.snapshot()
+            } else if let Some(histogram) = any.downcast_ref::<metriken::RwLockHistogram>() {
+                histogram.snapshot()
+            } else {
+                None
+            };
+
+            if let Some(snapshot) = snapshot {
+                if let Some(previous) = self.previous.get(&key) {
+                    self.deltas
+                        .insert(key.clone(), snapshot.wrapping_sub(previous).unwrap());
+                }
+
+                current.insert(key, snapshot);
+            }
+        }
+
+        self.previous = current;
+    }
+}
 
 mod common;
 mod config;
@@ -26,9 +122,6 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
-
-// #[distributed_slice]
-// pub static BPF_SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
 counter!(RUNTIME_SAMPLE_LOOP, "runtime/sample/loop");
 
@@ -68,19 +161,6 @@ fn main() {
 
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
-    // let debug_output: Box<dyn Output> = if let Some(file) = config.debug().log_file() {
-    //     let backup = config
-    //         .debug()
-    //         .log_backup()
-    //         .unwrap_or(format!("{}.old", file));
-    //     Box::new(
-    //         File::new(&file, &backup, config.debug().log_max_size())
-    //             .expect("failed to open debug log file"),
-    //     )
-    // } else {
-    //     // by default, log to stderr
-    //     Box::new(Stderr::new())
-    // };
 
     let level = Level::Info;
 
@@ -90,8 +170,6 @@ fn main() {
         LogBuilder::new()
     }
     .output(debug_output)
-    // .log_queue_depth(config.debug().log_queue_depth())
-    // .single_message_size(config.debug().log_single_message_size())
     .build()
     .expect("failed to initialize debug log");
 
@@ -116,6 +194,20 @@ fn main() {
         }
     });
 
+    // spawn thread to maintain histogram snapshots
+    rt.spawn(async {
+        loop {
+            // acquire a lock and update the snapshots
+            {
+                let mut snapshots = SNAPSHOTS.write().await;
+                snapshots.update();
+            }
+
+            // delay until next update
+            tokio::time::sleep(core::time::Duration::from_secs(1)).await;
+        }
+    });
+
     info!("rezolus");
 
     // spawn http exposition thread
@@ -127,12 +219,6 @@ fn main() {
     for sampler in SAMPLERS {
         samplers.push(sampler(&config));
     }
-
-    // let mut bpf_samplers: Vec<Box<dyn Sampler>> = Vec::new();
-
-    // for sampler in BPF_SAMPLERS {
-    //     bpf_samplers.push(sampler(&config));
-    // }
 
     info!("initialization complete");
 
@@ -160,11 +246,6 @@ fn main() {
 }
 
 pub trait Sampler {
-    // #[allow(clippy::result_unit_err)]
-    // fn configure(&self, config: &Config) -> Result<(), ()>;
-
     /// Do some sampling and updating of stats
     fn sample(&mut self);
-
-    // fn name(&self) -> &str;
 }
