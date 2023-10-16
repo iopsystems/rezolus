@@ -1,4 +1,5 @@
 use super::*;
+use ringlog::*;
 
 /// Represents a collection of counters in a open BPF map. The map must be
 /// created with:

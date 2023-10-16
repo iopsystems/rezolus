@@ -1,4 +1,5 @@
 use super::*;
+use ringlog::*;
 
 /// Represents a distribution in a BPF map. The distribution must be created
 /// with:
