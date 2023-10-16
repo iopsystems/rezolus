@@ -15,7 +15,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
-const NAME: &str = "memory::meminfo";
+const NAME: &str = "memory_meminfo";
 
 pub struct ProcMeminfo {
     prev: Instant,

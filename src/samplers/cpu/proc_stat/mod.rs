@@ -17,7 +17,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
-const NAME: &str = "cpu::proc_stat";
+const NAME: &str = "cpu_proc_stat";
 
 pub struct ProcStat {
     prev: Instant,

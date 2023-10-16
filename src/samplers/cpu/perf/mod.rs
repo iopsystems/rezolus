@@ -28,7 +28,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
-const NAME: &str = "cpu::perf";
+const NAME: &str = "cpu_perf";
 
 pub struct Perf {
     prev: Instant,

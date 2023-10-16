@@ -14,7 +14,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
-const NAME: &str = "memory::vmstat";
+const NAME: &str = "memory_vmstat";
 
 pub struct ProcVmstat {
     prev: Instant,

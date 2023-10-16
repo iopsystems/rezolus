@@ -11,7 +11,7 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/block_io_latency.bpf.rs"));
 }
 
-static NAME: &str = "block_io::latency";
+static NAME: &str = "block_io_latency";
 
 use bpf::*;
 

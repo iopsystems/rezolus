@@ -11,7 +11,7 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_receive.bpf.rs"));
 }
 
-const NAME: &str = "tcp::receive";
+const NAME: &str = "tcp_receive";
 
 use bpf::*;
 

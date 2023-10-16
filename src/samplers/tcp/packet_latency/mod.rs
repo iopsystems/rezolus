@@ -11,7 +11,7 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_packet_latency.bpf.rs"));
 }
 
-const NAME: &str = "tcp::packet_latency";
+const NAME: &str = "tcp_packet_latency";
 
 use bpf::*;
 

@@ -18,7 +18,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
-const NAME: &str = "gpu::nvidia";
+const NAME: &str = "gpu_nvidia";
 
 pub struct Nvidia {
     prev: Instant,

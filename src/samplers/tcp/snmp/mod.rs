@@ -17,7 +17,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
-const NAME: &str = "tcp::snmp";
+const NAME: &str = "tcp_snmp";
 
 pub struct Snmp {
     prev: Instant,

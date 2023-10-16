@@ -11,7 +11,7 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/syscall_latency.bpf.rs"));
 }
 
-const NAME: &str = "syscall::latency";
+const NAME: &str = "syscall_latency";
 
 use bpf::*;
 

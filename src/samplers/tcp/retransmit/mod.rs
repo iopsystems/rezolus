@@ -11,7 +11,7 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_retransmit.bpf.rs"));
 }
 
-const NAME: &str = "tcp::retransmit";
+const NAME: &str = "tcp_retransmit";
 
 use bpf::*;
 

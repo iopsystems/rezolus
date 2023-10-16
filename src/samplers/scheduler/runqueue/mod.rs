@@ -11,7 +11,7 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/scheduler_runqueue.bpf.rs"));
 }
 
-const NAME: &str = "scheduler::runqueue";
+const NAME: &str = "scheduler_runqueue";
 
 use bpf::*;
 

@@ -11,7 +11,7 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_traffic.bpf.rs"));
 }
 
-const NAME: &str = "tcp::traffic";
+const NAME: &str = "tcp_traffic";
 
 use bpf::*;
 
