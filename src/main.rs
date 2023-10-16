@@ -80,24 +80,22 @@ impl Snapshots {
 
             let key = metric.name().to_string();
 
-            if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>() {
-                if let Some(snapshot) = histogram.snapshot() {
-                    if let Some(previous) = self.previous.get(&key) {
-                        self.deltas
-                            .insert(key.clone(), snapshot.wrapping_sub(previous).unwrap());
-                    }
-
-                    current.insert(key, snapshot);
-                }
+            let snapshot = if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>()
+            {
+                histogram.snapshot()
             } else if let Some(histogram) = any.downcast_ref::<metriken::RwLockHistogram>() {
-                if let Some(snapshot) = histogram.snapshot() {
-                    if let Some(previous) = self.previous.get(&key) {
-                        self.deltas
-                            .insert(key.clone(), snapshot.wrapping_sub(previous).unwrap());
-                    }
+                histogram.snapshot()
+            } else {
+                None
+            };
 
-                    current.insert(key, snapshot);
+            if let Some(snapshot) = snapshot {
+                if let Some(previous) = self.previous.get(&key) {
+                    self.deltas
+                        .insert(key.clone(), snapshot.wrapping_sub(previous).unwrap());
                 }
+
+                current.insert(key, snapshot);
             }
         }
 
