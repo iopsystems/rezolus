@@ -10,6 +10,6 @@ updates:
         patterns:
           - "*"
     open-pull-requests-limit: 10
-    versioning-strategy: auto
+    versioning-strategy: lockfile-only
     allow:
       - dependency-type: all
