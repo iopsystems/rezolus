@@ -18,6 +18,8 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
+const NAME: &str = "gpu_nvidia";
+
 pub struct Nvidia {
     prev: Instant,
     next: Instant,
@@ -52,7 +54,12 @@ struct GpuMetrics {
 }
 
 impl Nvidia {
-    pub fn new(_config: &Config) -> Result<Self, ()> {
+    pub fn new(config: &Config) -> Result<Self, ()> {
+        // check if sampler should be enabled
+        if !config.enabled(NAME) {
+            return Err(());
+        }
+
         let now = Instant::now();
         let nvml = Nvml::init().map_err(|e| {
             error!("error initializing: {e}");
@@ -125,7 +132,7 @@ impl Nvidia {
             nvml,
             prev: now,
             next: now,
-            interval: Duration::from_millis(50),
+            interval: config.interval(NAME),
             pergpu_metrics,
         })
     }

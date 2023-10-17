@@ -1,3 +1,4 @@
+use crate::Duration;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -8,6 +9,7 @@ use std::path::Path;
 // #[serde(deny_unknown_fields)]
 pub struct Config {
     general: General,
+    defaults: SamplerConfig,
     samplers: HashMap<String, SamplerConfig>,
 }
 
@@ -20,10 +22,24 @@ impl Config {
             })
             .unwrap();
 
-        toml::from_str(&content).map_err(|e| {
-            eprintln!("failed to parse config file: {e}");
-            std::process::exit(1);
-        })
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| {
+                eprintln!("failed to parse config file: {e}");
+                std::process::exit(1);
+            })
+            .unwrap();
+
+        config.defaults.check("default");
+
+        for (name, config) in config.samplers.iter() {
+            config.check(name);
+        }
+
+        Ok(config)
+    }
+
+    pub fn defaults(&self) -> &SamplerConfig {
+        &self.defaults
     }
 
     pub fn sampler_config(&self, name: &str) -> Option<&SamplerConfig> {
@@ -43,7 +59,29 @@ impl Config {
     pub fn bpf(&self) -> bool {
         false
     }
+
+    pub fn enabled(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .map(|c| c.enabled())
+            .unwrap_or(self.defaults.enabled())
+    }
+
+    pub fn interval(&self, name: &str) -> Duration {
+        self.samplers
+            .get(name)
+            .map(|c| c.interval())
+            .unwrap_or(self.defaults.interval())
+    }
+
+    pub fn distribution_interval(&self, name: &str) -> Duration {
+        self.samplers
+            .get(name)
+            .map(|c| c.distribution_interval())
+            .unwrap_or(self.defaults.distribution_interval())
+    }
 }
+
 #[derive(Deserialize)]
 pub struct General {
     listen: String,
@@ -67,13 +105,71 @@ impl General {
     }
 }
 
+pub fn enabled() -> bool {
+    true
+}
+
+pub fn interval() -> String {
+    "10ms".into()
+}
+
+pub fn distribution_interval() -> String {
+    "50ms".into()
+}
+
 #[derive(Deserialize)]
 pub struct SamplerConfig {
+    #[serde(default = "enabled")]
     enabled: bool,
+    #[serde(default = "interval")]
+    interval: String,
+    #[serde(default = "distribution_interval")]
+    distribution_interval: String,
 }
 
 impl SamplerConfig {
+    pub fn check(&self, name: &str) {
+        if let Err(e) = self.interval.parse::<humantime::Duration>() {
+            eprintln!("{name} sampler interval is not valid: {e}");
+            std::process::exit(1);
+        }
+        if self.interval() < Duration::from_millis(1) {
+            eprintln!("{name} sampler interval is too short. Minimum interval is: 1ms");
+            std::process::exit(1);
+        }
+
+        if let Err(e) = self.distribution_interval.parse::<humantime::Duration>() {
+            eprintln!("{name} sampler distribution interval is not valid: {e}");
+            std::process::exit(1);
+        }
+
+        if self.distribution_interval() < Duration::from_millis(1) {
+            eprintln!(
+                "{name} sampler distribution interval is too short. Minimum interval is: 1ms"
+            );
+            std::process::exit(1);
+        }
+    }
+
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub fn interval(&self) -> Duration {
+        Duration::from_nanos(
+            self.interval
+                .parse::<humantime::Duration>()
+                .unwrap()
+                .as_nanos() as _,
+        )
+    }
+
+    pub fn distribution_interval(&self) -> Duration {
+        Duration::from_nanos(
+            self.distribution_interval
+                .parse::<humantime::Duration>()
+                .unwrap()
+                .as_nanos() as _,
+        )
     }
 }

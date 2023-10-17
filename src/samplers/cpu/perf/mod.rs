@@ -28,6 +28,8 @@ fn init(config: &Config) -> Box<dyn Sampler> {
     }
 }
 
+const NAME: &str = "cpu_perf";
+
 pub struct Perf {
     prev: Instant,
     next: Instant,
@@ -37,7 +39,12 @@ pub struct Perf {
 }
 
 impl Perf {
-    pub fn new(_config: &Config) -> Result<Self, ()> {
+    pub fn new(config: &Config) -> Result<Self, ()> {
+        // check if sampler should be enabled
+        if !config.enabled(NAME) {
+            return Err(());
+        }
+
         let now = Instant::now();
 
         let cpus = match hardware_info() {
@@ -90,7 +97,7 @@ impl Perf {
         return Ok(Self {
             prev: now,
             next: now,
-            interval: Duration::from_millis(10),
+            interval: config.interval(NAME),
             groups,
             counters,
         });
