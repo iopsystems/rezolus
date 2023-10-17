@@ -5,11 +5,8 @@ use metriken::Lazy;
 use ringlog::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
-
-type Duration = clocksource::Duration<clocksource::Nanoseconds<u64>>;
-type Instant = clocksource::Instant<clocksource::Nanoseconds<u64>>;
 
 type HistogramSnapshots = HashMap<String, metriken::histogram::Snapshot>;
 
@@ -234,14 +231,10 @@ fn main() {
             sampler.sample();
         }
 
-        // calculate how long we took during this iteration
-        let stop = Instant::now();
-        let elapsed = (stop - start).as_nanos();
-
-        // calculate how long to sleep and sleep before next iteration
-        // this wakeup period allows a maximum of 1kHz sampling
-        let sleep = 1_000_000_u64.saturating_sub(elapsed);
-        std::thread::sleep(std::time::Duration::from_nanos(sleep));
+        // Sleep for the remainder of one millisecond minus the sampling time.
+        // This wakeup period allows a maximum of 1kHz sampling
+        let delay = Duration::from_millis(1).saturating_sub(start.elapsed());
+        std::thread::sleep(delay);
     }
 }
 
