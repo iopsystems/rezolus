@@ -1315,7 +1315,6 @@ version = "3.5.1-alpha.0"
 dependencies = [
  "backtrace",
  "clap",
- "clocksource",
  "humantime",
  "lazy_static",
  "libbpf-cargo",
