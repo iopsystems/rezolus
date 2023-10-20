@@ -107,6 +107,28 @@ mod handlers {
                         }
                     }
                 }
+                if let Some(snapshot) = snapshots.previous.get(metric.name()) {
+                    // we need to export a total count (free-running)
+                    let mut count = 0;
+                    // we also need to export a total sum of all observations
+                    // which is also free-running
+                    let mut sum = 0;
+
+                    let mut entry = format!("# TYPE {name}_distribution histogram\n");
+                    for bucket in snapshot {
+                        // add this bucket's sum of observations
+                        sum += (bucket.count() - count) * bucket.end();
+
+                        // add the count to the aggregate
+                        count += bucket.count();
+
+                        entry += &format!("{name}_distribution_bucket{{le=\"{}\"}} {count} {timestamp}\n", bucket.end());
+                    }
+
+                    entry += &format!("{name}_distribution_bucket{{le=\"+Inf\"}} {count} {timestamp}\n");
+                    entry += &format!("{name}_distribution_count {count} {timestamp}\n");
+                    entry += &format!("{name}_distribution_sum {sum} {timestamp}\n");
+                }
             }
         }
 
