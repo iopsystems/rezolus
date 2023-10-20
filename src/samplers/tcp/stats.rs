@@ -35,18 +35,6 @@ counter_with_histogram!(
     "tcp/transmit/retransmit",
     "number of TCP segments retransmitted"
 );
-counter_with_histogram!(
-    TCP_CONN_ACTIVE_OPEN,
-    TCP_CONN_ACTIVE_OPEN_HISTOGRAM,
-    "tcp/connection/active_open",
-    "number of TCP active opens"
-);
-counter_with_histogram!(
-    TCP_CONN_PASSIVE_OPEN,
-    TCP_CONN_PASSIVE_OPEN_HISTOGRAM,
-    "tcp/connection/passive_open",
-    "number of TCP passive opens"
-);
 
 #[metric(
     name = "tcp/connection/state",
