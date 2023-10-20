@@ -26,6 +26,15 @@ distribution_interval = "50ms"
 [samplers.block_io_latency]
 enabled = true
 
+# Instruments CPU frequency, instructions, and cycles using perf events with
+# fallback to instrumenting frequency only via /proc/cpuinfo
+[samplers.cpu_perf]
+enabled = true
+
+# Instruments CPU usage by state by reading /proc/stat
+[samplers.cpu_proc_stat]
+enabled = true
+
 # Produces various nVIDIA specific GPU metrics using NVML
 [samplers.gpu_nvidia]
 enabled = true
@@ -46,6 +55,10 @@ enabled = true
 # BPF sampler that instruments syscall enter and exit to gather syscall counts
 # and latencies.
 [samplers.syscall_latency]
+enabled = true
+
+# Instruments TCP connection states by reading /proc/net/tcp
+[samplers.tcp_connection_state]
 enabled = true
 
 # BPF sampler that probes TCP receive path to measure latency from a packet

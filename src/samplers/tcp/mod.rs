@@ -4,6 +4,7 @@ sampler!(Tcp, "tcp", TCP_SAMPLERS);
 
 mod stats;
 
+mod connection_state;
 mod snmp;
 
 #[cfg(all(feature = "bpf", target_os = "linux"))]
