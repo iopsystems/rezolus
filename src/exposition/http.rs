@@ -128,6 +128,8 @@ mod handlers {
                     entry += &format!("{name}_distribution_bucket{{le=\"+Inf\"}} {count} {timestamp}\n");
                     entry += &format!("{name}_distribution_count {count} {timestamp}\n");
                     entry += &format!("{name}_distribution_sum {sum} {timestamp}\n");
+
+                    data.push(entry);
                 }
             }
         }
