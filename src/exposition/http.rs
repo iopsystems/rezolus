@@ -108,6 +108,7 @@ mod handlers {
                     }
                 }
                 if let Some(snapshot) = snapshots.previous.get(metric.name()) {
+                    // downsample to 6.25% error
                     let snapshot = snapshot.downsample(3).unwrap();
 
                     // we need to export a total count (free-running)
