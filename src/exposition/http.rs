@@ -108,6 +108,8 @@ mod handlers {
                     }
                 }
                 if let Some(snapshot) = snapshots.previous.get(metric.name()) {
+                    let snapshot = snapshot.downsample(3).unwrap();
+
                     // we need to export a total count (free-running)
                     let mut count = 0;
                     // we also need to export a total sum of all observations
@@ -115,7 +117,7 @@ mod handlers {
                     let mut sum = 0;
 
                     let mut entry = format!("# TYPE {name}_distribution histogram\n");
-                    for bucket in snapshot {
+                    for bucket in &snapshot {
                         // add this bucket's sum of observations
                         sum += (bucket.count() - count) * bucket.end();
 
