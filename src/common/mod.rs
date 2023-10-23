@@ -110,7 +110,7 @@ macro_rules! histogram {
             name = $name,
             crate = metriken
         )]
-        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new(7, 32);
+        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new(7, 42);
     };
     ($ident:ident, $name:tt, $description:tt) => {
         #[metriken::metric(
@@ -118,7 +118,7 @@ macro_rules! histogram {
             description = $description,
             crate = metriken
         )]
-        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new(7, 32);
+        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new(7, 42);
     };
 }
 
@@ -136,7 +136,7 @@ macro_rules! bpfhistogram {
             name = $name,
             crate = metriken
         )]
-        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new(7, 32);
+        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new(7, 42);
     };
     ($ident:ident, $name:tt, $description:tt) => {
         #[metriken::metric(
@@ -144,7 +144,7 @@ macro_rules! bpfhistogram {
             description = $description,
             crate = metriken
         )]
-        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new(7, 32);
+        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new(7, 42);
     };
 }
 
