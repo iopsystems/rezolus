@@ -58,8 +58,13 @@ enabled = true
 enabled = true
 
 # Instruments TCP connection states by reading /proc/net/tcp
+#
+# Note: this sampler causes higher CPU utilization than our other samplers when
+# running with short intervals. To reduce that cost, we override this to sample
+# on a secondly basis.
 [samplers.tcp_connection_state]
 enabled = true
+interval = "1s"
 
 # BPF sampler that probes TCP receive path to measure latency from a packet
 # being received until application reads from the socket.
