@@ -1,6 +1,6 @@
 use crate::*;
 
-sampler!(Gpu, "rezolus", REZOLUS_SAMPLERS);
+sampler!(Rezolus, "rezolus", REZOLUS_SAMPLERS);
 
 mod stats;
 
