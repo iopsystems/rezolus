@@ -26,7 +26,7 @@ pub struct Cpu {
     pub microcode: Option<String>,
     pub vendor: Option<String>,
     pub model_name: Option<String>,
-    pub features: Option<String>,
+    pub features: Option<Vec<String>>,
 
     pub caches: Vec<Cache>,
 }
@@ -165,7 +165,12 @@ pub fn get_cpus() -> Result<Vec<Cpu>> {
             "flags" | "Features" => {
                 if let Some(id) = id {
                     if let Some(cpu) = tmp.get_mut(&id) {
-                        cpu.features = Some(parts[1].to_owned());
+                        cpu.features = Some(
+                            parts[1]
+                                .split_ascii_whitespace()
+                                .map(|s| s.to_owned())
+                                .collect(),
+                        );
                     }
                 }
             }
