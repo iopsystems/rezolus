@@ -47,6 +47,10 @@ enabled = true
 [samplers.memory_vmstat]
 enabled = true
 
+# Sample resource utilization for Rezolus itself
+[samplers.rezolus_rusage]
+enabled = true
+
 # BPF sampler that instruments scheduler events and measures runqueue latency,
 # process running time, and context switch information.
 [samplers.scheduler_runqueue]
