@@ -1,6 +1,7 @@
 use crate::Arc;
 use crate::Config;
 use crate::PERCENTILES;
+use metriken::histogram::Snapshot;
 use metriken::{AtomicHistogram, Counter, Gauge, RwLockHistogram};
 
 use warp::Filter;
@@ -121,10 +122,28 @@ mod handlers {
                         }
                     }
                 }
-                if config.general().prometheus_histograms() {
+                if config.prometheus().histograms() {
                     if let Some(snapshot) = snapshots.previous.get(metric.name()) {
-                        // downsample to 6.25% error
-                        let snapshot = snapshot.downsample(3).unwrap();
+                        // downsample the snapshot if necessary
+                        let downsampled: Option<Snapshot> =
+                            if config.prometheus().histogram_downsampling_factor() > 0 {
+                                Some(
+                                    snapshot
+                                        .downsample(
+                                            config.prometheus().histogram_downsampling_factor(),
+                                        )
+                                        .unwrap(),
+                                )
+                            } else {
+                                None
+                            };
+
+                        // reassign to either use the downsampled snapshot or the original
+                        let snapshot = if let Some(snapshot) = downsampled.as_ref() {
+                            snapshot
+                        } else {
+                            snapshot
+                        };
 
                         // we need to export a total count (free-running)
                         let mut count = 0;
@@ -133,7 +152,7 @@ mod handlers {
                         let mut sum = 0;
 
                         let mut entry = format!("# TYPE {name}_distribution histogram\n");
-                        for bucket in &snapshot {
+                        for bucket in snapshot {
                             // add this bucket's sum of observations
                             sum += (bucket.count() - count) * bucket.end();
 
