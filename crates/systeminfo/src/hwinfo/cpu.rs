@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -26,7 +27,7 @@ pub struct Cpu {
     pub microcode: Option<String>,
     pub vendor: Option<String>,
     pub model_name: Option<String>,
-    pub features: Option<Vec<String>>,
+    pub features: Option<HashSet<String>>,
 
     pub caches: Vec<Cache>,
 }
