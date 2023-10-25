@@ -152,7 +152,7 @@ mod handlers {
                         let mut entry = format!("# TYPE {name}_distribution histogram\n");
                         for bucket in snapshot {
                             // add this bucket's sum of observations
-                            sum += (bucket.count() - count) * bucket.end();
+                            sum += bucket.count() * bucket.end();
 
                             // add the count to the aggregate
                             count += bucket.count();
