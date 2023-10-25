@@ -26,6 +26,15 @@ distribution_interval = "50ms"
 [samplers.block_io_latency]
 enabled = true
 
+# Instruments CPU frequency, instructions, and cycles using perf events with
+# fallback to instrumenting frequency only via /proc/cpuinfo
+[samplers.cpu_perf]
+enabled = true
+
+# Instruments CPU usage by state by reading /proc/stat
+[samplers.cpu_proc_stat]
+enabled = true
+
 # Produces various nVIDIA specific GPU metrics using NVML
 [samplers.gpu_nvidia]
 enabled = true
@@ -38,6 +47,10 @@ enabled = true
 [samplers.memory_vmstat]
 enabled = true
 
+# Sample resource utilization for Rezolus itself
+[samplers.rezolus_rusage]
+enabled = true
+
 # BPF sampler that instruments scheduler events and measures runqueue latency,
 # process running time, and context switch information.
 [samplers.scheduler_runqueue]
@@ -47,6 +60,15 @@ enabled = true
 # and latencies.
 [samplers.syscall_latency]
 enabled = true
+
+# Instruments TCP connection states by reading /proc/net/tcp
+#
+# Note: this sampler causes higher CPU utilization than our other samplers when
+# running with short intervals. To reduce that cost, we override this to sample
+# on a secondly basis.
+[samplers.tcp_connection_state]
+enabled = true
+interval = "1s"
 
 # BPF sampler that probes TCP receive path to measure latency from a packet
 # being received until application reads from the socket.
