@@ -85,6 +85,8 @@ impl Config {
 #[derive(Deserialize)]
 pub struct General {
     listen: String,
+    #[serde(default = "disabled")]
+    prometheus_histograms: bool,
 }
 
 impl General {
@@ -103,10 +105,18 @@ impl General {
             })
             .unwrap()
     }
+
+    pub fn prometheus_histograms(&self) -> bool {
+        self.prometheus_histograms
+    }
 }
 
 pub fn enabled() -> bool {
     true
+}
+
+pub fn disabled() -> bool {
+    false
 }
 
 pub fn interval() -> String {
