@@ -144,11 +144,11 @@ fn main() {
         .get_matches();
 
     // load config from file
-    let config = {
+    let config: Arc<Config> = {
         let file = matches.get_one::<String>("CONFIG").unwrap();
         debug!("loading config: {}", file);
         match Config::load(file) {
-            Ok(c) => c,
+            Ok(c) => c.into(),
             Err(error) => {
                 eprintln!("error loading config file: {file}\n{error}");
                 std::process::exit(1);
@@ -208,7 +208,7 @@ fn main() {
     info!("rezolus");
 
     // spawn http exposition thread
-    rt.spawn(exposition::http());
+    rt.spawn(exposition::http(config.clone()));
 
     // initialize and gather the samplers
     let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();

@@ -1,6 +1,11 @@
 [general]
 listen = "0.0.0.0:4242"
 
+# Controls whether the full distribution for each histogram is exposed via the
+# prometheus endpoint (`/metrics`). This adds a considerable number of time
+# series.
+prometheus_histograms = false
+
 # The defaults are used for each sampler unless there's a sampler level
 # configuration present.
 
