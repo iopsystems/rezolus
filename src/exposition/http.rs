@@ -60,6 +60,7 @@ mod filters {
 
 mod handlers {
     use super::*;
+    use crate::common::HISTOGRAM_GROUPING_POWER;
     use crate::SNAPSHOTS;
     use core::convert::Infallible;
     use std::time::UNIX_EPOCH;
@@ -124,19 +125,19 @@ mod handlers {
                 }
                 if config.prometheus().histograms() {
                     if let Some(snapshot) = snapshots.previous.get(metric.name()) {
+                        // calculate the difference between the grouping
+                        // power of the histogram and the target grouping
+                        // power
+                        let downsample_factor = HISTOGRAM_GROUPING_POWER
+                            - config.prometheus().histogram_grouping_power();
+
                         // downsample the snapshot if necessary
-                        let downsampled: Option<Snapshot> =
-                            if config.prometheus().histogram_downsampling_factor() > 0 {
-                                Some(
-                                    snapshot
-                                        .downsample(
-                                            config.prometheus().histogram_downsampling_factor(),
-                                        )
-                                        .unwrap(),
-                                )
-                            } else {
-                                None
-                            };
+                        let downsampled: Option<Snapshot> = if downsample_factor == 0 {
+                            // the powers matched, we don't need to downsample
+                            None
+                        } else {
+                            Some(snapshot.downsample(downsample_factor).unwrap())
+                        };
 
                         // reassign to either use the downsampled snapshot or the original
                         let snapshot = if let Some(snapshot) = downsampled.as_ref() {

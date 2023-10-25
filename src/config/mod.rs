@@ -116,16 +116,17 @@ impl General {
 pub struct Prometheus {
     #[serde(default = "disabled")]
     histograms: bool,
-    #[serde(default = "three")]
-    histogram_downsampling_factor: u8,
+    #[serde(default = "four")]
+    histogram_grouping_power: u8,
 }
 
 impl Prometheus {
     pub fn check(&self) {
-        if self.histogram_downsampling_factor > (crate::common::HISTOGRAM_GROUPING_POWER - 2) {
+        if !(2..=(crate::common::HISTOGRAM_GROUPING_POWER)).contains(&self.histogram_grouping_power)
+        {
             eprintln!(
-                "prometheus histogram downsample factor must be in the range 0..={}",
-                crate::common::HISTOGRAM_GROUPING_POWER - 2
+                "prometheus histogram downsample factor must be in the range 2..={}",
+                crate::common::HISTOGRAM_GROUPING_POWER
             );
             std::process::exit(1);
         }
@@ -135,8 +136,8 @@ impl Prometheus {
         self.histograms
     }
 
-    pub fn histogram_downsampling_factor(&self) -> u8 {
-        self.histogram_downsampling_factor
+    pub fn histogram_grouping_power(&self) -> u8 {
+        self.histogram_grouping_power
     }
 }
 
@@ -148,8 +149,8 @@ pub fn disabled() -> bool {
     false
 }
 
-pub fn three() -> u8 {
-    3
+pub fn four() -> u8 {
+    4
 }
 
 pub fn interval() -> String {
