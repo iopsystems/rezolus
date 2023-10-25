@@ -9,6 +9,7 @@ use std::path::Path;
 // #[serde(deny_unknown_fields)]
 pub struct Config {
     general: General,
+    prometheus: Prometheus,
     defaults: SamplerConfig,
     samplers: HashMap<String, SamplerConfig>,
 }
@@ -29,6 +30,8 @@ impl Config {
             })
             .unwrap();
 
+        config.prometheus().check();
+
         config.defaults.check("default");
 
         for (name, config) in config.samplers.iter() {
@@ -48,6 +51,10 @@ impl Config {
 
     pub fn general(&self) -> &General {
         &self.general
+    }
+
+    pub fn prometheus(&self) -> &Prometheus {
+        &self.prometheus
     }
 
     #[cfg(feature = "bpf")]
@@ -105,8 +112,45 @@ impl General {
     }
 }
 
+#[derive(Deserialize)]
+pub struct Prometheus {
+    #[serde(default = "disabled")]
+    histograms: bool,
+    #[serde(default = "four")]
+    histogram_grouping_power: u8,
+}
+
+impl Prometheus {
+    pub fn check(&self) {
+        if !(2..=(crate::common::HISTOGRAM_GROUPING_POWER)).contains(&self.histogram_grouping_power)
+        {
+            eprintln!(
+                "prometheus histogram downsample factor must be in the range 2..={}",
+                crate::common::HISTOGRAM_GROUPING_POWER
+            );
+            std::process::exit(1);
+        }
+    }
+
+    pub fn histograms(&self) -> bool {
+        self.histograms
+    }
+
+    pub fn histogram_grouping_power(&self) -> u8 {
+        self.histogram_grouping_power
+    }
+}
+
 pub fn enabled() -> bool {
     true
+}
+
+pub fn disabled() -> bool {
+    false
+}
+
+pub fn four() -> u8 {
+    4
 }
 
 pub fn interval() -> String {

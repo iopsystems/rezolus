@@ -9,6 +9,8 @@ use metriken::AtomicHistogram;
 use metriken::LazyCounter;
 pub use nop::Nop;
 
+pub const HISTOGRAM_GROUPING_POWER: u8 = 7;
+
 /// A `Counter` is a wrapper type that enables us to automatically calculate
 /// percentiles for secondly rates between subsequent counter observations.
 ///
@@ -110,7 +112,7 @@ macro_rules! histogram {
             name = $name,
             crate = metriken
         )]
-        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new(7, 64);
+        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new($crate::common::HISTOGRAM_GROUPING_POWER, 64);
     };
     ($ident:ident, $name:tt, $description:tt) => {
         #[metriken::metric(
@@ -118,7 +120,7 @@ macro_rules! histogram {
             description = $description,
             crate = metriken
         )]
-        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new(7, 64);
+        pub static $ident: metriken::AtomicHistogram = metriken::AtomicHistogram::new($crate::common::HISTOGRAM_GROUPING_POWER, 64);
     };
 }
 
@@ -136,7 +138,7 @@ macro_rules! bpfhistogram {
             name = $name,
             crate = metriken
         )]
-        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new(7, 64);
+        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new($crate::common::HISTOGRAM_GROUPING_POWER, 64);
     };
     ($ident:ident, $name:tt, $description:tt) => {
         #[metriken::metric(
@@ -144,7 +146,7 @@ macro_rules! bpfhistogram {
             description = $description,
             crate = metriken
         )]
-        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new(7, 64);
+        pub static $ident: metriken::RwLockHistogram = metriken::RwLockHistogram::new($crate::common::HISTOGRAM_GROUPING_POWER, 64);
     };
 }
 

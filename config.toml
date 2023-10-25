@@ -1,6 +1,36 @@
 [general]
 listen = "0.0.0.0:4242"
 
+[prometheus]
+# Controls whether the full distribution for each histogram is exposed via the
+# prometheus endpoint (`/metrics`). This adds a considerable number of time
+# series depending on the downsampling factor as each histogram bucket is
+# represented as its own time series.
+histograms = false
+
+# The histogram can be downsampled for exposition to reduce the number of
+# buckets, and therefore reduce the number of timeseries needed to store the
+# distribution.
+#
+# The grouping power must be in the range 2..=7. The native histograms are
+# recorded with a grouping power of 7. Any reduction in the grouping power will
+# increase the relative error, as the buckets are wider with lower grouping
+# powers.
+#
+# By default, we reduce the grouping power to 4 to greatly reduce the number of
+# timeseries but maintain an acceptable relative error for most uses.
+#
+# See https://docs.rs/histogram/ for more information about the grouping power.
+#
+# Power:   	    Error:		Buckets:
+# 7             0.781%      7424
+# 6             1.56%       3776
+# 5             3.13%       1920
+# 4             6.25%       976
+# 3             12.5%       496
+# 2             25.0%       252
+histogram_grouping_power = 4
+
 # The defaults are used for each sampler unless there's a sampler level
 # configuration present.
 

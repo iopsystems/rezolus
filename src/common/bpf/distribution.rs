@@ -82,7 +82,9 @@ impl<'a> Distribution<'a> {
                 *bucket = val;
             }
 
-            let _ = self.histogram.update_from(&self.buffer);
+            let _ = self
+                .histogram
+                .update_from(&self.buffer[0..HISTOGRAM_BUCKETS]);
         }
     }
 }
