@@ -1,10 +1,26 @@
 [general]
 listen = "0.0.0.0:4242"
 
+[prometheus]
 # Controls whether the full distribution for each histogram is exposed via the
 # prometheus endpoint (`/metrics`). This adds a considerable number of time
-# series.
-prometheus_histograms = false
+# series depending on the downsampling factor as each histogram bucket is
+# represented as its own time series.
+histograms = false
+
+# Downsampling factor for histogram exposition. Must be in the range 0..=6 and
+# controls the relative error for the histogram buckets. The default of `3` was
+# selected to reduce the number of buckets without the relative error getting
+# too high.
+#
+# Factor:   	Error:		Buckets:
+# 0             0.781%      7424
+# 1             1.56%       3776
+# 2             3.13%       1920
+# 3             6.25%       976
+# 4             12.5%       496
+# 5             25.0%       252
+histogram_downsampling_factor = 3
 
 # The defaults are used for each sampler unless there's a sampler level
 # configuration present.

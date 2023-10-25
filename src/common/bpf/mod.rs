@@ -20,11 +20,11 @@ const CACHELINE_SIZE: usize = 64;
 static MAX_CPUS: usize = 1024;
 
 /// The number of histogram buckets based on a rustcommon histogram with the
-/// parameters `grouping_power = 7` `max_value_power = 64`.
+/// parameters `grouping_power = 7` `max_value_power = 64`
 ///
 /// NOTE: this *must* remain in-sync across both C and Rust components of BPF
 /// code.
-const HISTOGRAM_BUCKETS: usize = 7424;
+const HISTOGRAM_BUCKETS: usize = 7680;
 const HISTOGRAM_PAGES: usize = 15;
 
 #[self_referencing]
