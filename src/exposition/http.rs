@@ -125,18 +125,15 @@ mod handlers {
                 }
                 if config.prometheus().histograms() {
                     if let Some(snapshot) = snapshots.previous.get(metric.name()) {
-                        // calculate the difference between the grouping
-                        // power of the histogram and the target grouping
-                        // power
-                        let downsample_factor = HISTOGRAM_GROUPING_POWER
-                            - config.prometheus().histogram_grouping_power();
+                        let current = HISTOGRAM_GROUPING_POWER;
+                        let target = config.prometheus().histogram_grouping_power();
 
                         // downsample the snapshot if necessary
-                        let downsampled: Option<Snapshot> = if downsample_factor == 0 {
+                        let downsampled: Option<Snapshot> = if current == target {
                             // the powers matched, we don't need to downsample
                             None
                         } else {
-                            Some(snapshot.downsample(downsample_factor).unwrap())
+                            Some(snapshot.downsample(target).unwrap())
                         };
 
                         // reassign to either use the downsampled snapshot or the original

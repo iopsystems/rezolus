@@ -563,9 +563,9 @@ checksum = "d77f7ec81a6d05a3abb01ab6eb7590f6083d08449fe5a1c8b1e620283546ccb7"
 
 [[package]]
 name = "histogram"
-version = "0.8.0"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bbe54c811e0443ccedc269b633a9495a03e04c20082b26f6c1cc4d27bfd0678"
+checksum = "72cc09ccef50843ffa24cfc42861950fd45a2b377cc4b66c49ac47d17449f144"
 dependencies = [
  "thiserror",
 ]
@@ -846,9 +846,9 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.3.1"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c9dca28590e7a34b2678a4f8740dfa96ad2db227e96390f3277241a7da3bce4"
+checksum = "033e8371ec83b73e4605dd1b1bbf1eaa0eea2884244eb3f713490ab08ca5ae6e"
 dependencies = [
  "histogram",
  "linkme",
@@ -1352,9 +1352,9 @@ dependencies = [
 
 [[package]]
 name = "ringlog"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "987665e9638b6e3c9bf753fd2da5058c8fa0e734221582d8790e3b7d0e1c3394"
+checksum = "325bf804f14769bdcd0bcf437a9ac2af50d12986e969df4448205397684ca5dc"
 dependencies = [
  "ahash",
  "clocksource",
