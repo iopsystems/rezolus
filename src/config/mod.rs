@@ -92,8 +92,6 @@ impl Config {
 #[derive(Deserialize)]
 pub struct General {
     listen: String,
-    #[serde(default = "disabled")]
-    prometheus_histograms: bool,
 }
 
 impl General {
@@ -111,10 +109,6 @@ impl General {
                 std::process::exit(1);
             })
             .unwrap()
-    }
-
-    pub fn prometheus_histograms(&self) -> bool {
-        self.prometheus_histograms
     }
 }
 
