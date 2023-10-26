@@ -128,7 +128,16 @@ impl Syscall {
 
         bpf.add_counters("counters", counters);
 
-        let mut distributions = vec![("total_latency", &SYSCALL_TOTAL_LATENCY)];
+        let mut distributions = vec![
+            ("total_latency", &SYSCALL_TOTAL_LATENCY),
+            ("read_latency", &SYSCALL_READ_LATENCY),
+            ("write_latency", &SYSCALL_WRITE_LATENCY),
+            ("poll_latency", &SYSCALL_POLL_LATENCY),
+            ("lock_latency", &SYSCALL_LOCK_LATENCY),
+            ("time_latency", &SYSCALL_TIME_LATENCY),
+            ("sleep_latency", &SYSCALL_SLEEP_LATENCY),
+            ("socket_latency", &SYSCALL_SOCKET_LATENCY),
+        ];
 
         for (name, histogram) in distributions.drain(..) {
             bpf.add_distribution(name, histogram);
