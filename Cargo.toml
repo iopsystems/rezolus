@@ -7,7 +7,7 @@ edition = "2021"
 description = "High resolution systems performance telemetry agent"
 
 [workspace.package]
-version = "3.6.0"
+version = "3.6.1-alpha.0"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
