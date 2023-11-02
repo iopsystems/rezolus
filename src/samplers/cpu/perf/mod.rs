@@ -57,10 +57,7 @@ impl Perf {
         let mut counters = Vec::with_capacity(cpus.len());
         let mut gauges = Vec::with_capacity(cpus.len());
 
-        let counter_metrics = [
-            "cpu/cycles",
-            "cpu/instructions",
-        ];
+        let counter_metrics = ["cpu/cycles", "cpu/instructions"];
 
         let gauge_metrics = ["cpu/ipkc", "cpu/ipus", "cpu/frequency"];
 
@@ -94,7 +91,6 @@ impl Perf {
                     })
                     .collect(),
             );
-
 
             match PerfGroup::new(cpu.id()) {
                 Ok(g) => groups.push(g),
