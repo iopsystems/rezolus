@@ -12,6 +12,8 @@ mod util;
 
 pub use self::cache::{Cache, CacheType};
 pub use self::cpu::Cpu;
+pub use self::cpu::CpuSmt;
+pub use self::cpufreq::CpuFreqBoosting;
 pub use self::cpufreq::Cpufreq;
 pub use self::interrupt::Interrupt;
 pub use self::memory::Memory;
@@ -25,8 +27,8 @@ pub struct HwInfo {
     pub kernel: String,
     pub caches: Vec<Vec<Cache>>,
     pub cpus: Vec<Cpu>,
-    pub cpu_smt: Option<bool>,
-    pub cpu_boosting: Option<bool>,
+    pub cpu_smt: CpuSmt,
+    pub cpu_boosting: CpuFreqBoosting,
     pub memory: Memory,
     pub network: Vec<Interface>,
     pub nodes: Vec<Node>,
@@ -40,7 +42,7 @@ impl HwInfo {
             caches: self::cache::get_caches()?,
             cpus: self::cpu::get_cpus()?,
             cpu_smt: self::cpu::get_cpu_smt(),
-            cpu_boosting: self::cpu::get_cpu_boosting(),
+            cpu_boosting: self::cpufreq::get_cpu_boosting(),
             memory: Memory::new()?,
             network: self::net::get_interfaces(),
             nodes: self::node::get_nodes()?,

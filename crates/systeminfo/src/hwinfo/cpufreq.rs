@@ -87,3 +87,31 @@ impl Cpufreq {
         })
     }
 }
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CpuFreqBoosting {
+    Enabled,
+    Disabled,
+    Unknown,
+}
+
+// Check whether the CPU frequency turbo/boosting is enabled or not, report Unknown if
+// the CPU frequency scaling driver doesn't expose the status
+pub fn get_cpu_boosting() -> CpuFreqBoosting {
+    if let Ok(no_turbo) = read_usize("/sys/devices/system/cpu/intel_pstate/no_turbo") {
+        if no_turbo == 0 {
+            CpuFreqBoosting::Enabled
+        } else {
+            CpuFreqBoosting::Disabled
+        }
+    } else if let Ok(boosting) = read_usize("/sys/devices/system/cpu/cpufreq/boost") {
+        if boosting == 1 {
+            CpuFreqBoosting::Enabled
+        } else {
+            CpuFreqBoosting::Disabled
+        }
+    } else {
+        CpuFreqBoosting::Unknown
+    }
+}

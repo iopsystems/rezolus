@@ -55,17 +55,25 @@ impl Cpu {
     }
 }
 
-pub fn get_cpu_smt() -> Option<bool> {
-    Some(read_usize("/sys/devices/system/cpu/smt/active").ok()? == 1)
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CpuSmt {
+    Enabled,
+    Disabled,
+    Unknown,
 }
 
-pub fn get_cpu_boosting() -> Option<bool> {
-    if let Ok(no_turbo) = read_usize("/sys/devices/system/cpu/intel_pstate/no_turbo") {
-        Some(no_turbo == 0)
-    } else if let Ok(boosting) = read_usize("/sys/devices/system/cpu/cpufreq/boost") {
-        Some(boosting == 1)
-    } else {
-        None
+// Check whether the SMT is enabled, return Unknown if the file is not readable
+pub fn get_cpu_smt() -> CpuSmt {
+    match read_usize("/sys/devices/system/cpu/smt/active") {
+        Ok(smt) => {
+            if smt == 1 {
+                CpuSmt::Enabled
+            } else {
+                CpuSmt::Disabled
+            }
+        }
+        Err(_) => CpuSmt::Unknown,
     }
 }
 
