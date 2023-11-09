@@ -1,15 +1,12 @@
-use std::path::Path;
-use std::str::FromStr;
-
 use super::util::*;
 use crate::Result;
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Cpufreq {    
+pub struct Cpufreq {
     pub affected_cpus: Vec<usize>,
     pub related_cpus: Vec<usize>,
-    pub freqdomain_cpus: Vec<usize>,    
+    pub freqdomain_cpus: Vec<usize>,
     pub cpuinfo_max_freq: usize,
     pub cpuinfo_min_freq: usize,
     // intel_pstate driver doesn't expose cpuinfo_cur_freq
@@ -22,10 +19,6 @@ pub struct Cpufreq {
     pub scaling_min_freq: usize,
     pub scaling_max_freq: usize,
     pub scaling_cur_freq: usize,
-}
-
-fn read_space_list<T:FromStr>(path: impl AsRef<Path>) -> Result<Vec<T>> {
-    Ok(read_string(path)?.split_whitespace().filter_map(|x| x.parse::<T>().ok()).collect())
 }
 
 impl Cpufreq {
@@ -49,7 +42,8 @@ impl Cpufreq {
         ))?;
         let cpuinfo_cur_freq: Option<usize> = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_cur_freq"
-        )).map_or(None, |v| Some(v));        
+        ))
+        .map_or(None, |v| Some(v));
         let cpuinfo_transition_latency = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_transition_latency"
         ))?;
@@ -64,7 +58,7 @@ impl Cpufreq {
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_available_frequencies"
         ))?;
         let scaling_available_governors = read_space_list(format!(
-            "/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_available_frequencies"
+            "/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_available_governors"
         ))?;
         let scaling_min_freq = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_min_freq"
@@ -75,23 +69,21 @@ impl Cpufreq {
         let scaling_cur_freq = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_cur_freq"
         ))?;
-        Ok(
-            Cpufreq { 
-                affected_cpus,
-                related_cpus,
-                freqdomain_cpus,
-                cpuinfo_max_freq,
-                cpuinfo_min_freq,
-                cpuinfo_cur_freq,
-                cpuinfo_transition_latency,
-                scaling_driver,                                
-                scaling_governor,
-                scaling_available_frequencies,
-                scaling_available_governors,
-                scaling_min_freq,
-                scaling_max_freq,
-                scaling_cur_freq,
-             }
-        )
+        Ok(Cpufreq {
+            affected_cpus,
+            related_cpus,
+            freqdomain_cpus,
+            cpuinfo_max_freq,
+            cpuinfo_min_freq,
+            cpuinfo_cur_freq,
+            cpuinfo_transition_latency,
+            scaling_driver,
+            scaling_governor,
+            scaling_available_frequencies,
+            scaling_available_governors,
+            scaling_min_freq,
+            scaling_max_freq,
+            scaling_cur_freq,
+        })
     }
 }

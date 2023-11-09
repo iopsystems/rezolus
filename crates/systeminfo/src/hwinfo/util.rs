@@ -1,7 +1,8 @@
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
+use std::str::FromStr;
 
-use walkdir::DirEntry;
+use walkdir::{DirEntry, WalkDir};
 
 use crate::{Error, Result};
 
@@ -60,6 +61,49 @@ fn parse_list(raw: &str, path: &Path) -> Result<Vec<usize>> {
     }
 
     Ok(ret)
+}
+
+pub(crate) fn read_hexbitmap(path: impl AsRef<Path>) -> Vec<usize> {
+    let mut ret: Vec<usize> = Vec::new();
+    if let Ok(hex_string) = read_string(path) {
+        hex_string.chars().rfold(0, |acc, c: char| {
+            let val = match c {
+                'a'..='f' => c as u8 - b'a' + 10,
+                'A'..='F' => c as u8 - b'A' + 10,
+                '0'..='9' => c as u8 - b'0',
+                _ => 0,
+            };
+            for i in 0..4 {
+                if (val & (0x1 << i)) > 0 {
+                    ret.push(acc + i);
+                }
+            }
+            acc + 4
+        });
+    }
+    ret
+}
+
+// Return a list of IRQ numbers in the path
+pub(crate) fn read_irqs(path: impl AsRef<Path>) -> Vec<usize> {
+    let walker = WalkDir::new(path).max_depth(1);
+    return walker
+        .into_iter()
+        .filter_map(|entry| {
+            if let Ok(irq) = entry {
+                irq.file_name().to_str().unwrap().parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .collect();
+}
+
+pub(crate) fn read_space_list<T: FromStr>(path: impl AsRef<Path>) -> Result<Vec<T>> {
+    Ok(read_string(path)?
+        .split_whitespace()
+        .filter_map(|x| x.parse::<T>().ok())
+        .collect())
 }
 
 pub(crate) fn is_hidden(entry: &DirEntry) -> bool {
