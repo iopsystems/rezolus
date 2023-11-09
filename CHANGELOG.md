@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+## [3.6.0] - 2023-10-26
+
+### Added
+
+- Allow configuration of individual samplers in the config file. This allows
+  each sampler to be individually enabled/disabled and have its collection
+  intervals adjusted.
+- TCP connection state sampler which tracks the number of tcp connections in
+  each state.
+- Rezolus sampler which monitors resource utilization of Rezolus itself.
+- Optional exposition of histogram buckets on the Prometheus/OpenTelemetry
+  endpoint.
+- Track latencies for each group of syscalls to help understand the breakdown of
+  total syscall latency.
+
+### Fixed
+
+- Corrected a length check of the mmap'd histogram regions. This fix enables the
+  fast path for reading histogram data into userspace.
+
 ## [3.5.0] - 2023-10-16
 
 ### Changed
@@ -76,7 +96,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.5.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.6.0...HEAD
+[3.6.0]: https://github.com/iopsystems/rezolus/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/iopsystems/rezolus/compare/v3.4.0...v3.5.0
 [3.4.0]: https://github.com/iopsystems/rezolus/compare/v3.3.3...v3.4.0
 [3.3.3]: https://github.com/iopsystems/rezolus/compare/v3.3.2...v3.3.3

@@ -52,10 +52,12 @@ impl<'a> Distribution<'a> {
 
         let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
 
-        if buckets.len() == HISTOGRAM_BUCKETS {
-            let _ = self.histogram.update_from(&buckets);
+        let expected_len = HISTOGRAM_PAGES * PAGE_SIZE / 8;
+
+        if buckets.len() == expected_len {
+            let _ = self.histogram.update_from(&buckets[0..HISTOGRAM_BUCKETS]);
         } else {
-            warn!("mmap region misaligned or did not have expected number of values");
+            warn!("mmap region misaligned or did not have expected number of values {} != {expected_len}", buckets.len());
 
             self.buffer.resize(HISTOGRAM_BUCKETS, 0);
 
@@ -80,7 +82,9 @@ impl<'a> Distribution<'a> {
                 *bucket = val;
             }
 
-            let _ = self.histogram.update_from(&self.buffer);
+            let _ = self
+                .histogram
+                .update_from(&self.buffer[0..HISTOGRAM_BUCKETS]);
         }
     }
 }

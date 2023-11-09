@@ -36,6 +36,7 @@ pub struct Perf {
     interval: Duration,
     groups: Vec<PerfGroup>,
     counters: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
+    gauges: Vec<Vec<DynBoxedMetric<metriken::Gauge>>>,
 }
 
 impl Perf {
@@ -54,18 +55,15 @@ impl Perf {
 
         let mut groups = Vec::with_capacity(cpus.len());
         let mut counters = Vec::with_capacity(cpus.len());
+        let mut gauges = Vec::with_capacity(cpus.len());
 
-        let metrics = [
-            "cpu/cycles",
-            "cpu/instructions",
-            "cpu/ipkc",
-            "cpu/ipus",
-            "cpu/frequency",
-        ];
+        let counter_metrics = ["cpu/cycles", "cpu/instructions"];
+
+        let gauge_metrics = ["cpu/ipkc", "cpu/ipus", "cpu/frequency"];
 
         for cpu in cpus {
             counters.push(
-                metrics
+                counter_metrics
                     .iter()
                     .map(|metric| {
                         MetricBuilder::new(*metric)
@@ -75,6 +73,21 @@ impl Perf {
                             .metadata("package", format!("{}", cpu.package()))
                             .formatter(cpu_metric_formatter)
                             .build(metriken::Counter::new())
+                    })
+                    .collect(),
+            );
+
+            gauges.push(
+                gauge_metrics
+                    .iter()
+                    .map(|metric| {
+                        MetricBuilder::new(*metric)
+                            .metadata("id", format!("{}", cpu.id()))
+                            .metadata("core", format!("{}", cpu.core()))
+                            .metadata("die", format!("{}", cpu.die()))
+                            .metadata("package", format!("{}", cpu.package()))
+                            .formatter(cpu_metric_formatter)
+                            .build(metriken::Gauge::new())
                     })
                     .collect(),
             );
@@ -100,6 +113,7 @@ impl Perf {
             interval: config.interval(NAME),
             groups,
             counters,
+            gauges,
         });
     }
 }
@@ -135,9 +149,10 @@ impl Sampler for Perf {
 
                 self.counters[reading.id][0].set(reading.cycles);
                 self.counters[reading.id][1].set(reading.instructions);
-                self.counters[reading.id][2].set(reading.ipkc);
-                self.counters[reading.id][3].set(reading.ipus);
-                self.counters[reading.id][4].set(reading.running_frequency_mhz);
+
+                self.gauges[reading.id][0].set(reading.ipkc as i64);
+                self.gauges[reading.id][1].set(reading.ipus as i64);
+                self.gauges[reading.id][2].set(reading.running_frequency_mhz as i64);
             }
         }
 

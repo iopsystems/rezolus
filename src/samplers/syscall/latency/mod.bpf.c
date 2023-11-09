@@ -51,6 +51,62 @@ struct {
 	__uint(max_entries, HISTOGRAM_BUCKETS);
 } total_latency SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} read_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} write_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} poll_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} lock_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} time_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} sleep_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} socket_latency SEC(".maps");
+
 // provides a lookup table from syscall id to a counter index offset
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -102,7 +158,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	if (syscall_id < MAX_SYSCALL_ID) {
 		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
 
-		if (counter_offset && *counter_offset < COUNTER_GROUP_WIDTH) {
+		if (counter_offset && *counter_offset && *counter_offset < COUNTER_GROUP_WIDTH) {
 			idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + ((u32)*counter_offset);
 			cnt = bpf_map_lookup_elem(&counters, &idx);
 
@@ -131,6 +187,35 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 
 	if (cnt) {
 		__sync_fetch_and_add(cnt, 1);
+	}
+
+	// increment latency histogram for the syscall family
+	if (syscall_id < MAX_SYSCALL_ID) {
+		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
+
+		if (!counter_offset || !*counter_offset || *counter_offset >= COUNTER_GROUP_WIDTH) {
+			return 0;
+		}
+
+		if (*counter_offset == 1) {
+			cnt = bpf_map_lookup_elem(&read_latency, &idx);
+		} else if (*counter_offset == 2) {
+			cnt = bpf_map_lookup_elem(&write_latency, &idx);
+		} else if (*counter_offset == 3) {
+			cnt = bpf_map_lookup_elem(&poll_latency, &idx);
+		} else if (*counter_offset == 4) {
+			cnt = bpf_map_lookup_elem(&lock_latency, &idx);
+		} else if (*counter_offset == 5) {
+			cnt = bpf_map_lookup_elem(&time_latency, &idx);
+		} else if (*counter_offset == 6) {
+			cnt = bpf_map_lookup_elem(&sleep_latency, &idx);
+		} else if (*counter_offset == 7) {
+			cnt = bpf_map_lookup_elem(&socket_latency, &idx);
+		}
+
+		if (cnt) {
+			__sync_fetch_and_add(cnt, 1);
+		}
 	}
 
 	return 0;
