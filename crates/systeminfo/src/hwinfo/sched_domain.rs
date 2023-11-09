@@ -1,7 +1,4 @@
-use std::ffi::OsStr;
-
 use super::util::*;
-use crate::Result;
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,32 +15,40 @@ pub struct SchedDomain {
 }
 
 impl SchedDomain {
-    pub fn new(cpu: usize, domain: &str) -> Result<Self> {
+    pub fn new(cpu: usize, domain: &str) -> Self {
         let name = read_string(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/name"
-        ))?;
+        ))
+        .unwrap();
         let flags = read_space_list(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/flags"
-        ))?;
+        ))
+        .unwrap();
         let min_interval = read_usize(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/min_interval"
-        ))?;
+        ))
+        .unwrap();
         let max_interval = read_usize(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/max_interval"
-        ))?;
+        ))
+        .unwrap();
         let imbalance_pct = read_usize(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/imbalance_pct"
-        ))?;
+        ))
+        .unwrap();
         let cache_nice_tries = read_usize(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/cache_nice_tries"
-        ))?;
+        ))
+        .unwrap();
         let busy_factor = read_usize(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/busy_factor"
-        ))?;
+        ))
+        .unwrap();
         let max_newidle_lb_cost = read_usize(format!(
             "/sys/kernel/debug/sched/domains/cpu{cpu}/{domain}/max_newidle_lb_cost"
-        ))?;
-        Ok(SchedDomain {
+        ))
+        .unwrap();
+        SchedDomain {
             name,
             flags,
             min_interval,
@@ -52,6 +57,6 @@ impl SchedDomain {
             cache_nice_tries,
             busy_factor,
             max_newidle_lb_cost,
-        })
+        }
     }
 }

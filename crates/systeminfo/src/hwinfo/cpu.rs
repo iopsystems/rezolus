@@ -20,9 +20,6 @@ pub struct Cpu {
     pub die_id: usize,
     pub package_id: usize,
 
-    // scheduling domain
-    // pub scheduling_domain: Option<Sched>,
-    // P state
     pub cpu_freq: Option<Cpufreq>,
     pub sched_domains: Option<Vec<SchedDomain>>,
     pub core_cpus: Vec<usize>,
@@ -63,14 +60,13 @@ pub fn get_cpu_smt() -> Option<bool> {
 }
 
 pub fn get_cpu_boosting() -> Option<bool> {
-    // intel_pstate no_turbo
     if let Ok(no_turbo) = read_usize("/sys/devices/system/cpu/intel_pstate/no_turbo") {
-        return Some(no_turbo == 0);
+        Some(no_turbo == 0)
+    } else if let Ok(boosting) = read_usize("/sys/devices/system/cpu/cpufreq/boost") {
+        Some(boosting == 1)
+    } else {
+        None
     }
-    if let Ok(boosting) = read_usize("/sys/devices/system/cpu/cpufreq/boost") {
-        return Some(boosting == 1);
-    }
-    None
 }
 
 pub fn get_cpus() -> Result<Vec<Cpu>> {
@@ -93,9 +89,8 @@ pub fn get_cpus() -> Result<Vec<Cpu>> {
         if let Ok(domain_dir) = fs::read_dir(format!("/sys/kernel/debug/sched/domains/cpu{id}")) {
             sched_domains = Some(
                 domain_dir
-                    .filter_map(|domain| {
+                    .map(|domain| {
                         SchedDomain::new(id, &domain.unwrap().file_name().into_string().unwrap())
-                            .ok()
                     })
                     .collect(),
             );

@@ -1,5 +1,4 @@
 use super::util::*;
-use walkdir::WalkDir;
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
