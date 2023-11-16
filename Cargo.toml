@@ -65,3 +65,13 @@ members = [
 
 [workspace.dependencies]
 systeminfo = { path = "crates/systeminfo" }
+
+[package.metadata.generate-rpm]
+auto_req = "builtin"
+assets = [
+    { source = "target/release/rezolus", dest = "/usr/bin/", mode = "755" },
+    { source = "config.toml", dest = "/etc/rezolus/", mode = "644" },
+    { source = "debian/rezolus.service", dest = "/usr/lib/systemd/system/", mode = "644" },
+]
+post_install_script = "rpm/systemd-start.sh"
+pre_uninstall_script = "rpm/systemd-stop.sh"
