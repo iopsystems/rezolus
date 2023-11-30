@@ -19,8 +19,8 @@ struct {
 	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
 } counters SEC(".maps");
 
-SEC("kprobe/tcp_retransmit_timer")
-int BPF_KPROBE(tcp_retransmit_kprobe, struct sock *sk)
+SEC("kprobe/tcp_retransmit_skb")
+int BPF_KPROBE(tcp_retransmit_skb, struct sock *sk, struct sk_buff *skb, int segs)
 {
 	u64 *cnt;
 
@@ -28,7 +28,7 @@ int BPF_KPROBE(tcp_retransmit_kprobe, struct sock *sk)
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__sync_fetch_and_add(cnt, segs);
 	}
 
 	return 0;
