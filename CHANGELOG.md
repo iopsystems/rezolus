@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [3.6.1] - 2023-11-30
+
+### Fixed
+
+- Fixed incorrect type annotation for CPU metrics (frequency, ipkc, ipus). (#98)
+- Fixed under-reported TCP retransmits. (#121)
+- Fixed TCP segment metrics. (#123)
+
 ## [3.6.0] - 2023-10-26
 
 ### Added
@@ -96,7 +104,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.6.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.6.1...HEAD
+[3.6.1]: https://github.com/iopsystems/rezolus/compare/v3.6.0...v3.6.1
 [3.6.0]: https://github.com/iopsystems/rezolus/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/iopsystems/rezolus/compare/v3.4.0...v3.5.0
 [3.4.0]: https://github.com/iopsystems/rezolus/compare/v3.3.3...v3.4.0
