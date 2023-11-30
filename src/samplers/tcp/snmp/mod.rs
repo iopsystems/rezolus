@@ -7,10 +7,7 @@ use std::fs::File;
 
 #[distributed_slice(TCP_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    // if we have bpf enabled, we don't need to run this sampler at all
-    if config.bpf() {
-        Box::new(Nop::new(config))
-    } else if let Ok(s) = Snmp::new(config) {
+    if let Ok(s) = Snmp::new(config) {
         Box::new(s)
     } else {
         Box::new(Nop::new(config))
