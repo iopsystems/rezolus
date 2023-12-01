@@ -8,9 +8,11 @@ use warp::Filter;
 
 /// HTTP exposition
 pub async fn http(config: Arc<Config>) {
-    let http = filters::http(config);
-
-    warp::serve(http).run(([0, 0, 0, 0], 4242)).await;
+    if config.general().compression() {
+        warp::serve(filters::http(config).with(warp::filters::compression::gzip())).run(([0, 0, 0, 0], 4242)).await;
+    } else {
+        warp::serve(filters::http(config)).run(([0, 0, 0, 0], 4242)).await;
+    }
 }
 
 mod filters {
@@ -29,7 +31,6 @@ mod filters {
         prometheus_stats(config.clone())
             .or(human_stats())
             .or(hardware_info())
-            .with(warp::filters::compression::gzip())
     }
 
     /// GET /metrics

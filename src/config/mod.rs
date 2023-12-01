@@ -92,6 +92,8 @@ impl Config {
 #[derive(Deserialize)]
 pub struct General {
     listen: String,
+    #[serde(default = "disabled")]
+    compression: bool,
 }
 
 impl General {
@@ -109,6 +111,10 @@ impl General {
                 std::process::exit(1);
             })
             .unwrap()
+    }
+
+    pub fn compression(&self) -> bool {
+        self.compression
     }
 }
 

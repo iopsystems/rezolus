@@ -1,11 +1,19 @@
 [general]
 listen = "0.0.0.0:4242"
 
+# Controls whether gzip compression will be used for the http endpoints. This
+# can significantly reduce the payload size at the cost of some additional cpu
+# time. This is highly recommended when exposing the histograms on the
+# prometheus endpoint.
+compression = false
+
 [prometheus]
 # Controls whether the full distribution for each histogram is exposed via the
 # prometheus endpoint (`/metrics`). This adds a considerable number of time
 # series depending on the downsampling factor as each histogram bucket is
 # represented as its own time series.
+#
+# NOTE: it's recommended to enable compression when enabling this.
 histograms = false
 
 # The histogram can be downsampled for exposition to reduce the number of
