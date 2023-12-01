@@ -31,7 +31,7 @@ syscall-numbers = "3.1.0"
 tokio = { version = "1.32.0", features = ["full"] }
 toml = "0.7.6"
 walkdir = "2.3.3"
-warp = "0.3.6"
+warp = { version = "0.3.6", features = ["compression"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.21.2", optional = true }
