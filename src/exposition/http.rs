@@ -9,9 +9,13 @@ use warp::Filter;
 /// HTTP exposition
 pub async fn http(config: Arc<Config>) {
     if config.general().compression() {
-        warp::serve(filters::http(config).with(warp::filters::compression::gzip())).run(([0, 0, 0, 0], 4242)).await;
+        warp::serve(filters::http(config).with(warp::filters::compression::gzip()))
+            .run(([0, 0, 0, 0], 4242))
+            .await;
     } else {
-        warp::serve(filters::http(config)).run(([0, 0, 0, 0], 4242)).await;
+        warp::serve(filters::http(config))
+            .run(([0, 0, 0, 0], 4242))
+            .await;
     }
 }
 
