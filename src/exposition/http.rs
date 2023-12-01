@@ -29,6 +29,7 @@ mod filters {
         prometheus_stats(config.clone())
             .or(human_stats())
             .or(hardware_info())
+            .with(warp::filters::compression::gzip())
     }
 
     /// GET /metrics
