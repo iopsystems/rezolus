@@ -23,7 +23,7 @@ gauge!(RU_IDRSS, "rezolus/memory/usage/data_size");
 gauge!(RU_ISRSS, "rezolus/memory/usage/stack_size");
 counter!(RU_MINFLT, "rezolus/memory/page/reclaims");
 counter!(RU_MAJFLT, "rezolus/memory/page/faults");
-counter!(RU_NSWAP, "rezolus/memory/usage/shared_memory_size");
+counter!(RU_NSWAP, "rezolus/memory/swapped");
 
 counter!(RU_INBLOCK, "rezolus/io/block/reads");
 counter!(RU_OUBLOCK, "rezolus/io/block/writes");
