@@ -55,7 +55,7 @@ pub static GPU_POWER_USAGE: LazyGauge = LazyGauge::new(Gauge::default);
 pub static GPU_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
-    name = "gpu/utilization/memory",
+    name = "gpu/memory_utilization",
     description = "The running average percentage of time that GPU memory was being read from or written to. (0-100).",
     formatter = gpu_metric_formatter
 )]

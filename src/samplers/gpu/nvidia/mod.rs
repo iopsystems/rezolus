@@ -140,12 +140,10 @@ impl Nvidia {
                     .build(metriken::Gauge::new()),
                 gpu_utilization: MetricBuilder::new("gpu/utilization")
                     .metadata("id", format!("{}", device))
-                    .metadata("type", "gpu")
                     .formatter(gpu_metric_formatter)
                     .build(metriken::Gauge::new()),
-                memory_utilization: MetricBuilder::new("gpu/utilization")
+                memory_utilization: MetricBuilder::new("gpu/memory_utilization")
                     .metadata("id", format!("{}", device))
-                    .metadata("type", "memory")
                     .formatter(gpu_metric_formatter)
                     .build(metriken::Gauge::new()),
             });
