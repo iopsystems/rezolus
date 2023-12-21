@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [3.7.0] - 2023-12-21
+
+### Added
+
+- Optional compression for HTTP exposition. (#128)
+- Additional GPU metrics for utilization and energy consumption. (#138)
+
+### Fixed
+
+- Duplicate metric name in Rezolus sampler. (#134)
+
 ## [3.6.1] - 2023-11-30
 
 ### Fixed
@@ -104,7 +115,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.6.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.7.0...HEAD
+[3.6.1]: https://github.com/iopsystems/rezolus/compare/v3.6.1...v3.7.0
 [3.6.1]: https://github.com/iopsystems/rezolus/compare/v3.6.0...v3.6.1
 [3.6.0]: https://github.com/iopsystems/rezolus/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/iopsystems/rezolus/compare/v3.4.0...v3.5.0
