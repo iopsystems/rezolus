@@ -29,6 +29,9 @@ pub struct Nvidia {
 }
 
 struct GpuMetrics {
+    // total energy consumption in millijoules (mJ)
+    energy_consumption: DynBoxedMetric<metriken::Counter>,
+
     // current power usage in mW
     power_usage: DynBoxedMetric<metriken::Gauge>,
 
@@ -51,6 +54,12 @@ struct GpuMetrics {
     clock_compute: DynBoxedMetric<metriken::Gauge>,
     clock_memory: DynBoxedMetric<metriken::Gauge>,
     clock_video: DynBoxedMetric<metriken::Gauge>,
+
+    // current average gpu utilization as % (0-100)
+    gpu_utilization: DynBoxedMetric<metriken::Gauge>,
+
+    // current average gpu memory utilization as % (0-100)
+    memory_utilization: DynBoxedMetric<metriken::Gauge>,
 }
 
 impl Nvidia {
@@ -73,6 +82,10 @@ impl Nvidia {
 
         for device in 0..devices {
             pergpu_metrics.push(GpuMetrics {
+                energy_consumption: MetricBuilder::new("gpu/energy/consumption")
+                    .metadata("id", format!("{}", device))
+                    .formatter(gpu_metric_formatter)
+                    .build(metriken::Counter::new()),
                 power_usage: MetricBuilder::new("gpu/power/usage")
                     .metadata("id", format!("{}", device))
                     .formatter(gpu_metric_formatter)
@@ -123,6 +136,16 @@ impl Nvidia {
                 clock_video: MetricBuilder::new("gpu/clock")
                     .metadata("id", format!("{}", device))
                     .metadata("type", "video")
+                    .formatter(gpu_metric_formatter)
+                    .build(metriken::Gauge::new()),
+                gpu_utilization: MetricBuilder::new("gpu/utilization")
+                    .metadata("id", format!("{}", device))
+                    .metadata("type", "gpu")
+                    .formatter(gpu_metric_formatter)
+                    .build(metriken::Gauge::new()),
+                memory_utilization: MetricBuilder::new("gpu/utilization")
+                    .metadata("id", format!("{}", device))
+                    .metadata("type", "memory")
                     .formatter(gpu_metric_formatter)
                     .build(metriken::Gauge::new()),
             });
@@ -183,8 +206,20 @@ impl Nvidia {
         let mut gpu_memory_free = 0;
         let mut gpu_memory_used = 0;
 
+        // current average utilization (%)
+        let mut gpu_utilization = 0;
+        let mut gpu_memory_utilization = 0;
+
         for (device_id, device_metrics) in self.pergpu_metrics.iter().enumerate() {
             if let Ok(device) = self.nvml.device_by_index(device_id as _) {
+                /*
+                 * energy
+                 */
+
+                if let Ok(v) = device.total_energy_consumption() {
+                    device_metrics.energy_consumption.set(v as _);
+                }
+
                 /*
                  * power
                  */
@@ -273,6 +308,20 @@ impl Nvidia {
                 if let Ok(frequency) = device.clock_info(Clock::Video).map(|f| f as i64 * MHZ) {
                     device_metrics.clock_video.set(frequency);
                 }
+
+                /*
+                 * utilization
+                 */
+
+                if let Ok(utilization) = device.utilization_rates() {
+                    gpu_utilization += utilization.gpu / self.pergpu_metrics.len() as u32;
+                    gpu_memory_utilization += utilization.memory / self.pergpu_metrics.len() as u32;
+
+                    device_metrics.gpu_utilization.set(utilization.gpu as i64);
+                    device_metrics
+                        .memory_utilization
+                        .set(utilization.memory as i64);
+                }
             }
         }
 
@@ -284,6 +333,9 @@ impl Nvidia {
 
         GPU_MEMORY_FREE.set(gpu_memory_free as _);
         GPU_MEMORY_USED.set(gpu_memory_used as _);
+
+        GPU_UTILIZATION.set(gpu_utilization as _);
+        GPU_MEMORY_UTILIZATION.set(gpu_memory_utilization as _);
 
         Ok(())
     }
