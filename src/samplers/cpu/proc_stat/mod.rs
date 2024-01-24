@@ -1,5 +1,5 @@
-use super::stats::*;
-use super::*;
+use crate::samplers::cpu::stats::*;
+use crate::samplers::cpu::*;
 use crate::common::Counter;
 use crate::common::Nop;
 use crate::samplers::hwinfo::hardware_info;

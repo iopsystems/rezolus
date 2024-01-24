@@ -15,8 +15,8 @@ const NAME: &str = "tcp_retransmit";
 
 use bpf::*;
 
-use super::stats::*;
-use super::*;
+use crate::samplers::tcp::stats::*;
+use crate::samplers::tcp::*;
 use crate::common::bpf::*;
 use crate::common::*;
 

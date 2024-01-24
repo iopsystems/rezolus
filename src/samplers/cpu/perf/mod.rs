@@ -1,5 +1,5 @@
-use super::stats::*;
-use super::*;
+use crate::samplers::cpu::stats::*;
+use crate::samplers::cpu::*;
 use crate::common::Nop;
 use metriken::{DynBoxedMetric, MetricBuilder};
 use perf_event::events::x86::{Msr, MsrId};
