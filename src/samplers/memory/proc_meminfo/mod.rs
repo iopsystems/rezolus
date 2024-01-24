@@ -35,7 +35,7 @@ impl ProcMeminfo {
 
         let now = Instant::now();
 
-        let gauges = HashMap::from([
+        let gauges: HashMap<&str, &Lazy<Gauge>> = HashMap::from([
             ("MemTotal:", &MEMORY_TOTAL),
             ("MemFree:", &MEMORY_FREE),
             ("MemAvailable:", &MEMORY_AVAILABLE),
