@@ -1,7 +1,7 @@
 use crate::common::Nop;
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
-use metriken::LazyGauge;
+use metriken::{Lazy, Gauge};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -22,7 +22,7 @@ pub struct ProcMeminfo {
     next: Instant,
     interval: Duration,
     file: File,
-    gauges: HashMap<&'static str, &'static LazyGauge>,
+    gauges: HashMap<&'static str, &'static Lazy<Gauge>>,
 }
 
 impl ProcMeminfo {
@@ -36,11 +36,11 @@ impl ProcMeminfo {
         let now = Instant::now();
 
         let gauges: HashMap<&str, &Lazy<Gauge>> = HashMap::from([
-            ("MemTotal:", &MEMORY_TOTAL),
-            ("MemFree:", &MEMORY_FREE),
-            ("MemAvailable:", &MEMORY_AVAILABLE),
-            ("Buffers:", &MEMORY_BUFFERS),
-            ("Cached:", &MEMORY_CACHED),
+            ("MemTotal:", &*MEMORY_TOTAL),
+            ("MemFree:", &*MEMORY_FREE),
+            ("MemAvailable:", &*MEMORY_AVAILABLE),
+            ("Buffers:", &*MEMORY_BUFFERS),
+            ("Cached:", &*MEMORY_CACHED),
         ]);
 
         Ok(Self {
