@@ -124,6 +124,7 @@ jobs:
         shell: bash
 
       - name: Install dependencies
+        if: ${{ matrix.profile != 'macos-latest' }}
         shell: bash
         run: sudo apt-get -y install libelf-dev
 
