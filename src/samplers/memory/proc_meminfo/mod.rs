@@ -1,6 +1,6 @@
-use super::stats::*;
-use super::*;
 use crate::common::Nop;
+use crate::samplers::memory::stats::*;
+use crate::samplers::memory::*;
 use metriken::LazyGauge;
 use std::collections::HashMap;
 use std::fs::File;

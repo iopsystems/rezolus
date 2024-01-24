@@ -1,6 +1,6 @@
-use super::stats::*;
-use super::*;
 use crate::common::{Counter, Nop};
+use crate::samplers::memory::stats::*;
+use crate::samplers::memory::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};
