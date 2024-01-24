@@ -15,10 +15,10 @@ const NAME: &str = "tcp_packet_latency";
 
 use bpf::*;
 
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
 use crate::common::bpf::*;
 use crate::common::*;
+use crate::samplers::tcp::stats::*;
+use crate::samplers::tcp::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
