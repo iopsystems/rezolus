@@ -34,7 +34,7 @@ impl ConnectionState {
 
         let now = Instant::now();
 
-        let gauges = vec![
+        let gauges: Vec<(&'static Lazy<Gauge>, i64)> = vec![
             (&TCP_CONN_STATE_ESTABLISHED, 0),
             (&TCP_CONN_STATE_SYN_SENT, 0),
             (&TCP_CONN_STATE_SYN_RECV, 0),
