@@ -15,10 +15,10 @@ const NAME: &str = "scheduler_runqueue";
 
 use bpf::*;
 
-use super::stats::*;
-use super::*;
 use crate::common::bpf::*;
 use crate::common::*;
+use crate::samplers::scheduler::stats::*;
+use crate::samplers::scheduler::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {

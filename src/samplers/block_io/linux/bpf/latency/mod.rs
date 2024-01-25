@@ -15,10 +15,10 @@ static NAME: &str = "block_io_latency";
 
 use bpf::*;
 
-use super::stats::*;
-use super::*;
 use crate::common::bpf::*;
 use crate::common::*;
+use crate::samplers::block_io::stats::*;
+use crate::samplers::block_io::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
