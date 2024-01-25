@@ -776,7 +776,7 @@ dependencies = [
  "lazy_static",
  "libbpf-sys",
  "libc",
- "nix",
+ "nix 0.26.4",
  "num_enum",
  "strum_macros",
  "thiserror",
@@ -785,12 +785,12 @@ dependencies = [
 
 [[package]]
 name = "libbpf-sys"
-version = "1.2.1+v1.2.0"
+version = "1.3.0+v1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75adb4021282a72ca63ebbc0e4247750ad74ede68ff062d247691072d709ad8b"
+checksum = "b6e68987fe8f2dd7b76930f800a4e5b958c766171fc3a7c33dd67c06a0f1e801"
 dependencies = [
  "cc",
- "nix",
+ "nix 0.27.1",
  "num_cpus",
  "pkg-config",
 ]
@@ -1001,7 +1001,17 @@ dependencies = [
  "cfg-if",
  "libc",
  "memoffset",
- "pin-utils",
+]
+
+[[package]]
+name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.4.2",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -1204,18 +1214,18 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.1.3"
+version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fda4ed1c6c173e3fc7a83629421152e01d7b1f9b7f65fb301e490e8cfc656422"
+checksum = "0302c4a0442c456bd56f841aee5c3bfd17967563f6fadc9ceb9f9c23cf3807e0"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.1.3"
+version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4359fd9c9171ec6e8c62926d6faaf553a8dc3f64e1507e76da7911b4f6a04405"
+checksum = "266c042b60c9c76b8d53061e52b2e0d1116abc57cefc8c5cd671619a56ac3690"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1357,9 +1367,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b7fa1134405e2ec9353fd416b17f8dacd46c473d7d3fd1cf202706a14eb792a"
+checksum = "5bb987efffd3c6d0d8f5f89510bb458559eab11e4f869acb20bf845e016259cd"
 dependencies = [
  "aho-corasick",
  "memchr",
