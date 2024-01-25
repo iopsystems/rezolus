@@ -95,7 +95,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, ubuntu-20.04 ]
+        os: [ ubuntu-latest, ubuntu-20.04, macos-latest ]
         profile: [ release, debug ]
         features: [ default, no-default ]
     steps:
@@ -124,6 +124,7 @@ jobs:
         shell: bash
 
       - name: Install dependencies
+        if: ${{ matrix.os != 'macos-latest' }}
         shell: bash
         run: sudo apt-get -y install libelf-dev
 
@@ -140,6 +141,10 @@ jobs:
         shell: bash
         run: |
           cargo test --workspace ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
+      - name: smoketest
+        shell: bash
+        run: |
+          timeout --preserve-status --signal 2 10 cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- config.toml || if [[ $? -eq 130 ]]; then true; fi
 
   check-success:
     name: verify all tests pass

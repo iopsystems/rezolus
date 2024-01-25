@@ -4,5 +4,5 @@ sampler!(Syscall, "syscall", SYSCALL_SAMPLERS);
 
 mod stats;
 
-#[cfg(all(feature = "bpf", target_os = "linux"))]
-mod latency;
+#[cfg(target_os = "linux")]
+mod linux;
