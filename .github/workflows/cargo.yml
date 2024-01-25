@@ -141,6 +141,10 @@ jobs:
         shell: bash
         run: |
           cargo test --workspace ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
+      - name: smoketest
+        shell: bash
+        run: |
+          timeout --preserve-status --signal 2 10 cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- config.toml || if [[ $? -eq 130 ]]; then true; fi
 
   check-success:
     name: verify all tests pass
