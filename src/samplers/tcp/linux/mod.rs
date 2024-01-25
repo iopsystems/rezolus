@@ -1,4 +1,3 @@
-
 mod connection_state;
 mod snmp;
 
