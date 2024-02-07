@@ -22,7 +22,7 @@ pub struct ProcMeminfo {
     next: Instant,
     interval: Duration,
     file: File,
-    gauges: HashMap<&'static str, &'static Lazy<Gauge>>,
+    gauges: HashMap<&'static str, &'static Gauge>,
 }
 
 impl ProcMeminfo {
@@ -35,7 +35,7 @@ impl ProcMeminfo {
 
         let now = Instant::now();
 
-        let gauges: HashMap<&str, &Lazy<Gauge>> = HashMap::from([
+        let gauges: HashMap<&str, &Gauge> = HashMap::from([
             ("MemTotal:", &*MEMORY_TOTAL),
             ("MemFree:", &*MEMORY_FREE),
             ("MemAvailable:", &*MEMORY_AVAILABLE),
