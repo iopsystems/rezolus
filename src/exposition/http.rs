@@ -273,7 +273,13 @@ mod handlers {
     pub async fn binary_metadata() -> Result<impl warp::Reply, Infallible> {
         let mut metadata = Metadata::new();
 
-        for metric in &metriken::metrics() {
+        // TODO(bmartin): this filtering needs to be consistent between the two
+        // binary output functions. This should be factored out to guarantee
+        // consistency.
+
+        // iterate through the static metrics and build-up the metadata object
+        // NOTE: dynamic metrics are omitted from the binary outputs
+        for metric in metriken::metrics().static_metrics() {
             let any = match metric.as_any() {
                 Some(any) => any,
                 None => {
@@ -312,7 +318,13 @@ mod handlers {
     pub async fn binary_readings() -> Result<impl warp::Reply, Infallible> {
         let mut readings = Readings::new();
 
-        for metric in &metriken::metrics() {
+        // TODO(bmartin): this filtering needs to be consistent between the two
+        // binary output functions. This should be factored out to guarantee
+        // consistency.
+
+        // iterate through the static metrics and build-up the readings object
+        // NOTE: dynamic metrics are omitted from the binary outputs
+        for metric in metriken::metrics().static_metrics() {
             let any = match metric.as_any() {
                 Some(any) => any,
                 None => {
