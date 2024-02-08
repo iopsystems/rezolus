@@ -348,6 +348,8 @@ mod handlers {
     }
 }
 
+/// This struct contains all the metric metadata organized by type. This allows
+/// the creation of a schema for metric storage based on this metadata alone.
 #[derive(Serialize, Deserialize)]
 pub struct Metadata {
     counters: Vec<MetricMetadata>,
@@ -365,21 +367,13 @@ impl Metadata {
     }
 }
 
+/// Contains per-metric metadata, such as the metric name.
 #[derive(Serialize, Deserialize)]
 pub struct MetricMetadata {
     name: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum MetricKind {
-    Counter,
-    Gauge,
-    Histogram {
-        grouping_power: u8,
-        max_value_power: u8,
-    },
-}
-
+/// Contains a snapshot of metric readings.
 #[derive(Serialize, Deserialize)]
 pub struct Readings {
     datetime: DateTime<Utc>,
