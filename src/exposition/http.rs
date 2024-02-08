@@ -278,7 +278,9 @@ mod handlers {
         // consistency.
 
         // iterate through the static metrics and build-up the metadata object
-        // NOTE: dynamic metrics are omitted from the binary outputs
+        // NOTE: dynamic metrics are omitted from the binary outputs, this is to
+        // ensure that the iteration order is consistent through the lifetime of
+        // the process.
         for metric in metriken::metrics().static_metrics() {
             let any = match metric.as_any() {
                 Some(any) => any,
@@ -323,7 +325,9 @@ mod handlers {
         // consistency.
 
         // iterate through the static metrics and build-up the readings object
-        // NOTE: dynamic metrics are omitted from the binary outputs
+        // NOTE: dynamic metrics are omitted from the binary outputs, this is to
+        // ensure that the iteration order is consistent through the lifetime of
+        // the process.
         for metric in metriken::metrics().static_metrics() {
             let any = match metric.as_any() {
                 Some(any) => any,
