@@ -278,32 +278,26 @@ mod handlers {
             }
 
             if let Some(counter) = any.downcast_ref::<Counter>() {
-                if let Some(value) = counter.value() {
-                    readings.counters.push((
-                        MetricMetadata {
-                            name: metric.formatted(metriken::Format::Simple),
-                        },
-                        value,
-                    ));
-                }
+                readings.counters.push((
+                    MetricMetadata {
+                        name: metric.formatted(metriken::Format::Simple),
+                    },
+                    counter.value(),
+                ));
             } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                if let Some(value) = gauge.value() {
-                    readings.gauge.push((
-                        MetricMetadata {
-                            name: metric.formatted(metriken::Format::Simple),
-                        },
-                        value,
-                    ));
-                }
+                readings.gauges.push((
+                    MetricMetadata {
+                        name: metric.formatted(metriken::Format::Simple),
+                    },
+                    gauge.value(),
+                ));
             } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                if let Some(histogram) = histogram.snapshot() {
-                    readings.histograms.push((
-                        MetricMetadata {
-                            name: metric.formatted(metriken::Format::Simple),
-                        },
-                        histogram,
-                    ));
-                }
+                readings.histograms.push((
+                    MetricMetadata {
+                        name: metric.formatted(metriken::Format::Simple),
+                    },
+                    histogram.snapshot(),
+                ));
             }
         }
 
@@ -333,8 +327,8 @@ pub struct MetricMetadata {
 pub struct MetricsSnapshot {
     datetime: DateTime<Utc>,
     unix_ns: u128,
-    counters: Vec<(MetricMetadata, Option<u64>)>,
-    gauges: Vec<(MetricMetadata, Option<i64>)>,
+    counters: Vec<(MetricMetadata, u64)>,
+    gauges: Vec<(MetricMetadata, i64)>,
     histograms: Vec<(MetricMetadata, Option<Snapshot>)>,
 }
 
