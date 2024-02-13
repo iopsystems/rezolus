@@ -264,7 +264,7 @@ mod handlers {
     pub async fn msgpack() -> Result<impl warp::Reply, Infallible> {
         let mut readings = MetricsSnapshot::new();
 
-        // iterate through the static metrics and build-up the readings object
+        // iterate through the metrics and build-up the snapshot
         for metric in &metriken::metrics() {
             let any = match metric.as_any() {
                 Some(any) => any,
