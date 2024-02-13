@@ -70,8 +70,8 @@ mod filters {
     }
 
     /// GET /metrics/binary
-    pub fn msgpack(
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    pub fn msgpack() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+    {
         warp::path!("metrics" / "binary")
             .and(warp::get())
             .and_then(handlers::msgpack)
@@ -278,17 +278,32 @@ mod handlers {
             }
 
             if let Some(counter) = any.downcast_ref::<Counter>() {
-                readings.counters.push((MetricMetadata {
-                    name: metric.formatted(metriken::Format::Simple),
-                }, Some(counter.value())));
+                if let Some(value) = counter.value() {
+                    readings.counters.push((
+                        MetricMetadata {
+                            name: metric.formatted(metriken::Format::Simple),
+                        },
+                        value,
+                    ));
+                }
             } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                readings.gauges.push((MetricMetadata {
-                    name: metric.formatted(metriken::Format::Simple),
-                }, Some(gauge.value())));
+                if let Some(value) = gauge.value() {
+                    readings.gauge.push((
+                        MetricMetadata {
+                            name: metric.formatted(metriken::Format::Simple),
+                        },
+                        value,
+                    ));
+                }
             } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                readings.histograms.push((MetricMetadata {
-                    name: metric.formatted(metriken::Format::Simple),
-                }, histogram.snapshot()));
+                if let Some(histogram) = histogram.snapshot() {
+                    readings.histograms.push((
+                        MetricMetadata {
+                            name: metric.formatted(metriken::Format::Simple),
+                        },
+                        histogram,
+                    ));
+                }
             }
         }
 
