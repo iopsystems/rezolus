@@ -83,6 +83,7 @@ mod handlers {
     use crate::common::HISTOGRAM_GROUPING_POWER;
     use crate::SNAPSHOTS;
     use core::convert::Infallible;
+    use metriken::Value;
 
     pub async fn prometheus_stats(config: Arc<Config>) -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
@@ -262,47 +263,41 @@ mod handlers {
     }
 
     pub async fn msgpack() -> Result<impl warp::Reply, Infallible> {
-        let mut readings = MetricsSnapshot::new();
+        let mut snapshot = MetricsSnapshot::new();
 
         // iterate through the metrics and build-up the snapshot
         for metric in &metriken::metrics() {
-            let any = match metric.as_any() {
-                Some(any) => any,
-                None => {
-                    continue;
-                }
-            };
-
+            // filter out any ringlog metrics
             if metric.name().starts_with("log_") {
                 continue;
             }
 
-            if let Some(counter) = any.downcast_ref::<Counter>() {
-                readings.counters.push((
-                    MetricMetadata {
-                        name: metric.formatted(metriken::Format::Simple),
-                    },
-                    counter.value(),
-                ));
-            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                readings.gauges.push((
-                    MetricMetadata {
-                        name: metric.formatted(metriken::Format::Simple),
-                    },
-                    gauge.value(),
-                ));
-            } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                readings.histograms.push((
-                    MetricMetadata {
-                        name: metric.formatted(metriken::Format::Simple),
-                    },
-                    histogram.snapshot(),
-                ));
+            match metric.value() {
+                Some(Value::Counter(value)) => {
+                    snapshot
+                        .counters
+                        .push((metric.formatted(metriken::Format::Simple), value));
+                }
+                Some(Value::Gauge(value)) => {
+                    snapshot
+                        .gauges
+                        .push((metric.formatted(metriken::Format::Simple), value));
+                }
+                Some(Value::Other(other)) => {
+                    if let Some(histogram) = other.downcast_ref::<RwLockHistogram>() {
+                        if let Some(histogram) = histogram.snapshot() {
+                            snapshot
+                                .histograms
+                                .push((metric.formatted(metriken::Format::Simple), histogram));
+                        }
+                    }
+                }
+                _ => continue,
             }
         }
 
         let mut buf = Vec::new();
-        readings.serialize(&mut Serializer::new(&mut buf)).unwrap();
+        snapshot.serialize(&mut Serializer::new(&mut buf)).unwrap();
 
         Ok(buf)
     }
@@ -316,20 +311,14 @@ mod handlers {
     }
 }
 
-/// Contains per-metric metadata, such as the metric name.
-#[derive(Serialize, Deserialize)]
-pub struct MetricMetadata {
-    name: String,
-}
-
 /// Contains a snapshot of metric readings.
 #[derive(Serialize, Deserialize)]
 pub struct MetricsSnapshot {
     datetime: DateTime<Utc>,
     unix_ns: u128,
-    counters: Vec<(MetricMetadata, u64)>,
-    gauges: Vec<(MetricMetadata, i64)>,
-    histograms: Vec<(MetricMetadata, Option<Snapshot>)>,
+    counters: Vec<(String, u64)>,
+    gauges: Vec<(String, i64)>,
+    histograms: Vec<(String, Snapshot)>,
 }
 
 impl MetricsSnapshot {
