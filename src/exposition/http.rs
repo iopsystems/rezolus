@@ -40,8 +40,7 @@ mod filters {
         prometheus_stats(config.clone())
             .or(human_stats())
             .or(hardware_info())
-            .or(binary_metadata())
-            .or(binary_readings())
+            .or(msgpack())
     }
 
     /// GET /metrics
@@ -70,20 +69,12 @@ mod filters {
             .and_then(handlers::hwinfo)
     }
 
-    /// GET /metrics/binary/metadata
-    pub fn binary_metadata(
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path!("metrics" / "binary" / "metadata")
+    /// GET /metrics/binary
+    pub fn msgpack() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+    {
+        warp::path!("metrics" / "binary")
             .and(warp::get())
-            .and_then(handlers::binary_metadata)
-    }
-
-    /// GET /metrics/binary/readings
-    pub fn binary_readings(
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path!("metrics" / "binary" / "readings")
-            .and(warp::get())
-            .and_then(handlers::binary_readings)
+            .and_then(handlers::msgpack)
     }
 }
 
@@ -92,6 +83,7 @@ mod handlers {
     use crate::common::HISTOGRAM_GROUPING_POWER;
     use crate::SNAPSHOTS;
     use core::convert::Infallible;
+    use metriken::Value;
 
     pub async fn prometheus_stats(config: Arc<Config>) -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
@@ -270,87 +262,42 @@ mod handlers {
         Ok(content)
     }
 
-    pub async fn binary_metadata() -> Result<impl warp::Reply, Infallible> {
-        let mut metadata = Metadata::new();
+    pub async fn msgpack() -> Result<impl warp::Reply, Infallible> {
+        let mut snapshot = MetricsSnapshot::new();
 
-        // TODO(bmartin): this filtering needs to be consistent between the two
-        // binary output functions. This should be factored out to guarantee
-        // consistency.
-
-        // iterate through the static metrics and build-up the metadata object
-        // NOTE: dynamic metrics are omitted from the binary outputs, this is to
-        // ensure that the iteration order is consistent through the lifetime of
-        // the process.
-        for metric in metriken::metrics().static_metrics() {
-            let any = match metric.as_any() {
-                Some(any) => any,
-                None => {
-                    continue;
-                }
-            };
-
+        // iterate through the metrics and build-up the snapshot
+        for metric in &metriken::metrics() {
+            // filter out any ringlog metrics
             if metric.name().starts_with("log_") {
                 continue;
             }
 
-            if let Some(_counter) = any.downcast_ref::<Counter>() {
-                metadata.counters.push(MetricMetadata {
-                    name: metric.formatted(metriken::Format::Simple),
-                });
-            } else if let Some(_gauge) = any.downcast_ref::<Gauge>() {
-                metadata.gauges.push(MetricMetadata {
-                    name: metric.formatted(metriken::Format::Simple),
-                });
-            } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                metadata.histograms.push((
-                    MetricMetadata {
-                        name: metric.formatted(metriken::Format::Simple),
-                    },
-                    histogram.config(),
-                ));
-            }
-        }
-
-        let mut buf = Vec::new();
-        metadata.serialize(&mut Serializer::new(&mut buf)).unwrap();
-
-        Ok(buf)
-    }
-
-    pub async fn binary_readings() -> Result<impl warp::Reply, Infallible> {
-        let mut readings = Readings::new();
-
-        // TODO(bmartin): this filtering needs to be consistent between the two
-        // binary output functions. This should be factored out to guarantee
-        // consistency.
-
-        // iterate through the static metrics and build-up the readings object
-        // NOTE: dynamic metrics are omitted from the binary outputs, this is to
-        // ensure that the iteration order is consistent through the lifetime of
-        // the process.
-        for metric in metriken::metrics().static_metrics() {
-            let any = match metric.as_any() {
-                Some(any) => any,
-                None => {
-                    continue;
+            match metric.value() {
+                Some(Value::Counter(value)) => {
+                    snapshot
+                        .counters
+                        .push((metric.formatted(metriken::Format::Simple), value));
                 }
-            };
-
-            if metric.name().starts_with("log_") {
-                continue;
-            }
-
-            if let Some(counter) = any.downcast_ref::<Counter>() {
-                readings.counters.push(counter.value());
-            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                readings.gauges.push(gauge.value());
-            } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                readings.histograms.push(histogram.snapshot());
+                Some(Value::Gauge(value)) => {
+                    snapshot
+                        .gauges
+                        .push((metric.formatted(metriken::Format::Simple), value));
+                }
+                Some(Value::Other(other)) => {
+                    if let Some(histogram) = other.downcast_ref::<RwLockHistogram>() {
+                        if let Some(histogram) = histogram.snapshot() {
+                            snapshot
+                                .histograms
+                                .push((metric.formatted(metriken::Format::Simple), histogram));
+                        }
+                    }
+                }
+                _ => continue,
             }
         }
 
         let mut buf = Vec::new();
-        readings.serialize(&mut Serializer::new(&mut buf)).unwrap();
+        snapshot.serialize(&mut Serializer::new(&mut buf)).unwrap();
 
         Ok(buf)
     }
@@ -364,42 +311,17 @@ mod handlers {
     }
 }
 
-/// This struct contains all the metric metadata organized by type. This allows
-/// the creation of a schema for metric storage based on this metadata alone.
-#[derive(Serialize, Deserialize)]
-pub struct Metadata {
-    counters: Vec<MetricMetadata>,
-    gauges: Vec<MetricMetadata>,
-    histograms: Vec<(MetricMetadata, histogram::Config)>,
-}
-
-impl Metadata {
-    pub fn new() -> Self {
-        Self {
-            counters: Vec::new(),
-            gauges: Vec::new(),
-            histograms: Vec::new(),
-        }
-    }
-}
-
-/// Contains per-metric metadata, such as the metric name.
-#[derive(Serialize, Deserialize)]
-pub struct MetricMetadata {
-    name: String,
-}
-
 /// Contains a snapshot of metric readings.
 #[derive(Serialize, Deserialize)]
-pub struct Readings {
+pub struct MetricsSnapshot {
     datetime: DateTime<Utc>,
     unix_ns: u128,
-    counters: Vec<u64>,
-    gauges: Vec<i64>,
-    histograms: Vec<Option<Snapshot>>,
+    counters: Vec<(String, u64)>,
+    gauges: Vec<(String, i64)>,
+    histograms: Vec<(String, Snapshot)>,
 }
 
-impl Readings {
+impl MetricsSnapshot {
     pub fn new() -> Self {
         let datetime: DateTime<Utc> = Utc::now();
 
