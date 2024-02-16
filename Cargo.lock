@@ -996,6 +996,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "metriken-exposition"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d307af99bb9b3c81e93086f907a6c74d0369c68cd443f46de8afcdbb61f06b4b"
+dependencies = [
+ "chrono",
+ "histogram",
+ "metriken",
+ "serde",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1493,6 +1505,7 @@ dependencies = [
  "linkme",
  "memmap2 0.5.10",
  "metriken",
+ "metriken-exposition",
  "nvml-wrapper",
  "once_cell",
  "ouroboros",

@@ -1,13 +1,9 @@
-use crate::Arc;
-use crate::Config;
-use crate::PERCENTILES;
-use chrono::{DateTime, Utc};
+use crate::{Arc, Config, PERCENTILES};
 use metriken::histogram::Snapshot;
 use metriken::{AtomicHistogram, Counter, Gauge, RwLockHistogram};
+use metriken_exposition::SnapshotterBuilder;
 use rmp_serde::Serializer;
-use serde::Deserialize;
 use serde::Serialize;
-use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use warp::Filter;
 
@@ -83,7 +79,6 @@ mod handlers {
     use crate::common::HISTOGRAM_GROUPING_POWER;
     use crate::SNAPSHOTS;
     use core::convert::Infallible;
-    use metriken::Value;
 
     pub async fn prometheus_stats(config: Arc<Config>) -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
@@ -263,38 +258,10 @@ mod handlers {
     }
 
     pub async fn msgpack() -> Result<impl warp::Reply, Infallible> {
-        let mut snapshot = MetricsSnapshot::new();
-
-        // iterate through the metrics and build-up the snapshot
-        for metric in &metriken::metrics() {
-            // filter out any ringlog metrics
-            if metric.name().starts_with("log_") {
-                continue;
-            }
-
-            match metric.value() {
-                Some(Value::Counter(value)) => {
-                    snapshot
-                        .counters
-                        .push((metric.formatted(metriken::Format::Simple), value));
-                }
-                Some(Value::Gauge(value)) => {
-                    snapshot
-                        .gauges
-                        .push((metric.formatted(metriken::Format::Simple), value));
-                }
-                Some(Value::Other(other)) => {
-                    if let Some(histogram) = other.downcast_ref::<RwLockHistogram>() {
-                        if let Some(histogram) = histogram.snapshot() {
-                            snapshot
-                                .histograms
-                                .push((metric.formatted(metriken::Format::Simple), histogram));
-                        }
-                    }
-                }
-                _ => continue,
-            }
-        }
+        let snapshot = SnapshotterBuilder::new()
+            .filter(|metric| !metric.name().starts_with("log_"))
+            .build()
+            .snapshot();
 
         let mut buf = Vec::new();
         snapshot.serialize(&mut Serializer::new(&mut buf)).unwrap();
@@ -307,35 +274,6 @@ mod handlers {
             Ok(warp::reply::json(hwinfo))
         } else {
             Ok(warp::reply::json(&false))
-        }
-    }
-}
-
-/// Contains a snapshot of metric readings.
-#[derive(Serialize, Deserialize)]
-pub struct MetricsSnapshot {
-    datetime: DateTime<Utc>,
-    unix_ns: u128,
-    counters: Vec<(String, u64)>,
-    gauges: Vec<(String, i64)>,
-    histograms: Vec<(String, Snapshot)>,
-}
-
-impl MetricsSnapshot {
-    pub fn new() -> Self {
-        let datetime: DateTime<Utc> = Utc::now();
-
-        let unix_ns = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-
-        Self {
-            datetime,
-            unix_ns,
-            counters: Vec::new(),
-            gauges: Vec::new(),
-            histograms: Vec::new(),
         }
     }
 }
