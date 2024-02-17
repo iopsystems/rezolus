@@ -259,7 +259,17 @@ mod handlers {
 
     pub async fn msgpack() -> Result<impl warp::Reply, Infallible> {
         let snapshot = SnapshotterBuilder::new()
-            .filter(|metric| !metric.name().starts_with("log_"))
+            .filter(|metric| {
+                if let Some(m) = metric.as_any() {
+                    if m.downcast_ref::<AtomicHistogram>().is_some() {
+                        false
+                    } else {
+                        !metric.name().starts_with("log_")
+                    }
+                } else {
+                    false
+                }
+            })
             .build()
             .snapshot();
 
