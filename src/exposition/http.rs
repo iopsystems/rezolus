@@ -104,6 +104,7 @@ mod handlers {
             if name.starts_with("log_") {
                 continue;
             }
+
             if let Some(counter) = any.downcast_ref::<Counter>() {
                 if metric.metadata().is_empty() {
                     data.push(format!(
@@ -126,7 +127,9 @@ mod handlers {
             } else if any.downcast_ref::<AtomicHistogram>().is_some()
                 || any.downcast_ref::<RwLockHistogram>().is_some()
             {
-                if let Some(delta) = snapshots.deltas.get(metric.name()) {
+                let simple_name = metric.formatted(metriken::Format::Simple);
+
+                if let Some(delta) = snapshots.delta.get(&simple_name) {
                     let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
                     if let Ok(result) = delta.percentiles(&percentiles) {
@@ -215,22 +218,18 @@ mod handlers {
                 continue;
             }
 
+            let simple_name = metric.formatted(metriken::Format::Simple);
+
             if let Some(counter) = any.downcast_ref::<Counter>() {
-                data.push(format!(
-                    "{}: {}",
-                    metric.formatted(metriken::Format::Simple),
-                    counter.value()
-                ));
+                data.push(format!("{}: {}", simple_name, counter.value()));
             } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                data.push(format!(
-                    "{}: {}",
-                    metric.formatted(metriken::Format::Simple),
-                    gauge.value()
-                ));
+                data.push(format!("{}: {}", simple_name, gauge.value()));
             } else if any.downcast_ref::<AtomicHistogram>().is_some()
                 || any.downcast_ref::<RwLockHistogram>().is_some()
             {
-                if let Some(delta) = snapshots.deltas.get(metric.name()) {
+                let simple_name = metric.formatted(metriken::Format::Simple);
+
+                if let Some(delta) = snapshots.delta.get(&simple_name) {
                     let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
                     if let Ok(result) = delta.percentiles(&percentiles) {
@@ -239,12 +238,7 @@ mod handlers {
                             .map(|(_, b)| b.end())
                             .zip(PERCENTILES.iter().map(|(l, _)| l))
                         {
-                            data.push(format!(
-                                "{}/{}: {}",
-                                metric.formatted(metriken::Format::Simple),
-                                label,
-                                value
-                            ));
+                            data.push(format!("{}/{}: {}", simple_name, label, value));
                         }
                     }
                 }

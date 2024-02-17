@@ -2,13 +2,15 @@ use backtrace::Backtrace;
 use clap::{Arg, Command};
 use linkme::distributed_slice;
 use metriken::Lazy;
+use metriken_exposition::HistogramSnapshot;
 use ringlog::*;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-type HistogramSnapshots = HashMap<String, metriken::histogram::Snapshot>;
+type HistogramSnapshots = HashMap<String, HistogramSnapshot>;
 
 static SNAPSHOTS: Lazy<Arc<RwLock<Snapshots>>> =
     Lazy::new(|| Arc::new(RwLock::new(Snapshots::new())));
@@ -16,7 +18,7 @@ static SNAPSHOTS: Lazy<Arc<RwLock<Snapshots>>> =
 pub struct Snapshots {
     timestamp: SystemTime,
     previous: HistogramSnapshots,
-    deltas: HistogramSnapshots,
+    delta: HistogramSnapshots,
 }
 
 impl Default for Snapshots {
@@ -27,72 +29,29 @@ impl Default for Snapshots {
 
 impl Snapshots {
     pub fn new() -> Self {
-        let timestamp = SystemTime::now();
+        let snapshot = metriken_exposition::Snapshotter::default().snapshot();
 
-        let mut current = HashMap::new();
-
-        for metric in metriken::metrics().iter() {
-            let any = if let Some(any) = metric.as_any() {
-                any
-            } else {
-                continue;
-            };
-
-            let key = metric.name().to_string();
-
-            let snapshot = if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>()
-            {
-                histogram.snapshot()
-            } else if let Some(histogram) = any.downcast_ref::<metriken::RwLockHistogram>() {
-                histogram.snapshot()
-            } else {
-                None
-            };
-
-            if let Some(snapshot) = snapshot {
-                current.insert(key, snapshot);
-            }
-        }
-
-        let deltas = current.clone();
+        let previous: HistogramSnapshots = snapshot.histograms.into_iter().collect();
+        let delta = previous.clone();
 
         Self {
-            timestamp,
-            previous: current,
-            deltas,
+            timestamp: snapshot.systemtime,
+            previous,
+            delta,
         }
     }
 
     pub fn update(&mut self) {
-        self.timestamp = SystemTime::now();
+        let mut snapshot = metriken_exposition::Snapshotter::default().snapshot();
+        self.timestamp = snapshot.systemtime;
 
-        let mut current = HashMap::new();
+        let mut current: HistogramSnapshots = snapshot.histograms.drain(..).collect();
+        let mut deltas: HistogramSnapshots = HashMap::new();
 
-        for metric in metriken::metrics().iter() {
-            let any = if let Some(any) = metric.as_any() {
-                any
-            } else {
-                continue;
-            };
-
-            let key = metric.name().to_string();
-
-            let snapshot = if let Some(histogram) = any.downcast_ref::<metriken::AtomicHistogram>()
-            {
-                histogram.snapshot()
-            } else if let Some(histogram) = any.downcast_ref::<metriken::RwLockHistogram>() {
-                histogram.snapshot()
-            } else {
-                None
-            };
-
-            if let Some(snapshot) = snapshot {
-                if let Some(previous) = self.previous.get(&key) {
-                    self.deltas
-                        .insert(key.clone(), snapshot.wrapping_sub(previous).unwrap());
-                }
-
-                current.insert(key, snapshot);
+        for (name, previous) in &self.previous {
+            if let Some((name, current)) = current.remove_entry(name) {
+                let _ = current.wrapping_sub(previous);
+                deltas.insert(name, current);
             }
         }
 
