@@ -997,13 +997,14 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d307af99bb9b3c81e93086f907a6c74d0369c68cd443f46de8afcdbb61f06b4b"
+checksum = "b6b9515f2f3608808aad0ecac792f0c20e675cf9abdda2a16f6a9e669bb9ec23"
 dependencies = [
  "chrono",
  "histogram",
  "metriken",
+ "rmp-serde",
  "serde",
 ]
 
@@ -1511,9 +1512,7 @@ dependencies = [
  "ouroboros",
  "perf-event2",
  "ringlog",
- "rmp-serde",
  "serde",
- "serde_json",
  "serde_repr",
  "syscall-numbers",
  "sysconf",
