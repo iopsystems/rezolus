@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [3.8.0] - 2024-03-04
+
+## Added
+
+- Allows Rezolus to run on MacOS though sampler support is limited.
+- Provides msgpack exposition format as a more efficient exposition format.
+
+## Fixed
+
+- Updates of various direct dependencies.
+
 ## [3.7.0] - 2023-12-21
 
 ### Added
@@ -115,8 +126,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.7.0...HEAD
-[3.6.1]: https://github.com/iopsystems/rezolus/compare/v3.6.1...v3.7.0
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.8.0...HEAD
+[3.8.0]: https://github.com/iopsystems/rezolus/compare/v3.7.0...v3.8.0
+[3.7.0]: https://github.com/iopsystems/rezolus/compare/v3.6.1...v3.7.0
 [3.6.1]: https://github.com/iopsystems/rezolus/compare/v3.6.0...v3.6.1
 [3.6.0]: https://github.com/iopsystems/rezolus/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/iopsystems/rezolus/compare/v3.4.0...v3.5.0
