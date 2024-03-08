@@ -28,7 +28,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 }
 
 #[cfg(not(feature = "bpf"))]
-#[distributed_slice(CPU_SAMPLERS)]
+#[distributed_slice(TCP_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     // try to use the /proc/net/snmp based sampler since BPF was not enabled for
     // this build
