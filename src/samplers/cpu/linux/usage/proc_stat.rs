@@ -1,5 +1,4 @@
 use crate::common::Counter;
-use crate::common::Nop;
 use crate::samplers::cpu::stats::*;
 use crate::samplers::cpu::*;
 use crate::samplers::hwinfo::hardware_info;
@@ -8,16 +7,7 @@ use metriken::MetricBuilder;
 use std::fs::File;
 use std::io::{Read, Seek};
 
-#[distributed_slice(CPU_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
-    if let Ok(procstat) = ProcStat::new(config) {
-        Box::new(procstat)
-    } else {
-        Box::new(Nop {})
-    }
-}
-
-const NAME: &str = "cpu_proc_stat";
+use super::NAME;
 
 pub struct ProcStat {
     prev: Instant,

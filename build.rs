@@ -12,6 +12,7 @@ mod bpf {
     // directory.
     const SOURCES: &'static [(&str, &str)] = &[
         ("block_io", "latency"),
+        ("cpu", "usage"),
         ("scheduler", "runqueue"),
         ("syscall", "latency"),
         ("tcp", "packet_latency"),
@@ -25,7 +26,7 @@ mod bpf {
         let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
         for (sampler, prog) in SOURCES {
-            let src = format!("src/samplers/{sampler}/linux/bpf/{prog}/mod.bpf.c");
+            let src = format!("src/samplers/{sampler}/linux/{prog}/mod.bpf.c");
             let tgt = format!("{out_dir}/{sampler}_{prog}.bpf.rs");
 
             if target_arch == "x86_64" {
