@@ -32,7 +32,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 fn init(config: &Config) -> Box<dyn Sampler> {
     // try to use the /proc/stat based sampler since BPF was not enabled for
     // this build
-    if let Ok(s) = ProcCpuinfo::new(config) {
+    if let Ok(s) = ProcStat::new(config) {
         Box::new(s)
     } else {
         Box::new(Nop {})
