@@ -20,10 +20,11 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects Scheduler Runqueue Latency stats using BPF and traces:
-
+/// Collects CPU Usage stats using BPF and traces:
+/// * __cgroup_account_cputime_field
 ///
 /// And produces these stats:
+/// * cpu/usage/*
 
 pub struct CpuUsage {
     bpf: Bpf<ModSkel<'static>>,
