@@ -1,22 +1,12 @@
 use crate::common::classic::NestedMap;
 use crate::common::Counter;
-use crate::common::Nop;
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
 use std::fs::File;
 
-#[distributed_slice(TCP_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
-    if let Ok(s) = Snmp::new(config) {
-        Box::new(s)
-    } else {
-        Box::new(Nop::new(config))
-    }
-}
+use super::NAME;
 
-const NAME: &str = "tcp_snmp";
-
-pub struct Snmp {
+pub struct ProcNetSnmp {
     prev: Instant,
     next: Instant,
     interval: Duration,
@@ -24,7 +14,7 @@ pub struct Snmp {
     counters: Vec<(Counter, &'static str, &'static str)>,
 }
 
-impl Snmp {
+impl ProcNetSnmp {
     pub fn new(config: &Config) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !config.enabled(NAME) {
@@ -56,7 +46,7 @@ impl Snmp {
     }
 }
 
-impl Sampler for Snmp {
+impl Sampler for ProcNetSnmp {
     fn sample(&mut self) {
         let now = Instant::now();
 

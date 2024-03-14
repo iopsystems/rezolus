@@ -2,8 +2,6 @@ use crate::{Arc, Config, PERCENTILES};
 use metriken::histogram::Snapshot;
 use metriken::{AtomicHistogram, Counter, Gauge, RwLockHistogram};
 use metriken_exposition::SnapshotterBuilder;
-use rmp_serde::Serializer;
-use serde::Serialize;
 use std::time::UNIX_EPOCH;
 use warp::Filter;
 
@@ -267,10 +265,7 @@ mod handlers {
             .build()
             .snapshot();
 
-        let mut buf = Vec::new();
-        snapshot.serialize(&mut Serializer::new(&mut buf)).unwrap();
-
-        Ok(buf)
+        Ok(metriken_exposition::Snapshot::to_msgpack(&snapshot).unwrap())
     }
 
     pub async fn hwinfo() -> Result<impl warp::Reply, Infallible> {

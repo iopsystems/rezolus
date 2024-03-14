@@ -1,24 +1,18 @@
-#[distributed_slice(TCP_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
-    if let Ok(s) = Traffic::new(config) {
-        Box::new(s)
-    } else {
-        Box::new(Nop {})
-    }
-}
-
 mod bpf {
-    include!(concat!(env!("OUT_DIR"), "/tcp_traffic.bpf.rs"));
+    include!(concat!(env!("OUT_DIR"), "/cpu_usage.bpf.rs"));
 }
 
-const NAME: &str = "tcp_traffic";
+use super::NAME;
+
+use metriken::MetricBuilder;
 
 use bpf::*;
 
 use crate::common::bpf::*;
 use crate::common::*;
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
+use crate::samplers::cpu::stats::*;
+use crate::samplers::cpu::*;
+use crate::samplers::hwinfo::hardware_info;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -26,18 +20,13 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-/// Collects TCP Traffic stats using BPF and traces:
-/// * `tcp_sendmsg`
-/// * `tcp_cleanup_rbuf`
+/// Collects CPU Usage stats using BPF and traces:
+/// * __cgroup_account_cputime_field
 ///
 /// And produces these stats:
-/// * `tcp/receive/bytes`
-/// * `tcp/receive/segments`
-/// * `tcp/receive/size`
-/// * `tcp/transmit/bytes`
-/// * `tcp/transmit/segments`
-/// * `tcp/transmit/size`
-pub struct Traffic {
+/// * cpu/usage/*
+
+pub struct CpuUsage {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Duration,
     counter_next: Instant,
@@ -47,13 +36,8 @@ pub struct Traffic {
     distribution_prev: Instant,
 }
 
-impl Traffic {
+impl CpuUsage {
     pub fn new(config: &Config) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !config.enabled(NAME) {
-            return Err(());
-        }
-
         let builder = ModSkelBuilder::default();
         let mut skel = builder
             .open()
@@ -66,16 +50,58 @@ impl Traffic {
 
         let mut bpf = Bpf::from_skel(skel);
 
+        let cpus = match hardware_info() {
+            Ok(hwinfo) => hwinfo.get_cpus(),
+            Err(_) => return Err(()),
+        };
+
         let counters = vec![
-            Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HISTOGRAM)),
-            Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HISTOGRAM)),
-            Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HISTOGRAM)),
-            Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HISTOGRAM)),
         ];
 
-        bpf.add_counters("counters", counters);
+        let mut percpu_counters = PercpuCounters::default();
 
-        let mut distributions = vec![("rx_size", &TCP_RX_SIZE), ("tx_size", &TCP_TX_SIZE)];
+        let states = [
+            "user",
+            "nice",
+            "system",
+            "idle",
+            "io_wait",
+            "irq",
+            "softirq",
+            "steal",
+            "guest",
+            "guest_nice",
+        ];
+
+        for cpu in cpus {
+            for state in states {
+                percpu_counters.push(
+                    cpu.id(),
+                    MetricBuilder::new("cpu/usage")
+                        .metadata("id", format!("{}", cpu.id()))
+                        .metadata("core", format!("{}", cpu.core()))
+                        .metadata("die", format!("{}", cpu.die()))
+                        .metadata("package", format!("{}", cpu.package()))
+                        .metadata("state", state)
+                        .formatter(cpu_metric_formatter)
+                        .build(metriken::Counter::new()),
+                );
+            }
+        }
+
+        bpf.add_counters_with_percpu("counters", counters, percpu_counters);
+
+        let mut distributions = vec![];
 
         for (name, histogram) in distributions.drain(..) {
             bpf.add_distribution(name, histogram);
@@ -137,7 +163,7 @@ impl Traffic {
     }
 }
 
-impl Sampler for Traffic {
+impl Sampler for CpuUsage {
     fn sample(&mut self) {
         let now = Instant::now();
         self.refresh_counters(now);

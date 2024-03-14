@@ -1,5 +1,11 @@
 mod connection_state;
-mod snmp;
+mod traffic;
 
 #[cfg(feature = "bpf")]
-mod bpf;
+mod packet_latency;
+
+#[cfg(feature = "bpf")]
+mod receive;
+
+#[cfg(feature = "bpf")]
+mod retransmit;
