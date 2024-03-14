@@ -42,7 +42,11 @@ impl Counter {
             .build()
     }
 
-    pub fn as_follower(&self, cpu: usize, leader: &mut perf_event::Counter) -> Result<perf_event::Counter, std::io::Error> {
+    pub fn as_follower(
+        &self,
+        cpu: usize,
+        leader: &mut perf_event::Counter,
+    ) -> Result<perf_event::Counter, std::io::Error> {
         self.builder()?
             .one_cpu(cpu)
             .any_pid()
@@ -123,34 +127,45 @@ impl PerfGroup {
         if let Ok(c) = Counter::Cycles.as_leader(cpu) {
             leader_id = Counter::Cycles as usize;
 
-            group.resize_with(Counter::Cycles as usize + 1, || { None });
+            group.resize_with(Counter::Cycles as usize + 1, || None);
             group[Counter::Cycles as usize] = Some(c);
         } else if let Ok(c) = Counter::Tsc.as_leader(cpu) {
             leader_id = Counter::Tsc as usize;
 
-            group.resize_with(Counter::Tsc as usize + 1, || { None });
+            group.resize_with(Counter::Tsc as usize + 1, || None);
             group[Counter::Tsc as usize] = Some(c);
         } else {
             error!("failed to initialize a group leader on CPU{cpu}");
             return Err(());
         }
 
-        for counter in &[Counter::Instructions, Counter::Tsc, Counter::Aperf, Counter::Mperf] {
+        for counter in &[
+            Counter::Instructions,
+            Counter::Tsc,
+            Counter::Aperf,
+            Counter::Mperf,
+        ] {
             if leader_id == *counter as usize {
                 continue;
             }
 
             if let Ok(c) = counter.as_follower(cpu, &mut group[leader_id].as_mut().unwrap()) {
-                group.resize_with(*counter as usize + 1, || { None });
+                group.resize_with(*counter as usize + 1, || None);
                 group[*counter as usize] = Some(c);
             }
         }
 
-        group[leader_id].as_mut().unwrap().enable_group().map_err(|e| {
-            error!("failed to enable the perf group on CPU{cpu}: {e}");
-        })?;
+        group[leader_id]
+            .as_mut()
+            .unwrap()
+            .enable_group()
+            .map_err(|e| {
+                error!("failed to enable the perf group on CPU{cpu}: {e}");
+            })?;
 
-        let prev = group[leader_id].as_mut().unwrap()
+        let prev = group[leader_id]
+            .as_mut()
+            .unwrap()
             .read_group()
             .map_err(|e| {
                 warn!("failed to read the perf group on CPU{cpu}: {e}");
@@ -167,8 +182,7 @@ impl PerfGroup {
     }
 
     pub fn get_metrics(&mut self) -> Result<Reading, ()> {
-        let current = self
-            .group[self.leader_id]
+        let current = self.group[self.leader_id]
             .as_mut()
             .unwrap()
             .read_group()
@@ -248,7 +262,8 @@ impl PerfGroup {
 
         if aperf.is_some() && mperf.is_some() {
             if base_frequency_mhz.is_some() {
-                running_frequency_mhz = Some(base_frequency_mhz.unwrap() * aperf.unwrap() / mperf.unwrap());
+                running_frequency_mhz =
+                    Some(base_frequency_mhz.unwrap() * aperf.unwrap() / mperf.unwrap());
             }
 
             if ipkc.is_some() {
