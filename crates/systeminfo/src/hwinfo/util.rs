@@ -67,12 +67,7 @@ pub(crate) fn read_hexbitmap(path: impl AsRef<Path>) -> Vec<usize> {
     let mut ret: Vec<usize> = Vec::new();
     if let Ok(hex_string) = read_string(path) {
         hex_string.chars().rfold(0, |acc, c: char| {
-            let val = match c {
-                'a'..='f' => c as u8 - b'a' + 10,
-                'A'..='F' => c as u8 - b'A' + 10,
-                '0'..='9' => c as u8 - b'0',
-                _ => 0,
-            };
+            let val = c.to_digit(16).unwrap_or(0);
             for i in 0..4 {
                 if (val & (0x1 << i)) > 0 {
                     ret.push(acc + i);

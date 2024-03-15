@@ -28,6 +28,7 @@ pub struct Queues {
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TxQueue {
+    pub id: u32,
     // whether xps is enabled or not
     pub xps: bool,
     // https://docs.kernel.org/networking/scaling.html
@@ -38,6 +39,7 @@ pub struct TxQueue {
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RxQueue {
+    pub id: u32,
     // whether rps is enabled or not
     pub rps: bool,
     // https://docs.kernel.org/networking/scaling.html
@@ -90,23 +92,29 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
         if entry.file_type().is_dir() {
             if let Some(name) = entry.file_name().to_str() {
                 if name.starts_with("tx-") {
-                    let xps_cpus = read_hexbitmap(entry.path().join("xps_cpus"));
-                    let xps_rxqs = read_hexbitmap(entry.path().join("xps_rxqs"));
-                    let xps = xps_cpus.len() > 0 || xps_rxqs.len() > 0;
-                    queues.tx.push(TxQueue {
-                        xps,
-                        xps_cpus,
-                        xps_rxqs,
-                    });
+                    if let Ok(id) = u32::from_str_radix(&name[3..], 10) {
+                        let xps_cpus = read_hexbitmap(entry.path().join("xps_cpus"));
+                        let xps_rxqs = read_hexbitmap(entry.path().join("xps_rxqs"));
+                        let xps = xps_cpus.len() > 0 || xps_rxqs.len() > 0;
+                        queues.tx.push(TxQueue {
+                            id,
+                            xps,
+                            xps_cpus,
+                            xps_rxqs,
+                        });
+                    }
                 } else if name.starts_with("rx-") {
-                    let rps_cpus = read_hexbitmap(entry.path().join("rps_cpus"));
-                    let rps_flow_cnt = read_usize(entry.path().join("rps_flow_cnt")).unwrap();
-                    let rps = rps_cpus.len() != 0;
-                    queues.rx.push(RxQueue {
-                        rps,
-                        rps_cpus,
-                        rps_flow_cnt,
-                    });
+                    if let Ok(id) = u32::from_str_radix(&name[3..], 10) {
+                        let rps_cpus = read_hexbitmap(entry.path().join("rps_cpus"));
+                        let rps_flow_cnt = read_usize(entry.path().join("rps_flow_cnt")).unwrap();
+                        let rps = rps_cpus.len() != 0;
+                        queues.rx.push(RxQueue {
+                            id,
+                            rps,
+                            rps_cpus,
+                            rps_flow_cnt,
+                        });
+                    }
                 }
             }
         }
