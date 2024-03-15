@@ -137,22 +137,33 @@ impl Sampler for Perf {
         for group in &mut self.groups {
             if let Ok(reading) = group.get_metrics() {
                 nr_active_groups += 1;
-                total_cycles += reading.cycles;
-                total_instructions += reading.instructions;
-                avg_ipkc += reading.ipkc;
-                avg_ipus += reading.ipus;
-                avg_base_frequency += reading.base_frequency_mhz;
-                avg_running_frequency += reading.running_frequency_mhz;
-                let _ = CPU_IPKC_HISTOGRAM.increment(reading.ipkc);
-                let _ = CPU_IPUS_HISTOGRAM.increment(reading.ipus);
-                let _ = CPU_FREQUENCY_HISTOGRAM.increment(reading.running_frequency_mhz);
+                total_cycles += reading.cycles.unwrap_or(0);
+                total_instructions += reading.instructions.unwrap_or(0);
+                avg_ipkc += reading.ipkc.unwrap_or(0);
+                avg_ipus += reading.ipus.unwrap_or(0);
+                avg_base_frequency += reading.base_frequency_mhz.unwrap_or(0);
+                avg_running_frequency += reading.running_frequency_mhz.unwrap_or(0);
+                let _ = CPU_IPKC_HISTOGRAM.increment(reading.ipkc.unwrap_or(0));
+                let _ = CPU_IPUS_HISTOGRAM.increment(reading.ipus.unwrap_or(0));
+                let _ =
+                    CPU_FREQUENCY_HISTOGRAM.increment(reading.running_frequency_mhz.unwrap_or(0));
 
-                self.counters[reading.id][0].set(reading.cycles);
-                self.counters[reading.id][1].set(reading.instructions);
+                if let Some(c) = reading.cycles {
+                    self.counters[reading.cpu][0].set(c);
+                }
+                if let Some(c) = reading.instructions {
+                    self.counters[reading.cpu][1].set(c);
+                }
 
-                self.gauges[reading.id][0].set(reading.ipkc as i64);
-                self.gauges[reading.id][1].set(reading.ipus as i64);
-                self.gauges[reading.id][2].set(reading.running_frequency_mhz as i64);
+                if let Some(c) = reading.ipkc {
+                    self.gauges[reading.cpu][0].set(c as i64);
+                }
+                if let Some(c) = reading.ipus {
+                    self.gauges[reading.cpu][1].set(c as i64);
+                }
+                if let Some(c) = reading.running_frequency_mhz {
+                    self.gauges[reading.cpu][2].set(c as i64);
+                }
             }
         }
 

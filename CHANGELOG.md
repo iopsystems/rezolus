@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [3.9.0] - 2024-03-15
+
+## Added
+
+- CPU usage metrics are now collected via BPF when available. (#165)
+- Perf event sampler can now initialize when only some counters are available.
+  (#168)
+
 ## [3.8.0] - 2024-03-04
 
 ## Added
@@ -126,7 +134,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.8.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.9.0...HEAD
+[3.9.0]: https://github.com/iopsystems/rezolus/compare/v3.8.0...v3.9.0
 [3.8.0]: https://github.com/iopsystems/rezolus/compare/v3.7.0...v3.8.0
 [3.7.0]: https://github.com/iopsystems/rezolus/compare/v3.6.1...v3.7.0
 [3.6.1]: https://github.com/iopsystems/rezolus/compare/v3.6.0...v3.6.1

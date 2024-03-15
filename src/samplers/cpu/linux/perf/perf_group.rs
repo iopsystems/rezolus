@@ -1,5 +1,61 @@
 use super::*;
 
+#[derive(Copy, Clone, Debug)]
+enum Counter {
+    Cycles,
+    Instructions,
+    Tsc,
+    Aperf,
+    Mperf,
+}
+
+impl Counter {
+    fn builder(&self) -> Result<perf_event::Builder, std::io::Error> {
+        match self {
+            Self::Cycles => Ok(Builder::new(Hardware::CPU_CYCLES)),
+            Self::Instructions => Ok(Builder::new(Hardware::INSTRUCTIONS)),
+            Self::Tsc => {
+                let msr = Msr::new(MsrId::TSC)?;
+                Ok(Builder::new(msr))
+            }
+            Self::Aperf => {
+                let msr = Msr::new(MsrId::APERF)?;
+                Ok(Builder::new(msr))
+            }
+            Self::Mperf => {
+                let msr = Msr::new(MsrId::MPERF)?;
+                Ok(Builder::new(msr))
+            }
+        }
+    }
+
+    pub fn as_leader(&self, cpu: usize) -> Result<perf_event::Counter, std::io::Error> {
+        self.builder()?
+            .one_cpu(cpu)
+            .any_pid()
+            .exclude_hv(false)
+            .exclude_kernel(false)
+            .pinned(true)
+            .read_format(
+                ReadFormat::TOTAL_TIME_ENABLED | ReadFormat::TOTAL_TIME_RUNNING | ReadFormat::GROUP,
+            )
+            .build()
+    }
+
+    pub fn as_follower(
+        &self,
+        cpu: usize,
+        leader: &mut perf_event::Counter,
+    ) -> Result<perf_event::Counter, std::io::Error> {
+        self.builder()?
+            .one_cpu(cpu)
+            .any_pid()
+            .exclude_hv(false)
+            .exclude_kernel(false)
+            .build_with_group(leader)
+    }
+}
+
 struct GroupData {
     inner: perf_event::GroupData,
 }
@@ -40,122 +96,95 @@ impl GroupData {
 
 pub struct Reading {
     /// The CPU this reading is from
-    pub id: usize,
-    pub cycles: u64,
-    pub instructions: u64,
-    pub ipkc: u64,
-    pub ipus: u64,
-    pub base_frequency_mhz: u64,
-    pub running_frequency_mhz: u64,
+    pub cpu: usize,
+    pub cycles: Option<u64>,
+    pub instructions: Option<u64>,
+    pub ipkc: Option<u64>,
+    pub ipus: Option<u64>,
+    pub base_frequency_mhz: Option<u64>,
+    pub running_frequency_mhz: Option<u64>,
 }
 
 /// Per-cpu perf event group that measure all tasks on one CPU
 pub struct PerfGroup {
     /// The CPU this group measures
-    id: usize,
-    /// Executed cycles and also the group leader
-    cycles: perf_event::Counter,
-    /// Retired instructions
-    instructions: perf_event::Counter,
-    /// Timestamp counter
-    tsc: perf_event::Counter,
-    /// Actual performance frequency clock
-    aperf: perf_event::Counter,
-    /// Maximum performance frequency clock
-    mperf: perf_event::Counter,
+    cpu: usize,
+    /// The group member that is the leader
+    leader_id: usize,
+    /// The counters in this group
+    group: Vec<Option<perf_event::Counter>>,
     /// prev holds the previous readings
     prev: Option<GroupData>,
 }
 
 impl PerfGroup {
     /// Create and enable the group on the cpu
-    pub fn new(id: usize) -> Result<Self, ()> {
-        let mut cycles = Builder::new(Hardware::CPU_CYCLES)
-            .one_cpu(id)
-            .any_pid()
-            .exclude_hv(false)
-            .exclude_kernel(false)
-            .pinned(true)
-            .read_format(
-                ReadFormat::TOTAL_TIME_ENABLED | ReadFormat::TOTAL_TIME_RUNNING | ReadFormat::GROUP,
-            )
-            .build()
+    pub fn new(cpu: usize) -> Result<Self, ()> {
+        let mut group = Vec::new();
+
+        let leader_id;
+
+        if let Ok(c) = Counter::Cycles.as_leader(cpu) {
+            leader_id = Counter::Cycles as usize;
+
+            group.resize_with(Counter::Cycles as usize + 1, || None);
+            group[Counter::Cycles as usize] = Some(c);
+        } else if let Ok(c) = Counter::Tsc.as_leader(cpu) {
+            leader_id = Counter::Tsc as usize;
+
+            group.resize_with(Counter::Tsc as usize + 1, || None);
+            group[Counter::Tsc as usize] = Some(c);
+        } else {
+            error!("failed to initialize a group leader on CPU{cpu}");
+            return Err(());
+        }
+
+        for counter in &[
+            Counter::Instructions,
+            Counter::Tsc,
+            Counter::Aperf,
+            Counter::Mperf,
+        ] {
+            if leader_id == *counter as usize {
+                continue;
+            }
+
+            if let Ok(c) = counter.as_follower(cpu, &mut group[leader_id].as_mut().unwrap()) {
+                group.resize_with(*counter as usize + 1, || None);
+                group[*counter as usize] = Some(c);
+            }
+        }
+
+        group[leader_id]
+            .as_mut()
+            .unwrap()
+            .enable_group()
             .map_err(|e| {
-                error!("failed to create the cycles event on CPU{id}: {e}");
+                error!("failed to enable the perf group on CPU{cpu}: {e}");
             })?;
 
-        let instructions = Builder::new(Hardware::INSTRUCTIONS)
-            .one_cpu(id)
-            .any_pid()
-            .exclude_hv(false)
-            .exclude_kernel(false)
-            .build_with_group(&mut cycles)
-            .map_err(|e| {
-                error!("failed to create the instructions event on CPU{id}: {e}");
-            })?;
-
-        let tsc_event = Msr::new(MsrId::TSC)
-            .map_err(|e| error!("failed to create perf event for tsc msr: {e}"))?;
-        let tsc = Builder::new(tsc_event)
-            .one_cpu(id)
-            .any_pid()
-            .exclude_hv(false)
-            .exclude_kernel(false)
-            .build_with_group(&mut cycles)
-            .map_err(|e| {
-                error!("failed to create the tsc counter on CPU{id}: {e}");
-            })?;
-
-        let aperf_event = Msr::new(MsrId::APERF)
-            .map_err(|e| error!("failed to create perf event for aperf msr: {e}"))?;
-        let aperf = Builder::new(aperf_event)
-            .one_cpu(id)
-            .any_pid()
-            .exclude_hv(false)
-            .exclude_kernel(false)
-            .build_with_group(&mut cycles)
-            .map_err(|e| {
-                error!("failed to create the aperf counter on CPU{id}: {e}");
-            })?;
-
-        let mperf_event = Msr::new(MsrId::MPERF)
-            .map_err(|e| error!("failed to create perf event for mperf msr: {e}"))?;
-        let mperf = Builder::new(mperf_event)
-            .one_cpu(id)
-            .any_pid()
-            .exclude_hv(false)
-            .exclude_kernel(false)
-            .build_with_group(&mut cycles)
-            .map_err(|e| {
-                error!("failed to create the mperf counter on CPU{id}: {e}");
-            })?;
-
-        cycles.enable_group().map_err(|e| {
-            error!("failed to enable the perf group on CPU{id}: {e}");
-        })?;
-
-        let prev = cycles
+        let prev = group[leader_id]
+            .as_mut()
+            .unwrap()
             .read_group()
             .map_err(|e| {
-                warn!("failed to read the perf group on CPU{id}: {e}");
+                warn!("failed to read the perf group on CPU{cpu}: {e}");
             })
             .map(|inner| GroupData { inner })
             .ok();
 
         return Ok(Self {
-            id,
-            cycles,
-            instructions,
-            tsc,
-            aperf,
-            mperf,
+            cpu,
+            leader_id,
+            group,
             prev,
         });
     }
 
     pub fn get_metrics(&mut self) -> Result<Reading, ()> {
-        let current = self
-            .cycles
+        let current = self.group[self.leader_id]
+            .as_mut()
+            .unwrap()
             .read_group()
             .map_err(|e| {
                 debug!("error reading perf group: {e}");
@@ -185,33 +214,67 @@ impl PerfGroup {
             .ok_or(())
             .map(|v| v.as_micros() as u64)?;
 
-        if running_us != enabled_us {
+        if running_us != enabled_us || running_us == 0 {
             self.prev = Some(current);
             return Err(());
         }
 
-        let cycles = current.delta(prev, &self.cycles).ok_or(())?;
-        let instructions = current.delta(prev, &self.instructions).ok_or(())?;
+        let mut cycles = None;
+        let mut instructions = None;
+        let mut tsc = None;
+        let mut aperf = None;
+        let mut mperf = None;
 
-        if cycles == 0 || instructions == 0 {
-            self.prev = Some(current);
-            return Err(());
+        if let Some(c) = &self.group[Counter::Cycles as usize] {
+            cycles = current.delta(prev, &c);
         }
 
-        let tsc = current.delta(prev, &self.tsc).ok_or(())?;
-        let mperf = current.delta(prev, &self.mperf).ok_or(())?;
-        let aperf = current.delta(prev, &self.aperf).ok_or(())?;
+        if let Some(c) = &self.group[Counter::Instructions as usize] {
+            instructions = current.delta(prev, &c);
+        }
 
-        // computer IPKC IPUS BASE_FREQUENCY RUNNING_FREQUENCY
-        let ipkc = (instructions * 1000) / cycles;
-        let base_frequency_mhz = tsc / running_us;
-        let running_frequency_mhz = (base_frequency_mhz * aperf) / mperf;
-        let ipus = (ipkc * aperf) / mperf;
+        if let Some(c) = &self.group[Counter::Tsc as usize] {
+            tsc = current.delta(prev, &c);
+        }
+
+        if let Some(c) = &self.group[Counter::Aperf as usize] {
+            aperf = current.delta(prev, &c);
+        }
+
+        if let Some(c) = &self.group[Counter::Mperf as usize] {
+            mperf = current.delta(prev, &c);
+        }
+
+        let ipkc = if instructions.is_some() && cycles.is_some() {
+            if cycles.unwrap() == 0 {
+                None
+            } else {
+                Some(instructions.unwrap() * 1000 / cycles.unwrap())
+            }
+        } else {
+            None
+        };
+
+        let base_frequency_mhz = tsc.map(|v| v / running_us);
+
+        let mut running_frequency_mhz = None;
+        let mut ipus = None;
+
+        if aperf.is_some() && mperf.is_some() {
+            if base_frequency_mhz.is_some() {
+                running_frequency_mhz =
+                    Some(base_frequency_mhz.unwrap() * aperf.unwrap() / mperf.unwrap());
+            }
+
+            if ipkc.is_some() {
+                ipus = Some(ipkc.unwrap() * aperf.unwrap() / mperf.unwrap());
+            }
+        }
 
         self.prev = Some(current);
 
         Ok(Reading {
-            id: self.id,
+            cpu: self.cpu,
             cycles,
             instructions,
             ipkc,
