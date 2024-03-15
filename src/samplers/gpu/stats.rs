@@ -47,6 +47,20 @@ pub static GPU_PCIE_THROUGHPUT_TX: LazyGauge = LazyGauge::new(Gauge::default);
 )]
 pub static GPU_POWER_USAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
+#[metric(
+    name = "gpu/utilization/gpu",
+    description = "The running average percentage of time the GPU was executing one or more kernels. (0-100).",
+    formatter = gpu_metric_formatter
+)]
+pub static GPU_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
+
+#[metric(
+    name = "gpu/memory_utilization",
+    description = "The running average percentage of time that GPU memory was being read from or written to. (0-100).",
+    formatter = gpu_metric_formatter
+)]
+pub static GPU_MEMORY_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
+
 /// A function to format the gpu metrics that allows for export of both total
 /// and per-GPU metrics.
 ///

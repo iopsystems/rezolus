@@ -1,4 +1,5 @@
 use super::*;
+use metriken::DynBoxedMetric;
 use metriken::RwLockHistogram;
 use ouroboros::*;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
@@ -10,6 +11,8 @@ mod distribution;
 
 use counters::Counters;
 use distribution::Distribution;
+
+pub use counters::PercpuCounters;
 
 const PAGE_SIZE: usize = 4096;
 const CACHELINE_SIZE: usize = 64;
@@ -58,8 +61,26 @@ impl<T: 'static + GetMap> Bpf<T> {
 
     pub fn add_counters(&mut self, name: &str, counters: Vec<Counter>) {
         self.with_mut(|this| {
-            this.counters
-                .push(Counters::new(this.skel.map(name), counters));
+            this.counters.push(Counters::new(
+                this.skel.map(name),
+                counters,
+                Default::default(),
+            ));
+        })
+    }
+
+    pub fn add_counters_with_percpu(
+        &mut self,
+        name: &str,
+        counters: Vec<Counter>,
+        percpu_counters: PercpuCounters,
+    ) {
+        self.with_mut(|this| {
+            this.counters.push(Counters::new(
+                this.skel.map(name),
+                counters,
+                percpu_counters,
+            ));
         })
     }
 

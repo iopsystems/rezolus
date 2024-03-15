@@ -4,6 +4,9 @@ use crate::*;
 /// disabled.
 pub struct Nop {}
 
+// Since the no-op sampler is not always used in a build (depending on platform
+// and features), we suppress the dead code lints.
+#[allow(dead_code)]
 impl Nop {
     pub fn new(_config: &Config) -> Self {
         Self {}

@@ -2,7 +2,8 @@ use crate::*;
 
 sampler!(Scheduler, "scheduler", SCHEDULER_SAMPLERS);
 
+#[cfg(target_os = "linux")]
 mod stats;
 
-#[cfg(all(feature = "bpf", target_os = "linux"))]
-mod runqueue;
+#[cfg(target_os = "linux")]
+mod linux;

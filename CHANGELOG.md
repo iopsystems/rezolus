@@ -1,5 +1,35 @@
 ## [Unreleased]
 
+## [3.8.0] - 2024-03-04
+
+## Added
+
+- Allows Rezolus to run on MacOS though sampler support is limited.
+- Provides msgpack exposition format as a more efficient exposition format.
+
+## Fixed
+
+- Updates of various direct dependencies.
+
+## [3.7.0] - 2023-12-21
+
+### Added
+
+- Optional compression for HTTP exposition. (#128)
+- Additional GPU metrics for utilization and energy consumption. (#138)
+
+### Fixed
+
+- Duplicate metric name in Rezolus sampler. (#134)
+
+## [3.6.1] - 2023-11-30
+
+### Fixed
+
+- Fixed incorrect type annotation for CPU metrics (frequency, ipkc, ipus). (#98)
+- Fixed under-reported TCP retransmits. (#121)
+- Fixed TCP segment metrics. (#123)
+
 ## [3.6.0] - 2023-10-26
 
 ### Added
@@ -96,7 +126,10 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.6.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.8.0...HEAD
+[3.8.0]: https://github.com/iopsystems/rezolus/compare/v3.7.0...v3.8.0
+[3.7.0]: https://github.com/iopsystems/rezolus/compare/v3.6.1...v3.7.0
+[3.6.1]: https://github.com/iopsystems/rezolus/compare/v3.6.0...v3.6.1
 [3.6.0]: https://github.com/iopsystems/rezolus/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/iopsystems/rezolus/compare/v3.4.0...v3.5.0
 [3.4.0]: https://github.com/iopsystems/rezolus/compare/v3.3.3...v3.4.0

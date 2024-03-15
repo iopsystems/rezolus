@@ -1,16 +1,21 @@
-use crate::Arc;
-use crate::Config;
-use crate::PERCENTILES;
+use crate::{Arc, Config, PERCENTILES};
 use metriken::histogram::Snapshot;
 use metriken::{AtomicHistogram, Counter, Gauge, RwLockHistogram};
-
+use metriken_exposition::SnapshotterBuilder;
+use std::time::UNIX_EPOCH;
 use warp::Filter;
 
 /// HTTP exposition
 pub async fn http(config: Arc<Config>) {
-    let http = filters::http(config);
-
-    warp::serve(http).run(([0, 0, 0, 0], 4242)).await;
+    if config.general().compression() {
+        warp::serve(filters::http(config).with(warp::filters::compression::gzip()))
+            .run(([0, 0, 0, 0], 4242))
+            .await;
+    } else {
+        warp::serve(filters::http(config))
+            .run(([0, 0, 0, 0], 4242))
+            .await;
+    }
 }
 
 mod filters {
@@ -29,6 +34,7 @@ mod filters {
         prometheus_stats(config.clone())
             .or(human_stats())
             .or(hardware_info())
+            .or(msgpack())
     }
 
     /// GET /metrics
@@ -56,6 +62,14 @@ mod filters {
             .and(warp::get())
             .and_then(handlers::hwinfo)
     }
+
+    /// GET /metrics/binary
+    pub fn msgpack() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
+    {
+        warp::path!("metrics" / "binary")
+            .and(warp::get())
+            .and_then(handlers::msgpack)
+    }
 }
 
 mod handlers {
@@ -63,7 +77,6 @@ mod handlers {
     use crate::common::HISTOGRAM_GROUPING_POWER;
     use crate::SNAPSHOTS;
     use core::convert::Infallible;
-    use std::time::UNIX_EPOCH;
 
     pub async fn prometheus_stats(config: Arc<Config>) -> Result<impl warp::Reply, Infallible> {
         let mut data = Vec::new();
@@ -240,6 +253,25 @@ mod handlers {
         let mut content = data.join("\n");
         content += "\n";
         Ok(content)
+    }
+
+    pub async fn msgpack() -> Result<impl warp::Reply, Infallible> {
+        let snapshot = SnapshotterBuilder::new()
+            .filter(|metric| {
+                if let Some(m) = metric.as_any() {
+                    if m.downcast_ref::<AtomicHistogram>().is_some() {
+                        false
+                    } else {
+                        !metric.name().starts_with("log_")
+                    }
+                } else {
+                    false
+                }
+            })
+            .build()
+            .snapshot();
+
+        Ok(metriken_exposition::Snapshot::to_msgpack(&snapshot).unwrap())
     }
 
     pub async fn hwinfo() -> Result<impl warp::Reply, Infallible> {

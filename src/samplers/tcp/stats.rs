@@ -12,16 +12,29 @@ counter_with_histogram!(
     "number of bytes received over TCP"
 );
 counter_with_histogram!(
+    TCP_RX_READ,
+    TCP_RX_READ_HISTOGRAM,
+    "tcp/receive/read",
+    "number of reads from the TCP socket buffers after reassembly"
+);
+counter_with_histogram!(
     TCP_RX_SEGMENTS,
     TCP_RX_SEGMENTS_HISTOGRAM,
     "tcp/receive/segments",
     "number of TCP segments received"
 );
+
 counter_with_histogram!(
     TCP_TX_BYTES,
     TCP_TX_BYTES_HISTOGRAM,
     "tcp/transmit/bytes",
     "number of bytes transmitted over TCP"
+);
+counter_with_histogram!(
+    TCP_TX_SEND,
+    TCP_TX_SEND_HISTOGRAM,
+    "tcp/transmit/send",
+    "number of TCP sends before fragmentation"
 );
 counter_with_histogram!(
     TCP_TX_SEGMENTS,
@@ -135,12 +148,12 @@ pub static TCP_CONN_STATE_NEW_SYN_RECV: LazyGauge = LazyGauge::new(Gauge::defaul
 bpfhistogram!(
     TCP_RX_SIZE,
     "tcp/receive/size",
-    "distribution of receive segment sizes"
+    "distribution of logical receive sizes after reassembly"
 );
 bpfhistogram!(
     TCP_TX_SIZE,
     "tcp/transmit/size",
-    "distribution of transmit segment sizes"
+    "distribution of logical send sizes before fragmentation"
 );
 bpfhistogram!(TCP_JITTER, "tcp/jitter");
 bpfhistogram!(TCP_SRTT, "tcp/srtt");

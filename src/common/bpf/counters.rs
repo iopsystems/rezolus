@@ -26,10 +26,33 @@ pub struct Counters<'a> {
     values: Vec<u64>,
     cachelines: usize,
     counters: Vec<Counter>,
+    percpu_counters: PercpuCounters,
+}
+
+#[derive(Default)]
+pub struct PercpuCounters {
+    inner: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
+}
+
+impl PercpuCounters {
+    pub fn push(&mut self, cpu: usize, counter: DynBoxedMetric<metriken::Counter>) {
+        self.inner.resize_with(cpu + 1, Default::default);
+        self.inner[cpu].push(counter);
+    }
+
+    pub fn set(&self, cpu: usize, idx: usize, value: u64) {
+        if let Some(Some(counter)) = self.inner.get(cpu).map(|v| v.get(idx)) {
+            counter.set(value);
+        }
+    }
 }
 
 impl<'a> Counters<'a> {
-    pub fn new(map: &'a libbpf_rs::Map, counters: Vec<Counter>) -> Self {
+    pub fn new(
+        map: &'a libbpf_rs::Map,
+        counters: Vec<Counter>,
+        percpu_counters: PercpuCounters,
+    ) -> Self {
         let ncounters = counters.len();
         let cachelines = (ncounters as f64 / std::mem::size_of::<u64>() as f64).ceil() as usize;
 
@@ -47,6 +70,7 @@ impl<'a> Counters<'a> {
             mmap,
             cachelines,
             counters,
+            percpu_counters,
             values: vec![0; ncounters],
         }
     }
@@ -64,9 +88,13 @@ impl<'a> Counters<'a> {
         if values.len() == MAX_CPUS * counters_per_cpu {
             for cpu in 0..MAX_CPUS {
                 for idx in 0..self.counters.len() {
+                    let value = values[idx + cpu * counters_per_cpu];
+
                     // add this CPU's counter to the combined value for this counter
-                    self.values[idx] =
-                        self.values[idx].wrapping_add(values[idx + cpu * counters_per_cpu]);
+                    self.values[idx] = self.values[idx].wrapping_add(value);
+
+                    // update the counter for this cpu
+                    self.percpu_counters.set(cpu, idx, value);
                 }
             }
         } else {
@@ -89,6 +117,9 @@ impl<'a> Counters<'a> {
 
                     // add this CPU's counter to the combined value for this counter
                     self.values[idx] = self.values[idx].wrapping_add(value);
+
+                    // update the counter for this cpu
+                    self.percpu_counters.set(cpu, idx, value);
                 }
             }
         }
