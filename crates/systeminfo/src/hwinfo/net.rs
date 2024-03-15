@@ -14,14 +14,37 @@ pub struct Interface {
     pub node: Option<usize>,
     pub mtu: usize,
     pub queues: Queues,
+    pub driver: Option<String>,
+    pub irqs: Vec<usize>,
 }
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Queues {
-    pub tx: usize,
-    pub rx: usize,
-    pub combined: usize,
+    pub tx: Vec<TxQueue>,
+    pub rx: Vec<RxQueue>,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TxQueue {
+    pub id: u32,
+    // whether xps is enabled or not
+    pub xps: bool,
+    // https://docs.kernel.org/networking/scaling.html
+    pub xps_cpus: Vec<usize>,
+    pub xps_rxqs: Vec<usize>,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RxQueue {
+    pub id: u32,
+    // whether rps is enabled or not
+    pub rps: bool,
+    // https://docs.kernel.org/networking/scaling.html
+    pub rps_cpus: Vec<usize>,
+    pub rps_flow_cnt: usize,
 }
 
 fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
@@ -38,12 +61,23 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
     let node = read_usize(format!("/sys/class/net/{name}/device/numa_node")).ok();
     let mtu = read_usize(format!("/sys/class/net/{name}/mtu"))?;
     let speed = read_usize(format!("/sys/class/net/{name}/speed")).ok();
+    let driver: Option<String> =
+        match std::fs::read_link(format!("/sys/class/net/{name}/device/driver/module")) {
+            Ok(driver_link) => Some(
+                driver_link
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            Err(_) => None,
+        };
+    let irqs = read_irqs(format!("/sys/class/net/{name}/device/msi_irqs"));
 
-    // count rx queues
+    //  tx/rx queues
     let mut queues = Queues {
-        tx: 0,
-        rx: 0,
-        combined: 0,
+        tx: Vec::new(),
+        rx: Vec::new(),
     };
 
     let walker = WalkDir::new(format!("/sys/class/net/{name}/queues"))
@@ -58,11 +92,29 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
         if entry.file_type().is_dir() {
             if let Some(name) = entry.file_name().to_str() {
                 if name.starts_with("tx-") {
-                    queues.tx += 1;
+                    if let Ok(id) = u32::from_str_radix(&name[3..], 10) {
+                        let xps_cpus = read_hexbitmap(entry.path().join("xps_cpus"));
+                        let xps_rxqs = read_hexbitmap(entry.path().join("xps_rxqs"));
+                        let xps = xps_cpus.len() > 0 || xps_rxqs.len() > 0;
+                        queues.tx.push(TxQueue {
+                            id,
+                            xps,
+                            xps_cpus,
+                            xps_rxqs,
+                        });
+                    }
                 } else if name.starts_with("rx-") {
-                    queues.rx += 1;
-                } else {
-                    queues.combined += 1;
+                    if let Ok(id) = u32::from_str_radix(&name[3..], 10) {
+                        let rps_cpus = read_hexbitmap(entry.path().join("rps_cpus"));
+                        let rps_flow_cnt = read_usize(entry.path().join("rps_flow_cnt")).unwrap();
+                        let rps = rps_cpus.len() != 0;
+                        queues.rx.push(RxQueue {
+                            id,
+                            rps,
+                            rps_cpus,
+                            rps_flow_cnt,
+                        });
+                    }
                 }
             }
         }
@@ -75,6 +127,8 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
         node,
         speed,
         queues,
+        driver,
+        irqs,
     }))
 }
 

@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::fs;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 
 use super::util::*;
 use super::Cache;
+use super::Cpufreq;
+use super::SchedDomain;
 use crate::{Error, Result};
 
 #[non_exhaustive]
@@ -17,6 +20,8 @@ pub struct Cpu {
     pub die_id: usize,
     pub package_id: usize,
 
+    pub cpu_freq: Option<Cpufreq>,
+    pub sched_domains: Option<Vec<SchedDomain>>,
     pub core_cpus: Vec<usize>,
     pub die_cpus: Vec<usize>,
     pub package_cpus: Vec<usize>,
@@ -50,6 +55,28 @@ impl Cpu {
     }
 }
 
+#[non_exhaustive]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CpuSmt {
+    Enabled,
+    Disabled,
+    Unknown,
+}
+
+// Check whether the SMT is enabled, return Unknown if the file is not readable
+pub fn get_cpu_smt() -> CpuSmt {
+    match read_usize("/sys/devices/system/cpu/smt/active") {
+        Ok(smt) => {
+            if smt == 1 {
+                CpuSmt::Enabled
+            } else {
+                CpuSmt::Disabled
+            }
+        }
+        Err(_) => CpuSmt::Unknown,
+    }
+}
+
 pub fn get_cpus() -> Result<Vec<Cpu>> {
     let mut tmp = BTreeMap::new();
 
@@ -64,6 +91,20 @@ pub fn get_cpus() -> Result<Vec<Cpu>> {
         // if the platform does not expose die topology, use the package id
         let die_id = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/die_id"))
             .unwrap_or(package_id);
+
+        // sched_domain
+        let mut sched_domains: Option<Vec<SchedDomain>> = None;
+        if let Ok(domain_dir) = fs::read_dir(format!("/sys/kernel/debug/sched/domains/cpu{id}")) {
+            sched_domains = Some(
+                domain_dir
+                    .map(|domain| {
+                        SchedDomain::new(id, &domain.unwrap().file_name().into_string().unwrap())
+                    })
+                    .collect(),
+            );
+        }
+
+        let cpu_freq = Cpufreq::new(id).ok();
 
         let core_cpus = read_list(format!(
             "/sys/devices/system/cpu/cpu{id}/topology/core_cpus_list"
@@ -101,6 +142,8 @@ pub fn get_cpus() -> Result<Vec<Cpu>> {
                 core_id,
                 die_id,
                 package_id,
+                sched_domains,
+                cpu_freq,
                 core_cpus,
                 die_cpus,
                 package_cpus,
