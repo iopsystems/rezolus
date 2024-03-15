@@ -1,0 +1,3 @@
+# ignore these vendored files in language statistics
+src/common/bpf/aarch64/vmlinux.h linguist-vendored
+src/common/bpf/x86_64/vmlinux.h linguist-vendored
