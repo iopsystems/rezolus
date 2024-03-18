@@ -14,7 +14,7 @@
 // 0 - user
 // 1 - nice
 // 2 - system
-// 3 - idle
+// 3 - idle - *NOTE* this will not increment. User-space must calculate it
 // 4 - iowait
 // 5 - irq
 // 6 - softirq
@@ -47,6 +47,10 @@ int account_delta(u64 delta, u32 usage_idx)
 SEC("kprobe/__cgroup_account_cputime_field")
 int BPF_KPROBE(cgroup_account_cputime_field_kprobe, void *task, u32 index, u64 delta)
 {
+	if (index == 3) {
+		return 0;
+	}
+
 	return account_delta(delta, index);
 }
 
