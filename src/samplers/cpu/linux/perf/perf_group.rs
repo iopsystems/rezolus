@@ -225,23 +225,23 @@ impl PerfGroup {
         let mut aperf = None;
         let mut mperf = None;
 
-        if let Some(c) = &self.group[Counter::Cycles as usize] {
+        if let Some(Some(c)) = &self.group.get(Counter::Cycles as usize) {
             cycles = current.delta(prev, &c);
         }
 
-        if let Some(c) = &self.group[Counter::Instructions as usize] {
+        if let Some(Some(c)) = &self.group.get(Counter::Instructions as usize) {
             instructions = current.delta(prev, &c);
         }
 
-        if let Some(c) = &self.group[Counter::Tsc as usize] {
+        if let Some(Some(c)) = &self.group.get(Counter::Tsc as usize) {
             tsc = current.delta(prev, &c);
         }
 
-        if let Some(c) = &self.group[Counter::Aperf as usize] {
+        if let Some(Some(c)) = &self.group.get(Counter::Aperf as usize) {
             aperf = current.delta(prev, &c);
         }
 
-        if let Some(c) = &self.group[Counter::Mperf as usize] {
+        if let Some(Some(c)) = &self.group.get(Counter::Mperf as usize) {
             mperf = current.delta(prev, &c);
         }
 
