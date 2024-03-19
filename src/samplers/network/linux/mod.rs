@@ -4,7 +4,7 @@ use crate::common::{Counter, Nop};
 use metriken::{DynBoxedMetric, MetricBuilder};
 use samplers::hwinfo::hardware_info;
 use std::fs::File;
-use std::io::{Error, Read, Seek};
+use std::io::{Read, Seek};
 
 const NAME: &str = "network_interface";
 
@@ -29,8 +29,6 @@ pub struct NetworkInterfaceStat {
 }
 
 struct NetworkMetrics {
-    // NIC name
-    name: String,
     // /sys/class/net/[name]/statistics/rx_bytes
     rx_bytes_file: File,
     rx_bytes: DynBoxedMetric<metriken::Counter>,
@@ -68,7 +66,6 @@ impl NetworkInterfaceStat {
         for interface in nics {
             let name = &interface.name;
             pernic_metrics.push(NetworkMetrics {
-                name: interface.name.clone(),
                 rx_bytes_file: File::open(format!("/sys/class/net/{name}/statistics/rx_bytes"))
                     .expect("file not found"),
                 rx_bytes: MetricBuilder::new("network/receive/bytes")
@@ -150,7 +147,6 @@ fn read_u64(file: &mut File) -> Result<u64, std::io::Error> {
     data.trim()
         .parse::<u64>()
         .map_err(|e| std::io::Error::other(e.to_string()))
-    // data.parse::<u64>().map_err(|e| std::io::Error::new(ErrorKind::e.to_string()))
 }
 
 impl NetworkInterfaceStat {

@@ -1,3 +1,4 @@
+mod block;
 mod block_io;
 mod cpu;
 mod gpu;

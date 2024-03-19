@@ -61,4 +61,8 @@ impl HwInfo {
     pub fn get_network_interfaces(&self) -> &Vec<Interface> {
         &self.network
     }
+
+    pub fn get_storage_blocks(&self) -> &Vec<Block> {
+        &self.blocks
+    }
 }

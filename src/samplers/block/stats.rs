@@ -4,53 +4,53 @@ use metriken::Format;
 use metriken::{Counter, LazyCounter, MetricEntry};
 
 #[metric(
-    name = "network/receive/bytes",
-    description = "number of bytes received over network",
-    formatter = network_metric_formatter
+    name = "block/read/bytes",
+    description = "number of read bytes ",
+    formatter = block_metric_formatter
 )]
-pub static NETWORK_RX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
+pub static BLOCK_READ_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(NETWORK_RX_BYTES_HISTOGRAM, "network/receive/bytes");
+histogram!(BLOCK_READ_BYTES_HISTOGRAM, "block/read/bytes");
 
 #[metric(
-    name = "network/receive/packets",
-    description = "number of packets received over network",
-    formatter = network_metric_formatter
+    name = "block/read/ios",
+    description = "number of read IOs",
+    formatter = block_metric_formatter
 )]
-pub static NETWORK_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
+pub static BLOCK_READ_IOS: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(NETWORK_RX_PACKETS_HISTOGRAM, "network/receive/packets");
+histogram!(BLOCK_READ_IOS_HISTOGRAM, "block/read/ios");
 
 #[metric(
-    name = "network/transmit/bytes",
-    description = "number of bytes transmitted over network",
-    formatter = network_metric_formatter
+    name = "block/write/bytes",
+    description = "number of write bytes",
+    formatter = block_metric_formatter
 )]
-pub static NETWORK_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
+pub static BLOCK_WRITE_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(NETWORK_TX_BYTES_HISTOGRAM, "network/transmit/bytes");
+histogram!(BLOCK_WRITE_BYTES_HISTOGRAM, "block/write/bytes");
 
 #[metric(
-    name = "network/transmit/packets",
-    description = "number of packets transmitted over network",
-    formatter = network_metric_formatter
+    name = "block/write/ios",
+    description = "number of writte IOs",
+    formatter = block_metric_formatter
 )]
-pub static NETWORK_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
+pub static BLOCK_WRITE_IOS: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(NETWORK_TX_PACKETS_HISTOGRAM, "network/transmit/packets");
+histogram!(BLOCK_WRITE_IOS_HISTOGRAM, "block/write/ios");
 
-/// A function to format the network metrics that allows for export of both total
-/// and per-nic metrics.
+/// A function to format the block metrics that allows for export of both total
+/// and per-block metrics.
 ///
 /// For the `Simple` format, the metrics will be formatted according to the
 /// a pattern which depends on the metric metadata:
-/// `{name}/{id}` eg: `network/receive/bytes/eth0`
-/// `{name}/total` eg: `network/receive/bytes/total`
+/// `{name}/{id}` eg: `block/read/bytes/eth0`
+/// `{name}/total` eg: `block/read/bytes/total`
 ///
 /// For the `Prometheus` format, if the metric has an `id` set in the metadata,
 /// the metric name is left as-is. Otherwise, `/total` is appended. Note: we
 /// rely on the exposition logic to convert the `/`s to `_`s in the metric name.
-pub fn network_metric_formatter(metric: &MetricEntry, format: Format) -> String {
+pub fn block_metric_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
             let name = metric.name().to_string();

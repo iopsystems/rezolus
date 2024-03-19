@@ -132,5 +132,9 @@ enabled = true
 enabled = true
 
 # Network interface sampler that reads from /sys/class/net
-[samplers.network]
+[samplers.network_interface]
+enabled = true
+
+# Block device sampler that reads from /sys/block/BLOCK_DEVICE/stat
+[samplers.block_devices]
 enabled = true
