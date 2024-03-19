@@ -130,3 +130,7 @@ enabled = true
 # distribution, bytes, and packets.
 [samplers.tcp_traffic]
 enabled = true
+
+# Network interface sampler that reads from /sys/class/net
+[samplers.network]
+enabled = true

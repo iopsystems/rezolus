@@ -8,6 +8,7 @@ mod memory;
 mod net;
 mod node;
 mod sched_domain;
+mod storage;
 mod util;
 
 pub use self::cache::{Cache, CacheType};
@@ -20,6 +21,7 @@ pub use self::memory::Memory;
 pub use self::net::{Interface, Queues};
 pub use self::node::Node;
 pub use self::sched_domain::SchedDomain;
+pub use self::storage::Block;
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,6 +33,7 @@ pub struct HwInfo {
     pub cpu_boosting: CpuFreqBoosting,
     pub memory: Memory,
     pub network: Vec<Interface>,
+    pub blocks: Vec<Block>,
     pub nodes: Vec<Node>,
     pub interrupts: Vec<Interrupt>,
 }
@@ -45,6 +48,7 @@ impl HwInfo {
             cpu_boosting: self::cpufreq::get_cpu_boosting(),
             memory: Memory::new()?,
             network: self::net::get_interfaces(),
+            blocks: self::storage::get_blocks(),
             nodes: self::node::get_nodes()?,
             interrupts: self::interrupt::get_interrupts(),
         })
@@ -52,5 +56,9 @@ impl HwInfo {
 
     pub fn get_cpus(&self) -> &Vec<Cpu> {
         &self.cpus
+    }
+
+    pub fn get_network_interfaces(&self) -> &Vec<Interface> {
+        &self.network
     }
 }
