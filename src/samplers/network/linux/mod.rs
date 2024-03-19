@@ -143,7 +143,7 @@ impl Sampler for NetworkInterfaceStat {
 fn read_u64(file: &mut File) -> Result<u64, std::io::Error> {
     file.rewind()?;
     let mut data = String::new();
-    file.read_to_string(&mut data);
+    file.read_to_string(&mut data)?;
     data.trim()
         .parse::<u64>()
         .map_err(|e| std::io::Error::other(e.to_string()))
