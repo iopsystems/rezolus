@@ -58,7 +58,9 @@ impl PercpuCounters {
 
     /// Returns the sum of all the counters for this CPU
     pub fn sum(&self, cpu: usize) -> Option<u64> {
-        self.inner.get(cpu).map(|v| v.iter().map(|v| v.value()).sum())
+        self.inner
+            .get(cpu)
+            .map(|v| v.iter().map(|v| v.value()).sum())
     }
 }
 
