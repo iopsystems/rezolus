@@ -32,6 +32,9 @@ impl GetMap for ModSkel<'_> {
 
 pub struct CpuUsage {
     bpf: Bpf<ModSkel<'static>>,
+    percpu_counters: Arc<PercpuCounters>,
+    sum_prev: u64,
+    percpu_sum_prev: Vec<u64>,
     counter_interval: Duration,
     counter_next: Instant,
     counter_prev: Instant,
@@ -113,7 +116,9 @@ impl CpuUsage {
             }
         }
 
-        bpf.add_counters_with_percpu("counters", counters, percpu_counters);
+        let percpu_counters = Arc::new(percpu_counters);
+
+        bpf.add_counters_with_percpu("counters", counters, percpu_counters.clone());
 
         let mut distributions = vec![];
 
@@ -125,6 +130,9 @@ impl CpuUsage {
 
         Ok(Self {
             bpf,
+            percpu_counters,
+            sum_prev: 0,
+            percpu_sum_prev: vec![0; cpus.len()],
             counter_interval: config.interval(NAME),
             counter_next: now,
             counter_prev: now,
@@ -146,17 +154,16 @@ impl CpuUsage {
         // get the amount of time since we last sampled
         let elapsed = now - self.counter_prev;
 
-        // sum the current readings of the cpu usage counters for busy time
-        let busy_prev = busy();
-
         // refresh the counters from the kernel-space counters
         self.bpf.refresh_counters(elapsed.as_secs_f64());
 
-        // get the new reading for busy time
-        let busy_now = busy();
+        // get the new sum of all the counters
+        let sum_now: u64 = sum();
 
-        // get the number of nanoseconds in busy time
-        let busy_delta = busy_now.wrapping_sub(busy_prev);
+        // get the number of nanoseconds in busy time, since idle hasn't been
+        // incremented, the busy time is the difference between our prev and
+        // current sums
+        let busy_delta = sum_now.wrapping_sub(self.sum_prev);
 
         // idle time delta is `cores * elapsed - busy_delta`
         let idle_delta = self.online_cores as u64 * elapsed.as_nanos() as u64 - busy_delta;
@@ -164,6 +171,18 @@ impl CpuUsage {
         // update the idle time metrics
         CPU_USAGE_IDLE.add(idle_delta);
         let _ = CPU_USAGE_IDLE_HISTOGRAM.increment(idle_delta);
+
+        // do the same for percpu counters
+        for (cpu, sum_prev) in self.percpu_sum_prev.iter_mut().enumerate() {
+            let sum_now: u64 = self.percpu_counters.sum(cpu).unwrap_or(0);
+            let busy_delta = sum_now.wrapping_sub(*sum_prev);
+            let idle_delta = elapsed.as_nanos() as u64 - busy_delta;
+            self.percpu_counters.add(cpu, 3, idle_delta);
+            *sum_prev += busy_delta + idle_delta;
+        }
+
+        // update the previous sums
+        self.sum_prev += busy_delta + idle_delta;
 
         // determine when to sample next
         let next = self.counter_next + self.counter_interval;
@@ -221,7 +240,7 @@ impl CpuUsage {
     }
 }
 
-fn busy() -> u64 {
+fn sum() -> u64 {
     [
         &CPU_USAGE_USER,
         &CPU_USAGE_NICE,
