@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [3.10.1] - 2024-03-20
+
+## Fixed
+
+- Fixes per-CPU idle time accounting in the BPF-based sampler. Starting in
+  release 3.9.0 these metrics incorrectly report no idle time. (#181)
+
 ## [3.10.0] - 2024-03-19
 
 ## Added
@@ -148,7 +155,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.10.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.10.1...HEAD
+[3.10.1]: https://github.com/iopsystems/rezolus/compare/v3.20.0...v3.10.1
 [3.10.0]: https://github.com/iopsystems/rezolus/compare/v3.9.0...v3.10.0
 [3.9.0]: https://github.com/iopsystems/rezolus/compare/v3.8.0...v3.9.0
 [3.8.0]: https://github.com/iopsystems/rezolus/compare/v3.7.0...v3.8.0
