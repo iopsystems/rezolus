@@ -273,11 +273,6 @@ fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
     for range in raw.split(',') {
         let mut parts = range.split('-');
 
-        if parts.next().is_some() {
-            // The line is invalid, report error
-            return Err(error!("invalid content in file"));
-        }
-
         let first: Option<usize> = parts
             .next()
             .map(|text| text.parse())
@@ -288,6 +283,11 @@ fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
             .map(|text| text.parse())
             .transpose()
             .map_err(|e| error!("couldn't parse: {e}"))?;
+
+        if parts.next().is_some() {
+            // The line is invalid, report error
+            return Err(error!("invalid content in file"));
+        }
 
         match (first, second) {
             (Some(_value), None) => {
