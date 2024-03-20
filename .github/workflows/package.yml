@@ -16,6 +16,9 @@ name: package
         description: 'Debian package release number'
         default: '1'
 
+permissions:
+  packages: write
+
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
