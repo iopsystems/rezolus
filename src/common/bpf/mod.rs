@@ -73,7 +73,7 @@ impl<T: 'static + GetMap> Bpf<T> {
         &mut self,
         name: &str,
         counters: Vec<Counter>,
-        percpu_counters: PercpuCounters,
+        percpu_counters: Arc<PercpuCounters>,
     ) {
         self.with_mut(|this| {
             this.counters.push(Counters::new(

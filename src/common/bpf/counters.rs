@@ -1,5 +1,6 @@
 use super::*;
 use ringlog::*;
+use std::sync::Arc;
 
 /// Represents a collection of counters in a open BPF map. The map must be
 /// created with:
@@ -26,7 +27,7 @@ pub struct Counters<'a> {
     values: Vec<u64>,
     cachelines: usize,
     counters: Vec<Counter>,
-    percpu_counters: PercpuCounters,
+    percpu_counters: Arc<PercpuCounters>,
 }
 
 #[derive(Default)]
@@ -35,15 +36,29 @@ pub struct PercpuCounters {
 }
 
 impl PercpuCounters {
+    /// Adds a new counter for a CPU
     pub fn push(&mut self, cpu: usize, counter: DynBoxedMetric<metriken::Counter>) {
         self.inner.resize_with(cpu + 1, Default::default);
         self.inner[cpu].push(counter);
     }
 
+    /// Set a counter for this CPU to the provided value
     pub fn set(&self, cpu: usize, idx: usize, value: u64) {
         if let Some(Some(counter)) = self.inner.get(cpu).map(|v| v.get(idx)) {
             counter.set(value);
         }
+    }
+
+    /// Adds the provided delta to a counter for this CPU
+    pub fn add(&self, cpu: usize, idx: usize, delta: u64) {
+        if let Some(Some(counter)) = self.inner.get(cpu).map(|v| v.get(idx)) {
+            counter.add(delta);
+        }
+    }
+
+    /// Returns the sum of all the counters for this CPU
+    pub fn sum(&self, cpu: usize) -> Option<u64> {
+        self.inner.get(cpu).map(|v| v.iter().map(|v| v.value()).sum())
     }
 }
 
@@ -51,7 +66,7 @@ impl<'a> Counters<'a> {
     pub fn new(
         map: &'a libbpf_rs::Map,
         counters: Vec<Counter>,
-        percpu_counters: PercpuCounters,
+        percpu_counters: Arc<PercpuCounters>,
     ) -> Self {
         let ncounters = counters.len();
         let cachelines = (ncounters as f64 / std::mem::size_of::<u64>() as f64).ceil() as usize;
