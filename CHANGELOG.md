@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [3.10.2] - 2024-03-20
+
+## Fixed
+
+- Fixes a panic in the CPU perf event sampler due to a divide-by-zero. This
+  occurs when there are no active perf event groups. (#185)
+
 ## [3.10.1] - 2024-03-20
 
 ## Fixed
@@ -155,8 +162,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.10.1...HEAD
-[3.10.1]: https://github.com/iopsystems/rezolus/compare/v3.20.0...v3.10.1
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.10.2...HEAD
+[3.10.2]: https://github.com/iopsystems/rezolus/compare/v3.10.1...v3.10.2
+[3.10.1]: https://github.com/iopsystems/rezolus/compare/v3.10.0...v3.10.1
 [3.10.0]: https://github.com/iopsystems/rezolus/compare/v3.9.0...v3.10.0
 [3.9.0]: https://github.com/iopsystems/rezolus/compare/v3.8.0...v3.9.0
 [3.8.0]: https://github.com/iopsystems/rezolus/compare/v3.7.0...v3.8.0
