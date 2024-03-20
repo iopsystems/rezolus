@@ -46,15 +46,17 @@ impl Snapshots {
         self.timestamp = snapshot.systemtime;
 
         let current: HistogramSnapshots = snapshot.histograms.into_iter().collect();
+        let mut delta = HistogramSnapshots::new();
 
         for (name, previous) in &self.previous {
             if let Some(histogram) = current.get(name).cloned() {
                 let _ = histogram.wrapping_sub(previous);
-                self.delta.insert(name.to_string(), histogram);
+                delta.insert(name.to_string(), histogram);
             }
         }
 
         self.previous = current;
+        self.delta = delta;
     }
 }
 
