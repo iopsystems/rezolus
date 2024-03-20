@@ -42,16 +42,15 @@ impl Snapshots {
     }
 
     pub fn update(&mut self) {
-        let mut snapshot = metriken_exposition::Snapshotter::default().snapshot();
+        let snapshot = metriken_exposition::Snapshotter::default().snapshot();
         self.timestamp = snapshot.systemtime;
 
-        let mut current: HistogramSnapshots = snapshot.histograms.drain(..).collect();
-        let mut deltas: HistogramSnapshots = HashMap::new();
+        let current: HistogramSnapshots = snapshot.histograms.into_iter().collect();
 
         for (name, previous) in &self.previous {
-            if let Some((name, current)) = current.remove_entry(name) {
-                let _ = current.wrapping_sub(previous);
-                deltas.insert(name, current);
+            if let Some(histogram) = current.get(name).cloned() {
+                let _ = histogram.wrapping_sub(previous);
+                self.delta.insert(name.to_string(), histogram);
             }
         }
 
