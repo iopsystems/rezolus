@@ -214,19 +214,14 @@ jobs:
           set -x
           shopt -s nullglob
 
-          url="$(echo '${{ github.event.release.upload_url }}' | sed -e 's/{.*}//g')"
+          mkdir -p target/artifacts
 
           for artifact in target/debian/**/*; do
             name="$(basename "$artifact")"
             directory="$(basename "$(dirname "$artifact")")"
-        
             release="$(echo "$directory" | cut -d _ -f 2)"
-        
-            curl -L -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Content-Type: application/octet-stream" \
-              -H "X-Github-Api-Version: 2022-11-28" \
-              "$url?name=${release}_${name}" \
-              --data-binary "@$artifact"
+
+            mv "$artifact" "target/artifacts/${release}_${name}"
           done
+
+          gh release upload "${{ github.event.release.tag_name }}" target/artifacts/*
