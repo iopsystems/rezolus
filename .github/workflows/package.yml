@@ -17,6 +17,8 @@ name: package
         default: '1'
 
 env:
+  GH_TOKEN: ${{ github.token }}
+
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
