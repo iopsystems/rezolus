@@ -1,8 +1,12 @@
+const ONLINE_CORES_REFRESH: Duration = Duration::from_secs(1);
+
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/cpu_usage.bpf.rs"));
 }
 
 use super::NAME;
+
+use std::io::{Read, Seek};
 
 use metriken::MetricBuilder;
 
@@ -34,6 +38,10 @@ pub struct CpuUsage {
     distribution_interval: Duration,
     distribution_next: Instant,
     distribution_prev: Instant,
+    online_cores: usize,
+    online_cores_file: std::fs::File,
+    online_cores_interval: Duration,
+    online_cores_next: Instant,
 }
 
 impl CpuUsage {
@@ -49,6 +57,12 @@ impl CpuUsage {
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
         let mut bpf = Bpf::from_skel(skel);
+
+        let mut online_cores_file = std::fs::File::open("/sys/devices/system/cpu/online")
+            .map_err(|e| error!("couldn't open: {e}"))?;
+
+        let online_cores = online_cores(&mut online_cores_file)
+            .map_err(|_| error!("couldn't determine number of online cores"))?;
 
         let cpus = match hardware_info() {
             Ok(hwinfo) => hwinfo.get_cpus(),
@@ -107,14 +121,20 @@ impl CpuUsage {
             bpf.add_distribution(name, histogram);
         }
 
+        let now = Instant::now();
+
         Ok(Self {
             bpf,
             counter_interval: config.interval(NAME),
-            counter_next: Instant::now(),
-            counter_prev: Instant::now(),
+            counter_next: now,
+            counter_prev: now,
             distribution_interval: config.distribution_interval(NAME),
-            distribution_next: Instant::now(),
-            distribution_prev: Instant::now(),
+            distribution_next: now,
+            distribution_prev: now,
+            online_cores,
+            online_cores_file,
+            online_cores_interval: ONLINE_CORES_REFRESH,
+            online_cores_next: now + ONLINE_CORES_REFRESH,
         })
     }
 
@@ -123,9 +143,27 @@ impl CpuUsage {
             return;
         }
 
-        let elapsed = (now - self.counter_prev).as_secs_f64();
+        // get the amount of time since we last sampled
+        let elapsed = now - self.counter_prev;
 
-        self.bpf.refresh_counters(elapsed);
+        // sum the current readings of the cpu usage counters for busy time
+        let busy_prev = busy();
+
+        // refresh the counters from the kernel-space counters
+        self.bpf.refresh_counters(elapsed.as_secs_f64());
+
+        // get the new reading for busy time
+        let busy_now = busy();
+
+        // get the number of nanoseconds in busy time
+        let busy_delta = busy_now.wrapping_sub(busy_prev);
+
+        // idle time delta is `cores * elapsed - busy_delta`
+        let idle_delta = self.online_cores as u64 * elapsed.as_nanos() as u64 - busy_delta;
+
+        // update the idle time metrics
+        CPU_USAGE_IDLE.add(idle_delta);
+        let _ = CPU_USAGE_IDLE_HISTOGRAM.increment(idle_delta);
 
         // determine when to sample next
         let next = self.counter_next + self.counter_interval;
@@ -161,11 +199,95 @@ impl CpuUsage {
         // mark when we last sampled
         self.distribution_prev = now;
     }
+
+    pub fn update_online_cores(&mut self, now: Instant) {
+        if now < self.online_cores_next {
+            return;
+        }
+
+        if let Ok(v) = online_cores(&mut self.online_cores_file) {
+            self.online_cores = v;
+        }
+
+        // determine when to update next
+        let next = self.online_cores_next + self.online_cores_interval;
+
+        // check that next update time is in the future
+        if next > now {
+            self.online_cores_next = next;
+        } else {
+            self.online_cores_next = now + self.online_cores_interval;
+        }
+    }
+}
+
+fn busy() -> u64 {
+    [
+        &CPU_USAGE_USER,
+        &CPU_USAGE_NICE,
+        &CPU_USAGE_SYSTEM,
+        &CPU_USAGE_IDLE,
+        &CPU_USAGE_IO_WAIT,
+        &CPU_USAGE_IRQ,
+        &CPU_USAGE_SOFTIRQ,
+        &CPU_USAGE_STEAL,
+        &CPU_USAGE_GUEST,
+        &CPU_USAGE_GUEST_NICE,
+    ]
+    .iter()
+    .map(|v| v.value())
+    .sum()
+}
+
+fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
+    let _ = file
+        .rewind()
+        .map_err(|e| error!("failed to seek to start of file: {e}"))?;
+
+    let mut count = 0;
+    let mut raw = String::new();
+
+    let _ = file
+        .read_to_string(&mut raw)
+        .map_err(|e| error!("failed to read file: {e}"))?;
+
+    for range in raw.split(',') {
+        let mut parts = range.split('-');
+
+        if parts.next().is_some() {
+            // The line is invalid, report error
+            return Err(error!("invalid content in file"));
+        }
+
+        let first: Option<usize> = parts
+            .next()
+            .map(|text| text.parse())
+            .transpose()
+            .map_err(|e| error!("couldn't parse: {e}"))?;
+        let second: Option<usize> = parts
+            .next()
+            .map(|text| text.parse())
+            .transpose()
+            .map_err(|e| error!("couldn't parse: {e}"))?;
+
+        match (first, second) {
+            (Some(_value), None) => {
+                count += 1;
+            }
+            (Some(start), Some(stop)) => {
+                count += stop + 1 - start;
+            }
+            _ => continue,
+        }
+    }
+
+    Ok(count)
 }
 
 impl Sampler for CpuUsage {
     fn sample(&mut self) {
         let now = Instant::now();
+        self.update_online_cores(now);
         self.refresh_counters(now);
         self.refresh_distributions(now);
     }
