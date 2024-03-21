@@ -155,7 +155,7 @@ int handle__sched_switch(u64 *ctx)
 
 		// calculate how long it was running, increment running histogram
 		tsp = bpf_map_lookup_elem(&running_at, &pid);
-		if (tsp) {
+		if (tsp && *tsp) {
 			delta_ns = ts - *tsp;
 			u32 idx = value_to_index(delta_ns);
 			cnt = bpf_map_lookup_elem(&running, &idx);
@@ -177,7 +177,7 @@ int handle__sched_switch(u64 *ctx)
 
 	// calculate how long it was enqueued, increment running histogram
 	tsp = bpf_map_lookup_elem(&enqueued_at, &pid);
-	if (tsp) {
+	if (tsp && *tsp) {
 		delta_ns = ts - *tsp;
 		u32 idx = value_to_index(delta_ns);
 		cnt = bpf_map_lookup_elem(&runqlat, &idx);

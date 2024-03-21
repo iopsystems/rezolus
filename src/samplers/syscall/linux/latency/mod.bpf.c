@@ -177,7 +177,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	start_ts = bpf_map_lookup_elem(&start, &tid);
 
 	// possible we missed the start
-	if (!start_ts) {
+	if (!start_ts || *start_ts == 0) {
 		return 0;
 	}
 
