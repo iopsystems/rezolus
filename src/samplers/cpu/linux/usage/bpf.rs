@@ -270,7 +270,7 @@ fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
         .read_to_string(&mut raw)
         .map_err(|e| error!("failed to read file: {e}"))?;
 
-    for range in raw.split(',') {
+    for range in raw.trim().split(',') {
         let mut parts = range.split('-');
 
         let first: Option<usize> = parts
