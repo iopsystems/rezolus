@@ -6,7 +6,7 @@ use samplers::hwinfo::hardware_info;
 use std::fs::File;
 use std::io::{Read, Seek};
 
-const NAME: &str = "block_devices";
+const NAME: &str = "block_device";
 
 #[distributed_slice(BLOCK_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
