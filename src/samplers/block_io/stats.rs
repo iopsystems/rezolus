@@ -92,19 +92,18 @@ pub static BLOCKIO_FLUSH_BYTES: LazyCounter = LazyCounter::new(Counter::default)
 
 histogram!(BLOCKIO_FLUSH_BYTES_HISTOGRAM, "blockio/flush/bytes");
 
-/// A function to format the cpu metrics that allows for export of both total
-/// and per-CPU metrics.
+/// A function to format the blockio metrics that allows for export of ops and
+/// byte counters by operation type.
+///
+/// Note: we do not currently support per-device metrics.
 ///
 /// For the `Simple` format, the metrics will be formatted according to the
 /// a pattern which depends on the metric metadata:
-/// `{name}/cpu{id}` eg: `cpu/frequency/cpu0`
-/// `{name}/total` eg: `cpu/cycles/total`
-/// `{name}/{state}/cpu{id}` eg: `cpu/usage/user/cpu0`
-/// `{name}/{state}/total` eg: `cpu/usage/user/total`
+/// `blockio/{op}/{operations, bytes}/total` eg: `blockio/read/operations/total`
 ///
-/// For the `Prometheus` format, if the metric has an `id` set in the metadata,
-/// the metric name is left as-is. Otherwise, `/total` is appended. Note: we
-/// rely on the exposition logic to convert the `/`s to `_`s in the metric name.
+/// For the `Prometheus` format, we supply the operation type as metadata. Note:
+/// we rely on the exposition logic to convert the `/`s to `_`s in the metric
+/// name.
 pub fn blockio_metric_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
