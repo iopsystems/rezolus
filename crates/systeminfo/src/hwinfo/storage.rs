@@ -9,44 +9,13 @@ const LOGIC_SECTOR_SIZE: usize = 512;
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Serialize, Deserialize)]
-// fs -> block -> device
+// Block devices under /sys/block except virtual loop devices
+// TODO: add hardware queue, block queue, and IRQ information
 pub struct Block {
-    // Blocks under /sys/block except loop devices
     pub name: String,
     // Device size in bytes /sys/block/NAME/size * 512
     pub size: usize,
-    // pub model: Option<String>,
-    // pub numa_node: Option<usize>,
-    // // mq
-    // pub ioqeues: Queues,
-    // // hardware queue
-    // pub device_queue_size: usize,
-    // pub irqs: Vec<usize>,
-    // pub speed: Option<usize>,
-    // pub node: Option<usize>,
-    // pub mtu: usize,
-    // pub queues: Queues,
 }
-
-// // https://www.kernel.org/doc/Documentation/block/queue-sysfs.txt
-// pub struct BlockQueue {
-//     // number of requests in the block layer for read or write requests
-//     pub nr_requests: usize,
-//     // whether polling is enabled or not
-//     pub io_poll: bool,
-//     pub logical_block_size: usize,
-//     // Smallest unit in bytes wihtout read-modify-write
-//     pub physical_block_size: usize,
-//     // Hard maximum logic sectors (512 bytes) a device can handler per request
-//     pub max_hw_sectors: usize,
-//     // Soft maximum logic sectors used by VFS for buffered IO
-//     pub max_sectors: usize,
-//     // Device preferred request size in bytes
-//     pub optimal_io_size: usize,
-//     // Maximum number of segment
-//     pub max_segment_size: usize,
-//     pub max_segments: usize,
-// }
 
 fn get_block(name: &OsStr) -> Result<Option<Block>> {
     let name = name.to_str().ok_or_else(Error::invalid_block_name)?;

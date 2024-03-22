@@ -46,8 +46,6 @@ impl BlockStat {
             Ok(hwinfo) => hwinfo.get_storage_blocks(),
             Err(_) => return Err(()),
         };
-
-        // No active NICs
         if blocks.is_empty() {
             return Err(());
         }
@@ -59,8 +57,9 @@ impl BlockStat {
         for block in blocks {
             let name = &block.name;
             perblock_metrics.push(BlockMetrics {
-                stat_file: File::open(format!("/sys/block/{name}/stat"))
-                    .expect("the block stat file not found"),
+                stat_file: File::open(format!("/sys/block/{name}/stat")).expect(&format!(
+                    "Failed to open the stat file of the block device {name}"
+                )),
                 read_bytes: MetricBuilder::new("block/read/bytes")
                     .metadata("id", format!("{name}"))
                     .formatter(block_metric_formatter)
@@ -124,6 +123,32 @@ impl Sampler for BlockStat {
     }
 }
 
+// The format of the block stat file explaned here https://docs.kernel.org/block/stat.html
+// many variants are not used now, but we might need them later
+#[allow(dead_code)]
+enum BlockStatsItems {
+    ReadIOs = 0,
+    ReadMerges,
+    ReadSectors,
+    ReadTicks,
+    WriteIOs,
+    WriteMerges,
+    WriteSectors,
+    WriteTicks,
+    InFlightRequests,
+    IOTicks,
+    TimeInQueue,
+    DiscardIOs,
+    DiscardMerges,
+    DiscardSectors,
+    DiscardTicks,
+    FlushIOs,
+    FlushTicks,
+    Size = 17,
+}
+
+const BYTES_IN_SECTOR: u64 = 512;
+
 impl BlockStat {
     fn sample_blocks(&mut self, elapsed: f64) -> Result<(), std::io::Error> {
         let mut total_read_bytes = 0;
@@ -140,21 +165,20 @@ impl BlockStat {
                 .split_whitespace()
                 .map(|v| v.parse::<u64>().unwrap())
                 .collect();
-            if parts.len() != 17 {
-                return Err(std::io::Error::other("wrong block stat file"));
+            if parts.len() != BlockStatsItems::Size as usize {
+                return Err(std::io::Error::other("wrong format in the block stat file"));
             }
-            //println!("{:?}", parts);
-            //https://docs.kernel.org/block/stat.html
-            let read_bytes = parts[2] * 512;
+
+            let read_bytes = parts[BlockStatsItems::ReadSectors as usize] * BYTES_IN_SECTOR;
             block.read_bytes.set(read_bytes);
             total_read_bytes += read_bytes;
-            let read_ios = parts[0];
+            let read_ios = parts[BlockStatsItems::ReadIOs as usize];
             block.read_ios.set(read_ios);
             total_read_ios += read_ios;
-            let write_bytes = parts[6] * 512;
+            let write_bytes = parts[BlockStatsItems::WriteSectors as usize] * BYTES_IN_SECTOR;
             block.write_bytes.set(write_bytes);
             total_write_bytes += write_bytes;
-            let write_ios = parts[4];
+            let write_ios = parts[BlockStatsItems::WriteIOs as usize];
             block.write_ios.set(write_ios);
             total_write_ios += write_ios;
         }

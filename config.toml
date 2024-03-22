@@ -131,10 +131,10 @@ enabled = true
 [samplers.tcp_traffic]
 enabled = true
 
-# Network interface sampler that reads from /sys/class/net
+# Network interface sampler that reads from stats from /sys/class/net/DEVICE/statistics/*
 [samplers.network_interface]
 enabled = true
 
-# Block device sampler that reads from /sys/block/BLOCK_DEVICE/stat
+# Block device sampler that reads stats from /sys/block/BLOCK_DEVICE/stat
 [samplers.block_devices]
 enabled = true
