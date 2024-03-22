@@ -5,7 +5,7 @@ use metriken::{Counter, LazyCounter, MetricEntry};
 
 #[metric(
     name = "network/receive/bytes",
-    description = "number of bytes received over network",
+    description = "bytes received over network",
     formatter = network_metric_formatter
 )]
 pub static NETWORK_RX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
@@ -14,7 +14,7 @@ histogram!(NETWORK_RX_BYTES_HISTOGRAM, "network/receive/bytes");
 
 #[metric(
     name = "network/receive/packets",
-    description = "number of packets received over network",
+    description = "packets received over network",
     formatter = network_metric_formatter
 )]
 pub static NETWORK_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
@@ -23,7 +23,7 @@ histogram!(NETWORK_RX_PACKETS_HISTOGRAM, "network/receive/packets");
 
 #[metric(
     name = "network/transmit/bytes",
-    description = "number of bytes transmitted over network",
+    description = "bytes transmitted over network",
     formatter = network_metric_formatter
 )]
 pub static NETWORK_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
@@ -32,7 +32,7 @@ histogram!(NETWORK_TX_BYTES_HISTOGRAM, "network/transmit/bytes");
 
 #[metric(
     name = "network/transmit/packets",
-    description = "number of packets transmitted over network",
+    description = "packets transmitted over network",
     formatter = network_metric_formatter
 )]
 pub static NETWORK_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);

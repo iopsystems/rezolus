@@ -5,7 +5,7 @@ use metriken::{Counter, LazyCounter, MetricEntry};
 
 #[metric(
     name = "block/read/bytes",
-    description = "number of read bytes ",
+    description = "block read bytes ",
     formatter = block_metric_formatter
 )]
 pub static BLOCK_READ_BYTES: LazyCounter = LazyCounter::new(Counter::default);
@@ -14,7 +14,7 @@ histogram!(BLOCK_READ_BYTES_HISTOGRAM, "block/read/bytes");
 
 #[metric(
     name = "block/read/ios",
-    description = "number of read IOs",
+    description = "block read IOs",
     formatter = block_metric_formatter
 )]
 pub static BLOCK_READ_IOS: LazyCounter = LazyCounter::new(Counter::default);
@@ -23,7 +23,7 @@ histogram!(BLOCK_READ_IOS_HISTOGRAM, "block/read/ios");
 
 #[metric(
     name = "block/write/bytes",
-    description = "number of write bytes",
+    description = "block write bytes",
     formatter = block_metric_formatter
 )]
 pub static BLOCK_WRITE_BYTES: LazyCounter = LazyCounter::new(Counter::default);
@@ -32,7 +32,7 @@ histogram!(BLOCK_WRITE_BYTES_HISTOGRAM, "block/write/bytes");
 
 #[metric(
     name = "block/write/ios",
-    description = "number of writte IOs",
+    description = "block write IOs",
     formatter = block_metric_formatter
 )]
 pub static BLOCK_WRITE_IOS: LazyCounter = LazyCounter::new(Counter::default);
@@ -44,7 +44,7 @@ histogram!(BLOCK_WRITE_IOS_HISTOGRAM, "block/write/ios");
 ///
 /// For the `Simple` format, the metrics will be formatted according to the
 /// a pattern which depends on the metric metadata:
-/// `{name}/{id}` eg: `block/read/bytes/eth0`
+/// `{name}/{id}` eg: `block/read/bytes/nvme0n1`
 /// `{name}/total` eg: `block/read/bytes/total`
 ///
 /// For the `Prometheus` format, if the metric has an `id` set in the metadata,
