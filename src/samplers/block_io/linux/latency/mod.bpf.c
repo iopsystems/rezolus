@@ -10,6 +10,35 @@
 
 extern int LINUX_KERNEL_VERSION __kconfig;
 
+#define COUNTER_GROUP_WIDTH 8
+#define MAX_CPUS 1024
+
+#define REQ_OP_BITS	8
+#define REQ_OP_MASK	((1 << REQ_OP_BITS) - 1)
+#define REQ_FLAG_BITS	24
+
+#define REQ_OP_READ 0
+#define REQ_OP_WRITE 1
+#define REQ_OP_FLUSH 2
+#define REQ_OP_DISCARD 3
+
+// counters
+// 0 - read ops
+// 1 - write ops
+// 2 - flush ops
+// 3 - discard ops
+// 4 - read bytes
+// 5 - write bytes
+// 6 - flush bytes
+// 7 - discard bytes
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+} counters SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 65536);
@@ -55,6 +84,27 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 {
 	u64 delta, *tsp, *cnt, ts = bpf_ktime_get_ns();
 	u32 idx;
+	unsigned int cmd_flags;
+
+	cmd_flags = BPF_CORE_READ(rq, cmd_flags);
+
+	idx = cmd_flags & REQ_OP_MASK;
+
+    if (idx < COUNTER_GROUP_WIDTH / 2) {
+        idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + idx;
+        cnt = bpf_map_lookup_elem(&counters, &idx);
+
+		if (cnt) {
+			__sync_fetch_and_add(cnt, 1);
+		}
+
+		idx = idx + COUNTER_GROUP_WIDTH / 2;
+		cnt = bpf_map_lookup_elem(&counters, &idx);
+
+		if (cnt) {
+			__sync_fetch_and_add(cnt, nr_bytes);
+		}
+    }
 
 	idx = value_to_index(nr_bytes);
 	cnt = bpf_map_lookup_elem(&size, &idx);
@@ -81,24 +131,6 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 
 	bpf_map_delete_elem(&start, &rq);
 	return 0;
-}
-
-SEC("tp_btf/block_rq_insert")
-int block_rq_insert_btf(u64 *ctx)
-{
-	return handle_block_rq_insert(ctx);
-}
-
-SEC("tp_btf/block_rq_issue")
-int block_rq_issue_btf(u64 *ctx)
-{
-	return handle_block_rq_issue(ctx);
-}
-
-SEC("tp_btf/block_rq_complete")
-int BPF_PROG(block_rq_complete_btf, struct request *rq, int error, unsigned int nr_bytes)
-{
-	return handle_block_rq_complete(rq, error, nr_bytes);
 }
 
 SEC("raw_tp/block_rq_insert")
