@@ -21,11 +21,11 @@
 #define HISTOGRAM_BUCKETS 7424
 #define MAX_CPUS 1024
 #define MAX_SYSCALL_ID 1024
-#define MAX_TRACKED_PIDS 65536 
+#define MAX_PID 4194304
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, MAX_TRACKED_PIDS);
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, MAX_PID);
 	__type(key, u32);
 	__type(value, u64);
 } start SEC(".maps");
@@ -177,12 +177,20 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	start_ts = bpf_map_lookup_elem(&start, &tid);
 
 	// possible we missed the start
-	if (!start_ts) {
+	if (!start_ts || *start_ts == 0) {
 		return 0;
 	}
 
+	// calculate the latency
 	lat = bpf_ktime_get_ns() - *start_ts;
+
+	// clear the start timestamp
+	*start_ts = 0;
+
+	// calculate the histogram index for this latency value
 	idx = value_to_index(lat);
+
+	// update the total latency histogram
 	cnt = bpf_map_lookup_elem(&total_latency, &idx);
 
 	if (cnt) {
@@ -197,19 +205,26 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 			return 0;
 		}
 
-		if (*counter_offset == 1) {
-			cnt = bpf_map_lookup_elem(&read_latency, &idx);
-		} else if (*counter_offset == 2) {
-			cnt = bpf_map_lookup_elem(&write_latency, &idx);
-		} else if (*counter_offset == 3) {
-			cnt = bpf_map_lookup_elem(&poll_latency, &idx);
-		} else if (*counter_offset == 4) {
-			cnt = bpf_map_lookup_elem(&lock_latency, &idx);
-		} else if (*counter_offset == 5) {
-			cnt = bpf_map_lookup_elem(&time_latency, &idx);
-		} else if (*counter_offset == 6) {
-			cnt = bpf_map_lookup_elem(&sleep_latency, &idx);
-		} else if (*counter_offset == 7) {
+		// nested if-else binary search. finds the correct histogram in 3 branches
+		if (*counter_offset < 5) {
+			if (*counter_offset < 3) {
+				if (*counter_offset == 1) {
+					cnt = bpf_map_lookup_elem(&read_latency, &idx);
+				} else {
+					cnt = bpf_map_lookup_elem(&write_latency, &idx);
+				}
+			} else if (*counter_offset == 3) {
+				cnt = bpf_map_lookup_elem(&poll_latency, &idx);
+			} else {
+				cnt = bpf_map_lookup_elem(&lock_latency, &idx);
+			}
+		} else if (*counter_offset < 7) {
+			if (*counter_offset == 5) {
+				cnt = bpf_map_lookup_elem(&time_latency, &idx);
+			} else {
+				cnt = bpf_map_lookup_elem(&sleep_latency, &idx);
+			}
+		} else {
 			cnt = bpf_map_lookup_elem(&socket_latency, &idx);
 		}
 

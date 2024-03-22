@@ -1,5 +1,40 @@
 ## [Unreleased]
 
+## [3.10.3] - 2024-03-20
+
+## Fixed
+
+- Fixes an incorrect calculation of the number of online CPUs in the BPF-based
+  CPU usage sampler.
+
+## [3.10.2] - 2024-03-20
+
+## Fixed
+
+- Fixes a panic in the CPU perf event sampler due to a divide-by-zero. This
+  occurs when there are no active perf event groups. (#185)
+
+## [3.10.1] - 2024-03-20
+
+## Fixed
+
+- Fixes per-CPU idle time accounting in the BPF-based sampler. Starting in
+  release 3.9.0 these metrics incorrectly report no idle time. (#181)
+
+## [3.10.0] - 2024-03-19
+
+## Added
+
+- Additional system information fields including kernel version, CPU frequency
+  details, network queues, and IRQ affinity. (#100)
+
+## Fixed
+
+- Fixes a panic on some systems when perf counter initialization has failed.
+  This bug was introduced in 3.9.0. (#175)
+- Fixes CPU idle time accounting in the BPF-based sampler. In 3.9.0 the sampler
+  incorrectly reports no idle time. (#176)
+
 ## [3.9.0] - 2024-03-15
 
 ## Added
@@ -134,7 +169,11 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.9.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.10.3...HEAD
+[3.10.3]: https://github.com/iopsystems/rezolus/compare/v3.10.2...v3.10.3
+[3.10.2]: https://github.com/iopsystems/rezolus/compare/v3.10.1...v3.10.2
+[3.10.1]: https://github.com/iopsystems/rezolus/compare/v3.10.0...v3.10.1
+[3.10.0]: https://github.com/iopsystems/rezolus/compare/v3.9.0...v3.10.0
 [3.9.0]: https://github.com/iopsystems/rezolus/compare/v3.8.0...v3.9.0
 [3.8.0]: https://github.com/iopsystems/rezolus/compare/v3.7.0...v3.8.0
 [3.7.0]: https://github.com/iopsystems/rezolus/compare/v3.6.1...v3.7.0

@@ -17,7 +17,7 @@
 #define COUNTER_GROUP_WIDTH 8
 #define HISTOGRAM_BUCKETS 7424
 #define MAX_CPUS 1024
-#define MAX_TRACKED_PIDS 65536 
+#define MAX_PID 4194304
 
 #define IVCSW 0
 #define TASK_RUNNING 0
@@ -55,15 +55,15 @@ struct {
 } counters SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, MAX_TRACKED_PIDS);
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, MAX_PID);
 	__type(key, u32);
 	__type(value, u64);
 } enqueued_at SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, MAX_TRACKED_PIDS);
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, MAX_PID);
 	__type(key, u32);
 	__type(value, u64);
 } running_at SEC(".maps");
@@ -155,7 +155,7 @@ int handle__sched_switch(u64 *ctx)
 
 		// calculate how long it was running, increment running histogram
 		tsp = bpf_map_lookup_elem(&running_at, &pid);
-		if (tsp) {
+		if (tsp && *tsp) {
 			delta_ns = ts - *tsp;
 			u32 idx = value_to_index(delta_ns);
 			cnt = bpf_map_lookup_elem(&running, &idx);
@@ -163,7 +163,7 @@ int handle__sched_switch(u64 *ctx)
 				__sync_fetch_and_add(cnt, 1);
 			}
 
-			bpf_map_delete_elem(&running_at, &pid);
+			*tsp = 0;
 		}
 	}
 	
@@ -177,7 +177,7 @@ int handle__sched_switch(u64 *ctx)
 
 	// calculate how long it was enqueued, increment running histogram
 	tsp = bpf_map_lookup_elem(&enqueued_at, &pid);
-	if (tsp) {
+	if (tsp && *tsp) {
 		delta_ns = ts - *tsp;
 		u32 idx = value_to_index(delta_ns);
 		cnt = bpf_map_lookup_elem(&runqlat, &idx);
@@ -185,7 +185,7 @@ int handle__sched_switch(u64 *ctx)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		bpf_map_delete_elem(&enqueued_at, &pid);
+		*tsp = 0;
 	}
 
 	return 0;

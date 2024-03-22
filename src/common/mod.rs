@@ -5,6 +5,8 @@ pub mod classic;
 
 mod nop;
 
+use std::sync::Arc;
+
 use metriken::AtomicHistogram;
 use metriken::LazyCounter;
 pub use nop::Nop;
