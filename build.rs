@@ -13,6 +13,7 @@ mod bpf {
     const SOURCES: &'static [(&str, &str)] = &[
         ("block_io", "latency"),
         ("cpu", "usage"),
+        ("network", "traffic"),
         ("scheduler", "runqueue"),
         ("syscall", "latency"),
         ("tcp", "packet_latency"),
