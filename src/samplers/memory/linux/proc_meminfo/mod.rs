@@ -1,7 +1,7 @@
 use crate::common::Nop;
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
-use metriken::{Gauge, Lazy};
+use metriken::Gauge;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};

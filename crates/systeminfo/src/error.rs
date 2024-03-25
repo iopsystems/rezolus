@@ -46,6 +46,10 @@ impl Error {
     pub(crate) fn invalid_interface_name() -> Self {
         Self::without_path(ErrorKind::InvalidInterfaceName, ErrorSource::None)
     }
+
+    pub(crate) fn invalid_block_name() -> Self {
+        Self::without_path(ErrorKind::InvalidBlockName, ErrorSource::None)
+    }
 }
 
 #[derive(Debug)]
@@ -60,6 +64,7 @@ pub(crate) enum ErrorKind {
     UnreadableFile,
     UnparseableFile,
     InvalidInterfaceName,
+    InvalidBlockName,
 }
 
 impl fmt::Display for ErrorSource {
@@ -87,6 +92,7 @@ impl fmt::Display for Error {
                 self.path().display()
             ),
             ErrorKind::InvalidInterfaceName => f.write_str("interface name was not valid UTF-8"),
+            ErrorKind::InvalidBlockName => f.write_str("block device name was not valid UTF-8"),
         }
     }
 }

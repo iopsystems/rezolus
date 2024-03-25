@@ -1,8 +1,10 @@
+mod block;
 mod block_io;
 mod cpu;
 mod gpu;
 pub mod hwinfo;
 mod memory;
+mod network;
 mod rezolus;
 mod scheduler;
 mod syscall;
