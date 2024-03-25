@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+## [3.11.0] - 2024-03-25
+
+## Changed
+
+- Refactored the scheduler and syscall BPF samplers to reduce overheads. (#193
+  #195)
+
+## Added
+
+- BlockIO thoughput and operation metrics using BPF. (#198)
+- Network throughput and packet metrics using BPF. (#200)
+
+## Fixed
+
+- Online CPU detection for CPU usage sampler needed a trimmed string. (#194)
+
 ## [3.10.3] - 2024-03-20
 
 ## Fixed
@@ -169,7 +185,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.10.3...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.11.0...HEAD
+[3.10.3]: https://github.com/iopsystems/rezolus/compare/v3.10.3...v3.11.0
 [3.10.3]: https://github.com/iopsystems/rezolus/compare/v3.10.2...v3.10.3
 [3.10.2]: https://github.com/iopsystems/rezolus/compare/v3.10.1...v3.10.2
 [3.10.1]: https://github.com/iopsystems/rezolus/compare/v3.10.0...v3.10.1
