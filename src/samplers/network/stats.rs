@@ -26,4 +26,3 @@ counter_with_histogram!(
     "network/transmit/packets",
     "number of packets transmitted"
 );
-
