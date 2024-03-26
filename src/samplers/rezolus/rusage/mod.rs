@@ -111,17 +111,10 @@ impl Rusage {
                 rusage.ru_stime.tv_sec as u64 * S + rusage.ru_stime.tv_usec as u64 * US,
             );
             RU_MAXRSS.set(rusage.ru_maxrss * KB);
-            RU_IXRSS.set(rusage.ru_ixrss * KB);
-            RU_IDRSS.set(rusage.ru_idrss * KB);
-            RU_ISRSS.set(rusage.ru_isrss * KB);
             RU_MINFLT.set(rusage.ru_minflt as u64);
             RU_MAJFLT.set(rusage.ru_majflt as u64);
-            RU_NSWAP.set(rusage.ru_nswap as u64);
             RU_INBLOCK.set(rusage.ru_inblock as u64);
             RU_OUBLOCK.set(rusage.ru_oublock as u64);
-            RU_MSGSND.set(rusage.ru_msgsnd as u64);
-            RU_MSGRCV.set(rusage.ru_msgrcv as u64);
-            RU_NSIGNALS.set(rusage.ru_nsignals as u64);
             RU_NVCSW.set(rusage.ru_nvcsw as u64);
             RU_NIVCSW.set(rusage.ru_nivcsw as u64);
         }
