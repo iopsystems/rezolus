@@ -1,5 +1,6 @@
 use crate::common::Nop;
-use crate::samplers::cpu::*;
+use crate::samplers::cpu::CPU_SAMPLERS;
+use crate::{distributed_slice, Config, Sampler};
 
 const NAME: &str = "cpu_usage";
 

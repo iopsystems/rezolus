@@ -14,7 +14,6 @@ use bpf::*;
 
 use crate::common::bpf::*;
 use crate::common::*;
-use crate::samplers::cpu::stats::*;
 use crate::samplers::cpu::*;
 use crate::samplers::hwinfo::hardware_info;
 

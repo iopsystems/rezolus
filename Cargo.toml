@@ -22,6 +22,7 @@ linkme = "0.3.15"
 metriken =  "0.5.1"
 metriken-exposition = { version = "0.2.0", features = ["serde", "msgpack"] }
 memmap2 = "0.5.10"
+num_cpus = "1.16.0"
 once_cell = "1.18.0"
 ouroboros = "0.17.2"
 ringlog = "0.6.0"
