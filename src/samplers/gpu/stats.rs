@@ -4,7 +4,7 @@ use metriken::{metric, Format, Gauge, LazyGauge, MetricEntry};
     name = "gpu/memory",
     description = "The total amount of GPU memory free.",
     formatter = gpu_metric_formatter,
-    metadata = { state = "free" }
+    metadata = { state = "free", unit = "bytes" }
 )]
 pub static GPU_MEMORY_FREE: LazyGauge = LazyGauge::new(Gauge::default);
 
@@ -12,7 +12,7 @@ pub static GPU_MEMORY_FREE: LazyGauge = LazyGauge::new(Gauge::default);
     name = "gpu/memory",
     description = "The total amount of GPU memory used.",
     formatter = gpu_metric_formatter,
-    metadata = { state = "used" }
+    metadata = { state = "used", unit = "bytes" }
 )]
 pub static GPU_MEMORY_USED: LazyGauge = LazyGauge::new(Gauge::default);
 
@@ -20,7 +20,7 @@ pub static GPU_MEMORY_USED: LazyGauge = LazyGauge::new(Gauge::default);
     name = "gpu/pcie/bandwidth",
     description = "The total PCIe bandwidth in Bytes/s.",
     formatter = gpu_metric_formatter,
-    metadata = { direction = "receive" }
+    metadata = { direction = "receive", unit = "bytes/second" }
 )]
 pub static GPU_PCIE_BANDWIDTH: LazyGauge = LazyGauge::new(Gauge::default);
 
@@ -28,7 +28,7 @@ pub static GPU_PCIE_BANDWIDTH: LazyGauge = LazyGauge::new(Gauge::default);
     name = "gpu/pcie/throughput",
     description = "The current PCIe throughput in Bytes/s.",
     formatter = gpu_metric_formatter,
-    metadata = { direction = "receive" }
+    metadata = { direction = "receive", unit = "bytes/second" }
 )]
 pub static GPU_PCIE_THROUGHPUT_RX: LazyGauge = LazyGauge::new(Gauge::default);
 
@@ -36,28 +36,31 @@ pub static GPU_PCIE_THROUGHPUT_RX: LazyGauge = LazyGauge::new(Gauge::default);
     name = "gpu/pcie/throughput",
     description = "The current PCIe throughput in Bytes/s.",
     formatter = gpu_metric_formatter,
-    metadata = { direction = "transmit" }
+    metadata = { direction = "transmit", unit = "bytes/second" }
 )]
 pub static GPU_PCIE_THROUGHPUT_TX: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "gpu/power/usage",
     description = "The current power usage in milliwatts (mW).",
-    formatter = gpu_metric_formatter
+    formatter = gpu_metric_formatter,
+    metadata = { unit = "milliwatts" }
 )]
 pub static GPU_POWER_USAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "gpu/utilization/gpu",
     description = "The running average percentage of time the GPU was executing one or more kernels. (0-100).",
-    formatter = gpu_metric_formatter
+    formatter = gpu_metric_formatter,
+    metadata = { unit = "percentage" }
 )]
 pub static GPU_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "gpu/memory_utilization",
     description = "The running average percentage of time that GPU memory was being read from or written to. (0-100).",
-    formatter = gpu_metric_formatter
+    formatter = gpu_metric_formatter,
+    metadata = { unit = "percentage" }
 )]
 pub static GPU_MEMORY_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
 

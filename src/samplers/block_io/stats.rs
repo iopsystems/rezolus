@@ -16,7 +16,7 @@ bpfhistogram!(
     name = "blockio/operations",
     description = "The number of completed read operations for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "read" }
+    metadata = { op = "read", unit = "operations" }
 )]
 pub static BLOCKIO_READ_OPS: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -26,7 +26,7 @@ histogram!(BLOCKIO_READ_OPS_HISTOGRAM, "blockio/read/operations");
     name = "blockio/operations",
     description = "The number of completed write operations for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "write" }
+    metadata = { op = "write", unit = "operations" }
 )]
 pub static BLOCKIO_WRITE_OPS: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -36,7 +36,7 @@ histogram!(BLOCKIO_WRITE_OPS_HISTOGRAM, "blockio/write/operations");
     name = "blockio/operations",
     description = "The number of completed discard operations for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "discard" }
+    metadata = { op = "discard", unit = "operations" }
 )]
 pub static BLOCKIO_DISCARD_OPS: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -46,7 +46,7 @@ histogram!(BLOCKIO_DISCARD_OPS_HISTOGRAM, "blockio/discard/operations");
     name = "blockio/operations",
     description = "The number of completed flush operations for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "flush" }
+    metadata = { op = "flush", unit = "operations" }
 )]
 pub static BLOCKIO_FLUSH_OPS: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -56,7 +56,7 @@ histogram!(BLOCKIO_FLUSH_OPS_HISTOGRAM, "blockio/flush/operations");
     name = "blockio/bytes",
     description = "The number of bytes read for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "read" }
+    metadata = { op = "read", unit = "bytes" }
 )]
 pub static BLOCKIO_READ_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -66,7 +66,7 @@ histogram!(BLOCKIO_READ_BYTES_HISTOGRAM, "blockio/read/bytes");
     name = "blockio/bytes",
     description = "The number of bytes written for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "write" }
+    metadata = { op = "write", unit = "bytes" }
 )]
 pub static BLOCKIO_WRITE_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -76,7 +76,7 @@ histogram!(BLOCKIO_WRITE_BYTES_HISTOGRAM, "blockio/write/bytes");
     name = "blockio/bytes",
     description = "The number of bytes discarded for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "discard" }
+    metadata = { op = "discard", unit = "bytes" }
 )]
 pub static BLOCKIO_DISCARD_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -86,7 +86,7 @@ histogram!(BLOCKIO_DISCARD_BYTES_HISTOGRAM, "blockio/discard/bytes");
     name = "blockio/bytes",
     description = "The number of bytes flushed for block devices",
     formatter = blockio_metric_formatter,
-    metadata = { op = "flush" }
+    metadata = { op = "flush", unit = "bytes" }
 )]
 pub static BLOCKIO_FLUSH_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
