@@ -19,7 +19,7 @@ pub static CPU_USAGE_IO_WAIT: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cpu/usage/io_wait",
-    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    description = "Distribution of rate of CPU usage from sample to sample",
     metadata = { unit = "nanoseconds/second" }
 )]
 pub static CPU_USAGE_IO_WAIT_HISTOGRAM: AtomicHistogram =
@@ -35,7 +35,7 @@ pub static CPU_USAGE_IRQ: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cpu/usage/irq",
-    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    description = "Distribution of rate of CPU usage from sample to sample",
     metadata = { unit = "nanoseconds/second" }
 )]
 pub static CPU_USAGE_IRQ_HISTOGRAM: AtomicHistogram =
@@ -51,7 +51,7 @@ pub static CPU_USAGE_SOFTIRQ: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cpu/usage/softirq",
-    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    description = "Distribution of rate of CPU usage from sample to sample",
     metadata = { unit = "nanoseconds/second" }
 )]
 pub static CPU_USAGE_SOFTIRQ_HISTOGRAM: AtomicHistogram =
@@ -67,7 +67,7 @@ pub static CPU_USAGE_STEAL: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cpu/usage/steal",
-    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    description = "Distribution of rate of CPU usage from sample to sample",
     metadata = { unit = "nanoseconds/second" }
 )]
 pub static CPU_USAGE_STEAL_HISTOGRAM: AtomicHistogram =
@@ -83,7 +83,7 @@ pub static CPU_USAGE_GUEST: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cpu/usage/guest",
-    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    description = "Distribution of rate of CPU usage from sample to sample",
     metadata = { unit = "nanoseconds/second" }
 )]
 pub static CPU_USAGE_GUEST_HISTOGRAM: AtomicHistogram =
@@ -99,7 +99,7 @@ pub static CPU_USAGE_GUEST_NICE: LazyCounter = LazyCounter::new(Counter::default
 
 #[metric(
     name = "cpu/usage/guest_nice",
-    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    description = "Distribution of rate of CPU usage from sample to sample",
     metadata = { unit = "nanoseconds/second" }
 )]
 pub static CPU_USAGE_GUEST_NICE_HISTOGRAM: AtomicHistogram =
@@ -133,7 +133,7 @@ pub static CPU_IPKC_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "cpu/ipkc",
-    description = "Distribution of instruction retirement rates across the past snapshot interval",
+    description = "Distribution of instruction retirement rates from sample to sample",
     metadata = { unit = "instructions/kilocycle" }
 )]
 pub static CPU_IPKC_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
@@ -146,7 +146,7 @@ pub static CPU_IPUS_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "cpu/ipus",
-    description = "Distribution of instruction retirement rates across the past snapshot interval",
+    description = "Distribution of instruction retirement rates from sample to sample",
     metadata = { unit = "instructions/microsecond" }
 )]
 pub static CPU_IPUS_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
@@ -165,7 +165,7 @@ pub static CPU_FREQUENCY_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "cpu/frequency",
-    description = "Distribution of instantaneous CPU frequencies sampled across the past snapshot interval",
+    description = "Distribution of CPU frequencies from sample to sample",
     metadata = { unit = "megahertz" }
 )]
 pub static CPU_FREQUENCY_HISTOGRAM: AtomicHistogram =
