@@ -5,7 +5,7 @@ use metriken::{metric, Counter, Format, LazyCounter, MetricEntry};
     name = "cpu/usage",
     description = "The amount of CPU time spent executing normal tasks is user mode",
     formatter = cpu_metric_formatter,
-    metadata = { state = "user" }
+    metadata = { state = "user", unit = "nanoseconds" }
 )]
 pub static CPU_USAGE_USER: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -15,7 +15,7 @@ histogram!(CPU_USAGE_USER_HISTOGRAM, "cpu/usage/user");
     name = "cpu/usage",
     description = "The amount of CPU time spent executing low priority tasks in user mode",
     formatter = cpu_metric_formatter,
-    metadata = { state = "nice" }
+    metadata = { state = "nice", unit = "nanoseconds" }
 )]
 pub static CPU_USAGE_NICE: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -25,7 +25,7 @@ histogram!(CPU_USAGE_NICE_HISTOGRAM, "cpu/usage/nice");
     name = "cpu/usage",
     description = "The amount of CPU time spent executing tasks in kernel mode",
     formatter = cpu_metric_formatter,
-    metadata = { state = "system" }
+    metadata = { state = "system", unit = "nanoseconds" }
 )]
 pub static CPU_USAGE_SYSTEM: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -35,7 +35,7 @@ histogram!(CPU_USAGE_SYSTEM_HISTOGRAM, "cpu/usage/system");
     name = "cpu/usage",
     description = "The amount of CPU time spent idle",
     formatter = cpu_metric_formatter,
-    metadata = { state = "idle" }
+    metadata = { state = "idle", unit = "nanoseconds" }
 )]
 pub static CPU_USAGE_IDLE: LazyCounter = LazyCounter::new(Counter::default);
 
