@@ -1,5 +1,4 @@
 use crate::common::Counter;
-use crate::samplers::cpu::stats::*;
 use crate::samplers::cpu::*;
 use crate::samplers::hwinfo::hardware_info;
 use metriken::DynBoxedMetric;

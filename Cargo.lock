@@ -1510,6 +1510,7 @@ dependencies = [
  "memmap2 0.5.10",
  "metriken",
  "metriken-exposition",
+ "num_cpus",
  "nvml-wrapper",
  "once_cell",
  "ouroboros",
