@@ -11,7 +11,7 @@ pub static NETWORK_RX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network/receive/bytes",
-    description = "Distribution of network receive throughput across the past snapshot interval",
+    description = "Distribution of network receive throughput from sample to sample",
     metadata = { unit = "bytes/second" }
 )]
 pub static NETWORK_RX_BYTES_HISTOGRAM: AtomicHistogram =
@@ -26,7 +26,7 @@ pub static NETWORK_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network/receive/packets",
-    description = "Distribution of network receive packet rate across the past snapshot interval",
+    description = "Distribution of network receive packet rate from sample to sample",
     metadata = { unit = "packets/second" }
 )]
 pub static NETWORK_RX_PACKETS_HISTOGRAM: AtomicHistogram =
@@ -41,7 +41,7 @@ pub static NETWORK_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network/transmit/bytes",
-    description = "Distribution of network transmit throughput across the past snapshot interval",
+    description = "Distribution of network transmit throughput from sample to sample",
     metadata = { unit = "bytes/second" }
 )]
 pub static NETWORK_TX_BYTES_HISTOGRAM: AtomicHistogram =
@@ -56,7 +56,7 @@ pub static NETWORK_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network/transmit/packets",
-    description = "Distribution of network transmit packet rate across the past snapshot interval",
+    description = "Distribution of network transmit packet rate from sample to sample",
     metadata = { unit = "packets/second" }
 )]
 pub static NETWORK_TX_PACKETS_HISTOGRAM: AtomicHistogram =
