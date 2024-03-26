@@ -1,6 +1,6 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
 use crate::*;
-use metriken::{metric, Conter, LazyCounter, RwLockHistogram};
+use metriken::{metric, Counter, LazyCounter, RwLockHistogram};
 
 #[metric(
     name = "scheduler/runqueue/latency",
