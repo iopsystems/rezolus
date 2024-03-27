@@ -1,9 +1,7 @@
-use crate::*;
-use metriken::metric;
-use metriken::Format;
-use metriken::Gauge;
-use metriken::LazyGauge;
-use metriken::MetricEntry;
+use crate::common::HISTOGRAM_GROUPING_POWER;
+use metriken::{
+    metric, AtomicHistogram, Counter, Format, LazyCounter, MetricEntry, RwLockHistogram,
+};
 
 #[metric(
     name = "tcp/receive/bytes",
