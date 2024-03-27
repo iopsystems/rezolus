@@ -25,12 +25,12 @@ impl ProcNetSnmp {
 
         let counters = vec![
             (
-                Counter::new(&TCP_RX_SEGMENTS, Some(&TCP_RX_SEGMENTS_HISTOGRAM)),
+                Counter::new(&TCP_RX_PACKETS, Some(&TCP_RX_PACKETS_HISTOGRAM)),
                 "Tcp:",
                 "InSegs",
             ),
             (
-                Counter::new(&TCP_TX_SEGMENTS, Some(&TCP_TX_SEGMENTS_HISTOGRAM)),
+                Counter::new(&TCP_TX_PACKETS, Some(&TCP_TX_PACKETS_HISTOGRAM)),
                 "Tcp:",
                 "OutSegs",
             ),

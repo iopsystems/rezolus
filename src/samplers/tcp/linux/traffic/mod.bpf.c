@@ -22,8 +22,8 @@
 
 #define TCP_RX_BYTES 0
 #define TCP_TX_BYTES 1
-#define TCP_RX_SEGMENTS 2
-#define TCP_TX_SEGMENTS 3
+#define TCP_RX_PACKETS 2
+#define TCP_TX_PACKETS 3
 
 // counters
 struct {
@@ -79,7 +79,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = 8 * bpf_get_smp_processor_id() + TCP_RX_SEGMENTS;
+		idx = 8 * bpf_get_smp_processor_id() + TCP_RX_PACKETS;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
@@ -100,7 +100,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, 1);
 		}
 
-		idx = 8 * bpf_get_smp_processor_id() + TCP_TX_SEGMENTS;
+		idx = 8 * bpf_get_smp_processor_id() + TCP_TX_PACKETS;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
