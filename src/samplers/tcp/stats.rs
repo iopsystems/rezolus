@@ -40,14 +40,14 @@ pub static TCP_RX_PACKETS_HISTOGRAM: AtomicHistogram =
     description = "The number of reads from the TCP socket buffers after reassembly",
     metadata = { unit = "operations" }
 )]
-pub static TCP_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
+pub static TCP_RX_READ: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp/receive/read",
     description = "Distribution of the rate of reads from the TCP socket buffers after reassembly from sample to sample",
     metadata = { unit = "operations/second" }
 )]
-pub static TCP_RX_PACKETS_HISTOGRAM: AtomicHistogram =
+pub static TCP_RX_READ_HISTOGRAM: AtomicHistogram =
     AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
