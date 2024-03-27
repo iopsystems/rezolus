@@ -1,5 +1,5 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use metriken::{metric, AtomicHistogram, Counter, Format, LazyCounter, MetricEntry};
+use metriken::{metric, AtomicHistogram, Counter, Format, LazyCounter, MetricEntry, RwLockHistogram};
 
 #[metric(
     name = "syscall/total",
