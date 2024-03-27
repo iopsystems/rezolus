@@ -1,5 +1,5 @@
-use crate::*;
-use metriken::{metric, Counter, Format, LazyCounter, MetricEntry};
+use crate::common::HISTOGRAM_GROUPING_POWER;
+use metriken::{metric, AtomicHistogram, Counter, Format, LazyCounter, MetricEntry};
 
 #[metric(
     name = "cpu/usage",
@@ -9,7 +9,13 @@ use metriken::{metric, Counter, Format, LazyCounter, MetricEntry};
 )]
 pub static CPU_USAGE_USER: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(CPU_USAGE_USER_HISTOGRAM, "cpu/usage/user");
+#[metric(
+    name = "cpu/usage/user",
+    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static CPU_USAGE_USER_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "cpu/usage",
@@ -19,7 +25,13 @@ histogram!(CPU_USAGE_USER_HISTOGRAM, "cpu/usage/user");
 )]
 pub static CPU_USAGE_NICE: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(CPU_USAGE_NICE_HISTOGRAM, "cpu/usage/nice");
+#[metric(
+    name = "cpu/usage/nice",
+    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static CPU_USAGE_NICE_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "cpu/usage",
@@ -29,7 +41,13 @@ histogram!(CPU_USAGE_NICE_HISTOGRAM, "cpu/usage/nice");
 )]
 pub static CPU_USAGE_SYSTEM: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(CPU_USAGE_SYSTEM_HISTOGRAM, "cpu/usage/system");
+#[metric(
+    name = "cpu/usage/system",
+    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static CPU_USAGE_SYSTEM_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "cpu/usage",
@@ -39,7 +57,13 @@ histogram!(CPU_USAGE_SYSTEM_HISTOGRAM, "cpu/usage/system");
 )]
 pub static CPU_USAGE_IDLE: LazyCounter = LazyCounter::new(Counter::default);
 
-histogram!(CPU_USAGE_IDLE_HISTOGRAM, "cpu/usage/idle");
+#[metric(
+    name = "cpu/usage/idle",
+    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static CPU_USAGE_IDLE_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 /// A function to format the cpu metrics that allows for export of both total
 /// and per-CPU metrics.
