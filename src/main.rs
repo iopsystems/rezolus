@@ -10,6 +10,8 @@ use std::time::SystemTime;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 type HistogramSnapshots = HashMap<String, HistogramSnapshot>;
 
 static SNAPSHOTS: Lazy<Arc<RwLock<Snapshots>>> =
@@ -165,7 +167,7 @@ fn main() {
         }
     });
 
-    info!("rezolus");
+    info!("rezolus {VERSION}");
 
     // spawn http exposition thread
     rt.spawn(exposition::http(config.clone()));
