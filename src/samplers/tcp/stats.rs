@@ -1,6 +1,7 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::{
-    metric, AtomicHistogram, Counter, Format, Gauge, LazyCounter, LazyGauge, MetricEntry, RwLockHistogram,
+    metric, AtomicHistogram, Counter, Format, Gauge, LazyCounter, LazyGauge, MetricEntry,
+    RwLockHistogram,
 };
 
 #[metric(
