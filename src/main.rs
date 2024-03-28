@@ -52,8 +52,9 @@ impl Snapshots {
 
         for (name, previous) in &self.previous {
             if let Some(histogram) = current.get(name).cloned() {
-                let _ = histogram.wrapping_sub(previous);
-                delta.insert(name.to_string(), histogram);
+                if let Ok(d) = histogram.wrapping_sub(previous) {
+                    delta.insert(name.to_string(), d);
+                }
             }
         }
 
