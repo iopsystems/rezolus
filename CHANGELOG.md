@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [3.12.0] - 2024-03-28
+
+## Added
+- MacOS cpu usage sampling. (#203)
+- Metric unit annotations are added and exposed as metadata.
+- Logs version number on startup. (#213)
+
+## Fixed
+
+- Incorrect summary stats (percentiles) were reported in version 3.10.2, 3.10.3,
+  and 3.11.0. (#216)
+
 ## [3.11.0] - 2024-03-25
 
 ## Changed
@@ -185,8 +197,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.11.0...HEAD
-[3.10.3]: https://github.com/iopsystems/rezolus/compare/v3.10.3...v3.11.0
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.12.0...HEAD
+[3.12.0]: https://github.com/iopsystems/rezolus/compare/v3.11.0...v3.12.0
+[3.11.0]: https://github.com/iopsystems/rezolus/compare/v3.10.3...v3.11.0
 [3.10.3]: https://github.com/iopsystems/rezolus/compare/v3.10.2...v3.10.3
 [3.10.2]: https://github.com/iopsystems/rezolus/compare/v3.10.1...v3.10.2
 [3.10.1]: https://github.com/iopsystems/rezolus/compare/v3.10.0...v3.10.1
