@@ -1000,9 +1000,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.2.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b9515f2f3608808aad0ecac792f0c20e675cf9abdda2a16f6a9e669bb9ec23"
+checksum = "51211be05b38efe9bd8a4af3c2346e8f3c32b4818582a5412bb2c1f930e03892"
 dependencies = [
  "chrono",
  "histogram",

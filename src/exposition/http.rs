@@ -130,7 +130,7 @@ mod handlers {
                 if let Some(delta) = snapshots.delta.get(&simple_name) {
                     let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                    if let Ok(result) = delta.percentiles(&percentiles) {
+                    if let Ok(result) = delta.value.percentiles(&percentiles) {
                         for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
                             data.push(format!(
                                 "# TYPE {name} gauge\n{name}{{percentile=\"{:02}\"}} {value} {timestamp}",
@@ -149,14 +149,14 @@ mod handlers {
                             // the powers matched, we don't need to downsample
                             None
                         } else {
-                            Some(snapshot.downsample(target).unwrap())
+                            Some(snapshot.value.downsample(target).unwrap())
                         };
 
                         // reassign to either use the downsampled snapshot or the original
                         let snapshot = if let Some(snapshot) = downsampled.as_ref() {
                             snapshot
                         } else {
-                            snapshot
+                            &snapshot.value
                         };
 
                         // we need to export a total count (free-running)
@@ -230,7 +230,7 @@ mod handlers {
                 if let Some(delta) = snapshots.delta.get(&simple_name) {
                     let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                    if let Ok(result) = delta.percentiles(&percentiles) {
+                    if let Ok(result) = delta.value.percentiles(&percentiles) {
                         for (value, label) in result
                             .iter()
                             .map(|(_, b)| b.end())
@@ -251,6 +251,8 @@ mod handlers {
 
     pub async fn msgpack() -> Result<impl warp::Reply, Infallible> {
         let snapshot = SnapshotterBuilder::new()
+            .metadata("source".to_string(), env!("CARGO_BIN_NAME").to_string())
+            .metadata("version".to_string(), env!("CARGO_PKG_VERSION").to_string())
             .filter(|metric| {
                 if let Some(m) = metric.as_any() {
                     if m.downcast_ref::<AtomicHistogram>().is_some() {
