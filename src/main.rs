@@ -2,7 +2,7 @@ use backtrace::Backtrace;
 use clap::{Arg, Command};
 use linkme::distributed_slice;
 use metriken::Lazy;
-use metriken_exposition::HistogramSnapshot;
+use metriken_exposition::Histogram;
 use ringlog::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-type HistogramSnapshots = HashMap<String, HistogramSnapshot>;
+type HistogramSnapshots = HashMap<String, Histogram>;
 
 static SNAPSHOTS: Lazy<Arc<RwLock<Snapshots>>> =
     Lazy::new(|| Arc::new(RwLock::new(Snapshots::new())));
@@ -33,7 +33,11 @@ impl Snapshots {
     pub fn new() -> Self {
         let snapshot = metriken_exposition::Snapshotter::default().snapshot();
 
-        let previous: HistogramSnapshots = snapshot.histograms.into_iter().collect();
+        let previous: HistogramSnapshots = snapshot
+            .histograms
+            .into_iter()
+            .map(|v| (v.name.clone(), v))
+            .collect();
         let delta = previous.clone();
 
         Self {
@@ -47,13 +51,18 @@ impl Snapshots {
         let snapshot = metriken_exposition::Snapshotter::default().snapshot();
         self.timestamp = snapshot.systemtime;
 
-        let current: HistogramSnapshots = snapshot.histograms.into_iter().collect();
+        let current: HistogramSnapshots = snapshot
+            .histograms
+            .into_iter()
+            .map(|v| (v.name.clone(), v))
+            .collect();
         let mut delta = HistogramSnapshots::new();
 
-        for (name, previous) in &self.previous {
-            if let Some(histogram) = current.get(name).cloned() {
-                if let Ok(d) = histogram.wrapping_sub(previous) {
-                    delta.insert(name.to_string(), d);
+        for (name, mut previous) in self.previous.drain() {
+            if let Some(histogram) = current.get(&name).cloned() {
+                if let Ok(d) = histogram.value.wrapping_sub(&previous.value) {
+                    previous.value = d;
+                    delta.insert(name.to_string(), previous);
                 }
             }
         }
