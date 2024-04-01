@@ -2,10 +2,9 @@
 pub mod bpf;
 
 pub mod classic;
+pub mod units;
 
 mod nop;
-
-use std::sync::Arc;
 
 use metriken::AtomicHistogram;
 use metriken::LazyCounter;
