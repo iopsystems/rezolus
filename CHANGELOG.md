@@ -1,8 +1,18 @@
 ## [Unreleased]
 
+## [3.13.0] - 2024-04-01
+
+## Changed
+
+- Memory sampler was reporting memory usage stats in KiB, but with bytes for the
+  unit metadata. This change corrects the sampler to report memory usage in
+  bytes. This fix is disruptive as it will cause the memory stats to change.
+  (#222)
+
 ## [3.12.0] - 2024-03-28
 
 ## Added
+
 - MacOS cpu usage sampling. (#203)
 - Metric unit annotations are added and exposed as metadata.
 - Logs version number on startup. (#213)
@@ -197,7 +207,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.12.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.13.0...HEAD
+[3.13.0]: https://github.com/iopsystems/rezolus/compare/v3.12.0...v3.13.0
 [3.12.0]: https://github.com/iopsystems/rezolus/compare/v3.11.0...v3.12.0
 [3.11.0]: https://github.com/iopsystems/rezolus/compare/v3.10.3...v3.11.0
 [3.10.3]: https://github.com/iopsystems/rezolus/compare/v3.10.2...v3.10.3
