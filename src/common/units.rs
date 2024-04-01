@@ -2,7 +2,7 @@
 
 // Time units with base unit as nanoseconds
 pub const SECONDS: u64 = 1_000 * MILLISECONDS;
-pub const MILLISECONDS: u64 = 1_000 * MICROSECONDS; 
+pub const MILLISECONDS: u64 = 1_000 * MICROSECONDS;
 pub const MICROSECONDS: u64 = 1_000 * NANOSECONDS;
 pub const NANOSECONDS: u64 = 1;
 

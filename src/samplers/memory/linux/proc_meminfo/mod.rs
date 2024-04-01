@@ -1,5 +1,5 @@
-use crate::common::Nop;
 use crate::common::units::KIBIBYTES;
+use crate::common::Nop;
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
 use metriken::{Gauge, Lazy};
