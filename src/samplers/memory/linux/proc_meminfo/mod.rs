@@ -1,3 +1,4 @@
+use crate::common::units::KIBIBYTES;
 use crate::common::Nop;
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
@@ -99,7 +100,7 @@ impl ProcMeminfo {
 
             if let Some(gauge) = self.gauges.get_mut(*parts.first().unwrap()) {
                 if let Some(Ok(v)) = parts.get(1).map(|v| v.parse::<i64>()) {
-                    gauge.set(v);
+                    gauge.set(v * KIBIBYTES as i64);
                 }
             }
         }

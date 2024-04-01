@@ -1,11 +1,8 @@
 use super::stats::*;
 use super::*;
+use crate::common::units::{KIBIBYTES, MICROSECONDS, SECONDS};
 use crate::common::Counter;
 use crate::common::Nop;
-
-const S: u64 = 1_000_000_000;
-const US: u64 = 1_000;
-const KB: i64 = 1024;
 
 #[distributed_slice(REZOLUS_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
@@ -104,13 +101,15 @@ impl Rusage {
         if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut rusage) } == 0 {
             self.ru_utime.set(
                 elapsed,
-                rusage.ru_utime.tv_sec as u64 * S + rusage.ru_utime.tv_usec as u64 * US,
+                rusage.ru_utime.tv_sec as u64 * SECONDS
+                    + rusage.ru_utime.tv_usec as u64 * MICROSECONDS,
             );
             self.ru_stime.set(
                 elapsed,
-                rusage.ru_stime.tv_sec as u64 * S + rusage.ru_stime.tv_usec as u64 * US,
+                rusage.ru_stime.tv_sec as u64 * SECONDS
+                    + rusage.ru_stime.tv_usec as u64 * MICROSECONDS,
             );
-            RU_MAXRSS.set(rusage.ru_maxrss * KB);
+            RU_MAXRSS.set(rusage.ru_maxrss * KIBIBYTES as i64);
             RU_MINFLT.set(rusage.ru_minflt as u64);
             RU_MAJFLT.set(rusage.ru_majflt as u64);
             RU_INBLOCK.set(rusage.ru_inblock as u64);

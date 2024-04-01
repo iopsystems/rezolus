@@ -3,6 +3,7 @@ use metriken::DynBoxedMetric;
 use metriken::RwLockHistogram;
 use ouroboros::*;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::sync::Arc;
 
 pub use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 
