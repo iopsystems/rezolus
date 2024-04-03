@@ -1,5 +1,4 @@
 use crate::{Arc, Config, PERCENTILES};
-use metriken::histogram::Snapshot;
 use metriken::{AtomicHistogram, Counter, Gauge, RwLockHistogram};
 use metriken_exposition::SnapshotterBuilder;
 use std::time::UNIX_EPOCH;
@@ -140,23 +139,23 @@ mod handlers {
                     }
                 }
                 if config.prometheus().histograms() {
-                    if let Some(snapshot) = snapshots.previous.get(metric.name()) {
+                    if let Some(histogram) = snapshots.previous.get(metric.name()) {
                         let current = HISTOGRAM_GROUPING_POWER;
                         let target = config.prometheus().histogram_grouping_power();
 
-                        // downsample the snapshot if necessary
-                        let downsampled: Option<Snapshot> = if current == target {
+                        // downsample the histogram if necessary
+                        let downsampled: Option<histogram::Histogram> = if current == target {
                             // the powers matched, we don't need to downsample
                             None
                         } else {
-                            Some(snapshot.value.downsample(target).unwrap())
+                            Some(histogram.value.downsample(target).unwrap())
                         };
 
-                        // reassign to either use the downsampled snapshot or the original
-                        let snapshot = if let Some(snapshot) = downsampled.as_ref() {
-                            snapshot
+                        // reassign to either use the downsampled histogram or the original
+                        let histogram = if let Some(histogram) = downsampled.as_ref() {
+                            histogram
                         } else {
-                            &snapshot.value
+                            &histogram.value
                         };
 
                         // we need to export a total count (free-running)
@@ -166,7 +165,7 @@ mod handlers {
                         let mut sum = 0;
 
                         let mut entry = format!("# TYPE {name}_distribution histogram\n");
-                        for bucket in snapshot {
+                        for bucket in histogram {
                             // add this bucket's sum of observations
                             sum += bucket.count() * bucket.end();
 
