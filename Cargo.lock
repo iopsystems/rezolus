@@ -1521,7 +1521,6 @@ dependencies = [
  "backtrace",
  "chrono",
  "clap",
- "h2",
  "histogram 0.10.0",
  "humantime",
  "lazy_static",
