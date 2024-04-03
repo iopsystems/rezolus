@@ -671,6 +671,15 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b634390eb8a63662e127836d4e2f26d7ae930600d4e05ee0fd85a009eeb1175"
 dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "histogram"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4d3bddd75a32b17e75762f128ffc7a33158b933b6eb27424da9be4a58f30eb9"
+dependencies = [
  "serde",
  "thiserror",
 ]
@@ -968,7 +977,20 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9868467c2c6c455c1c7707c7eff2abd55d7ecf6a5bcc29ec7ca5cee8abdd096d"
 dependencies = [
- "histogram",
+ "histogram 0.9.1",
+ "metriken-core",
+ "metriken-derive",
+ "once_cell",
+ "parking_lot",
+]
+
+[[package]]
+name = "metriken"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0bad9aa443621ae4972578da55b7f3c24d930cc1491551a8f989edead4762c"
+dependencies = [
+ "histogram 0.10.0",
  "metriken-core",
  "metriken-derive",
  "once_cell",
@@ -1000,13 +1022,13 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51211be05b38efe9bd8a4af3c2346e8f3c32b4818582a5412bb2c1f930e03892"
+checksum = "668934cb4bd14f41e8d98a447ee237c76fc19ef0b935d5127026121a096ea86e"
 dependencies = [
  "chrono",
- "histogram",
- "metriken",
+ "histogram 0.10.0",
+ "metriken 0.6.0",
  "rmp-serde",
  "serde",
 ]
@@ -1499,7 +1521,7 @@ dependencies = [
  "backtrace",
  "chrono",
  "clap",
- "histogram",
+ "histogram 0.10.0",
  "humantime",
  "lazy_static",
  "libbpf-cargo",
@@ -1508,7 +1530,7 @@ dependencies = [
  "libc",
  "linkme",
  "memmap2 0.5.10",
- "metriken",
+ "metriken 0.6.0",
  "metriken-exposition",
  "num_cpus",
  "nvml-wrapper",
@@ -1536,7 +1558,7 @@ dependencies = [
  "ahash",
  "clocksource",
  "log",
- "metriken",
+ "metriken 0.5.1",
  "mpmc",
 ]
 
