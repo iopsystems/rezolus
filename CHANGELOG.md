@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [3.14.1] - 2024-04-16
+
+## Fixed
+
+- CPU usage reporting via BPF would report CPU as always idle on some systems.
+  (#233)
+
 ## [3.14.0] - 2024-04-03
 
 ## Changed
@@ -217,7 +224,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.14.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.14.1...HEAD
+[3.14.1]: https://github.com/iopsystems/rezolus/compare/v3.14.0...v3.14.1
 [3.14.0]: https://github.com/iopsystems/rezolus/compare/v3.13.0...v3.14.0
 [3.13.0]: https://github.com/iopsystems/rezolus/compare/v3.12.0...v3.13.0
 [3.12.0]: https://github.com/iopsystems/rezolus/compare/v3.11.0...v3.12.0
