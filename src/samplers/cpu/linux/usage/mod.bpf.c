@@ -44,8 +44,8 @@ int account_delta(u64 delta, u32 usage_idx)
 	return 0;
 }
 
-SEC("kprobe/__cgroup_account_cputime_field")
-int BPF_KPROBE(cgroup_account_cputime_field_kprobe, void *task, u32 index, u64 delta)
+SEC("kprobe/cpuacct_account_field")
+int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 {
 	if (index == 3) {
 		return 0;
