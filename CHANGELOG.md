@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [3.14.2] - 2024-04-18
+
+## Fixed
+
+- CPU usage for soft and hard irq was incorrectly reported. (#236)
+
 ## [3.14.1] - 2024-04-16
 
 ## Fixed
@@ -224,7 +230,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.14.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.14.2...HEAD
+[3.14.2]: https://github.com/iopsystems/rezolus/compare/v3.14.1...v3.14.2
 [3.14.1]: https://github.com/iopsystems/rezolus/compare/v3.14.0...v3.14.1
 [3.14.0]: https://github.com/iopsystems/rezolus/compare/v3.13.0...v3.14.0
 [3.13.0]: https://github.com/iopsystems/rezolus/compare/v3.12.0...v3.13.0
