@@ -10,14 +10,17 @@
 #define COUNTER_GROUP_WIDTH 16
 #define MAX_CPUS 1024
 
-// counters for cpu usage
+#define IDLE_STAT_INDEX 5
+#define IOWAIT_STAT_INDEX 6
+
+// cpu usage stat index (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
 // 0 - user
 // 1 - nice
 // 2 - system
-// 3 - idle - *NOTE* this will not increment. User-space must calculate it
-// 4 - iowait
-// 5 - irq
-// 6 - softirq
+// 3 - softirq
+// 4 - irq
+// 5 - idle - *NOTE* this will not increment. User-space must calculate it
+// 6 - iowait
 // 7 - steal
 // 8 - guest
 // 9 - guest_nice
@@ -47,7 +50,9 @@ int account_delta(u64 delta, u32 usage_idx)
 SEC("kprobe/cpuacct_account_field")
 int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 {
-	if (index == 3) {
+  // ignore both the idle and the iowait counting since both count the idle time
+  // https://elixir.bootlin.com/linux/v6.9-rc4/source/kernel/sched/cputime.c#L227
+	if (index == IDLE_STAT_INDEX || index == IOWAIT_STAT_INDEX) {
 		return 0;
 	}
 
