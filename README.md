@@ -42,6 +42,18 @@ Rezolus provides valuable data about systems performance and can be used to root
 cause production performance issues, capture better data in test environments,
 and provide signals for optimization efforts.
 
+### Configuration
+
+Rezolus uses a TOML configuration. See `config.toml` in this project for an
+example config file.
+
+### Dashboard
+
+If you are running Prometheus and Grafana for collecting and visualizing
+metrics, the `dashboard.json` file is an example Grafana dashboard that
+demonstrates some ways to use the collected data. This can help you get started
+on your own dashboards.
+
 ## Getting Help
 
 Join our [Discord server][discord] to ask questions and have discussions.
