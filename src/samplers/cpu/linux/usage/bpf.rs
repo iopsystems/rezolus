@@ -46,6 +46,7 @@ pub struct CpuUsage {
     online_cores_next: Instant,
 }
 
+const IDLE_CPUTIME_INDEX: usize = 3;
 impl CpuUsage {
     pub fn new(config: &Config) -> Result<Self, ()> {
         let builder = ModSkelBuilder::default();
@@ -90,10 +91,10 @@ impl CpuUsage {
             "user",
             "nice",
             "system",
+            "softirq",
+            "irq",
             "idle",
             "io_wait",
-            "irq",
-            "softirq",
             "steal",
             "guest",
             "guest_nice",
@@ -176,7 +177,8 @@ impl CpuUsage {
             let sum_now: u64 = self.percpu_counters.sum(cpu).unwrap_or(0);
             let busy_delta = sum_now.wrapping_sub(*sum_prev);
             let idle_delta = elapsed.as_nanos() as u64 - busy_delta;
-            self.percpu_counters.add(cpu, 3, idle_delta);
+            self.percpu_counters
+                .add(cpu, IDLE_CPUTIME_INDEX, idle_delta);
             *sum_prev += busy_delta + idle_delta;
         }
 
