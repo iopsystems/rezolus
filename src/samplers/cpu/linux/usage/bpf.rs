@@ -46,7 +46,7 @@ pub struct CpuUsage {
     online_cores_next: Instant,
 }
 
-const IDLE_CPUTIME_INDEX: usize = 3;
+const IDLE_CPUTIME_INDEX: usize = 5;
 impl CpuUsage {
     pub fn new(config: &Config) -> Result<Self, ()> {
         let builder = ModSkelBuilder::default();
@@ -76,10 +76,10 @@ impl CpuUsage {
             Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HISTOGRAM)),
             Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HISTOGRAM)),
             Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HISTOGRAM)),
             Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
             Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HISTOGRAM)),
             Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HISTOGRAM)),
             Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HISTOGRAM)),
             Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HISTOGRAM)),
@@ -246,10 +246,10 @@ fn sum() -> u64 {
         &CPU_USAGE_USER,
         &CPU_USAGE_NICE,
         &CPU_USAGE_SYSTEM,
+        &CPU_USAGE_SOFTIRQ,
+        &CPU_USAGE_IRQ,
         &CPU_USAGE_IDLE,
         &CPU_USAGE_IO_WAIT,
-        &CPU_USAGE_IRQ,
-        &CPU_USAGE_SOFTIRQ,
         &CPU_USAGE_STEAL,
         &CPU_USAGE_GUEST,
         &CPU_USAGE_GUEST_NICE,
