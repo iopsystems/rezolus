@@ -72,6 +72,7 @@ impl Runqlat {
         let mut distributions = vec![
             ("runqlat", &SCHEDULER_RUNQUEUE_LATENCY),
             ("running", &SCHEDULER_RUNNING),
+            ("offcpu", &SCHEDULER_OFFCPU),
         ];
 
         for (name, histogram) in distributions.drain(..) {

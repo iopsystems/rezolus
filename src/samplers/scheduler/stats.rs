@@ -18,6 +18,13 @@ pub static SCHEDULER_RUNQUEUE_LATENCY: RwLockHistogram =
 pub static SCHEDULER_RUNNING: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
+    name = "scheduler/offcpu",
+    description = "Distribution of the amount of time tasks were off-CPU",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
     name = "scheduler/context_switch/involuntary",
     description = "The number of involuntary context switches"
 )]
