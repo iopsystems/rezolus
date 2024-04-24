@@ -1,5 +1,5 @@
-use ringlog::Level;
 use crate::Duration;
+use ringlog::Level;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
