@@ -1,6 +1,4 @@
-use crate::common::HISTOGRAM_GROUPING_POWER;
-use crate::*;
-use metriken::{metric, AtomicHistogram, Counter, Gauge, LazyCounter, LazyGauge};
+use metriken::{metric, Gauge, LazyGauge};
 
 #[metric(
     name = "filesystem/descriptors/open",

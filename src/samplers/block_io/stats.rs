@@ -1,5 +1,4 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use crate::*;
 use metriken::*;
 
 #[metric(

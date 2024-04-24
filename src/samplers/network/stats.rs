@@ -1,6 +1,5 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use crate::*;
-use metriken::{metric, AtomicHistogram, Counter, Gauge, LazyCounter, LazyGauge};
+use metriken::{metric, AtomicHistogram, Counter, LazyCounter};
 
 #[metric(
     name = "network/receive/bytes",

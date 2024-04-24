@@ -43,7 +43,7 @@ impl Cpufreq {
         let cpuinfo_cur_freq: Option<usize> = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_cur_freq"
         ))
-        .map_or(None, |v| Some(v));
+        .ok();
         let cpuinfo_transition_latency = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_transition_latency"
         ))?;

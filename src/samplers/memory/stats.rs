@@ -1,4 +1,3 @@
-use crate::*;
 use metriken::{metric, Counter, Gauge, LazyCounter, LazyGauge};
 
 #[metric(

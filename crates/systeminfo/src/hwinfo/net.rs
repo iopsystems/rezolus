@@ -91,30 +91,26 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
         let entry = entry.unwrap();
         if entry.file_type().is_dir() {
             if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with("tx-") {
-                    if let Ok(id) = u32::from_str_radix(&name[3..], 10) {
-                        let xps_cpus = read_hexbitmap(entry.path().join("xps_cpus"));
-                        let xps_rxqs = read_hexbitmap(entry.path().join("xps_rxqs"));
-                        let xps = xps_cpus.len() > 0 || xps_rxqs.len() > 0;
-                        queues.tx.push(TxQueue {
-                            id,
-                            xps,
-                            xps_cpus,
-                            xps_rxqs,
-                        });
-                    }
-                } else if name.starts_with("rx-") {
-                    if let Ok(id) = u32::from_str_radix(&name[3..], 10) {
-                        let rps_cpus = read_hexbitmap(entry.path().join("rps_cpus"));
-                        let rps_flow_cnt = read_usize(entry.path().join("rps_flow_cnt")).unwrap();
-                        let rps = rps_cpus.len() != 0;
-                        queues.rx.push(RxQueue {
-                            id,
-                            rps,
-                            rps_cpus,
-                            rps_flow_cnt,
-                        });
-                    }
+                if let Some(Ok(id)) = name.strip_prefix("tx-").map(|v| v.parse::<u32>()) {
+                    let xps_cpus = read_hexbitmap(entry.path().join("xps_cpus"));
+                    let xps_rxqs = read_hexbitmap(entry.path().join("xps_rxqs"));
+                    let xps = !xps_cpus.is_empty() || !xps_rxqs.is_empty();
+                    queues.tx.push(TxQueue {
+                        id,
+                        xps,
+                        xps_cpus,
+                        xps_rxqs,
+                    });
+                } else if let Some(Ok(id)) = name.strip_prefix("rx-").map(|v| v.parse::<u32>()) {
+                    let rps_cpus = read_hexbitmap(entry.path().join("rps_cpus"));
+                    let rps_flow_cnt = read_usize(entry.path().join("rps_flow_cnt")).unwrap();
+                    let rps = !rps_cpus.is_empty();
+                    queues.rx.push(RxQueue {
+                        id,
+                        rps,
+                        rps_cpus,
+                        rps_flow_cnt,
+                    });
                 }
             }
         }
