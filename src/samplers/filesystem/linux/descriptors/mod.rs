@@ -1,6 +1,6 @@
 use crate::common::Nop;
-use crate::{distributed_slice, Config, Sampler};
 use crate::samplers::filesystem::FILESYSTEM_SAMPLERS;
+use crate::{distributed_slice, Config, Sampler};
 
 const NAME: &str = "filesystem_descriptors";
 

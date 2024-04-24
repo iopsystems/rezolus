@@ -1,9 +1,9 @@
-use crate::{error, Config, Sampler, Instant, Duration};
 use crate::samplers::filesystem::*;
 use crate::samplers::hwinfo::hardware_info;
+use crate::{error, Config, Duration, Instant, Sampler};
 use metriken::DynBoxedMetric;
-use metriken::MetricBuilder;
 use metriken::LazyGauge;
+use metriken::MetricBuilder;
 use std::fs::File;
 use std::io::{Read, Seek};
 
