@@ -7,6 +7,10 @@ listen = "0.0.0.0:4242"
 # prometheus endpoint.
 compression = false
 
+[log]
+# Controls the log level: "error", "warn", "info", "debug", "trace"
+level = "info"
+
 [prometheus]
 # Controls whether the full distribution for each histogram is exposed via the
 # prometheus endpoint (`/metrics`). This adds a considerable number of time

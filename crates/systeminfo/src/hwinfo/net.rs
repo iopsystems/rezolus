@@ -50,6 +50,8 @@ pub struct RxQueue {
 fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
     let name = name.to_str().ok_or_else(Error::invalid_interface_name)?;
 
+    debug!("discovering network interface info for: {name}");
+
     // skip any that aren't "up"
     let operstate = read_string(format!("/sys/class/net/{name}/operstate"))?;
     if operstate != "up" {
@@ -115,6 +117,8 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
             }
         }
     }
+
+    debug!("completed discovery for network interface: {name}");
 
     Ok(Some(Interface {
         name: name.to_string(),
