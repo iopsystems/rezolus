@@ -1,7 +1,9 @@
+pub mod hwinfo;
+
 mod block_io;
 mod cpu;
+mod filesystem;
 mod gpu;
-pub mod hwinfo;
 mod memory;
 mod network;
 mod rezolus;
