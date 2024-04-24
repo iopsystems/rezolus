@@ -13,15 +13,12 @@ mod bpf {
 
 static NAME: &str = "block_io_latency";
 
-use metriken::MetricBuilder;
-
 use bpf::*;
 
 use crate::common::bpf::*;
 use crate::common::*;
 use crate::samplers::block_io::stats::*;
 use crate::samplers::block_io::*;
-use crate::samplers::hwinfo::hardware_info;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -67,11 +64,6 @@ impl Biolat {
         let mut bpf = Bpf::from_skel(skel);
 
         let mut distributions = vec![("latency", &BLOCKIO_LATENCY), ("size", &BLOCKIO_SIZE)];
-
-        let cpus = match hardware_info() {
-            Ok(hwinfo) => hwinfo.get_cpus(),
-            Err(_) => return Err(()),
-        };
 
         let counters = vec![
             Counter::new(&BLOCKIO_READ_OPS, Some(&BLOCKIO_READ_OPS_HISTOGRAM)),
