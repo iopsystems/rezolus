@@ -1,7 +1,7 @@
 use crate::common::Nop;
+use crate::samplers::hwinfo::hardware_info;
 use crate::samplers::network::stats::*;
 use crate::samplers::network::*;
-use crate::samplers::hwinfo::hardware_info;
 use metriken::Counter;
 use std::fs::File;
 use std::io::Read;
@@ -56,7 +56,10 @@ impl Interfaces {
                     continue;
                 }
 
-                if let Ok(mut f) = std::fs::File::open(&format!("/sys/class/net/{}/statistics/{stat}", interface.name)) {
+                if let Ok(mut f) = std::fs::File::open(&format!(
+                    "/sys/class/net/{}/statistics/{stat}",
+                    interface.name
+                )) {
                     if f.read_to_string(&mut d).is_ok() {
                         if d.parse::<u64>().is_ok() {
                             if_stats.insert(interface.name.to_string(), f);
