@@ -1,15 +1,15 @@
 // Helpers for converting values to histogram indices. 
 
+#define HISTOGRAM_BUCKETS_POW_4 976
+#define HISTOGRAM_BUCKETS_POW_5 1920
+#define HISTOGRAM_BUCKETS_POW_6 3776
+#define HISTOGRAM_BUCKETS_POW_7 7424
+
 // Function to count leading zeros, since we cannot use the builtin CLZ from
 // within BPF. But since we also can't loop, this is implemented as a binary
-// search with a maximum of 6 branches.
+// search with a maximum of 6 branches. 
 static u32 clz(u64 value) {
     u32 count = 0;
-
-    // quick return if value is 0
-    if (!value) {
-        return 64;
-    }
 
     // binary search to find number of leading zeros
     if (value & 0xFFFFFFFF00000000) {
@@ -203,25 +203,79 @@ static u32 clz(u64 value) {
     } else {
         return 63;
     }
+
+    return 64;
 }
 
 // base-2 histogram indexing function that is compatible with Rust `histogram`
-// crate for m = 0, r = 8, n = 64 this gives us the ability to store counts for
-// values from 1 -> u64::MAX and uses 7424 buckets per histogram, which occupies
-// 58KB of space in kernelspace (where we use 64bit counters)
-static u32 value_to_index(u64 value) {
-    if (value == 0) {
-        return 0;
-    }
-
-    u64 h = 63 - clz(value);
-    // h < r
-    if (h < 8) {
+// crate with grouping power = 4. This uses 2 pages (8KB) in kernel space and
+// 7.6KB in user space and has a relative error of 6.25%
+//
+// See the indexing logic here:
+// https://github.com/pelikan-io/rustcommon/blob/main/histogram/src/config.rs
+static u32 value_to_index4(u64 value) {
+    if (value < 32) {
         return value;
     } else {
-        // d = h - r + 1
-        u64 d = h - 7;
-        // ((d + 1) * G + ((value - (1 << h)) >> (m + d)))
-        return ((d + 1) * 128) + ((value - (1 << h)) >> d);
+        u64 power = 63 - clz(value);
+        u64 bin = power - 3;
+        u64 offset = (value - (1 << power)) >> (power - 4);
+
+        return (bin * 16 + offset);
+    }
+}
+
+// base-2 histogram indexing function that is compatible with Rust `histogram`
+// crate with grouping power = 5. This uses 4 pages (16KB) in kernel space and
+// 15KB in user space and has a relative error of 3.13%
+//
+// See the indexing logic here:
+// https://github.com/pelikan-io/rustcommon/blob/main/histogram/src/config.rs
+static u32 value_to_index5(u64 value) {
+    if (value < 64) {
+        return value;
+    } else {
+        u64 power = 63 - clz(value);
+        u64 bin = power - 4;
+        u64 offset = (value - (1 << power)) >> (power - 5);
+
+        return (bin * 32 + offset);
+    }
+}
+
+// base-2 histogram indexing function that is compatible with Rust `histogram`
+// crate with grouping power = 5. This uses 4 pages (16KB) in kernel space and
+// 15KB in user space and has a relative error of 3.13%
+//
+// See the indexing logic here:
+// https://github.com/pelikan-io/rustcommon/blob/main/histogram/src/config.rs
+static u32 value_to_index6(u64 value) {
+    if (value < 128) {
+        return value;
+    } else {
+        u64 power = 63 - clz(value);
+        u64 bin = power - 5;
+        u64 offset = (value - (1 << power)) >> (power - 6);
+
+        return (bin * 64 + offset);
+    }
+}
+
+
+// base-2 histogram indexing function that is compatible with Rust `histogram`
+// crate with grouping power = 7. This uses 15 pages (60KB) in kernel space and
+// 58KB in user space per histogram with a relative error of 0.781%
+//
+// See the indexing logic here:
+// https://github.com/pelikan-io/rustcommon/blob/main/histogram/src/config.rs
+static u32 value_to_index7(u64 value) {
+    if (value < 256) {
+        return value;
+    } else {
+        u64 power = 63 - clz(value);
+        u64 bin = power - 6;
+        u64 offset = (value - (1 << power)) >> (power - 7);
+
+        return (bin * 128 + offset);
     }
 }

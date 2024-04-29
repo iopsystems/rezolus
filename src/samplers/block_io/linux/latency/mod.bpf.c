@@ -106,7 +106,7 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 		}
     }
 
-	idx = value_to_index(nr_bytes);
+	idx = value_to_index7(nr_bytes);
 	cnt = bpf_map_lookup_elem(&size, &idx);
 
 	if (cnt) {
@@ -121,7 +121,7 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 	if (*tsp <= ts) {
 		delta = ts - *tsp;
 
-		idx = value_to_index(delta);
+		idx = value_to_index7(delta);
 		cnt = bpf_map_lookup_elem(&latency, &idx);
 
 		if (cnt) {

@@ -15,7 +15,6 @@
 #include <bpf/bpf_helpers.h>
 
 #define COUNTER_GROUP_WIDTH 8
-#define HISTOGRAM_BUCKETS 7424
 #define MAX_CPUS 1024
 #define MAX_PID 4194304
 
@@ -90,7 +89,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } runqlat SEC(".maps");
 
 struct {
@@ -98,7 +97,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } running SEC(".maps");
 
 struct {
@@ -106,7 +105,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } offcpu SEC(".maps");
 
 /* record enqueue timestamp */
@@ -185,7 +184,7 @@ int handle__sched_switch(u64 *ctx)
 			delta_ns = ts - *tsp;
 
 			// update histogram
-			idx = value_to_index(delta_ns);
+			idx = value_to_index7(delta_ns);
 			cnt = bpf_map_lookup_elem(&running, &idx);
 			if (cnt) {
 				__sync_fetch_and_add(cnt, 1);
@@ -215,7 +214,7 @@ int handle__sched_switch(u64 *ctx)
 		delta_ns = ts - *tsp;
 
 		// update the histogram
-		idx = value_to_index(delta_ns);
+		idx = value_to_index7(delta_ns);
 		cnt = bpf_map_lookup_elem(&runqlat, &idx);
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
@@ -233,7 +232,7 @@ int handle__sched_switch(u64 *ctx)
 				offcpu_ns = offcpu_ns - delta_ns;
 
 				// update the histogram
-				idx = value_to_index(offcpu_ns);
+				idx = value_to_index7(offcpu_ns);
 				cnt = bpf_map_lookup_elem(&offcpu, &idx);
 				if (cnt) {
 					__sync_fetch_and_add(cnt, 1);
