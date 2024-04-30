@@ -17,6 +17,27 @@ pub static NETWORK_RX_BYTES_HISTOGRAM: AtomicHistogram =
     AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
+    name = "network/receive/errors/crc",
+    description = "The number of packets received which had CRC errors",
+    metadata = { unit = "packets" }
+)]
+pub static NETWORK_RX_CRC_ERRORS: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "network/receive/dropped",
+    description = "The number of packets received but not processed. Usually due to lack of resources or unsupported protocol. Does not include hardware interface buffer exhaustion.",
+    metadata = { unit = "packets" }
+)]
+pub static NETWORK_RX_DROPPED: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "network/receive/errors/missed",
+    description = "The number of packets missed due to buffer exhaustion.",
+    metadata = { unit = "packets" }
+)]
+pub static NETWORK_RX_MISSED_ERRORS: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
     name = "network/receive/packets",
     description = "The number of packets received over the network",
     metadata = { unit = "packets" }
@@ -45,6 +66,13 @@ pub static NETWORK_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 )]
 pub static NETWORK_TX_BYTES_HISTOGRAM: AtomicHistogram =
     AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "network/transmit/dropped",
+    description = "The number of packets dropped on the transmit path. Usually due to lack of resources.",
+    metadata = { unit = "packets" }
+)]
+pub static NETWORK_TX_DROPPED: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network/transmit/packets",
