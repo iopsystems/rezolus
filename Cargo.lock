@@ -1873,6 +1873,7 @@ dependencies = [
 name = "systeminfo"
 version = "3.14.3-alpha.0"
 dependencies = [
+ "log",
  "serde",
  "serde_json",
  "walkdir",

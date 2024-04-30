@@ -56,6 +56,8 @@ impl Receive {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
+        debug!("{NAME} tcp_rcv() BPF instruction count: {}", skel.progs().tcp_rcv_kprobe().insn_cnt());
+
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
