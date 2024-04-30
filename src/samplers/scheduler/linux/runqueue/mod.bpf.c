@@ -185,7 +185,7 @@ int handle__sched_switch(u64 *ctx)
 			delta_ns = ts - *tsp;
 
 			// update histogram
-			idx = value_to_index(HISTOGRAM_POWER, delta_ns);
+			idx = value_to_index(delta_ns, HISTOGRAM_POWER);
 			cnt = bpf_map_lookup_elem(&running, &idx);
 			if (cnt) {
 				__sync_fetch_and_add(cnt, 1);
@@ -215,7 +215,7 @@ int handle__sched_switch(u64 *ctx)
 		delta_ns = ts - *tsp;
 
 		// update the histogram
-		idx = value_to_index(HISTOGRAM_POWER, delta_ns);
+		idx = value_to_index(delta_ns, HISTOGRAM_POWER);
 		cnt = bpf_map_lookup_elem(&runqlat, &idx);
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
@@ -233,7 +233,7 @@ int handle__sched_switch(u64 *ctx)
 				offcpu_ns = offcpu_ns - delta_ns;
 
 				// update the histogram
-				idx = value_to_index(HISTOGRAM_POWER, offcpu_ns);
+				idx = value_to_index(offcpu_ns, HISTOGRAM_POWER);
 				cnt = bpf_map_lookup_elem(&offcpu, &idx);
 				if (cnt) {
 					__sync_fetch_and_add(cnt, 1);

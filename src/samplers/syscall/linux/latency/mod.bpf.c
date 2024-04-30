@@ -188,7 +188,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	*start_ts = 0;
 
 	// calculate the histogram index for this latency value
-	idx = value_to_index(HISTOGRAM_POWER, lat);
+	idx = value_to_index(lat, HISTOGRAM_POWER);
 
 	// update the total latency histogram
 	cnt = bpf_map_lookup_elem(&total_latency, &idx);

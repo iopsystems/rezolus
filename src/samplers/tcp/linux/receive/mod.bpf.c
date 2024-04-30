@@ -51,7 +51,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	// record nanoseconds.
 	srtt_ns = 1000 * (u64) srtt_us >> 3;
 
-	idx = value_to_index(HISTOGRAM_POWER, srtt_ns);
+	idx = value_to_index(srtt_ns, HISTOGRAM_POWER);
 	cnt = bpf_map_lookup_elem(&srtt, &idx);
 
 	if (cnt) {
@@ -62,7 +62,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	// record nanoseconds.
 	mdev_ns = 1000 * (u64) mdev_us >> 2;
 
-	idx = value_to_index(HISTOGRAM_POWER, mdev_ns);
+	idx = value_to_index(mdev_ns, HISTOGRAM_POWER);
 	cnt = bpf_map_lookup_elem(&jitter, &idx);
 
 	if (cnt) {

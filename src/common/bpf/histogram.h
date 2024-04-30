@@ -212,7 +212,7 @@ static u32 clz(u64 value) {
 //
 // See the indexing logic here:
 // https://github.com/pelikan-io/rustcommon/blob/main/histogram/src/config.rs
-static u32 value_to_index(u8 grouping_power, u64 value) {
+static u32 value_to_index(u64 value, u8 grouping_power) {
     if (value < (2 << grouping_power)) {
         return value;
     } else {

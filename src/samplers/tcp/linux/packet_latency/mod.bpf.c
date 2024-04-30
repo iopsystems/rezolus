@@ -85,7 +85,7 @@ static int handle_tcp_rcv_space_adjust(void *ctx, struct sock *sk)
 
 	delta_ns = (now - *tsp);
 
-	idx = value_to_index(HISTOGRAM_POWER, delta_ns);
+	idx = value_to_index(delta_ns, HISTOGRAM_POWER);
 	cnt = bpf_map_lookup_elem(&latency, &idx);
 
 	if (cnt) {

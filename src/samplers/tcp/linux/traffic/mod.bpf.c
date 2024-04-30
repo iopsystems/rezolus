@@ -74,7 +74,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, (u64) size);
 		}
 
-		idx = value_to_index(HISTOGRAM_POWER, (u64) size);
+		idx = value_to_index((u64) size, HISTOGRAM_POWER);
 		cnt = bpf_map_lookup_elem(&rx_size, &idx);
 
 		if (cnt) {
@@ -95,7 +95,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, (u64) size);
 		}
 
-		idx = value_to_index(HISTOGRAM_POWER, (u64) size);
+		idx = value_to_index((u64) size, HISTOGRAM_POWER);
 		cnt = bpf_map_lookup_elem(&tx_size, &idx);
 
 		if (cnt) {
