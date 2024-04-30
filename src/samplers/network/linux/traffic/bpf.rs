@@ -50,8 +50,14 @@ impl NetworkTraffic {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
-        debug!("{NAME} netif_receive_skb() BPF instruction count: {}", skel.progs().netif_receive_skb().insn_cnt());
-        debug!("{NAME} tcp_cleanup_rbuf() BPF instruction count: {}", skel.progs().tcp_cleanup_rbuf().insn_cnt());
+        debug!(
+            "{NAME} netif_receive_skb() BPF instruction count: {}",
+            skel.progs().netif_receive_skb().insn_cnt()
+        );
+        debug!(
+            "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
+            skel.progs().tcp_cleanup_rbuf().insn_cnt()
+        );
 
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;

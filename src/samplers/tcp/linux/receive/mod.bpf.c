@@ -16,6 +16,8 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
+#define HISTOGRAM_POWER 7
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -49,7 +51,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	// record nanoseconds.
 	srtt_ns = 1000 * (u64) srtt_us >> 3;
 
-	idx = value_to_index7(srtt_ns);
+	idx = value_to_index(HISTOGRAM_POWER, srtt_ns);
 	cnt = bpf_map_lookup_elem(&srtt, &idx);
 
 	if (cnt) {
@@ -60,7 +62,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	// record nanoseconds.
 	mdev_ns = 1000 * (u64) mdev_us >> 2;
 
-	idx = value_to_index7(mdev_ns);
+	idx = value_to_index(HISTOGRAM_POWER, mdev_ns);
 	cnt = bpf_map_lookup_elem(&jitter, &idx);
 
 	if (cnt) {

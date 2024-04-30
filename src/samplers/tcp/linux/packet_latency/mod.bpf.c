@@ -16,6 +16,8 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
+#define HISTOGRAM_POWER 7
+
 #define MAX_ENTRIES	10240
 #define AF_INET		2
 #define NO_EXIST    1
@@ -83,7 +85,7 @@ static int handle_tcp_rcv_space_adjust(void *ctx, struct sock *sk)
 
 	delta_ns = (now - *tsp);
 
-	idx = value_to_index7(delta_ns);
+	idx = value_to_index(HISTOGRAM_POWER, delta_ns);
 	cnt = bpf_map_lookup_elem(&latency, &idx);
 
 	if (cnt) {

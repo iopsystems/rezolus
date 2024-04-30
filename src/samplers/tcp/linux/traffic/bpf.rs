@@ -52,8 +52,14 @@ impl TcpTraffic {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
-        debug!("{NAME} tcp_sendmsg() BPF instruction count: {}", skel.progs().tcp_sendmsg().insn_cnt());
-        debug!("{NAME} tcp_cleanup_rbuf() BPF instruction count: {}", skel.progs().tcp_cleanup_rbuf().insn_cnt());
+        debug!(
+            "{NAME} tcp_sendmsg() BPF instruction count: {}",
+            skel.progs().tcp_sendmsg().insn_cnt()
+        );
+        debug!(
+            "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
+            skel.progs().tcp_cleanup_rbuf().insn_cnt()
+        );
 
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;

@@ -15,6 +15,7 @@
 #include <bpf/bpf_helpers.h>
 
 #define COUNTER_GROUP_WIDTH 8
+#define HISTOGRAM_POWER 7
 #define MAX_CPUS 1024
 #define MAX_PID 4194304
 
@@ -184,7 +185,7 @@ int handle__sched_switch(u64 *ctx)
 			delta_ns = ts - *tsp;
 
 			// update histogram
-			idx = value_to_index7(delta_ns);
+			idx = value_to_index(HISTOGRAM_POWER, delta_ns);
 			cnt = bpf_map_lookup_elem(&running, &idx);
 			if (cnt) {
 				__sync_fetch_and_add(cnt, 1);
@@ -214,7 +215,7 @@ int handle__sched_switch(u64 *ctx)
 		delta_ns = ts - *tsp;
 
 		// update the histogram
-		idx = value_to_index7(delta_ns);
+		idx = value_to_index(HISTOGRAM_POWER, delta_ns);
 		cnt = bpf_map_lookup_elem(&runqlat, &idx);
 		if (cnt) {
 			__sync_fetch_and_add(cnt, 1);
@@ -232,7 +233,7 @@ int handle__sched_switch(u64 *ctx)
 				offcpu_ns = offcpu_ns - delta_ns;
 
 				// update the histogram
-				idx = value_to_index7(offcpu_ns);
+				idx = value_to_index(HISTOGRAM_POWER, offcpu_ns);
 				cnt = bpf_map_lookup_elem(&offcpu, &idx);
 				if (cnt) {
 					__sync_fetch_and_add(cnt, 1);

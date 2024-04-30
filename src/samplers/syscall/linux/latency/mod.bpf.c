@@ -18,7 +18,7 @@
 #include <bpf/bpf_core_read.h>
 
 #define COUNTER_GROUP_WIDTH 8
-#define HISTOGRAM_BUCKETS 7424
+#define HISTOGRAM_POWER 7
 #define MAX_CPUS 1024
 #define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
@@ -188,7 +188,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	*start_ts = 0;
 
 	// calculate the histogram index for this latency value
-	idx = value_to_index7(lat);
+	idx = value_to_index(HISTOGRAM_POWER, lat);
 
 	// update the total latency histogram
 	cnt = bpf_map_lookup_elem(&total_latency, &idx);

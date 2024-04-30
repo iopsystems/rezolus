@@ -16,6 +16,8 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
+#define HISTOGRAM_POWER 7
+
 /* Taken from kernel include/linux/socket.h. */
 #define AF_INET		2	/* Internet IP Protocol 	*/
 #define AF_INET6	10	/* IP version 6			*/
@@ -72,7 +74,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, (u64) size);
 		}
 
-		idx = value_to_index7((u64) size);
+		idx = value_to_index(HISTOGRAM_POWER, (u64) size);
 		cnt = bpf_map_lookup_elem(&rx_size, &idx);
 
 		if (cnt) {
@@ -93,7 +95,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, (u64) size);
 		}
 
-		idx = value_to_index7((u64) size);
+		idx = value_to_index(HISTOGRAM_POWER, (u64) size);
 		cnt = bpf_map_lookup_elem(&tx_size, &idx);
 
 		if (cnt) {

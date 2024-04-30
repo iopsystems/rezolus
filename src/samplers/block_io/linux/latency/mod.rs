@@ -58,9 +58,18 @@ impl Biolat {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
-        debug!("{NAME} block_rq_insert() BPF instruction count: {}", skel.progs().block_rq_insert().insn_cnt());
-        debug!("{NAME} block_rq_issue() BPF instruction count: {}", skel.progs().block_rq_issue().insn_cnt());
-        debug!("{NAME} block_rq_complete() BPF instruction count: {}", skel.progs().block_rq_complete().insn_cnt());
+        debug!(
+            "{NAME} block_rq_insert() BPF instruction count: {}",
+            skel.progs().block_rq_insert().insn_cnt()
+        );
+        debug!(
+            "{NAME} block_rq_issue() BPF instruction count: {}",
+            skel.progs().block_rq_issue().insn_cnt()
+        );
+        debug!(
+            "{NAME} block_rq_complete() BPF instruction count: {}",
+            skel.progs().block_rq_complete().insn_cnt()
+        );
 
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
