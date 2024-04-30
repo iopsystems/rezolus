@@ -4,6 +4,9 @@
 #[macro_use]
 extern crate serde;
 
+#[macro_use]
+extern crate log;
+
 mod error;
 pub mod hwinfo;
 

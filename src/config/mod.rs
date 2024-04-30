@@ -1,4 +1,5 @@
 use crate::Duration;
+use ringlog::Level;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -9,6 +10,7 @@ use std::path::Path;
 // #[serde(deny_unknown_fields)]
 pub struct Config {
     general: General,
+    log: Log,
     prometheus: Prometheus,
     defaults: SamplerConfig,
     samplers: HashMap<String, SamplerConfig>,
@@ -39,6 +41,10 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    pub fn log(&self) -> &Log {
+        &self.log
     }
 
     pub fn defaults(&self) -> &SamplerConfig {
@@ -116,6 +122,35 @@ impl General {
     pub fn compression(&self) -> bool {
         self.compression
     }
+}
+
+#[derive(Deserialize)]
+pub struct Log {
+    #[serde(with = "LevelDef")]
+    #[serde(default = "log_level")]
+    level: Level,
+}
+
+impl Log {
+    pub fn level(&self) -> Level {
+        self.level
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[serde(remote = "Level")]
+#[serde(deny_unknown_fields)]
+enum LevelDef {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+fn log_level() -> Level {
+    Level::Info
 }
 
 #[derive(Deserialize)]
