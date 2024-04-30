@@ -16,12 +16,14 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
+#define HISTOGRAM_POWER 7
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } jitter SEC(".maps");
 
 struct {
@@ -29,7 +31,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } srtt SEC(".maps");
 
 SEC("kprobe/tcp_rcv_established")
@@ -49,7 +51,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	// record nanoseconds.
 	srtt_ns = 1000 * (u64) srtt_us >> 3;
 
-	idx = value_to_index(srtt_ns);
+	idx = value_to_index(srtt_ns, HISTOGRAM_POWER);
 	cnt = bpf_map_lookup_elem(&srtt, &idx);
 
 	if (cnt) {
@@ -60,7 +62,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	// record nanoseconds.
 	mdev_ns = 1000 * (u64) mdev_us >> 2;
 
-	idx = value_to_index(mdev_ns);
+	idx = value_to_index(mdev_ns, HISTOGRAM_POWER);
 	cnt = bpf_map_lookup_elem(&jitter, &idx);
 
 	if (cnt) {

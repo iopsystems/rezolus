@@ -56,6 +56,11 @@ impl CpuUsage {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
+        debug!(
+            "{NAME} cpuacct_account_field() BPF instruction count: {}",
+            skel.progs().cpuacct_account_field_kprobe().insn_cnt()
+        );
+
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 

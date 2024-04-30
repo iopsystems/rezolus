@@ -18,7 +18,7 @@
 #include <bpf/bpf_core_read.h>
 
 #define COUNTER_GROUP_WIDTH 8
-#define HISTOGRAM_BUCKETS 7424
+#define HISTOGRAM_POWER 7
 #define MAX_CPUS 1024
 #define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
@@ -48,7 +48,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } total_latency SEC(".maps");
 
 struct {
@@ -56,7 +56,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } read_latency SEC(".maps");
 
 struct {
@@ -64,7 +64,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } write_latency SEC(".maps");
 
 struct {
@@ -72,7 +72,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } poll_latency SEC(".maps");
 
 struct {
@@ -80,7 +80,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } lock_latency SEC(".maps");
 
 struct {
@@ -88,7 +88,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } time_latency SEC(".maps");
 
 struct {
@@ -96,7 +96,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } sleep_latency SEC(".maps");
 
 struct {
@@ -104,7 +104,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } socket_latency SEC(".maps");
 
 // provides a lookup table from syscall id to a counter index offset
@@ -188,7 +188,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	*start_ts = 0;
 
 	// calculate the histogram index for this latency value
-	idx = value_to_index(lat);
+	idx = value_to_index(lat, HISTOGRAM_POWER);
 
 	// update the total latency histogram
 	cnt = bpf_map_lookup_elem(&total_latency, &idx);

@@ -16,6 +16,8 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
+#define HISTOGRAM_POWER 7
+
 #define MAX_ENTRIES	10240
 #define AF_INET		2
 #define NO_EXIST    1
@@ -32,7 +34,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } latency SEC(".maps");
 
 static __always_inline __u64 get_sock_ident(struct sock *sk)
@@ -83,7 +85,7 @@ static int handle_tcp_rcv_space_adjust(void *ctx, struct sock *sk)
 
 	delta_ns = (now - *tsp);
 
-	idx = value_to_index(delta_ns);
+	idx = value_to_index(delta_ns, HISTOGRAM_POWER);
 	cnt = bpf_map_lookup_elem(&latency, &idx);
 
 	if (cnt) {

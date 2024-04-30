@@ -16,6 +16,8 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
+#define HISTOGRAM_POWER 7
+
 /* Taken from kernel include/linux/socket.h. */
 #define AF_INET		2	/* Internet IP Protocol 	*/
 #define AF_INET6	10	/* IP version 6			*/
@@ -39,7 +41,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } rx_size SEC(".maps");
 
 struct {
@@ -47,7 +49,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } tx_size SEC(".maps");
 
 static int probe_ip(bool receiving, struct sock *sk, size_t size)
@@ -72,7 +74,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, (u64) size);
 		}
 
-		idx = value_to_index((u64) size);
+		idx = value_to_index((u64) size, HISTOGRAM_POWER);
 		cnt = bpf_map_lookup_elem(&rx_size, &idx);
 
 		if (cnt) {
@@ -93,7 +95,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__sync_fetch_and_add(cnt, (u64) size);
 		}
 
-		idx = value_to_index((u64) size);
+		idx = value_to_index((u64) size, HISTOGRAM_POWER);
 		cnt = bpf_map_lookup_elem(&tx_size, &idx);
 
 		if (cnt) {

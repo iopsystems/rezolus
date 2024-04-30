@@ -11,6 +11,7 @@
 extern int LINUX_KERNEL_VERSION __kconfig;
 
 #define COUNTER_GROUP_WIDTH 8
+#define HISTOGRAM_POWER 7
 #define MAX_CPUS 1024
 
 #define REQ_OP_BITS	8
@@ -106,7 +107,7 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 		}
     }
 
-	idx = value_to_index(nr_bytes);
+	idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
 	cnt = bpf_map_lookup_elem(&size, &idx);
 
 	if (cnt) {
@@ -121,7 +122,7 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 	if (*tsp <= ts) {
 		delta = ts - *tsp;
 
-		idx = value_to_index(delta);
+		idx = value_to_index(delta, HISTOGRAM_POWER);
 		cnt = bpf_map_lookup_elem(&latency, &idx);
 
 		if (cnt) {

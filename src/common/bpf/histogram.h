@@ -1,15 +1,15 @@
 // Helpers for converting values to histogram indices. 
 
+#define HISTOGRAM_BUCKETS_POW_4 976
+#define HISTOGRAM_BUCKETS_POW_5 1920
+#define HISTOGRAM_BUCKETS_POW_6 3776
+#define HISTOGRAM_BUCKETS_POW_7 7424
+
 // Function to count leading zeros, since we cannot use the builtin CLZ from
 // within BPF. But since we also can't loop, this is implemented as a binary
-// search with a maximum of 6 branches.
+// search with a maximum of 6 branches. 
 static u32 clz(u64 value) {
     u32 count = 0;
-
-    // quick return if value is 0
-    if (!value) {
-        return 64;
-    }
 
     // binary search to find number of leading zeros
     if (value & 0xFFFFFFFF00000000) {
@@ -203,25 +203,23 @@ static u32 clz(u64 value) {
     } else {
         return 63;
     }
+
+    return 64;
 }
 
 // base-2 histogram indexing function that is compatible with Rust `histogram`
-// crate for m = 0, r = 8, n = 64 this gives us the ability to store counts for
-// values from 1 -> u64::MAX and uses 7424 buckets per histogram, which occupies
-// 58KB of space in kernelspace (where we use 64bit counters)
-static u32 value_to_index(u64 value) {
-    if (value == 0) {
-        return 0;
-    }
-
-    u64 h = 63 - clz(value);
-    // h < r
-    if (h < 8) {
+// crate.
+//
+// See the indexing logic here:
+// https://github.com/pelikan-io/rustcommon/blob/main/histogram/src/config.rs
+static u32 value_to_index(u64 value, u8 grouping_power) {
+    if (value < (2 << grouping_power)) {
         return value;
     } else {
-        // d = h - r + 1
-        u64 d = h - 7;
-        // ((d + 1) * G + ((value - (1 << h)) >> (m + d)))
-        return ((d + 1) * 128) + ((value - (1 << h)) >> d);
+        u64 power = 63 - clz(value);
+        u64 bin = power - grouping_power + 1;
+        u64 offset = (value - (1 << power)) >> (power - grouping_power);
+
+        return (bin * (1 << grouping_power) + offset);
     }
 }
