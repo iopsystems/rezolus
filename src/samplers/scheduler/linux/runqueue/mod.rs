@@ -60,6 +60,10 @@ impl Runqlat {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
+        debug!("{NAME} handle__sched_wakeup() BPF instruction count: {}", skel.progs().handle__sched_wakeup().insn_cnt());
+        debug!("{NAME} handle__sched_wakeup_new() BPF instruction count: {}", skel.progs().handle__sched_wakeup_new().insn_cnt());
+        debug!("{NAME} handle__sched_switch() BPF instruction count: {}", skel.progs().handle__sched_switch().insn_cnt());
+
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 

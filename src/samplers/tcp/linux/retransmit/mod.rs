@@ -55,6 +55,8 @@ impl Retransmit {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
+        debug!("{NAME} tcp_retransmit_skb() BPF instruction count: {}", skel.progs().tcp_retransmit_skb().insn_cnt());
+
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 

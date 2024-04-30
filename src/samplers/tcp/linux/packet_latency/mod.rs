@@ -57,6 +57,10 @@ impl PacketLatency {
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
+        debug!("{NAME} tcp_probe() BPF instruction count: {}", skel.progs().tcp_probe().insn_cnt());
+        debug!("{NAME} tcp_rcv_space_adjust() BPF instruction count: {}", skel.progs().tcp_rcv_space_adjust().insn_cnt());
+        debug!("{NAME} tcp_destroy_sock() BPF instruction count: {}", skel.progs().tcp_destroy_sock().insn_cnt());
+
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
