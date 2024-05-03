@@ -1,10 +1,10 @@
-use metriken::metric;
-use metriken::LazyCounter;
 use crate::common::Counter;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use linkme::distributed_slice;
+use metriken::metric;
 use metriken::Lazy;
+use metriken::LazyCounter;
 use metriken_exposition::Histogram;
 use ringlog::*;
 use std::collections::HashMap;
