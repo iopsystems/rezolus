@@ -1,4 +1,4 @@
-use crate::common::{Counter, Nop};
+use crate::common::{Counter, Interval, Nop};
 use crate::samplers::cpu::*;
 use crate::{distributed_slice, Config, Sampler};
 use core::time::Duration;
@@ -19,9 +19,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 }
 
 struct CpuUsage {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     port: mach_port_t,
     nanos_per_tick: u64,
     counters_total: Vec<Counter>,
@@ -34,8 +32,6 @@ impl CpuUsage {
         if !config.enabled(NAME) {
             return Err(());
         }
-
-        let now = Instant::now();
 
         let cpus = num_cpus::get();
 
@@ -73,9 +69,7 @@ impl CpuUsage {
         let nanos_per_tick = 1_000_000_000 / (sc_clk_tck as u64);
 
         Ok(Self {
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
             port: unsafe { libc::mach_host_self() },
             nanos_per_tick,
             counters_total,
@@ -86,32 +80,11 @@ impl CpuUsage {
 
 impl Sampler for CpuUsage {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        if now < self.next {
-            return;
+        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            unsafe {
+                let _ = self.sample_processor_info(elapsed.as_secs_f64());
+            }
         }
-
-        let elapsed = (now - self.prev).as_secs_f64();
-
-        if unsafe { self.sample_processor_info(elapsed) }.is_err() {
-            return;
-        }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }
 

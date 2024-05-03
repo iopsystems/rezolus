@@ -42,18 +42,12 @@ impl ProcNetSnmp {
 
 impl Sampler for ProcNetSnmp {
     fn sample(&mut self) {
-        let elapsed = self
-            .interval
-            .try_wait(Instant::now())
-            .map_err(|_| {
-                return;
-            })
-            .unwrap();
-
-        if let Ok(nested_map) = NestedMap::try_from_procfs(&mut self.file) {
-            for (counter, pkey, lkey) in self.counters.iter_mut() {
-                if let Some(curr) = nested_map.get(pkey, lkey) {
-                    counter.set(elapsed.as_secs_f64(), curr);
+        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            if let Ok(nested_map) = NestedMap::try_from_procfs(&mut self.file) {
+                for (counter, pkey, lkey) in self.counters.iter_mut() {
+                    if let Some(curr) = nested_map.get(pkey, lkey) {
+                        counter.set(elapsed.as_secs_f64(), curr);
+                    }
                 }
             }
         }

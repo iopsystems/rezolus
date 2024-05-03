@@ -37,11 +37,9 @@ impl Rusage {
 
 impl Sampler for Rusage {
     fn sample(&mut self) {
-        let elapsed = self.interval.try_wait(Instant::now()).map_err(|_| {
-            return;
-        });
-
-        self.sample_rusage(elapsed.unwrap().as_secs_f64());
+        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            self.sample_rusage(elapsed.as_secs_f64());
+        }
     }
 }
 
