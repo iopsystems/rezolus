@@ -216,8 +216,7 @@ fn sum() -> u64 {
 }
 
 fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
-    file
-        .rewind()
+    file.rewind()
         .map_err(|e| error!("failed to seek to start of file: {e}"))?;
 
     let mut count = 0;
