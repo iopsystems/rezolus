@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/network_traffic.bpf.rs"));
 }

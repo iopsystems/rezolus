@@ -52,17 +52,9 @@ impl ProcVmstat {
 
 impl Sampler for ProcVmstat {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        let elapsed = self
-            .interval
-            .try_wait(now)
-            .map_err(|_| {
-                return;
-            })
-            .unwrap();
-
-        let _ = self.sample_proc_vmstat(elapsed.as_secs_f64());
+        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            let _ = self.sample_proc_vmstat(elapsed.as_secs_f64());
+        }
     }
 }
 

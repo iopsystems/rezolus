@@ -56,10 +56,8 @@ impl Interfaces {
                     "/sys/class/net/{}/statistics/{stat}",
                     interface.name
                 )) {
-                    if f.read_to_string(&mut d).is_ok() {
-                        if d.parse::<u64>().is_ok() {
-                            if_stats.insert(interface.name.to_string(), f);
-                        }
+                    if f.read_to_string(&mut d).is_ok() && d.parse::<u64>().is_ok() {
+                        if_stats.insert(interface.name.to_string(), f);
                     }
                 }
             }

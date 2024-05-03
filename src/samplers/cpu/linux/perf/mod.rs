@@ -98,17 +98,17 @@ impl Perf {
             };
         }
 
-        if groups.len() == 0 {
+        if groups.is_empty() {
             error!("Failed to create the perf group on any CPU");
             return Err(());
         }
 
-        return Ok(Self {
+        Ok(Self {
             interval: Interval::new(Instant::now(), config.interval(NAME)),
             groups,
             counters,
             gauges,
-        });
+        })
     }
 }
 

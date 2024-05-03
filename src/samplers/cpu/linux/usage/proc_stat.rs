@@ -1,4 +1,4 @@
-use crate::common::Counter;
+use crate::common::{Counter, Interval};
 use crate::samplers::cpu::*;
 use crate::samplers::hwinfo::hardware_info;
 use metriken::DynBoxedMetric;
@@ -9,9 +9,7 @@ use std::io::{Read, Seek};
 use super::NAME;
 
 pub struct ProcStat {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     nanos_per_tick: u64,
     file: File,
     counters_total: Vec<Counter>,
@@ -24,8 +22,6 @@ impl ProcStat {
         if !config.enabled(NAME) {
             return Err(());
         }
-
-        let now = Instant::now();
 
         let cpus = match hardware_info() {
             Ok(hwinfo) => hwinfo.get_cpus(),
@@ -98,7 +94,7 @@ impl ProcStat {
 impl Sampler for ProcStat {
     fn sample(&mut self) {
         if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
-            let _ = self.sample_proc_stat(elapsed);
+            let _ = self.sample_proc_stat(elapsed.as_secs_f64());
         }
     }
 }

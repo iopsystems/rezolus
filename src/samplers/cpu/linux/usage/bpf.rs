@@ -1,5 +1,6 @@
 const ONLINE_CORES_REFRESH: Duration = Duration::from_secs(1);
 
+#[allow(clippy::module_inception)]
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/cpu_usage.bpf.rs"));
 }
@@ -215,7 +216,7 @@ fn sum() -> u64 {
 }
 
 fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
-    let _ = file
+    file
         .rewind()
         .map_err(|e| error!("failed to seek to start of file: {e}"))?;
 
