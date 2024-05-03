@@ -24,67 +24,72 @@ pub struct Distribution<'a> {
     _map: &'a libbpf_rs::Map,
     mmap: memmap2::MmapMut,
     buffer: Vec<u64>,
+    buckets: usize,
+    aligned: bool,
     histogram: &'static RwLockHistogram,
 }
 
 impl<'a> Distribution<'a> {
     pub fn new(map: &'a libbpf_rs::Map, histogram: &'static RwLockHistogram) -> Self {
+        let buckets = histogram.config().total_buckets();
+
+        let mmap_len = histogram_pages(buckets) * PAGE_SIZE;
+
         let fd = map.as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
         let mmap = unsafe {
             memmap2::MmapOptions::new()
-                .len(HISTOGRAM_PAGES * PAGE_SIZE)
+                .len(mmap_len)
                 .map_mut(&file)
                 .expect("failed to mmap() bpf distribution")
+        };
+
+        // check the alignment
+        let (_prefix, data, _suffix) = unsafe { mmap.align_to::<u64>() };
+        let expected_len = mmap_len / std::mem::size_of::<u64>();
+
+        let aligned = if data.len() == expected_len {
+            true
+        } else {
+            warn!("mmap region misaligned or did not have expected number of values {} != {expected_len}", data.len());
+            false
         };
 
         Self {
             _map: map,
             mmap,
             buffer: Vec::new(),
+            buckets,
+            aligned,
             histogram,
         }
     }
 
     pub fn refresh(&mut self) {
-        // If the mmap'd region is properly aligned we can more efficiently
-        // update the histogram. Otherwise, fall-back to the old strategy.
-
-        let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
-
-        let expected_len = HISTOGRAM_PAGES * PAGE_SIZE / 8;
-
-        if buckets.len() == expected_len {
-            let _ = self.histogram.update_from(&buckets[0..HISTOGRAM_BUCKETS]);
+        if self.aligned {
+            let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
+            let _ = self.histogram.update_from(&buckets[0..self.buckets]);
         } else {
-            warn!("mmap region misaligned or did not have expected number of values {} != {expected_len}", buckets.len());
-
-            self.buffer.resize(HISTOGRAM_BUCKETS, 0);
+            self.buffer.resize(self.buckets, 0);
 
             for (idx, bucket) in self.buffer.iter_mut().enumerate() {
                 let start = idx * std::mem::size_of::<u64>();
 
-                if start + 7 >= self.mmap.len() {
+                if start + std::mem::size_of::<u64>() > self.mmap.len() {
                     break;
                 }
 
-                let val = u64::from_ne_bytes([
-                    self.mmap[start],
-                    self.mmap[start + 1],
-                    self.mmap[start + 2],
-                    self.mmap[start + 3],
-                    self.mmap[start + 4],
-                    self.mmap[start + 5],
-                    self.mmap[start + 6],
-                    self.mmap[start + 7],
-                ]);
+                let val = u64::from_ne_bytes(
+                    <[u8; std::mem::size_of::<u64>()]>::try_from(
+                        &self.mmap[start..(start + std::mem::size_of::<u64>())],
+                    )
+                    .unwrap(),
+                );
 
                 *bucket = val;
             }
 
-            let _ = self
-                .histogram
-                .update_from(&self.buffer[0..HISTOGRAM_BUCKETS]);
+            let _ = self.histogram.update_from(&self.buffer[0..self.buckets]);
         }
     }
 }
