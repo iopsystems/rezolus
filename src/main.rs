@@ -1,7 +1,10 @@
+use crate::common::Counter;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use linkme::distributed_slice;
+use metriken::metric;
 use metriken::Lazy;
+use metriken::LazyCounter;
 use metriken_exposition::Histogram;
 use ringlog::*;
 use std::collections::HashMap;
@@ -92,7 +95,11 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
 
-counter!(RUNTIME_SAMPLE_LOOP, "runtime/sample/loop");
+#[metric(
+    name = "runtime/sample/loop",
+    description = "The total number sampler loops executed"
+)]
+pub static RUNTIME_SAMPLE_LOOP: LazyCounter = LazyCounter::new(metriken::Counter::default);
 
 fn main() {
     // custom panic hook to terminate whole process after unwinding
