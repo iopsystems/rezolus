@@ -149,7 +149,7 @@ impl PerfGroup {
                 continue;
             }
 
-            if let Ok(c) = counter.as_follower(cpu, &mut group[leader_id].as_mut().unwrap()) {
+            if let Ok(c) = counter.as_follower(cpu, group[leader_id].as_mut().unwrap()) {
                 group.resize_with(*counter as usize + 1, || None);
                 group[*counter as usize] = Some(c);
             }
@@ -173,12 +173,12 @@ impl PerfGroup {
             .map(|inner| GroupData { inner })
             .ok();
 
-        return Ok(Self {
+        Ok(Self {
             cpu,
             leader_id,
             group,
             prev,
-        });
+        })
     }
 
     pub fn get_metrics(&mut self) -> Result<Reading, ()> {
@@ -226,30 +226,30 @@ impl PerfGroup {
         let mut mperf = None;
 
         if let Some(Some(c)) = &self.group.get(Counter::Cycles as usize) {
-            cycles = current.delta(prev, &c);
+            cycles = current.delta(prev, c);
         }
 
         if let Some(Some(c)) = &self.group.get(Counter::Instructions as usize) {
-            instructions = current.delta(prev, &c);
+            instructions = current.delta(prev, c);
         }
 
         if let Some(Some(c)) = &self.group.get(Counter::Tsc as usize) {
-            tsc = current.delta(prev, &c);
+            tsc = current.delta(prev, c);
         }
 
         if let Some(Some(c)) = &self.group.get(Counter::Aperf as usize) {
-            aperf = current.delta(prev, &c);
+            aperf = current.delta(prev, c);
         }
 
         if let Some(Some(c)) = &self.group.get(Counter::Mperf as usize) {
-            mperf = current.delta(prev, &c);
+            mperf = current.delta(prev, c);
         }
 
-        let ipkc = if instructions.is_some() && cycles.is_some() {
-            if cycles.unwrap() == 0 {
+        let ipkc = if let (Some(instructions), Some(cycles)) = (instructions, cycles) {
+            if cycles == 0 {
                 None
             } else {
-                Some(instructions.unwrap() * 1000 / cycles.unwrap())
+                Some(instructions * 1000 / cycles)
             }
         } else {
             None

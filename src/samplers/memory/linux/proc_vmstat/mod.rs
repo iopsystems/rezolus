@@ -1,4 +1,4 @@
-use crate::common::{Counter, Nop};
+use crate::common::{Counter, Interval, Nop};
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
 use std::collections::HashMap;
@@ -17,9 +17,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 const NAME: &str = "memory_vmstat";
 
 pub struct ProcVmstat {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     counters: HashMap<&'static str, Counter>,
     file: File,
 }
@@ -31,8 +29,6 @@ impl ProcVmstat {
         if !config.enabled(NAME) {
             return Err(());
         }
-
-        let now = Instant::now();
 
         let counters = HashMap::from([
             ("numa_hit", Counter::new(&MEMORY_NUMA_HIT, None)),
@@ -49,41 +45,16 @@ impl ProcVmstat {
         Ok(Self {
             file: File::open("/proc/vmstat").expect("file not found"),
             counters,
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
     }
 }
 
 impl Sampler for ProcVmstat {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        if now < self.next {
-            return;
+        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            let _ = self.sample_proc_vmstat(elapsed.as_secs_f64());
         }
-
-        let elapsed = (now - self.prev).as_secs_f64();
-
-        if self.sample_proc_vmstat(elapsed).is_err() {
-            return;
-        }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }
 

@@ -1,5 +1,6 @@
 const ONLINE_CORES_REFRESH: Duration = Duration::from_secs(1);
 
+#[allow(clippy::module_inception)]
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/cpu_usage.bpf.rs"));
 }
@@ -34,16 +35,11 @@ pub struct CpuUsage {
     percpu_counters: Arc<PercpuCounters>,
     sum_prev: u64,
     percpu_sum_prev: Vec<u64>,
-    counter_interval: Duration,
-    counter_next: Instant,
-    counter_prev: Instant,
-    distribution_interval: Duration,
-    distribution_next: Instant,
-    distribution_prev: Instant,
+    counter_interval: Interval,
+    distribution_interval: Interval,
     online_cores: usize,
     online_cores_file: std::fs::File,
-    online_cores_interval: Duration,
-    online_cores_next: Instant,
+    online_cores_interval: Interval,
 }
 
 const IDLE_CPUTIME_INDEX: usize = 5;
@@ -138,26 +134,16 @@ impl CpuUsage {
             percpu_counters,
             sum_prev: 0,
             percpu_sum_prev: vec![0; cpus.len()],
-            counter_interval: config.interval(NAME),
-            counter_next: now,
-            counter_prev: now,
-            distribution_interval: config.distribution_interval(NAME),
-            distribution_next: now,
-            distribution_prev: now,
+            counter_interval: Interval::new(now, config.interval(NAME)),
+            distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
             online_cores,
             online_cores_file,
-            online_cores_interval: ONLINE_CORES_REFRESH,
-            online_cores_next: now + ONLINE_CORES_REFRESH,
+            online_cores_interval: Interval::new(now, ONLINE_CORES_REFRESH),
         })
     }
 
-    pub fn refresh_counters(&mut self, now: Instant) {
-        if now < self.counter_next {
-            return;
-        }
-
-        // get the amount of time since we last sampled
-        let elapsed = now - self.counter_prev;
+    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         // refresh the counters from the kernel-space counters
         self.bpf.refresh_counters(elapsed.as_secs_f64());
@@ -190,59 +176,24 @@ impl CpuUsage {
         // update the previous sums
         self.sum_prev += busy_delta + idle_delta;
 
-        // determine when to sample next
-        let next = self.counter_next + self.counter_interval;
-
-        // check that next sample time is in the future
-        if next > now {
-            self.counter_next = next;
-        } else {
-            self.counter_next = now + self.counter_interval;
-        }
-
-        // mark when we last sampled
-        self.counter_prev = now;
+        Ok(())
     }
 
-    pub fn refresh_distributions(&mut self, now: Instant) {
-        if now < self.distribution_next {
-            return;
-        }
-
+    pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
+        self.distribution_interval.try_wait(now)?;
         self.bpf.refresh_distributions();
 
-        // determine when to sample next
-        let next = self.distribution_next + self.distribution_interval;
-
-        // check that next sample time is in the future
-        if next > now {
-            self.distribution_next = next;
-        } else {
-            self.distribution_next = now + self.distribution_interval;
-        }
-
-        // mark when we last sampled
-        self.distribution_prev = now;
+        Ok(())
     }
 
-    pub fn update_online_cores(&mut self, now: Instant) {
-        if now < self.online_cores_next {
-            return;
-        }
+    pub fn update_online_cores(&mut self, now: Instant) -> Result<(), ()> {
+        self.online_cores_interval.try_wait(now)?;
 
         if let Ok(v) = online_cores(&mut self.online_cores_file) {
             self.online_cores = v;
         }
 
-        // determine when to update next
-        let next = self.online_cores_next + self.online_cores_interval;
-
-        // check that next update time is in the future
-        if next > now {
-            self.online_cores_next = next;
-        } else {
-            self.online_cores_next = now + self.online_cores_interval;
-        }
+        Ok(())
     }
 }
 
@@ -265,8 +216,7 @@ fn sum() -> u64 {
 }
 
 fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
-    let _ = file
-        .rewind()
+    file.rewind()
         .map_err(|e| error!("failed to seek to start of file: {e}"))?;
 
     let mut count = 0;
@@ -312,8 +262,8 @@ fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
 impl Sampler for CpuUsage {
     fn sample(&mut self) {
         let now = Instant::now();
-        self.update_online_cores(now);
-        self.refresh_counters(now);
-        self.refresh_distributions(now);
+        let _ = self.update_online_cores(now);
+        let _ = self.refresh_counters(now);
+        let _ = self.refresh_distributions(now);
     }
 }

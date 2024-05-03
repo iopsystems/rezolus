@@ -1,14 +1,13 @@
+use crate::common::Interval;
 use crate::samplers::filesystem::*;
-use crate::{error, Config, Duration, Instant, Sampler};
+use crate::{error, Config, Instant, Sampler};
 use std::fs::File;
 use std::io::{Read, Seek};
 
 use super::NAME;
 
 pub struct Procfs {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     file: File,
 }
 
@@ -19,45 +18,24 @@ impl Procfs {
             return Err(());
         }
 
-        let now = Instant::now();
-
         let file = std::fs::File::open("/proc/sys/fs/file-nr").map_err(|e| {
             error!("failed to open: {e}");
         })?;
 
         Ok(Self {
             file,
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
     }
 }
 
 impl Sampler for Procfs {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        if now < self.next {
+        if self.interval.try_wait(Instant::now()).is_err() {
             return;
         }
 
         let _ = self.sample_procfs();
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }
 

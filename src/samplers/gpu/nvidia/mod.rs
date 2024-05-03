@@ -1,5 +1,6 @@
 use super::stats::*;
 use super::*;
+use crate::common::Interval;
 use crate::common::Nop;
 use metriken::{DynBoxedMetric, MetricBuilder};
 use nvml_wrapper::enum_wrappers::device::*;
@@ -21,9 +22,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 const NAME: &str = "gpu_nvidia";
 
 pub struct Nvidia {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     nvml: Nvml,
     pergpu_metrics: Vec<GpuMetrics>,
 }
@@ -69,7 +68,6 @@ impl Nvidia {
             return Err(());
         }
 
-        let now = Instant::now();
         let nvml = Nvml::init().map_err(|e| {
             error!("error initializing: {e}");
         })?;
@@ -151,9 +149,7 @@ impl Nvidia {
 
         Ok(Self {
             nvml,
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
             pergpu_metrics,
         })
     }
@@ -163,28 +159,13 @@ impl Sampler for Nvidia {
     fn sample(&mut self) {
         let now = Instant::now();
 
-        if now < self.next {
+        if self.interval.try_wait(now).is_err() {
             return;
         }
 
         if let Err(e) = self.sample_nvml(now) {
             error!("error sampling: {e}");
         }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }
 

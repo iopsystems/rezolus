@@ -1,5 +1,5 @@
 use crate::common::units::KIBIBYTES;
-use crate::common::Nop;
+use crate::common::{Interval, Nop};
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
 use metriken::Gauge;
@@ -19,9 +19,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 const NAME: &str = "memory_meminfo";
 
 pub struct ProcMeminfo {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     file: File,
     gauges: HashMap<&'static str, &'static Gauge>,
 }
@@ -34,8 +32,6 @@ impl ProcMeminfo {
             return Err(());
         }
 
-        let now = Instant::now();
-
         let gauges: HashMap<&str, &Gauge> = HashMap::from([
             ("MemTotal:", &*MEMORY_TOTAL),
             ("MemFree:", &*MEMORY_FREE),
@@ -47,9 +43,7 @@ impl ProcMeminfo {
         Ok(Self {
             file: File::open("/proc/meminfo").expect("file not found"),
             gauges,
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
     }
 }
@@ -58,28 +52,11 @@ impl Sampler for ProcMeminfo {
     fn sample(&mut self) {
         let now = Instant::now();
 
-        if now < self.next {
+        if self.interval.try_wait(now).is_err() {
             return;
         }
 
-        if self.sample_proc_meminfo(now).is_err() {
-            return;
-        }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
+        let _ = self.sample_proc_meminfo(now).is_err();
     }
 }
 

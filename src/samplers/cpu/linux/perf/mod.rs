@@ -1,3 +1,4 @@
+use crate::common::Interval;
 use crate::common::Nop;
 use crate::samplers::cpu::*;
 use metriken::{DynBoxedMetric, MetricBuilder};
@@ -30,9 +31,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 const NAME: &str = "cpu_perf";
 
 pub struct Perf {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     groups: Vec<PerfGroup>,
     counters: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
     gauges: Vec<Vec<DynBoxedMetric<metriken::Gauge>>>,
@@ -44,8 +43,6 @@ impl Perf {
         if !config.enabled(NAME) {
             return Err(());
         }
-
-        let now = Instant::now();
 
         let cpus = match hardware_info() {
             Ok(hwinfo) => hwinfo.get_cpus(),
@@ -101,19 +98,17 @@ impl Perf {
             };
         }
 
-        if groups.len() == 0 {
+        if groups.is_empty() {
             error!("Failed to create the perf group on any CPU");
             return Err(());
         }
 
-        return Ok(Self {
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+        Ok(Self {
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
             groups,
             counters,
             gauges,
-        });
+        })
     }
 }
 
@@ -121,7 +116,7 @@ impl Sampler for Perf {
     fn sample(&mut self) {
         let now = Instant::now();
 
-        if now < self.next {
+        if self.interval.try_wait(now).is_err() {
             return;
         }
 
@@ -178,20 +173,5 @@ impl Sampler for Perf {
             CPU_FREQUENCY_AVERAGE.set((avg_running_frequency / nr_active_groups) as i64);
             CPU_CORES.set(nr_active_groups as _);
         }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }

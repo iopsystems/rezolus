@@ -4,10 +4,13 @@ pub mod bpf;
 pub mod classic;
 pub mod units;
 
+mod interval;
 mod nop;
 
 use metriken::AtomicHistogram;
 use metriken::LazyCounter;
+
+pub use interval::Interval;
 pub use nop::Nop;
 
 pub const HISTOGRAM_GROUPING_POWER: u8 = 7;

@@ -1,4 +1,4 @@
-use crate::common::Nop;
+use crate::common::{Interval, Nop};
 use crate::samplers::hwinfo::hardware_info;
 use crate::samplers::network::stats::*;
 use crate::samplers::network::*;
@@ -19,9 +19,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 const NAME: &str = "network_interfaces";
 
 pub struct Interfaces {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     stats: Vec<(&'static Lazy<Counter>, &'static str, HashMap<String, File>)>,
 }
 
@@ -31,8 +29,6 @@ impl Interfaces {
         if !config.enabled(NAME) {
             return Err(());
         }
-
-        let now = Instant::now();
 
         let hwinfo = hardware_info().map_err(|e| {
             error!("failed to load hardware info: {e}");
@@ -60,10 +56,8 @@ impl Interfaces {
                     "/sys/class/net/{}/statistics/{stat}",
                     interface.name
                 )) {
-                    if f.read_to_string(&mut d).is_ok() {
-                        if d.parse::<u64>().is_ok() {
-                            if_stats.insert(interface.name.to_string(), f);
-                        }
+                    if f.read_to_string(&mut d).is_ok() && d.parse::<u64>().is_ok() {
+                        if_stats.insert(interface.name.to_string(), f);
                     }
                 }
             }
@@ -73,18 +67,14 @@ impl Interfaces {
 
         Ok(Self {
             stats,
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
     }
 }
 
 impl Sampler for Interfaces {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        if now < self.next {
+        if self.interval.try_wait(Instant::now()).is_err() {
             return;
         }
 
@@ -110,20 +100,5 @@ impl Sampler for Interfaces {
 
             counter.set(sum);
         }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }

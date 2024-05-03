@@ -1,8 +1,7 @@
 use super::stats::*;
 use super::*;
 use crate::common::units::{KIBIBYTES, MICROSECONDS, SECONDS};
-use crate::common::Counter;
-use crate::common::Nop;
+use crate::common::{Counter, Interval, Nop};
 
 #[distributed_slice(REZOLUS_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
@@ -16,9 +15,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 const NAME: &str = "rezolus_rusage";
 
 pub struct Rusage {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     ru_utime: Counter,
     ru_stime: Counter,
 }
@@ -30,12 +27,8 @@ impl Rusage {
             return Err(());
         }
 
-        let now = Instant::now();
-
         Ok(Self {
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
             ru_utime: Counter::new(&RU_UTIME, Some(&RU_UTIME_HISTOGRAM)),
             ru_stime: Counter::new(&RU_STIME, Some(&RU_STIME_HISTOGRAM)),
         })
@@ -44,30 +37,9 @@ impl Rusage {
 
 impl Sampler for Rusage {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        if now < self.next {
-            return;
+        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            self.sample_rusage(elapsed.as_secs_f64());
         }
-
-        let elapsed = (now - self.prev).as_secs_f64();
-
-        self.sample_rusage(elapsed);
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }
 

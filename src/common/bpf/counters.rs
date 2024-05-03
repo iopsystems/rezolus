@@ -122,7 +122,7 @@ impl<'a> Counters<'a> {
                     let start = (cpu * self.cachelines * CACHELINE_SIZE)
                         + (idx * std::mem::size_of::<u64>());
                     let value = u64::from_ne_bytes([
-                        self.mmap[start + 0],
+                        self.mmap[start],
                         self.mmap[start + 1],
                         self.mmap[start + 2],
                         self.mmap[start + 3],

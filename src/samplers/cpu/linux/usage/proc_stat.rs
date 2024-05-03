@@ -1,4 +1,4 @@
-use crate::common::Counter;
+use crate::common::{Counter, Interval};
 use crate::samplers::cpu::*;
 use crate::samplers::hwinfo::hardware_info;
 use metriken::DynBoxedMetric;
@@ -9,9 +9,7 @@ use std::io::{Read, Seek};
 use super::NAME;
 
 pub struct ProcStat {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     nanos_per_tick: u64,
     file: File,
     counters_total: Vec<Counter>,
@@ -24,8 +22,6 @@ impl ProcStat {
         if !config.enabled(NAME) {
             return Err(());
         }
-
-        let now = Instant::now();
 
         let cpus = match hardware_info() {
             Ok(hwinfo) => hwinfo.get_cpus(),
@@ -90,41 +86,16 @@ impl ProcStat {
             counters_total,
             counters_percpu,
             nanos_per_tick,
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
     }
 }
 
 impl Sampler for ProcStat {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        if now < self.next {
-            return;
+        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            let _ = self.sample_proc_stat(elapsed.as_secs_f64());
         }
-
-        let elapsed = (now - self.prev).as_secs_f64();
-
-        if self.sample_proc_stat(elapsed).is_err() {
-            return;
-        }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }
 

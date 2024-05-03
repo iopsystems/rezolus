@@ -35,12 +35,8 @@ impl GetMap for ModSkel<'_> {
 /// * `tcp/receive/packet_latency`
 pub struct PacketLatency {
     bpf: Bpf<ModSkel<'static>>,
-    counter_interval: Duration,
-    counter_next: Instant,
-    counter_prev: Instant,
-    distribution_interval: Duration,
-    distribution_next: Instant,
-    distribution_prev: Instant,
+    counter_interval: Interval,
+    distribution_interval: Interval,
 }
 
 impl PacketLatency {
@@ -81,66 +77,36 @@ impl PacketLatency {
             bpf.add_distribution(name, histogram);
         }
 
+        let now = Instant::now();
+
         Ok(Self {
             bpf,
-            counter_interval: config.interval(NAME),
-            counter_next: Instant::now(),
-            counter_prev: Instant::now(),
-            distribution_interval: config.distribution_interval(NAME),
-            distribution_next: Instant::now(),
-            distribution_prev: Instant::now(),
+            counter_interval: Interval::new(now, config.interval(NAME)),
+            distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
         })
     }
 
-    pub fn refresh_counters(&mut self, now: Instant) {
-        if now < self.counter_next {
-            return;
-        }
-
-        let elapsed = (now - self.counter_prev).as_secs_f64();
+    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
+        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
 
         self.bpf.refresh_counters(elapsed);
 
-        // determine when to sample next
-        let next = self.counter_next + self.counter_interval;
-
-        // check that next sample time is in the future
-        if next > now {
-            self.counter_next = next;
-        } else {
-            self.counter_next = now + self.counter_interval;
-        }
-
-        // mark when we last sampled
-        self.counter_prev = now;
+        Ok(())
     }
 
-    pub fn refresh_distributions(&mut self, now: Instant) {
-        if now < self.distribution_next {
-            return;
-        }
+    pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
+        self.distribution_interval.try_wait(now)?;
 
         self.bpf.refresh_distributions();
 
-        // determine when to sample next
-        let next = self.distribution_next + self.distribution_interval;
-
-        // check that next sample time is in the future
-        if next > now {
-            self.distribution_next = next;
-        } else {
-            self.distribution_next = now + self.distribution_interval;
-        }
-
-        // mark when we last sampled
-        self.distribution_prev = now;
+        Ok(())
     }
 }
 
 impl Sampler for PacketLatency {
     fn sample(&mut self) {
         let now = Instant::now();
-        self.refresh_counters(now);
-        self.refresh_distributions(now);
+        let _ = self.refresh_counters(now);
+        let _ = self.refresh_distributions(now);
     }
 }
