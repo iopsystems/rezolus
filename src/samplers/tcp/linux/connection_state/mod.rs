@@ -1,4 +1,4 @@
-use crate::common::Nop;
+use crate::common::{Interval, Nop};
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
 use metriken::Gauge;
@@ -18,9 +18,7 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 const NAME: &str = "tcp_connection_state";
 
 pub struct ConnectionState {
-    prev: Instant,
-    next: Instant,
-    interval: Duration,
+    interval: Interval,
     files: Vec<File>,
     gauges: Vec<(&'static Lazy<Gauge>, i64)>,
 }
@@ -31,8 +29,6 @@ impl ConnectionState {
         if !config.enabled(NAME) {
             return Err(());
         }
-
-        let now = Instant::now();
 
         let gauges: Vec<(&'static Lazy<Gauge>, i64)> = vec![
             (&TCP_CONN_STATE_ESTABLISHED, 0),
@@ -69,18 +65,14 @@ impl ConnectionState {
         Ok(Self {
             files,
             gauges,
-            prev: now,
-            next: now,
-            interval: config.interval(NAME),
+            interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
     }
 }
 
 impl Sampler for ConnectionState {
     fn sample(&mut self) {
-        let now = Instant::now();
-
-        if now < self.next {
+        if self.interval.try_wait(Instant::now()).is_err() {
             return;
         }
 
@@ -114,20 +106,5 @@ impl Sampler for ConnectionState {
         for (gauge, value) in self.gauges.iter() {
             gauge.set(*value);
         }
-
-        // determine when to sample next
-        let next = self.next + self.interval;
-
-        // it's possible we fell behind
-        if next > now {
-            // if we didn't, sample at the next planned time
-            self.next = next;
-        } else {
-            // if we did, sample after the interval has elapsed
-            self.next = now + self.interval;
-        }
-
-        // mark when we last sampled
-        self.prev = now;
     }
 }
