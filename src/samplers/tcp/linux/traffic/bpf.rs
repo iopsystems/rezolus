@@ -61,8 +61,6 @@ impl TcpTraffic {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
         let counters = vec![
             Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HISTOGRAM)),
             Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HISTOGRAM)),
@@ -70,13 +68,11 @@ impl TcpTraffic {
             Counter::new(&TCP_TX_PACKETS, Some(&TCP_TX_PACKETS_HISTOGRAM)),
         ];
 
-        bpf.add_counters("counters", counters);
-
-        let mut distributions = vec![("rx_size", &TCP_RX_SIZE), ("tx_size", &TCP_TX_SIZE)];
-
-        for (name, histogram) in distributions.drain(..) {
-            bpf.add_distribution(name, histogram);
-        }
+        let mut bpf = BpfBuilder::new(skel)
+            .counters("counters", counters)
+            .distribution("rx_size", &TCP_RX_SIZE)
+            .distribution("tx_size", &TCP_TX_SIZE)
+            .build();
 
         let now = Instant::now();
 
@@ -88,7 +84,7 @@ impl TcpTraffic {
     }
 
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
 

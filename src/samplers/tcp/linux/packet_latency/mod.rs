@@ -69,13 +69,9 @@ impl PacketLatency {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
-        let mut distributions = vec![("latency", &TCP_PACKET_LATENCY)];
-
-        for (name, histogram) in distributions.drain(..) {
-            bpf.add_distribution(name, histogram);
-        }
+        let bpf = BpfBuilder::new(skel)
+            .distribution("latency", &TCP_PACKET_LATENCY)
+            .build();
 
         let now = Instant::now();
 
@@ -87,7 +83,7 @@ impl PacketLatency {
     }
 
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
 

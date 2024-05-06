@@ -59,8 +59,6 @@ impl NetworkTraffic {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
         let counters = vec![
             Counter::new(&NETWORK_RX_BYTES, Some(&NETWORK_RX_BYTES_HISTOGRAM)),
             Counter::new(&NETWORK_TX_BYTES, Some(&NETWORK_TX_BYTES_HISTOGRAM)),
@@ -68,20 +66,19 @@ impl NetworkTraffic {
             Counter::new(&NETWORK_TX_PACKETS, Some(&NETWORK_TX_PACKETS_HISTOGRAM)),
         ];
 
-        bpf.add_counters("counters", counters);
+        let bpf = BpfBuilder::new(skel).counters("counters", counters).build();
 
         let now = Instant::now();
 
         Ok(Self {
             bpf,
             counter_interval: Interval::new(now, config.interval(NAME)),
-
             distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
         })
     }
 
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
 

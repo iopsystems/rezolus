@@ -60,13 +60,10 @@ impl Receive {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
-        let mut distributions = vec![("srtt", &TCP_SRTT), ("jitter", &TCP_JITTER)];
-
-        for (name, histogram) in distributions.drain(..) {
-            bpf.add_distribution(name, histogram);
-        }
+        let bpf = BpfBuilder::new(skel)
+            .distribution("srtt", &TCP_SRTT)
+            .distribution("jitter", &TCP_JITTER)
+            .build();
 
         let now = Instant::now();
 
@@ -78,7 +75,7 @@ impl Receive {
     }
 
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
 

@@ -74,10 +74,6 @@ impl Biolat {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
-        let mut distributions = vec![("latency", &BLOCKIO_LATENCY), ("size", &BLOCKIO_SIZE)];
-
         let counters = vec![
             Counter::new(&BLOCKIO_READ_OPS, Some(&BLOCKIO_READ_OPS_HISTOGRAM)),
             Counter::new(&BLOCKIO_WRITE_OPS, Some(&BLOCKIO_WRITE_OPS_HISTOGRAM)),
@@ -92,11 +88,11 @@ impl Biolat {
             ),
         ];
 
-        bpf.add_counters("counters", counters);
-
-        for (name, histogram) in distributions.drain(..) {
-            bpf.add_distribution(name, histogram);
-        }
+        let bpf = BpfBuilder::new(skel)
+            .counters("counters", counters)
+            .distribution("latency", &BLOCKIO_LATENCY)
+            .distribution("size", &BLOCKIO_SIZE)
+            .build();
 
         Ok(Self {
             bpf,
@@ -114,7 +110,7 @@ impl Biolat {
             return;
         }
 
-        let elapsed = (now - self.counter_prev).as_secs_f64();
+        let elapsed = now - self.counter_prev;
 
         self.bpf.refresh_counters(elapsed);
 

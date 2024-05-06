@@ -59,14 +59,12 @@ impl Retransmit {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
         let counters = vec![Counter::new(
             &TCP_TX_RETRANSMIT,
             Some(&TCP_TX_RETRANSMIT_HISTOGRAM),
         )];
 
-        bpf.add_counters("counters", counters);
+        let bpf = BpfBuilder::new(skel).counters("counters", counters).build();
 
         let now = Instant::now();
 
@@ -78,7 +76,7 @@ impl Retransmit {
     }
 
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
 
