@@ -60,8 +60,6 @@ impl CpuUsage {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
         let mut online_cores_file = std::fs::File::open("/sys/devices/system/cpu/online")
             .map_err(|e| error!("couldn't open: {e}"))?;
 
@@ -119,13 +117,9 @@ impl CpuUsage {
 
         let percpu_counters = Arc::new(percpu_counters);
 
-        bpf.add_counters_with_percpu("counters", counters, percpu_counters.clone());
-
-        let mut distributions = vec![];
-
-        for (name, histogram) in distributions.drain(..) {
-            bpf.add_distribution(name, histogram);
-        }
+        let bpf = BpfBuilder::new(skel)
+            .percpu_counters("counters", counters, percpu_counters.clone())
+            .build();
 
         let now = Instant::now();
 
@@ -146,7 +140,7 @@ impl CpuUsage {
         let elapsed = self.counter_interval.try_wait(now)?;
 
         // refresh the counters from the kernel-space counters
-        self.bpf.refresh_counters(elapsed.as_secs_f64());
+        self.bpf.refresh_counters(elapsed);
 
         // get the new sum of all the counters
         let sum_now: u64 = sum();

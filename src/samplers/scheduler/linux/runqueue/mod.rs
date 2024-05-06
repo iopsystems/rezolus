@@ -72,21 +72,14 @@ impl Runqlat {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
         let counters = vec![Counter::new(&SCHEDULER_IVCSW, None)];
 
-        bpf.add_counters("counters", counters);
-
-        let mut distributions = vec![
-            ("runqlat", &SCHEDULER_RUNQUEUE_LATENCY),
-            ("running", &SCHEDULER_RUNNING),
-            ("offcpu", &SCHEDULER_OFFCPU),
-        ];
-
-        for (name, histogram) in distributions.drain(..) {
-            bpf.add_distribution(name, histogram);
-        }
+        let bpf = BpfBuilder::new(skel)
+            .counters("counters", counters)
+            .distribution("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
+            .distribution("running", &SCHEDULER_RUNNING)
+            .distribution("offcpu", &SCHEDULER_OFFCPU)
+            .build();
 
         let now = Instant::now();
 
@@ -98,7 +91,7 @@ impl Runqlat {
     }
 
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
 

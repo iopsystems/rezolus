@@ -13,14 +13,14 @@ mod bpf {
 
 const NAME: &str = "syscall_latency";
 
+const MAX_SYSCALL_ID: usize = 1024;
+
 use bpf::*;
 
 use crate::common::bpf::*;
 use crate::common::*;
 use crate::samplers::syscall::stats::*;
 use crate::samplers::syscall::*;
-
-use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -67,59 +67,6 @@ impl Syscall {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut bpf = Bpf::from_skel(skel);
-
-        let fd = bpf.map("syscall_lut").as_fd().as_raw_fd();
-        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
-        let mut syscall_lut = unsafe {
-            memmap2::MmapOptions::new()
-                .len(1024 * 8)
-                .map_mut(&file)
-                .expect("failed to mmap() bpf syscall lut")
-        };
-
-        for (syscall_id, bytes) in syscall_lut.chunks_exact_mut(8).enumerate() {
-            let counter_offset = bytes.as_mut_ptr() as *mut u64;
-            if let Some(syscall_name) = syscall_numbers::native::sys_call_name(syscall_id as i64) {
-                let group = match syscall_name {
-                    // read related
-                    "pread64" | "preadv" | "preadv2" | "read" | "readv" | "recvfrom"
-                    | "recvmmsg" | "recvmsg" => 1,
-                    // write related
-                    "pwrite64" | "pwritev" | "pwritev2" | "sendmmsg" | "sendmsg" | "sendto"
-                    | "write" | "writev" => 2,
-                    // poll/select/epoll
-                    "epoll_create" | "epoll_create1" | "epoll_ctl" | "epoll_ctl_old"
-                    | "epoll_pwait" | "epoll_pwait2" | "epoll_wait" | "epoll_wait_old" | "poll"
-                    | "ppoll" | "ppoll_time64" | "pselect6" | "pselect6_time64" | "select" => 3,
-                    // locking
-                    "futex" => 4,
-                    // time
-                    "adjtimex" | "clock_adjtime" | "clock_getres" | "clock_gettime"
-                    | "clock_settime" | "gettimeofday" | "settimeofday" | "time" => 5,
-                    // sleep
-                    "clock_nanosleep" | "nanosleep" => 6,
-                    // socket creation and management
-                    "accept" | "bind" | "connect" | "getpeername" | "getsockname"
-                    | "getsockopt" | "listen" | "setsockopt" | "shutdown" | "socket"
-                    | "socketpair" => 7,
-                    _ => {
-                        // no group defined for these syscalls
-                        0
-                    }
-                };
-                unsafe {
-                    *counter_offset = group;
-                }
-            } else {
-                unsafe {
-                    *counter_offset = 0;
-                }
-            }
-        }
-
-        let _ = syscall_lut.flush();
-
         let counters = vec![
             Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HISTOGRAM)),
             Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HISTOGRAM)),
@@ -131,22 +78,55 @@ impl Syscall {
             Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HISTOGRAM)),
         ];
 
-        bpf.add_counters("counters", counters);
+        let syscall_lut: Vec<u64> = (0..MAX_SYSCALL_ID)
+            .map(|id| {
+                if let Some(syscall_name) = syscall_numbers::native::sys_call_name(id as i64) {
+                    match syscall_name {
+                        // read related
+                        "pread64" | "preadv" | "preadv2" | "read" | "readv" | "recvfrom"
+                        | "recvmmsg" | "recvmsg" => 1,
+                        // write related
+                        "pwrite64" | "pwritev" | "pwritev2" | "sendmmsg" | "sendmsg" | "sendto"
+                        | "write" | "writev" => 2,
+                        // poll/select/epoll
+                        "epoll_create" | "epoll_create1" | "epoll_ctl" | "epoll_ctl_old"
+                        | "epoll_pwait" | "epoll_pwait2" | "epoll_wait" | "epoll_wait_old"
+                        | "poll" | "ppoll" | "ppoll_time64" | "pselect6" | "pselect6_time64"
+                        | "select" => 3,
+                        // locking
+                        "futex" => 4,
+                        // time
+                        "adjtimex" | "clock_adjtime" | "clock_getres" | "clock_gettime"
+                        | "clock_settime" | "gettimeofday" | "settimeofday" | "time" => 5,
+                        // sleep
+                        "clock_nanosleep" | "nanosleep" => 6,
+                        // socket creation and management
+                        "accept" | "bind" | "connect" | "getpeername" | "getsockname"
+                        | "getsockopt" | "listen" | "setsockopt" | "shutdown" | "socket"
+                        | "socketpair" => 7,
+                        _ => {
+                            // no group defined for these syscalls
+                            0
+                        }
+                    }
+                } else {
+                    0
+                }
+            })
+            .collect();
 
-        let mut distributions = vec![
-            ("total_latency", &SYSCALL_TOTAL_LATENCY),
-            ("read_latency", &SYSCALL_READ_LATENCY),
-            ("write_latency", &SYSCALL_WRITE_LATENCY),
-            ("poll_latency", &SYSCALL_POLL_LATENCY),
-            ("lock_latency", &SYSCALL_LOCK_LATENCY),
-            ("time_latency", &SYSCALL_TIME_LATENCY),
-            ("sleep_latency", &SYSCALL_SLEEP_LATENCY),
-            ("socket_latency", &SYSCALL_SOCKET_LATENCY),
-        ];
-
-        for (name, histogram) in distributions.drain(..) {
-            bpf.add_distribution(name, histogram);
-        }
+        let bpf = BpfBuilder::new(skel)
+            .counters("counters", counters)
+            .distribution("total_latency", &SYSCALL_TOTAL_LATENCY)
+            .distribution("read_latency", &SYSCALL_READ_LATENCY)
+            .distribution("write_latency", &SYSCALL_WRITE_LATENCY)
+            .distribution("poll_latency", &SYSCALL_POLL_LATENCY)
+            .distribution("lock_latency", &SYSCALL_LOCK_LATENCY)
+            .distribution("time_latency", &SYSCALL_TIME_LATENCY)
+            .distribution("sleep_latency", &SYSCALL_SLEEP_LATENCY)
+            .distribution("socket_latency", &SYSCALL_SOCKET_LATENCY)
+            .map("syscall_lut", &syscall_lut)
+            .build();
 
         let now = Instant::now();
 
@@ -158,7 +138,7 @@ impl Syscall {
     }
 
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?.as_secs_f64();
+        let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
 
