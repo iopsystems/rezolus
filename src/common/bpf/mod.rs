@@ -23,13 +23,11 @@ const CACHELINE_SIZE: usize = 64;
 /// no CPUs will share cacheline sized segments of the counter map.
 static MAX_CPUS: usize = 1024;
 
-/// The number of histogram buckets based on a rustcommon histogram with the
-/// parameters `grouping_power = 7` `max_value_power = 64`.
-///
-/// NOTE: this *must* remain in-sync across both C and Rust components of BPF
-/// code.
-const HISTOGRAM_BUCKETS: usize = 7424;
-const HISTOGRAM_PAGES: usize = 15;
+/// Returns the next nearest whole number of pages that fits a histogram with
+/// the provided config.
+pub fn histogram_pages(buckets: usize) -> usize {
+    ((buckets * std::mem::size_of::<u64>()) + PAGE_SIZE - 1) / PAGE_SIZE
+}
 
 #[self_referencing]
 pub struct Bpf<T: 'static> {
