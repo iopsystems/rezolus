@@ -136,9 +136,7 @@ pub struct Log {
 
 impl Default for Log {
     fn default() -> Self {
-        Self {
-            level: log_level(),
-        }
+        Self { level: log_level() }
     }
 }
 
