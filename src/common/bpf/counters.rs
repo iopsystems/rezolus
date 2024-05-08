@@ -49,13 +49,6 @@ impl PercpuCounters {
         }
     }
 
-    /// Adds the provided delta to a counter for this CPU
-    pub fn add(&self, cpu: usize, idx: usize, delta: u64) {
-        if let Some(Some(counter)) = self.inner.get(cpu).map(|v| v.get(idx)) {
-            counter.add(delta);
-        }
-    }
-
     /// Returns the sum of all the counters for this CPU
     pub fn sum(&self, cpu: usize) -> Option<u64> {
         self.inner

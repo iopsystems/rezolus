@@ -65,6 +65,22 @@ pub static CPU_USAGE_IDLE: LazyCounter = LazyCounter::new(Counter::default);
 pub static CPU_USAGE_IDLE_HISTOGRAM: AtomicHistogram =
     AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
+#[metric(
+    name = "cpu/usage",
+    description = "The amount of CPU time spent busy",
+    formatter = cpu_metric_formatter,
+    metadata = { state = "busy", unit = "nanoseconds" }
+)]
+pub static CPU_USAGE_BUSY: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "cpu/usage/busy",
+    description = "Distribution of rate of CPU usage across the past snapshot interval",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static CPU_USAGE_BUSY_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
 /// A function to format the cpu metrics that allows for export of both total
 /// and per-CPU metrics.
 ///

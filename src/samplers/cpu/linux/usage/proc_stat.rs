@@ -12,8 +12,10 @@ pub struct ProcStat {
     interval: Interval,
     nanos_per_tick: u64,
     file: File,
-    counters_total: Vec<Counter>,
-    counters_percpu: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
+    total_counters: Vec<Counter>,
+    total_busy: Counter,
+    percpu_counters: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
+    percpu_busy: Vec<DynBoxedMetric<metriken::Counter>>,
 }
 
 impl ProcStat {
@@ -28,7 +30,7 @@ impl ProcStat {
             Err(_) => return Err(()),
         };
 
-        let counters_total = vec![
+        let total_counters = vec![
             Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HISTOGRAM)),
             Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HISTOGRAM)),
             Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
@@ -41,7 +43,8 @@ impl ProcStat {
             Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HISTOGRAM)),
         ];
 
-        let mut counters_percpu = Vec::with_capacity(cpus.len());
+        let mut percpu_counters = Vec::with_capacity(cpus.len());
+        let mut percpu_busy = Vec::new();
 
         for cpu in cpus {
             let states = [
@@ -71,7 +74,18 @@ impl ProcStat {
                 })
                 .collect();
 
-            counters_percpu.push(counters);
+            percpu_counters.push(counters);
+
+            percpu_busy.push(
+                MetricBuilder::new("cpu/usage")
+                    .metadata("id", format!("{}", cpu.id()))
+                    .metadata("core", format!("{}", cpu.core()))
+                    .metadata("die", format!("{}", cpu.die()))
+                    .metadata("package", format!("{}", cpu.package()))
+                    .metadata("state", "busy")
+                    .formatter(cpu_metric_formatter)
+                    .build(metriken::Counter::new()),
+            );
         }
 
         let sc_clk_tck =
@@ -83,8 +97,10 @@ impl ProcStat {
 
         Ok(Self {
             file: File::open("/proc/stat").expect("file not found"),
-            counters_total,
-            counters_percpu,
+            total_counters,
+            total_busy: Counter::new(&CPU_USAGE_BUSY, Some(&CPU_USAGE_BUSY_HISTOGRAM)),
+            percpu_counters,
+            percpu_busy,
             nanos_per_tick,
             interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
@@ -118,18 +134,33 @@ impl ProcStat {
             let header = parts.first().unwrap();
 
             if *header == "cpu" {
-                for (field, counter) in self.counters_total.iter_mut().enumerate() {
+                let mut busy: u64 = 0;
+
+                for (field, counter) in self.total_counters.iter_mut().enumerate() {
                     if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
-                        counter.set(elapsed, v.wrapping_mul(self.nanos_per_tick))
+                        if field < 2 || field > 4 {
+                            busy = busy.wrapping_add(v);
+                        }
+                        counter.set(elapsed, v.wrapping_mul(self.nanos_per_tick));
                     }
+
+                    self.total_busy
+                        .set(elapsed, busy.wrapping_mul(self.nanos_per_tick));
                 }
             } else if header.starts_with("cpu") {
                 if let Ok(id) = header.replace("cpu", "").parse::<usize>() {
-                    for (field, counter) in self.counters_percpu[id].iter_mut().enumerate() {
+                    let mut busy: u64 = 0;
+
+                    for (field, counter) in self.percpu_counters[id].iter_mut().enumerate() {
                         if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
+                            if field < 2 || field > 4 {
+                                busy = busy.wrapping_add(v);
+                            }
                             counter.set(v.wrapping_mul(self.nanos_per_tick));
                         }
                     }
+
+                    self.percpu_busy[id].set(busy.wrapping_mul(self.nanos_per_tick));
                 }
             }
         }

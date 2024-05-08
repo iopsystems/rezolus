@@ -9,7 +9,7 @@ use super::NAME;
 
 use std::io::{Read, Seek};
 
-use metriken::MetricBuilder;
+use metriken::{DynBoxedMetric, MetricBuilder};
 
 use bpf::*;
 
@@ -33,8 +33,10 @@ impl GetMap for ModSkel<'_> {
 pub struct CpuUsage {
     bpf: Bpf<ModSkel<'static>>,
     percpu_counters: Arc<PercpuCounters>,
-    sum_prev: u64,
-    percpu_sum_prev: Vec<u64>,
+    total_busy: Counter,
+    total_idle: Counter,
+    percpu_busy: Vec<DynBoxedMetric<metriken::Counter>>,
+    percpu_idle: Vec<DynBoxedMetric<metriken::Counter>>,
     counter_interval: Interval,
     distribution_interval: Interval,
     online_cores: usize,
@@ -42,7 +44,6 @@ pub struct CpuUsage {
     online_cores_interval: Interval,
 }
 
-const IDLE_CPUTIME_INDEX: usize = 5;
 impl CpuUsage {
     pub fn new(config: &Config) -> Result<Self, ()> {
         let builder = ModSkelBuilder::default();
@@ -77,14 +78,14 @@ impl CpuUsage {
             Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
             Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HISTOGRAM)),
             Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HISTOGRAM)),
             Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HISTOGRAM)),
             Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HISTOGRAM)),
             Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HISTOGRAM)),
         ];
 
         let mut percpu_counters = PercpuCounters::default();
+        let mut percpu_busy = Vec::new();
+        let mut percpu_idle = Vec::new();
 
         let states = [
             "user",
@@ -92,8 +93,6 @@ impl CpuUsage {
             "system",
             "softirq",
             "irq",
-            "idle",
-            "io_wait",
             "steal",
             "guest",
             "guest_nice",
@@ -113,6 +112,26 @@ impl CpuUsage {
                         .build(metriken::Counter::new()),
                 );
             }
+            percpu_busy.push(
+                MetricBuilder::new("cpu/usage")
+                    .metadata("id", format!("{}", cpu.id()))
+                    .metadata("core", format!("{}", cpu.core()))
+                    .metadata("die", format!("{}", cpu.die()))
+                    .metadata("package", format!("{}", cpu.package()))
+                    .metadata("state", "busy")
+                    .formatter(cpu_metric_formatter)
+                    .build(metriken::Counter::new()),
+            );
+            percpu_idle.push(
+                MetricBuilder::new("cpu/usage")
+                    .metadata("id", format!("{}", cpu.id()))
+                    .metadata("core", format!("{}", cpu.core()))
+                    .metadata("die", format!("{}", cpu.die()))
+                    .metadata("package", format!("{}", cpu.package()))
+                    .metadata("state", "idle")
+                    .formatter(cpu_metric_formatter)
+                    .build(metriken::Counter::new()),
+            );
         }
 
         let percpu_counters = Arc::new(percpu_counters);
@@ -125,11 +144,13 @@ impl CpuUsage {
 
         Ok(Self {
             bpf,
-            percpu_counters,
-            sum_prev: 0,
-            percpu_sum_prev: vec![0; cpus.len()],
             counter_interval: Interval::new(now, config.interval(NAME)),
             distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
+            total_busy: Counter::new(&CPU_USAGE_BUSY, Some(&CPU_USAGE_BUSY_HISTOGRAM)),
+            total_idle: Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
+            percpu_counters,
+            percpu_busy,
+            percpu_idle,
             online_cores,
             online_cores_file,
             online_cores_interval: Interval::new(now, ONLINE_CORES_REFRESH),
@@ -142,33 +163,33 @@ impl CpuUsage {
         // refresh the counters from the kernel-space counters
         self.bpf.refresh_counters(elapsed);
 
-        // get the new sum of all the counters
-        let sum_now: u64 = sum();
+        // update busy time metric
+        let busy: u64 = busy();
+        let busy_prev = CPU_USAGE_BUSY.value();
+        let busy_delta = busy.wrapping_sub(busy_prev);
+        self.total_busy.set(elapsed.as_secs_f64(), busy);
 
-        // get the number of nanoseconds in busy time, since idle hasn't been
-        // incremented, the busy time is the difference between our prev and
-        // current sums
-        let busy_delta = sum_now.wrapping_sub(self.sum_prev);
-
-        // idle time delta is `cores * elapsed - busy_delta`
-        let idle_delta = self.online_cores as u64 * elapsed.as_nanos() as u64 - busy_delta;
-
-        // update the idle time metrics
-        CPU_USAGE_IDLE.add(idle_delta);
-        let _ = CPU_USAGE_IDLE_HISTOGRAM.increment(idle_delta);
+        // calculate the idle time elapsed since last sample, update metric
+        let idle_prev = CPU_USAGE_IDLE.value();
+        let idle_delta =
+            (self.online_cores as u64 * elapsed.as_nanos() as u64).saturating_sub(busy_delta);
+        self.total_idle
+            .set(elapsed.as_secs_f64(), idle_prev.wrapping_add(idle_delta));
 
         // do the same for percpu counters
-        for (cpu, sum_prev) in self.percpu_sum_prev.iter_mut().enumerate() {
-            let sum_now: u64 = self.percpu_counters.sum(cpu).unwrap_or(0);
-            let busy_delta = sum_now.wrapping_sub(*sum_prev);
-            let idle_delta = elapsed.as_nanos() as u64 - busy_delta;
-            self.percpu_counters
-                .add(cpu, IDLE_CPUTIME_INDEX, idle_delta);
-            *sum_prev += busy_delta + idle_delta;
-        }
+        for (cpu, (busy_counter, idle_counter)) in self
+            .percpu_busy
+            .iter_mut()
+            .zip(self.percpu_idle.iter_mut())
+            .enumerate()
+        {
+            let busy: u64 = self.percpu_counters.sum(cpu).unwrap_or(0);
+            let busy_prev = busy_counter.set(busy);
+            let busy_delta = busy.wrapping_sub(busy_prev);
 
-        // update the previous sums
-        self.sum_prev += busy_delta + idle_delta;
+            let idle_delta = (elapsed.as_nanos() as u64).saturating_sub(busy_delta);
+            idle_counter.add(idle_delta);
+        }
 
         Ok(())
     }
@@ -191,15 +212,13 @@ impl CpuUsage {
     }
 }
 
-fn sum() -> u64 {
+fn busy() -> u64 {
     [
         &CPU_USAGE_USER,
         &CPU_USAGE_NICE,
         &CPU_USAGE_SYSTEM,
         &CPU_USAGE_SOFTIRQ,
         &CPU_USAGE_IRQ,
-        &CPU_USAGE_IDLE,
-        &CPU_USAGE_IO_WAIT,
         &CPU_USAGE_STEAL,
         &CPU_USAGE_GUEST,
         &CPU_USAGE_GUEST_NICE,
