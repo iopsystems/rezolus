@@ -7,12 +7,15 @@ use std::net::ToSocketAddrs;
 use std::path::Path;
 
 #[derive(Deserialize)]
-// #[serde(deny_unknown_fields)]
 pub struct Config {
     general: General,
+    #[serde(default)]
     log: Log,
+    #[serde(default)]
     prometheus: Prometheus,
+    #[serde(default)]
     defaults: SamplerConfig,
+    #[serde(default)]
     samplers: HashMap<String, SamplerConfig>,
 }
 
@@ -131,6 +134,14 @@ pub struct Log {
     level: Level,
 }
 
+impl Default for Log {
+    fn default() -> Self {
+        Self {
+            level: log_level(),
+        }
+    }
+}
+
 impl Log {
     pub fn level(&self) -> Level {
         self.level
@@ -159,6 +170,15 @@ pub struct Prometheus {
     histograms: bool,
     #[serde(default = "four")]
     histogram_grouping_power: u8,
+}
+
+impl Default for Prometheus {
+    fn default() -> Self {
+        Self {
+            histograms: false,
+            histogram_grouping_power: 4,
+        }
+    }
 }
 
 impl Prometheus {
@@ -210,6 +230,16 @@ pub struct SamplerConfig {
     interval: String,
     #[serde(default = "distribution_interval")]
     distribution_interval: String,
+}
+
+impl Default for SamplerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: interval(),
+            distribution_interval: distribution_interval(),
+        }
+    }
 }
 
 impl SamplerConfig {
