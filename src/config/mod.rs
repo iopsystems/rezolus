@@ -66,21 +66,18 @@ impl Config {
         &self.prometheus
     }
 
-    #[cfg(feature = "bpf")]
-    pub fn bpf(&self) -> bool {
-        true
-    }
-
-    #[cfg(not(feature = "bpf"))]
-    pub fn bpf(&self) -> bool {
-        false
-    }
-
     pub fn enabled(&self, name: &str) -> bool {
         self.samplers
             .get(name)
             .map(|c| c.enabled())
             .unwrap_or(self.defaults.enabled())
+    }
+
+    pub fn bpf(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .map(|c| c.bpf())
+            .unwrap_or(self.defaults.bpf())
     }
 
     pub fn interval(&self, name: &str) -> Duration {
@@ -224,6 +221,8 @@ pub fn distribution_interval() -> String {
 pub struct SamplerConfig {
     #[serde(default = "enabled")]
     enabled: bool,
+    #[serde(default = "enabled")]
+    bpf: bool,
     #[serde(default = "interval")]
     interval: String,
     #[serde(default = "distribution_interval")]
@@ -234,6 +233,7 @@ impl Default for SamplerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            bpf: true,
             interval: interval(),
             distribution_interval: distribution_interval(),
         }
@@ -266,6 +266,10 @@ impl SamplerConfig {
 
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub fn bpf(&self) -> bool {
+        self.bpf
     }
 
     pub fn interval(&self) -> Duration {
