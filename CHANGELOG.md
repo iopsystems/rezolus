@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+## [3.15.0] - 2024-05-09
+
+## Fixed
+
+- CPU usage sampler could not be disabled (#259)
+- Example config out-of-date (#260)
+
+## Added
+
+- Example Grafana/Prometheus dashboard (#239)
+- Off-CPU time added to the scheduler runqueue sampler (#240)
+- Filesystem sampler added and tracks the number of open file descriptors (#242)
+- Log level can now be set in the config (#246)
+- Network interface statistics for tx/rx errors (drop, crc, ...) (#247)
+- BPF can be enabled/disabled per-sampler or globally. (#258)
+
 ## [3.14.2] - 2024-04-18
 
 ## Fixed
@@ -230,7 +246,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.14.2...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.15.0...HEAD
+[3.15.0]: https://github.com/iopsystems/rezolus/compare/v3.14.2...v3.15.0
 [3.14.2]: https://github.com/iopsystems/rezolus/compare/v3.14.1...v3.14.2
 [3.14.1]: https://github.com/iopsystems/rezolus/compare/v3.14.0...v3.14.1
 [3.14.0]: https://github.com/iopsystems/rezolus/compare/v3.13.0...v3.14.0
