@@ -2,12 +2,12 @@
 
 ## [3.15.0] - 2024-05-09
 
-## Fixed
+### Fixed
 
 - CPU usage sampler could not be disabled (#259)
 - Example config out-of-date (#260)
 
-## Added
+### Added
 
 - Example Grafana/Prometheus dashboard (#239)
 - Off-CPU time added to the scheduler runqueue sampler (#240)
@@ -18,20 +18,20 @@
 
 ## [3.14.2] - 2024-04-18
 
-## Fixed
+### Fixed
 
 - CPU usage for soft and hard irq was incorrectly reported. (#236)
 
 ## [3.14.1] - 2024-04-16
 
-## Fixed
+### Fixed
 
 - CPU usage reporting via BPF would report CPU as always idle on some systems.
   (#233)
 
 ## [3.14.0] - 2024-04-03
 
-## Changed
+### Changed
 
 - metriken crates updated which changes the msgpack output. (#224)
 
@@ -41,7 +41,7 @@
 
 ## [3.13.0] - 2024-04-01
 
-## Changed
+### Changed
 
 - Memory sampler was reporting memory usage stats in KiB, but with bytes for the
   unit metadata. This change corrects the sampler to report memory usage in
@@ -50,62 +50,62 @@
 
 ## [3.12.0] - 2024-03-28
 
-## Added
+### Added
 
 - MacOS cpu usage sampling. (#203)
 - Metric unit annotations are added and exposed as metadata.
 - Logs version number on startup. (#213)
 
-## Fixed
+### Fixed
 
 - Incorrect summary stats (percentiles) were reported in version 3.10.2, 3.10.3,
   and 3.11.0. (#216)
 
 ## [3.11.0] - 2024-03-25
 
-## Changed
+### Changed
 
 - Refactored the scheduler and syscall BPF samplers to reduce overheads. (#193
   #195)
 
-## Added
+### Added
 
 - BlockIO thoughput and operation metrics using BPF. (#198)
 - Network throughput and packet metrics using BPF. (#200)
 
-## Fixed
+### Fixed
 
 - Online CPU detection for CPU usage sampler needed a trimmed string. (#194)
 
 ## [3.10.3] - 2024-03-20
 
-## Fixed
+### Fixed
 
 - Fixes an incorrect calculation of the number of online CPUs in the BPF-based
   CPU usage sampler.
 
 ## [3.10.2] - 2024-03-20
 
-## Fixed
+### Fixed
 
 - Fixes a panic in the CPU perf event sampler due to a divide-by-zero. This
   occurs when there are no active perf event groups. (#185)
 
 ## [3.10.1] - 2024-03-20
 
-## Fixed
+### Fixed
 
 - Fixes per-CPU idle time accounting in the BPF-based sampler. Starting in
   release 3.9.0 these metrics incorrectly report no idle time. (#181)
 
 ## [3.10.0] - 2024-03-19
 
-## Added
+### Added
 
 - Additional system information fields including kernel version, CPU frequency
   details, network queues, and IRQ affinity. (#100)
 
-## Fixed
+### Fixed
 
 - Fixes a panic on some systems when perf counter initialization has failed.
   This bug was introduced in 3.9.0. (#175)
@@ -114,7 +114,7 @@
 
 ## [3.9.0] - 2024-03-15
 
-## Added
+### Added
 
 - CPU usage metrics are now collected via BPF when available. (#165)
 - Perf event sampler can now initialize when only some counters are available.
@@ -122,12 +122,12 @@
 
 ## [3.8.0] - 2024-03-04
 
-## Added
+### Added
 
 - Allows Rezolus to run on MacOS though sampler support is limited.
 - Provides msgpack exposition format as a more efficient exposition format.
 
-## Fixed
+### Fixed
 
 - Updates of various direct dependencies.
 
