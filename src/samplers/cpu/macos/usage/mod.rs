@@ -124,7 +124,7 @@ impl CpuUsage {
                     .offset((cpu as i32 * libc::CPU_STATE_MAX + libc::CPU_STATE_NICE) as isize)
                     as u64)
                     .wrapping_mul(self.nanos_per_tick);
-                let busy = user.wrapping_add(system.wrapping_add(idle));
+                let busy = user.wrapping_add(system.wrapping_add(nice));
 
                 self.counters_percpu[cpu as usize][0].set(user);
                 self.counters_percpu[cpu as usize][1].set(nice);
