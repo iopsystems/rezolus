@@ -66,16 +66,6 @@ impl Config {
         &self.prometheus
     }
 
-    #[cfg(feature = "bpf")]
-    pub fn bpf(&self) -> bool {
-        true
-    }
-
-    #[cfg(not(feature = "bpf"))]
-    pub fn bpf(&self) -> bool {
-        false
-    }
-
     pub fn enabled(&self, name: &str) -> bool {
         self.samplers
             .get(name)
@@ -243,7 +233,7 @@ impl Default for SamplerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            use_bpf: true,
+            bpf: true,
             interval: interval(),
             distribution_interval: distribution_interval(),
         }
