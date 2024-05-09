@@ -12,7 +12,6 @@
 
 #define IDLE_STAT_INDEX 5
 #define IOWAIT_STAT_INDEX 6
-#define TOTAL_STATES 10
 
 // cpu usage stat index (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
 // 0 - user
