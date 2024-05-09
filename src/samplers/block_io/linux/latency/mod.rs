@@ -47,7 +47,7 @@ pub struct Biolat {
 impl Biolat {
     pub fn new(config: &Config) -> Result<Self, ()> {
         // check if sampler should be enabled
-        if !config.enabled(NAME) {
+        if !(config.enabled(NAME) && config.bpf(NAME)) {
             return Err(());
         }
 
