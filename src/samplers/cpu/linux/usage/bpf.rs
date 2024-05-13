@@ -39,9 +39,14 @@ pub struct CpuUsage {
     percpu_idle: Vec<DynBoxedMetric<metriken::Counter>>,
     counter_interval: Interval,
     distribution_interval: Interval,
-    online_cores: usize,
+    online_cores: OnlineCores,
     online_cores_file: std::fs::File,
     online_cores_interval: Interval,
+}
+
+pub struct OnlineCores {
+    count: usize,
+    cpus: Vec<bool>,
 }
 
 impl CpuUsage {
@@ -177,7 +182,7 @@ impl CpuUsage {
         // calculate the idle time elapsed since last sample, update metric
         let idle_prev = CPU_USAGE_IDLE.value();
         let idle_delta =
-            (self.online_cores as u64 * elapsed.as_nanos() as u64).saturating_sub(busy_delta);
+            (self.online_cores.count as u64 * elapsed.as_nanos() as u64).saturating_sub(busy_delta);
         self.total_idle
             .set(elapsed.as_secs_f64(), idle_prev.wrapping_add(idle_delta));
 
@@ -188,6 +193,10 @@ impl CpuUsage {
             .zip(self.percpu_idle.iter_mut())
             .enumerate()
         {
+            if !self.online_cores.cpus[cpu] {
+                continue;
+            }
+
             let busy: u64 = self.percpu_counters.sum(cpu).unwrap_or(0);
             let busy_prev = busy_counter.set(busy);
             let busy_delta = busy.wrapping_sub(busy_prev);
@@ -233,7 +242,7 @@ fn busy() -> u64 {
     .sum()
 }
 
-fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
+fn online_cores(file: &mut std::fs::File) -> Result<OnlineCores, ()> {
     file.rewind()
         .map_err(|e| error!("failed to seek to start of file: {e}"))?;
 
@@ -243,6 +252,8 @@ fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
     let _ = file
         .read_to_string(&mut raw)
         .map_err(|e| error!("failed to read file: {e}"))?;
+
+    let mut cpus = vec![false; 1024];
 
     for range in raw.trim().split(',') {
         let mut parts = range.split('-');
@@ -264,17 +275,21 @@ fn online_cores(file: &mut std::fs::File) -> Result<usize, ()> {
         }
 
         match (first, second) {
-            (Some(_value), None) => {
+            (Some(value), None) => {
+                cpus[value] = true;
                 count += 1;
             }
             (Some(start), Some(stop)) => {
+                for value in start..=stop {
+                    cpus[value] = true;
+                }
                 count += stop + 1 - start;
             }
             _ => continue,
         }
     }
 
-    Ok(count)
+    Ok(OnlineCores { count, cpus })
 }
 
 impl Sampler for CpuUsage {
