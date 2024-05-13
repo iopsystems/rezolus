@@ -62,9 +62,9 @@ impl OnlineCores {
             file,
         };
 
-        let _ = online_cores.refresh();
+        let _ = online_cores.refresh()?;
 
-        online_cores
+        Ok(online_cores)
     }
 
     pub fn refresh(&mut self) -> Result<(), ()> {
@@ -117,6 +117,8 @@ impl OnlineCores {
         }
 
         self.count = count;
+
+        Ok(())
     }
 }
 
