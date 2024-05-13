@@ -18,6 +18,8 @@ use crate::common::*;
 use crate::samplers::cpu::*;
 use crate::samplers::hwinfo::hardware_info;
 
+const MAX_CPUS: usize = 1024;
+
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         self.obj.map(name).unwrap()
@@ -46,7 +48,72 @@ pub struct CpuUsage {
 
 pub struct OnlineCores {
     count: usize,
-    cpus: Vec<bool>,
+    cpus: [bool; MAX_CPUS],
+}
+
+impl OnlineCores {
+    pub fn new() -> Self {
+        let mut online_cores = OnlineCores {
+            count: 0,
+            cpus: [false; MAX_CPUS],
+        };
+
+        online_cores.refresh();
+
+        online_cores
+    }
+
+    pub fn refresh(&mut self) {
+        file.rewind()
+            .map_err(|e| error!("failed to seek to start of file: {e}"))?;
+
+        let mut count = 0;
+        let mut raw = String::new();
+
+        let _ = file
+            .read_to_string(&mut raw)
+            .map_err(|e| error!("failed to read file: {e}"))?;
+
+        for cpu in self.cpus.iter_mut() {
+            *cpu = false;
+        }
+
+        for range in raw.trim().split(',') {
+            let mut parts = range.split('-');
+
+            let first: Option<usize> = parts
+                .next()
+                .map(|text| text.parse())
+                .transpose()
+                .map_err(|e| error!("couldn't parse: {e}"))?;
+            let second: Option<usize> = parts
+                .next()
+                .map(|text| text.parse())
+                .transpose()
+                .map_err(|e| error!("couldn't parse: {e}"))?;
+
+            if parts.next().is_some() {
+                // The line is invalid, report error
+                return Err(error!("invalid content in file"));
+            }
+
+            match (first, second) {
+                (Some(value), None) => {
+                    self.cpus[value] = true;
+                    count += 1;
+                }
+                (Some(start), Some(stop)) => {
+                    for value in start..=stop {
+                        self.cpus[value] = true;
+                    }
+                    count += stop + 1 - start;
+                }
+                _ => continue,
+            }
+        }
+
+        self.count = count;
+    }
 }
 
 impl CpuUsage {
@@ -175,12 +242,12 @@ impl CpuUsage {
 
         // update busy time metric
         let busy: u64 = busy();
-        let busy_prev = CPU_USAGE_BUSY.value();
+        let busy_prev = self.total_busy.value();
         let busy_delta = busy.wrapping_sub(busy_prev);
         self.total_busy.set(elapsed.as_secs_f64(), busy);
 
         // calculate the idle time elapsed since last sample, update metric
-        let idle_prev = CPU_USAGE_IDLE.value();
+        let idle_prev = self.total_idle.value();
         let idle_delta =
             (self.online_cores.count as u64 * elapsed.as_nanos() as u64).saturating_sub(busy_delta);
         self.total_idle
@@ -217,10 +284,7 @@ impl CpuUsage {
 
     pub fn update_online_cores(&mut self, now: Instant) -> Result<(), ()> {
         self.online_cores_interval.try_wait(now)?;
-
-        if let Ok(v) = online_cores(&mut self.online_cores_file) {
-            self.online_cores = v;
-        }
+        self.online_cores.refresh();
 
         Ok(())
     }
@@ -240,56 +304,6 @@ fn busy() -> u64 {
     .iter()
     .map(|v| v.value())
     .sum()
-}
-
-fn online_cores(file: &mut std::fs::File) -> Result<OnlineCores, ()> {
-    file.rewind()
-        .map_err(|e| error!("failed to seek to start of file: {e}"))?;
-
-    let mut count = 0;
-    let mut raw = String::new();
-
-    let _ = file
-        .read_to_string(&mut raw)
-        .map_err(|e| error!("failed to read file: {e}"))?;
-
-    let mut cpus = vec![false; 1024];
-
-    for range in raw.trim().split(',') {
-        let mut parts = range.split('-');
-
-        let first: Option<usize> = parts
-            .next()
-            .map(|text| text.parse())
-            .transpose()
-            .map_err(|e| error!("couldn't parse: {e}"))?;
-        let second: Option<usize> = parts
-            .next()
-            .map(|text| text.parse())
-            .transpose()
-            .map_err(|e| error!("couldn't parse: {e}"))?;
-
-        if parts.next().is_some() {
-            // The line is invalid, report error
-            return Err(error!("invalid content in file"));
-        }
-
-        match (first, second) {
-            (Some(value), None) => {
-                cpus[value] = true;
-                count += 1;
-            }
-            (Some(start), Some(stop)) => {
-                for value in start..=stop {
-                    cpus[value] = true;
-                }
-                count += stop + 1 - start;
-            }
-            _ => continue,
-        }
-    }
-
-    Ok(OnlineCores { count, cpus })
 }
 
 impl Sampler for CpuUsage {

@@ -51,6 +51,10 @@ impl Counter {
 
         self.previous = Some(value);
     }
+
+    pub fn value(&self) -> u64 {
+        self.counter.value()
+    }
 }
 
 #[macro_export]
