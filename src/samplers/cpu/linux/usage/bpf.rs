@@ -42,35 +42,39 @@ pub struct CpuUsage {
     counter_interval: Interval,
     distribution_interval: Interval,
     online_cores: OnlineCores,
-    online_cores_file: std::fs::File,
     online_cores_interval: Interval,
 }
 
 pub struct OnlineCores {
     count: usize,
     cpus: [bool; MAX_CPUS],
+    file: std::fs::File,
 }
 
 impl OnlineCores {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, ()> {
+        let file = std::fs::File::open("/sys/devices/system/cpu/online")
+            .map_err(|e| error!("couldn't open: {e}"))?;
+
         let mut online_cores = OnlineCores {
             count: 0,
             cpus: [false; MAX_CPUS],
+            file,
         };
 
-        online_cores.refresh();
+        let _ = online_cores.refresh();
 
         online_cores
     }
 
-    pub fn refresh(&mut self) {
-        file.rewind()
+    pub fn refresh(&mut self) -> Result<(), ()> {
+        self.file.rewind()
             .map_err(|e| error!("failed to seek to start of file: {e}"))?;
 
         let mut count = 0;
         let mut raw = String::new();
 
-        let _ = file
+        let _ = self.file
             .read_to_string(&mut raw)
             .map_err(|e| error!("failed to read file: {e}"))?;
 
@@ -138,10 +142,7 @@ impl CpuUsage {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let mut online_cores_file = std::fs::File::open("/sys/devices/system/cpu/online")
-            .map_err(|e| error!("couldn't open: {e}"))?;
-
-        let online_cores = online_cores(&mut online_cores_file)
+        let online_cores = OnlineCores::new()
             .map_err(|_| error!("couldn't determine number of online cores"))?;
 
         let cpus = match hardware_info() {
@@ -229,7 +230,6 @@ impl CpuUsage {
             percpu_busy,
             percpu_idle,
             online_cores,
-            online_cores_file,
             online_cores_interval: Interval::new(now, ONLINE_CORES_REFRESH),
         })
     }
@@ -284,7 +284,7 @@ impl CpuUsage {
 
     pub fn update_online_cores(&mut self, now: Instant) -> Result<(), ()> {
         self.online_cores_interval.try_wait(now)?;
-        self.online_cores.refresh();
+        self.online_cores.refresh()?;
 
         Ok(())
     }
