@@ -8,6 +8,9 @@ use std::io::{Read, Seek};
 
 use super::NAME;
 
+const CPU_IDLE_FIELD_INDEX: usize = 3;
+const CPU_IO_WAIT_FIELD_INDEX: usize = 4;
+
 pub struct ProcStat {
     interval: Interval,
     nanos_per_tick: u64,
@@ -138,7 +141,7 @@ impl ProcStat {
 
                 for (field, counter) in self.total_counters.iter_mut().enumerate() {
                     if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
-                        if field < 2 || field > 4 {
+                        if field != CPU_IDLE_FIELD_INDEX && field != CPU_IO_WAIT_FIELD_INDEX {
                             busy = busy.wrapping_add(v);
                         }
                         counter.set(elapsed, v.wrapping_mul(self.nanos_per_tick));
@@ -153,7 +156,7 @@ impl ProcStat {
 
                     for (field, counter) in self.percpu_counters[id].iter_mut().enumerate() {
                         if let Some(Ok(v)) = parts.get(field + 1).map(|v| v.parse::<u64>()) {
-                            if field < 2 || field > 4 {
+                            if field != CPU_IDLE_FIELD_INDEX && field != CPU_IO_WAIT_FIELD_INDEX {
                                 busy = busy.wrapping_add(v);
                             }
                             counter.set(v.wrapping_mul(self.nanos_per_tick));
