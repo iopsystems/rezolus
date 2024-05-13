@@ -68,13 +68,15 @@ impl OnlineCores {
     }
 
     pub fn refresh(&mut self) -> Result<(), ()> {
-        self.file.rewind()
+        self.file
+            .rewind()
             .map_err(|e| error!("failed to seek to start of file: {e}"))?;
 
         let mut count = 0;
         let mut raw = String::new();
 
-        let _ = self.file
+        let _ = self
+            .file
             .read_to_string(&mut raw)
             .map_err(|e| error!("failed to read file: {e}"))?;
 
@@ -144,8 +146,8 @@ impl CpuUsage {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let online_cores = OnlineCores::new()
-            .map_err(|_| error!("couldn't determine number of online cores"))?;
+        let online_cores =
+            OnlineCores::new().map_err(|_| error!("couldn't determine number of online cores"))?;
 
         let cpus = match hardware_info() {
             Ok(hwinfo) => hwinfo.get_cpus(),
