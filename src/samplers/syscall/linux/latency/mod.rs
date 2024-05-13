@@ -44,7 +44,7 @@ pub struct Syscall {
 impl Syscall {
     pub fn new(config: &Config) -> Result<Self, ()> {
         // check if sampler should be enabled
-        if !config.enabled(NAME) {
+        if !(config.enabled(NAME) && config.bpf(NAME)) {
             return Err(());
         }
 

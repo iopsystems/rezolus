@@ -46,6 +46,11 @@ pub struct CpuUsage {
 
 impl CpuUsage {
     pub fn new(config: &Config) -> Result<Self, ()> {
+        // check if sampler should be enabled
+        if !(config.enabled(NAME) && config.bpf(NAME)) {
+            return Err(());
+        }
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
             .open()

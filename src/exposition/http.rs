@@ -6,14 +6,14 @@ use warp::Filter;
 
 /// HTTP exposition
 pub async fn http(config: Arc<Config>) {
+    let listen = config.general().listen();
+
     if config.general().compression() {
         warp::serve(filters::http(config).with(warp::filters::compression::gzip()))
-            .run(([0, 0, 0, 0], 4242))
+            .run(listen)
             .await;
     } else {
-        warp::serve(filters::http(config))
-            .run(([0, 0, 0, 0], 4242))
-            .await;
+        warp::serve(filters::http(config)).run(listen).await;
     }
 }
 

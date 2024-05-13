@@ -52,6 +52,10 @@ histogram_grouping_power = 4
 # collection for that sampler. Setting the default to false requires that
 # individual sampler configs are used to opt-in to collection.
 enabled = true
+# Controls whether BPF sampler will be used. When a metric can be collected
+# without BPF, that sampler will be used instead. Otherwise, the sampler will
+# effectively be disabled.
+bpf = true
 # The collection interval for counter and gauge based metrics. Shorter intervals
 # allow for more accurately capturing bursts in the related percentile metrics.
 interval = "10ms"
@@ -73,9 +77,11 @@ enabled = true
 [samplers.cpu_perf]
 enabled = true
 
-# Instruments CPU usage by state by reading /proc/stat
-[samplers.cpu_proc_stat]
+# Instruments CPU usage by state with BPF or by reading /proc/stat on linux
+# On macos host_processor_info() is used
+[samplers.cpu_usage]
 enabled = true
+bpf = true
 
 # Produces various nVIDIA specific GPU metrics using NVML
 [samplers.gpu_nvidia]
@@ -87,6 +93,14 @@ enabled = true
 
 # Memory NUMA metrics from /proc/vmstat
 [samplers.memory_vmstat]
+enabled = true
+
+# Produces network interface statistics from /sys/class/net for TX/RX errors
+[samplers.network_interfaces]
+enabled = true
+
+# Produces network traffic statistics using BPF
+[samplers.network_traffic]
 enabled = true
 
 # Sample resource utilization for Rezolus itself
@@ -126,11 +140,8 @@ enabled = true
 [samplers.tcp_retransmit]
 enabled = true
 
-# TCP sampler that reads from /proc/snmp
-[samplers.tcp_snmp]
-enabled = true
-
-# BPF sampler that probes TCP send and receive paths to instrument tx/rx size
-# distribution, bytes, and packets.
+# Samples TCP traffic using either a BPF sampler or /proc/net/snmp to provide
+# metrics for TX/RX bytes and packets
 [samplers.tcp_traffic]
 enabled = true
+bpf = true

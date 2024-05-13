@@ -7,12 +7,15 @@ use std::net::ToSocketAddrs;
 use std::path::Path;
 
 #[derive(Deserialize)]
-// #[serde(deny_unknown_fields)]
 pub struct Config {
     general: General,
+    #[serde(default)]
     log: Log,
+    #[serde(default)]
     prometheus: Prometheus,
+    #[serde(default)]
     defaults: SamplerConfig,
+    #[serde(default)]
     samplers: HashMap<String, SamplerConfig>,
 }
 
@@ -63,21 +66,18 @@ impl Config {
         &self.prometheus
     }
 
-    #[cfg(feature = "bpf")]
-    pub fn bpf(&self) -> bool {
-        true
-    }
-
-    #[cfg(not(feature = "bpf"))]
-    pub fn bpf(&self) -> bool {
-        false
-    }
-
     pub fn enabled(&self, name: &str) -> bool {
         self.samplers
             .get(name)
             .map(|c| c.enabled())
             .unwrap_or(self.defaults.enabled())
+    }
+
+    pub fn bpf(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .map(|c| c.bpf())
+            .unwrap_or(self.defaults.bpf())
     }
 
     pub fn interval(&self, name: &str) -> Duration {
@@ -131,6 +131,12 @@ pub struct Log {
     level: Level,
 }
 
+impl Default for Log {
+    fn default() -> Self {
+        Self { level: log_level() }
+    }
+}
+
 impl Log {
     pub fn level(&self) -> Level {
         self.level
@@ -159,6 +165,15 @@ pub struct Prometheus {
     histograms: bool,
     #[serde(default = "four")]
     histogram_grouping_power: u8,
+}
+
+impl Default for Prometheus {
+    fn default() -> Self {
+        Self {
+            histograms: false,
+            histogram_grouping_power: 4,
+        }
+    }
 }
 
 impl Prometheus {
@@ -206,10 +221,23 @@ pub fn distribution_interval() -> String {
 pub struct SamplerConfig {
     #[serde(default = "enabled")]
     enabled: bool,
+    #[serde(default = "enabled")]
+    bpf: bool,
     #[serde(default = "interval")]
     interval: String,
     #[serde(default = "distribution_interval")]
     distribution_interval: String,
+}
+
+impl Default for SamplerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bpf: true,
+            interval: interval(),
+            distribution_interval: distribution_interval(),
+        }
+    }
 }
 
 impl SamplerConfig {
@@ -238,6 +266,10 @@ impl SamplerConfig {
 
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub fn bpf(&self) -> bool {
+        self.bpf
     }
 
     pub fn interval(&self) -> Duration {
