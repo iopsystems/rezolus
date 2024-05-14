@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [3.16.0] - 2024-05-14
+
+### Fixed
+
+- Listen address could not be changed (#264)
+
+### Added
+
+- CPU busy time metric for non-Prometheus endpoints (#256)
+
 ## [3.15.0] - 2024-05-09
 
 ### Fixed
@@ -246,7 +256,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.15.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.16.0...HEAD
+[3.16.0]: https://github.com/iopsystems/rezolus/compare/v3.15.0...v3.16.0
 [3.15.0]: https://github.com/iopsystems/rezolus/compare/v3.14.2...v3.15.0
 [3.14.2]: https://github.com/iopsystems/rezolus/compare/v3.14.1...v3.14.2
 [3.14.1]: https://github.com/iopsystems/rezolus/compare/v3.14.0...v3.14.1
