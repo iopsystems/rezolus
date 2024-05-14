@@ -1,7 +1,6 @@
 use crate::common::{Counter, Interval, Nop};
 use crate::samplers::cpu::*;
 use crate::{distributed_slice, Config, Sampler};
-use core::time::Duration;
 use libc::mach_port_t;
 use metriken::{DynBoxedMetric, MetricBuilder};
 use ringlog::error;
@@ -98,6 +97,7 @@ impl CpuUsage {
         let mut total_system = 0;
         let mut total_idle = 0;
         let mut total_nice = 0;
+        let mut total_busy = 0;
 
         if libc::host_processor_info(
             self.port,
@@ -124,22 +124,26 @@ impl CpuUsage {
                     .offset((cpu as i32 * libc::CPU_STATE_MAX + libc::CPU_STATE_NICE) as isize)
                     as u64)
                     .wrapping_mul(self.nanos_per_tick);
+                let busy = user.wrapping_add(system.wrapping_add(nice));
 
                 self.counters_percpu[cpu as usize][0].set(user);
                 self.counters_percpu[cpu as usize][1].set(nice);
                 self.counters_percpu[cpu as usize][2].set(system);
                 self.counters_percpu[cpu as usize][3].set(idle);
+                self.counters_percpu[cpu as usize][4].set(busy);
 
                 total_user += user;
                 total_system += system;
                 total_idle += idle;
                 total_nice += nice;
+                total_busy += busy;
             }
 
             self.counters_total[0].set(elapsed, total_user);
             self.counters_total[1].set(elapsed, total_nice);
             self.counters_total[2].set(elapsed, total_system);
             self.counters_total[3].set(elapsed, total_idle);
+            self.counters_total[4].set(elapsed, total_busy);
         } else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,

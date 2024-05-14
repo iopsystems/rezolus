@@ -48,7 +48,12 @@ impl Counter {
                 let _ = histogram.increment((delta as f64 / elapsed) as _);
             }
         }
+
         self.previous = Some(value);
+    }
+
+    pub fn value(&self) -> u64 {
+        self.counter.value()
     }
 }
 

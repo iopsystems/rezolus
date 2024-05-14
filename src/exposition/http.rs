@@ -102,6 +102,10 @@ mod handlers {
                 continue;
             }
 
+            if name == "cpu/usage" && metric.metadata().get("state") == Some("busy") {
+                continue;
+            }
+
             if let Some(counter) = any.downcast_ref::<Counter>() {
                 if metric.metadata().is_empty() {
                     data.push(format!(

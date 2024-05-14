@@ -1,17 +1,14 @@
-use crate::common::Counter;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use linkme::distributed_slice;
-use metriken::metric;
-use metriken::Lazy;
-use metriken::LazyCounter;
+use metriken::{metric, Lazy, LazyCounter};
 use metriken_exposition::Histogram;
 use ringlog::*;
+use tokio::sync::RwLock;
+
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use std::time::{Duration, Instant, SystemTime};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
