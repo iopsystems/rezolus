@@ -171,7 +171,7 @@ int handle__sched_switch(u64 *ctx)
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
+			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 
 		pid = prev->pid;
@@ -188,7 +188,7 @@ int handle__sched_switch(u64 *ctx)
 			idx = value_to_index(delta_ns, HISTOGRAM_POWER);
 			cnt = bpf_map_lookup_elem(&running, &idx);
 			if (cnt) {
-				__sync_fetch_and_add(cnt, 1);
+				__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 			}
 
 			*tsp = 0;
@@ -218,7 +218,7 @@ int handle__sched_switch(u64 *ctx)
 		idx = value_to_index(delta_ns, HISTOGRAM_POWER);
 		cnt = bpf_map_lookup_elem(&runqlat, &idx);
 		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
+			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 
 		*tsp = 0;
@@ -236,7 +236,7 @@ int handle__sched_switch(u64 *ctx)
 				idx = value_to_index(offcpu_ns, HISTOGRAM_POWER);
 				cnt = bpf_map_lookup_elem(&offcpu, &idx);
 				if (cnt) {
-					__sync_fetch_and_add(cnt, 1);
+					__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 				}
 			}
 

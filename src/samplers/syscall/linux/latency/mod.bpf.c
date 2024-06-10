@@ -149,7 +149,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 	// for some syscalls, we track counts by "family" of syscall. check the
@@ -163,7 +163,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 			cnt = bpf_map_lookup_elem(&counters, &idx);
 
 			if (cnt) {
-				__sync_fetch_and_add(cnt, 1);
+				__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 			}
 		} else {
 			// syscall counter offset was outside of the expected range
@@ -194,7 +194,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	cnt = bpf_map_lookup_elem(&total_latency, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 	// increment latency histogram for the syscall family
@@ -229,7 +229,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 		}
 
 		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
+			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 	}
 

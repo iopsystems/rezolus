@@ -89,7 +89,7 @@ static int handle_tcp_rcv_space_adjust(void *ctx, struct sock *sk)
 	cnt = bpf_map_lookup_elem(&latency, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 cleanup:

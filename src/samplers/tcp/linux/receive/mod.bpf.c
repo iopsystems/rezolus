@@ -55,7 +55,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	cnt = bpf_map_lookup_elem(&srtt, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 	// NOTE: mdev is stored as 4x the value in microseconds but we want to
@@ -66,7 +66,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	cnt = bpf_map_lookup_elem(&jitter, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 	return 0;
