@@ -45,9 +45,10 @@ impl SysfsNetSampler {
                     "/sys/class/net/{}/statistics/{stat}",
                     interface.name
                 )) {
-                	data.clear();
+                    data.clear();
 
-                    if f.read_to_string(&mut data).is_ok() && data.trim_end().parse::<u64>().is_ok() {
+                    if f.read_to_string(&mut data).is_ok() && data.trim_end().parse::<u64>().is_ok()
+                    {
                         if_stats.insert(interface.name.to_string(), f);
                     }
                 }
@@ -76,7 +77,7 @@ impl Sampler for SysfsNetSampler {
 
             for file in if_stats.values_mut() {
                 if file.rewind().is_ok() {
-                	data.clear();
+                    data.clear();
 
                     if let Err(e) = file.read_to_string(&mut data) {
                         error!("error reading: {e}");
