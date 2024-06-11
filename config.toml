@@ -72,16 +72,22 @@ distribution_interval = "50ms"
 [samplers.block_io_latency]
 enabled = true
 
-# Instruments CPU frequency, instructions, and cycles using perf events with
-# fallback to instrumenting frequency only via /proc/cpuinfo
+# Instruments CPU frequency, instructions, and cycles using BPF perf events or
+# frequency only via /proc/cpuinfo
 [samplers.cpu_perf]
 enabled = true
+bpf = true
 
 # Instruments CPU usage by state with BPF or by reading /proc/stat on linux
 # On macos host_processor_info() is used
 [samplers.cpu_usage]
 enabled = true
 bpf = true
+
+# Instruments the number of currently open file descriptors using
+# /proc/sys/fs/file-nr
+[samplers.filesystem_descriptors]
+enabled = true
 
 # Produces various nVIDIA specific GPU metrics using NVML
 [samplers.gpu_nvidia]
