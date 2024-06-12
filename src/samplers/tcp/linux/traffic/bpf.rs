@@ -68,7 +68,7 @@ impl TcpTraffic {
             Counter::new(&TCP_TX_PACKETS, Some(&TCP_TX_PACKETS_HISTOGRAM)),
         ];
 
-        let mut bpf = BpfBuilder::new(skel)
+        let bpf = BpfBuilder::new(skel)
             .counters("counters", counters)
             .distribution("rx_size", &TCP_RX_SIZE)
             .distribution("tx_size", &TCP_TX_SIZE)

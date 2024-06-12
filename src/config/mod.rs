@@ -69,29 +69,44 @@ impl Config {
     pub fn enabled(&self, name: &str) -> bool {
         self.samplers
             .get(name)
-            .map(|c| c.enabled())
-            .unwrap_or(self.defaults.enabled())
+            .and_then(|v| v.enabled)
+            .unwrap_or(self.defaults.enabled.unwrap_or(enabled()))
     }
 
     pub fn bpf(&self, name: &str) -> bool {
         self.samplers
             .get(name)
-            .map(|c| c.bpf())
-            .unwrap_or(self.defaults.bpf())
+            .and_then(|v| v.bpf)
+            .unwrap_or(self.defaults.bpf.unwrap_or(enabled()))
     }
 
     pub fn interval(&self, name: &str) -> Duration {
-        self.samplers
+        let interval = self
+            .samplers
             .get(name)
-            .map(|c| c.interval())
-            .unwrap_or(self.defaults.interval())
+            .and_then(|v| v.interval.as_ref())
+            .unwrap_or(self.defaults.interval.as_ref().unwrap_or(&interval()))
+            .parse::<humantime::Duration>()
+            .unwrap();
+
+        Duration::from_nanos(interval.as_nanos() as u64)
     }
 
     pub fn distribution_interval(&self, name: &str) -> Duration {
-        self.samplers
+        let interval = self
+            .samplers
             .get(name)
-            .map(|c| c.distribution_interval())
-            .unwrap_or(self.defaults.distribution_interval())
+            .and_then(|v| v.distribution_interval.as_ref())
+            .unwrap_or(
+                self.defaults
+                    .distribution_interval
+                    .as_ref()
+                    .unwrap_or(&distribution_interval()),
+            )
+            .parse::<humantime::Duration>()
+            .unwrap();
+
+        Duration::from_nanos(interval.as_nanos() as u64)
     }
 }
 
@@ -217,76 +232,54 @@ pub fn distribution_interval() -> String {
     "50ms".into()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct SamplerConfig {
-    #[serde(default = "enabled")]
-    enabled: bool,
-    #[serde(default = "enabled")]
-    bpf: bool,
-    #[serde(default = "interval")]
-    interval: String,
-    #[serde(default = "distribution_interval")]
-    distribution_interval: String,
-}
-
-impl Default for SamplerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            bpf: true,
-            interval: interval(),
-            distribution_interval: distribution_interval(),
-        }
-    }
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    bpf: Option<bool>,
+    #[serde(default)]
+    interval: Option<String>,
+    #[serde(default)]
+    distribution_interval: Option<String>,
 }
 
 impl SamplerConfig {
-    pub fn check(&self, name: &str) {
-        if let Err(e) = self.interval.parse::<humantime::Duration>() {
-            eprintln!("{name} sampler interval is not valid: {e}");
-            std::process::exit(1);
+    fn check(&self, name: &str) {
+        match self
+            .interval
+            .as_ref()
+            .map(|v| v.parse::<humantime::Duration>())
+        {
+            Some(Err(e)) => {
+                eprintln!("{name} sampler interval is not valid: {e}");
+                std::process::exit(1);
+            }
+            Some(Ok(interval)) => {
+                if Duration::from_nanos(interval.as_nanos() as u64) < Duration::from_millis(1) {
+                    eprintln!("{name} sampler interval is too short. Minimum interval is: 1ms");
+                    std::process::exit(1);
+                }
+            }
+            _ => {}
         }
-        if self.interval() < Duration::from_millis(1) {
-            eprintln!("{name} sampler interval is too short. Minimum interval is: 1ms");
-            std::process::exit(1);
+
+        match self
+            .distribution_interval
+            .as_ref()
+            .map(|v| v.parse::<humantime::Duration>())
+        {
+            Some(Err(e)) => {
+                eprintln!("{name} sampler distribution_interval is not valid: {e}");
+                std::process::exit(1);
+            }
+            Some(Ok(interval)) => {
+                if Duration::from_nanos(interval.as_nanos() as u64) < Duration::from_millis(1) {
+                    eprintln!("{name} sampler distribution_interval is too short. Minimum interval is: 1ms");
+                    std::process::exit(1);
+                }
+            }
+            _ => {}
         }
-
-        if let Err(e) = self.distribution_interval.parse::<humantime::Duration>() {
-            eprintln!("{name} sampler distribution interval is not valid: {e}");
-            std::process::exit(1);
-        }
-
-        if self.distribution_interval() < Duration::from_millis(1) {
-            eprintln!(
-                "{name} sampler distribution interval is too short. Minimum interval is: 1ms"
-            );
-            std::process::exit(1);
-        }
-    }
-
-    pub fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    pub fn bpf(&self) -> bool {
-        self.bpf
-    }
-
-    pub fn interval(&self) -> Duration {
-        Duration::from_nanos(
-            self.interval
-                .parse::<humantime::Duration>()
-                .unwrap()
-                .as_nanos() as _,
-        )
-    }
-
-    pub fn distribution_interval(&self) -> Duration {
-        Duration::from_nanos(
-            self.distribution_interval
-                .parse::<humantime::Duration>()
-                .unwrap()
-                .as_nanos() as _,
-        )
     }
 }
