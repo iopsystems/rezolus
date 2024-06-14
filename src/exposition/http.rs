@@ -142,7 +142,7 @@ mod handlers {
                 if let Some(delta) = snapshots.delta.get(&simple_name) {
                     let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                    if let Ok(result) = delta.value.percentiles(&percentiles) {
+                    if let Ok(Some(result)) = delta.value.percentiles(&percentiles) {
                         for (percentile, value) in result.iter().map(|(p, b)| (p, b.end())) {
                             data.push(format!(
                                 "# TYPE {name} gauge\n{name}{{percentile=\"{:02}\"}} {value} {timestamp}",
@@ -295,7 +295,7 @@ async fn simple_stats(quoted: bool) -> Vec<String> {
             if let Some(delta) = snapshots.delta.get(&simple_name) {
                 let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
 
-                if let Ok(result) = delta.value.percentiles(&percentiles) {
+                if let Ok(Some(result)) = delta.value.percentiles(&percentiles) {
                     for (value, label) in result
                         .iter()
                         .map(|(_, b)| b.end())
