@@ -32,6 +32,7 @@ mod filters {
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         prometheus_stats(config.clone())
             .or(human_stats())
+            .or(json_stats())
             .or(hardware_info())
             .or(msgpack())
     }
@@ -52,6 +53,14 @@ mod filters {
         warp::path!("vars")
             .and(warp::get())
             .and_then(handlers::human_stats)
+    }
+
+    /// GET /vars.json
+    pub fn json_stats(
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path!("vars")
+            .and(warp::get())
+            .and_then(handlers::json_stats)
     }
 
     /// GET /hardware_info
@@ -247,8 +256,62 @@ mod handlers {
         }
 
         data.sort();
+
         let mut content = data.join("\n");
         content += "\n";
+        Ok(content)
+    }
+
+    pub async fn json_stats() -> Result<impl warp::Reply, Infallible> {
+        let mut data = Vec::new();
+
+        let snapshots = SNAPSHOTS.read().await;
+
+        for metric in &metriken::metrics() {
+            let any = match metric.as_any() {
+                Some(any) => any,
+                None => {
+                    continue;
+                }
+            };
+
+            if metric.name().starts_with("log_") {
+                continue;
+            }
+
+            let simple_name = metric.formatted(metriken::Format::Simple);
+
+            if let Some(counter) = any.downcast_ref::<Counter>() {
+                data.push(format!("\"{}\": {}", simple_name, counter.value()));
+            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
+                data.push(format!("\"{}\": {}", simple_name, gauge.value()));
+            } else if any.downcast_ref::<AtomicHistogram>().is_some()
+                || any.downcast_ref::<RwLockHistogram>().is_some()
+            {
+                let simple_name = metric.formatted(metriken::Format::Simple);
+
+                if let Some(delta) = snapshots.delta.get(&simple_name) {
+                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                    if let Ok(result) = delta.value.percentiles(&percentiles) {
+                        for (value, label) in result
+                            .iter()
+                            .map(|(_, b)| b.end())
+                            .zip(PERCENTILES.iter().map(|(l, _)| l))
+                        {
+                            data.push(format!("\"{}/{}\": {}", simple_name, label, value));
+                        }
+                    }
+                }
+            }
+        }
+
+        data.sort();
+
+        let mut content = "{".to_string();
+        content += &data.join(",");
+        content += "}";
+
         Ok(content)
     }
 
