@@ -212,101 +212,16 @@ mod handlers {
     }
 
     pub async fn human_stats() -> Result<impl warp::Reply, Infallible> {
-        let mut data = Vec::new();
-
-        let snapshots = SNAPSHOTS.read().await;
-
-        for metric in &metriken::metrics() {
-            let any = match metric.as_any() {
-                Some(any) => any,
-                None => {
-                    continue;
-                }
-            };
-
-            if metric.name().starts_with("log_") {
-                continue;
-            }
-
-            let simple_name = metric.formatted(metriken::Format::Simple);
-
-            if let Some(counter) = any.downcast_ref::<Counter>() {
-                data.push(format!("{}: {}", simple_name, counter.value()));
-            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                data.push(format!("{}: {}", simple_name, gauge.value()));
-            } else if any.downcast_ref::<AtomicHistogram>().is_some()
-                || any.downcast_ref::<RwLockHistogram>().is_some()
-            {
-                let simple_name = metric.formatted(metriken::Format::Simple);
-
-                if let Some(delta) = snapshots.delta.get(&simple_name) {
-                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
-
-                    if let Ok(result) = delta.value.percentiles(&percentiles) {
-                        for (value, label) in result
-                            .iter()
-                            .map(|(_, b)| b.end())
-                            .zip(PERCENTILES.iter().map(|(l, _)| l))
-                        {
-                            data.push(format!("{}/{}: {}", simple_name, label, value));
-                        }
-                    }
-                }
-            }
-        }
-
-        data.sort();
+        let data = simple_stats(false).await;
 
         let mut content = data.join("\n");
         content += "\n";
+
         Ok(content)
     }
 
     pub async fn json_stats() -> Result<impl warp::Reply, Infallible> {
-        let mut data = Vec::new();
-
-        let snapshots = SNAPSHOTS.read().await;
-
-        for metric in &metriken::metrics() {
-            let any = match metric.as_any() {
-                Some(any) => any,
-                None => {
-                    continue;
-                }
-            };
-
-            if metric.name().starts_with("log_") {
-                continue;
-            }
-
-            let simple_name = metric.formatted(metriken::Format::Simple);
-
-            if let Some(counter) = any.downcast_ref::<Counter>() {
-                data.push(format!("\"{}\": {}", simple_name, counter.value()));
-            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                data.push(format!("\"{}\": {}", simple_name, gauge.value()));
-            } else if any.downcast_ref::<AtomicHistogram>().is_some()
-                || any.downcast_ref::<RwLockHistogram>().is_some()
-            {
-                let simple_name = metric.formatted(metriken::Format::Simple);
-
-                if let Some(delta) = snapshots.delta.get(&simple_name) {
-                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
-
-                    if let Ok(result) = delta.value.percentiles(&percentiles) {
-                        for (value, label) in result
-                            .iter()
-                            .map(|(_, b)| b.end())
-                            .zip(PERCENTILES.iter().map(|(l, _)| l))
-                        {
-                            data.push(format!("\"{}/{}\": {}", simple_name, label, value));
-                        }
-                    }
-                }
-            }
-        }
-
-        data.sort();
+        let data = simple_stats(true).await;
 
         let mut content = "{".to_string();
         content += &data.join(",");
@@ -343,4 +258,56 @@ mod handlers {
             Ok(warp::reply::json(&false))
         }
     }
+}
+
+// gathers up the metrics into a simple format that can be presented as human
+// readable metrics or transformed into JSON
+async fn simple_stats(quoted: bool) -> Vec<String> {
+    let mut data = Vec::new();
+
+    let snapshots = crate::SNAPSHOTS.read().await;
+
+    let q = if quoted { "\"" } else { "" };
+
+    for metric in &metriken::metrics() {
+        let any = match metric.as_any() {
+            Some(any) => any,
+            None => {
+                continue;
+            }
+        };
+
+        if metric.name().starts_with("log_") {
+            continue;
+        }
+
+        let simple_name = metric.formatted(metriken::Format::Simple);
+
+        if let Some(counter) = any.downcast_ref::<Counter>() {
+            data.push(format!("{q}{simple_name}{q}: {}", counter.value()));
+        } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
+            data.push(format!("{q}{simple_name}{q}: {}", gauge.value()));
+        } else if any.downcast_ref::<AtomicHistogram>().is_some()
+            || any.downcast_ref::<RwLockHistogram>().is_some()
+        {
+            let simple_name = metric.formatted(metriken::Format::Simple);
+
+            if let Some(delta) = snapshots.delta.get(&simple_name) {
+                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                if let Ok(result) = delta.value.percentiles(&percentiles) {
+                    for (value, label) in result
+                        .iter()
+                        .map(|(_, b)| b.end())
+                        .zip(PERCENTILES.iter().map(|(l, _)| l))
+                    {
+                        data.push(format!("{q}{simple_name}/{label}{q}: {value}"));
+                    }
+                }
+            }
+        }
+    }
+
+    data.sort();
+    data
 }
