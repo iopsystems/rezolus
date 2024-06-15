@@ -32,10 +32,35 @@ mod filters {
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         prometheus_stats(config.clone())
             .or(human_stats())
+            .or(json_stats())
             .or(hardware_info())
             .or(msgpack())
     }
 
+    /// Serves Prometheus / OpenMetrics text format metrics. All metrics have
+    /// type information, some have descriptions as well. Percentiles read from
+    /// histograms are exposed with a `percentile` label where the value
+    /// corresponds to the percentile in the range of 0.0 - 100.0.
+    ///
+    /// Since we serve histogram metrics from a snapshot, they have a timestamp
+    /// that indicates when the histogram was snapshotted. All other metrics are
+    /// read at the time of the request and rely on the scraper to timestamp the
+    /// readings. This allows backends like Prometheus to attribute the readings
+    /// from all sources to the moment in time they were read.
+    ///
+    /// See: https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md
+    ///
+    /// ```text
+    /// # TYPE example_counter counter
+    /// # HELP example_counter An unsigned 64bit monotonic counter.
+    /// example_counter 0
+    /// # TYPE example_gauge gauge
+    /// # HELP example_gauge A signed 64bit gauge.
+    /// example_gauge 0
+    /// # TYPE example_histogram{percentile="50.0"} gauge
+    /// example_histogram{percentile="50.0"} 0 [UNIX TIME]
+    /// ```
+    ///
     /// GET /metrics
     pub fn prometheus_stats(
         config: Arc<Config>,
@@ -46,12 +71,49 @@ mod filters {
             .and_then(handlers::prometheus_stats)
     }
 
+    /// Serves human readable stats. One metric per line with a `LF` as the
+    /// newline character (Unix-style). Percentiles will have percentile labels
+    /// appended with a `/` as a separator.
+    ///
+    /// ```
+    /// example/counter: 0
+    /// example/gauge: 0,
+    /// example/histogram/p999: 0,
+    /// ```
+    ///
     /// GET /vars
     pub fn human_stats(
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::path!("vars")
             .and(warp::get())
             .and_then(handlers::human_stats)
+    }
+
+    /// JSON metrics exposition. Multiple paths are provided for enhanced
+    /// compatibility with metrics collectors.
+    ///
+    /// Percentiles read from heatmaps will have a percentile label appended to
+    /// to the metric name in the form `/p999` which would be the 99.9th
+    /// percentile.
+    ///
+    /// ```text
+    /// {"example/counter": 0,"example/gauge": 0, example/histogram/p999": 0, ... }
+    /// ```
+    ///
+    /// GET /metrics.json
+    /// GET /vars.json
+    /// GET /admin/metrics.json
+    pub fn json_stats(
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path!("metrics.json")
+            .and(warp::get())
+            .and_then(handlers::json_stats)
+            .or(warp::path!("vars.json")
+                .and(warp::get())
+                .and_then(handlers::json_stats))
+            .or(warp::path!("admin" / "metrics.json")
+                .and(warp::get())
+                .and_then(handlers::json_stats))
     }
 
     /// GET /hardware_info
@@ -203,52 +265,21 @@ mod handlers {
     }
 
     pub async fn human_stats() -> Result<impl warp::Reply, Infallible> {
-        let mut data = Vec::new();
+        let data = simple_stats(false).await;
 
-        let snapshots = SNAPSHOTS.read().await;
-
-        for metric in &metriken::metrics() {
-            let any = match metric.as_any() {
-                Some(any) => any,
-                None => {
-                    continue;
-                }
-            };
-
-            if metric.name().starts_with("log_") {
-                continue;
-            }
-
-            let simple_name = metric.formatted(metriken::Format::Simple);
-
-            if let Some(counter) = any.downcast_ref::<Counter>() {
-                data.push(format!("{}: {}", simple_name, counter.value()));
-            } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-                data.push(format!("{}: {}", simple_name, gauge.value()));
-            } else if any.downcast_ref::<AtomicHistogram>().is_some()
-                || any.downcast_ref::<RwLockHistogram>().is_some()
-            {
-                let simple_name = metric.formatted(metriken::Format::Simple);
-
-                if let Some(delta) = snapshots.delta.get(&simple_name) {
-                    let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
-
-                    if let Ok(Some(result)) = delta.value.percentiles(&percentiles) {
-                        for (value, label) in result
-                            .iter()
-                            .map(|(_, b)| b.end())
-                            .zip(PERCENTILES.iter().map(|(l, _)| l))
-                        {
-                            data.push(format!("{}/{}: {}", simple_name, label, value));
-                        }
-                    }
-                }
-            }
-        }
-
-        data.sort();
         let mut content = data.join("\n");
         content += "\n";
+
+        Ok(content)
+    }
+
+    pub async fn json_stats() -> Result<impl warp::Reply, Infallible> {
+        let data = simple_stats(true).await;
+
+        let mut content = "{".to_string();
+        content += &data.join(",");
+        content += "}";
+
         Ok(content)
     }
 
@@ -280,4 +311,56 @@ mod handlers {
             Ok(warp::reply::json(&false))
         }
     }
+}
+
+// gathers up the metrics into a simple format that can be presented as human
+// readable metrics or transformed into JSON
+async fn simple_stats(quoted: bool) -> Vec<String> {
+    let mut data = Vec::new();
+
+    let snapshots = crate::SNAPSHOTS.read().await;
+
+    let q = if quoted { "\"" } else { "" };
+
+    for metric in &metriken::metrics() {
+        let any = match metric.as_any() {
+            Some(any) => any,
+            None => {
+                continue;
+            }
+        };
+
+        if metric.name().starts_with("log_") {
+            continue;
+        }
+
+        let simple_name = metric.formatted(metriken::Format::Simple);
+
+        if let Some(counter) = any.downcast_ref::<Counter>() {
+            data.push(format!("{q}{simple_name}{q}: {}", counter.value()));
+        } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
+            data.push(format!("{q}{simple_name}{q}: {}", gauge.value()));
+        } else if any.downcast_ref::<AtomicHistogram>().is_some()
+            || any.downcast_ref::<RwLockHistogram>().is_some()
+        {
+            let simple_name = metric.formatted(metriken::Format::Simple);
+
+            if let Some(delta) = snapshots.delta.get(&simple_name) {
+                let percentiles: Vec<f64> = PERCENTILES.iter().map(|(_, p)| *p).collect();
+
+                if let Ok(Some(result)) = delta.value.percentiles(&percentiles) {
+                    for (value, label) in result
+                        .iter()
+                        .map(|(_, b)| b.end())
+                        .zip(PERCENTILES.iter().map(|(l, _)| l))
+                    {
+                        data.push(format!("{q}{simple_name}/{label}{q}: {value}"));
+                    }
+                }
+            }
+        }
+    }
+
+    data.sort();
+    data
 }
