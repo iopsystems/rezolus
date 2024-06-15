@@ -37,6 +37,30 @@ mod filters {
             .or(msgpack())
     }
 
+    /// Serves Prometheus / OpenMetrics text format metrics. All metrics have
+    /// type information, some have descriptions as well. Percentiles read from
+    /// histograms are exposed with a `percentile` label where the value
+    /// corresponds to the percentile in the range of 0.0 - 100.0.
+    ///
+    /// Since we serve histogram metrics from a snapshot, they have a timestamp
+    /// that indicates when the histogram was snapshotted. All other metrics are
+    /// read at the time of the request and rely on the scraper to timestamp the
+    /// readings. This allows backends like Prometheus to attribute the readings
+    /// from all sources to the moment in time they were read.
+    ///
+    /// See: https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md
+    ///
+    /// ```text
+    /// # TYPE example_counter counter
+    /// # HELP example_counter An unsigned 64bit monotonic counter.
+    /// example_counter 0
+    /// # TYPE example_gauge gauge
+    /// # HELP example_gauge A signed 64bit gauge.
+    /// example_gauge 0
+    /// # TYPE example_histogram{percentile="50.0"} gauge
+    /// example_histogram{percentile="50.0"} 0 [UNIX TIME]
+    /// ```
+    ///
     /// GET /metrics
     pub fn prometheus_stats(
         config: Arc<Config>,
@@ -47,6 +71,16 @@ mod filters {
             .and_then(handlers::prometheus_stats)
     }
 
+    /// Serves human readable stats. One metric per line with a `LF` as the
+    /// newline character (Unix-style). Percentiles will have percentile labels
+    /// appended with a `/` as a separator.
+    ///
+    /// ```
+    /// example/counter: 0
+    /// example/gauge: 0,
+    /// example/histogram/p999: 0,
+    /// ```
+    ///
     /// GET /vars
     pub fn human_stats(
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -55,12 +89,31 @@ mod filters {
             .and_then(handlers::human_stats)
     }
 
+    /// JSON metrics exposition. Multiple paths are provided for enhanced
+    /// compatibility with metrics collectors.
+    ///
+    /// Percentiles read from heatmaps will have a percentile label appended to
+    /// to the metric name in the form `/p999` which would be the 99.9th
+    /// percentile.
+    ///
+    /// ```text
+    /// {"example/counter": 0,"example/gauge": 0, example/histogram/p999": 0, ... }
+    /// ```
+    ///
+    /// GET /metrics.json
     /// GET /vars.json
+    /// GET /admin/metrics.json
     pub fn json_stats(
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path!("vars")
+        warp::path!("metrics.json")
             .and(warp::get())
             .and_then(handlers::json_stats)
+            .or(warp::path!("vars.json")
+                .and(warp::get())
+                .and_then(handlers::json_stats))
+            .or(warp::path!("admin" / "metrics.json")
+                .and(warp::get())
+                .and_then(handlers::json_stats))
     }
 
     /// GET /hardware_info
