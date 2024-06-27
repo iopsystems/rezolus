@@ -123,10 +123,7 @@ pub struct General {
 
 impl General {
     fn check(&self) {
-        match self
-            .snapshot_interval
-            .parse::<humantime::Duration>()
-        {
+        match self.snapshot_interval.parse::<humantime::Duration>() {
             Err(e) => {
                 eprintln!("snapshot interval is not valid: {e}");
                 std::process::exit(1);
