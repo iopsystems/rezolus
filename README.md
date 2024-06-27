@@ -158,7 +158,7 @@ Detailed licensing information can be found in the
 [config]: https://github.com/iopsystems/rezolus/blob/main/config.toml
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT
 [create a fork]: https://github.com/iopsystems/rpc-perf/fork
-[discord]: https://discord.gg/cJEqqErM
+[discord]: https://discord.gg/YC5GDsH4dG
 [license apache]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-APACHE
 [license mit]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-MIT
 [new issue]: https://github.com/iopsystems/rezolus/issues/new
