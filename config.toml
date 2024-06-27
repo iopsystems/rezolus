@@ -12,8 +12,8 @@ compression = false
 # meaning that the percentile metrics will not change until the interval has
 # passed. It is recommended to match this to the scrape interval for the metrics
 # endpoints. The default is one second and should be increased if your metrics
-# system does less frequent sampling. Note: this has no impact on counters,
-# gauges, or full-distribution exposition.
+# system does less frequent sampling. Note: this has no impact on counters or
+# gauges, as both those are read on-demand.
 snapshot_interval = "1s"
 
 [log]
