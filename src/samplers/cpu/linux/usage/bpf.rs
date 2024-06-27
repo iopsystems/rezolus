@@ -224,12 +224,17 @@ impl CpuUsage {
 
         let now = Instant::now();
 
+        let mut total_busy = Counter::new(&CPU_USAGE_BUSY, Some(&CPU_USAGE_BUSY_HISTOGRAM));
+        let mut total_idle = Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM));
+        total_busy.set(0.0, 0);
+        total_idle.set(0.0, 0);
+
         Ok(Self {
             bpf,
             counter_interval: Interval::new(now, config.interval(NAME)),
             distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
-            total_busy: Counter::new(&CPU_USAGE_BUSY, Some(&CPU_USAGE_BUSY_HISTOGRAM)),
-            total_idle: Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
+            total_busy,
+            total_idle,
             percpu_counters,
             percpu_busy,
             percpu_idle,
@@ -254,8 +259,8 @@ impl CpuUsage {
         let idle_prev = self.total_idle.value();
         let idle_delta =
             (self.online_cores.count as u64 * elapsed.as_nanos() as u64).saturating_sub(busy_delta);
-        self.total_idle
-            .set(elapsed.as_secs_f64(), idle_prev.wrapping_add(idle_delta));
+        let idle = idle_prev.wrapping_add(idle_delta);
+        self.total_idle.set(elapsed.as_secs_f64(), idle);
 
         // do the same for percpu counters
         for (cpu, (busy_counter, idle_counter)) in self
