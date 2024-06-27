@@ -51,14 +51,26 @@ mod filters {
     /// See: https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md
     ///
     /// ```text
-    /// # TYPE example_counter counter
-    /// # HELP example_counter An unsigned 64bit monotonic counter.
-    /// example_counter 0
-    /// # TYPE example_gauge gauge
-    /// # HELP example_gauge A signed 64bit gauge.
-    /// example_gauge 0
-    /// # TYPE example_histogram{percentile="50.0"} gauge
-    /// example_histogram{percentile="50.0"} 0 [UNIX TIME]
+    /// # TYPE example_a counter
+    /// # HELP example_a An unsigned 64bit monotonic counter.
+    /// example_a 0
+    /// # TYPE example_b gauge
+    /// # HELP example_b A signed 64bit gauge.
+    /// example_b [i64]
+    /// # TYPE example_c{percentile="50.0"} gauge
+    /// example_c{percentile="50.0"} [i64] [UNIX TIME]
+    /// ```
+    ///
+    /// If histogram exposition is enabled, the histogram buckets are also
+    /// exported and will look like this:
+    ///
+    /// ```text
+    /// # TYPE example_c_distribution histogram
+    /// example_c_distribution_bucket{le="0"} [u64] [UNIX TIME]
+    /// ...
+    /// example_c_distribution_bucket{le="+Inf"} [u64] [UNIX TIME]
+    /// example_c_distribution_count [u64] [UNIX TIME]
+    /// example_c_distribution_sum [u64] [UNIX TIME]
     /// ```
     ///
     /// GET /metrics
