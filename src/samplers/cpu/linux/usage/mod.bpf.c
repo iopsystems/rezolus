@@ -42,7 +42,7 @@ int account_delta(u64 delta, u32 usage_idx)
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
-			__sync_fetch_and_add(cnt, delta);
+			__atomic_fetch_add(cnt, delta, __ATOMIC_RELAXED);
 		}
 	}
 

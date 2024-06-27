@@ -28,7 +28,7 @@ int BPF_KPROBE(tcp_retransmit_skb, struct sock *sk, struct sk_buff *skb, int seg
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, segs);
+		__atomic_fetch_add(cnt, segs, __ATOMIC_RELAXED);
 	}
 
 	return 0;

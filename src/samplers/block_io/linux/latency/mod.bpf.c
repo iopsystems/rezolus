@@ -96,14 +96,14 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
         cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
+			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 
 		idx = idx + COUNTER_GROUP_WIDTH / 2;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
-			__sync_fetch_and_add(cnt, nr_bytes);
+			__atomic_fetch_add(cnt, nr_bytes, __ATOMIC_RELAXED);
 		}
     }
 
@@ -111,7 +111,7 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 	cnt = bpf_map_lookup_elem(&size, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 	tsp = bpf_map_lookup_elem(&start, &rq);
@@ -126,7 +126,7 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 		cnt = bpf_map_lookup_elem(&latency, &idx);
 
 		if (cnt) {
-			__sync_fetch_and_add(cnt, 1);
+			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 	}
 

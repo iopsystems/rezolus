@@ -42,14 +42,14 @@ int BPF_PROG(netif_receive_skb, struct sk_buff *skb)
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 	idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + RX_BYTES;
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, len);
+		__atomic_fetch_add(cnt, len, __ATOMIC_RELAXED);
 	}
 
 	return 0;
@@ -69,14 +69,14 @@ int BPF_PROG(tcp_cleanup_rbuf, struct sk_buff *skb, struct net_device *dev, void
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, 1);
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 	}
 
 	idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + TX_BYTES;
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {
-		__sync_fetch_and_add(cnt, len);
+		__atomic_fetch_add(cnt, len, __ATOMIC_RELAXED);
 	}
 
 	return 0;
