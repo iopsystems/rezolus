@@ -168,7 +168,8 @@ fn main() {
     });
 
     // spawn thread to maintain histogram snapshots
-    rt.spawn(async {
+    let snapshot_interval = config.general().snapshot_interval();
+    rt.spawn(async move {
         loop {
             // acquire a lock and update the snapshots
             {
@@ -177,7 +178,7 @@ fn main() {
             }
 
             // delay until next update
-            tokio::time::sleep(core::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(snapshot_interval).await;
         }
     });
 

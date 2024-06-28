@@ -35,6 +35,8 @@ impl Config {
             })
             .unwrap();
 
+        config.general.check();
+
         config.prometheus().check();
 
         config.defaults.check("default");
@@ -115,9 +117,26 @@ pub struct General {
     listen: String,
     #[serde(default = "disabled")]
     compression: bool,
+    #[serde(default = "snapshot_interval")]
+    snapshot_interval: String,
 }
 
 impl General {
+    fn check(&self) {
+        match self.snapshot_interval.parse::<humantime::Duration>() {
+            Err(e) => {
+                eprintln!("snapshot interval is not valid: {e}");
+                std::process::exit(1);
+            }
+            Ok(interval) => {
+                if Duration::from_nanos(interval.as_nanos() as u64) < Duration::from_millis(100) {
+                    eprintln!("snapshot interval is too short. Minimum interval is: 100ms");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     pub fn listen(&self) -> SocketAddr {
         self.listen
             .to_socket_addrs()
@@ -136,6 +155,15 @@ impl General {
 
     pub fn compression(&self) -> bool {
         self.compression
+    }
+
+    pub fn snapshot_interval(&self) -> Duration {
+        let interval = self
+            .snapshot_interval
+            .parse::<humantime::Duration>()
+            .unwrap();
+
+        Duration::from_nanos(interval.as_nanos() as u64)
     }
 }
 
@@ -230,6 +258,10 @@ pub fn interval() -> String {
 
 pub fn distribution_interval() -> String {
     "50ms".into()
+}
+
+pub fn snapshot_interval() -> String {
+    "1s".into()
 }
 
 #[derive(Deserialize, Default)]
