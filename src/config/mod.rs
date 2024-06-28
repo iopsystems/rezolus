@@ -129,8 +129,8 @@ impl General {
                 std::process::exit(1);
             }
             Ok(interval) => {
-                if Duration::from_nanos(interval.as_nanos() as u64) < Duration::from_secs(1) {
-                    eprintln!("snapshot interval is too short. Minimum interval is: 1s");
+                if Duration::from_nanos(interval.as_nanos() as u64) < Duration::from_millis(100) {
+                    eprintln!("snapshot interval is too short. Minimum interval is: 100ms");
                     std::process::exit(1);
                 }
             }
