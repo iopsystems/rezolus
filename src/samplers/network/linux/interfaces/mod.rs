@@ -3,6 +3,7 @@ use crate::samplers::network::linux::*;
 #[distributed_slice(NETWORK_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
     let metrics = vec![
+        (&NETWORK_CARRIER_CHANGES, "../carrier_changes"),
         (&NETWORK_RX_CRC_ERRORS, "rx_crc_errors"),
         (&NETWORK_RX_DROPPED, "rx_dropped"),
         (&NETWORK_RX_MISSED_ERRORS, "rx_missed_errors"),

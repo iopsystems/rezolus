@@ -2,6 +2,12 @@ use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::{metric, AtomicHistogram, Counter, LazyCounter};
 
 #[metric(
+    name = "network/carrier_changes",
+    description = "The number of times the link has changes between the UP and DOWN states"
+)]
+pub static NETWORK_CARRIER_CHANGES: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
     name = "network/receive/bytes",
     description = "The number of bytes received over the network",
     metadata = { unit = "bytes" }
