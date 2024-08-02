@@ -42,7 +42,6 @@ impl GetMap for ModSkel<'_> {
 /// * `syscall/socket/latency`
 pub struct Syscall {
     bpf: Bpf<ModSkel<'static>>,
-    counter_interval: Interval,
     distribution_interval: Interval,
 }
 
@@ -90,7 +89,6 @@ impl Syscall {
 
         Ok(Self {
             bpf,
-            counter_interval: Interval::new(now, config.interval(NAME)),
             distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
         })
     }
