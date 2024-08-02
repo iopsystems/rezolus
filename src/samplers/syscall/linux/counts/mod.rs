@@ -8,10 +8,10 @@ fn init(config: &Config) -> Box<dyn Sampler> {
 }
 
 mod bpf {
-    include!(concat!(env!("OUT_DIR"), "/syscall_latency.bpf.rs"));
+    include!(concat!(env!("OUT_DIR"), "/syscall_counts.bpf.rs"));
 }
 
-const NAME: &str = "syscall_latency";
+const NAME: &str = "syscall_counts";
 
 const MAX_SYSCALL_ID: usize = 1024;
 
@@ -30,17 +30,16 @@ impl GetMap for ModSkel<'_> {
 
 /// Collects Scheduler Runqueue Latency stats using BPF and traces:
 /// * `raw_syscalls/sys_enter`
-/// * `raw_syscalls/sys_exit`
 ///
 /// And produces these stats:
-/// * `syscall/total/latency`
-/// * `syscall/read/latency`
-/// * `syscall/write/latency`
-/// * `syscall/poll/latency`
-/// * `syscall/lock/latency`
-/// * `syscall/time/latency`
-/// * `syscall/sleep/latency`
-/// * `syscall/socket/latency`
+/// * `syscall/total`
+/// * `syscall/read`
+/// * `syscall/write`
+/// * `syscall/poll`
+/// * `syscall/lock`
+/// * `syscall/time`
+/// * `syscall/sleep`
+/// * `syscall/socket`
 pub struct Syscall {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Interval,
@@ -72,6 +71,17 @@ impl Syscall {
 
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
+
+        let counters = vec![
+            Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HISTOGRAM)),
+            Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HISTOGRAM)),
+            Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HISTOGRAM)),
+            Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HISTOGRAM)),
+            Counter::new(&SYSCALL_LOCK, Some(&SYSCALL_LOCK_HISTOGRAM)),
+            Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HISTOGRAM)),
+            Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HISTOGRAM)),
+            Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HISTOGRAM)),
+        ];
 
         let syscall_lut: Vec<u64> = (0..MAX_SYSCALL_ID)
             .map(|id| {
@@ -111,14 +121,7 @@ impl Syscall {
             .collect();
 
         let bpf = BpfBuilder::new(skel)
-            .distribution("total_latency", &SYSCALL_TOTAL_LATENCY)
-            .distribution("read_latency", &SYSCALL_READ_LATENCY)
-            .distribution("write_latency", &SYSCALL_WRITE_LATENCY)
-            .distribution("poll_latency", &SYSCALL_POLL_LATENCY)
-            .distribution("lock_latency", &SYSCALL_LOCK_LATENCY)
-            .distribution("time_latency", &SYSCALL_TIME_LATENCY)
-            .distribution("sleep_latency", &SYSCALL_SLEEP_LATENCY)
-            .distribution("socket_latency", &SYSCALL_SOCKET_LATENCY)
+            .counters("counters", counters)
             .map("syscall_lut", &syscall_lut)
             .build();
 
@@ -131,10 +134,10 @@ impl Syscall {
         })
     }
 
-    pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
-        self.distribution_interval.try_wait(now)?;
+    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
+        let elapsed = self.counter_interval.try_wait(now)?;
 
-        self.bpf.refresh_distributions();
+        self.bpf.refresh_counters(elapsed);
 
         Ok(())
     }
@@ -143,6 +146,6 @@ impl Syscall {
 impl Sampler for Syscall {
     fn sample(&mut self) {
         let now = Instant::now();
-        let _ = self.refresh_distributions(now);
+        let _ = self.refresh_counters(now);
     }
 }

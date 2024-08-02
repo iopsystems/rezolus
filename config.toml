@@ -127,8 +127,12 @@ enabled = true
 [samplers.scheduler_runqueue]
 enabled = true
 
-# BPF sampler that instruments syscall enter and exit to gather syscall counts
-# and latencies.
+# BPF sampler that instruments syscall enter to gather syscall counts.
+[samplers.syscall_counts]
+enabled = true
+
+# BPF sampler that instruments syscall enter and exit to gather syscall latency
+# distributions.
 [samplers.syscall_latency]
 enabled = true
 
