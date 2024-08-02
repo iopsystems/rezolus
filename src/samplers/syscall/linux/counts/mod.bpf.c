@@ -60,6 +60,10 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 	// update the total counter
 	cnt = bpf_map_lookup_elem(&counters, &offset);
 
+	if (cnt) {
+		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
+	}
+
 	// for some syscalls, we track counts by "family" of syscall. check the
 	// lookup table and increment the appropriate counter
 	idx = 0;
