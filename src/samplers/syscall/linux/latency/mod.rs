@@ -13,12 +13,11 @@ mod bpf {
 
 const NAME: &str = "syscall_latency";
 
-const MAX_SYSCALL_ID: usize = 1024;
-
 use bpf::*;
 
 use crate::common::bpf::*;
 use crate::common::*;
+use crate::samplers::syscall::linux::*;
 use crate::samplers::syscall::stats::*;
 use crate::samplers::syscall::*;
 
@@ -73,42 +72,7 @@ impl Syscall {
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
-        let syscall_lut: Vec<u64> = (0..MAX_SYSCALL_ID)
-            .map(|id| {
-                if let Some(syscall_name) = syscall_numbers::native::sys_call_name(id as i64) {
-                    match syscall_name {
-                        // read related
-                        "pread64" | "preadv" | "preadv2" | "read" | "readv" | "recvfrom"
-                        | "recvmmsg" | "recvmsg" => 1,
-                        // write related
-                        "pwrite64" | "pwritev" | "pwritev2" | "sendmmsg" | "sendmsg" | "sendto"
-                        | "write" | "writev" => 2,
-                        // poll/select/epoll
-                        "epoll_create" | "epoll_create1" | "epoll_ctl" | "epoll_ctl_old"
-                        | "epoll_pwait" | "epoll_pwait2" | "epoll_wait" | "epoll_wait_old"
-                        | "poll" | "ppoll" | "ppoll_time64" | "pselect6" | "pselect6_time64"
-                        | "select" => 3,
-                        // locking
-                        "futex" => 4,
-                        // time
-                        "adjtimex" | "clock_adjtime" | "clock_getres" | "clock_gettime"
-                        | "clock_settime" | "gettimeofday" | "settimeofday" | "time" => 5,
-                        // sleep
-                        "clock_nanosleep" | "nanosleep" => 6,
-                        // socket creation and management
-                        "accept" | "bind" | "connect" | "getpeername" | "getsockname"
-                        | "getsockopt" | "listen" | "setsockopt" | "shutdown" | "socket"
-                        | "socketpair" => 7,
-                        _ => {
-                            // no group defined for these syscalls
-                            0
-                        }
-                    }
-                } else {
-                    0
-                }
-            })
-            .collect();
+        let syscall_lut = syscall_lut();
 
         let bpf = BpfBuilder::new(skel)
             .distribution("total_latency", &SYSCALL_TOTAL_LATENCY)
