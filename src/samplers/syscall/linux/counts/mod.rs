@@ -64,10 +64,6 @@ impl Syscall {
             "{NAME} sys_enter() BPF instruction count: {}",
             skel.progs().sys_enter().insn_cnt()
         );
-        debug!(
-            "{NAME} sys_exit() BPF instruction count: {}",
-            skel.progs().sys_exit().insn_cnt()
-        );
 
         skel.attach()
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
