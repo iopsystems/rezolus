@@ -23,23 +23,6 @@ extern int LINUX_KERNEL_VERSION __kconfig;
 #define REQ_OP_FLUSH 2
 #define REQ_OP_DISCARD 3
 
-// counters
-// 0 - read ops
-// 1 - write ops
-// 2 - flush ops
-// 3 - discard ops
-// 4 - read bytes
-// 5 - write bytes
-// 6 - flush bytes
-// 7 - discard bytes
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
-} counters SEC(".maps");
-
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 65536);
@@ -54,14 +37,6 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, 7424);
 } latency SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, 7424);
-} size SEC(".maps");
 
 static int __always_inline trace_rq_start(struct request *rq, int issue)
 {
@@ -85,34 +60,6 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 {
 	u64 delta, *tsp, *cnt, ts = bpf_ktime_get_ns();
 	u32 idx;
-	unsigned int cmd_flags;
-
-	cmd_flags = BPF_CORE_READ(rq, cmd_flags);
-
-	idx = cmd_flags & REQ_OP_MASK;
-
-    if (idx < COUNTER_GROUP_WIDTH / 2) {
-        idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + idx;
-        cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-		}
-
-		idx = idx + COUNTER_GROUP_WIDTH / 2;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, nr_bytes, __ATOMIC_RELAXED);
-		}
-    }
-
-	idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
-	cnt = bpf_map_lookup_elem(&size, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
 
 	tsp = bpf_map_lookup_elem(&start, &rq);
 	if (!tsp) {

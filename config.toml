@@ -76,9 +76,14 @@ distribution_interval = "50ms"
 # Each sampler can then be individually configured to override the defaults. All
 # of the configuration options in the `[defaults]` section are allowed.
 
-# BPF sampler that instruments block_io request queue to measure latency and
-# size distribution.
+# BPF sampler that instruments block_io request queue to measure the request
+# latency distribution.
 [samplers.block_io_latency]
+enabled = true
+
+# BPF sampler that instruments block_io request queue to get counts of requests,
+# the number of bytes by request type, and the size distribution.
+[samplers.block_io_requests]
 enabled = true
 
 # Instruments CPU frequency, instructions, and cycles using BPF perf events or

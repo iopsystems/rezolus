@@ -12,6 +12,7 @@ mod bpf {
     // directory.
     const SOURCES: &[(&str, &str)] = &[
         ("block_io", "latency"),
+        ("block_io", "requests"),
         ("cpu", "usage"),
         ("network", "traffic"),
         ("scheduler", "runqueue"),
