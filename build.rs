@@ -15,6 +15,7 @@ mod bpf {
         ("cpu", "usage"),
         ("network", "traffic"),
         ("scheduler", "runqueue"),
+        ("syscall", "counts"),
         ("syscall", "latency"),
         ("tcp", "packet_latency"),
         ("tcp", "receive"),
