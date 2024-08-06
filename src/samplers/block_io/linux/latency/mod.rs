@@ -73,6 +73,8 @@ impl BlockIOLatency {
             .distribution("latency", &BLOCKIO_LATENCY)
             .build();
 
+        let now = Instant::now();
+
         Ok(Self {
             bpf,
             distribution_interval:  Interval::new(now, config.distribution_interval(NAME)),

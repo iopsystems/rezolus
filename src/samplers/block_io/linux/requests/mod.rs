@@ -80,6 +80,8 @@ impl BlockIORequests {
             .distribution("size", &BLOCKIO_SIZE)
             .build();
 
+        let now = Instant::now();
+
         Ok(Self {
             bpf,
             counter_interval:  Interval::new(now, config.interval(NAME)),
@@ -87,7 +89,7 @@ impl BlockIORequests {
         })
     }
 
-    pub fn refresh_counters(&mut self, now: Instant) {
+    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
         let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
