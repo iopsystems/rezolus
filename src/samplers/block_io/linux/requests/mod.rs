@@ -84,8 +84,8 @@ impl BlockIORequests {
 
         Ok(Self {
             bpf,
-            counter_interval:  Interval::new(now, config.interval(NAME)),
-            distribution_interval:  Interval::new(now, config.distribution_interval(NAME)),
+            counter_interval: Interval::new(now, config.interval(NAME)),
+            distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
         })
     }
 
