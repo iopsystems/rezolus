@@ -99,12 +99,16 @@ impl BlockIORequests {
         let elapsed = self.counter_interval.try_wait(now)?;
 
         self.bpf.refresh_counters(elapsed);
+
+        Ok(())
     }
 
     pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
         self.distribution_interval.try_wait(now)?;
 
         self.bpf.refresh_distributions();
+
+        Ok(())
     }
 }
 

@@ -88,6 +88,8 @@ impl BlockIOLatency {
         self.distribution_interval.try_wait(now)?;
 
         self.bpf.refresh_distributions();
+
+        Ok(())
     }
 }
 
