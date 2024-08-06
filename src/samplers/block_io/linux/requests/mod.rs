@@ -109,7 +109,7 @@ impl BlockIORequests {
 impl Sampler for BlockIORequests {
     fn sample(&mut self) {
         let now = Instant::now();
-        self.refresh_counters(now);
-        self.refresh_distributions(now);
+        let _ = self.refresh_counters(now);
+        let _ = self.refresh_distributions(now);
     }
 }
