@@ -1,6 +1,6 @@
 #[distributed_slice(BLOCK_IO_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    if let Ok(s) = BlockIOCounts::new(config) {
+    if let Ok(s) = BlockIORequests::new(config) {
         Box::new(s)
     } else {
         Box::new(Nop {})
@@ -35,12 +35,8 @@ impl GetMap for ModSkel<'_> {
 /// * `blockio/size`
 pub struct BlockIORequests {
     bpf: Bpf<ModSkel<'static>>,
-    counter_interval: Duration,
-    counter_next: Instant,
-    counter_prev: Instant,
-    distribution_interval: Duration,
-    distribution_next: Instant,
-    distribution_prev: Instant,
+    counter_interval: Interval,
+    distribution_interval: Interval,
 }
 
 impl BlockIORequests {
@@ -86,12 +82,8 @@ impl BlockIORequests {
 
         Ok(Self {
             bpf,
-            counter_interval: config.interval(NAME),
-            counter_next: Instant::now(),
-            counter_prev: Instant::now(),
-            distribution_interval: config.distribution_interval(NAME),
-            distribution_next: Instant::now(),
-            distribution_prev: Instant::now(),
+            counter_interval:  Interval::new(now, config.interval(NAME)),
+            distribution_interval:  Interval::new(now, config.distribution_interval(NAME)),
         })
     }
 

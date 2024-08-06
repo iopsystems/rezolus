@@ -75,12 +75,7 @@ impl BlockIOLatency {
 
         Ok(Self {
             bpf,
-            counter_interval: config.interval(NAME),
-            counter_next: Instant::now(),
-            counter_prev: Instant::now(),
-            distribution_interval: config.distribution_interval(NAME),
-            distribution_next: Instant::now(),
-            distribution_prev: Instant::now(),
+            distribution_interval:  Interval::new(now, config.distribution_interval(NAME)),
         })
     }
 
