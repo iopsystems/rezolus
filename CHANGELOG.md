@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+### Added
+
+- Allow setting the metric snapshot interval to better address cases where
+  metrics are not scraped on a secondly basis. (#286)
+- Network carrier change metric. (#290)
+
+### Changed
+
+- Explicitly use relaxed atomics in BPF samplers. (#276)
+- Split syscall sampler into syscall_latency and syscall_counts to allow more
+  fine-grained configuration and allow for reduced overhead. (#298)
+- Split block_io latency sampler into block_io_latency and block_io_requests to
+  allow more fine-grained configuration and allow for reduced overhead. (#299)
+
 ## [3.17.0] - 2024-06-27
 
 ### Fixed
@@ -271,7 +285,7 @@
   a more modern approach to BPF and Perf Event instrumentation. 
 
 [unreleased]: https://github.com/iopsystems/rezolus/compare/v3.17.0...HEAD
-[3.16.0]: https://github.com/iopsystems/rezolus/compare/v3.16.0...v3.17.0
+[3.17.0]: https://github.com/iopsystems/rezolus/compare/v3.16.0...v3.17.0
 [3.16.0]: https://github.com/iopsystems/rezolus/compare/v3.15.0...v3.16.0
 [3.15.0]: https://github.com/iopsystems/rezolus/compare/v3.14.2...v3.15.0
 [3.14.2]: https://github.com/iopsystems/rezolus/compare/v3.14.1...v3.14.2
