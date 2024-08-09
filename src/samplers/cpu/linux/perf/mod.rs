@@ -143,10 +143,10 @@ impl Sampler for Perf {
                     CPU_FREQUENCY_HISTOGRAM.increment(reading.running_frequency_mhz.unwrap_or(0));
 
                 if let Some(c) = reading.cycles {
-                    self.counters[reading.cpu][0].set(c);
+                    self.counters[reading.cpu][0].add(c);
                 }
                 if let Some(c) = reading.instructions {
-                    self.counters[reading.cpu][1].set(c);
+                    self.counters[reading.cpu][1].add(c);
                 }
 
                 if let Some(c) = reading.ipkc {

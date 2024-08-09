@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### Fixed
+
+- CPU per core cycle and instruction counters were incorrect. The system totals
+  reflected the appropriate value. (# ?)
+
 ### Added
 
 - Allow setting the metric snapshot interval to better address cases where
