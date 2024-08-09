@@ -52,7 +52,9 @@ jobs:
           # (or a compiler that supports C++17).
           # - { distro: ubuntu, release: trusty  } # LTS until Apr 2024
           # - { distro: ubuntu, release: xenial  } # LTS until Apr 2026
-          - { distro: ubuntu, release: bionic  } # LTS until Apr 2028
+          # bionic does not have a glibc neew enough for node 20, checkout step
+          #   now fails. Dropping support
+          # - { distro: ubuntu, release: bionic  } # LTS until Apr 2028
           - { distro: ubuntu, release: focal   } # LTS until Apr 2030
           - { distro: ubuntu, release: jammy   } # LTS until Apr 2032
           - { distro: ubuntu, release: lunar   } # Current release
