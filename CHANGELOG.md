@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [3.18.1] - 2024-08-09
+
+### Changed
+
+- Ubuntu Bionic dropped from packaging job. (#306)
+
 ## [3.18.0] - 2024-08-09
 
 ### Fixed
@@ -291,7 +297,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.18.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.18.1...HEAD
+[3.18.1]: https://github.com/iopsystems/rezolus/compare/v3.18.0...v3.18.1
 [3.18.0]: https://github.com/iopsystems/rezolus/compare/v3.17.0...v3.18.0
 [3.17.0]: https://github.com/iopsystems/rezolus/compare/v3.16.0...v3.17.0
 [3.16.0]: https://github.com/iopsystems/rezolus/compare/v3.15.0...v3.16.0
