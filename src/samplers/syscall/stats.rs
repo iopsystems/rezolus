@@ -184,3 +184,26 @@ pub static SYSCALL_SOCKET_HISTOGRAM: AtomicHistogram =
 )]
 pub static SYSCALL_SOCKET_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "syscall/yield",
+    description = "The number of socket related syscalls (sched_yield, ...)",
+    metadata = { unit = "syscalls" }
+)]
+pub static SYSCALL_YIELD: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "syscall/yield",
+    description = "Distribution of the rate of yield related syscalls from sample to sample",
+    metadata = { unit = "sycalls/second" }
+)]
+pub static SYSCALL_YIELD_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "syscall/yield/latency",
+    description = "Distribution of the latency for yield related syscalls",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static SYSCALL_YIELD_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);

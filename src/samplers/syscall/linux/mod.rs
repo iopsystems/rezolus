@@ -32,6 +32,8 @@ pub fn syscall_lut() -> Vec<u64> {
                     "accept" | "bind" | "connect" | "getpeername" | "getsockname"
                     | "getsockopt" | "listen" | "setsockopt" | "shutdown" | "socket"
                     | "socketpair" => 7,
+                    // yield
+                    "sched_yield" => 8,
                     _ => {
                         // no group defined for these syscalls
                         0

@@ -17,11 +17,21 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define COUNTER_GROUP_WIDTH 8
+#define COUNTER_GROUP_WIDTH 16
 #define HISTOGRAM_POWER 7
 #define MAX_CPUS 1024
 #define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
+
+#define TOTAL 0
+#define READ 1
+#define WRITE 2
+#define POLL 3
+#define LOCK 4
+#define TIME 5
+#define SLEEP 6
+#define SOCKET 7
+#define YIELD 8
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -95,6 +105,14 @@ struct {
 	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
 } socket_latency SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
+} yield_latency SEC(".maps");
+
 // provides a lookup table from syscall id to a counter index offset
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -160,31 +178,37 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	if (syscall_id < MAX_SYSCALL_ID) {
 		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
 
-		if (!counter_offset || !*counter_offset || *counter_offset >= COUNTER_GROUP_WIDTH) {
+		if (!counter_offset) {
 			return 0;
 		}
 
-		// nested if-else binary search. finds the correct histogram in 3 branches
-		if (*counter_offset < 5) {
-			if (*counter_offset < 3) {
-				if (*counter_offset == 1) {
-					cnt = bpf_map_lookup_elem(&read_latency, &idx);
-				} else {
-					cnt = bpf_map_lookup_elem(&write_latency, &idx);
-				}
-			} else if (*counter_offset == 3) {
+		switch (*counter_offset) {
+			case READ:
+				cnt = bpf_map_lookup_elem(&read_latency, &idx);
+				break;
+			case WRITE:
+				cnt = bpf_map_lookup_elem(&write_latency, &idx);
+				break;
+			case POLL:
 				cnt = bpf_map_lookup_elem(&poll_latency, &idx);
-			} else {
+				break;
+			case LOCK:
 				cnt = bpf_map_lookup_elem(&lock_latency, &idx);
-			}
-		} else if (*counter_offset < 7) {
-			if (*counter_offset == 5) {
+				break;
+			case TIME:
 				cnt = bpf_map_lookup_elem(&time_latency, &idx);
-			} else {
+				break;
+			case SLEEP:
 				cnt = bpf_map_lookup_elem(&sleep_latency, &idx);
-			}
-		} else {
-			cnt = bpf_map_lookup_elem(&socket_latency, &idx);
+				break;
+			case SOCKET:
+				cnt = bpf_map_lookup_elem(&socket_latency, &idx);
+				break;
+			case YIELD:
+				cnt = bpf_map_lookup_elem(&yield_latency, &idx);
+				break;
+			default:
+				return 0;
 		}
 
 		if (cnt) {

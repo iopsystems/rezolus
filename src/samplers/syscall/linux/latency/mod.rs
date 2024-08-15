@@ -40,6 +40,7 @@ impl GetMap for ModSkel<'_> {
 /// * `syscall/time/latency`
 /// * `syscall/sleep/latency`
 /// * `syscall/socket/latency`
+/// * `syscall/yield/latency`
 pub struct Syscall {
     bpf: Bpf<ModSkel<'static>>,
     distribution_interval: Interval,
@@ -82,6 +83,7 @@ impl Syscall {
             .distribution("time_latency", &SYSCALL_TIME_LATENCY)
             .distribution("sleep_latency", &SYSCALL_SLEEP_LATENCY)
             .distribution("socket_latency", &SYSCALL_SOCKET_LATENCY)
+            .distribution("yield_latency", &SYSCALL_YIELD_LATENCY)
             .map("syscall_lut", &syscall_lut)
             .build();
 
