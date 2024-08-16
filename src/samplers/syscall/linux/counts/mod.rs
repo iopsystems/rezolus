@@ -39,6 +39,7 @@ impl GetMap for ModSkel<'_> {
 /// * `syscall/time`
 /// * `syscall/sleep`
 /// * `syscall/socket`
+/// * `syscall/yield`
 pub struct Syscall {
     bpf: Bpf<ModSkel<'static>>,
     counter_interval: Interval,
@@ -75,6 +76,7 @@ impl Syscall {
             Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HISTOGRAM)),
             Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HISTOGRAM)),
             Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HISTOGRAM)),
+            Counter::new(&SYSCALL_YIELD, Some(&SYSCALL_YIELD_HISTOGRAM)),
         ];
 
         let syscall_lut = syscall_lut();

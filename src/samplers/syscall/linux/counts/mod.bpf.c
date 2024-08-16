@@ -17,8 +17,7 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define COUNTER_GROUP_WIDTH 8
-#define HISTOGRAM_POWER 7
+#define COUNTER_GROUP_WIDTH 16
 #define MAX_CPUS 1024
 #define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
