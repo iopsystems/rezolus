@@ -93,6 +93,14 @@ impl BlockIOLatency {
 impl Sampler for BlockIOLatency {
     fn sample(&mut self) {
         let now = Instant::now();
-        let _ = self.refresh_distributions(now);
+
+        if self.refresh_distributions(now).is_ok() {
+            let elapsed = now.elapsed().as_nanos() as u64;
+
+            METADATA_BLOCKIO_LATENCY_COLLECTED_AT
+                .set(UnixInstant::EPOCH.elapsed().as_nanos() - elapsed);
+            METADATA_BLOCKIO_LATENCY_RUNTIME.add(elapsed);
+            let _ = METADATA_BLOCKIO_LATENCY_RUNTIME_HISTOGRAM.increment(elapsed);
+        }
     }
 }

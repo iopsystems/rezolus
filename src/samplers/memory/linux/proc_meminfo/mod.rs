@@ -1,5 +1,5 @@
 use crate::common::units::KIBIBYTES;
-use crate::common::{Interval, Nop};
+use crate::common::*;
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
 use metriken::Gauge;
@@ -56,7 +56,13 @@ impl Sampler for ProcMeminfo {
             return;
         }
 
+        METADATA_MEMORY_MEMINFO_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
         let _ = self.sample_proc_meminfo(now).is_err();
+
+        let elapsed = now.elapsed().as_nanos() as u64;
+        METADATA_MEMORY_MEMINFO_RUNTIME.add(elapsed);
+        let _ = METADATA_MEMORY_MEMINFO_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }
 

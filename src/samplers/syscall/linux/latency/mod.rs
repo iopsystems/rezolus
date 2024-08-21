@@ -1,6 +1,6 @@
 #[distributed_slice(SYSCALL_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    if let Ok(s) = Syscall::new(config) {
+    if let Ok(s) = SyscallLatency::new(config) {
         Box::new(s)
     } else {
         Box::new(Nop {})
@@ -41,12 +41,12 @@ impl GetMap for ModSkel<'_> {
 /// * `syscall/sleep/latency`
 /// * `syscall/socket/latency`
 /// * `syscall/yield/latency`
-pub struct Syscall {
+pub struct SyscallLatency {
     bpf: Bpf<ModSkel<'static>>,
-    distribution_interval: Interval,
+    interval: Interval,
 }
 
-impl Syscall {
+impl SyscallLatency {
     pub fn new(config: &Config) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !(config.enabled(NAME) && config.bpf(NAME)) {
@@ -91,22 +91,23 @@ impl Syscall {
 
         Ok(Self {
             bpf,
-            distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
+            interval: Interval::new(now, config.distribution_interval(NAME)),
         })
-    }
-
-    pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
-        self.distribution_interval.try_wait(now)?;
-
-        self.bpf.refresh_distributions();
-
-        Ok(())
     }
 }
 
-impl Sampler for Syscall {
+impl Sampler for SyscallLatency {
     fn sample(&mut self) {
         let now = Instant::now();
-        let _ = self.refresh_distributions(now);
+
+        if let Ok(_) = self.interval.try_wait(now) {
+            METADATA_SYSCALL_LATENCY_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
+            self.bpf.refresh_distributions();
+
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_SYSCALL_LATENCY_RUNTIME.add(elapsed);
+            let _ = METADATA_SYSCALL_LATENCY_RUNTIME_HISTOGRAM.increment(elapsed);
+        }
     }
 }

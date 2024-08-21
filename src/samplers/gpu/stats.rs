@@ -1,4 +1,25 @@
-use metriken::{metric, Format, Gauge, LazyGauge, MetricEntry};
+use metriken::*;
+
+#[metric(
+    name = "metadata/gpu_nvidia/collected_at",
+    description = "The offset from the Unix epoch when gpu_nvidia sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_GPU_NVIDIA_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/gpu_nvidia/runtime",
+    description = "The total runtime of the gpu_nvidia sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_GPU_NVIDIA_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/gpu_nvidia/runtime",
+    description = "Distribution of sampling runtime of the gpu_nvidia sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_GPU_NVIDIA_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
 
 #[metric(
     name = "gpu/memory",

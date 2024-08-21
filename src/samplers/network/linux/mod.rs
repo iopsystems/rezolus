@@ -1,17 +1,14 @@
-use crate::common::{Interval, Nop};
 use crate::samplers::hwinfo::hardware_info;
 use crate::samplers::network::stats::*;
 use crate::samplers::network::*;
 use metriken::Counter;
 use std::fs::File;
-use std::io::Read;
-use std::io::Seek;
+use std::io::{Read, Seek};
 
 mod interfaces;
 mod traffic;
 
 pub struct SysfsNetSampler {
-    interval: Interval,
     stats: Vec<(&'static Lazy<Counter>, &'static str, HashMap<String, File>)>,
 }
 
@@ -57,19 +54,10 @@ impl SysfsNetSampler {
             stats.push((counter, stat, if_stats));
         }
 
-        Ok(Self {
-            stats,
-            interval: Interval::new(Instant::now(), config.interval(name)),
-        })
+        Ok(Self { stats })
     }
-}
 
-impl Sampler for SysfsNetSampler {
-    fn sample(&mut self) {
-        if self.interval.try_wait(Instant::now()).is_err() {
-            return;
-        }
-
+    fn sample_now(&mut self) {
         let mut data = String::new();
 
         'outer: for (counter, _stat, ref mut if_stats) in &mut self.stats {

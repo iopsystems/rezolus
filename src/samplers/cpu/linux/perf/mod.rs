@@ -1,6 +1,7 @@
 use crate::common::Interval;
 use crate::common::Nop;
 use crate::samplers::cpu::*;
+use clocksource::precise::UnixInstant;
 use metriken::{DynBoxedMetric, MetricBuilder};
 use perf_event::events::x86::{Msr, MsrId};
 use perf_event::events::Hardware;
@@ -120,6 +121,8 @@ impl Sampler for Perf {
             return;
         }
 
+        METADATA_CPU_PERF_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
         let mut nr_active_groups: u64 = 0;
         let mut total_cycles = 0;
         let mut total_instructions = 0;
@@ -173,5 +176,9 @@ impl Sampler for Perf {
             CPU_FREQUENCY_AVERAGE.set((avg_running_frequency / nr_active_groups) as i64);
             CPU_CORES.set(nr_active_groups as _);
         }
+
+        let elapsed = now.elapsed().as_nanos() as u64;
+        METADATA_CPU_PERF_RUNTIME.add(elapsed);
+        let _ = METADATA_CPU_PERF_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }

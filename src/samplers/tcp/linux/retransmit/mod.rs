@@ -33,8 +33,7 @@ impl GetMap for ModSkel<'_> {
 /// * `tcp/transmit/retransmit`
 pub struct Retransmit {
     bpf: Bpf<ModSkel<'static>>,
-    counter_interval: Interval,
-    distribution_interval: Interval,
+    interval: Interval,
 }
 
 impl Retransmit {
@@ -70,32 +69,23 @@ impl Retransmit {
 
         Ok(Self {
             bpf,
-            counter_interval: Interval::new(now, config.interval(NAME)),
-            distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
+            interval: Interval::new(now, config.interval(NAME)),
         })
-    }
-
-    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?;
-
-        self.bpf.refresh_counters(elapsed);
-
-        Ok(())
-    }
-
-    pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
-        self.distribution_interval.try_wait(now)?;
-
-        self.bpf.refresh_distributions();
-
-        Ok(())
     }
 }
 
 impl Sampler for Retransmit {
     fn sample(&mut self) {
         let now = Instant::now();
-        let _ = self.refresh_counters(now);
-        let _ = self.refresh_distributions(now);
+
+        if let Ok(elapsed) = self.interval.try_wait(now) {
+            METADATA_TCP_RETRANSMIT_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
+            self.bpf.refresh_counters(elapsed);
+
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_TCP_RETRANSMIT_RUNTIME.add(elapsed);
+            let _ = METADATA_TCP_RETRANSMIT_RUNTIME_HISTOGRAM.increment(elapsed);
+        }
     }
 }

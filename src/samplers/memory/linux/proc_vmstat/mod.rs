@@ -1,4 +1,4 @@
-use crate::common::{Counter, Interval, Nop};
+use crate::common::*;
 use crate::samplers::memory::stats::*;
 use crate::samplers::memory::*;
 use std::collections::HashMap;
@@ -52,8 +52,16 @@ impl ProcVmstat {
 
 impl Sampler for ProcVmstat {
     fn sample(&mut self) {
-        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+        let now = Instant::now();
+
+        if let Ok(elapsed) = self.interval.try_wait(now) {
+            METADATA_MEMORY_VMSTAT_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
             let _ = self.sample_proc_vmstat(elapsed.as_secs_f64());
+
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_MEMORY_VMSTAT_RUNTIME.add(elapsed);
+            let _ = METADATA_MEMORY_VMSTAT_RUNTIME_HISTOGRAM.increment(elapsed);
         }
     }
 }

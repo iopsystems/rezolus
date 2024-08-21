@@ -36,6 +36,7 @@ tokio = { version = "1.37.0", features = ["full"] }
 toml = "0.8.13"
 walkdir = "2.5.0"
 warp = { version = "0.3.7", features = ["compression"] }
+clocksource = "0.8.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.21.2", optional = true }

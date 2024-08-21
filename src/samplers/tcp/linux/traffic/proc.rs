@@ -1,5 +1,5 @@
 use crate::common::classic::NestedMap;
-use crate::common::{Counter, Interval};
+use crate::common::*;
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
 use std::fs::File;
@@ -42,7 +42,11 @@ impl ProcNetSnmp {
 
 impl Sampler for ProcNetSnmp {
     fn sample(&mut self) {
-        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+        let now = Instant::now();
+
+        if let Ok(elapsed) = self.interval.try_wait(now) {
+            METADATA_TCP_TRAFFIC_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
             if let Ok(nested_map) = NestedMap::try_from_procfs(&mut self.file) {
                 for (counter, pkey, lkey) in self.counters.iter_mut() {
                     if let Some(curr) = nested_map.get(pkey, lkey) {
@@ -50,6 +54,10 @@ impl Sampler for ProcNetSnmp {
                     }
                 }
             }
+
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_TCP_TRAFFIC_RUNTIME.add(elapsed);
+            let _ = METADATA_TCP_TRAFFIC_RUNTIME_HISTOGRAM.increment(elapsed);
         }
     }
 }
