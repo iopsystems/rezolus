@@ -50,7 +50,8 @@ impl BlockIORequests {
             return Err(());
         }
 
-        let open_object: &'static mut MaybeUninit<OpenObject> = Box::leak(Box::new(MaybeUninit::uninit()));
+        let open_object: &'static mut MaybeUninit<OpenObject> =
+            Box::leak(Box::new(MaybeUninit::uninit()));
 
         let builder = ModSkelBuilder::default();
         let mut skel = builder
