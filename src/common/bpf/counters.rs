@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// The name is also flexible, but it is recommended to pack the counters for
 /// each BPF program into one map, so `counters` is a reasonable name to use.
 pub struct Counters<'a> {
-    _map: &'a libbpf_rs::Map,
+    _map: &'a libbpf_rs::Map<'a>,
     mmap: memmap2::MmapMut,
     values: Vec<u64>,
     cachelines: usize,

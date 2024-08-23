@@ -35,13 +35,13 @@ mod bpf {
             if target_arch == "x86_64" {
                 SkeletonBuilder::new()
                     .source(&src)
-                    .clang_args("-Isrc/common/bpf/x86_64 -fno-unwind-tables -D__TARGET_ARCH_x86")
+                    .clang_args(["-Isrc/common/bpf/x86_64", "-fno-unwind-tables", "-D__TARGET_ARCH_x86"])
                     .build_and_generate(&tgt)
                     .unwrap();
             } else if target_arch == "aarch64" {
                 SkeletonBuilder::new()
                     .source(&src)
-                    .clang_args("-Isrc/common/bpf/aarch64 -fno-unwind-tables -D__TARGET_ARCH_arm64")
+                    .clang_args(["-Isrc/common/bpf/aarch64", "-fno-unwind-tables", "-D__TARGET_ARCH_arm64"])
                     .build_and_generate(&tgt)
                     .unwrap();
             } else {

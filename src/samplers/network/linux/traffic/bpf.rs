@@ -14,7 +14,10 @@ use crate::samplers::network::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.obj.map(name).unwrap()
+        match name {
+            "counters" => &self.maps.counters,
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -40,20 +43,22 @@ impl NetworkTraffic {
             return Err(());
         }
 
+        let open_object: &'static mut MaybeUninit<OpenObject> = Box::leak(Box::new(MaybeUninit::uninit()));
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
-            .open()
+            .open(open_object)
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         debug!(
             "{NAME} netif_receive_skb() BPF instruction count: {}",
-            skel.progs().netif_receive_skb().insn_cnt()
+            skel.progs.netif_receive_skb.insn_cnt()
         );
         debug!(
             "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
-            skel.progs().tcp_cleanup_rbuf().insn_cnt()
+            skel.progs.tcp_cleanup_rbuf.insn_cnt()
         );
 
         skel.attach()

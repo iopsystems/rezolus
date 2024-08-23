@@ -22,7 +22,10 @@ use crate::samplers::block_io::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.obj.map(name).unwrap()
+        match name {
+            "latency" => &self.maps.latency,
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -46,24 +49,26 @@ impl BlockIOLatency {
             return Err(());
         }
 
+        let open_object: &'static mut MaybeUninit<OpenObject> = Box::leak(Box::new(MaybeUninit::uninit()));
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
-            .open()
+            .open(open_object)
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         debug!(
             "{NAME} block_rq_insert() BPF instruction count: {}",
-            skel.progs().block_rq_insert().insn_cnt()
+            skel.progs.block_rq_insert.insn_cnt()
         );
         debug!(
             "{NAME} block_rq_issue() BPF instruction count: {}",
-            skel.progs().block_rq_issue().insn_cnt()
+            skel.progs.block_rq_issue.insn_cnt()
         );
         debug!(
             "{NAME} block_rq_complete() BPF instruction count: {}",
-            skel.progs().block_rq_complete().insn_cnt()
+            skel.progs.block_rq_complete.insn_cnt()
         );
 
         skel.attach()

@@ -23,7 +23,19 @@ use crate::samplers::syscall::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.obj.map(name).unwrap()
+        match name {
+            "total_latency" => &self.maps.total_latency,
+            "read_latency" => &self.maps.read_latency,
+            "write_latency" => &self.maps.write_latency,
+            "poll_latency" => &self.maps.poll_latency,
+            "lock_latency" => &self.maps.lock_latency,
+            "time_latency" => &self.maps.time_latency,
+            "sleep_latency" => &self.maps.sleep_latency,
+            "socket_latency" => &self.maps.socket_latency,
+            "yield_latency" => &self.maps.yield_latency,
+            "syscall_lut" => &self.maps.syscall_lut,
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -53,20 +65,22 @@ impl Syscall {
             return Err(());
         }
 
+        let open_object: &'static mut MaybeUninit<OpenObject> = Box::leak(Box::new(MaybeUninit::uninit()));
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
-            .open()
+            .open(open_object)
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         debug!(
             "{NAME} sys_enter() BPF instruction count: {}",
-            skel.progs().sys_enter().insn_cnt()
+            skel.progs.sys_enter.insn_cnt()
         );
         debug!(
             "{NAME} sys_exit() BPF instruction count: {}",
-            skel.progs().sys_exit().insn_cnt()
+            skel.progs.sys_exit.insn_cnt()
         );
 
         skel.attach()

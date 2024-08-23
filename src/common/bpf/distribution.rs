@@ -21,7 +21,7 @@ use ringlog::*;
 ///
 /// The distribution should be given some meaningful name in the BPF program.
 pub struct Distribution<'a> {
-    _map: &'a libbpf_rs::Map,
+    _map: &'a libbpf_rs::Map<'a>,
     mmap: memmap2::MmapMut,
     buffer: Vec<u64>,
     buckets: usize,

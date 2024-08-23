@@ -6,7 +6,9 @@ use ouroboros::*;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::sync::Arc;
 
+pub use libbpf_rs::OpenObject;
 pub use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
+pub use std::mem::MaybeUninit;
 
 mod counters;
 mod distribution;
@@ -48,7 +50,7 @@ impl<T: 'static + GetMap> BpfBuilder<T> {
     }
 
     pub fn counters(mut self, name: &str, counters: Vec<Counter>) -> Self {
-        self.bpf.add_counters(name, counters);
+        self.bpf = self.bpf.add_counters(name, counters);
         self
     }
 
@@ -58,12 +60,12 @@ impl<T: 'static + GetMap> BpfBuilder<T> {
         counters: Vec<Counter>,
         percpu: Arc<PercpuCounters>,
     ) -> Self {
-        self.bpf.add_counters_with_percpu(name, counters, percpu);
+        self.bpf = self.bpf.add_counters_with_percpu(name, counters, percpu);
         self
     }
 
     pub fn distribution(mut self, name: &str, histogram: &'static RwLockHistogram) -> Self {
-        self.bpf.add_distribution(name, histogram);
+        self.bpf = self.bpf.add_distribution(name, histogram);
         self
     }
 
@@ -136,36 +138,39 @@ impl<T: 'static + GetMap> _Bpf<T> {
         self.with(|this| this.skel.map(name))
     }
 
-    pub fn add_counters(&mut self, name: &str, counters: Vec<Counter>) {
+    pub fn add_counters(mut self, name: &str, counters: Vec<Counter>) -> Self {
         self.with_mut(|this| {
             this.counters.push(Counters::new(
                 this.skel.map(name),
                 counters,
                 Default::default(),
             ));
-        })
+        });
+        self
     }
 
     pub fn add_counters_with_percpu(
-        &mut self,
+        mut self,
         name: &str,
         counters: Vec<Counter>,
         percpu_counters: Arc<PercpuCounters>,
-    ) {
+    ) -> Self {
         self.with_mut(|this| {
             this.counters.push(Counters::new(
                 this.skel.map(name),
                 counters,
                 percpu_counters,
             ));
-        })
+        });
+        self
     }
 
-    pub fn add_distribution(&mut self, name: &str, histogram: &'static RwLockHistogram) {
+    pub fn add_distribution(mut self, name: &str, histogram: &'static RwLockHistogram) -> Self {
         self.with_mut(|this| {
             this.distributions
                 .push(Distribution::new(this.skel.map(name), histogram));
-        })
+        });
+        self
     }
 
     pub fn refresh_counters(&mut self, elapsed: f64) {
