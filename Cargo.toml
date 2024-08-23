@@ -7,7 +7,7 @@ edition = "2021"
 description = "High resolution systems performance telemetry agent"
 
 [workspace.package]
-version = "3.18.2-alpha.0"
+version = "3.18.2-alpha.2"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
@@ -38,13 +38,13 @@ walkdir = "2.5.0"
 warp = { version = "0.3.7", features = ["compression"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libbpf-rs = { version = "0.21.2", optional = true }
-libbpf-sys = { version = "1.2.1", optional = true }
+libbpf-rs = { version = "0.24.2", optional = true }
+libbpf-sys = { version = "1.4.3", optional = true }
 perf-event2 = "0.7.2"
 nvml-wrapper = "0.9.0"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
-libbpf-cargo = { version = "0.21.2", optional = true }
+libbpf-cargo = { version = "0.24.2", optional = true }
 
 [features]
 all = ["bpf"]

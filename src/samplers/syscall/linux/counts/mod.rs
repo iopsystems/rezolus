@@ -23,7 +23,11 @@ use crate::samplers::syscall::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.obj.map(name).unwrap()
+        match name {
+            "counters" => &self.maps.counters,
+            "syscall_lut" => &self.maps.syscall_lut,
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -52,16 +56,19 @@ impl Syscall {
             return Err(());
         }
 
+        let open_object: &'static mut MaybeUninit<OpenObject> =
+            Box::leak(Box::new(MaybeUninit::uninit()));
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
-            .open()
+            .open(open_object)
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         debug!(
             "{NAME} sys_enter() BPF instruction count: {}",
-            skel.progs().sys_enter().insn_cnt()
+            skel.progs.sys_enter.insn_cnt()
         );
 
         skel.attach()
@@ -79,11 +86,9 @@ impl Syscall {
             Counter::new(&SYSCALL_YIELD, Some(&SYSCALL_YIELD_HISTOGRAM)),
         ];
 
-        let syscall_lut = syscall_lut();
-
         let bpf = BpfBuilder::new(skel)
             .counters("counters", counters)
-            .map("syscall_lut", &syscall_lut)
+            .map("syscall_lut", &syscall_lut())
             .build();
 
         let now = Instant::now();

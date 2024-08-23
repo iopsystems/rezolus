@@ -22,7 +22,11 @@ use crate::samplers::block_io::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.obj.map(name).unwrap()
+        match name {
+            "counters" => &self.maps.counters,
+            "size" => &self.maps.size,
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -46,16 +50,19 @@ impl BlockIORequests {
             return Err(());
         }
 
+        let open_object: &'static mut MaybeUninit<OpenObject> =
+            Box::leak(Box::new(MaybeUninit::uninit()));
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
-            .open()
+            .open(open_object)
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         debug!(
             "{NAME} block_rq_complete() BPF instruction count: {}",
-            skel.progs().block_rq_complete().insn_cnt()
+            skel.progs.block_rq_complete.insn_cnt()
         );
 
         skel.attach()

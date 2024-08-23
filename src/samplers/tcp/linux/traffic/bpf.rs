@@ -14,7 +14,12 @@ use crate::samplers::tcp::*;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.obj.map(name).unwrap()
+        match name {
+            "counters" => &self.maps.counters,
+            "rx_size" => &self.maps.rx_size,
+            "tx_size" => &self.maps.tx_size,
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -42,20 +47,23 @@ impl TcpTraffic {
             return Err(());
         }
 
+        let open_object: &'static mut MaybeUninit<OpenObject> =
+            Box::leak(Box::new(MaybeUninit::uninit()));
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
-            .open()
+            .open(open_object)
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         debug!(
             "{NAME} tcp_sendmsg() BPF instruction count: {}",
-            skel.progs().tcp_sendmsg().insn_cnt()
+            skel.progs.tcp_sendmsg.insn_cnt()
         );
         debug!(
             "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
-            skel.progs().tcp_cleanup_rbuf().insn_cnt()
+            skel.progs.tcp_cleanup_rbuf.insn_cnt()
         );
 
         skel.attach()

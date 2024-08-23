@@ -22,7 +22,10 @@ const MAX_CPUS: usize = 1024;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
-        self.obj.map(name).unwrap()
+        match name {
+            "counters" => &self.maps.counters,
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -131,16 +134,19 @@ impl CpuUsage {
             return Err(());
         }
 
+        let open_object: &'static mut MaybeUninit<OpenObject> =
+            Box::leak(Box::new(MaybeUninit::uninit()));
+
         let builder = ModSkelBuilder::default();
         let mut skel = builder
-            .open()
+            .open(open_object)
             .map_err(|e| error!("failed to open bpf builder: {e}"))?
             .load()
             .map_err(|e| error!("failed to load bpf program: {e}"))?;
 
         debug!(
             "{NAME} cpuacct_account_field() BPF instruction count: {}",
-            skel.progs().cpuacct_account_field_kprobe().insn_cnt()
+            skel.progs.cpuacct_account_field_kprobe.insn_cnt()
         );
 
         skel.attach()
