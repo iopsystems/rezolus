@@ -1,10 +1,9 @@
-use crate::common::{Interval, Nop};
+use crate::common::*;
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
 use metriken::Gauge;
 use std::fs::File;
-use std::io::Read;
-use std::io::Seek;
+use std::io::{Read, Seek};
 
 #[distributed_slice(TCP_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
@@ -72,9 +71,13 @@ impl ConnectionState {
 
 impl Sampler for ConnectionState {
     fn sample(&mut self) {
-        if self.interval.try_wait(Instant::now()).is_err() {
+        let now = Instant::now();
+
+        if self.interval.try_wait(now).is_err() {
             return;
         }
+
+        METADATA_TCP_CONNECTION_STATE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
         // zero the temporary gauges
         for (_, gauge) in self.gauges.iter_mut() {
@@ -106,5 +109,9 @@ impl Sampler for ConnectionState {
         for (gauge, value) in self.gauges.iter() {
             gauge.set(*value);
         }
+
+        let elapsed = now.elapsed().as_nanos() as u64;
+        METADATA_TCP_CONNECTION_STATE_RUNTIME.add(elapsed);
+        let _ = METADATA_TCP_CONNECTION_STATE_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }

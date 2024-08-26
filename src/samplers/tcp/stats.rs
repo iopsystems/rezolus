@@ -1,8 +1,114 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use metriken::{
-    metric, AtomicHistogram, Counter, Format, Gauge, LazyCounter, LazyGauge, MetricEntry,
-    RwLockHistogram,
-};
+use metriken::*;
+
+#[metric(
+    name = "metadata/tcp_connection_state/collected_at",
+    description = "The offset from the Unix epoch when tcp_connection_state sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_CONNECTION_STATE_COLLECTED_AT: LazyCounter =
+    LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_connection_state/runtime",
+    description = "The total runtime of the tcp_connection_state sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_CONNECTION_STATE_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_connection_state/runtime",
+    description = "Distribution of sampling runtime of the tcp_connection_state sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_TCP_CONNECTION_STATE_RUNTIME_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(4, 32);
+
+#[metric(
+    name = "metadata/tcp_packet_latency/collected_at",
+    description = "The offset from the Unix epoch when tcp_packet_latency sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_PACKET_LATENCY_COLLECTED_AT: LazyCounter =
+    LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_packet_latency/runtime",
+    description = "The total runtime of the tcp_packet_latency sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_PACKET_LATENCY_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_packet_latency/runtime",
+    description = "Distribution of sampling runtime of the tcp_packet_latency sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_TCP_PACKET_LATENCY_RUNTIME_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(4, 32);
+
+#[metric(
+    name = "metadata/tcp_receive/collected_at",
+    description = "The offset from the Unix epoch when tcp_receive sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_RECEIVE_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_receive/runtime",
+    description = "The total runtime of the tcp_receive sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_RECEIVE_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_receive/runtime",
+    description = "Distribution of sampling runtime of the tcp_receive sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_TCP_RECEIVE_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
+
+#[metric(
+    name = "metadata/tcp_retransmit/collected_at",
+    description = "The offset from the Unix epoch when tcp_retransmit sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_RETRANSMIT_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_retransmit/runtime",
+    description = "The total runtime of the tcp_retransmit sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_RETRANSMIT_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_retransmit/runtime",
+    description = "Distribution of sampling runtime of the tcp_retransmit sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_TCP_RETRANSMIT_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
+
+#[metric(
+    name = "metadata/tcp_traffic/collected_at",
+    description = "The offset from the Unix epoch when tcp_traffic sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_TRAFFIC_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_traffic/runtime",
+    description = "The total runtime of the tcp_traffic sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_TCP_TRAFFIC_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/tcp_traffic/runtime",
+    description = "Distribution of sampling runtime of the tcp_traffic sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_TCP_TRAFFIC_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
 
 #[metric(
     name = "tcp/receive/bytes",

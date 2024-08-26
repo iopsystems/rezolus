@@ -1,7 +1,6 @@
 use super::stats::*;
 use super::*;
-use crate::common::Interval;
-use crate::common::Nop;
+use crate::common::*;
 use metriken::{DynBoxedMetric, MetricBuilder};
 use nvml_wrapper::enum_wrappers::device::*;
 use nvml_wrapper::Nvml;
@@ -163,9 +162,15 @@ impl Sampler for Nvidia {
             return;
         }
 
+        METADATA_GPU_NVIDIA_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
         if let Err(e) = self.sample_nvml(now) {
             error!("error sampling: {e}");
         }
+
+        let elapsed = now.elapsed().as_nanos() as u64;
+        METADATA_GPU_NVIDIA_RUNTIME.add(elapsed);
+        let _ = METADATA_GPU_NVIDIA_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }
 

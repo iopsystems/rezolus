@@ -1,5 +1,48 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use metriken::{metric, AtomicHistogram, Counter, LazyCounter, RwLockHistogram};
+use metriken::*;
+
+#[metric(
+    name = "metadata/syscall_counts/collected_at",
+    description = "The offset from the Unix epoch when syscall_counts sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_SYSCALL_COUNTS_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/syscall_counts/runtime",
+    description = "The total runtime of the syscall_counts sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_SYSCALL_COUNTS_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/syscall_counts/runtime",
+    description = "Distribution of sampling runtime of the syscall_counts sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_SYSCALL_COUNTS_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
+
+#[metric(
+    name = "metadata/syscall_latency/collected_at",
+    description = "The offset from the Unix epoch when syscall_latency sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_SYSCALL_LATENCY_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/syscall_latency/runtime",
+    description = "The total runtime of the syscall_latency sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_SYSCALL_LATENCY_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/syscall_latency/runtime",
+    description = "Distribution of sampling runtime of the syscall_latency sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_SYSCALL_LATENCY_RUNTIME_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(4, 32);
 
 #[metric(
     name = "syscall/total",

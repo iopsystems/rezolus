@@ -1,5 +1,50 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use metriken::{metric, AtomicHistogram, Counter, LazyCounter};
+use metriken::*;
+
+#[metric(
+    name = "metadata/network_interfaces/collected_at",
+    description = "The offset from the Unix epoch when network_interfaces sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_NETWORK_INTERFACES_COLLECTED_AT: LazyCounter =
+    LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/network_interfaces/runtime",
+    description = "The total runtime of the network_interfaces sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_NETWORK_INTERFACES_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/network_interfaces/runtime",
+    description = "Distribution of sampling runtime of the network_interfaces sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_NETWORK_INTERFACES_RUNTIME_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(4, 32);
+
+#[metric(
+    name = "metadata/network_traffic/collected_at",
+    description = "The offset from the Unix epoch when network_traffic sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_NETWORK_TRAFFIC_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/network_traffic/runtime",
+    description = "The total runtime of the network_traffic sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_NETWORK_TRAFFIC_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/network_traffic/runtime",
+    description = "Distribution of sampling runtime of the network_traffic sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_NETWORK_TRAFFIC_RUNTIME_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(4, 32);
 
 #[metric(
     name = "network/carrier_changes",

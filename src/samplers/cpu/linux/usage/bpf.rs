@@ -9,6 +9,7 @@ use super::NAME;
 
 use std::io::{Read, Seek};
 
+use clocksource::precise::UnixInstant;
 use metriken::{DynBoxedMetric, MetricBuilder};
 
 use bpf::*;
@@ -250,6 +251,8 @@ impl CpuUsage {
     pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
         let elapsed = self.counter_interval.try_wait(now)?;
 
+        METADATA_CPU_USAGE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
         // refresh the counters from the kernel-space counters
         self.bpf.refresh_counters(elapsed);
 
@@ -319,8 +322,14 @@ fn busy() -> u64 {
 impl Sampler for CpuUsage {
     fn sample(&mut self) {
         let now = Instant::now();
-        let _ = self.update_online_cores(now);
-        let _ = self.refresh_counters(now);
-        let _ = self.refresh_distributions(now);
+
+        if self.update_online_cores(now).is_ok()
+            || self.refresh_counters(now).is_ok()
+            || self.refresh_distributions(now).is_ok()
+        {
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_CPU_USAGE_RUNTIME.add(elapsed);
+            let _ = METADATA_CPU_USAGE_RUNTIME_HISTOGRAM.increment(elapsed);
+        }
     }
 }

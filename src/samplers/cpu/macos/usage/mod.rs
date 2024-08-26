@@ -1,4 +1,4 @@
-use crate::common::{Counter, Interval, Nop};
+use crate::common::*;
 use crate::samplers::cpu::*;
 use crate::{distributed_slice, Config, Sampler};
 use libc::mach_port_t;
@@ -79,10 +79,18 @@ impl CpuUsage {
 
 impl Sampler for CpuUsage {
     fn sample(&mut self) {
-        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+        let now = Instant::now();
+
+        if let Ok(elapsed) = self.interval.try_wait(now) {
+            METADATA_CPU_USAGE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
             unsafe {
                 let _ = self.sample_processor_info(elapsed.as_secs_f64());
             }
+
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_CPU_USAGE_RUNTIME.add(elapsed);
+            let _ = METADATA_CPU_USAGE_RUNTIME_HISTOGRAM.increment(elapsed);
         }
     }
 }

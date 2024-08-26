@@ -2,6 +2,50 @@ use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::*;
 
 #[metric(
+    name = "metadata/blockio_latency/collected_at",
+    description = "The offset from the Unix epoch when blockio_latency sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_BLOCKIO_LATENCY_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/blockio_latency/runtime",
+    description = "The total runtime of the blockio_latency sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_BLOCKIO_LATENCY_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/blockio_latency/runtime",
+    description = "Distribution of sampling runtime of the blockio_latency sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_BLOCKIO_LATENCY_RUNTIME_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(4, 32);
+
+#[metric(
+    name = "metadata/blockio_requests/collected_at",
+    description = "The offset from the Unix epoch when blockio_requests sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_BLOCKIO_REQUESTS_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/blockio_requests/runtime",
+    description = "The total runtime of the blockio_requests sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_BLOCKIO_REQUESTS_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/blockio_requests/runtime",
+    description = "Distribution of sampling runtime of the blockio_requests sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_BLOCKIO_REQUESTS_RUNTIME_HISTOGRAM: AtomicHistogram =
+    AtomicHistogram::new(4, 32);
+
+#[metric(
     name = "blockio/latency",
     description = "Distribution of blockio operation latency in nanoseconds",
     metadata = { unit = "nanoseconds" }

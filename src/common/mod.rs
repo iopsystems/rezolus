@@ -8,6 +8,7 @@ mod counter;
 mod interval;
 mod nop;
 
+pub use clocksource::precise::UnixInstant;
 pub use counter::Counter;
 pub use interval::Interval;
 pub use nop::Nop;

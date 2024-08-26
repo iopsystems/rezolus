@@ -1,6 +1,6 @@
 #[distributed_slice(SYSCALL_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
-    if let Ok(s) = Syscall::new(config) {
+    if let Ok(s) = SyscallCounts::new(config) {
         Box::new(s)
     } else {
         Box::new(Nop {})
@@ -44,12 +44,12 @@ impl GetMap for ModSkel<'_> {
 /// * `syscall/sleep`
 /// * `syscall/socket`
 /// * `syscall/yield`
-pub struct Syscall {
+pub struct SyscallCounts {
     bpf: Bpf<ModSkel<'static>>,
-    counter_interval: Interval,
+    interval: Interval,
 }
 
-impl Syscall {
+impl SyscallCounts {
     pub fn new(config: &Config) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !(config.enabled(NAME) && config.bpf(NAME)) {
@@ -95,22 +95,23 @@ impl Syscall {
 
         Ok(Self {
             bpf,
-            counter_interval: Interval::new(now, config.interval(NAME)),
+            interval: Interval::new(now, config.interval(NAME)),
         })
-    }
-
-    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?;
-
-        self.bpf.refresh_counters(elapsed);
-
-        Ok(())
     }
 }
 
-impl Sampler for Syscall {
+impl Sampler for SyscallCounts {
     fn sample(&mut self) {
         let now = Instant::now();
-        let _ = self.refresh_counters(now);
+
+        if let Ok(elapsed) = self.interval.try_wait(now) {
+            METADATA_SYSCALL_COUNTS_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
+            self.bpf.refresh_counters(elapsed);
+
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_SYSCALL_COUNTS_RUNTIME.add(elapsed);
+            let _ = METADATA_SYSCALL_COUNTS_RUNTIME_HISTOGRAM.increment(elapsed);
+        }
     }
 }

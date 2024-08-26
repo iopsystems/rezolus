@@ -1,5 +1,26 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use metriken::{metric, AtomicHistogram, Counter, Gauge, LazyCounter, LazyGauge};
+use metriken::*;
+
+#[metric(
+    name = "metadata/rezolus_rusage/collected_at",
+    description = "The offset from the Unix epoch when rezolus_rusage sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_REZOLUS_RUSAGE_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/rezolus_rusage/runtime",
+    description = "The total runtime of the rezolus_rusage sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_REZOLUS_RUSAGE_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/rezolus_rusage/runtime",
+    description = "Distribution of sampling runtime of the rezolus_rusage sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_REZOLUS_RUSAGE_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
 
 #[metric(
     name = "rezolus/cpu/usage/user",

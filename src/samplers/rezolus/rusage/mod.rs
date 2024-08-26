@@ -1,7 +1,7 @@
 use super::stats::*;
 use super::*;
 use crate::common::units::{KIBIBYTES, MICROSECONDS, SECONDS};
-use crate::common::{Counter, Interval, Nop};
+use crate::common::*;
 
 #[distributed_slice(REZOLUS_SAMPLERS)]
 fn init(config: &Config) -> Box<dyn Sampler> {
@@ -37,8 +37,16 @@ impl Rusage {
 
 impl Sampler for Rusage {
     fn sample(&mut self) {
+        let now = Instant::now();
+
         if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
+            METADATA_REZOLUS_RUSAGE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
             self.sample_rusage(elapsed.as_secs_f64());
+
+            let elapsed = now.elapsed().as_nanos() as u64;
+            METADATA_REZOLUS_RUSAGE_RUNTIME.add(elapsed);
+            let _ = METADATA_REZOLUS_RUSAGE_RUNTIME_HISTOGRAM.increment(elapsed);
         }
     }
 }

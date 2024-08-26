@@ -1,5 +1,26 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use metriken::{metric, AtomicHistogram, Counter, Format, LazyCounter, MetricEntry};
+use metriken::*;
+
+#[metric(
+    name = "metadata/cpu_usage/collected_at",
+    description = "The offset from the Unix epoch when cpu_usage sampler was last run",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_CPU_USAGE_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/cpu_usage/runtime",
+    description = "The total runtime of the cpu_usage sampler",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static METADATA_CPU_USAGE_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "metadata/cpu_usage/runtime",
+    description = "Distribution of sampling runtime of the cpu_usage_sampler",
+    metadata = { unit = "nanoseconds/second" }
+)]
+pub static METADATA_CPU_USAGE_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
 
 #[metric(
     name = "cpu/usage",
