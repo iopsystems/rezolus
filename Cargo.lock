@@ -1520,6 +1520,7 @@ dependencies = [
  "nvml-wrapper",
  "once_cell",
  "ouroboros",
+ "parking_lot",
  "perf-event2",
  "ringlog",
  "serde",

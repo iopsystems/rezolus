@@ -1,10 +1,49 @@
-#[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    if let Ok(s) = Runqlat::new(config) {
-        Box::new(s)
-    } else {
-        Box::new(Nop {})
+use crate::*;
+
+#[derive(Clone)]
+struct SyncPrimitive {
+    initialized: Arc<AtomicBool>,
+    notify: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl SyncPrimitive {
+    pub fn new() -> Self {
+        let initialized = Arc::new(AtomicBool::new(false));
+        let notify = Arc::new((Mutex::new(false), Condvar::new()));
+
+        Self {
+            initialized,
+            notify,
+        }
     }
+}
+
+#[distributed_slice(ASYNC_SAMPLERS)]
+fn spawn(config: Arc<Config>, runtime: &Runtime) {
+    // check if sampler should be enabled
+    if !(config.enabled(NAME) && config.bpf(NAME)) {
+        return;
+    }
+
+    let sync = SyncPrimitive::new();
+
+    let thread = spawn_bpf(sync.clone());
+
+    runtime.spawn(async move {
+        let mut s = Runqlat {
+            thread,
+            sync,
+            interval: config.async_interval(NAME),
+        };
+
+        if s.thread.is_finished() {
+            return;
+        }
+
+        loop {
+            s.sample().await;
+        }
+    });
 }
 
 mod bpf {
@@ -19,6 +58,10 @@ use crate::common::bpf::*;
 use crate::common::*;
 use crate::samplers::scheduler::stats::*;
 use crate::samplers::scheduler::*;
+
+use parking_lot::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
@@ -43,27 +86,36 @@ impl GetMap for ModSkel<'_> {
 /// * `scheduler/context_switch/involuntary`
 /// * `scheduler/context_switch/voluntary`
 pub struct Runqlat {
-    bpf: Bpf<ModSkel<'static>>,
-    interval: Interval,
+    thread: JoinHandle<()>,
+    sync: SyncPrimitive,
+    interval: AsyncInterval,
 }
 
-impl Runqlat {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !(config.enabled(NAME) && config.bpf(NAME)) {
-            return Err(());
-        }
+fn spawn_bpf(sync: SyncPrimitive) -> std::thread::JoinHandle<()> {
+    // define userspace metric sets
+    let counters = vec![Counter::new(&SCHEDULER_IVCSW, None)];
 
+    std::thread::spawn(move || {
+        // storage for the BPF object file
         let open_object: &'static mut MaybeUninit<OpenObject> =
             Box::leak(Box::new(MaybeUninit::uninit()));
 
-        let builder = ModSkelBuilder::default();
-        let mut skel = builder
-            .open(open_object)
-            .map_err(|e| error!("failed to open bpf builder: {e}"))?
-            .load()
-            .map_err(|e| error!("failed to load bpf program: {e}"))?;
+        // open and load the program
+        let mut skel = match ModSkelBuilder::default().open(open_object) {
+            Ok(s) => match s.load() {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("failed to load bpf program: {e}");
+                    return;
+                }
+            },
+            Err(e) => {
+                error!("failed to open bpf builder: {e}");
+                return;
+            }
+        };
 
+        // debugging info about BPF instruction counts
         debug!(
             "{NAME} handle__sched_wakeup() BPF instruction count: {}",
             skel.progs.handle__sched_wakeup.insn_cnt()
@@ -77,45 +129,87 @@ impl Runqlat {
             skel.progs.handle__sched_switch.insn_cnt()
         );
 
-        skel.attach()
-            .map_err(|e| error!("failed to attach bpf program: {e}"))?;
+        // attach the BPF program
+        if let Err(e) = skel.attach() {
+            error!("failed to attach bpf program: {e}");
+            return;
+        };
 
-        let counters = vec![Counter::new(&SCHEDULER_IVCSW, None)];
+        // get the time
+        let mut prev = Instant::now();
 
-        let bpf = BpfBuilder::new(skel)
+        // wrap the BPF program and define BPF maps
+        let mut bpf = BpfBuilder::new(skel)
             .counters("counters", counters)
             .distribution("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
             .distribution("running", &SCHEDULER_RUNNING)
             .distribution("offcpu", &SCHEDULER_OFFCPU)
             .build();
 
-        let now = Instant::now();
+        // indicate that we have completed initialization
+        sync.initialized.store(true, Ordering::SeqCst);
 
-        Ok(Self {
-            bpf,
-            interval: Interval::new(now, config.interval(NAME)),
-        })
-    }
+        // the sampler loop
+        loop {
+            // wait until we are notified to start
+            {
+                let &(ref lock, ref cvar) = &*sync.notify;
+                let mut started = lock.lock();
+                if !*started {
+                    cvar.wait(&mut started);
+                }
+            }
 
-    pub fn refresh(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.interval.try_wait(now)?;
+            let now = Instant::now();
 
-        METADATA_SCHEDULER_RUNQUEUE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+            METADATA_SCHEDULER_RUNQUEUE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
-        self.bpf.refresh(elapsed);
+            // refresh userspace metrics
+            bpf.refresh(now.duration_since(prev));
 
-        Ok(())
-    }
-}
-
-impl Sampler for Runqlat {
-    fn sample(&mut self) {
-        let now = Instant::now();
-
-        if self.refresh(now).is_ok() {
             let elapsed = now.elapsed().as_nanos() as u64;
             METADATA_SCHEDULER_RUNQUEUE_RUNTIME.add(elapsed);
             let _ = METADATA_SCHEDULER_RUNQUEUE_RUNTIME_HISTOGRAM.increment(elapsed);
+
+            prev = now;
+
+            // notify that we have finished running
+            {
+                let &(ref lock, ref cvar) = &*sync.notify;
+                let mut running = lock.lock();
+                *running = false;
+                cvar.notify_one();
+            }
+        }
+    })
+}
+
+#[async_trait]
+impl AsyncSampler for Runqlat {
+    async fn sample(&mut self) {
+        // wait until it's time to sample
+        self.interval.tick().await;
+
+        // check that the thread has not exited
+        if self.thread.is_finished() {
+            return;
+        }
+
+        // notify the thread to start
+        {
+            let &(ref lock, ref cvar) = &*self.sync.notify;
+            let mut started = lock.lock();
+            *started = true;
+            cvar.notify_one();
+        }
+
+        // wait for notification that thread has finished
+        {
+            let &(ref lock, ref cvar) = &*self.sync.notify;
+            let mut running = lock.lock();
+            if *running {
+                cvar.wait(&mut running);
+            }
         }
     }
 }
