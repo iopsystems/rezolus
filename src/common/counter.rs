@@ -1,5 +1,6 @@
 use metriken::AtomicHistogram;
 use metriken::LazyCounter;
+use std::time::Duration;
 
 /// A `Counter` is a wrapper type that enables us to automatically calculate
 /// percentiles for secondly rates between subsequent counter observations.
@@ -33,6 +34,17 @@ impl Counter {
         }
 
         self.counter.set(value)
+    }
+
+    /// Updates the counter by setting it to a new value. If this counter has a
+    /// histogram it also calculates a secondly rate since the last reading
+    /// and increments the histogram.
+    pub fn set2(&mut self, elapsed: Option<Duration>, value: u64) -> u64 {
+        if elapsed.is_some() {
+            self.set(elapsed.unwrap().as_secs_f64(), value)
+        } else {
+            self.counter.set(value)
+        }
     }
 
     /// Updates the counter by incrementing it by some value. If this counter

@@ -10,7 +10,7 @@ mod nop;
 
 pub use clocksource::precise::UnixInstant;
 pub use counter::Counter;
-pub use interval::Interval;
+pub use interval::{AsyncInterval, Interval};
 pub use nop::Nop;
 
 pub const HISTOGRAM_GROUPING_POWER: u8 = 7;

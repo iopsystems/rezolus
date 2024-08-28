@@ -3,19 +3,21 @@ use super::*;
 use crate::common::units::{KIBIBYTES, MICROSECONDS, SECONDS};
 use crate::common::*;
 
-#[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    if let Ok(rusage) = Rusage::new(config) {
-        Box::new(rusage)
-    } else {
-        Box::new(Nop {})
-    }
+#[distributed_slice(ASYNC_SAMPLERS)]
+fn spawn(config: Arc<Config>, runtime: &Runtime) {
+    runtime.spawn(async {
+        if let Ok(mut s) = Rusage::new(config) {
+            loop {
+                s.sample().await;
+            }
+        }
+    });
 }
 
 const NAME: &str = "rezolus_rusage";
 
 pub struct Rusage {
-    interval: Interval,
+    interval: AsyncInterval,
     ru_utime: Counter,
     ru_stime: Counter,
 }
@@ -28,31 +30,30 @@ impl Rusage {
         }
 
         Ok(Self {
-            interval: Interval::new(Instant::now(), config.interval(NAME)),
+            interval: config.async_interval(NAME),
             ru_utime: Counter::new(&RU_UTIME, Some(&RU_UTIME_HISTOGRAM)),
             ru_stime: Counter::new(&RU_STIME, Some(&RU_STIME_HISTOGRAM)),
         })
     }
 }
 
-impl Sampler for Rusage {
-    fn sample(&mut self) {
-        let now = Instant::now();
+#[async_trait]
+impl AsyncSampler for Rusage {
+    async fn sample(&mut self) {
+        let (now, elapsed) = self.interval.tick().await;
 
-        if let Ok(elapsed) = self.interval.try_wait(Instant::now()) {
-            METADATA_REZOLUS_RUSAGE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+        METADATA_REZOLUS_RUSAGE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
-            self.sample_rusage(elapsed.as_secs_f64());
+        self.sample_rusage(elapsed);
 
-            let elapsed = now.elapsed().as_nanos() as u64;
-            METADATA_REZOLUS_RUSAGE_RUNTIME.add(elapsed);
-            let _ = METADATA_REZOLUS_RUSAGE_RUNTIME_HISTOGRAM.increment(elapsed);
-        }
+        let elapsed = now.elapsed().as_nanos() as u64;
+        METADATA_REZOLUS_RUSAGE_RUNTIME.add(elapsed);
+        let _ = METADATA_REZOLUS_RUSAGE_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }
 
 impl Rusage {
-    fn sample_rusage(&mut self, elapsed: f64) {
+    fn sample_rusage(&mut self, elapsed: Option<Duration>) {
         let mut rusage = libc::rusage {
             ru_utime: libc::timeval {
                 tv_sec: 0,
@@ -79,12 +80,12 @@ impl Rusage {
         };
 
         if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut rusage) } == 0 {
-            self.ru_utime.set(
+            self.ru_utime.set2(
                 elapsed,
                 rusage.ru_utime.tv_sec as u64 * SECONDS
                     + rusage.ru_utime.tv_usec as u64 * MICROSECONDS,
             );
-            self.ru_stime.set(
+            self.ru_stime.set2(
                 elapsed,
                 rusage.ru_stime.tv_sec as u64 * SECONDS
                     + rusage.ru_stime.tv_usec as u64 * MICROSECONDS,
