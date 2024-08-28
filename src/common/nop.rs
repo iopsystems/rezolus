@@ -8,7 +8,7 @@ pub struct Nop {}
 // and features), we suppress the dead code lints.
 #[allow(dead_code)]
 impl Nop {
-    pub fn new(_config: &Config) -> Self {
+    pub fn new(_config: Arc<Config>) -> Self {
         Self {}
     }
 }

@@ -5,12 +5,12 @@ use metriken::Gauge;
 use std::fs::File;
 use std::io::{Read, Seek};
 
-#[distributed_slice(TCP_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = ConnectionState::new(config) {
         Box::new(s)
     } else {
-        Box::new(Nop::new(config))
+        Box::new(Nop {})
     }
 }
 
@@ -23,7 +23,7 @@ pub struct ConnectionState {
 }
 
 impl ConnectionState {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !config.enabled(NAME) {
             return Err(());

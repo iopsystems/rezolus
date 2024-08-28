@@ -14,7 +14,7 @@ pub struct SysfsNetSampler {
 
 impl SysfsNetSampler {
     pub fn new(
-        config: &Config,
+        config: Arc<Config>,
         name: &str,
         mut metrics: Vec<(&'static Lazy<Counter>, &'static str)>,
     ) -> Result<Self, ()> {

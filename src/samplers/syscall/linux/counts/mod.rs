@@ -1,5 +1,5 @@
-#[distributed_slice(SYSCALL_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = SyscallCounts::new(config) {
         Box::new(s)
     } else {
@@ -50,7 +50,7 @@ pub struct SyscallCounts {
 }
 
 impl SyscallCounts {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !(config.enabled(NAME) && config.bpf(NAME)) {
             return Err(());

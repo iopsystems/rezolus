@@ -7,27 +7,27 @@ const NAME: &str = "network_traffic";
 mod bpf;
 
 #[cfg(feature = "bpf")]
-#[distributed_slice(NETWORK_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     // try to initialize the bpf based sampler
-    if let Ok(s) = bpf::NetworkTraffic::new(config) {
+    if let Ok(s) = bpf::NetworkTraffic::new(config.clone()) {
         Box::new(s)
     } else {
         if let Ok(s) = NetworkTraffic::new(config) {
             Box::new(s)
         } else {
-            Box::new(Nop::new(config))
+            Box::new(Nop {})
         }
     }
 }
 
 #[cfg(not(feature = "bpf"))]
-#[distributed_slice(NETWORK_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = NetworkTraffic::new(config) {
         Box::new(s)
     } else {
-        Box::new(Nop::new(config))
+        Box::new(Nop {})
     }
 }
 
@@ -37,7 +37,7 @@ struct NetworkTraffic {
 }
 
 impl NetworkTraffic {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         let metrics = vec![
             (&NETWORK_RX_BYTES, "rx_bytes"),
             (&NETWORK_RX_PACKETS, "rx_packets"),
@@ -46,7 +46,7 @@ impl NetworkTraffic {
         ];
 
         Ok(Self {
-            inner: SysfsNetSampler::new(config, NAME, metrics)?,
+            inner: SysfsNetSampler::new(config.clone(), NAME, metrics)?,
             interval: Interval::new(Instant::now(), config.interval(NAME)),
         })
     }

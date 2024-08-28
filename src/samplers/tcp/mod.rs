@@ -1,6 +1,5 @@
+#[allow(unused_imports)]
 use crate::*;
-
-sampler!(Tcp, "tcp", TCP_SAMPLERS);
 
 #[cfg(target_os = "linux")]
 mod stats;

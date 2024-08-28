@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek};
 
-#[distributed_slice(MEMORY_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = ProcMeminfo::new(config) {
         Box::new(s)
     } else {
@@ -26,7 +26,7 @@ pub struct ProcMeminfo {
 
 impl ProcMeminfo {
     #![allow(dead_code)]
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !config.enabled(NAME) {
             return Err(());

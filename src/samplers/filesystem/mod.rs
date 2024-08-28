@@ -1,6 +1,5 @@
+#[allow(unused_imports)]
 use crate::*;
-
-sampler!(Filesystem, "filesystem", FILESYSTEM_SAMPLERS);
 
 #[cfg(target_os = "linux")]
 mod linux;

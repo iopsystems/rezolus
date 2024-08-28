@@ -9,8 +9,8 @@ const KB: i64 = 1024;
 const MB: i64 = 1024 * KB;
 const MHZ: i64 = 1_000_000;
 
-#[distributed_slice(GPU_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(nvidia) = Nvidia::new(config) {
         Box::new(nvidia)
     } else {
@@ -61,7 +61,7 @@ struct GpuMetrics {
 }
 
 impl Nvidia {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !config.enabled(NAME) {
             return Err(());

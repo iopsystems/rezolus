@@ -1,6 +1,5 @@
+#[allow(unused_imports)]
 use crate::*;
-
-sampler!(Cpu, "cpu", CPU_SAMPLERS);
 
 #[cfg(target_os = "macos")]
 mod macos;

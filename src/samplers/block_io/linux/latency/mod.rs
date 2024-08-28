@@ -1,5 +1,5 @@
-#[distributed_slice(BLOCK_IO_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = BlockIOLatency::new(config) {
         Box::new(s)
     } else {
@@ -43,7 +43,7 @@ pub struct BlockIOLatency {
 }
 
 impl BlockIOLatency {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !(config.enabled(NAME) && config.bpf(NAME)) {
             return Err(());
