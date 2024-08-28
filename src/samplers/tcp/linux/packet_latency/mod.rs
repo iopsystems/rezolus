@@ -82,7 +82,7 @@ impl PacketLatency {
 
         Ok(Self {
             bpf,
-            interval: Interval::new(now, config.distribution_interval(NAME)),
+            interval: Interval::new(now, config.interval(NAME)),
         })
     }
 }
@@ -91,10 +91,10 @@ impl Sampler for PacketLatency {
     fn sample(&mut self) {
         let now = Instant::now();
 
-        if self.interval.try_wait(now).is_ok() {
+        if let Ok(elapsed) = self.interval.try_wait(now) {
             METADATA_TCP_PACKET_LATENCY_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
-            self.bpf.refresh_distributions();
+            self.bpf.refresh(elapsed);
 
             let elapsed = now.elapsed().as_nanos() as u64;
             METADATA_TCP_PACKET_LATENCY_RUNTIME.add(elapsed);

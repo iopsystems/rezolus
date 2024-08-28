@@ -107,7 +107,7 @@ impl Sampler for SyscallCounts {
         if let Ok(elapsed) = self.interval.try_wait(now) {
             METADATA_SYSCALL_COUNTS_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
-            self.bpf.refresh_counters(elapsed);
+            self.bpf.refresh(elapsed);
 
             let elapsed = now.elapsed().as_nanos() as u64;
             METADATA_SYSCALL_COUNTS_RUNTIME.add(elapsed);

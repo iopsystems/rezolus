@@ -39,7 +39,7 @@ impl GetMap for ModSkel<'_> {
 /// * `blockio/size`
 pub struct BlockIOLatency {
     bpf: Bpf<ModSkel<'static>>,
-    distribution_interval: Interval,
+    interval: Interval,
 }
 
 impl BlockIOLatency {
@@ -83,14 +83,16 @@ impl BlockIOLatency {
 
         Ok(Self {
             bpf,
-            distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
+            interval: Interval::new(now, config.interval(NAME)),
         })
     }
 
-    pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
-        self.distribution_interval.try_wait(now)?;
+    pub fn refresh(&mut self, now: Instant) -> Result<(), ()> {
+        let elapsed = self.interval.try_wait(now)?;
 
-        self.bpf.refresh_distributions();
+        METADATA_BLOCKIO_LATENCY_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
+        self.bpf.refresh(elapsed);
 
         Ok(())
     }
@@ -100,11 +102,9 @@ impl Sampler for BlockIOLatency {
     fn sample(&mut self) {
         let now = Instant::now();
 
-        if self.refresh_distributions(now).is_ok() {
+        if self.refresh(now).is_ok() {
             let elapsed = now.elapsed().as_nanos() as u64;
 
-            METADATA_BLOCKIO_LATENCY_COLLECTED_AT
-                .set(UnixInstant::EPOCH.elapsed().as_nanos() - elapsed);
             METADATA_BLOCKIO_LATENCY_RUNTIME.add(elapsed);
             let _ = METADATA_BLOCKIO_LATENCY_RUNTIME_HISTOGRAM.increment(elapsed);
         }

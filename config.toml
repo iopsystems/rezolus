@@ -65,13 +65,10 @@ enabled = true
 # without BPF, that sampler will be used instead. Otherwise, the sampler will
 # effectively be disabled.
 bpf = true
-# The collection interval for counter and gauge based metrics. Shorter intervals
-# allow for more accurately capturing bursts in the related percentile metrics.
+# The collection interval for the sampler. Shorter intervals result in less
+# error when calculating rates and allow for more accurately capturing bursts in
+# the related percentile metrics.
 interval = "10ms"
-# The collection interval for metrics that sample a distribution. Shorter
-# intervals reduce the uncertainty of the exact period corresponding to the
-# related percentile metrics.
-distribution_interval = "50ms"
 
 # Each sampler can then be individually configured to override the defaults. All
 # of the configuration options in the `[defaults]` section are allowed.
