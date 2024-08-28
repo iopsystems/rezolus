@@ -90,7 +90,7 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 ];
 
 #[distributed_slice]
-pub static SAMPLERS: [fn(config: &Config) -> Box<dyn Sampler>] = [..];
+pub static SAMPLERS: [fn(config: Arc<Config>) -> Box<dyn Sampler>] = [..];
 
 #[metric(
     name = "runtime/sample/loop",
@@ -191,7 +191,7 @@ fn main() {
     let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();
 
     for sampler in SAMPLERS {
-        samplers.push(sampler(&config));
+        samplers.push(sampler(config.clone()));
     }
 
     info!("initialization complete");

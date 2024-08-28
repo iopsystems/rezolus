@@ -1,6 +1,5 @@
 use crate::common::Nop;
-use crate::samplers::filesystem::FILESYSTEM_SAMPLERS;
-use crate::{distributed_slice, Config, Sampler};
+use crate::*;
 
 const NAME: &str = "filesystem_descriptors";
 
@@ -8,8 +7,8 @@ mod procfs;
 
 use procfs::*;
 
-#[distributed_slice(FILESYSTEM_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = Procfs::new(config) {
         Box::new(s)
     } else {

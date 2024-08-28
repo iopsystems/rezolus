@@ -14,11 +14,11 @@ mod proc_cpuinfo;
 use perf_group::*;
 use proc_cpuinfo::*;
 
-#[distributed_slice(CPU_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     // try to initialize the perf counter based sampler that provides more info
     // with lower overhead
-    if let Ok(perf) = Perf::new(config) {
+    if let Ok(perf) = Perf::new(config.clone()) {
         Box::new(perf)
     // try to fallback to the /proc/cpuinfo based sampler if perf events are not
     // supported
@@ -39,7 +39,7 @@ pub struct Perf {
 }
 
 impl Perf {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !(config.enabled(NAME) && config.bpf(NAME)) {
             return Err(());

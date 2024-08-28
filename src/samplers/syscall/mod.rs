@@ -1,6 +1,5 @@
+#[allow(unused_imports)]
 use crate::*;
-
-sampler!(Syscall, "syscall", SYSCALL_SAMPLERS);
 
 #[cfg(target_os = "linux")]
 mod stats;

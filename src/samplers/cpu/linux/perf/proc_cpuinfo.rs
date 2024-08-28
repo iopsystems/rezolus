@@ -9,7 +9,7 @@ pub struct ProcCpuinfo {
 }
 
 impl ProcCpuinfo {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         let file = File::open("/proc/cpuinfo").map_err(|e| {
             error!("failed to open /proc/cpuinfo: {e}");
         })?;

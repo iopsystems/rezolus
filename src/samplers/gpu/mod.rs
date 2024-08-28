@@ -1,6 +1,5 @@
+#[allow(unused_imports)]
 use crate::*;
-
-sampler!(Gpu, "gpu", GPU_SAMPLERS);
 
 #[cfg(target_os = "linux")]
 mod stats;

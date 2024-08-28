@@ -1,6 +1,5 @@
 use crate::common::*;
 use crate::samplers::cpu::*;
-use crate::{distributed_slice, Config, Sampler};
 use libc::mach_port_t;
 use metriken::{DynBoxedMetric, MetricBuilder};
 use ringlog::error;
@@ -8,8 +7,8 @@ use std::time::Instant;
 
 const NAME: &str = "cpu_usage";
 
-#[distributed_slice(CPU_SAMPLERS)]
-fn init(config: &Config) -> Box<dyn Sampler> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = CpuUsage::new(config) {
         Box::new(s)
     } else {
@@ -26,7 +25,7 @@ struct CpuUsage {
 }
 
 impl CpuUsage {
-    pub fn new(config: &Config) -> Result<Self, ()> {
+    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
         if !config.enabled(NAME) {
             return Err(());

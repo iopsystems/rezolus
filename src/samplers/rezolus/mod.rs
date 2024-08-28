@@ -1,6 +1,5 @@
+#[allow(unused_imports)]
 use crate::*;
-
-sampler!(Rezolus, "rezolus", REZOLUS_SAMPLERS);
 
 mod stats;
 

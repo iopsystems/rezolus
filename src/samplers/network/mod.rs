@@ -1,6 +1,5 @@
+#[allow(unused_imports)]
 use crate::*;
-
-sampler!(Network, "network", NETWORK_SAMPLERS);
 
 #[cfg(target_os = "linux")]
 pub(crate) mod stats;
