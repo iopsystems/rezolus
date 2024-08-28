@@ -105,7 +105,6 @@ impl Sampler for BlockIOLatency {
         if self.refresh(now).is_ok() {
             let elapsed = now.elapsed().as_nanos() as u64;
 
-            
             METADATA_BLOCKIO_LATENCY_RUNTIME.add(elapsed);
             let _ = METADATA_BLOCKIO_LATENCY_RUNTIME_HISTOGRAM.increment(elapsed);
         }

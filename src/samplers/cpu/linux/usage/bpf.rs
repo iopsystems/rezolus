@@ -314,9 +314,7 @@ impl Sampler for CpuUsage {
     fn sample(&mut self) {
         let now = Instant::now();
 
-        if self.update_online_cores(now).is_ok()
-            || self.refresh(now).is_ok()
-        {
+        if self.update_online_cores(now).is_ok() || self.refresh(now).is_ok() {
             let elapsed = now.elapsed().as_nanos() as u64;
             METADATA_CPU_USAGE_RUNTIME.add(elapsed);
             let _ = METADATA_CPU_USAGE_RUNTIME_HISTOGRAM.increment(elapsed);

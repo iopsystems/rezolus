@@ -104,7 +104,7 @@ impl<T: 'static + GetMap> Bpf<T> {
         self.bpf.refresh_counters(elapsed.as_secs_f64());
         self.bpf.refresh_distributions();
     }
-    
+
     pub fn refresh_counters(&mut self, elapsed: Duration) {
         self.bpf.refresh_counters(elapsed.as_secs_f64())
     }
