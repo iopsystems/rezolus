@@ -90,12 +90,12 @@ impl BlockIORequests {
 
         Ok(Self {
             bpf,
-            counter_interval: Interval::new(now, config.interval(NAME)),
+            interval: Interval::new(now, config.interval(NAME)),
         })
     }
 
     pub fn refresh(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?;
+        let elapsed = self.interval.try_wait(now)?;
 
         METADATA_BLOCKIO_REQUESTS_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 

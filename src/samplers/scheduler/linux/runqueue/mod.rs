@@ -97,7 +97,7 @@ impl Runqlat {
         })
     }
 
-    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
+    pub fn refresh(&mut self, now: Instant) -> Result<(), ()> {
         let elapsed = self.interval.try_wait(now)?;
 
         METADATA_SCHEDULER_RUNQUEUE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());

@@ -82,7 +82,7 @@ impl NetworkTraffic {
     }
 
     pub fn refresh(&mut self, now: Instant) -> Result<(), ()> {
-        let elapsed = self.counter_interval.try_wait(now)?;
+        let elapsed = self.interval.try_wait(now)?;
 
         METADATA_NETWORK_TRAFFIC_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
