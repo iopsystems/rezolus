@@ -1,9 +1,11 @@
+use async_trait::async_trait;
 use backtrace::Backtrace;
 use clap::{Arg, Command};
 use linkme::distributed_slice;
 use metriken::{metric, Lazy, LazyCounter};
 use metriken_exposition::Histogram;
 use ringlog::*;
+use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 
 use std::collections::HashMap;
@@ -91,6 +93,9 @@ pub static PERCENTILES: &[(&str, f64)] = &[
 
 #[distributed_slice]
 pub static SAMPLERS: [fn(config: Arc<Config>) -> Box<dyn Sampler>] = [..];
+
+#[distributed_slice]
+pub static ASYNC_SAMPLERS: [fn(config: Arc<Config>, runtime: &Runtime)] = [..];
 
 #[metric(
     name = "runtime/sample/loop",
@@ -187,6 +192,17 @@ fn main() {
     // spawn http exposition thread
     rt.spawn(exposition::http(config.clone()));
 
+    // initialize async sampler runtime
+    let sampler_rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(1)
+        .build()
+        .expect("failed to launch async runtime");
+
+    for sampler in ASYNC_SAMPLERS {
+        sampler(config.clone(), &sampler_rt);
+    }
+
     // initialize and gather the samplers
     let mut samplers: Vec<Box<dyn Sampler>> = Vec::new();
 
@@ -218,4 +234,9 @@ fn main() {
 pub trait Sampler {
     /// Do some sampling and updating of stats
     fn sample(&mut self);
+}
+
+#[async_trait]
+pub trait AsyncSampler {
+    async fn sample(&mut self);
 }

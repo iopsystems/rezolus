@@ -1,3 +1,4 @@
+use crate::common::AsyncInterval;
 use crate::Duration;
 use ringlog::Level;
 use serde::Deserialize;
@@ -92,6 +93,18 @@ impl Config {
             .unwrap();
 
         Duration::from_nanos(interval.as_nanos() as u64)
+    }
+
+    pub fn async_interval(&self, name: &str) -> AsyncInterval {
+        let interval = self
+            .samplers
+            .get(name)
+            .and_then(|v| v.interval.as_ref())
+            .unwrap_or(self.defaults.interval.as_ref().unwrap_or(&interval()))
+            .parse::<humantime::Duration>()
+            .unwrap();
+
+        AsyncInterval::new(Duration::from_nanos(interval.as_nanos() as u64))
     }
 }
 
