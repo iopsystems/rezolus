@@ -16,7 +16,7 @@ fn init(config: Arc<Config>) -> Box<dyn Sampler> {
         if let Ok(s) = NetworkTraffic::new(config) {
             Box::new(s)
         } else {
-            Box::new(Nop { })
+            Box::new(Nop {})
         }
     }
 }
@@ -27,7 +27,7 @@ fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = NetworkTraffic::new(config) {
         Box::new(s)
     } else {
-        Box::new(Nop { })
+        Box::new(Nop {})
     }
 }
 

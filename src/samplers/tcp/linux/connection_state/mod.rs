@@ -10,7 +10,7 @@ fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = ConnectionState::new(config) {
         Box::new(s)
     } else {
-        Box::new(Nop { })
+        Box::new(Nop {})
     }
 }
 

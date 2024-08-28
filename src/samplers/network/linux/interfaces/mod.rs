@@ -6,7 +6,7 @@ fn init(config: Arc<Config>) -> Box<dyn Sampler> {
     if let Ok(s) = NetworkInterfaces::new(config) {
         Box::new(s)
     } else {
-        Box::new(Nop { })
+        Box::new(Nop {})
     }
 }
 
