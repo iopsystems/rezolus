@@ -100,6 +100,11 @@ pub struct Bpf<T: 'static> {
 }
 
 impl<T: 'static + GetMap> Bpf<T> {
+    pub fn refresh(&mut self, elapsed: Duration) {
+        self.bpf.refresh_counters(elapsed.as_secs_f64());
+        self.bpf.refresh_distributions();
+    }
+    
     pub fn refresh_counters(&mut self, elapsed: Duration) {
         self.bpf.refresh_counters(elapsed.as_secs_f64())
     }

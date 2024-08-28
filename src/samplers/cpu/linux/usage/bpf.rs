@@ -43,8 +43,7 @@ pub struct CpuUsage {
     total_idle: Counter,
     percpu_busy: Vec<DynBoxedMetric<metriken::Counter>>,
     percpu_idle: Vec<DynBoxedMetric<metriken::Counter>>,
-    counter_interval: Interval,
-    distribution_interval: Interval,
+    interval: Interval,
     online_cores: OnlineCores,
     online_cores_interval: Interval,
 }
@@ -236,8 +235,7 @@ impl CpuUsage {
 
         Ok(Self {
             bpf,
-            counter_interval: Interval::new(now, config.interval(NAME)),
-            distribution_interval: Interval::new(now, config.distribution_interval(NAME)),
+            interval: Interval::new(now, config.interval(NAME)),
             total_busy,
             total_idle,
             percpu_counters,
@@ -248,13 +246,13 @@ impl CpuUsage {
         })
     }
 
-    pub fn refresh_counters(&mut self, now: Instant) -> Result<(), ()> {
+    pub fn refresh(&mut self, now: Instant) -> Result<(), ()> {
         let elapsed = self.counter_interval.try_wait(now)?;
 
         METADATA_CPU_USAGE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
         // refresh the counters from the kernel-space counters
-        self.bpf.refresh_counters(elapsed);
+        self.bpf.refresh(elapsed);
 
         // update busy time metric
         let busy: u64 = busy();
@@ -288,13 +286,6 @@ impl CpuUsage {
         Ok(())
     }
 
-    pub fn refresh_distributions(&mut self, now: Instant) -> Result<(), ()> {
-        self.distribution_interval.try_wait(now)?;
-        self.bpf.refresh_distributions();
-
-        Ok(())
-    }
-
     pub fn update_online_cores(&mut self, now: Instant) -> Result<(), ()> {
         self.online_cores_interval.try_wait(now)?;
         self.online_cores.refresh()?;
@@ -324,8 +315,7 @@ impl Sampler for CpuUsage {
         let now = Instant::now();
 
         if self.update_online_cores(now).is_ok()
-            || self.refresh_counters(now).is_ok()
-            || self.refresh_distributions(now).is_ok()
+            || self.refresh(now).is_ok()
         {
             let elapsed = now.elapsed().as_nanos() as u64;
             METADATA_CPU_USAGE_RUNTIME.add(elapsed);
