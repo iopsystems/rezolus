@@ -2,22 +2,24 @@ use crate::common::*;
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
 use metriken::Gauge;
-use std::fs::File;
-use std::io::{Read, Seek};
-
-#[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    if let Ok(s) = ConnectionState::new(config) {
-        Box::new(s)
-    } else {
-        Box::new(Nop {})
-    }
-}
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 const NAME: &str = "tcp_connection_state";
 
+#[distributed_slice(ASYNC_SAMPLERS)]
+fn spawn(config: Arc<Config>, runtime: &Runtime) {
+    runtime.spawn(async {
+        if let Ok(mut s) = ConnectionState::new(config) {
+            loop {
+                s.sample().await;
+            }
+        }
+    });
+}
+
 pub struct ConnectionState {
-    interval: Interval,
+    interval: AsyncInterval,
     files: Vec<File>,
     gauges: Vec<(&'static Lazy<Gauge>, i64)>,
 }
@@ -44,13 +46,17 @@ impl ConnectionState {
             (&TCP_CONN_STATE_NEW_SYN_RECV, 0),
         ];
 
-        let ipv4 = File::open("/proc/net/tcp").map_err(|e| {
-            error!("Failed to open /proc/net/tcp: {e}");
-        });
+        let ipv4 = std::fs::File::open("/proc/net/tcp")
+            .map(|f| File::from_std(f))
+            .map_err(|e| {
+                error!("Failed to open /proc/net/tcp: {e}");
+            });
 
-        let ipv6 = File::open("/proc/net/tcp6").map_err(|e| {
-            error!("Failed to open /proc/net/tcp6: {e}");
-        });
+        let ipv6 = std::fs::File::open("/proc/net/tcp6")
+            .map(|f| File::from_std(f))
+            .map_err(|e| {
+                error!("Failed to open /proc/net/tcp6: {e}");
+            });
 
         let mut files: Vec<Result<File, ()>> = vec![ipv4, ipv6];
 
@@ -64,18 +70,15 @@ impl ConnectionState {
         Ok(Self {
             files,
             gauges,
-            interval: Interval::new(Instant::now(), config.interval(NAME)),
+            interval: config.async_interval(NAME),
         })
     }
 }
 
-impl Sampler for ConnectionState {
-    fn sample(&mut self) {
-        let now = Instant::now();
-
-        if self.interval.try_wait(now).is_err() {
-            return;
-        }
+#[async_trait]
+impl AsyncSampler for ConnectionState {
+    async fn sample(&mut self) {
+        let (now, _elapsed) = self.interval.tick().await;
 
         METADATA_TCP_CONNECTION_STATE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
@@ -86,9 +89,9 @@ impl Sampler for ConnectionState {
 
         for file in self.files.iter_mut() {
             // seek to start to cause reload of content
-            if file.rewind().is_ok() {
+            if file.rewind().await.is_ok() {
                 let mut data = String::new();
-                if file.read_to_string(&mut data).is_err() {
+                if file.read_to_string(&mut data).await.is_err() {
                     error!("error reading /proc/net/tcp");
                     return;
                 }
