@@ -5,23 +5,47 @@ use metriken::{DynBoxedMetric, MetricBuilder};
 use nvml_wrapper::enum_wrappers::device::*;
 use nvml_wrapper::Nvml;
 
+const NAME: &str = "gpu_nvidia";
+
 const KB: i64 = 1024;
 const MB: i64 = 1024 * KB;
 const MHZ: i64 = 1_000_000;
 
-#[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    if let Ok(nvidia) = Nvidia::new(config) {
-        Box::new(nvidia)
-    } else {
-        Box::new(Nop {})
+#[distributed_slice(ASYNC_SAMPLERS)]
+fn spawn(config: Arc<Config>, runtime: &Runtime) {
+    // check if sampler should be enabled
+    if !(config.enabled(NAME) && config.bpf(NAME)) {
+        return;
+    }
+
+    if let Ok(sampler) = Nvidia::new(config.clone()) {
+        runtime.spawn(async move {
+            let mut interval = config.async_interval(NAME);
+
+            let sampler = Arc::new(parking_lot::Mutex::new(sampler));
+
+            loop {
+                let (now, _elapsed) = interval.tick().await;
+
+                METADATA_GPU_NVIDIA_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+
+                let s = sampler.clone();
+
+                let _ = tokio::task::spawn_blocking(move || {
+                    let mut s = s.lock();
+                    let _ = s.sample_nvml(now.into());
+                })
+                .await;
+
+                let elapsed = now.elapsed().as_nanos() as u64;
+                METADATA_GPU_NVIDIA_RUNTIME.add(elapsed);
+                let _ = METADATA_GPU_NVIDIA_RUNTIME_HISTOGRAM.increment(elapsed);
+            }
+        });
     }
 }
 
-const NAME: &str = "gpu_nvidia";
-
 pub struct Nvidia {
-    interval: Interval,
     nvml: Nvml,
     pergpu_metrics: Vec<GpuMetrics>,
 }
@@ -61,12 +85,7 @@ struct GpuMetrics {
 }
 
 impl Nvidia {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !config.enabled(NAME) {
-            return Err(());
-        }
-
+    pub fn new(_config: Arc<Config>) -> Result<Self, ()> {
         let nvml = Nvml::init().map_err(|e| {
             error!("error initializing: {e}");
         })?;
@@ -148,29 +167,8 @@ impl Nvidia {
 
         Ok(Self {
             nvml,
-            interval: Interval::new(Instant::now(), config.interval(NAME)),
             pergpu_metrics,
         })
-    }
-}
-
-impl Sampler for Nvidia {
-    fn sample(&mut self) {
-        let now = Instant::now();
-
-        if self.interval.try_wait(now).is_err() {
-            return;
-        }
-
-        METADATA_GPU_NVIDIA_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
-
-        if let Err(e) = self.sample_nvml(now) {
-            error!("error sampling: {e}");
-        }
-
-        let elapsed = now.elapsed().as_nanos() as u64;
-        METADATA_GPU_NVIDIA_RUNTIME.add(elapsed);
-        let _ = METADATA_GPU_NVIDIA_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }
 
