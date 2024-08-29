@@ -1,35 +1,37 @@
-use crate::*;
 use super::*;
+use crate::*;
 // use crate::common::bpf::BpfBuilder;
-use core::mem::MaybeUninit;
-use libbpf_rs::skel::SkelBuilder;
-use libbpf_rs::skel::OpenSkel;
-use libbpf_rs::OpenObject;
 pub use crate::common::bpf::GetMap;
-use libbpf_rs::skel::Skel;
-use core::marker::PhantomData;
 use crate::common::bpf::PercpuCounters;
+use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use libbpf_rs::skel::OpenSkel;
+use libbpf_rs::skel::Skel;
+use libbpf_rs::skel::SkelBuilder;
+use libbpf_rs::OpenObject;
 use metriken::RwLockHistogram;
 
 pub struct BpfBuilder<T: 'static + libbpf_rs::skel::SkelBuilder<'static>> {
     _skel: PhantomData<T>,
-	inner: crate::common::bpf::BpfBuilder<<<T as SkelBuilder<'static>>::Output as libbpf_rs::skel::OpenSkel<'static>>::Output>,
+    inner: crate::common::bpf::BpfBuilder<
+        <<T as SkelBuilder<'static>>::Output as libbpf_rs::skel::OpenSkel<'static>>::Output,
+    >,
 }
 
 pub trait OpenSkelExt {
-	/// When called, the SkelBuilder should log instruction counts for each of
-	/// the programs within the skeleton. Log level should be debug.
-	fn log_prog_instructions(&self);
+    /// When called, the SkelBuilder should log instruction counts for each of
+    /// the programs within the skeleton. Log level should be debug.
+    fn log_prog_instructions(&self);
 }
 
 impl<T: 'static> BpfBuilder<T>
-where 
+where
     T: libbpf_rs::skel::SkelBuilder<'static>,
     <<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output: OpenSkelExt,
     <<T as SkelBuilder<'static>>::Output as libbpf_rs::skel::OpenSkel<'static>>::Output: GetMap,
 {
-	pub fn new(skel_builder: T) -> Result<Self, ()> {
-		// storage for the BPF object file
+    pub fn new(skel_builder: T) -> Result<Self, ()> {
+        // storage for the BPF object file
         let open_object: &'static mut MaybeUninit<OpenObject> =
             Box::leak(Box::new(MaybeUninit::uninit()));
 
@@ -49,7 +51,7 @@ where
 
         skel.log_prog_instructions();
 
-       	// attach the BPF program
+        // attach the BPF program
         if let Err(e) = skel.attach() {
             error!("failed to attach bpf program: {e}");
             return Err(());
@@ -58,12 +60,14 @@ where
         // wrap the BPF program and define BPF maps
         Ok(Self {
             _skel: PhantomData,
-        	inner: crate::common::bpf::BpfBuilder::new(skel),
+            inner: crate::common::bpf::BpfBuilder::new(skel),
         })
-	}
+    }
 
     pub fn build(self) -> Bpf<<<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output> {
-        Bpf { inner: self.inner.build() }
+        Bpf {
+            inner: self.inner.build(),
+        }
     }
 
     pub fn counters(mut self, name: &str, counters: Vec<Counter>) -> Self {
@@ -101,4 +105,3 @@ impl<T: 'static + GetMap> Bpf<T> {
         self.inner.refresh(elapsed)
     }
 }
-

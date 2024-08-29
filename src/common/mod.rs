@@ -15,14 +15,14 @@ mod counter;
 mod interval;
 mod nop;
 
-use core::sync::atomic::AtomicBool;
-use parking_lot::Mutex;
-use parking_lot::Condvar;
-use std::sync::Arc;
 pub use clocksource::precise::UnixInstant;
+use core::sync::atomic::AtomicBool;
 pub use counter::Counter;
 pub use interval::{AsyncInterval, Interval};
 pub use nop::Nop;
+use parking_lot::Condvar;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 pub const HISTOGRAM_GROUPING_POWER: u8 = 7;
 

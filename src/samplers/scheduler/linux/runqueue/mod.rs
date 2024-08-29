@@ -1,5 +1,5 @@
-use crate::*;
 use crate::common::SyncPrimitive;
+use crate::*;
 
 #[distributed_slice(ASYNC_SAMPLERS)]
 fn spawn(config: Arc<Config>, runtime: &Runtime) {
@@ -102,7 +102,8 @@ fn spawn_bpf(sync: SyncPrimitive) -> std::thread::JoinHandle<()> {
             return;
         }
 
-        let mut bpf = builder.unwrap()
+        let mut bpf = builder
+            .unwrap()
             .counters("counters", counters)
             .distribution("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
             .distribution("running", &SCHEDULER_RUNNING)
