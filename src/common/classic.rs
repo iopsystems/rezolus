@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
-use tokio::io::AsyncSeekExt;
-use tokio::io::AsyncReadExt;
 use std::collections::HashMap;
-use tokio::fs::File;
 use std::io::{Error, ErrorKind};
 use std::iter::zip;
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncSeekExt;
 
 /// A type that wraps values associated with a nested set of string keys. It is
 /// intended to be constructed by parsing from a file with a specific format and

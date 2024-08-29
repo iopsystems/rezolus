@@ -24,9 +24,11 @@ impl ProcNetSnmp {
             ),
         ];
 
-        let file = std::fs::File::open("/proc/net/snmp").map(|f| tokio::fs::File::from_std(f)).map_err(|e| {
-            error!("failed to open: /proc/net/snmp error: {e}");
-        })?;
+        let file = std::fs::File::open("/proc/net/snmp")
+            .map(|f| tokio::fs::File::from_std(f))
+            .map_err(|e| {
+                error!("failed to open: /proc/net/snmp error: {e}");
+            })?;
 
         Ok(Self {
             interval,

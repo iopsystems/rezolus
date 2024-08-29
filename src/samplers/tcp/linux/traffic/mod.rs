@@ -1,6 +1,6 @@
 use crate::common::*;
-use crate::samplers::tcp::*;
 use crate::samplers::tcp::stats::*;
+use crate::samplers::tcp::*;
 
 const NAME: &str = "tcp_traffic";
 
@@ -10,9 +10,9 @@ mod bpf {
 }
 
 #[cfg(feature = "bpf")]
-use bpf::*;
-#[cfg(feature = "bpf")]
 use crate::common::bpf::*;
+#[cfg(feature = "bpf")]
+use bpf::*;
 
 mod proc;
 
