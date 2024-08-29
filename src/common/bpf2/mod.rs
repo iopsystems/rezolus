@@ -1,14 +1,12 @@
 use super::*;
-pub use crate::common::bpf::GetMap;
-use crate::common::bpf::PercpuCounters;
 use crate::*;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
-use libbpf_rs::skel::OpenSkel;
-use libbpf_rs::skel::Skel;
-use libbpf_rs::skel::SkelBuilder;
+use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::OpenObject;
 use metriken::RwLockHistogram;
+
+pub use crate::common::bpf::{GetMap, PercpuCounters};
 
 pub struct BpfBuilder<T: 'static + libbpf_rs::skel::SkelBuilder<'static>> {
     _skel: PhantomData<T>,
@@ -34,6 +32,7 @@ where
         let open_object: &'static mut MaybeUninit<OpenObject> =
             Box::leak(Box::new(MaybeUninit::uninit()));
 
+        // open and load the BPF program
         let mut skel = match skel_builder.open(open_object) {
             Ok(s) => match s.load() {
                 Ok(s) => s,
