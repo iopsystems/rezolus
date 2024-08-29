@@ -10,11 +10,17 @@ pub use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 pub use libbpf_rs::OpenObject;
 pub use std::mem::MaybeUninit;
 
+mod async_bpf;
+
+pub use async_bpf::*;
+
 mod counters;
 mod distribution;
+mod sync_primitive;
 
 use counters::Counters;
 use distribution::Distribution;
+use sync_primitive::SyncPrimitive;
 
 pub use counters::PercpuCounters;
 
