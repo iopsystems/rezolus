@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
+use tokio::io::AsyncSeekExt;
+use tokio::io::AsyncReadExt;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
-use std::io::Seek;
+use tokio::fs::File;
 use std::io::{Error, ErrorKind};
 use std::iter::zip;
 
@@ -30,12 +30,12 @@ impl NestedMap {
     /// pkeyN lkey1 ... lkeyN
     /// pkeyN value1 ... lkeyN
     /// ```
-    pub fn try_from_procfs(file: &mut File) -> Result<Self, std::io::Error> {
+    pub async fn try_from_procfs(file: &mut File) -> Result<Self, std::io::Error> {
         // seek to start to cause reload of content
-        file.rewind()?;
+        file.rewind().await?;
 
         let mut data = String::new();
-        file.read_to_string(&mut data)?;
+        file.read_to_string(&mut data).await?;
 
         let mut inner = HashMap::new();
 

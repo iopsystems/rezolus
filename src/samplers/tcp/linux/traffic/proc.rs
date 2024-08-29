@@ -2,23 +2,15 @@ use crate::common::classic::NestedMap;
 use crate::common::*;
 use crate::samplers::tcp::stats::*;
 use crate::samplers::tcp::*;
-use std::fs::File;
-
-use super::NAME;
 
 pub struct ProcNetSnmp {
-    interval: Interval,
-    file: File,
+    interval: AsyncInterval,
     counters: Vec<(Counter, &'static str, &'static str)>,
+    file: tokio::fs::File,
 }
 
 impl ProcNetSnmp {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !config.enabled(NAME) {
-            return Err(());
-        }
-
+    pub fn new(interval: AsyncInterval) -> Result<Self, ()> {
         let counters = vec![
             (
                 Counter::new(&TCP_RX_PACKETS, Some(&TCP_RX_PACKETS_HISTOGRAM)),
@@ -32,32 +24,35 @@ impl ProcNetSnmp {
             ),
         ];
 
+        let file = std::fs::File::open("/proc/net/snmp").map(|f| tokio::fs::File::from_std(f)).map_err(|e| {
+            error!("failed to open: /proc/net/snmp error: {e}");
+        })?;
+
         Ok(Self {
-            file: File::open("/proc/net/snmp").expect("file not found"),
+            interval,
             counters,
-            interval: Interval::new(Instant::now(), config.interval(NAME)),
+            file,
         })
     }
 }
 
-impl Sampler for ProcNetSnmp {
-    fn sample(&mut self) {
-        let now = Instant::now();
+#[async_trait]
+impl AsyncSampler for ProcNetSnmp {
+    async fn sample(&mut self) {
+        let (now, elapsed) = self.interval.tick().await;
 
-        if let Ok(elapsed) = self.interval.try_wait(now) {
-            METADATA_TCP_TRAFFIC_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+        METADATA_TCP_TRAFFIC_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
 
-            if let Ok(nested_map) = NestedMap::try_from_procfs(&mut self.file) {
-                for (counter, pkey, lkey) in self.counters.iter_mut() {
-                    if let Some(curr) = nested_map.get(pkey, lkey) {
-                        counter.set(elapsed.as_secs_f64(), curr);
-                    }
+        if let Ok(nested_map) = NestedMap::try_from_procfs(&mut self.file).await {
+            for (counter, pkey, lkey) in self.counters.iter_mut() {
+                if let Some(curr) = nested_map.get(pkey, lkey) {
+                    counter.set2(elapsed, curr);
                 }
             }
-
-            let elapsed = now.elapsed().as_nanos() as u64;
-            METADATA_TCP_TRAFFIC_RUNTIME.add(elapsed);
-            let _ = METADATA_TCP_TRAFFIC_RUNTIME_HISTOGRAM.increment(elapsed);
         }
+
+        let elapsed = now.elapsed().as_nanos() as u64;
+        METADATA_TCP_TRAFFIC_RUNTIME.add(elapsed);
+        let _ = METADATA_TCP_TRAFFIC_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }
