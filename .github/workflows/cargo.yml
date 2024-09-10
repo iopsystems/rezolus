@@ -55,7 +55,7 @@ jobs:
       security-events: write
     steps:
     - uses: actions/checkout@v3
-    - uses: actions/download-artifact@v3
+    - uses: actions/download-artifact@v4.1.7
       with:
         name: clippy-sarif
     - uses: github/codeql-action/upload-sarif@v2
