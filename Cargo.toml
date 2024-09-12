@@ -13,6 +13,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 systeminfo = { workspace = true }
 
+axum = { version = "0.7.5", features = ["http2"] }
 backtrace = "0.3.71"
 chrono = { version = "0.4.38", features = ["serde"] }
 clap = "4.5.4"
@@ -34,8 +35,9 @@ syscall-numbers = "3.1.1"
 sysconf = "0.3.4"
 tokio = { version = "1.37.0", features = ["full"] }
 toml = "0.8.13"
+tower = { version = "0.5.0", features = ["tokio"] }
+tower-http = { version = "0.5.2", features = ["compression-full", "decompression-full"] }
 walkdir = "2.5.0"
-warp = { version = "0.3.7", features = ["compression"] }
 clocksource = "0.8.1"
 async-trait = "0.1.81"
 parking_lot = "0.12.3"

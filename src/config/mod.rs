@@ -111,8 +111,6 @@ impl Config {
 #[derive(Deserialize)]
 pub struct General {
     listen: String,
-    #[serde(default = "disabled")]
-    compression: bool,
     #[serde(default = "snapshot_interval")]
     snapshot_interval: String,
 }
@@ -147,10 +145,6 @@ impl General {
                 std::process::exit(1);
             })
             .unwrap()
-    }
-
-    pub fn compression(&self) -> bool {
-        self.compression
     }
 
     pub fn snapshot_interval(&self) -> Duration {
