@@ -148,6 +148,7 @@ jobs:
       - check
       - rustfmt
       - clippy
+      - clippy-upload
 
     steps:
       - name: no-op
