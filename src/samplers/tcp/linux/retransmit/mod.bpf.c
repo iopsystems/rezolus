@@ -10,13 +10,16 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
+#define COUNTER_GROUP_WIDTH 8
+#define MAX_CPUS 1024
+
 // counters
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
+	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 SEC("kprobe/tcp_retransmit_skb")
@@ -24,7 +27,7 @@ int BPF_KPROBE(tcp_retransmit_skb, struct sock *sk, struct sk_buff *skb, int seg
 {
 	u64 *cnt;
 
-	u32 idx = 8 * bpf_get_smp_processor_id();
+	u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 	cnt = bpf_map_lookup_elem(&counters, &idx);
 
 	if (cnt) {

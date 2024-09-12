@@ -1,19 +1,18 @@
-/// Collects Syscall Latency stats using BPF and traces:
+/// Collects Syscall stats using BPF and traces:
 /// * `raw_syscalls/sys_enter`
-/// * `raw_syscalls/sys_exit`
 ///
 /// And produces these stats:
-/// * `syscall/total/latency`
-/// * `syscall/read/latency`
-/// * `syscall/write/latency`
-/// * `syscall/poll/latency`
-/// * `syscall/lock/latency`
-/// * `syscall/time/latency`
-/// * `syscall/sleep/latency`
-/// * `syscall/socket/latency`
-/// * `syscall/yield/latency`
+/// * `syscall/total`
+/// * `syscall/read`
+/// * `syscall/write`
+/// * `syscall/poll`
+/// * `syscall/lock`
+/// * `syscall/time`
+/// * `syscall/sleep`
+/// * `syscall/socket`
+/// * `syscall/yield`
 
-const NAME: &str = "syscall_latency";
+const NAME: &str = "syscall_counts";
 
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/syscall_latency.bpf.rs"));
@@ -21,54 +20,37 @@ mod bpf {
 
 use bpf::*;
 
-use crate::common::bpf::*;
+use crate::common::*;
+use crate::samplers::syscall::linux::stats::*;
 use crate::samplers::syscall::linux::syscall_lut;
-use crate::samplers::syscall::stats::*;
+use crate::samplers::Sampler;
 use crate::*;
 
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
-    if !(config.enabled(NAME) && config.bpf(NAME)) {
-        return;
+use std::sync::Arc;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
     }
 
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
-        .distribution("total_latency", &SYSCALL_TOTAL_LATENCY)
-        .distribution("read_latency", &SYSCALL_READ_LATENCY)
-        .distribution("write_latency", &SYSCALL_WRITE_LATENCY)
-        .distribution("poll_latency", &SYSCALL_POLL_LATENCY)
-        .distribution("lock_latency", &SYSCALL_LOCK_LATENCY)
-        .distribution("time_latency", &SYSCALL_TIME_LATENCY)
-        .distribution("sleep_latency", &SYSCALL_SLEEP_LATENCY)
-        .distribution("socket_latency", &SYSCALL_SOCKET_LATENCY)
-        .distribution("yield_latency", &SYSCALL_YIELD_LATENCY)
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+        .histogram("total_latency", &SYSCALL_TOTAL_LATENCY)
+        .histogram("read_latency", &SYSCALL_READ_LATENCY)
+        .histogram("write_latency", &SYSCALL_WRITE_LATENCY)
+        .histogram("poll_latency", &SYSCALL_POLL_LATENCY)
+        .histogram("lock_latency", &SYSCALL_LOCK_LATENCY)
+        .histogram("time_latency", &SYSCALL_TIME_LATENCY)
+        .histogram("sleep_latency", &SYSCALL_SLEEP_LATENCY)
+        .histogram("socket_latency", &SYSCALL_SOCKET_LATENCY)
+        .histogram("yield_latency", &SYSCALL_YIELD_LATENCY)
         .map("syscall_lut", syscall_lut())
-        .collected_at(&METADATA_SYSCALL_LATENCY_COLLECTED_AT)
-        .runtime(
-            &METADATA_SYSCALL_LATENCY_RUNTIME,
-            &METADATA_SYSCALL_LATENCY_RUNTIME_HISTOGRAM,
-        )
-        .build();
+        .build()?;
 
-    if bpf.is_err() {
-        return;
-    }
-
-    runtime.spawn(async move {
-        let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-        loop {
-            if sampler.is_finished() {
-                return;
-            }
-
-            sampler.sample().await;
-        }
-    });
+    Ok(Some(Box::new(bpf)))
 }
 
-impl GetMap for ModSkel<'_> {
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "total_latency" => &self.maps.total_latency,

@@ -1,69 +1,67 @@
-use crate::common::*;
-use crate::samplers::network::linux::*;
+/// Collects Network Traffic stats using BPF and traces:
+/// * `netif_receive_skb`
+/// * `netdev_start_xmit`
+///
+/// And produces these stats:
+/// * `network/receive/bytes`
+/// * `network/receive/frames`
+/// * `network/transmit/bytes`
+/// * `network/transmit/frames`
 
 const NAME: &str = "network_traffic";
 
-#[cfg(feature = "bpf")]
-mod bpf;
+#[allow(clippy::module_inception)]
+mod bpf {
+    include!(concat!(env!("OUT_DIR"), "/network_traffic.bpf.rs"));
+}
 
-#[cfg(feature = "bpf")]
+use bpf::*;
+
+use crate::common::*;
+use crate::samplers::network::linux::stats::*;
+use crate::samplers::Sampler;
+use crate::*;
+
+use std::sync::Arc;
+
 #[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    // try to initialize the bpf based sampler
-    if let Ok(s) = bpf::NetworkTraffic::new(config.clone()) {
-        Box::new(s)
-    } else {
-        if let Ok(s) = NetworkTraffic::new(config) {
-            Box::new(s)
-        } else {
-            Box::new(Nop {})
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    let counters = vec![
+        &NETWORK_RX_BYTES,
+        &NETWORK_TX_BYTES,
+        &NETWORK_RX_PACKETS,
+        &NETWORK_TX_PACKETS,
+    ];
+
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+        .counters("counters", counters)
+        .build()?;
+
+    Ok(Some(Box::new(bpf)))
+}
+
+impl SkelExt for ModSkel<'_> {
+    fn map(&self, name: &str) -> &libbpf_rs::Map {
+        match name {
+            "counters" => &self.maps.counters,
+            _ => unimplemented!(),
         }
     }
 }
 
-#[cfg(not(feature = "bpf"))]
-#[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    if let Ok(s) = NetworkTraffic::new(config) {
-        Box::new(s)
-    } else {
-        Box::new(Nop {})
-    }
-}
-
-struct NetworkTraffic {
-    inner: SysfsNetSampler,
-    interval: Interval,
-}
-
-impl NetworkTraffic {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        let metrics = vec![
-            (&NETWORK_RX_BYTES, "rx_bytes"),
-            (&NETWORK_RX_PACKETS, "rx_packets"),
-            (&NETWORK_TX_BYTES, "tx_bytes"),
-            (&NETWORK_TX_PACKETS, "tx_packets"),
-        ];
-
-        Ok(Self {
-            inner: SysfsNetSampler::new(config.clone(), NAME, metrics)?,
-            interval: Interval::new(Instant::now(), config.interval(NAME)),
-        })
-    }
-}
-
-impl Sampler for NetworkTraffic {
-    fn sample(&mut self) {
-        let now = Instant::now();
-
-        if let Ok(_) = self.interval.try_wait(now) {
-            METADATA_NETWORK_TRAFFIC_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
-
-            let _ = self.inner.sample_now();
-
-            let elapsed = now.elapsed().as_nanos() as u64;
-            METADATA_NETWORK_TRAFFIC_RUNTIME.add(elapsed);
-            let _ = METADATA_NETWORK_TRAFFIC_RUNTIME_HISTOGRAM.increment(elapsed);
-        }
+impl OpenSkelExt for ModSkel<'_> {
+    fn log_prog_instructions(&self) {
+        debug!(
+            "{NAME} netif_receive_skb() BPF instruction count: {}",
+            self.progs.netif_receive_skb.insn_cnt()
+        );
+        debug!(
+            "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
+            self.progs.tcp_cleanup_rbuf.insn_cnt()
+        );
     }
 }

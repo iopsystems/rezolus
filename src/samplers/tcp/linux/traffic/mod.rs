@@ -1,25 +1,53 @@
-use crate::common::*;
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
+/// Collects TCP stats using BPF and traces:
+/// * `tcp_sendmsg`
+/// * `tcp_cleanup_rbuf`
+///
+/// And produces these stats:
+/// * `tcp/receive/bytes`
+/// * `tcp/receive/packets`
+/// * `tcp/receive/size`
+/// * `tcp/transmit/bytes`
+/// * `tcp/transmit/packets`
+/// * `tcp/transmit/size`
 
 const NAME: &str = "tcp_traffic";
 
-#[cfg(feature = "bpf")]
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_traffic.bpf.rs"));
 }
 
-#[cfg(feature = "bpf")]
-use crate::common::bpf::*;
-#[cfg(feature = "bpf")]
 use bpf::*;
 
-mod proc;
+use crate::common::*;
+use crate::samplers::tcp::linux::stats::*;
+use crate::samplers::Sampler;
+use crate::*;
 
-use proc::*;
+use std::sync::Arc;
 
-#[cfg(feature = "bpf")]
-impl GetMap for ModSkel<'_> {
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    let counters = vec![
+        &TCP_RX_BYTES,
+        &TCP_TX_BYTES,
+        &TCP_RX_PACKETS,
+        &TCP_TX_PACKETS,
+    ];
+
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+        .counters("counters", counters)
+        .histogram("rx_size", &TCP_RX_SIZE)
+        .histogram("tx_size", &TCP_TX_SIZE)
+        .build()?;
+
+    Ok(Some(Box::new(bpf)))
+}
+
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "counters" => &self.maps.counters,
@@ -30,7 +58,6 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-#[cfg(feature = "bpf")]
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
@@ -41,54 +68,5 @@ impl OpenSkelExt for ModSkel<'_> {
             "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
             self.progs.tcp_cleanup_rbuf.insn_cnt()
         );
-    }
-}
-
-#[cfg(feature = "bpf")]
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
-    if !(config.enabled(NAME) && config.bpf(NAME)) {
-        return;
-    }
-
-    let counters = vec![
-        Counter::new(&TCP_RX_BYTES, Some(&TCP_RX_BYTES_HISTOGRAM)),
-        Counter::new(&TCP_TX_BYTES, Some(&TCP_TX_BYTES_HISTOGRAM)),
-        Counter::new(&TCP_RX_PACKETS, Some(&TCP_RX_PACKETS_HISTOGRAM)),
-        Counter::new(&TCP_TX_PACKETS, Some(&TCP_TX_PACKETS_HISTOGRAM)),
-    ];
-
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
-        .counters("counters", counters)
-        .distribution("rx_size", &TCP_RX_SIZE)
-        .distribution("tx_size", &TCP_TX_SIZE)
-        .collected_at(&METADATA_TCP_TRAFFIC_COLLECTED_AT)
-        .runtime(
-            &METADATA_TCP_TRAFFIC_RUNTIME,
-            &METADATA_TCP_TRAFFIC_RUNTIME_HISTOGRAM,
-        )
-        .build();
-
-    if bpf.is_ok() {
-        runtime.spawn(async move {
-            let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-            loop {
-                if sampler.is_finished() {
-                    return;
-                }
-
-                sampler.sample().await;
-            }
-        });
-    } else {
-        runtime.spawn(async move {
-            if let Ok(mut sampler) = ProcNetSnmp::new(config.async_interval(NAME)) {
-                loop {
-                    sampler.sample().await;
-                }
-            }
-        });
     }
 }

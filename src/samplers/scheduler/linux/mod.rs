@@ -1,2 +1,3 @@
-#[cfg(feature = "bpf")]
+mod stats;
+
 mod runqueue;

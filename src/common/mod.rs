@@ -1,16 +1,26 @@
-#[cfg(all(feature = "bpf", target_os = "linux"))]
+mod counters;
+mod gauges;
+
+pub use counters::*;
+pub use gauges::*;
+
+#[cfg(target_os = "linux")]
 pub mod bpf;
 
-pub mod classic;
-pub mod units;
+#[cfg(target_os = "linux")]
+pub use bpf::*;
 
-mod counter;
-mod interval;
-mod nop;
+#[cfg(target_os = "linux")]
+pub mod linux;
 
-pub use clocksource::precise::UnixInstant;
-pub use counter::Counter;
-pub use interval::{AsyncInterval, Interval};
-pub use nop::Nop;
+pub static HISTOGRAM_GROUPING_POWER: u8 = 3;
 
-pub const HISTOGRAM_GROUPING_POWER: u8 = 7;
+// Time units with base unit as nanoseconds
+pub const SECONDS: u64 = 1_000 * MILLISECONDS;
+pub const MILLISECONDS: u64 = 1_000 * MICROSECONDS;
+pub const MICROSECONDS: u64 = 1_000 * NANOSECONDS;
+pub const NANOSECONDS: u64 = 1;
+
+// Data (IEC) with base unit as bytes - typically used for memory
+pub const KIBIBYTES: u64 = 1024 * BYTES;
+pub const BYTES: u64 = 1;

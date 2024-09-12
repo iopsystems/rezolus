@@ -13,45 +13,28 @@ mod bpf {
 
 use bpf::*;
 
-use crate::common::bpf::*;
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
+use crate::common::*;
+use crate::samplers::tcp::linux::stats::*;
+use crate::samplers::Sampler;
+use crate::*;
 
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
-    if !(config.enabled(NAME) && config.bpf(NAME)) {
-        return;
+use std::sync::Arc;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
     }
 
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
-        .distribution("srtt", &TCP_SRTT)
-        .distribution("jitter", &TCP_JITTER)
-        .collected_at(&METADATA_TCP_RECEIVE_COLLECTED_AT)
-        .runtime(
-            &METADATA_TCP_RECEIVE_RUNTIME,
-            &METADATA_TCP_RECEIVE_RUNTIME_HISTOGRAM,
-        )
-        .build();
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+        .histogram("srtt", &TCP_SRTT)
+        .histogram("jitter", &TCP_JITTER)
+        .build()?;
 
-    if bpf.is_err() {
-        return;
-    }
-
-    runtime.spawn(async move {
-        let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-        loop {
-            if sampler.is_finished() {
-                return;
-            }
-
-            sampler.sample().await;
-        }
-    });
+    Ok(Some(Box::new(bpf)))
 }
 
-impl GetMap for ModSkel<'_> {
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "srtt" => &self.maps.srtt,

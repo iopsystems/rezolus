@@ -20,59 +20,41 @@ mod bpf {
 
 use bpf::*;
 
-use crate::common::bpf::*;
 use crate::common::*;
+use crate::samplers::syscall::linux::stats::*;
 use crate::samplers::syscall::linux::syscall_lut;
-use crate::samplers::syscall::stats::*;
+use crate::samplers::Sampler;
 use crate::*;
 
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
-    if !(config.enabled(NAME) && config.bpf(NAME)) {
-        return;
+use std::sync::Arc;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
     }
 
     let counters = vec![
-        Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HISTOGRAM)),
-        Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HISTOGRAM)),
-        Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HISTOGRAM)),
-        Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HISTOGRAM)),
-        Counter::new(&SYSCALL_LOCK, Some(&SYSCALL_LOCK_HISTOGRAM)),
-        Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HISTOGRAM)),
-        Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HISTOGRAM)),
-        Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HISTOGRAM)),
-        Counter::new(&SYSCALL_YIELD, Some(&SYSCALL_YIELD_HISTOGRAM)),
+        &SYSCALL_TOTAL,
+        &SYSCALL_READ,
+        &SYSCALL_WRITE,
+        &SYSCALL_POLL,
+        &SYSCALL_LOCK,
+        &SYSCALL_TIME,
+        &SYSCALL_SLEEP,
+        &SYSCALL_SOCKET,
+        &SYSCALL_YIELD,
     ];
 
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .counters("counters", counters)
         .map("syscall_lut", syscall_lut())
-        .collected_at(&METADATA_SYSCALL_COUNTS_COLLECTED_AT)
-        .runtime(
-            &METADATA_SYSCALL_COUNTS_RUNTIME,
-            &METADATA_SYSCALL_COUNTS_RUNTIME_HISTOGRAM,
-        )
-        .build();
+        .build()?;
 
-    if bpf.is_err() {
-        return;
-    }
-
-    runtime.spawn(async move {
-        let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-        loop {
-            if sampler.is_finished() {
-                return;
-            }
-
-            sampler.sample().await;
-        }
-    });
+    Ok(Some(Box::new(bpf)))
 }
 
-impl GetMap for ModSkel<'_> {
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "counters" => &self.maps.counters,

@@ -7,23 +7,24 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
-#define COUNTER_GROUP_WIDTH 8
+#define COUNTER_GROUP_WIDTH 16
 #define MAX_CPUS 1024
 
 #define IDLE_STAT_INDEX 5
 #define IOWAIT_STAT_INDEX 6
 
 // cpu usage stat index (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
-// 0 - user
-// 1 - nice
-// 2 - system
-// 3 - softirq
-// 4 - irq
+// 0 - busy total
+// 1 - user
+// 2 - nice
+// 3 - system
+// 4 - softirq
+// 5 - irq
 //   - idle - *NOTE* this will not increment. User-space must calculate it. This index is skipped
 //   - iowait - *NOTE* this will not increment. This index is skipped
-// 5 - steal
-// 6 - guest
-// 7 - guest_nice
+// 6 - steal
+// 7 - guest
+// 8 - guest_nice
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -38,7 +39,16 @@ int account_delta(u64 delta, u32 usage_idx)
 	u32 idx;
 
 	if (usage_idx < COUNTER_GROUP_WIDTH) {
-		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + usage_idx;
+		// increment busy total
+		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+		cnt = bpf_map_lookup_elem(&counters, &idx);
+
+		if (cnt) {
+			__atomic_fetch_add(cnt, delta, __ATOMIC_RELAXED);
+		}
+
+		// increment counter for this usage category
+		idx = idx + usage_idx;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
@@ -62,9 +72,9 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 	// this prevents having those counters mapped to non-incrementing values in
 	// this BPF program
 	if (index < IDLE_STAT_INDEX) {
-		return account_delta(delta, index);
+		return account_delta(delta, index + 1);
 	} else {
-		return account_delta(delta, index - 2);
+		return account_delta(delta, index - 1);
 	}
 }
 
