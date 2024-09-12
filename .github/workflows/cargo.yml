@@ -35,6 +35,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: clippy-sarif,sarif-fmt
+      - name: Install dependencies
+        shell: bash
+        run: sudo apt-get -y install libelf-dev
       - name: run clippy
         run: |
           cargo clippy --all-targets --all-features --message-format json \
