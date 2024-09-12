@@ -27,17 +27,14 @@ fn spawn(config: Arc<Config>, runtime: &Runtime) {
     }
 
     let counters = vec![
-        Counter::new(&BLOCKIO_READ_OPS, Some(&BLOCKIO_READ_OPS_HISTOGRAM)),
-        Counter::new(&BLOCKIO_WRITE_OPS, Some(&BLOCKIO_WRITE_OPS_HISTOGRAM)),
-        Counter::new(&BLOCKIO_FLUSH_OPS, Some(&BLOCKIO_FLUSH_OPS_HISTOGRAM)),
-        Counter::new(&BLOCKIO_DISCARD_OPS, Some(&BLOCKIO_DISCARD_OPS_HISTOGRAM)),
-        Counter::new(&BLOCKIO_READ_BYTES, Some(&BLOCKIO_READ_BYTES_HISTOGRAM)),
-        Counter::new(&BLOCKIO_WRITE_BYTES, Some(&BLOCKIO_WRITE_BYTES_HISTOGRAM)),
-        Counter::new(&BLOCKIO_FLUSH_BYTES, Some(&BLOCKIO_FLUSH_BYTES_HISTOGRAM)),
-        Counter::new(
-            &BLOCKIO_DISCARD_BYTES,
-            Some(&BLOCKIO_DISCARD_BYTES_HISTOGRAM),
-        ),
+        Counter::new(&BLOCKIO_READ_OPS, None),
+        Counter::new(&BLOCKIO_WRITE_OPS, None),
+        Counter::new(&BLOCKIO_FLUSH_OPS, None),
+        Counter::new(&BLOCKIO_DISCARD_OPS, None),
+        Counter::new(&BLOCKIO_READ_BYTES, None),
+        Counter::new(&BLOCKIO_WRITE_BYTES, None),
+        Counter::new(&BLOCKIO_FLUSH_BYTES, None),
+        Counter::new(&BLOCKIO_DISCARD_BYTES, None),
     ];
 
     let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)

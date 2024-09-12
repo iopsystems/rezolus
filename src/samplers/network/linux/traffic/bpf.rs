@@ -65,10 +65,10 @@ impl NetworkTraffic {
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
         let counters = vec![
-            Counter::new(&NETWORK_RX_BYTES, Some(&NETWORK_RX_BYTES_HISTOGRAM)),
-            Counter::new(&NETWORK_TX_BYTES, Some(&NETWORK_TX_BYTES_HISTOGRAM)),
-            Counter::new(&NETWORK_RX_PACKETS, Some(&NETWORK_RX_PACKETS_HISTOGRAM)),
-            Counter::new(&NETWORK_TX_PACKETS, Some(&NETWORK_TX_PACKETS_HISTOGRAM)),
+            Counter::new(&NETWORK_RX_BYTES,  None),
+            Counter::new(&NETWORK_TX_BYTES, None),
+            Counter::new(&NETWORK_RX_PACKETS, None),
+            Counter::new(&NETWORK_TX_PACKETS, None),
         ];
 
         let bpf = BpfBuilder::new(skel).counters("counters", counters).build();

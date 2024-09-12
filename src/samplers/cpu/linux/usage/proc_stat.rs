@@ -35,16 +35,16 @@ impl ProcStat {
         };
 
         let total_counters = vec![
-            Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IO_WAIT, Some(&CPU_USAGE_IO_WAIT_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_USER, None),
+            Counter::new(&CPU_USAGE_NICE, None),
+            Counter::new(&CPU_USAGE_SYSTEM, None),
+            Counter::new(&CPU_USAGE_IDLE,  None),
+            Counter::new(&CPU_USAGE_IO_WAIT, None),
+            Counter::new(&CPU_USAGE_IRQ,  None),
+            Counter::new(&CPU_USAGE_SOFTIRQ,  None),
+            Counter::new(&CPU_USAGE_STEAL,  None),
+            Counter::new(&CPU_USAGE_GUEST,  None),
+            Counter::new(&CPU_USAGE_GUEST_NICE,  None),
         ];
 
         let mut percpu_counters = Vec::with_capacity(cpus.len());
@@ -102,7 +102,7 @@ impl ProcStat {
         Ok(Self {
             file: File::open("/proc/stat").expect("file not found"),
             total_counters,
-            total_busy: Counter::new(&CPU_USAGE_BUSY, Some(&CPU_USAGE_BUSY_HISTOGRAM)),
+            total_busy: Counter::new(&CPU_USAGE_BUSY,  None),
             percpu_counters,
             percpu_busy,
             nanos_per_tick,

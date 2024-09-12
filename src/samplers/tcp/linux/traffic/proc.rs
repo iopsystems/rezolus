@@ -13,12 +13,12 @@ impl ProcNetSnmp {
     pub fn new(interval: AsyncInterval) -> Result<Self, ()> {
         let counters = vec![
             (
-                Counter::new(&TCP_RX_PACKETS, Some(&TCP_RX_PACKETS_HISTOGRAM)),
+                Counter::new(&TCP_RX_PACKETS,  None),
                 "Tcp:",
                 "InSegs",
             ),
             (
-                Counter::new(&TCP_TX_PACKETS, Some(&TCP_TX_PACKETS_HISTOGRAM)),
+                Counter::new(&TCP_TX_PACKETS,  None),
                 "Tcp:",
                 "OutSegs",
             ),

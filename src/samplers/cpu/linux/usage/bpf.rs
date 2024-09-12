@@ -161,14 +161,14 @@ impl CpuUsage {
         };
 
         let counters = vec![
-            Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_SOFTIRQ, Some(&CPU_USAGE_SOFTIRQ_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IRQ, Some(&CPU_USAGE_IRQ_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_STEAL, Some(&CPU_USAGE_STEAL_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_GUEST, Some(&CPU_USAGE_GUEST_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_GUEST_NICE, Some(&CPU_USAGE_GUEST_NICE_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_USER, None),
+            Counter::new(&CPU_USAGE_NICE, None),
+            Counter::new(&CPU_USAGE_SYSTEM, None),
+            Counter::new(&CPU_USAGE_SOFTIRQ, None),
+            Counter::new(&CPU_USAGE_IRQ, None),
+            Counter::new(&CPU_USAGE_STEAL, None),
+            Counter::new(&CPU_USAGE_GUEST, None),
+            Counter::new(&CPU_USAGE_GUEST_NICE, None),
         ];
 
         let mut percpu_counters = PercpuCounters::default();
@@ -230,8 +230,8 @@ impl CpuUsage {
 
         let now = Instant::now();
 
-        let total_busy = Counter::new(&CPU_USAGE_BUSY, Some(&CPU_USAGE_BUSY_HISTOGRAM));
-        let total_idle = Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM));
+        let total_busy = Counter::new(&CPU_USAGE_BUSY,  None);
+        let total_idle = Counter::new(&CPU_USAGE_IDLE, None);
 
         Ok(Self {
             bpf,

@@ -26,7 +26,7 @@ fn spawn(config: Arc<Config>, runtime: &Runtime) {
 
     let counters = vec![Counter::new(
         &TCP_TX_RETRANSMIT,
-        Some(&TCP_TX_RETRANSMIT_HISTOGRAM),
+        None,
     )];
 
     let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)

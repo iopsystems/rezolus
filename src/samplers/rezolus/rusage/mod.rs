@@ -31,8 +31,8 @@ impl Rusage {
 
         Ok(Self {
             interval: config.async_interval(NAME),
-            ru_utime: Counter::new(&RU_UTIME, Some(&RU_UTIME_HISTOGRAM)),
-            ru_stime: Counter::new(&RU_STIME, Some(&RU_STIME_HISTOGRAM)),
+            ru_utime: Counter::new(&RU_UTIME, None),
+            ru_stime: Counter::new(&RU_STIME, None),
         })
     }
 }
