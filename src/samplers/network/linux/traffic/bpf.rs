@@ -65,7 +65,7 @@ impl NetworkTraffic {
             .map_err(|e| error!("failed to attach bpf program: {e}"))?;
 
         let counters = vec![
-            Counter::new(&NETWORK_RX_BYTES,  None),
+            Counter::new(&NETWORK_RX_BYTES, None),
             Counter::new(&NETWORK_TX_BYTES, None),
             Counter::new(&NETWORK_RX_PACKETS, None),
             Counter::new(&NETWORK_TX_PACKETS, None),

@@ -230,7 +230,7 @@ impl CpuUsage {
 
         let now = Instant::now();
 
-        let total_busy = Counter::new(&CPU_USAGE_BUSY,  None);
+        let total_busy = Counter::new(&CPU_USAGE_BUSY, None);
         let total_idle = Counter::new(&CPU_USAGE_IDLE, None);
 
         Ok(Self {

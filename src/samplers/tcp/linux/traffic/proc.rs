@@ -12,16 +12,8 @@ pub struct ProcNetSnmp {
 impl ProcNetSnmp {
     pub fn new(interval: AsyncInterval) -> Result<Self, ()> {
         let counters = vec![
-            (
-                Counter::new(&TCP_RX_PACKETS,  None),
-                "Tcp:",
-                "InSegs",
-            ),
-            (
-                Counter::new(&TCP_TX_PACKETS,  None),
-                "Tcp:",
-                "OutSegs",
-            ),
+            (Counter::new(&TCP_RX_PACKETS, None), "Tcp:", "InSegs"),
+            (Counter::new(&TCP_TX_PACKETS, None), "Tcp:", "OutSegs"),
         ];
 
         let file = std::fs::File::open("/proc/net/snmp")

@@ -53,10 +53,10 @@ fn spawn(config: Arc<Config>, runtime: &Runtime) {
     }
 
     let counters = vec![
-        Counter::new(&TCP_RX_BYTES,  None),
-        Counter::new(&TCP_TX_BYTES,  None),
-        Counter::new(&TCP_RX_PACKETS,  None),
-        Counter::new(&TCP_TX_PACKETS,  None),
+        Counter::new(&TCP_RX_BYTES, None),
+        Counter::new(&TCP_TX_BYTES, None),
+        Counter::new(&TCP_RX_PACKETS, None),
+        Counter::new(&TCP_TX_PACKETS, None),
     ];
 
     let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)

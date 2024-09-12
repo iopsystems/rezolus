@@ -38,13 +38,13 @@ impl ProcStat {
             Counter::new(&CPU_USAGE_USER, None),
             Counter::new(&CPU_USAGE_NICE, None),
             Counter::new(&CPU_USAGE_SYSTEM, None),
-            Counter::new(&CPU_USAGE_IDLE,  None),
+            Counter::new(&CPU_USAGE_IDLE, None),
             Counter::new(&CPU_USAGE_IO_WAIT, None),
-            Counter::new(&CPU_USAGE_IRQ,  None),
-            Counter::new(&CPU_USAGE_SOFTIRQ,  None),
-            Counter::new(&CPU_USAGE_STEAL,  None),
-            Counter::new(&CPU_USAGE_GUEST,  None),
-            Counter::new(&CPU_USAGE_GUEST_NICE,  None),
+            Counter::new(&CPU_USAGE_IRQ, None),
+            Counter::new(&CPU_USAGE_SOFTIRQ, None),
+            Counter::new(&CPU_USAGE_STEAL, None),
+            Counter::new(&CPU_USAGE_GUEST, None),
+            Counter::new(&CPU_USAGE_GUEST_NICE, None),
         ];
 
         let mut percpu_counters = Vec::with_capacity(cpus.len());
@@ -102,7 +102,7 @@ impl ProcStat {
         Ok(Self {
             file: File::open("/proc/stat").expect("file not found"),
             total_counters,
-            total_busy: Counter::new(&CPU_USAGE_BUSY,  None),
+            total_busy: Counter::new(&CPU_USAGE_BUSY, None),
             percpu_counters,
             percpu_busy,
             nanos_per_tick,
