@@ -190,7 +190,7 @@ fn main() {
     info!("rezolus {VERSION}");
 
     // spawn http exposition thread
-    rt.spawn(exposition::http(config.clone()));
+    rt.spawn(exposition::http::serve(config.clone()));
 
     // initialize async sampler runtime
     let sampler_rt = tokio::runtime::Builder::new_multi_thread()
