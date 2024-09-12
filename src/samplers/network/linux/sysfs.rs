@@ -22,10 +22,8 @@ impl SysfsSampler {
             let mut if_stats = HashMap::new();
 
             for interface in &interfaces {
-                let mut f = std::fs::File::open(format!(
-                    "/sys/class/net/{}/statistics/{stat}",
-                    interface
-                ))?;
+                let mut f =
+                    std::fs::File::open(format!("/sys/class/net/{}/statistics/{stat}", interface))?;
 
                 data.clear();
 
