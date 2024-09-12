@@ -1,9 +1,9 @@
 fn main() {
-    #[cfg(all(feature = "bpf", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     bpf::generate();
 }
 
-#[cfg(all(feature = "bpf", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 mod bpf {
     use libbpf_cargo::SkeletonBuilder;
 

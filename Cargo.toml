@@ -41,18 +41,13 @@ async-trait = "0.1.81"
 parking_lot = "0.12.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libbpf-rs = { version = "0.24.2", optional = true }
-libbpf-sys = { version = "1.4.3", optional = true }
+libbpf-rs = { version = "0.24.2" }
+libbpf-sys = { version = "1.4.3" }
 perf-event2 = "0.7.2"
 nvml-wrapper = "0.9.0"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
-libbpf-cargo = { version = "0.24.2", optional = true }
-
-[features]
-all = ["bpf"]
-default = ["bpf"]
-bpf = ["libbpf-cargo","libbpf-rs","libbpf-sys"]
+libbpf-cargo = { version = "0.24.2" }
 
 [profile.bench]
 debug = true
