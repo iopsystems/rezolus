@@ -1,4 +1,3 @@
-use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::*;
 
 #[metric(
@@ -30,25 +29,11 @@ pub static METADATA_REZOLUS_RUSAGE_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHi
 pub static RU_UTIME: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "rezolus/cpu/usage/user",
-    description = "Distribution of the rate of CPU usage for Rezolus executing in user mode",
-    metadata = { unit = "nanoseconds/second" }
-)]
-pub static RU_UTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "rezolus/cpu/usage/system",
     description = "The amount of CPU time Rezolus was executing in system mode",
     metadata = { unit = "nanoseconds" }
 )]
 pub static RU_STIME: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "rezolus/cpu/usage/system",
-    description = "Distribution of the rate of CPU usage for Rezolus executing in system mode",
-    metadata = { unit = "nanoseconds/second" }
-)]
-pub static RU_STIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "rezolus/memory/usage/resident_set_size",

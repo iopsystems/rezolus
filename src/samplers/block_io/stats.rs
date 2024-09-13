@@ -68,28 +68,12 @@ pub static BLOCKIO_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPI
 pub static BLOCKIO_READ_OPS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "blockio/read/operations",
-    description = "Distribution of blockio read operation rates from sample to sample",
-    metadata = { unit = "operations/second" }
-)]
-pub static BLOCKIO_READ_OPS_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "blockio/operations",
     description = "The number of completed write operations for block devices",
     formatter = blockio_metric_formatter,
     metadata = { op = "write", unit = "operations" }
 )]
 pub static BLOCKIO_WRITE_OPS: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "blockio/write/operations",
-    description = "Distribution of blockio write operation rates from sample to sample",
-    metadata = { unit = "operations/second" }
-)]
-pub static BLOCKIO_WRITE_OPS_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio/operations",
@@ -100,28 +84,12 @@ pub static BLOCKIO_WRITE_OPS_HISTOGRAM: AtomicHistogram =
 pub static BLOCKIO_DISCARD_OPS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "blockio/discard/operations",
-    description = "Distribution of blockio discard operation rates from sample to sample",
-    metadata = { unit = "operations/second" }
-)]
-pub static BLOCKIO_DISCARD_OPS_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "blockio/operations",
     description = "The number of completed flush operations for block devices",
     formatter = blockio_metric_formatter,
     metadata = { op = "flush", unit = "operations" }
 )]
 pub static BLOCKIO_FLUSH_OPS: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "blockio/flush/operations",
-    description = "Distribution of blockio flush operation rates from sample to sample",
-    metadata = { unit = "operations/second" }
-)]
-pub static BLOCKIO_FLUSH_OPS_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio/bytes",
@@ -132,28 +100,12 @@ pub static BLOCKIO_FLUSH_OPS_HISTOGRAM: AtomicHistogram =
 pub static BLOCKIO_READ_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "blockio/read/bytes",
-    description = "Distribution of blockio read throughput from sample to sample",
-    metadata = { unit = "bytes/second" }
-)]
-pub static BLOCKIO_READ_BYTES_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "blockio/bytes",
     description = "The number of bytes written for block devices",
     formatter = blockio_metric_formatter,
     metadata = { op = "write", unit = "bytes" }
 )]
 pub static BLOCKIO_WRITE_BYTES: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "blockio/write/bytes",
-    description = "Distribution of blockio write throughput from sample to sample",
-    metadata = { unit = "bytes/second" }
-)]
-pub static BLOCKIO_WRITE_BYTES_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio/bytes",
@@ -164,28 +116,12 @@ pub static BLOCKIO_WRITE_BYTES_HISTOGRAM: AtomicHistogram =
 pub static BLOCKIO_DISCARD_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "blockio/discard/bytes",
-    description = "Distribution of blockio discard throughput from sample to sample",
-    metadata = { unit = "bytes/second" }
-)]
-pub static BLOCKIO_DISCARD_BYTES_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "blockio/bytes",
     description = "The number of bytes flushed for block devices",
     formatter = blockio_metric_formatter,
     metadata = { op = "flush", unit = "bytes" }
 )]
 pub static BLOCKIO_FLUSH_BYTES: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "blockio/flush/bytes",
-    description = "Distribution of blockio flush throughput from sample to sample",
-    metadata = { unit = "bytes/second" }
-)]
-pub static BLOCKIO_FLUSH_BYTES_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 /// A function to format the blockio metrics that allows for export of ops and
 /// byte counters by operation type.

@@ -118,27 +118,11 @@ pub static METADATA_TCP_TRAFFIC_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHisto
 pub static TCP_RX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "tcp/receive/bytes",
-    description = "Distribution of the rate of bytes received over TCP from sample to sample",
-    metadata = { unit = "bytes/second" }
-)]
-pub static TCP_RX_BYTES_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "tcp/receive/packets",
     description = "The number of packets received over TCP",
     metadata = { unit = "packets" }
 )]
 pub static TCP_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "tcp/receive/packets",
-    description = "Distribution of the rate of packets received over TCP from sample to sample",
-    metadata = { unit = "packets/second" }
-)]
-pub static TCP_RX_PACKETS_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "tcp/receive/read",
@@ -163,27 +147,11 @@ pub static TCP_RX_READ_HISTOGRAM: AtomicHistogram =
 pub static TCP_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "tcp/transmit/bytes",
-    description = "Distribution of the rate of bytes transmitted over TCP from sample to sample",
-    metadata = { unit = "bytes/second" }
-)]
-pub static TCP_TX_BYTES_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "tcp/transmit/packets",
     description = "The number of packets transmitted over TCP",
     metadata = { unit = "packets" }
 )]
 pub static TCP_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "tcp/transmit/packets",
-    description = "Distribution of the rate of packets transmitted over TCP from sample to sample",
-    metadata = { unit = "packets/second" }
-)]
-pub static TCP_TX_PACKETS_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "tcp/transmit/send",
@@ -193,27 +161,11 @@ pub static TCP_TX_PACKETS_HISTOGRAM: AtomicHistogram =
 pub static TCP_TX_SEND: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "tcp/transmit/send",
-    description = "Distribution of the rate of TCP sends before fragmentation from sample to sample",
-    metadata = { unit = "operations/second" }
-)]
-pub static TCP_TX_SEND_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
     name = "tcp/transmit/retransmit",
     description = "The number of TCP packets that were re-transmitted",
     metadata = { unit = "packets" }
 )]
 pub static TCP_TX_RETRANSMIT: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "tcp/transmit/retransmit",
-    description = "Distribution of the rate of TCP packets re-transmitted from sample to sample",
-    metadata = { unit = "packets/second" }
-)]
-pub static TCP_TX_RETRANSMIT_HISTOGRAM: AtomicHistogram =
-    AtomicHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "tcp/connection/state",

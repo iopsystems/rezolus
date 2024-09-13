@@ -34,10 +34,10 @@ impl CpuUsage {
         let cpus = num_cpus::get();
 
         let counters_total = vec![
-            Counter::new(&CPU_USAGE_USER, Some(&CPU_USAGE_USER_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_NICE, Some(&CPU_USAGE_NICE_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_SYSTEM, Some(&CPU_USAGE_SYSTEM_HISTOGRAM)),
-            Counter::new(&CPU_USAGE_IDLE, Some(&CPU_USAGE_IDLE_HISTOGRAM)),
+            Counter::new(&CPU_USAGE_USER, None),
+            Counter::new(&CPU_USAGE_NICE, None),
+            Counter::new(&CPU_USAGE_SYSTEM, None),
+            Counter::new(&CPU_USAGE_IDLE, None),
         ];
 
         let mut counters_percpu = Vec::with_capacity(cpus);

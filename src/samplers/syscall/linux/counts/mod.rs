@@ -34,15 +34,15 @@ fn spawn(config: Arc<Config>, runtime: &Runtime) {
     }
 
     let counters = vec![
-        Counter::new(&SYSCALL_TOTAL, Some(&SYSCALL_TOTAL_HISTOGRAM)),
-        Counter::new(&SYSCALL_READ, Some(&SYSCALL_READ_HISTOGRAM)),
-        Counter::new(&SYSCALL_WRITE, Some(&SYSCALL_WRITE_HISTOGRAM)),
-        Counter::new(&SYSCALL_POLL, Some(&SYSCALL_POLL_HISTOGRAM)),
-        Counter::new(&SYSCALL_LOCK, Some(&SYSCALL_LOCK_HISTOGRAM)),
-        Counter::new(&SYSCALL_TIME, Some(&SYSCALL_TIME_HISTOGRAM)),
-        Counter::new(&SYSCALL_SLEEP, Some(&SYSCALL_SLEEP_HISTOGRAM)),
-        Counter::new(&SYSCALL_SOCKET, Some(&SYSCALL_SOCKET_HISTOGRAM)),
-        Counter::new(&SYSCALL_YIELD, Some(&SYSCALL_YIELD_HISTOGRAM)),
+        Counter::new(&SYSCALL_TOTAL, None),
+        Counter::new(&SYSCALL_READ, None),
+        Counter::new(&SYSCALL_WRITE, None),
+        Counter::new(&SYSCALL_POLL, None),
+        Counter::new(&SYSCALL_LOCK, None),
+        Counter::new(&SYSCALL_TIME, None),
+        Counter::new(&SYSCALL_SLEEP, None),
+        Counter::new(&SYSCALL_SOCKET, None),
+        Counter::new(&SYSCALL_YIELD, None),
     ];
 
     let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
