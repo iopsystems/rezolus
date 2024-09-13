@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Changed
+
+- BPF is now non-optional on Linux. (#336)
+
 ## [3.18.1] - 2024-08-09
 
 ### Changed

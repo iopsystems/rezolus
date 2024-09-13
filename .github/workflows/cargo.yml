@@ -101,7 +101,6 @@ jobs:
       matrix:
         os: [ ubuntu-latest, ubuntu-20.04, macos-latest ]
         profile: [ release, debug ]
-        features: [ default, no-default ]
     steps:
       - uses: actions/checkout@v3
       - uses: ./.github/actions/setup-rust
@@ -116,15 +115,6 @@ jobs:
       - name: Update cargo flags
         if: ${{ matrix.profile == 'debug' }}
         run: echo 'FLAGS=' >> $GITHUB_ENV
-        shell: bash
-
-      - name: Update feature flags
-        if: ${{ matrix.features == 'default' }}
-        run: echo 'FEATURE_FLAGS=--features default' >> $GITHUB_ENV
-        shell: bash
-      - name: Update feature flags
-        if: ${{ matrix.features == 'no-default' }}
-        run: echo 'FEATURE_FLAGS=--no-default-features' >> $GITHUB_ENV
         shell: bash
 
       - name: Install dependencies

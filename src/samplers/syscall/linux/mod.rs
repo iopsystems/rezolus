@@ -1,7 +1,4 @@
-#[cfg(feature = "bpf")]
 mod counts;
-
-#[cfg(feature = "bpf")]
 mod latency;
 
 pub const MAX_SYSCALL_ID: usize = 1024;
