@@ -16,7 +16,8 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
-#define HISTOGRAM_POWER 7
+#define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
+#define HISTOGRAM_POWER 3
 
 /* Taken from kernel include/linux/socket.h. */
 #define AF_INET		2	/* Internet IP Protocol 	*/
@@ -41,7 +42,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } rx_size SEC(".maps");
 
 struct {
@@ -49,7 +50,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } tx_size SEC(".maps");
 
 static int probe_ip(bool receiving, struct sock *sk, size_t size)

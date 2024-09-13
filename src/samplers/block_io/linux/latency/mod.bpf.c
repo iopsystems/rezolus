@@ -11,7 +11,8 @@
 extern int LINUX_KERNEL_VERSION __kconfig;
 
 #define COUNTER_GROUP_WIDTH 8
-#define HISTOGRAM_POWER 7
+#define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
+#define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
 
 #define REQ_OP_BITS	8
@@ -35,7 +36,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 7424);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } latency SEC(".maps");
 
 static int __always_inline trace_rq_start(struct request *rq, int issue)

@@ -76,13 +76,6 @@ impl Config {
             .unwrap_or(self.defaults.enabled.unwrap_or(enabled()))
     }
 
-    pub fn bpf(&self, name: &str) -> bool {
-        self.samplers
-            .get(name)
-            .and_then(|v| v.bpf)
-            .unwrap_or(self.defaults.bpf.unwrap_or(enabled()))
-    }
-
     pub fn interval(&self, name: &str) -> Duration {
         let interval = self
             .samplers
@@ -111,8 +104,6 @@ impl Config {
 #[derive(Deserialize)]
 pub struct General {
     listen: String,
-    #[serde(default = "disabled")]
-    compression: bool,
     #[serde(default = "snapshot_interval")]
     snapshot_interval: String,
 }
@@ -147,10 +138,6 @@ impl General {
                 std::process::exit(1);
             })
             .unwrap()
-    }
-
-    pub fn compression(&self) -> bool {
-        self.compression
     }
 
     pub fn snapshot_interval(&self) -> Duration {
@@ -217,10 +204,10 @@ impl Default for Prometheus {
 
 impl Prometheus {
     pub fn check(&self) {
-        if !(2..=(crate::common::HISTOGRAM_GROUPING_POWER)).contains(&self.histogram_grouping_power)
+        if !(0..=(crate::common::HISTOGRAM_GROUPING_POWER)).contains(&self.histogram_grouping_power)
         {
             eprintln!(
-                "prometheus histogram downsample factor must be in the range 2..={}",
+                "prometheus histogram grouping power must be in the range 0..={}",
                 crate::common::HISTOGRAM_GROUPING_POWER
             );
             std::process::exit(1);
@@ -260,8 +247,6 @@ pub fn snapshot_interval() -> String {
 pub struct SamplerConfig {
     #[serde(default)]
     enabled: Option<bool>,
-    #[serde(default)]
-    bpf: Option<bool>,
     #[serde(default)]
     interval: Option<String>,
 }

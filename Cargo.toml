@@ -7,12 +7,13 @@ edition = "2021"
 description = "High resolution systems performance telemetry agent"
 
 [workspace.package]
-version = "3.18.2-alpha.11"
+version = "4.0.0-alpha.1"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 systeminfo = { workspace = true }
 
+axum = { version = "0.7.5", features = ["http2"] }
 backtrace = "0.3.71"
 chrono = { version = "0.4.38", features = ["serde"] }
 clap = "4.5.4"
@@ -34,25 +35,21 @@ syscall-numbers = "3.1.1"
 sysconf = "0.3.4"
 tokio = { version = "1.37.0", features = ["full"] }
 toml = "0.8.13"
+tower = { version = "0.5.0", features = ["tokio"] }
+tower-http = { version = "0.5.2", features = ["compression-full", "decompression-full"] }
 walkdir = "2.5.0"
-warp = { version = "0.3.7", features = ["compression"] }
 clocksource = "0.8.1"
 async-trait = "0.1.81"
 parking_lot = "0.12.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libbpf-rs = { version = "0.24.2", optional = true }
-libbpf-sys = { version = "1.4.3", optional = true }
+libbpf-rs = { version = "0.24.2" }
+libbpf-sys = { version = "1.4.3" }
 perf-event2 = "0.7.2"
 nvml-wrapper = "0.9.0"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
-libbpf-cargo = { version = "0.24.2", optional = true }
-
-[features]
-all = ["bpf"]
-default = ["bpf"]
-bpf = ["libbpf-cargo","libbpf-rs","libbpf-sys"]
+libbpf-cargo = { version = "0.24.2" }
 
 [profile.bench]
 debug = true

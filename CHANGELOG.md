@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Changed
+
+- BPF is now non-optional on Linux. (#336)
+- Makes HTTP compression dependent on client accept headers, removes the need
+  for separate configuration of compression. (#337)
+
 ## [3.18.1] - 2024-08-09
 
 ### Changed

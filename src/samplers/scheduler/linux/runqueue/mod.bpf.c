@@ -15,7 +15,8 @@
 #include <bpf/bpf_helpers.h>
 
 #define COUNTER_GROUP_WIDTH 8
-#define HISTOGRAM_POWER 7
+#define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
+#define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
 #define MAX_PID 4194304
 
@@ -90,7 +91,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } runqlat SEC(".maps");
 
 struct {
@@ -98,7 +99,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } running SEC(".maps");
 
 struct {
@@ -106,7 +107,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS_POW_7);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
 } offcpu SEC(".maps");
 
 /* record enqueue timestamp */
