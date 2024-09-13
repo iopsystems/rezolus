@@ -204,10 +204,10 @@ impl Default for Prometheus {
 
 impl Prometheus {
     pub fn check(&self) {
-        if !(2..=(crate::common::HISTOGRAM_GROUPING_POWER)).contains(&self.histogram_grouping_power)
+        if !(0..=(crate::common::HISTOGRAM_GROUPING_POWER)).contains(&self.histogram_grouping_power)
         {
             eprintln!(
-                "prometheus histogram downsample factor must be in the range 2..={}",
+                "prometheus histogram grouping power must be in the range 0..={}",
                 crate::common::HISTOGRAM_GROUPING_POWER
             );
             std::process::exit(1);

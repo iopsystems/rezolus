@@ -1,5 +1,7 @@
 // Helpers for converting values to histogram indices. 
 
+#define HISTOGRAM_BUCKETS_POW_2 252
+#define HISTOGRAM_BUCKETS_POW_3 496
 #define HISTOGRAM_BUCKETS_POW_4 976
 #define HISTOGRAM_BUCKETS_POW_5 1920
 #define HISTOGRAM_BUCKETS_POW_6 3776
