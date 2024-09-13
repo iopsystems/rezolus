@@ -1,3 +1,1 @@
-mod http;
-
-pub use http::http;
+pub mod http;
