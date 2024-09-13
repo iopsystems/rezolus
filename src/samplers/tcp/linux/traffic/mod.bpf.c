@@ -17,8 +17,8 @@
 #include <bpf/bpf_endian.h>
 
 #define COUNTER_GROUP_WIDTH 8
-#define HISTOGRAM_POWER 3
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
+#define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
 
 /* Taken from kernel include/linux/socket.h. */
