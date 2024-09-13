@@ -4,21 +4,13 @@ use crate::samplers::tcp::*;
 
 const NAME: &str = "tcp_traffic";
 
-#[cfg(feature = "bpf")]
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_traffic.bpf.rs"));
 }
 
-#[cfg(feature = "bpf")]
 use crate::common::bpf::*;
-#[cfg(feature = "bpf")]
 use bpf::*;
 
-mod proc;
-
-use proc::*;
-
-#[cfg(feature = "bpf")]
 impl GetMap for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
@@ -30,7 +22,6 @@ impl GetMap for ModSkel<'_> {
     }
 }
 
-#[cfg(feature = "bpf")]
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
@@ -44,11 +35,10 @@ impl OpenSkelExt for ModSkel<'_> {
     }
 }
 
-#[cfg(feature = "bpf")]
 #[distributed_slice(ASYNC_SAMPLERS)]
 fn spawn(config: Arc<Config>, runtime: &Runtime) {
     // check if sampler should be enabled
-    if !(config.enabled(NAME) && config.bpf(NAME)) {
+    if !config.enabled(NAME) {
         return;
     }
 
@@ -80,14 +70,6 @@ fn spawn(config: Arc<Config>, runtime: &Runtime) {
                 }
 
                 sampler.sample().await;
-            }
-        });
-    } else {
-        runtime.spawn(async move {
-            if let Ok(mut sampler) = ProcNetSnmp::new(config.async_interval(NAME)) {
-                loop {
-                    sampler.sample().await;
-                }
             }
         });
     }

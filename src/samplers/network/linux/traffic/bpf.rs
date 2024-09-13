@@ -38,7 +38,7 @@ pub struct NetworkTraffic {
 impl NetworkTraffic {
     pub fn new(config: Arc<Config>) -> Result<Self, ()> {
         // check if sampler should be enabled
-        if !(config.enabled(NAME) && config.bpf(NAME)) {
+        if !config.enabled(NAME) {
             return Err(());
         }
 

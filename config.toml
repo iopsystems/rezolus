@@ -53,10 +53,6 @@ histogram_grouping_power = 4
 # collection for that sampler. Setting the default to false requires that
 # individual sampler configs are used to opt-in to collection.
 enabled = true
-# Controls whether BPF sampler will be used. When a metric can be collected
-# without BPF, that sampler will be used instead. Otherwise, the sampler will
-# effectively be disabled.
-bpf = true
 # The collection interval for the sampler. Shorter intervals result in less
 # error when calculating rates and allow for more accurately capturing bursts in
 # the related percentile metrics.
@@ -75,17 +71,14 @@ enabled = true
 [samplers.block_io_requests]
 enabled = true
 
-# Instruments CPU frequency, instructions, and cycles using BPF perf events or
-# frequency only via /proc/cpuinfo
+# Instruments CPU frequency, instructions, and cycles using perf events
 [samplers.cpu_perf]
 enabled = true
-bpf = true
 
-# Instruments CPU usage by state with BPF or by reading /proc/stat on linux
+# Instruments CPU usage by state with BPF
 # On macos host_processor_info() is used
 [samplers.cpu_usage]
 enabled = true
-bpf = true
 
 # Instruments the number of currently open file descriptors using
 # /proc/sys/fs/file-nr
@@ -153,8 +146,7 @@ enabled = true
 [samplers.tcp_retransmit]
 enabled = true
 
-# Samples TCP traffic using either a BPF sampler or /proc/net/snmp to provide
-# metrics for TX/RX bytes and packets
+# Samples TCP traffic using a BPF sampler to get metrics for TX/RX bytes and
+# packets
 [samplers.tcp_traffic]
 enabled = true
-bpf = true

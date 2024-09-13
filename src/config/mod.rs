@@ -76,13 +76,6 @@ impl Config {
             .unwrap_or(self.defaults.enabled.unwrap_or(enabled()))
     }
 
-    pub fn bpf(&self, name: &str) -> bool {
-        self.samplers
-            .get(name)
-            .and_then(|v| v.bpf)
-            .unwrap_or(self.defaults.bpf.unwrap_or(enabled()))
-    }
-
     pub fn interval(&self, name: &str) -> Duration {
         let interval = self
             .samplers
@@ -254,8 +247,6 @@ pub fn snapshot_interval() -> String {
 pub struct SamplerConfig {
     #[serde(default)]
     enabled: Option<bool>,
-    #[serde(default)]
-    bpf: Option<bool>,
     #[serde(default)]
     interval: Option<String>,
 }

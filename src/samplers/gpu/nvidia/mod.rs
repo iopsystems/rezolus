@@ -14,7 +14,7 @@ const MHZ: i64 = 1_000_000;
 #[distributed_slice(ASYNC_SAMPLERS)]
 fn spawn(config: Arc<Config>, runtime: &Runtime) {
     // check if sampler should be enabled
-    if !(config.enabled(NAME) && config.bpf(NAME)) {
+    if !config.enabled(NAME) {
         return;
     }
 
