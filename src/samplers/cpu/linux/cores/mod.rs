@@ -1,6 +1,6 @@
 const NAME: &str = "cpu_cores";
 
-use crate::samplers::cpu::linux::stats::*;
+use crate::samplers::cpu::stats::*;
 use crate::*;
 
 use tokio::fs::File;

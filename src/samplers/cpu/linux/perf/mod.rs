@@ -5,6 +5,7 @@ mod group;
 use group::*;
 
 use crate::common::*;
+use crate::samplers::cpu::stats::*;
 use crate::samplers::cpu::linux::stats::*;
 use crate::samplers::Sampler;
 use crate::*;
