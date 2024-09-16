@@ -17,7 +17,7 @@ extern int LINUX_KERNEL_VERSION __kconfig;
 
 #define REQ_OP_BITS 8
 #define REQ_OP_MASK ((1 << REQ_OP_BITS) - 1)
-#define REQ_FLAG_BITS   24
+#define REQ_FLAG_BITS 24
 
 #define REQ_OP_READ 0
 #define REQ_OP_WRITE 1
