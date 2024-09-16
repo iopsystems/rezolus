@@ -16,8 +16,10 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_endian.h>
 
+#define COUNTER_GROUP_WIDTH 8
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
 #define HISTOGRAM_POWER 3
+#define MAX_CPUS 1024
 
 /* Taken from kernel include/linux/socket.h. */
 #define AF_INET		2	/* Internet IP Protocol 	*/
@@ -34,7 +36,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
+	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 struct {
@@ -66,9 +68,11 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 		return 0;
 	}
 
+	u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+
 
 	if (receiving) {
-		idx = 8 * bpf_get_smp_processor_id() + TCP_RX_BYTES;
+		idx = offset + TCP_RX_BYTES;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
@@ -82,14 +86,14 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 
-		idx = 8 * bpf_get_smp_processor_id() + TCP_RX_PACKETS;
+		idx = offset + TCP_RX_PACKETS;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
 			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 	} else {
-		idx = 8 * bpf_get_smp_processor_id() + TCP_TX_BYTES;
+		idx = offset + TCP_TX_BYTES;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {
@@ -103,7 +107,7 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 
-		idx = 8 * bpf_get_smp_processor_id() + TCP_TX_PACKETS;
+		idx = offset + TCP_TX_PACKETS;
 		cnt = bpf_map_lookup_elem(&counters, &idx);
 
 		if (cnt) {

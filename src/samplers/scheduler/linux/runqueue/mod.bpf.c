@@ -147,7 +147,7 @@ SEC("tp_btf/sched_switch")
 int handle__sched_switch(u64 *ctx)
 {
 	/* TP_PROTO(bool preempt, struct task_struct *prev,
-	 *	    struct task_struct *next)
+	 *      struct task_struct *next)
 	 */
 	struct task_struct *prev = (struct task_struct *)ctx[1];
 	struct task_struct *next = (struct task_struct *)ctx[2];
