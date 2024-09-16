@@ -40,11 +40,6 @@ histogram_grouping_power = 3
 # individual sampler configs are used to opt-in to collection.
 enabled = true
 
-# Rezolus collects metrics on-demand. To prevent frequent sampling, a
-# Time-to-Live (TTL) may be set. A duration of zero indicates that no caching
-# will be used. The default behavior is to not cache the values.
-ttl = "0ms"
-
 # Each sampler can then be individually configured to override the defaults. All
 # of the configuration options in the `[defaults]` section are allowed.
 

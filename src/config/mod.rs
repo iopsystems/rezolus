@@ -102,16 +102,4 @@ impl Config {
             .and_then(|v| v.enabled())
             .unwrap_or(self.defaults.enabled().unwrap_or(enabled()))
     }
-
-    pub fn ttl(&self, name: &str) -> Duration {
-        let ttl = self
-            .samplers
-            .get(name)
-            .and_then(|v| v.ttl())
-            .unwrap_or(self.defaults.ttl().unwrap_or(&ttl()))
-            .parse::<humantime::Duration>()
-            .unwrap();
-
-        Duration::from_nanos(ttl.as_nanos() as u64)
-    }
 }
