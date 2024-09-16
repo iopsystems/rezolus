@@ -1,3 +1,5 @@
+const NAME: &str = "rezolus_rusage";
+
 use crate::common::*;
 use crate::samplers::rezolus::stats::*;
 use crate::*;
@@ -12,8 +14,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     Ok(Some(Box::new(Rusage {})))
 }
-
-const NAME: &str = "rezolus_rusage";
 
 pub struct Rusage {}
 

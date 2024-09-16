@@ -1,10 +1,39 @@
+const NAME: &str = "cpu_usage";
+
 use crate::samplers::cpu::stats::*;
 use crate::*;
 
 use libc::mach_host_self;
 use libc::mach_port_t;
+use tokio::sync::Mutex;
 
 use std::io::Error;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    let inner = UsageInner::new()?;
+
+    Ok(Some(Box::new(Usage {
+        inner: Arc::new(Mutex::new(inner)),
+    })))
+}
+
+pub struct Usage {
+    inner: Arc<Mutex<UsageInner>>,
+}
+
+#[async_trait]
+impl Sampler for Usage {
+    async fn refresh(&self) {
+        let mut inner = self.inner.lock().await;
+
+        let _ = inner.refresh().await;
+    }
+}
 
 pub struct UsageInner {
     port: mach_port_t,
@@ -24,7 +53,7 @@ impl UsageInner {
         })
     }
 
-    async fn sample(&mut self) {
+    async fn refresh(&mut self) {
         let mut num_cpu: u32 = 0;
         let mut cpu_info: *mut i32 = std::ptr::null_mut();
         let mut cpu_info_len: u32 = 0;
