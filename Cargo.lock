@@ -1882,6 +1882,7 @@ dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
  "libbpf-sys",
+ "libc",
  "linkme",
  "memmap2 0.9.5",
  "metriken",

@@ -5,6 +5,7 @@ mod cpu;
 mod gpu;
 mod memory;
 mod network;
+mod rezolus;
 mod scheduler;
 mod syscall;
 mod tcp;
