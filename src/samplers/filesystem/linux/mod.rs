@@ -1,3 +1,3 @@
-mod descriptors;
+mod stats;
 
-pub mod stats;
+mod descriptors;

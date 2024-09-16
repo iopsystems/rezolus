@@ -11,8 +11,8 @@ mod bpf {
     // Each entry `(sampler, program)` maps to a unique path in the `samplers`
     // directory.
     const SOURCES: &[(&str, &str)] = &[
-        ("block_io", "latency"),
-        ("block_io", "requests"),
+        ("blockio", "latency"),
+        ("blockio", "requests"),
         ("cpu", "usage"),
         ("network", "traffic"),
         ("scheduler", "runqueue"),

@@ -1,142 +1,186 @@
-use super::*;
-use ringlog::*;
-use std::sync::Arc;
+use crate::common::bpf::*;
+use crate::common::*;
+use crate::*;
 
-/// Represents a collection of counters in a open BPF map. The map must be
-/// created with:
-///
-/// ```c
-/// // counts the total number of syscalls
-/// struct {
-///     __uint(type, BPF_MAP_TYPE_ARRAY);
-///     __uint(map_flags, BPF_F_MMAPABLE);
-///     __type(key, u32);
-///     __type(value, u64);
-///     __uint(max_entries, 8192); // good for up to 1024 cores w/ 8 counters
-/// } counters SEC(".maps");
-/// ```
-///
-/// The number of entries is flexible, but should be a multiple of 8192. This
-/// struct will automatically know the multiple based on the number of counters.
-///
-/// The name is also flexible, but it is recommended to pack the counters for
-/// each BPF program into one map, so `counters` is a reasonable name to use.
-pub struct Counters<'a> {
-    _map: &'a libbpf_rs::Map<'a>,
-    mmap: memmap2::MmapMut,
-    values: Vec<u64>,
-    cachelines: usize,
-    counters: Vec<Counter>,
-    percpu_counters: Arc<PercpuCounters>,
+use libbpf_rs::Map;
+use memmap2::{MmapMut, MmapOptions};
+use metriken::LazyCounter;
+
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+
+/// This wraps the BPF map along with an opened memory-mapped region for the map
+/// values.
+struct CounterMap<'a> {
+    _map: &'a Map<'a>,
+    mmap: MmapMut,
+    bank_width: usize,
 }
 
-#[derive(Default)]
-pub struct PercpuCounters {
-    inner: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
-}
+impl<'a> CounterMap<'a> {
+    /// Create a new `CounterMap` from the provided BPF map that holds the
+    /// provided number of counters.
+    pub fn new(map: &'a Map, counters: usize) -> Result<Self, ()> {
+        // each CPU has its own bank of counters, this bank is the next nearest
+        // whole number of cachelines wide
+        let bank_cachelines = whole_cachelines::<u64>(counters);
 
-impl PercpuCounters {
-    /// Adds a new counter for a CPU
-    pub fn push(&mut self, cpu: usize, counter: DynBoxedMetric<metriken::Counter>) {
-        self.inner.resize_with(cpu + 1, Default::default);
-        self.inner[cpu].push(counter);
-    }
+        // the number of possible slots per bank of counters
+        let bank_width = bank_cachelines * COUNTERS_PER_CACHELINE;
 
-    /// Set a counter for this CPU to the provided value
-    pub fn set(&self, cpu: usize, idx: usize, value: u64) {
-        if let Some(Some(counter)) = self.inner.get(cpu).map(|v| v.get(idx)) {
-            counter.set(value);
-        }
-    }
-
-    /// Returns the sum of all the counters for this CPU
-    pub fn sum(&self, cpu: usize) -> Option<u64> {
-        self.inner
-            .get(cpu)
-            .map(|v| v.iter().map(|v| v.value()).sum())
-    }
-}
-
-impl<'a> Counters<'a> {
-    pub fn new(
-        map: &'a libbpf_rs::Map,
-        counters: Vec<Counter>,
-        percpu_counters: Arc<PercpuCounters>,
-    ) -> Self {
-        let ncounters = counters.len();
-        let cachelines = (ncounters as f64 / std::mem::size_of::<u64>() as f64).ceil() as usize;
+        // our total mapped region size in bytes
+        let total_bytes = bank_cachelines * CACHELINE_SIZE * MAX_CPUS;
 
         let fd = map.as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
-        let mmap = unsafe {
-            memmap2::MmapOptions::new()
-                .len(cachelines * CACHELINE_SIZE * MAX_CPUS)
+        let mmap: MmapMut = unsafe {
+            MmapOptions::new()
+                .len(total_bytes)
                 .map_mut(&file)
-                .expect("failed to mmap() bpf counterset")
-        };
+                .map_err(|e| error!("failed to mmap() bpf counterset: {e}"))
+        }?;
 
-        Self {
+        let (_prefix, values, _suffix) = unsafe { mmap.align_to::<u64>() };
+
+        if values.len() != MAX_CPUS * bank_width {
+            error!("mmap region not aligned or width doesn't match");
+            return Err(());
+        }
+
+        Ok(Self {
             _map: map,
             mmap,
-            cachelines,
+            bank_width,
+        })
+    }
+
+    /// Borrow a reference to the raw values.
+    pub fn values(&self) -> &[u64] {
+        let (_prefix, values, _suffix) = unsafe { self.mmap.align_to::<u64>() };
+        values
+    }
+
+    /// Get the bank width which is the stride for reading through the values
+    /// slice.
+    pub fn bank_width(&self) -> usize {
+        self.bank_width
+    }
+}
+
+/// Represents a set of counters where the BPF map has one bank of counters per
+/// CPU to avoid contention. Each bank of counters is a whole number of
+/// cachelines to avoid false sharing. Per-CPU counters are not individually
+/// tracked.
+pub struct Counters<'a> {
+    counter_map: CounterMap<'a>,
+    counters: Vec<&'static LazyCounter>,
+    values: Vec<u64>,
+}
+
+impl<'a> Counters<'a> {
+    /// Create a new set of counters from the provided BPF map and collection of
+    /// counter metrics.
+    pub fn new(map: &'a Map, counters: Vec<&'static LazyCounter>) -> Self {
+        // we need temporary buffer so we can total up the per-CPU values
+        let values = vec![0; counters.len()];
+
+        // load the BPF counter map
+        let counter_map = CounterMap::new(map, counters.len()).expect("failed to initialize");
+
+        Self {
+            counter_map,
             counters,
-            percpu_counters,
-            values: vec![0; ncounters],
+            values,
         }
     }
 
-    pub fn refresh(&mut self, elapsed: f64) {
-        // reset the values of the combined counters to zero
+    /// Refreshes the counters by reading from the BPF map and setting each
+    /// counter metric to the current value.
+    pub fn refresh(&mut self) {
+        // zero out temp counters
         self.values.fill(0);
 
-        let counters_per_cpu = self.cachelines * CACHELINE_SIZE / std::mem::size_of::<u64>();
+        let bank_width = self.counter_map.bank_width();
 
-        let (_prefix, values, _suffix) = unsafe { self.mmap.align_to::<u64>() };
+        // borrow the BPF counters map so we can read per-cpu values
+        let counters = self.counter_map.values();
 
-        // if the number of aligned u64 values matches the total number of
-        // per-cpu counters, then we can use a more efficient update strategy
-        if values.len() == MAX_CPUS * counters_per_cpu {
-            for cpu in 0..MAX_CPUS {
-                for idx in 0..self.counters.len() {
-                    let value = values[idx + cpu * counters_per_cpu];
+        // iterate through and increment our local value for each cpu counter
+        for cpu in 0..MAX_CPUS {
+            for idx in 0..self.counters.len() {
+                let value = counters[idx + cpu * bank_width];
 
-                    // add this CPU's counter to the combined value for this counter
-                    self.values[idx] = self.values[idx].wrapping_add(value);
-
-                    // update the counter for this cpu
-                    self.percpu_counters.set(cpu, idx, value);
-                }
-            }
-        } else {
-            warn!("mmap region misaligned or did not have expected number of values");
-
-            for cpu in 0..MAX_CPUS {
-                for idx in 0..self.counters.len() {
-                    let start = (cpu * self.cachelines * CACHELINE_SIZE)
-                        + (idx * std::mem::size_of::<u64>());
-                    let value = u64::from_ne_bytes([
-                        self.mmap[start],
-                        self.mmap[start + 1],
-                        self.mmap[start + 2],
-                        self.mmap[start + 3],
-                        self.mmap[start + 4],
-                        self.mmap[start + 5],
-                        self.mmap[start + 6],
-                        self.mmap[start + 7],
-                    ]);
-
-                    // add this CPU's counter to the combined value for this counter
-                    self.values[idx] = self.values[idx].wrapping_add(value);
-
-                    // update the counter for this cpu
-                    self.percpu_counters.set(cpu, idx, value);
-                }
+                // add this CPU's counter to the combined value for this counter
+                self.values[idx] = self.values[idx].wrapping_add(value);
             }
         }
 
-        // set each counter to its new combined value
+        // set each counter metric to its new combined value
         for (value, counter) in self.values.iter().zip(self.counters.iter_mut()) {
-            counter.set(elapsed, *value);
+            counter.set(*value);
+        }
+    }
+}
+
+/// Represents a set of counters where the BPF map has one bank of counters per
+/// CPU. Like `Counters`, each bank is a whole number of cachelines to avoid
+/// false sharing. Unlike `Counters`, each CPU's counters are also individually
+/// tracked.
+pub struct CpuCounters<'a> {
+    counter_map: CounterMap<'a>,
+    totals: Vec<&'static LazyCounter>,
+    individual: ScopedCounters,
+    values: Vec<u64>,
+}
+
+impl<'a> CpuCounters<'a> {
+    /// Create a new set of counters from the provided BPF map and collection of
+    /// counter metrics.
+    pub fn new(
+        map: &'a Map,
+        totals: Vec<&'static LazyCounter>,
+        individual: ScopedCounters,
+    ) -> Self {
+        // we need temporary buffer so we can total up the per-CPU values
+        let values = vec![0; totals.len()];
+
+        // load the BPF counter map
+        let counter_map = CounterMap::new(map, totals.len()).expect("failed to initialize");
+
+        Self {
+            counter_map,
+            totals,
+            individual,
+            values,
+        }
+    }
+
+    /// Refreshes the counters by reading from the BPF map and setting each
+    /// counter metric to the current value.
+    pub fn refresh(&mut self) {
+        // zero out temp counters
+        self.values.fill(0);
+
+        let bank_width = self.counter_map.bank_width();
+
+        // borrow the BPF counters map so we can read per-cpu values
+        let counters = self.counter_map.values();
+
+        // iterate through and increment our local value for each cpu counter
+        for cpu in 0..MAX_CPUS {
+            for idx in 0..self.totals.len() {
+                let value = counters[idx + cpu * bank_width];
+
+                // add this CPU's counter to the combined value for this counter
+                self.values[idx] = self.values[idx].wrapping_add(value);
+
+                // set this CPU's counter to the new value
+                let _ = self.individual.set(cpu, idx, value);
+            }
+        }
+
+        // set each counter metric to its new combined value
+        for (value, counter) in self.values.iter().zip(self.totals.iter_mut()) {
+            counter.set(*value);
         }
     }
 }

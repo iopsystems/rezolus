@@ -1,59 +1,23 @@
-use super::stats::*;
-use super::*;
-use crate::common::units::{KIBIBYTES, MICROSECONDS, SECONDS};
-use crate::common::*;
-
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    runtime.spawn(async {
-        if let Ok(mut s) = Rusage::new(config) {
-            loop {
-                s.sample().await;
-            }
-        }
-    });
-}
-
 const NAME: &str = "rezolus_rusage";
 
-pub struct Rusage {
-    interval: AsyncInterval,
-    ru_utime: Counter,
-    ru_stime: Counter,
-}
+use crate::common::*;
+use crate::samplers::rezolus::stats::*;
+use crate::*;
 
-impl Rusage {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !config.enabled(NAME) {
-            return Err(());
-        }
-
-        Ok(Self {
-            interval: config.async_interval(NAME),
-            ru_utime: Counter::new(&RU_UTIME, None),
-            ru_stime: Counter::new(&RU_STIME, None),
-        })
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
     }
+
+    Ok(Some(Box::new(Rusage {})))
 }
+
+pub struct Rusage {}
 
 #[async_trait]
-impl AsyncSampler for Rusage {
-    async fn sample(&mut self) {
-        let (now, elapsed) = self.interval.tick().await;
-
-        METADATA_REZOLUS_RUSAGE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
-
-        self.sample_rusage(elapsed);
-
-        let elapsed = now.elapsed().as_nanos() as u64;
-        METADATA_REZOLUS_RUSAGE_RUNTIME.add(elapsed);
-        let _ = METADATA_REZOLUS_RUSAGE_RUNTIME_HISTOGRAM.increment(elapsed);
-    }
-}
-
-impl Rusage {
-    fn sample_rusage(&mut self, elapsed: Option<Duration>) {
+impl Sampler for Rusage {
+    async fn refresh(&self) {
         let mut rusage = libc::rusage {
             ru_utime: libc::timeval {
                 tv_sec: 0,
@@ -80,13 +44,11 @@ impl Rusage {
         };
 
         if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut rusage) } == 0 {
-            self.ru_utime.set2(
-                elapsed,
+            RU_UTIME.set(
                 rusage.ru_utime.tv_sec as u64 * SECONDS
                     + rusage.ru_utime.tv_usec as u64 * MICROSECONDS,
             );
-            self.ru_stime.set2(
-                elapsed,
+            RU_STIME.set(
                 rusage.ru_stime.tv_sec as u64 * SECONDS
                     + rusage.ru_stime.tv_usec as u64 * MICROSECONDS,
             );

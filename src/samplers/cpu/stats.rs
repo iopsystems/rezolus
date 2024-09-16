@@ -1,25 +1,18 @@
 use metriken::*;
 
 #[metric(
-    name = "metadata/cpu_usage/collected_at",
-    description = "The offset from the Unix epoch when cpu_usage sampler was last run",
-    metadata = { unit = "nanoseconds" }
+    name = "cpu/cores",
+    description = "The total number of logical cores that are currently online"
 )]
-pub static METADATA_CPU_USAGE_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
+pub static CPU_CORES: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
-    name = "metadata/cpu_usage/runtime",
-    description = "The total runtime of the cpu_usage sampler",
-    metadata = { unit = "nanoseconds" }
+    name = "cpu/usage",
+    description = "The amount of CPU time spent busy",
+    formatter = cpu_metric_formatter,
+    metadata = { state = "busy", unit = "nanoseconds" }
 )]
-pub static METADATA_CPU_USAGE_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "metadata/cpu_usage/runtime",
-    description = "Distribution of sampling runtime of the cpu_usage_sampler",
-    metadata = { unit = "nanoseconds/second" }
-)]
-pub static METADATA_CPU_USAGE_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
+pub static CPU_USAGE_BUSY: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cpu/usage",
@@ -44,22 +37,6 @@ pub static CPU_USAGE_NICE: LazyCounter = LazyCounter::new(Counter::default);
     metadata = { state = "system", unit = "nanoseconds" }
 )]
 pub static CPU_USAGE_SYSTEM: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "cpu/usage",
-    description = "The amount of CPU time spent idle",
-    formatter = cpu_metric_formatter,
-    metadata = { state = "idle", unit = "nanoseconds" }
-)]
-pub static CPU_USAGE_IDLE: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "cpu/usage",
-    description = "The amount of CPU time spent busy",
-    formatter = cpu_metric_formatter,
-    metadata = { state = "busy", unit = "nanoseconds" }
-)]
-pub static CPU_USAGE_BUSY: LazyCounter = LazyCounter::new(Counter::default);
 
 /// A function to format the cpu metrics that allows for export of both total
 /// and per-CPU metrics.

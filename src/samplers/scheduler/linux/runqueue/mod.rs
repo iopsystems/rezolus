@@ -6,8 +6,8 @@
 /// And produces these stats:
 /// * `scheduler/runqueue/latency`
 /// * `scheduler/running`
+/// * `scheduler/offcpu`
 /// * `scheduler/context_switch/involuntary`
-/// * `scheduler/context_switch/voluntary`
 
 const NAME: &str = "scheduler_runqueue";
 
@@ -17,56 +17,37 @@ mod bpf {
 
 use bpf::*;
 
-use crate::common::bpf::*;
 use crate::common::*;
-use crate::samplers::scheduler::stats::*;
+use crate::samplers::scheduler::linux::stats::*;
 use crate::*;
 
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
+use std::sync::Arc;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
-        return;
+        return Ok(None);
     }
 
-    let counters = vec![Counter::new(&SCHEDULER_IVCSW, None)];
+    let counters = vec![&SCHEDULER_IVCSW];
 
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .counters("counters", counters)
-        .distribution("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
-        .distribution("running", &SCHEDULER_RUNNING)
-        .distribution("offcpu", &SCHEDULER_OFFCPU)
-        .collected_at(&METADATA_SCHEDULER_RUNQUEUE_COLLECTED_AT)
-        .runtime(
-            &METADATA_SCHEDULER_RUNQUEUE_RUNTIME,
-            &METADATA_SCHEDULER_RUNQUEUE_RUNTIME_HISTOGRAM,
-        )
-        .build();
+        .histogram("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
+        .histogram("running", &SCHEDULER_RUNNING)
+        .histogram("offcpu", &SCHEDULER_OFFCPU)
+        .build()?;
 
-    if bpf.is_err() {
-        return;
-    }
-
-    runtime.spawn(async move {
-        let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-        loop {
-            if sampler.is_finished() {
-                return;
-            }
-
-            sampler.sample().await;
-        }
-    });
+    Ok(Some(Box::new(bpf)))
 }
 
-impl GetMap for ModSkel<'_> {
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "counters" => &self.maps.counters,
-            "runqlat" => &self.maps.runqlat,
-            "running" => &self.maps.running,
             "offcpu" => &self.maps.offcpu,
+            "running" => &self.maps.running,
+            "runqlat" => &self.maps.runqlat,
             _ => unimplemented!(),
         }
     }
@@ -75,16 +56,16 @@ impl GetMap for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
+            "{NAME} handle__sched_switch() BPF instruction count: {}",
+            self.progs.handle__sched_switch.insn_cnt()
+        );
+        debug!(
             "{NAME} handle__sched_wakeup() BPF instruction count: {}",
             self.progs.handle__sched_wakeup.insn_cnt()
         );
         debug!(
             "{NAME} handle__sched_wakeup_new() BPF instruction count: {}",
             self.progs.handle__sched_wakeup_new.insn_cnt()
-        );
-        debug!(
-            "{NAME} handle__sched_switch() BPF instruction count: {}",
-            self.progs.handle__sched_switch.insn_cnt()
         );
     }
 }

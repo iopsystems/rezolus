@@ -1,1 +1,3 @@
+mod stats;
+
 mod runqueue;

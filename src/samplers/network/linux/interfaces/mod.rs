@@ -1,51 +1,41 @@
-use crate::common::*;
-use crate::samplers::network::linux::*;
-
-#[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    if let Ok(s) = NetworkInterfaces::new(config) {
-        Box::new(s)
-    } else {
-        Box::new(Nop {})
-    }
-}
-
 const NAME: &str = "network_interfaces";
 
-struct NetworkInterfaces {
-    inner: SysfsNetSampler,
-    interval: Interval,
-}
+use crate::samplers::network::linux::stats::*;
+use crate::samplers::network::linux::sysfs::SysfsSampler;
+use crate::*;
 
-impl NetworkInterfaces {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        let metrics = vec![
-            (&NETWORK_CARRIER_CHANGES, "../carrier_changes"),
-            (&NETWORK_RX_CRC_ERRORS, "rx_crc_errors"),
-            (&NETWORK_RX_DROPPED, "rx_dropped"),
-            (&NETWORK_RX_MISSED_ERRORS, "rx_missed_errors"),
-            (&NETWORK_TX_DROPPED, "tx_dropped"),
-        ];
+use tokio::sync::Mutex;
 
-        Ok(Self {
-            inner: SysfsNetSampler::new(config.clone(), NAME, metrics)?,
-            interval: Interval::new(Instant::now(), config.interval(NAME)),
-        })
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
     }
+
+    let metrics = vec![
+        (&NETWORK_CARRIER_CHANGES, "../carrier_changes"),
+        (&NETWORK_RX_CRC_ERRORS, "rx_crc_errors"),
+        (&NETWORK_RX_DROPPED, "rx_dropped"),
+        (&NETWORK_RX_MISSED_ERRORS, "rx_missed_errors"),
+        (&NETWORK_TX_DROPPED, "tx_dropped"),
+    ];
+
+    let inner = SysfsSampler::new(metrics)?;
+
+    Ok(Some(Box::new(Interfaces {
+        inner: Mutex::new(inner),
+    })))
 }
 
-impl Sampler for NetworkInterfaces {
-    fn sample(&mut self) {
-        let now = Instant::now();
+struct Interfaces {
+    inner: Mutex<SysfsSampler>,
+}
 
-        if let Ok(_) = self.interval.try_wait(now) {
-            METADATA_NETWORK_INTERFACES_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
+#[async_trait]
+impl Sampler for Interfaces {
+    async fn refresh(&self) {
+        let mut inner = self.inner.lock().await;
 
-            let _ = self.inner.sample_now();
-
-            let elapsed = now.elapsed().as_nanos() as u64;
-            METADATA_NETWORK_INTERFACES_RUNTIME.add(elapsed);
-            let _ = METADATA_NETWORK_INTERFACES_RUNTIME_HISTOGRAM.increment(elapsed);
-        }
+        inner.refresh().await;
     }
 }

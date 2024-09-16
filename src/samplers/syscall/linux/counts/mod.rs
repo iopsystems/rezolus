@@ -20,59 +20,40 @@ mod bpf {
 
 use bpf::*;
 
-use crate::common::bpf::*;
 use crate::common::*;
+use crate::samplers::syscall::linux::stats::*;
 use crate::samplers::syscall::linux::syscall_lut;
-use crate::samplers::syscall::stats::*;
 use crate::*;
 
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
+use std::sync::Arc;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
-        return;
+        return Ok(None);
     }
 
     let counters = vec![
-        Counter::new(&SYSCALL_TOTAL, None),
-        Counter::new(&SYSCALL_READ, None),
-        Counter::new(&SYSCALL_WRITE, None),
-        Counter::new(&SYSCALL_POLL, None),
-        Counter::new(&SYSCALL_LOCK, None),
-        Counter::new(&SYSCALL_TIME, None),
-        Counter::new(&SYSCALL_SLEEP, None),
-        Counter::new(&SYSCALL_SOCKET, None),
-        Counter::new(&SYSCALL_YIELD, None),
+        &SYSCALL_TOTAL,
+        &SYSCALL_READ,
+        &SYSCALL_WRITE,
+        &SYSCALL_POLL,
+        &SYSCALL_LOCK,
+        &SYSCALL_TIME,
+        &SYSCALL_SLEEP,
+        &SYSCALL_SOCKET,
+        &SYSCALL_YIELD,
     ];
 
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .counters("counters", counters)
         .map("syscall_lut", syscall_lut())
-        .collected_at(&METADATA_SYSCALL_COUNTS_COLLECTED_AT)
-        .runtime(
-            &METADATA_SYSCALL_COUNTS_RUNTIME,
-            &METADATA_SYSCALL_COUNTS_RUNTIME_HISTOGRAM,
-        )
-        .build();
+        .build()?;
 
-    if bpf.is_err() {
-        return;
-    }
-
-    runtime.spawn(async move {
-        let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-        loop {
-            if sampler.is_finished() {
-                return;
-            }
-
-            sampler.sample().await;
-        }
-    });
+    Ok(Some(Box::new(bpf)))
 }
 
-impl GetMap for ModSkel<'_> {
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "counters" => &self.maps.counters,

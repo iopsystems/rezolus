@@ -1,6 +1,14 @@
-use crate::common::*;
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
+/// Collects TCP stats using BPF and traces:
+/// * `tcp_sendmsg`
+/// * `tcp_cleanup_rbuf`
+///
+/// And produces these stats:
+/// * `tcp/receive/bytes`
+/// * `tcp/receive/packets`
+/// * `tcp/receive/size`
+/// * `tcp/transmit/bytes`
+/// * `tcp/transmit/packets`
+/// * `tcp/transmit/size`
 
 const NAME: &str = "tcp_traffic";
 
@@ -8,10 +16,37 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_traffic.bpf.rs"));
 }
 
-use crate::common::bpf::*;
 use bpf::*;
 
-impl GetMap for ModSkel<'_> {
+use crate::common::*;
+use crate::samplers::tcp::linux::stats::*;
+use crate::*;
+
+use std::sync::Arc;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    let counters = vec![
+        &TCP_RX_BYTES,
+        &TCP_TX_BYTES,
+        &TCP_RX_PACKETS,
+        &TCP_TX_PACKETS,
+    ];
+
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+        .counters("counters", counters)
+        .histogram("rx_size", &TCP_RX_SIZE)
+        .histogram("tx_size", &TCP_TX_SIZE)
+        .build()?;
+
+    Ok(Some(Box::new(bpf)))
+}
+
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "counters" => &self.maps.counters,
@@ -32,45 +67,5 @@ impl OpenSkelExt for ModSkel<'_> {
             "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
             self.progs.tcp_cleanup_rbuf.insn_cnt()
         );
-    }
-}
-
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
-    if !config.enabled(NAME) {
-        return;
-    }
-
-    let counters = vec![
-        Counter::new(&TCP_RX_BYTES, None),
-        Counter::new(&TCP_TX_BYTES, None),
-        Counter::new(&TCP_RX_PACKETS, None),
-        Counter::new(&TCP_TX_PACKETS, None),
-    ];
-
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
-        .counters("counters", counters)
-        .distribution("rx_size", &TCP_RX_SIZE)
-        .distribution("tx_size", &TCP_TX_SIZE)
-        .collected_at(&METADATA_TCP_TRAFFIC_COLLECTED_AT)
-        .runtime(
-            &METADATA_TCP_TRAFFIC_RUNTIME,
-            &METADATA_TCP_TRAFFIC_RUNTIME_HISTOGRAM,
-        )
-        .build();
-
-    if bpf.is_ok() {
-        runtime.spawn(async move {
-            let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-            loop {
-                if sampler.is_finished() {
-                    return;
-                }
-
-                sampler.sample().await;
-            }
-        });
     }
 }

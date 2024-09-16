@@ -1,3 +1,5 @@
+mod stats;
+
 mod counts;
 mod latency;
 

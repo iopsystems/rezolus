@@ -1,3 +1,5 @@
+mod stats;
+
 mod connection_state;
 mod packet_latency;
 mod receive;

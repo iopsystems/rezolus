@@ -1,37 +1,47 @@
-use crate::common::*;
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
-use metriken::Gauge;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
 const NAME: &str = "tcp_connection_state";
 
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    runtime.spawn(async {
-        if let Ok(mut s) = ConnectionState::new(config) {
-            loop {
-                s.sample().await;
-            }
-        }
-    });
+use crate::samplers::tcp::linux::stats::*;
+use crate::*;
+
+use metriken::LazyGauge;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::sync::Mutex;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    let inner = ConnectionStateInner::new()?;
+
+    Ok(Some(Box::new(ConnectionState {
+        inner: Arc::new(Mutex::new(inner)),
+    })))
 }
 
 pub struct ConnectionState {
-    interval: AsyncInterval,
-    files: Vec<File>,
-    gauges: Vec<(&'static Lazy<Gauge>, i64)>,
+    inner: Arc<Mutex<ConnectionStateInner>>,
 }
 
-impl ConnectionState {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !config.enabled(NAME) {
-            return Err(());
-        }
+#[async_trait]
+impl Sampler for ConnectionState {
+    async fn refresh(&self) {
+        let mut inner = self.inner.lock().await;
 
-        let gauges: Vec<(&'static Lazy<Gauge>, i64)> = vec![
+        let _ = inner.refresh().await;
+    }
+}
+
+pub struct ConnectionStateInner {
+    files: Vec<File>,
+    gauges: Vec<(&'static LazyGauge, i64)>,
+}
+
+impl ConnectionStateInner {
+    pub fn new() -> Result<Self, std::io::Error> {
+        let gauges: Vec<(&'static LazyGauge, i64)> = vec![
             (&TCP_CONN_STATE_ESTABLISHED, 0),
             (&TCP_CONN_STATE_SYN_SENT, 0),
             (&TCP_CONN_STATE_SYN_RECV, 0),
@@ -46,42 +56,32 @@ impl ConnectionState {
             (&TCP_CONN_STATE_NEW_SYN_RECV, 0),
         ];
 
-        let ipv4 = std::fs::File::open("/proc/net/tcp")
-            .map(|f| File::from_std(f))
-            .map_err(|e| {
-                error!("Failed to open /proc/net/tcp: {e}");
-            });
+        let ipv4 = std::fs::File::open("/proc/net/tcp").map_err(|e| {
+            error!("Failed to open /proc/net/tcp: {e}");
+        });
 
-        let ipv6 = std::fs::File::open("/proc/net/tcp6")
-            .map(|f| File::from_std(f))
-            .map_err(|e| {
-                error!("Failed to open /proc/net/tcp6: {e}");
-            });
+        let ipv6 = std::fs::File::open("/proc/net/tcp6").map_err(|e| {
+            error!("Failed to open /proc/net/tcp6: {e}");
+        });
 
-        let mut files: Vec<Result<File, ()>> = vec![ipv4, ipv6];
+        let mut files: Vec<Result<std::fs::File, ()>> = vec![ipv4, ipv6];
 
-        let files: Vec<File> = files.drain(..).filter_map(|v| v.ok()).collect();
+        let files: Vec<File> = files
+            .drain(..)
+            .filter_map(|v| v.ok())
+            .map(File::from_std)
+            .collect();
 
         if files.is_empty() {
-            error!("Could not open any file in /proc/net for this sampler");
-            return Err(());
+            return Err(std::io::Error::other(
+                "Could not open any file in /proc/net for this sampler",
+            ));
         }
 
-        Ok(Self {
-            files,
-            gauges,
-            interval: config.async_interval(NAME),
-        })
+        Ok(Self { files, gauges })
     }
-}
 
-#[async_trait]
-impl AsyncSampler for ConnectionState {
-    async fn sample(&mut self) {
-        let (now, _elapsed) = self.interval.tick().await;
-
-        METADATA_TCP_CONNECTION_STATE_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
-
+    async fn refresh(&mut self) {
         // zero the temporary gauges
         for (_, gauge) in self.gauges.iter_mut() {
             *gauge = 0;
@@ -112,9 +112,5 @@ impl AsyncSampler for ConnectionState {
         for (gauge, value) in self.gauges.iter() {
             gauge.set(*value);
         }
-
-        let elapsed = now.elapsed().as_nanos() as u64;
-        METADATA_TCP_CONNECTION_STATE_RUNTIME.add(elapsed);
-        let _ = METADATA_TCP_CONNECTION_STATE_RUNTIME_HISTOGRAM.increment(elapsed);
     }
 }

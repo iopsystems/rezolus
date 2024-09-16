@@ -12,47 +12,28 @@ mod bpf {
 
 use bpf::*;
 
-use crate::common::bpf::*;
 use crate::common::*;
-use crate::samplers::tcp::stats::*;
-use crate::samplers::tcp::*;
+use crate::samplers::tcp::linux::stats::*;
+use crate::*;
 
-#[distributed_slice(ASYNC_SAMPLERS)]
-fn spawn(config: Arc<Config>, runtime: &Runtime) {
-    // check if sampler should be enabled
+use std::sync::Arc;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
-        return;
+        return Ok(None);
     }
 
-    let counters = vec![Counter::new(&TCP_TX_RETRANSMIT, None)];
+    let counters = vec![&TCP_TX_RETRANSMIT];
 
-    let bpf = AsyncBpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .counters("counters", counters)
-        .collected_at(&METADATA_TCP_RETRANSMIT_COLLECTED_AT)
-        .runtime(
-            &METADATA_TCP_RETRANSMIT_RUNTIME,
-            &METADATA_TCP_RETRANSMIT_RUNTIME_HISTOGRAM,
-        )
-        .build();
+        .build()?;
 
-    if bpf.is_err() {
-        return;
-    }
-
-    runtime.spawn(async move {
-        let mut sampler = AsyncBpfSampler::new(bpf.unwrap(), config.async_interval(NAME));
-
-        loop {
-            if sampler.is_finished() {
-                return;
-            }
-
-            sampler.sample().await;
-        }
-    });
+    Ok(Some(Box::new(bpf)))
 }
 
-impl GetMap for ModSkel<'_> {
+impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "counters" => &self.maps.counters,

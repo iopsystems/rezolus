@@ -1,90 +1,75 @@
-use crate::common::Interval;
-use crate::common::Nop;
-use crate::samplers::cpu::*;
-use clocksource::precise::UnixInstant;
-use metriken::{DynBoxedMetric, MetricBuilder};
-use perf_event::events::x86::{Msr, MsrId};
-use perf_event::events::Hardware;
-use perf_event::{Builder, ReadFormat};
-use samplers::hwinfo::hardware_info;
-
-mod perf_group;
-
-use perf_group::*;
-
-#[distributed_slice(SAMPLERS)]
-fn init(config: Arc<Config>) -> Box<dyn Sampler> {
-    if let Ok(perf) = Perf::new(config.clone()) {
-        Box::new(perf)
-    } else {
-        Box::new(Nop {})
-    }
-}
-
 const NAME: &str = "cpu_perf";
 
-pub struct Perf {
-    interval: Interval,
-    groups: Vec<PerfGroup>,
-    counters: Vec<Vec<DynBoxedMetric<metriken::Counter>>>,
-    gauges: Vec<Vec<DynBoxedMetric<metriken::Gauge>>>,
+mod group;
+
+use group::*;
+
+use crate::common::*;
+use crate::samplers::cpu::linux::stats::*;
+use crate::samplers::cpu::stats::*;
+use crate::samplers::Sampler;
+use crate::*;
+
+use parking_lot::Mutex;
+
+use tokio::task::spawn_blocking;
+
+#[distributed_slice(SAMPLERS)]
+fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    let inner = PerfInner::new()?;
+
+    Ok(Some(Box::new(Perf {
+        inner: Arc::new(Mutex::new(inner)),
+    })))
 }
 
-impl Perf {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !config.enabled(NAME) {
-            return Err(());
-        }
+pub struct Perf {
+    inner: Arc<Mutex<PerfInner>>,
+}
 
-        let cpus = match hardware_info() {
-            Ok(hwinfo) => hwinfo.get_cpus(),
-            Err(_) => return Err(()),
-        };
+struct PerfInner {
+    groups: Vec<PerfGroup>,
+    counters: ScopedCounters,
+    gauges: ScopedGauges,
+}
+
+impl PerfInner {
+    pub fn new() -> Result<Self, std::io::Error> {
+        let cpus = common::linux::cpus()?;
 
         let mut groups = Vec::with_capacity(cpus.len());
-        let mut counters = Vec::with_capacity(cpus.len());
-        let mut gauges = Vec::with_capacity(cpus.len());
-
-        let counter_metrics = ["cpu/cycles", "cpu/instructions"];
-
-        let gauge_metrics = ["cpu/ipkc", "cpu/ipus", "cpu/frequency"];
+        let mut counters = ScopedCounters::new();
+        let mut gauges = ScopedGauges::new();
 
         for cpu in cpus {
-            counters.push(
-                counter_metrics
-                    .iter()
-                    .map(|metric| {
-                        MetricBuilder::new(*metric)
-                            .metadata("id", format!("{}", cpu.id()))
-                            .metadata("core", format!("{}", cpu.core()))
-                            .metadata("die", format!("{}", cpu.die()))
-                            .metadata("package", format!("{}", cpu.package()))
-                            .formatter(cpu_metric_formatter)
-                            .build(metriken::Counter::new())
-                    })
-                    .collect(),
-            );
+            for counter in &["cpu/cycles", "cpu/instructions"] {
+                counters.push(
+                    cpu,
+                    DynamicCounterBuilder::new(*counter)
+                        .metadata("id", format!("{}", cpu))
+                        .formatter(cpu_metric_formatter)
+                        .build(),
+                );
+            }
 
-            gauges.push(
-                gauge_metrics
-                    .iter()
-                    .map(|metric| {
-                        MetricBuilder::new(*metric)
-                            .metadata("id", format!("{}", cpu.id()))
-                            .metadata("core", format!("{}", cpu.core()))
-                            .metadata("die", format!("{}", cpu.die()))
-                            .metadata("package", format!("{}", cpu.package()))
-                            .formatter(cpu_metric_formatter)
-                            .build(metriken::Gauge::new())
-                    })
-                    .collect(),
-            );
+            for gauge in &["cpu/ipkc", "cpu/ipus", "cpu/frequency"] {
+                gauges.push(
+                    cpu,
+                    DynamicGaugeBuilder::new(*gauge)
+                        .metadata("id", format!("{}", cpu))
+                        .formatter(cpu_metric_formatter)
+                        .build(),
+                );
+            }
 
-            match PerfGroup::new(cpu.id()) {
+            match PerfGroup::new(cpu) {
                 Ok(g) => groups.push(g),
                 Err(_) => {
-                    warn!("Failed to create the perf group on CPU {}", cpu.id());
+                    warn!("Failed to create the perf group on CPU {}", cpu);
                     // we want to continue because it's possible that this CPU is offline
                     continue;
                 }
@@ -92,32 +77,25 @@ impl Perf {
         }
 
         if groups.is_empty() {
-            error!("Failed to create the perf group on any CPU");
-            return Err(());
+            return Err(std::io::Error::other(
+                "Failed to create perf group on any CPU",
+            ));
         }
 
         Ok(Self {
-            interval: Interval::new(Instant::now(), config.interval(NAME)),
             groups,
             counters,
             gauges,
         })
     }
-}
 
-impl Sampler for Perf {
-    fn sample(&mut self) {
-        let now = Instant::now();
-
-        if self.interval.try_wait(now).is_err() {
-            return;
-        }
-
-        METADATA_CPU_PERF_COLLECTED_AT.set(UnixInstant::EPOCH.elapsed().as_nanos());
-
+    /// Refreshes the metrics from the underlying perf counter groups.
+    ///
+    /// *Note:* the reading returned by `get_metrics()` returns delta'd counters
+    /// so instead of setting our counters, we will add the delta to them.
+    pub fn refresh(&mut self) {
         let mut nr_active_groups: u64 = 0;
-        let mut total_cycles = 0;
-        let mut total_instructions = 0;
+
         let mut avg_ipkc = 0;
         let mut avg_ipus = 0;
         let mut avg_base_frequency = 0;
@@ -126,47 +104,58 @@ impl Sampler for Perf {
         for group in &mut self.groups {
             if let Ok(reading) = group.get_metrics() {
                 nr_active_groups += 1;
-                total_cycles += reading.cycles.unwrap_or(0);
-                total_instructions += reading.instructions.unwrap_or(0);
+
                 avg_ipkc += reading.ipkc.unwrap_or(0);
                 avg_ipus += reading.ipus.unwrap_or(0);
                 avg_base_frequency += reading.base_frequency_mhz.unwrap_or(0);
                 avg_running_frequency += reading.running_frequency_mhz.unwrap_or(0);
 
+                // note: add counters, these are deltas
                 if let Some(c) = reading.cycles {
-                    self.counters[reading.cpu][0].add(c);
+                    let _ = self.counters.add(reading.cpu, 0, c);
+                    CPU_CYCLES.add(c);
                 }
                 if let Some(c) = reading.instructions {
-                    self.counters[reading.cpu][1].add(c);
+                    let _ = self.counters.add(reading.cpu, 1, c);
+                    CPU_INSTRUCTIONS.add(c);
                 }
 
-                if let Some(c) = reading.ipkc {
-                    self.gauges[reading.cpu][0].set(c as i64);
+                if let Some(g) = reading.ipkc {
+                    let _ = self.gauges.set(reading.cpu, 0, g as _);
                 }
-                if let Some(c) = reading.ipus {
-                    self.gauges[reading.cpu][1].set(c as i64);
+                if let Some(g) = reading.ipus {
+                    let _ = self.gauges.set(reading.cpu, 1, g as _);
                 }
-                if let Some(c) = reading.running_frequency_mhz {
-                    self.gauges[reading.cpu][2].set(c as i64);
+                if let Some(g) = reading.running_frequency_mhz {
+                    let _ = self.gauges.set(reading.cpu, 2, g as _);
                 }
             }
-        }
 
-        if nr_active_groups > 0 {
-            // we increase the total cycles executed in the last sampling period
-            // instead of using the cycle perf event value to handle offlined CPUs.
-            CPU_CYCLES.add(total_cycles);
-            CPU_INSTRUCTIONS.add(total_instructions);
-            CPU_PERF_GROUPS_ACTIVE.set(nr_active_groups as i64);
-            CPU_IPKC_AVERAGE.set((avg_ipkc / nr_active_groups) as i64);
-            CPU_IPUS_AVERAGE.set((avg_ipus / nr_active_groups) as i64);
-            CPU_BASE_FREQUENCY_AVERAGE.set((avg_base_frequency / nr_active_groups) as i64);
-            CPU_FREQUENCY_AVERAGE.set((avg_running_frequency / nr_active_groups) as i64);
-            CPU_CORES.set(nr_active_groups as _);
+            // we can only update averages if at least one group of perf
+            // counters was active in the period
+            if nr_active_groups > 0 {
+                CPU_PERF_GROUPS_ACTIVE.set(nr_active_groups as i64);
+                CPU_IPKC_AVERAGE.set((avg_ipkc / nr_active_groups) as i64);
+                CPU_IPUS_AVERAGE.set((avg_ipus / nr_active_groups) as i64);
+                CPU_BASE_FREQUENCY_AVERAGE.set((avg_base_frequency / nr_active_groups) as i64);
+                CPU_FREQUENCY_AVERAGE.set((avg_running_frequency / nr_active_groups) as i64);
+            }
         }
+    }
+}
 
-        let elapsed = now.elapsed().as_nanos() as u64;
-        METADATA_CPU_PERF_RUNTIME.add(elapsed);
-        let _ = METADATA_CPU_PERF_RUNTIME_HISTOGRAM.increment(elapsed);
+#[async_trait]
+impl Sampler for Perf {
+    async fn refresh(&self) {
+        let inner = self.inner.clone();
+
+        // we spawn onto a blocking thread because this can take on the order of
+        // tens of milliseconds on large systems
+
+        let _ = spawn_blocking(move || {
+            let mut inner = inner.lock();
+            inner.refresh();
+        })
+        .await;
     }
 }

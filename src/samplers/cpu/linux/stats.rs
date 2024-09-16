@@ -1,32 +1,6 @@
-use super::super::stats::*;
+use crate::samplers::cpu::stats::*;
+
 use metriken::*;
-
-#[metric(
-    name = "metadata/cpu_perf/collected_at",
-    description = "The offset from the Unix epoch when cpu_perf sampler was last run",
-    metadata = { unit = "nanoseconds" }
-)]
-pub static METADATA_CPU_PERF_COLLECTED_AT: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "metadata/cpu_perf/runtime",
-    description = "The total runtime of the cpu_perf sampler",
-    metadata = { unit = "nanoseconds" }
-)]
-pub static METADATA_CPU_PERF_RUNTIME: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "metadata/cpu_perf/runtime",
-    description = "Distribution of sampling runtime of the cpu_usage_sampler",
-    metadata = { unit = "nanoseconds/second" }
-)]
-pub static METADATA_CPU_PERF_RUNTIME_HISTOGRAM: AtomicHistogram = AtomicHistogram::new(4, 32);
-
-#[metric(
-    name = "cpu/cores",
-    description = "The total number of logical cores that are currently online"
-)]
-pub static CPU_CORES: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "cpu/usage",
