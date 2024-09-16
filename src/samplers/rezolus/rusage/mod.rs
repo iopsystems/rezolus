@@ -10,12 +10,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    Ok(Some(Box::new(Rusage { })))
+    Ok(Some(Box::new(Rusage {})))
 }
 
 const NAME: &str = "rezolus_rusage";
 
-pub struct Rusage { }
+pub struct Rusage {}
 
 impl Rusage {
     pub fn new(config: Arc<Config>) -> Result<Self, ()> {
@@ -24,7 +24,7 @@ impl Rusage {
             return Err(());
         }
 
-        Ok(Self { })
+        Ok(Self {})
     }
 }
 
