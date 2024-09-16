@@ -99,5 +99,3 @@ pub static CPU_BASE_FREQUENCY_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default
     metadata = { unit = "megahertz" }
 )]
 pub static CPU_FREQUENCY_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
-
-

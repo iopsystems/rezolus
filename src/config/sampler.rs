@@ -11,5 +11,5 @@ impl Sampler {
         self.enabled
     }
 
-    pub fn check(&self, _name: &str) { }
+    pub fn check(&self, _name: &str) {}
 }
