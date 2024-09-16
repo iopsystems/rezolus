@@ -18,11 +18,11 @@
 #include <bpf/bpf_core_read.h>
 
 #define COUNTER_GROUP_WIDTH 16
-#define HISTOGRAM_POWER 3
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
+#define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
-#define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
+#define MAX_SYSCALL_ID 1024
 
 #define TOTAL 0
 #define READ 1

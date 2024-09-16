@@ -16,8 +16,8 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
-#define HISTOGRAM_POWER 3
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
+#define HISTOGRAM_POWER 3
 
 #define MAX_ENTRIES	10240
 #define AF_INET		2
