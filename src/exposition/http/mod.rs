@@ -2,7 +2,6 @@ use crate::common::HISTOGRAM_GROUPING_POWER;
 use crate::Arc;
 use crate::Config;
 use crate::Sampler;
-use crate::SAMPLERS;
 use axum::extract::State;
 use axum::routing::get;
 use axum::Router;

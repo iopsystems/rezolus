@@ -16,7 +16,6 @@ use bpf::*;
 
 use crate::common::*;
 use crate::samplers::tcp::linux::stats::*;
-use crate::samplers::Sampler;
 use crate::*;
 
 use std::sync::Arc;

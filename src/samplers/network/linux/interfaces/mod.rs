@@ -1,6 +1,5 @@
 const NAME: &str = "network_interfaces";
 
-use crate::common::*;
 use crate::samplers::network::linux::stats::*;
 use crate::samplers::network::linux::sysfs::SysfsSampler;
 use crate::*;

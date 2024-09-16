@@ -4,8 +4,7 @@ use crate::samplers::cpu::stats::*;
 use crate::*;
 
 use tokio::fs::File;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncSeekExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
 
 #[distributed_slice(SAMPLERS)]

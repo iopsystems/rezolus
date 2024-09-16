@@ -4,8 +4,6 @@ use crate::common::*;
 use crate::samplers::rezolus::stats::*;
 use crate::*;
 
-use tokio::sync::Mutex;
-
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
@@ -16,17 +14,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 pub struct Rusage {}
-
-impl Rusage {
-    pub fn new(config: Arc<Config>) -> Result<Self, ()> {
-        // check if sampler should be enabled
-        if !config.enabled(NAME) {
-            return Err(());
-        }
-
-        Ok(Self {})
-    }
-}
 
 #[async_trait]
 impl Sampler for Rusage {

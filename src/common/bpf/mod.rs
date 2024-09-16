@@ -1,12 +1,9 @@
-#![allow(dead_code)]
-
 mod builder;
 mod counters;
 mod histogram;
 mod sync_primitive;
 
 pub use builder::Builder as BpfBuilder;
-// pub use builder::BpfBuilderError;
 
 use crate::samplers::Sampler;
 use crate::*;

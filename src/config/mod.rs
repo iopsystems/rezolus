@@ -1,10 +1,10 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use core::time::Duration;
+
 use ringlog::Level;
 use serde::Deserialize;
+
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 
 mod general;
@@ -23,10 +23,6 @@ fn enabled() -> bool {
 
 fn histogram_grouping_power() -> u8 {
     HISTOGRAM_GROUPING_POWER
-}
-
-fn ttl() -> String {
-    "0ms".into()
 }
 
 fn listen() -> String {

@@ -1,16 +1,14 @@
 use crate::common::bpf::*;
 use crate::common::*;
-use crate::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::{Map, OpenObject};
+use libbpf_rs::OpenObject;
 use metriken::{LazyCounter, RwLockHistogram};
 
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
 pub struct Builder<T: 'static + SkelBuilder<'static>> {
     skel: fn() -> T,

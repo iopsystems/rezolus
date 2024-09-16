@@ -19,7 +19,6 @@ use bpf::*;
 
 use crate::common::*;
 use crate::samplers::scheduler::linux::stats::*;
-use crate::samplers::Sampler;
 use crate::*;
 
 use std::sync::Arc;

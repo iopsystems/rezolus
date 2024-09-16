@@ -1,6 +1,3 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
-
 use async_trait::async_trait;
 use backtrace::Backtrace;
 use linkme::distributed_slice;
@@ -56,7 +53,7 @@ fn main() {
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
 
-    let level = Level::Debug;
+    let level = config.log().level();
 
     let debug_log = if level <= Level::Info {
         LogBuilder::new().format(ringlog::default_format)

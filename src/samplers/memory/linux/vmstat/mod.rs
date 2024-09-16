@@ -1,6 +1,5 @@
 const NAME: &str = "memory_vmstat";
 
-use crate::common::*;
 use crate::samplers::memory::linux::stats::*;
 use crate::*;
 

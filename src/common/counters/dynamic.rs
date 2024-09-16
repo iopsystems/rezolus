@@ -1,6 +1,4 @@
-use metriken::Format;
-use metriken::LazyCounter;
-use metriken::MetricEntry;
+use metriken::{Format, LazyCounter, MetricEntry};
 
 use std::borrow::Cow;
 

@@ -6,7 +6,6 @@ use libbpf_rs::Map;
 use memmap2::{MmapMut, MmapOptions};
 use metriken::LazyCounter;
 
-use std::borrow::Cow;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 
 /// This wraps the BPF map along with an opened memory-mapped region for the map

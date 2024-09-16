@@ -2,15 +2,12 @@ const NAME: &str = "gpu_nvidia";
 
 use crate::common::*;
 use crate::samplers::gpu::linux::stats::*;
-use crate::samplers::Sampler;
 use crate::*;
 
-use metriken::{DynBoxedMetric, MetricBuilder};
 use nvml_wrapper::enum_wrappers::device::*;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use parking_lot::Mutex;
-
 use tokio::task::spawn_blocking;
 
 const KB: i64 = 1024;

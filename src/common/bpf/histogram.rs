@@ -1,8 +1,6 @@
 use crate::common::bpf::*;
 use crate::*;
 
-use libbpf_rs::Map;
-use memmap2::{MmapMut, MmapOptions};
 use metriken::RwLockHistogram;
 
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};

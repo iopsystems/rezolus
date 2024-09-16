@@ -1,6 +1,5 @@
 const NAME: &str = "tcp_connection_state";
 
-use crate::common::*;
 use crate::samplers::tcp::linux::stats::*;
 use crate::*;
 

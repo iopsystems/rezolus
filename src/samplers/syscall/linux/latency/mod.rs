@@ -23,7 +23,6 @@ use bpf::*;
 use crate::common::*;
 use crate::samplers::syscall::linux::stats::*;
 use crate::samplers::syscall::linux::syscall_lut;
-use crate::samplers::Sampler;
 use crate::*;
 
 use std::sync::Arc;
