@@ -41,6 +41,16 @@ nvml-wrapper = "0.10.0"
 [target.'cfg(target_os = "linux")'.build-dependencies]
 libbpf-cargo = { version = "0.24.2" }
 
+[profile.bench]
+debug = true
+lto = true
+codegen-units = 1
+
+[profile.release]
+debug = true
+lto = true
+codegen-units = 1
+
 [package.metadata.generate-rpm]
 auto_req = "builtin"
 assets = [
