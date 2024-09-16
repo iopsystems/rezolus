@@ -1,6 +1,6 @@
 [package]
 name = "rezolus"
-version = "3.18.2-alpha.10"
+version = "4.0.0-alpha.1"
 license = "MIT OR Apache-2.0"
 publish = false
 edition = "2021"
