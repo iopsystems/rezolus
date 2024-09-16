@@ -105,6 +105,6 @@ enabled = true
 # BPF sampler that probes TCP retransmit path to measure retransmits.
 [samplers.tcp_retransmit]
 
-# Samples TCP traffic using either a BPF sampler or /proc/net/snmp to provide
-# metrics for TX/RX bytes and packets
+# Samples TCP traffic using a BPF sampler to get metrics for TX/RX bytes and
+# packets
 [samplers.tcp_traffic]
