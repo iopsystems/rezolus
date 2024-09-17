@@ -18,6 +18,7 @@ mod bpf {
         ("scheduler", "runqueue"),
         ("syscall", "counts"),
         ("syscall", "latency"),
+        ("tcp", "connect_latency"),
         ("tcp", "packet_latency"),
         ("tcp", "receive"),
         ("tcp", "retransmit"),

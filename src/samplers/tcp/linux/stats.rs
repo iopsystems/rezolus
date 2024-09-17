@@ -98,6 +98,13 @@ pub static TCP_CONN_STATE_CLOSING: LazyGauge = LazyGauge::new(Gauge::default);
 pub static TCP_CONN_STATE_NEW_SYN_RECV: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
+    name = "tcp/connect_latency",
+    description = "Distribution of latency for establishing outbound connections (active open)",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static TCP_CONNECT_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
     name = "tcp/packet_latency",
     description = "Distribution of latency from a socket becoming readable until a userspace read",
     metadata = { unit = "nanoseconds" }
