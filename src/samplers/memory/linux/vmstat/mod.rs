@@ -65,6 +65,8 @@ impl MeminfoInner {
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
         self.file.rewind().await?;
 
+        self.data.clear();
+
         self.file.read_to_string(&mut self.data).await?;
 
         let lines = self.data.lines();
