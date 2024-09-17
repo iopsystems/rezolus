@@ -19,9 +19,9 @@
 #define HISTOGRAM_POWER 3
 
 #define MAX_ENTRIES	10240
-#define AF_INET    2
-#define AF_INET6   10
-#define NO_EXIST    1
+#define AF_INET 2
+#define AF_INET6 10
+#define NO_EXIST 1
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -64,7 +64,7 @@ static int handle_tcp_rcv_state_process(void *ctx, struct sock *sk)
 		return 0;
 
 	sock_ident = get_sock_ident(sk);
-	
+
 	tsp = bpf_map_lookup_elem(&start, &sock_ident);
 	if (!tsp) {
 		return 0;
