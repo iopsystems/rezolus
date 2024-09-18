@@ -14,15 +14,6 @@ sets itself apart from other telemetry agents by using:
   retired, the number of CPU cyles, and fine-grained CPU frequency data. This
   helps expose how efficient workload execution is on the hardware.
 
-* **High frequency sampling**: For traditional telemetry sources, Rezolus will
-  sample at high frequency and provide summary statistics about behavior over
-  time. By capturing data at high resolution, Rezolus is able to see spikes in
-  utilization. Normally more data makes it more expensive to collect and store
-  in your observability stack. But with Rezolus' summary statistics, these
-  spikes will be reflected in percentile summaries. It's cheaper to export a few
-  percentiles for each metrics than it is to collect on a secondly (or finer)
-  basis.
-
 ## Overview
 
 Rezolus is designed to produce high resolution systems performance telemetry. It
@@ -71,19 +62,23 @@ installed, please see [rust-lang.org][rust-lang.org] to get started with Rust.
 
 Rust >= 1.70.0
 
-A default build of Rezolus that targets Linux systems will have BPF support
-enabled by default. For this build, in addition to the rust toolchain, you will
-need:
+#### Linux
+
+A minimum kernel version of 5.5 is required. The following distributions should
+work:
+
+* Debian: Bullseye and newer
+* Ubuntu: 20.10 and newer
+* Red Hat: RHEL 9 and newer
+* Amazon Linux: AL2 w/ 5.10 or newer, AL2023
+* Any rolling-release distro: Arch, Gentoo, ...
+
+In addition to the base dependencies, the following are needed:
 
 * clang >= 11.0
 * libelf-dev >= 0.183
 * make >= 4.3
 * pkg-config >= 0.29.2
-
-When building for non-Linux systems or without the default features to disable
-the `bpf` feature, the only dependencies aside from the rust toolchain are:
-
-* clang >= 11.0
 
 Debian and Ubuntu users can install all the required dependencies for a default
 build with:
@@ -105,16 +100,10 @@ cd rezolus
 cargo build --release
 ```
 
-**NOTE**: If you want to disable BPF support, you should build Rezolus with:
-```bash
-cargo build --release --no-default-features
-```
-
 ### Configuration
 
-At this time, the configuration for Rezolus is very minimal with the only option
-being the listen address of the agent. See the [config.toml file][config] for
-an example.
+See the [config.toml file][config] for an example configuration with
+explanations for the various options.
 
 ### Installation
 
