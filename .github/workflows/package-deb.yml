@@ -72,6 +72,8 @@ jobs:
       - name: modify /etc/apt/sources.list
         if: ${{ matrix.distro == 'ubuntu' }}
         run: |
+          cat /etc/apt/sources.list
+          
           cat /etc/apt/sources.list             | \
             sed 's/^deb /deb [arch=amd64] /g'   | \
             grep '^deb '                          \
