@@ -57,7 +57,7 @@ jobs:
 
           # ubuntu kernels supported from 20.10 and up
           - { distro: ubuntu, release: jammy   } # 22.04
-          - { distro: ubuntu, release: noble   } # 24.04
+          # - { distro: ubuntu, release: noble   } # 24.04
       fail-fast: false
     env:
       # dpkg-buildpackage issues a warning if we attempt to cross compile and
@@ -69,23 +69,26 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: enable ubuntu ports
+      - name: modify /etc/apt/sources.list
         if: ${{ matrix.distro == 'ubuntu' }}
         run: |
-          cat /etc/apt/sources.list
+          cat /etc/apt/sources.list             | \
+            sed 's/^deb /deb [arch=amd64] /g'   | \
+            grep '^deb '                          \
+            > amd64.list
+          
+          cat /etc/apt/sources.list             | \
+            sed 's/^deb /deb [arch=arm64] /g'   | \
+            grep archive.ubuntu.com             | \
+            grep '^deb '                        | \
+            sed 's|archive.ubuntu.com/ubuntu|ports.ubuntu.com|g' \
+            > arm64.list
 
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }} main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-security main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-backports main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-updates main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
-          apt-get update
+          cat amd64.list arm64.list > /etc/apt/sources.list
+          rm amd64.list arm64.list
 
-          apt install libelf-dev libelf-dev:arm64 
-      
-      - name: enable arm64 dpkg architecture - debian
-        if: ${{ matrix.distro == 'debian' }}
-        run: |
-          dpkg --add-architecture arm64
+      - name: enable arm64 dpkg architecture
+        run: dpkg --add-architecture arm64
 
       - name: install buildsystem apt dependencies
         run: |
