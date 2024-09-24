@@ -13,6 +13,7 @@ axum = { version = "0.7.5", features = ["http2"] }
 backtrace = "0.3.73"
 clap = "4.5.17"
 clocksource = "0.8.1"
+futures = "0.3.30"
 histogram = "0.11.0"
 humantime = "2.1.0"
 lazy_static = "1.5.0"
