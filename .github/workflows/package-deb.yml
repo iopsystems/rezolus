@@ -78,7 +78,8 @@ jobs:
           echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-updates main multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
           apt-get update
       
-      - name: enable arm64 dpkg architecture
+      - name: enable arm64 dpkg architecture - debian
+        if: ${{ matrix.distro == 'debian' }}
         run: |
           dpkg --add-architecture arm64
 
