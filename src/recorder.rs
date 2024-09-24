@@ -34,7 +34,7 @@ fn main() {
                 .help("Parquet file")
                 .action(clap::ArgAction::Set)
                 .required(true)
-                .index(1),
+                .index(2),
         )
         .get_matches();
 
