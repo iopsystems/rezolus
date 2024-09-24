@@ -73,11 +73,11 @@ jobs:
         if: ${{ matrix.distro == 'ubuntu' }}
         run: |
           cat /etc/apt/sources.list
-          
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }} main multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-security main multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-backports main multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
-          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-updates main multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
+
+          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }} main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
+          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-security main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
+          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-backports main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
+          echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-updates main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
           apt-get update
       
       - name: enable arm64 dpkg architecture - debian
