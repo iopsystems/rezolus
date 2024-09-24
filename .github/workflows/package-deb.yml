@@ -72,6 +72,8 @@ jobs:
       - name: enable arm64 dpkg architecture - ubuntu
         if: ${{ matrix.distro == 'ubuntu' }}
         run: |
+          cat /etc/apt/sources.list
+          
           echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }} main' | tee /etc/apt/sources.list.d/arm64.list
           apt-get update
       
