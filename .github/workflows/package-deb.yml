@@ -4,7 +4,15 @@ name: package-deb
 
 "on":
   push:
+    paths:
+      - .github/actions/**
+      - .github/workflows/package-deb.yml
+      - debian/**
   pull_request:
+    paths:
+      - .github/actions/**
+      - .github/workflows/package-deb.yml
+      - debian/**
   release:
     types: [published]
   workflow_dispatch:

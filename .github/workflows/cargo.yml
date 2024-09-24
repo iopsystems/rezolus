@@ -99,7 +99,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, ubuntu-22.04, macos-latest ]
+        os: [ ubuntu-24.04, ubuntu-22.04, macos-latest ]
         profile: [ release, debug ]
     steps:
       - uses: actions/checkout@v3
