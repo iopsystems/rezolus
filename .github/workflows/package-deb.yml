@@ -84,7 +84,7 @@ jobs:
             sed 's|archive.ubuntu.com/ubuntu|ports.ubuntu.com|g' \
             > arm64.list
 
-          cat amd64.list arm64.list > /etc/apt/sources.list
+          cat amd64.list arm64.list | tee /etc/apt/sources.list
           rm amd64.list arm64.list
 
       - name: enable arm64 dpkg architecture
