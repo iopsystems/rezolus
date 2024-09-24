@@ -79,7 +79,8 @@ jobs:
           echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-backports main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
           echo 'deb [arch=arm64] http://ports.ubuntu.com ${{ matrix.release }}-updates main restricted multiverse universe' | tee /etc/apt/sources.list.d/arm64.list
           apt-get update
-          dpkg --add-architecture arm64
+
+          apt install libelf-dev libelf-dev:arm64 
       
       - name: enable arm64 dpkg architecture - debian
         if: ${{ matrix.distro == 'debian' }}
