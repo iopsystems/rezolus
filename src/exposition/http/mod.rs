@@ -206,9 +206,9 @@ async fn root() -> String {
 }
 
 async fn refresh(samplers: &[Box<dyn Sampler>]) {
-    for sampler in samplers.iter() {
-        sampler.refresh().await;
-    }
+    let s: Vec<_> = samplers.iter().map(|s| s.refresh()).collect();
+
+    futures::future::join_all(s).await;
 }
 
 fn simple_stats(quoted: bool) -> Vec<String> {
