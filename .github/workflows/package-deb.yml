@@ -73,6 +73,7 @@ jobs:
         if: ${{ matrix.distro == 'ubuntu' }}
         run: |
           cat /etc/apt/sources.list
+          cat /etc/apt/sources.list.d/ubuntu.sources
           
           cat /etc/apt/sources.list             | \
             sed 's/^deb /deb [arch=amd64] /g'   | \
