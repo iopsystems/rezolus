@@ -69,26 +69,26 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: modify /etc/apt/sources.list
-        if: ${{ matrix.distro == 'ubuntu' }}
-        run: |
-          cat /etc/apt/sources.list
-          cat /etc/apt/sources.list.d/ubuntu.sources
+      # - name: modify /etc/apt/sources.list
+      #   if: ${{ matrix.distro == 'ubuntu' }}
+      #   run: |
+      #     cat /etc/apt/sources.list
+      #     cat /etc/apt/sources.list.d/ubuntu.sources
           
-          cat /etc/apt/sources.list             | \
-            sed 's/^deb /deb [arch=amd64] /g'   | \
-            grep '^deb '                          \
-            > amd64.list
+      #     cat /etc/apt/sources.list             | \
+      #       sed 's/^deb /deb [arch=amd64] /g'   | \
+      #       grep '^deb '                          \
+      #       > amd64.list
           
-          cat /etc/apt/sources.list             | \
-            sed 's/^deb /deb [arch=arm64] /g'   | \
-            grep archive.ubuntu.com             | \
-            grep '^deb '                        | \
-            sed 's|archive.ubuntu.com/ubuntu|ports.ubuntu.com|g' \
-            > arm64.list
+      #     cat /etc/apt/sources.list             | \
+      #       sed 's/^deb /deb [arch=arm64] /g'   | \
+      #       grep archive.ubuntu.com             | \
+      #       grep '^deb '                        | \
+      #       sed 's|archive.ubuntu.com/ubuntu|ports.ubuntu.com|g' \
+      #       > arm64.list
 
-          cat amd64.list arm64.list | tee /etc/apt/sources.list
-          rm amd64.list arm64.list
+      #     cat amd64.list arm64.list | tee /etc/apt/sources.list
+      #     rm amd64.list arm64.list
 
       - name: enable arm64 dpkg architecture
         run: dpkg --add-architecture arm64
