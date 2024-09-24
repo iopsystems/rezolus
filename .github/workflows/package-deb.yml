@@ -44,20 +44,15 @@ jobs:
     strategy:
       matrix:
         include:
-          - { distro: debian, release: buster }
+          # minimum kernel version is 5.5
+
+          # debian kernels supported from bullseye and up
           - { distro: debian, release: bullseye }
           - { distro: debian, release: bookworm }
 
-          # trusty and xenial are too old to properly support cross compiling
-          # (or a compiler that supports C++17).
-          # - { distro: ubuntu, release: trusty  } # LTS until Apr 2024
-          # - { distro: ubuntu, release: xenial  } # LTS until Apr 2026
-          # bionic does not have a glibc neew enough for node 20, checkout step
-          #   now fails. Dropping support
-          # - { distro: ubuntu, release: bionic  } # LTS until Apr 2028
-          - { distro: ubuntu, release: focal   } # LTS until Apr 2030
-          - { distro: ubuntu, release: jammy   } # LTS until Apr 2032
-          - { distro: ubuntu, release: lunar   } # Current release
+          # ubuntu kernels supported from 20.10 and up
+          - { distro: ubuntu, release: jammy   } # 22.04
+          - { distro: ubuntu, release: noble   } # 24.04
       fail-fast: false
     env:
       # dpkg-buildpackage issues a warning if we attempt to cross compile and
