@@ -70,7 +70,12 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: enable arm64 dpkg architecture
-        run: dpkg --add-architecture arm64
+        if: ${{ matrix.distro == 'ubuntu' }}
+        run: |
+          sudo add-apt-repository 'deb [arch=arm64] http://ports.ubuntu.com/dists/ ${{matrix.release}} main'
+        if: ${{ matrix.distro == 'debian' }}
+        run: |
+          dpkg --add-architecture arm64
 
       - name: install buildsystem apt dependencies
         run: |
