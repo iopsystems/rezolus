@@ -72,8 +72,8 @@ jobs:
       - name: enable arm64 dpkg architecture - ubuntu
         if: ${{ matrix.distro == 'ubuntu' }}
         run: |
-          apt-get install software-properties-common
-          add-apt-repository 'deb [arch=arm64] http://ports.ubuntu.com/dists/ ${{matrix.release}} main'
+          echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu ${{ matrix.release }} main' | tee /etc/apt/sources.list.d/arm64.list
+          apt-get update
       
       - name: enable arm64 dpkg architecture - debian
         if: ${{ matrix.distro == 'debian' }}
