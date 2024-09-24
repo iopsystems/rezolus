@@ -1,13 +1,10 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 
-name: package
+name: package-deb
 
 "on":
   push:
-    paths:
-      - .github/actions/**
-      - .github/workflows/package.yml
-      - debian/**
+  pull_request:
   release:
     types: [published]
   workflow_dispatch:
@@ -39,7 +36,7 @@ env:
 jobs:
   build-deb:
     name: "${{ matrix.distro }}:${{ matrix.release }}"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: "${{ matrix.distro }}:${{ matrix.release }}"
     strategy:
       matrix:
@@ -100,22 +97,6 @@ jobs:
 
       - name: enable additional rustup targets
         run: rustup target add aarch64-unknown-linux-gnu
-
-      # Newer clang versions need a newer version of libstdc++ then bionic provides.
-      - name: install a newer libstc++ version needed for clang
-        if: ${{ matrix.release == 'bionic' }}
-        run: |
-          apt-get -q install -y software-properties-common
-          add-apt-repository -y ppa:ubuntu-toolchain-r/test
-
-      # bpf-rs needs a newer version of clang than is available in older distro releases
-      - name: install a newer clang version
-        run: |
-          curl -sSL https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-          cat > /etc/apt/sources.list.d/llvm.list <<EOM
-            deb http://apt.llvm.org/$(lsb_release -sc)/ llvm-toolchain-$(lsb_release -sc) main
-          EOM
-          apt-get -q update
 
       - name: check cargo
         shell: bash
