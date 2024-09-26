@@ -67,7 +67,7 @@ jobs:
       # anything for us.
       DEB_BUILD_OPTS: nocheck
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: modify /etc/apt/sources.list
         if: ${{ matrix.distro == 'ubuntu' }}
@@ -105,6 +105,10 @@ jobs:
 
       - name: enable additional rustup targets
         run: rustup target add aarch64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-deb-${{ matrix.distro }}-${{ matrix.release }}
 
       - name: check cargo
         shell: bash
@@ -149,7 +153,7 @@ jobs:
           mkdir -p target/debian
           cp ../*.deb ../*.ddeb target/debian/
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           path: target/debian/*
           name: ${{ matrix.distro }}_${{ matrix.release }}_all
@@ -160,7 +164,7 @@ jobs:
     needs:
       - build-deb
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v1
         id: auth
         with:
@@ -193,7 +197,7 @@ jobs:
     needs:
       - build-deb
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4.1.7
         with:
           path: target/debian/
@@ -209,9 +213,10 @@ jobs:
           for artifact in target/debian/**/*; do
             name="$(basename "$artifact")"
             directory="$(basename "$(dirname "$artifact")")"
+            distro="$(echo "$directory" | cut -d _ -f 1)"
             release="$(echo "$directory" | cut -d _ -f 2)"
 
-            mv "$artifact" "target/artifacts/${release}_${name}"
+            mv "$artifact" "target/artifacts/${distro}_${release}_${name}"
           done
 
           gh release upload "${{ github.event.release.tag_name }}" target/artifacts/*
