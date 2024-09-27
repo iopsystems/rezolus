@@ -8,11 +8,13 @@ name: package-rpm
       - .github/actions/**
       - .github/workflows/package-rpm.yml
       - debian/**
+      - rpm/**
   pull_request:
     paths:
       - .github/actions/**
       - .github/workflows/package-rpm.yml
       - debian/**
+      - rpm/**
   release:
     types: [published]
   workflow_dispatch:
