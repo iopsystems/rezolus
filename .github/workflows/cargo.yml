@@ -14,7 +14,7 @@ jobs:
     name: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
@@ -29,7 +29,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
@@ -57,7 +57,7 @@ jobs:
     permissions:
       security-events: write
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - uses: actions/download-artifact@v4.1.7
       with:
         name: clippy-sarif
@@ -65,27 +65,25 @@ jobs:
       with:
         sarif_file: clippy.sarif
 
-  # TODO(bmartin): re-enable audit check (#302)
-  # audit:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v3
-  #     - uses: Swatinem/rust-cache@v2
-  #       with:
-  #         shared-key: check-ubuntu-latest
-  #         save-if: false
-  #     - uses: baptiste0928/cargo-install@v1
-  #       with:
-  #         crate: cargo-audit
-  #         args: --locked
-  #     - run: |
-  #         cargo audit
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check-ubuntu-latest
+          save-if: false
+      - name: install cargo-audit
+        run: cargo install cargo-audit
+      - run: |
+          cargo audit
       
   rustfmt:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo fmt
         shell: bash
@@ -102,7 +100,7 @@ jobs:
         os: [ ubuntu-24.04, ubuntu-22.04, macos-latest ]
         profile: [ release, debug ]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
