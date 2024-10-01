@@ -1,14 +1,20 @@
-use std::time::Duration;
-use tokio::io::AsyncWriteExt;
-use tempfile::tempfile_in;
-use std::path::PathBuf;
-use http::Version;
-use http::Method;
-use std::time::Instant;
-use tokio::net::TcpStream;
-use std::net::SocketAddr;
 use backtrace::Backtrace;
+use http::Method;
+use http::Version;
+use metriken_exposition::MsgpackToParquet;
+use metriken_exposition::ParquetOptions;
 use ringlog::*;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
+use tempfile::tempfile_in;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+
+static RUNNING: AtomicBool = AtomicBool::new(true);
 
 fn main() {
     // custom panic hook to terminate whole process after unwinding
@@ -21,7 +27,9 @@ fn main() {
     // parse command line options
     let matches = clap::Command::new(env!("CARGO_BIN_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
-        .long_about("Rezolus recorder periodically samples Rezolus to produce a parquet file of metrics.")
+        .long_about(
+            "Rezolus recorder periodically samples Rezolus to produce a parquet file of metrics.",
+        )
         .arg(
             clap::Arg::new("SOURCE")
                 .help("Rezolus address")
@@ -31,7 +39,7 @@ fn main() {
         )
         .arg(
             clap::Arg::new("DESTINATION")
-                .help("Parquet file")
+                .help("Parquet output file")
                 .action(clap::ArgAction::Set)
                 .required(true)
                 .index(2),
@@ -114,46 +122,47 @@ fn main() {
 
     // spawn logging thread
     rt.spawn(async move {
-        loop {
+        while RUNNING.load(Ordering::Relaxed) {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let _ = log.flush();
         }
     });
+
+    ctrlc::set_handler(move || {
+        eprintln!("please wait while for the file to be saved");
+        RUNNING.store(false, Ordering::SeqCst);
+    })
+    .expect("failed to set ctrl-c handler");
 
     // spawn recorder thread
     rt.spawn(async move {
         recorder(addr, destination, temporary).await;
     });
 
-
-    // let mut samplers = Vec::new();
-
-    // for init in SAMPLERS {
-    //     if let Ok(Some(s)) = init(config.clone()) {
-    //         samplers.push(s);
-    //     }
-    // }
-
-    // let samplers = Arc::new(samplers.into_boxed_slice());
-
-    // rt.spawn(async move {
-    //     exposition::http::serve(config, samplers).await;
-    // });
-
-    loop {
+    while RUNNING.load(Ordering::Relaxed) {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+
+    ctrlc::set_handler(move || {
+        if RUNNING.load(Ordering::SeqCst) {
+            eprintln!("saving file... please wait...");
+            RUNNING.store(false, Ordering::SeqCst);
+        } else {
+            eprintln!("terminating...");
+            std::process::exit(2);
+        }
+    })
+    .expect("failed to set ctrl-c handler");
 }
 
-async fn recorder(addr: SocketAddr, _destination: std::fs::File, temporary: std::fs::File) {
+async fn recorder(addr: SocketAddr, destination: std::fs::File, temporary: std::fs::File) {
     let mut temporary = tokio::fs::File::from_std(temporary);
 
     let mut interval = tokio::time::interval(Duration::from_millis(1000));
 
-
     let mut client = None;
 
-    loop {
+    while RUNNING.load(Ordering::Relaxed) {
         if client.is_none() {
             if let Ok(s) = TcpStream::connect(addr).await {
                 if s.set_nodelay(true).is_err() {
@@ -193,7 +202,7 @@ async fn recorder(addr: SocketAddr, _destination: std::fs::File, temporary: std:
                     let mut body = response.into_body();
 
                     let mut temp = Vec::new();
-                    
+
                     while let Some(chunk) = body.data().await {
                         match chunk {
                             Ok(c) => {
@@ -223,5 +232,12 @@ async fn recorder(addr: SocketAddr, _destination: std::fs::File, temporary: std:
         }
     }
 
+    let _ = temporary.flush().await;
+    let temporary = temporary.into_std().await;
 
+    if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
+        .convert_file_handle(temporary, destination)
+    {
+        eprintln!("error saving parquet file: {e}");
+    }
 }
