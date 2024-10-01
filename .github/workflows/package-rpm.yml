@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: package-rpm
+
+"on":
+  push:
+    paths:
+      - .github/actions/**
+      - .github/workflows/package-rpm.yml
+      - debian/**
+      - rpm/**
+  pull_request:
+    paths:
+      - .github/actions/**
+      - .github/workflows/package-rpm.yml
+      - debian/**
+      - rpm/**
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Debian package release number'
+        default: '1'
+
+permissions: write-all
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  RUST_BACKTRACE: 1
+
+  PROTOC_VERSION: "23.4"
+
+jobs:
+  build-rpm:
+    name: "${{ matrix.distro }}:${{ matrix.version }} (${{ matrix.arch }})"
+    runs-on: buildjet-8vcpu-ubuntu-2204${{ matrix.arch == 'arm64' && '-arm' || '' }}
+    container: "${{ matrix.distro }}:${{ matrix.version }}"
+    strategy:
+      matrix:
+        # minimum kernel version is 5.5
+        include:
+          - { distro: rockylinux, version: 9, arch: x86_64 }
+          - { distro: rockylinux, version: 9, arch: arm64 }
+          
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: install build dependencies
+        shell: bash
+        run: |
+          yum install -y gcc elfutils-devel clang
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-rpm-${{ matrix.distro }}-${{ matrix.version}}-${{ matrix.arch }}
+
+      - name: install rpm packaging tool
+        run: cargo install cargo-generate-rpm
+
+      - name: check cargo
+        shell: bash
+        run: |
+          echo "::group::rustc -vV"
+          rustc -vV
+          echo "::endgroup::"
+          echo "::group::cargo -vV"
+          cargo -vV
+          echo "::endgroup::"
+
+      - name: set release env var
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          echo 'RELEASE=${{ github.event.inputs.release }}' >> $GITHUB_ENV
+
+      - name: build
+        shell: bash
+        run: |
+          cargo build --release --locked
+
+      - name: package
+        shell: bash
+        run: |
+          cargo generate-rpm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: target/generate-rpm/*
+          name: ${{ matrix.distro }}_${{ matrix.version }}_${{ matrix.arch }}
+
+  upload-release-artifacts:
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    needs:
+      - build-rpm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4.1.7
+        with:
+          path: target/rpm/
+
+      - name: upload packages
+        shell: bash
+        run: |
+          set -x
+          shopt -s nullglob
+
+          mkdir -p target/artifacts
+
+          for artifact in target/rpm/**/*; do
+            name="$(basename "$artifact")"
+            directory="$(basename "$(dirname "$artifact")")"
+            distro="$(echo "$directory" | cut -d _ -f 1)"
+            version="$(echo "$directory" | cut -d _ -f 2)"
+
+            mv "$artifact" "target/artifacts/${distro}_${version}_${name}"
+          done
+
+          gh release upload "${{ github.event.release.tag_name }}" target/artifacts/*

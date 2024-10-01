@@ -1,6 +1,6 @@
 [package]
 name = "rezolus"
-version = "4.0.0-alpha.1"
+version = "4.0.1-alpha.0"
 license = "MIT OR Apache-2.0"
 publish = false
 edition = "2021"
@@ -21,6 +21,7 @@ axum = { version = "0.7.5", features = ["http2"] }
 backtrace = "0.3.73"
 clap = "4.5.17"
 clocksource = "0.8.1"
+futures = "0.3.30"
 histogram = "0.11.0"
 humantime = "2.1.0"
 h2 = "*"

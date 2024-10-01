@@ -1,10 +1,22 @@
 ## [Unreleased]
 
+## [4.0.0] - 2024-09-27
+
 ### Changed
 
+- All samplers are now async and run on-demand when a metrics endpoint is hit.
+  Percentiles must now be calculated from the free-running histograms. (#334)
 - BPF is now non-optional on Linux. (#336)
 - Makes HTTP compression dependent on client accept headers, removes the need
   for separate configuration of compression. (#337)
+- Removes histograms for counter and gauge metrics. (#338)
+- Histogram grouping power reduced from 7 (0.781% error) to 3 (12.5% error).
+  This reduces the memory footprint for each histogram. (#339)
+
+### Added
+
+- Syscall samplers now track yield syscall. (#310)
+- TCP active open (connect) latency now tracked. (#342)
 
 ## [3.18.1] - 2024-08-09
 
@@ -303,7 +315,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v3.18.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/iopsystems/rezolus/compare/v3.18.1...v4.0.0
 [3.18.1]: https://github.com/iopsystems/rezolus/compare/v3.18.0...v3.18.1
 [3.18.0]: https://github.com/iopsystems/rezolus/compare/v3.17.0...v3.18.0
 [3.17.0]: https://github.com/iopsystems/rezolus/compare/v3.16.0...v3.17.0
