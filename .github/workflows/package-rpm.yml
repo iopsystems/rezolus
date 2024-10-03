@@ -44,6 +44,9 @@ jobs:
       matrix:
         # minimum kernel version is 5.5
         include:
+          - { distro: amazonlinux, version: 2, arch: x86_64 }
+          - { distro: amazonlinux, version: 2, arch: arm64 }
+
           - { distro: rockylinux, version: 9, arch: x86_64 }
           - { distro: rockylinux, version: 9, arch: arm64 }
           
