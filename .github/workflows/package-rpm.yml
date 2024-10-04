@@ -56,7 +56,7 @@ jobs:
         if: ${{ (matrix.distro == 'amazonlinux') && (matrix.version == 2) }}
         shell: bash
         run: |
-          yum install -y python3 gcc10 gcc10-c++ tar gzip
+          yum install -y python3 gcc10 gcc10-c++ tar gzip binutils
           export CC=gcc10-cc
           export CXX=gcc10-g++
           curl -O -L https://nodejs.org/dist/v20.18.0/node-v20.18.0.tar.gz
