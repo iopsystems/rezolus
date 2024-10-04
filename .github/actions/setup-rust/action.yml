@@ -6,4 +6,4 @@ runs:
   steps:
     - uses: dtolnay/rust-toolchain@stable
       with:
-        components: clippy
+        components: clippy rustfmt
