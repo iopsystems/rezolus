@@ -63,7 +63,7 @@ jobs:
           tar xzf node-v20.18.0.tar.gz
           cd node-v20.18.0
           ./configure
-          make -j || make
+          make
           make install
 
       - uses: actions/checkout@v4
