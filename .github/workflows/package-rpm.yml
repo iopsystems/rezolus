@@ -60,7 +60,7 @@ jobs:
           export CC=gcc10-cc
           export CXX=gcc10-g++
           curl -O -L https://nodejs.org/dist/v20.18.0/node-v20.18.0.tar.gz
-          tar xzvf node-v20.18.0.tar.gz
+          tar xzf node-v20.18.0.tar.gz
           cd node-v20.18.0
           ./configure
           make -j || make
