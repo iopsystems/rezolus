@@ -55,7 +55,7 @@ jobs:
       - name: install node
         shell: bash
         run: |
-          yum install -y python3 gcc10 gcc10-c++ tar
+          yum install -y python3 gcc10 gcc10-c++ tar gzip
           export CC=gcc10-cc
           export CXX=gcc10-g++
           curl -O -L https://nodejs.org/dist/v20.18.0/node-v20.18.0.tar.gz
