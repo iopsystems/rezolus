@@ -52,16 +52,13 @@ jobs:
           
       fail-fast: false
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v2
         with:
           node-version: 20
 
       - uses: actions/checkout@v4
 
-      - name: install rust
-        run: |
-          curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
-          echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-rust
 
       - name: install build dependencies
         shell: bash
