@@ -52,7 +52,8 @@ jobs:
           
       fail-fast: false
     steps:
-      - name: install node
+      - name: install node (AmazonLinux2)
+        if: ${{ (matrix.distro == 'amazonlinux') && (matrix.version == 2) }}
         shell: bash
         run: |
           yum install -y python3 gcc10 gcc10-c++ tar gzip
