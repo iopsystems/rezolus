@@ -52,12 +52,11 @@ jobs:
           
       fail-fast: false
     steps:
-      - name: install node
-        run: |
-          git clone https://github.com/nodejs/node && git checkout v20.11.0
-          ./configure && make -j4 && make install
-      
-      - uses: actions/checkout@v3
+     - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/checkout@v4
 
       - name: install rust
         run: |
