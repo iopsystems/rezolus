@@ -129,23 +129,8 @@ fn main() {
     });
 
     ctrlc::set_handler(move || {
-        eprintln!("please wait while for the file to be saved");
-        RUNNING.store(false, Ordering::SeqCst);
-    })
-    .expect("failed to set ctrl-c handler");
-
-    // spawn recorder thread
-    rt.spawn(async move {
-        recorder(addr, destination, temporary).await;
-    });
-
-    while RUNNING.load(Ordering::Relaxed) {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
-
-    ctrlc::set_handler(move || {
         if RUNNING.load(Ordering::SeqCst) {
-            eprintln!("saving file... please wait...");
+            eprintln!("finalizing recording... please wait...");
             RUNNING.store(false, Ordering::SeqCst);
         } else {
             eprintln!("terminating...");
@@ -153,6 +138,11 @@ fn main() {
         }
     })
     .expect("failed to set ctrl-c handler");
+
+    // spawn recorder thread
+    rt.block_on(async move {
+        recorder(addr, destination, temporary).await;
+    });
 }
 
 async fn recorder(addr: SocketAddr, destination: std::fs::File, temporary: std::fs::File) {
