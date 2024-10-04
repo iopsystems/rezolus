@@ -1,18 +1,13 @@
 use backtrace::Backtrace;
-use http::Method;
-use http::Version;
-use metriken_exposition::MsgpackToParquet;
-use metriken_exposition::ParquetOptions;
+use http::{Method, Version};
+use metriken_exposition::{MsgpackToParquet, ParquetOptions};
 use ringlog::*;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use tempfile::tempfile_in;
-use tokio::io::AsyncSeekExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -37,6 +32,14 @@ fn main() {
                 .action(clap::ArgAction::Set)
                 .value_name("INTERVAL")
                 .help("Sampling interval"),
+        )
+        .arg(
+            clap::Arg::new("VERBOSE")
+                .short('v')
+                .long("verbose")
+                .action(clap::ArgAction::Count)
+                .value_name("VERBOSE")
+                .help("Increase logging verbosity by one level"),
         )
         .arg(
             clap::Arg::new("SOURCE")
@@ -117,7 +120,11 @@ fn main() {
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
 
-    let level = Level::Info;
+    let level = match matches.get_count("VERBOSE") {
+        0 => Level::Info,
+        1 => Level::Debug,
+        _ => Level::Trace,
+    };
 
     let debug_log = if level <= Level::Info {
         LogBuilder::new().format(ringlog::default_format)
@@ -144,7 +151,7 @@ fn main() {
 
     // spawn logging thread
     rt.spawn(async move {
-        while RUNNING.load(Ordering::Relaxed) {
+        loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let _ = log.flush();
         }
@@ -181,19 +188,30 @@ async fn recorder(
 
     while RUNNING.load(Ordering::Relaxed) {
         if client.is_none() {
-            if let Ok(s) = TcpStream::connect(addr).await {
-                if s.set_nodelay(true).is_err() {
-                    continue;
-                }
+            debug!("connecting to Rezolus...");
 
-                if let Ok((h2, connection)) = ::h2::client::handshake(s).await {
-                    tokio::spawn(async move {
-                        let _ = connection.await;
-                    });
-
-                    if let Ok(h2) = h2.ready().await {
-                        client = Some(h2);
+            match TcpStream::connect(addr).await {
+                Ok(s) => {
+                    if s.set_nodelay(true).is_err() {
+                        continue;
                     }
+
+                    debug!("performing http2 handshake...");
+
+                    if let Ok((h2, connection)) = ::h2::client::handshake(s).await {
+                        tokio::spawn(async move {
+                            let _ = connection.await;
+                        });
+
+                        if let Ok(h2) = h2.ready().await {
+                            debug!("connection to Rezolus is established");
+
+                            client = Some(h2);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("error connecting to Rezolus: {e}");
                 }
             }
 
@@ -234,7 +252,7 @@ async fn recorder(
 
                     let latency = start.elapsed();
 
-                    info!("sampling latency: {}", latency.as_micros());
+                    debug!("sampling latency: {}", latency.as_micros());
 
                     for chunk in temp {
                         if let Err(e) = temporary.write_all(&chunk).await {
@@ -249,9 +267,13 @@ async fn recorder(
         }
     }
 
+    debug!("flushing and seeking to start of temp file");
+
     let _ = temporary.flush().await;
     let _ = temporary.rewind().await;
     let temporary = temporary.into_std().await;
+
+    debug!("converting temp file to parquet");
 
     if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
         .convert_file_handle(temporary, destination)
