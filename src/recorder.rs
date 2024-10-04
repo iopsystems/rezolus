@@ -72,7 +72,7 @@ fn main() {
 
     // open destination file
     let destination: std::fs::File = {
-        match std::fs::File::open(path.clone()) {
+        match std::fs::File::create(path.clone()) {
             Ok(f) => f,
             Err(error) => {
                 eprintln!("could not open destination: {:?}\n{error}", path);
