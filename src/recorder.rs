@@ -1,4 +1,3 @@
-use tokio::io::AsyncSeekExt;
 use backtrace::Backtrace;
 use http::Method;
 use http::Version;
@@ -12,6 +11,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::tempfile_in;
+use tokio::io::AsyncSeekExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -33,10 +33,10 @@ fn main() {
         )
         .arg(
             clap::Arg::new("INTERVAL")
-              .long("interval")
-              .action(clap::ArgAction::Set)
-              .value_name("INTERVAL")
-              .help("Sampling interval")
+                .long("interval")
+                .action(clap::ArgAction::Set)
+                .value_name("INTERVAL")
+                .help("Sampling interval"),
         )
         .arg(
             clap::Arg::new("SOURCE")
@@ -55,7 +55,10 @@ fn main() {
         .get_matches();
 
     let interval: Duration = {
-        let interval = matches.get_one::<String>("INTERVAL").map(|v| v.to_string()).unwrap_or("1s".to_string());
+        let interval = matches
+            .get_one::<String>("INTERVAL")
+            .map(|v| v.to_string())
+            .unwrap_or("1s".to_string());
         match interval.parse::<humantime::Duration>() {
             Ok(c) => c.into(),
             Err(error) => {
@@ -164,7 +167,12 @@ fn main() {
     });
 }
 
-async fn recorder(addr: SocketAddr, destination: std::fs::File, temporary: std::fs::File, interval: Duration) {
+async fn recorder(
+    addr: SocketAddr,
+    destination: std::fs::File,
+    temporary: std::fs::File,
+    interval: Duration,
+) {
     let mut temporary = tokio::fs::File::from_std(temporary);
 
     let mut interval = tokio::time::interval(interval);
