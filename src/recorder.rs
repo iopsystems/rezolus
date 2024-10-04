@@ -32,6 +32,13 @@ fn main() {
             "Rezolus recorder periodically samples Rezolus to produce a parquet file of metrics.",
         )
         .arg(
+            clap::Arg::new("INTERVAL")
+              .long("interval")
+              .action(clap::ArgAction::Set)
+              .value_name("INTERVAL")
+              .help("Sampling interval")
+        )
+        .arg(
             clap::Arg::new("SOURCE")
                 .help("Rezolus address")
                 .action(clap::ArgAction::Set)
@@ -46,6 +53,17 @@ fn main() {
                 .index(2),
         )
         .get_matches();
+
+    let interval: Duration = {
+        let interval = matches.get_one::<String>("INTERVAL").map(|v| v.to_string()).unwrap_or("1s".to_string());
+        match interval.parse::<humantime::Duration>() {
+            Ok(c) => c.into(),
+            Err(error) => {
+                eprintln!("interval is not valid: {interval}\n{error}");
+                std::process::exit(1);
+            }
+        }
+    };
 
     // parse source address
     let addr: SocketAddr = {
@@ -142,14 +160,14 @@ fn main() {
 
     // spawn recorder thread
     rt.block_on(async move {
-        recorder(addr, destination, temporary).await;
+        recorder(addr, destination, temporary, interval).await;
     });
 }
 
-async fn recorder(addr: SocketAddr, destination: std::fs::File, temporary: std::fs::File) {
+async fn recorder(addr: SocketAddr, destination: std::fs::File, temporary: std::fs::File, interval: Duration) {
     let mut temporary = tokio::fs::File::from_std(temporary);
 
-    let mut interval = tokio::time::interval(Duration::from_millis(1000));
+    let mut interval = tokio::time::interval(interval);
 
     let mut client = None;
 
