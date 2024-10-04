@@ -1,3 +1,4 @@
+use tokio::io::AsyncSeekExt;
 use backtrace::Backtrace;
 use http::Method;
 use http::Version;
@@ -223,6 +224,7 @@ async fn recorder(addr: SocketAddr, destination: std::fs::File, temporary: std::
     }
 
     let _ = temporary.flush().await;
+    let _ = temporary.rewind().await;
     let temporary = temporary.into_std().await;
 
     if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
