@@ -44,7 +44,7 @@ env:
 jobs:
   build-deb:
     name: "${{ matrix.distro }}:${{ matrix.release }}"
-    runs-on: buildjet-8vcpu-ubuntu-2204${{ matrix.arch == 'arm64' && '-arm' || '' }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'buildjet-16vcpu-ubuntu-2204-arm' || 'buildjet-8vcpu-ubuntu-2204' }}
     container: "${{ matrix.distro }}:${{ matrix.release }}"
     strategy:
       matrix:
