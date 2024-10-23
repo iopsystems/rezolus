@@ -19,11 +19,11 @@ struct AppState {
 }
 
 pub async fn serve(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) {
-    let state = Arc::new(AppState { config, samplers });
+    let state = Arc::new(AppState { config: config.clone(), samplers });
 
     let app: Router = app(state);
 
-    let listener = TcpListener::bind("0.0.0.0:4242")
+    let listener = TcpListener::bind(config.general().listen())
         .await
         .expect("failed to listen");
 
