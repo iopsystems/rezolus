@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [4.1.0] - 2024-10-23
+
+### Added
+
+- `rezolus-recorder` which can connect to a running Rezolus instance and record
+  metrics into a parquet file. (#356)
+
+### Fixed
+
+- Configured listen address was ignored and a default was used. (#362)
+
 ## [4.0.0] - 2024-09-27
 
 ### Changed
@@ -315,7 +326,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v4.0.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/iopsystems/rezolus/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/iopsystems/rezolus/compare/v3.18.1...v4.0.0
 [3.18.1]: https://github.com/iopsystems/rezolus/compare/v3.18.0...v3.18.1
 [3.18.0]: https://github.com/iopsystems/rezolus/compare/v3.17.0...v3.18.0
