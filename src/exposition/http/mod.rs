@@ -19,7 +19,10 @@ struct AppState {
 }
 
 pub async fn serve(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) {
-    let state = Arc::new(AppState { config: config.clone(), samplers });
+    let state = Arc::new(AppState {
+        config: config.clone(),
+        samplers,
+    });
 
     let app: Router = app(state);
 
