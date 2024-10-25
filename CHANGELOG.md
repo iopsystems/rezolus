@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [4.1.1] - 2024-10-24
+
+### Fixed
+
+- Fixed packaging workflow so DEB and RPM artifacts are published. (#365)
+
 ## [4.1.0] - 2024-10-23
 
 ### Added
@@ -326,7 +332,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v4.1.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v4.1.1...HEAD
+[4.1.1]: https://github.com/iopsystems/rezolus/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/iopsystems/rezolus/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/iopsystems/rezolus/compare/v3.18.1...v4.0.0
 [3.18.1]: https://github.com/iopsystems/rezolus/compare/v3.18.0...v3.18.1
