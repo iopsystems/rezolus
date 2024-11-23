@@ -2,7 +2,6 @@
 name = "rezolus"
 version = "4.1.2-alpha.0"
 license = "MIT OR Apache-2.0"
-publish = false
 edition = "2021"
 description = "High resolution systems performance telemetry agent"
 
