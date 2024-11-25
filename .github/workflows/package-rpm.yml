@@ -38,7 +38,7 @@ env:
 jobs:
   build-rpm:
     name: "${{ matrix.distro }}:${{ matrix.version }} (${{ matrix.arch }})"
-    runs-on: buildjet-8vcpu-ubuntu-2204${{ matrix.arch == 'arm64' && '-arm' || '' }}
+    runs-on: buildjet-16vcpu-ubuntu-2204${{ matrix.arch == 'arm64' && '-arm' || '' }}
     container: "${{ matrix.distro }}:${{ matrix.version }}"
     strategy:
       matrix:
