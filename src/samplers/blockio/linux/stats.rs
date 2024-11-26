@@ -9,11 +9,39 @@ use metriken::*;
 pub static BLOCKIO_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
+    name = "blockio/read/latency",
+    description = "Distribution of blockio read operation latency in nanoseconds",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static BLOCKIO_READ_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio/write/latency",
+    description = "Distribution of blockio write operation latency in nanoseconds",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static BLOCKIO_WRITE_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
     name = "blockio/size",
     description = "Distribution of blockio operation sizes in bytes",
     metadata = { unit = "bytes" }
 )]
 pub static BLOCKIO_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio/read/size",
+    description = "Distribution of blockio read operation sizes in bytes",
+    metadata = { unit = "bytes" }
+)]
+pub static BLOCKIO_READ_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio/write/size",
+    description = "Distribution of blockio write operation sizes in bytes",
+    metadata = { unit = "bytes" }
+)]
+pub static BLOCKIO_WRITE_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio/operations",
