@@ -10,7 +10,7 @@
 // srtt.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -40,7 +40,7 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 {
 	const struct inet_sock *inet = (struct inet_sock *)(sk);
 	struct tcp_sock *ts;
-	u64 key, slot, *cnt;
+	u64 key, slot;
 	u32 idx, mdev_us, srtt_us;
 	u64 mdev_ns, srtt_ns;
 
@@ -52,23 +52,13 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
 	// record nanoseconds.
 	srtt_ns = 1000 * (u64) srtt_us >> 3;
 
-	idx = value_to_index(srtt_ns, HISTOGRAM_POWER);
-	cnt = bpf_map_lookup_elem(&srtt, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
+	histogram_incr(&srtt, HISTOGRAM_POWER, srtt_ns);
 
 	// NOTE: mdev is stored as 4x the value in microseconds but we want to
 	// record nanoseconds.
 	mdev_ns = 1000 * (u64) mdev_us >> 2;
 
-	idx = value_to_index(mdev_ns, HISTOGRAM_POWER);
-	cnt = bpf_map_lookup_elem(&jitter, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
+	histogram_incr(&jitter, HISTOGRAM_POWER, mdev_ns);
 
 	return 0;
 }

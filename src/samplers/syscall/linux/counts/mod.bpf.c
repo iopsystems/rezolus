@@ -12,7 +12,7 @@
 // syscall counts and latencies.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
@@ -46,7 +46,6 @@ struct {
 SEC("tracepoint/raw_syscalls/sys_enter")
 int sys_enter(struct trace_event_raw_sys_enter *args)
 {
-	u64 *cnt;
 	u32 offset, idx;
 
 	if (args->id < 0) {
@@ -57,11 +56,7 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 	offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
 	// update the total counter
-	cnt = bpf_map_lookup_elem(&counters, &offset);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
+	array_incr(&counters, offset);
 
 	// for some syscalls, we track counts by "family" of syscall. check the
 	// lookup table and increment the appropriate counter
@@ -71,11 +66,7 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 
 		if (counter_offset && *counter_offset && *counter_offset < COUNTER_GROUP_WIDTH) {
 			idx = offset + ((u32)*counter_offset);
-			cnt = bpf_map_lookup_elem(&counters, &idx);
-
-			if (cnt) {
-				__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-			}
+			array_incr(&counters, idx);
 		} else {
 			// syscall counter offset was outside of the expected range
 			// this indicates that the LUT contains invalid values

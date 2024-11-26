@@ -11,7 +11,7 @@
 // application.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -68,7 +68,7 @@ static int handle_tcp_rcv_space_adjust(void *ctx, struct sock *sk)
 	u64 sock_ident = get_sock_ident(sk);
 	u64 id = bpf_get_current_pid_tgid(), *tsp;
 	u32 idx;
-	u64 now, delta_ns, *cnt;
+	u64 now, delta_ns;
 	u32 pid = id >> 32, tid = id;
 	struct event *eventp;
 	u16 family;
@@ -86,12 +86,7 @@ static int handle_tcp_rcv_space_adjust(void *ctx, struct sock *sk)
 
 	delta_ns = (now - *tsp);
 
-	idx = value_to_index(delta_ns, HISTOGRAM_POWER);
-	cnt = bpf_map_lookup_elem(&latency, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
+	histogram_incr(&latency, HISTOGRAM_POWER, delta_ns);
 
 cleanup:
 	bpf_map_delete_elem(&start, &sock_ident);

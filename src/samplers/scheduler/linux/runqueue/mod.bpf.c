@@ -10,7 +10,7 @@
 // to calculate the runqueue latency, running time, and off-cpu time.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 
@@ -153,7 +153,7 @@ int handle__sched_switch(u64 *ctx)
 	struct task_struct *next = (struct task_struct *)ctx[2];
 
 	u32 pid, idx;
-	u64 *tsp, delta_ns, *cnt, offcpu_ns;
+	u64 *tsp, delta_ns, offcpu_ns;
 
 	u32 processor_id = bpf_get_smp_processor_id();
 	u64 ts = bpf_ktime_get_ns();
@@ -169,11 +169,7 @@ int handle__sched_switch(u64 *ctx)
 	if (get_task_state(prev) == TASK_RUNNING) {
 		// count involuntary context switch
 		idx = COUNTER_GROUP_WIDTH * processor_id + IVCSW;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-		}
+		array_incr(&counters, idx);
 
 		pid = prev->pid;
 
@@ -186,11 +182,7 @@ int handle__sched_switch(u64 *ctx)
 			delta_ns = ts - *tsp;
 
 			// update histogram
-			idx = value_to_index(delta_ns, HISTOGRAM_POWER);
-			cnt = bpf_map_lookup_elem(&running, &idx);
-			if (cnt) {
-				__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-			}
+			histogram_incr(&running, HISTOGRAM_POWER, delta_ns);
 
 			*tsp = 0;
 		}
@@ -216,11 +208,7 @@ int handle__sched_switch(u64 *ctx)
 		delta_ns = ts - *tsp;
 
 		// update the histogram
-		idx = value_to_index(delta_ns, HISTOGRAM_POWER);
-		cnt = bpf_map_lookup_elem(&runqlat, &idx);
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-		}
+		histogram_incr(&runqlat, HISTOGRAM_POWER, delta_ns);
 
 		*tsp = 0;
 
@@ -234,11 +222,7 @@ int handle__sched_switch(u64 *ctx)
 				offcpu_ns = offcpu_ns - delta_ns;
 
 				// update the histogram
-				idx = value_to_index(offcpu_ns, HISTOGRAM_POWER);
-				cnt = bpf_map_lookup_elem(&offcpu, &idx);
-				if (cnt) {
-					__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-				}
+				histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
 			}
 
 			*tsp = 0;

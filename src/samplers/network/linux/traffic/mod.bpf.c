@@ -5,7 +5,7 @@
 // packets and bytes transmitted as well as the size distributions.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -41,18 +41,10 @@ int BPF_PROG(netif_receive_skb, struct sk_buff *skb)
 	u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
 	idx = offset + RX_PACKETS;
-	cnt = bpf_map_lookup_elem(&counters, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
+	array_incr(&counters, idx);
 
 	idx = offset + RX_BYTES;
-	cnt = bpf_map_lookup_elem(&counters, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, len, __ATOMIC_RELAXED);
-	}
+	array_add(&counters, idx, len);
 
 	return 0;
 }
@@ -70,18 +62,10 @@ int BPF_PROG(tcp_cleanup_rbuf, struct sk_buff *skb, struct net_device *dev, void
 	u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
 	idx = offset + TX_PACKETS;
-	cnt = bpf_map_lookup_elem(&counters, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
+	array_incr(&counters, idx);
 
 	idx = offset + TX_BYTES;
-	cnt = bpf_map_lookup_elem(&counters, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, len, __ATOMIC_RELAXED);
-	}
+	array_add(&counters, idx, len);
 
 	return 0;
 }

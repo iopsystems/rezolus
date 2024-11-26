@@ -2,7 +2,7 @@
 // Copyright (c) 2024 The Rezolus Authors
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -35,25 +35,16 @@ struct {
 
 int account_delta(u64 delta, u32 usage_idx)
 {
-	u64 *cnt;
 	u32 idx;
 
 	if (usage_idx < COUNTER_GROUP_WIDTH) {
 		// increment busy total
 		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, delta, __ATOMIC_RELAXED);
-		}
+		array_add(&counters, idx, delta);
 
 		// increment counter for this usage category
 		idx = idx + usage_idx;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, delta, __ATOMIC_RELAXED);
-		}
+		array_add(&counters, idx, delta);
 	}
 
 	return 0;
