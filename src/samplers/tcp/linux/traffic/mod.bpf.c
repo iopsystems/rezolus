@@ -10,7 +10,7 @@
 // segments and bytes transmitted as well as the size distributions.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -58,7 +58,6 @@ struct {
 static int probe_ip(bool receiving, struct sock *sk, size_t size)
 {
 	u16 family;
-	u64 *cnt;
 	u32 idx;
 
 	family = BPF_CORE_READ(sk, __sk_common.skc_family);
@@ -70,49 +69,24 @@ static int probe_ip(bool receiving, struct sock *sk, size_t size)
 
 	u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
+	u64 sz = (u64) size;
 
 	if (receiving) {
 		idx = offset + TCP_RX_BYTES;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
+		array_add(&counters, idx, sz);
 
-		if (cnt) {
-			__atomic_fetch_add(cnt, (u64) size, __ATOMIC_RELAXED);
-		}
-
-		idx = value_to_index((u64) size, HISTOGRAM_POWER);
-		cnt = bpf_map_lookup_elem(&rx_size, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-		}
+		histogram_incr(&rx_size, HISTOGRAM_POWER, sz);
 
 		idx = offset + TCP_RX_PACKETS;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-		}
+		array_incr(&counters, idx);
 	} else {
 		idx = offset + TCP_TX_BYTES;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
+		array_add(&counters, idx, sz);
 
-		if (cnt) {
-			__atomic_fetch_add(cnt, (u64) size, __ATOMIC_RELAXED);
-		}
-
-		idx = value_to_index((u64) size, HISTOGRAM_POWER);
-		cnt = bpf_map_lookup_elem(&tx_size, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-		}
+		histogram_incr(&tx_size, HISTOGRAM_POWER, sz);
 
 		idx = offset + TCP_TX_PACKETS;
-		cnt = bpf_map_lookup_elem(&counters, &idx);
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-		}
+		array_incr(&counters, idx);
 	}
 
 	return 0;

@@ -12,7 +12,7 @@
 // syscall counts and latencies.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/histogram.h"
+#include "../../../common/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
@@ -142,7 +142,6 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	u64 *start_ts, lat = 0;
 	u32 tid = id;
 
-	u64 *cnt;
 	u32 idx;
 
 	if (args->id < 0) {
@@ -169,11 +168,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	idx = value_to_index(lat, HISTOGRAM_POWER);
 
 	// update the total latency histogram
-	cnt = bpf_map_lookup_elem(&total_latency, &idx);
-
-	if (cnt) {
-		__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
-	}
+	array_incr(&total_latency, idx);
 
 	// increment latency histogram for the syscall family
 	if (syscall_id < MAX_SYSCALL_ID) {
@@ -185,35 +180,29 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 
 		switch (*counter_offset) {
 			case READ:
-				cnt = bpf_map_lookup_elem(&read_latency, &idx);
+				array_incr(&read_latency, idx);
 				break;
 			case WRITE:
-				cnt = bpf_map_lookup_elem(&write_latency, &idx);
+				array_incr(&write_latency, idx);
 				break;
 			case POLL:
-				cnt = bpf_map_lookup_elem(&poll_latency, &idx);
+				array_incr(&poll_latency, idx);
 				break;
 			case LOCK:
-				cnt = bpf_map_lookup_elem(&lock_latency, &idx);
+				array_incr(&lock_latency, idx);
 				break;
 			case TIME:
-				cnt = bpf_map_lookup_elem(&time_latency, &idx);
+				array_incr(&time_latency, idx);
 				break;
 			case SLEEP:
-				cnt = bpf_map_lookup_elem(&sleep_latency, &idx);
+				array_incr(&sleep_latency, idx);
 				break;
 			case SOCKET:
-				cnt = bpf_map_lookup_elem(&socket_latency, &idx);
+				array_incr(&socket_latency, idx);
 				break;
 			case YIELD:
-				cnt = bpf_map_lookup_elem(&yield_latency, &idx);
+				array_incr(&yield_latency, idx);
 				break;
-			default:
-				return 0;
-		}
-
-		if (cnt) {
-			__atomic_fetch_add(cnt, 1, __ATOMIC_RELAXED);
 		}
 	}
 
