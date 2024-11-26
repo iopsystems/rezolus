@@ -49,24 +49,53 @@ struct {
 	__uint(max_entries, HISTOGRAM_BUCKETS);
 } size SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} read_size SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} write_size SEC(".maps");
+
 static int handle_block_rq_complete(struct request *rq, int error, unsigned int nr_bytes)
 {
 	u64 delta, *tsp;
-	u32 idx;
+	u32 idx, op;
 	unsigned int cmd_flags;
 
 	cmd_flags = BPF_CORE_READ(rq, cmd_flags);
 
-	idx = cmd_flags & REQ_OP_MASK;
+	op = cmd_flags & REQ_OP_MASK;
 
-	if (idx < COUNTER_GROUP_WIDTH / 2) {
-		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + idx;
+	if (op < COUNTER_GROUP_WIDTH / 2) {
+		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + op;
 		array_incr(&counters, idx);
 
 		idx = idx + COUNTER_GROUP_WIDTH / 2;
 		array_add(&counters, idx, nr_bytes);
 
-		histogram_incr(&size, HISTOGRAM_POWER, nr_bytes);
+		idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
+
+		// increment size histogram for all ops
+		array_incr(&size, idx);
+
+		// incremenet per-operation size histogram
+		switch (op) {
+			case REQ_OP_READ:
+				array_incr(&read_size, idx);
+				break;
+			case REQ_OP_WRITE:
+				array_incr(&write_size, idx);
+				break;
+		}
 	}
 
 	return 0;
