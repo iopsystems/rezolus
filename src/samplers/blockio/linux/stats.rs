@@ -13,14 +13,16 @@ pub static BLOCKIO_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GRO
     description = "Distribution of blockio read operation latency in nanoseconds",
     metadata = { unit = "nanoseconds" }
 )]
-pub static BLOCKIO_READ_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_READ_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio/write/latency",
     description = "Distribution of blockio write operation latency in nanoseconds",
     metadata = { unit = "nanoseconds" }
 )]
-pub static BLOCKIO_WRITE_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_WRITE_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio/size",
