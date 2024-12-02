@@ -2,8 +2,9 @@ use crate::common::bpf::*;
 use crate::common::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::OpenObject;
+use libbpf_rs::{MapCore, MapFlags, OpenObject};
 use metriken::{LazyCounter, RwLockHistogram};
+use perf_event::ReadFormat;
 
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
@@ -16,6 +17,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     histograms: Vec<(&'static str, &'static RwLockHistogram)>,
     maps: Vec<(&'static str, Vec<u64>)>,
     cpu_counters: Vec<(&'static str, Vec<&'static LazyCounter>, ScopedCounters)>,
+    perf_events: Vec<(&'static str, perf_event::events::Hardware)>,
 }
 
 impl<T: 'static> Builder<T>
@@ -31,6 +33,7 @@ where
             histograms: Vec::new(),
             maps: Vec::new(),
             cpu_counters: Vec::new(),
+            perf_events: Vec::new(),
         }
     }
 
@@ -76,6 +79,64 @@ where
                     CpuCounters::new(skel.map(name), totals, individual)
                 })
                 .collect();
+
+            let cpus = match common::linux::cpus() {
+                Ok(cpus) => cpus.last().map(|v| *v).unwrap_or(1023),
+                Err(_) => 1023,
+            };
+
+            let perf_events: Vec<Vec<std::io::Result<perf_event::Counter>>> = self
+                .perf_events
+                .into_iter()
+                .map(|(name, event)| {
+                    println!("initializing perf events: {name}");
+
+                    let map = skel.map(name);
+
+                    let mut counters = Vec::new();
+
+                    for cpu in 0..=cpus {
+                        let mut counter = perf_event::Builder::new(event)
+                            .one_cpu(cpu)
+                            .any_pid()
+                            .exclude_hv(false)
+                            .exclude_kernel(false)
+                            .pinned(true)
+                            .read_format(
+                                ReadFormat::TOTAL_TIME_ENABLED
+                                    | ReadFormat::TOTAL_TIME_RUNNING
+                                    | ReadFormat::GROUP,
+                            )
+                            .build();
+
+                        if let Ok(c) = counter.as_mut() {
+                            let _ = c.enable();
+
+                            let fd = c.as_raw_fd();
+
+                            println!("cpu: {cpu} with fd: {}", fd as i32);
+                            if map
+                                .update(
+                                    &((cpu as u32).to_ne_bytes()),
+                                    &((fd as i32).to_ne_bytes()),
+                                    MapFlags::ANY,
+                                )
+                                .is_err()
+                            {
+                                println!("error updating perf_event_array for cpu {cpu}");
+                            }
+                        }
+
+                        counters.push(counter);
+                    }
+
+                    println!("initialized: {} counters for {name}", counters.len());
+
+                    counters
+                })
+                .collect();
+
+            println!("{} total perf events initialized", perf_events.len());
 
             // load any data from userspace into BPF maps
             for (name, values) in self.maps.into_iter() {
@@ -187,6 +248,12 @@ where
         individual: ScopedCounters,
     ) -> Self {
         self.cpu_counters.push((name, totals, individual));
+        self
+    }
+
+    /// Specify a perf event array name and an associated perf event.
+    pub fn perf_event(mut self, name: &'static str, event: perf_event::events::Hardware) -> Self {
+        self.perf_events.push((name, event));
         self
     }
 }
