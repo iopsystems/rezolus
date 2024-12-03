@@ -89,8 +89,6 @@ where
                 .perf_events
                 .into_iter()
                 .map(|(name, event)| {
-                    println!("initializing perf events: {name}");
-
                     let map = skel.map(name);
 
                     let mut counters = Vec::new();
@@ -114,29 +112,19 @@ where
 
                             let fd = c.as_raw_fd();
 
-                            println!("cpu: {cpu} with fd: {}", fd as i32);
-                            if map
-                                .update(
-                                    &((cpu as u32).to_ne_bytes()),
-                                    &((fd as i32).to_ne_bytes()),
-                                    MapFlags::ANY,
-                                )
-                                .is_err()
-                            {
-                                println!("error updating perf_event_array for cpu {cpu}");
-                            }
+                            let _ = map.update(
+                                &((cpu as u32).to_ne_bytes()),
+                                &((fd as i32).to_ne_bytes()),
+                                MapFlags::ANY,
+                            );
                         }
 
                         counters.push(counter);
                     }
 
-                    println!("initialized: {} counters for {name}", counters.len());
-
                     counters
                 })
                 .collect();
-
-            println!("{} total perf events initialized", perf_events.len());
 
             // load any data from userspace into BPF maps
             for (name, values) in self.maps.into_iter() {
