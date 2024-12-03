@@ -1,3 +1,11 @@
+//! Collects CPU frequency using a combination of MSRs.
+//!
+//! Initializes perf events to collect TSC, APERF, MPERF.
+//!
+//! Produces:
+//! * `cpu/base_frequency`
+//! * `cpu/running_frequency`
+
 const NAME: &str = "cpu_frequency";
 
 mod group;

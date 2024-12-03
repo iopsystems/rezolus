@@ -1,16 +1,11 @@
-/// Collects CPU usage stats using BPF and traces:
-/// * `cpuacct_account_field`
-///
-/// And produces these stats:
-/// * `cpu_usage/busy`
-/// * `cpu_usage/user`
-/// * `cpu_usage/nice`
-/// * `cpu_usage/system`
-/// * `cpu_usage/softirq`
-/// * `cpu_usage/irq`
-/// * `cpu_usage/steal`
-/// * `cpu_usage/guest`
-/// * `cpu_usage/guest_nice`
+//! Collects CPU perf counters using BPF and traces:
+//! * `sched_switch`
+//!
+//! Initializes perf events to collect cycles and instructions.
+//!
+//! And produces these stats:
+//! * `cpu/cycles`
+//! * `cpu/instructions`
 
 const NAME: &str = "cpu_perf";
 
