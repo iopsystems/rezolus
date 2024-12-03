@@ -126,7 +126,10 @@ where
                 })
                 .collect();
 
-            debug!("initialized perf events for: {} hardware counters", perf_events.len());
+            debug!(
+                "initialized perf events for: {} hardware counters",
+                perf_events.len()
+            );
 
             // load any data from userspace into BPF maps
             for (name, values) in self.maps.into_iter() {
