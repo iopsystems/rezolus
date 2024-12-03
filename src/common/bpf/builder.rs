@@ -81,7 +81,7 @@ where
                 .collect();
 
             let cpus = match common::linux::cpus() {
-                Ok(cpus) => cpus.last().map(|v| *v).unwrap_or(1023),
+                Ok(cpus) => cpus.last().copied().unwrap_or(1023),
                 Err(_) => 1023,
             };
 
@@ -114,7 +114,7 @@ where
 
                             let _ = map.update(
                                 &((cpu as u32).to_ne_bytes()),
-                                &((fd as i32).to_ne_bytes()),
+                                &(fd.to_ne_bytes()),
                                 MapFlags::ANY,
                             );
                         }
@@ -125,6 +125,8 @@ where
                     counters
                 })
                 .collect();
+
+            debug!("initialized perf events for: {} hardware counters", perf_events.len());
 
             // load any data from userspace into BPF maps
             for (name, values) in self.maps.into_iter() {

@@ -224,11 +224,9 @@ impl PerfGroup {
 
         let mut running_frequency_mhz = None;
 
-        if aperf.is_some() && mperf.is_some() {
-            if base_frequency_mhz.is_some() {
-                running_frequency_mhz =
-                    Some(base_frequency_mhz.unwrap() * aperf.unwrap() / mperf.unwrap());
-            }
+        if aperf.is_some() && mperf.is_some() && base_frequency_mhz.is_some() {
+            running_frequency_mhz =
+                Some(base_frequency_mhz.unwrap() * aperf.unwrap() / mperf.unwrap());
         }
 
         self.prev = Some(current);

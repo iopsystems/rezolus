@@ -44,15 +44,13 @@ impl PerfInner {
         let mut gauges = ScopedGauges::new();
 
         for cpu in cpus {
-            for gauge in &["cpu/frequency"] {
-                gauges.push(
-                    cpu,
-                    DynamicGaugeBuilder::new(*gauge)
-                        .metadata("id", format!("{}", cpu))
-                        .formatter(cpu_metric_formatter)
-                        .build(),
-                );
-            }
+            gauges.push(
+                cpu,
+                DynamicGaugeBuilder::new("cpu/frequency")
+                    .metadata("id", format!("{}", cpu))
+                    .formatter(cpu_metric_formatter)
+                    .build(),
+            );
 
             match PerfGroup::new(cpu) {
                 Ok(g) => groups.push(g),
