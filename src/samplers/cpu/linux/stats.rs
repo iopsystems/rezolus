@@ -67,26 +67,6 @@ pub static CPU_CYCLES: LazyCounter = LazyCounter::new(Counter::default);
 pub static CPU_INSTRUCTIONS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
-    name = "cpu/perf_groups/active",
-    description = "The number of currently active perf event groups"
-)]
-pub static CPU_PERF_GROUPS_ACTIVE: LazyGauge = LazyGauge::new(Gauge::default);
-
-#[metric(
-    name = "cpu/ipkc/average",
-    description = "Average IPKC (instructions per thousand cycles): SUM(IPKC_CPU0...N)/N)",
-    metadata = { unit = "instructions/kilocycle" }
-)]
-pub static CPU_IPKC_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
-
-#[metric(
-    name = "cpu/ipus/average",
-    description = "Average IPUS (instructions per microsecond): SUM(IPUS_CPU0...N)/N)",
-    metadata = { unit = "instructions/microsecond" }
-)]
-pub static CPU_IPUS_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
-
-#[metric(
     name = "cpu/base_frequency/average",
     description = "Average base CPU frequency (MHz)",
     metadata = { unit = "megahertz" }

@@ -1,13 +1,10 @@
 use crate::*;
 
 use perf_event::events::x86::{Msr, MsrId};
-use perf_event::events::Hardware;
 use perf_event::{Builder, ReadFormat};
 
 #[derive(Copy, Clone, Debug)]
 enum Counter {
-    Cycles,
-    Instructions,
     Tsc,
     Aperf,
     Mperf,
@@ -16,8 +13,6 @@ enum Counter {
 impl Counter {
     fn builder(&self) -> Result<perf_event::Builder, std::io::Error> {
         match self {
-            Self::Cycles => Ok(Builder::new(Hardware::CPU_CYCLES)),
-            Self::Instructions => Ok(Builder::new(Hardware::INSTRUCTIONS)),
             Self::Tsc => {
                 let msr = Msr::new(MsrId::TSC)?;
                 Ok(Builder::new(msr))
@@ -101,10 +96,6 @@ impl GroupData {
 pub struct Reading {
     /// The CPU this reading is from
     pub cpu: usize,
-    pub cycles: Option<u64>,
-    pub instructions: Option<u64>,
-    pub ipkc: Option<u64>,
-    pub ipus: Option<u64>,
     pub base_frequency_mhz: Option<u64>,
     pub running_frequency_mhz: Option<u64>,
 }
@@ -128,12 +119,7 @@ impl PerfGroup {
 
         let leader_id;
 
-        if let Ok(c) = Counter::Cycles.as_leader(cpu) {
-            leader_id = Counter::Cycles as usize;
-
-            group.resize_with(Counter::Cycles as usize + 1, || None);
-            group[Counter::Cycles as usize] = Some(c);
-        } else if let Ok(c) = Counter::Tsc.as_leader(cpu) {
+        if let Ok(c) = Counter::Tsc.as_leader(cpu) {
             leader_id = Counter::Tsc as usize;
 
             group.resize_with(Counter::Tsc as usize + 1, || None);
@@ -143,12 +129,7 @@ impl PerfGroup {
             return Err(());
         }
 
-        for counter in &[
-            Counter::Instructions,
-            Counter::Tsc,
-            Counter::Aperf,
-            Counter::Mperf,
-        ] {
+        for counter in &[Counter::Aperf, Counter::Mperf] {
             if leader_id == *counter as usize {
                 continue;
             }
@@ -223,19 +204,9 @@ impl PerfGroup {
             return Err(());
         }
 
-        let mut cycles = None;
-        let mut instructions = None;
         let mut tsc = None;
         let mut aperf = None;
         let mut mperf = None;
-
-        if let Some(Some(c)) = &self.group.get(Counter::Cycles as usize) {
-            cycles = current.delta(prev, c);
-        }
-
-        if let Some(Some(c)) = &self.group.get(Counter::Instructions as usize) {
-            instructions = current.delta(prev, c);
-        }
 
         if let Some(Some(c)) = &self.group.get(Counter::Tsc as usize) {
             tsc = current.delta(prev, c);
@@ -249,40 +220,19 @@ impl PerfGroup {
             mperf = current.delta(prev, c);
         }
 
-        let ipkc = if let (Some(instructions), Some(cycles)) = (instructions, cycles) {
-            if cycles == 0 {
-                None
-            } else {
-                Some(instructions * 1000 / cycles)
-            }
-        } else {
-            None
-        };
-
         let base_frequency_mhz = tsc.map(|v| v / running_us);
 
         let mut running_frequency_mhz = None;
-        let mut ipus = None;
 
-        if aperf.is_some() && mperf.is_some() {
-            if base_frequency_mhz.is_some() {
-                running_frequency_mhz =
-                    Some(base_frequency_mhz.unwrap() * aperf.unwrap() / mperf.unwrap());
-            }
-
-            if ipkc.is_some() {
-                ipus = Some(ipkc.unwrap() * aperf.unwrap() / mperf.unwrap());
-            }
+        if aperf.is_some() && mperf.is_some() && base_frequency_mhz.is_some() {
+            running_frequency_mhz =
+                Some(base_frequency_mhz.unwrap() * aperf.unwrap() / mperf.unwrap());
         }
 
         self.prev = Some(current);
 
         Ok(Reading {
             cpu: self.cpu,
-            cycles,
-            instructions,
-            ipkc,
-            ipus,
             base_frequency_mhz,
             running_frequency_mhz,
         })
