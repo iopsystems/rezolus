@@ -162,6 +162,7 @@ jobs:
 
             echo "::group::upload $release $name"
             gcloud artifacts apt upload "$release" --source "$artifact"
+            gcloud artifacts apt upload "$release-public" --source "$artifact"
             echo "::endgroup::"
           done
 
