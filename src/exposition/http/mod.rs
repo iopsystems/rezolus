@@ -124,23 +124,27 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
             continue;
         }
 
+        let metadata: Vec<String> = metric
+            .metadata()
+            .iter()
+            .map(|(key, value)| format!("{key}=\"{value}\""))
+            .collect();
+        let metadata = metadata.join(", ");
+
+        let name_with_metadata = if metadata.is_empty() {
+            metric.name().to_string()
+        } else {
+            format!("{}{{{metadata}}}", metric.name())
+        };
+
         if let Some(counter) = any.downcast_ref::<Counter>() {
-            if metric.metadata().is_empty() {
-                data.push(format!(
-                    "# TYPE {name}_total counter\n{name}_total {} {timestamp}",
-                    counter.value()
-                ));
-            } else {
-                data.push(format!(
-                    "# TYPE {name} counter\n{} {} {timestamp}",
-                    metric.formatted(metriken::Format::Prometheus),
-                    counter.value()
-                ));
-            }
+            data.push(format!(
+                 "# TYPE {name} counter\n{name_with_metadata} {} {timestamp}",
+                counter.value()
+            ));
         } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
             data.push(format!(
-                "# TYPE {name} gauge\n{} {} {timestamp}",
-                metric.formatted(metriken::Format::Prometheus),
+                "# TYPE {name} gauge\n{name_with_metadata} {} {timestamp}",
                 gauge.value()
             ));
         } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
