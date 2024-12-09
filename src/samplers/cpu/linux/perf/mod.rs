@@ -17,7 +17,6 @@ use bpf::*;
 
 use crate::common::*;
 use crate::samplers::cpu::linux::stats::*;
-use crate::samplers::cpu::stats::*;
 use crate::*;
 
 use std::sync::Arc;
@@ -42,7 +41,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
                 cpu,
                 DynamicCounterBuilder::new(metric)
                     .metadata("id", format!("{}", cpu))
-                    .formatter(cpu_metric_formatter)
+                    .formatter(cpu_metric_percore_formatter)
                     .build(),
             );
         }
