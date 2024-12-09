@@ -34,6 +34,7 @@ metriken = "0.7.0"
 metriken-exposition = "0.9.1"
 ouroboros = "0.18.4"
 parking_lot = "0.12.3"
+reqwest = "0.12.9"
 ringlog = "0.8.0"
 serde = { version = "1.0.209", features = ["derive"] }
 syscall-numbers = "4.0.0"
