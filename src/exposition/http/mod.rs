@@ -139,7 +139,7 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
 
         if let Some(counter) = any.downcast_ref::<Counter>() {
             data.push(format!(
-                 "# TYPE {name} counter\n{name_with_metadata} {} {timestamp}",
+                "# TYPE {name} counter\n{name_with_metadata} {} {timestamp}",
                 counter.value()
             ));
         } else if let Some(gauge) = any.downcast_ref::<Gauge>() {

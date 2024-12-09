@@ -87,24 +87,29 @@ pub fn simple_formatter(metric: &MetricEntry, _format: Format) -> String {
 pub fn cpu_metric_percore_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
-            let id = metric.metadata().get("id").expect("no `id` for metric formatter");
+            let id = metric
+                .metadata()
+                .get("id")
+                .expect("no `id` for metric formatter");
             format!("{}/cpu{id}", metric.name())
         }
-        _ => {
-            metric.name().to_string()
-        }
+        _ => metric.name().to_string(),
     }
 }
 
 pub fn cpu_usage_percore_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
-            let id = metric.metadata().get("id").expect("no `id` for metric formatter");
-            let state = metric.metadata().get("state").expect("no `state` for metric formatter");
+            let id = metric
+                .metadata()
+                .get("id")
+                .expect("no `id` for metric formatter");
+            let state = metric
+                .metadata()
+                .get("state")
+                .expect("no `state` for metric formatter");
             format!("{}/{state}/cpu{id}", metric.name())
         }
-        _ => {
-            metric.name().to_string()
-        }
+        _ => metric.name().to_string(),
     }
 }

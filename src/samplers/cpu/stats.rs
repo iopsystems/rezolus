@@ -41,11 +41,12 @@ pub static CPU_USAGE_SYSTEM: LazyCounter = LazyCounter::new(Counter::default);
 pub fn cpu_usage_total_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
-            let state = metric.metadata().get("state").expect("no `state` for metric formatter");
+            let state = metric
+                .metadata()
+                .get("state")
+                .expect("no `state` for metric formatter");
             format!("cpu/usage/{state}/total")
         }
-        _ => {
-            metric.name().to_string()
-        }
+        _ => metric.name().to_string(),
     }
 }

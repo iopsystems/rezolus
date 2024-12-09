@@ -114,23 +114,25 @@ pub static BLOCKIO_FLUSH_BYTES: LazyCounter = LazyCounter::new(Counter::default)
 pub fn blockio_bytes_metric_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
-            let op = metric.metadata().get("op").expect("no `op` for metric formatter");
+            let op = metric
+                .metadata()
+                .get("op")
+                .expect("no `op` for metric formatter");
             format!("blockio/{op}/bytes/total")
         }
-        _ => {
-            metric.name().to_string()
-        }
+        _ => metric.name().to_string(),
     }
 }
 
 pub fn blockio_ops_metric_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
-            let op = metric.metadata().get("op").expect("no `op` for metric formatter");
+            let op = metric
+                .metadata()
+                .get("op")
+                .expect("no `op` for metric formatter");
             format!("blockio/{op}/operations/total")
         }
-        _ => {
-            metric.name().to_string()
-        }
+        _ => metric.name().to_string(),
     }
 }
