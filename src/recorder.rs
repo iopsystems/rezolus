@@ -31,7 +31,14 @@ fn main() {
                 .long("interval")
                 .action(clap::ArgAction::Set)
                 .value_name("INTERVAL")
-                .help("Sampling interval"),
+                .help("Sampling interval. Defaults to 1 second"),
+        )
+        .arg(
+            clap::Arg::new("DURATION")
+                .long("duration")
+                .action(clap::ArgAction::Set)
+                .value_name("DURATION")
+                .help("Limits the collection to the provided duration."),
         )
         .arg(
             clap::Arg::new("VERBOSE")
@@ -68,6 +75,20 @@ fn main() {
                 eprintln!("interval is not valid: {interval}\n{error}");
                 std::process::exit(1);
             }
+        }
+    };
+
+    let duration: Option<Duration> = {
+        if let Some(duration) = matches.get_one::<String>("DURATION") {
+            match duration.parse::<humantime::Duration>() {
+                Ok(c) => Some(c.into()),
+                Err(error) => {
+                    eprintln!("duration is not valid: {duration}\n{error}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            None
         }
     };
 
@@ -170,7 +191,7 @@ fn main() {
 
     // spawn recorder thread
     rt.block_on(async move {
-        recorder(addr, destination, temporary, interval).await;
+        recorder(addr, destination, temporary, interval, duration).await;
     });
 }
 
@@ -179,6 +200,7 @@ async fn recorder(
     destination: std::fs::File,
     temporary: std::fs::File,
     interval: Duration,
+    duration: Option<Duration>,
 ) {
     let mut temporary = tokio::fs::File::from_std(temporary);
 
@@ -186,7 +208,15 @@ async fn recorder(
 
     let mut client = None;
 
+    let start = std::time::Instant::now();
+
     while RUNNING.load(Ordering::Relaxed) {
+        if let Some(duration) = duration {
+            if start.elapsed() >= duration {
+                break;
+            }
+        }
+
         if client.is_none() {
             debug!("connecting to Rezolus...");
 
@@ -224,7 +254,7 @@ async fn recorder(
             let request = http::request::Builder::new()
                 .version(Version::HTTP_2)
                 .method(Method::GET)
-                .uri(&format!("http://{addr}/metrics/binary"))
+                .uri(format!("http://{addr}/metrics/binary"))
                 .body(())
                 .unwrap();
 
