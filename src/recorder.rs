@@ -233,14 +233,12 @@ async fn recorder(
         if client.is_none() {
             debug!("connecting to Rezolus at: {url}");
 
-            match Client::builder()
-                .http1_only()
-                .build() {
-                    Ok(c) => client = Some(c),
-                    Err(e) => {
-                        error!("error connecting to Rezolus: {e}");
-                    }
+            match Client::builder().http1_only().build() {
+                Ok(c) => client = Some(c),
+                Err(e) => {
+                    error!("error connecting to Rezolus: {e}");
                 }
+            }
 
             continue;
         }
