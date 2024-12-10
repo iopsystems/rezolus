@@ -1,14 +1,13 @@
 use backtrace::Backtrace;
-use http::{Method, Version};
 use metriken_exposition::{MsgpackToParquet, ParquetOptions};
+use reqwest::Client;
+use reqwest::Url;
 use ringlog::*;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tempfile::tempfile_in;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
@@ -93,16 +92,30 @@ fn main() {
     };
 
     // parse source address
-    let addr: SocketAddr = {
+    let mut url: Url = {
         let source = matches.get_one::<String>("SOURCE").unwrap();
-        match source.parse::<SocketAddr>() {
+
+        let source = if source.starts_with("http://") || source.starts_with("https://") {
+            source.to_string()
+        } else {
+            format!("http://{source}")
+        };
+
+        match source.parse::<Url>() {
             Ok(c) => c,
             Err(error) => {
-                eprintln!("source is not a socket: {source}\n{error}");
+                eprintln!("source is not a valid URL: {source}\n{error}");
                 std::process::exit(1);
             }
         }
     };
+
+    if url.path() != "/" {
+        eprintln!("URL should not have an non-root path: {url}");
+        std::process::exit(1);
+    }
+
+    url.set_path("/metrics/binary");
 
     // convert destination to a path
     let path: PathBuf = {
@@ -191,12 +204,12 @@ fn main() {
 
     // spawn recorder thread
     rt.block_on(async move {
-        recorder(addr, destination, temporary, interval, duration).await;
+        recorder(url, destination, temporary, interval, duration).await;
     });
 }
 
 async fn recorder(
-    addr: SocketAddr,
+    url: Url,
     destination: std::fs::File,
     temporary: std::fs::File,
     interval: Duration,
@@ -218,28 +231,10 @@ async fn recorder(
         }
 
         if client.is_none() {
-            debug!("connecting to Rezolus...");
+            debug!("connecting to Rezolus at: {url}");
 
-            match TcpStream::connect(addr).await {
-                Ok(s) => {
-                    if s.set_nodelay(true).is_err() {
-                        continue;
-                    }
-
-                    debug!("performing http2 handshake...");
-
-                    if let Ok((h2, connection)) = ::h2::client::handshake(s).await {
-                        tokio::spawn(async move {
-                            let _ = connection.await;
-                        });
-
-                        if let Ok(h2) = h2.ready().await {
-                            debug!("connection to Rezolus is established");
-
-                            client = Some(h2);
-                        }
-                    }
-                }
+            match Client::builder().http1_only().build() {
+                Ok(c) => client = Some(c),
                 Err(e) => {
                     error!("error connecting to Rezolus: {e}");
                 }
@@ -250,50 +245,27 @@ async fn recorder(
 
         let c = client.take().unwrap();
 
-        if let Ok(mut sender) = c.clone().ready().await {
-            let request = http::request::Builder::new()
-                .version(Version::HTTP_2)
-                .method(Method::GET)
-                .uri(format!("http://{addr}/metrics/binary"))
-                .body(())
-                .unwrap();
+        interval.tick().await;
 
-            interval.tick().await;
+        let start = Instant::now();
 
-            let start = Instant::now();
+        if let Ok(response) = c.get(url.clone()).send().await {
+            if let Ok(body) = response.bytes().await {
+                let latency = start.elapsed();
 
-            if let Ok((response, _)) = sender.send_request(request, true) {
-                if let Ok(response) = response.await {
-                    let mut body = response.into_body();
+                debug!("sampling latency: {} us", latency.as_micros());
 
-                    let mut temp = Vec::new();
-
-                    while let Some(chunk) = body.data().await {
-                        match chunk {
-                            Ok(c) => {
-                                temp.push(c);
-                            }
-                            Err(e) => {
-                                error!("error sampling: {e}");
-                                continue;
-                            }
-                        }
-                    }
-
-                    let latency = start.elapsed();
-
-                    debug!("sampling latency: {}", latency.as_micros());
-
-                    for chunk in temp {
-                        if let Err(e) = temporary.write_all(&chunk).await {
-                            error!("error writing to temporary file: {e}");
-                            std::process::exit(1);
-                        }
-                    }
+                if let Err(e) = temporary.write_all(&body).await {
+                    error!("error writing to temporary file: {e}");
+                    std::process::exit(1);
                 }
-            }
 
-            client = Some(c);
+                debug!("wrote: {} bytes", body.len());
+
+                debug!("recording latency: {} us", start.elapsed().as_micros());
+
+                client = Some(c);
+            }
         }
     }
 
