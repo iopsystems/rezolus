@@ -18,7 +18,7 @@ anyhow = "1.0"
 async-trait = "0.1.81"
 axum = { version = "0.7.5", features = ["http2"] }
 backtrace = "0.3.73"
-clap = "4.5.17"
+clap = { version = "4.5.17", features = ["derive"] }
 clocksource = "0.8.1"
 ctrlc = "3.4.5"
 futures = "0.3.30"
