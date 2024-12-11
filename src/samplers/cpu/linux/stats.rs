@@ -53,7 +53,6 @@ pub static CPU_USAGE_GUEST_NICE: LazyCounter = LazyCounter::new(Counter::default
 #[metric(
     name = "cpu/cycles/total",
     description = "The number of elapsed CPU cycles",
-    formatter = simple_formatter,
     metadata = { unit = "cycles" }
 )]
 pub static CPU_CYCLES: LazyCounter = LazyCounter::new(Counter::default);
@@ -61,10 +60,24 @@ pub static CPU_CYCLES: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "cpu/instructions/total",
     description = "The number of instructions retired",
-    formatter = simple_formatter,
     metadata = { unit = "instructions" }
 )]
 pub static CPU_INSTRUCTIONS: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "cpu/aperf/total"
+)]
+pub static CPU_APERF: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "cpu/mperf/total"
+)]
+pub static CPU_MPERF: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "cpu/tsc/total"
+)]
+pub static CPU_TSC: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cpu/base_frequency/average",

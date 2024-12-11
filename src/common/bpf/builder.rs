@@ -11,13 +11,53 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+pub struct PerfEvent {
+    inner: Event
+}
+
+enum Event {
+    Hardware(perf_event::events::Hardware),
+    Msr(perf_event::events::x86::Msr),
+}
+
+impl Event {
+    fn builder(&self) -> perf_event::Builder {
+        match self {
+            Self::Hardware(e) => perf_event::Builder::new(*e),
+            Self::Msr(m) => perf_event::Builder::new(*m),
+        }
+    }
+}
+
+impl PerfEvent {
+    pub fn cpu_cycles() -> Self {
+        Self {
+            inner: Event::Hardware(perf_event::events::Hardware::CPU_CYCLES)
+        }
+    }
+
+    pub fn instructions() -> Self {
+        Self {
+            inner: Event::Hardware(perf_event::events::Hardware::INSTRUCTIONS)
+        }
+    }
+
+    pub fn msr(msr_id: perf_event::events::x86::MsrId) -> Result<Self, std::io::Error> {
+        let msr = perf_event::events::x86::Msr::new(msr_id)?;
+        
+        Ok(Self {
+            inner: Event::Msr(msr)
+        })
+    }
+}
+
 pub struct Builder<T: 'static + SkelBuilder<'static>> {
     skel: fn() -> T,
     counters: Vec<(&'static str, Vec<&'static LazyCounter>)>,
     histograms: Vec<(&'static str, &'static RwLockHistogram)>,
     maps: Vec<(&'static str, Vec<u64>)>,
     cpu_counters: Vec<(&'static str, Vec<&'static LazyCounter>, ScopedCounters)>,
-    perf_events: Vec<(&'static str, perf_event::events::Hardware)>,
+    perf_events: Vec<(&'static str, PerfEvent)>,
 }
 
 impl<T: 'static> Builder<T>
@@ -94,7 +134,7 @@ where
                     let mut counters = Vec::new();
 
                     for cpu in 0..=cpus {
-                        let mut counter = perf_event::Builder::new(event)
+                        let mut counter = event.inner.builder()
                             .one_cpu(cpu)
                             .any_pid()
                             .exclude_hv(false)
@@ -245,7 +285,7 @@ where
     }
 
     /// Specify a perf event array name and an associated perf event.
-    pub fn perf_event(mut self, name: &'static str, event: perf_event::events::Hardware) -> Self {
+    pub fn perf_event(mut self, name: &'static str, event: PerfEvent) -> Self {
         self.perf_events.push((name, event));
         self
     }
