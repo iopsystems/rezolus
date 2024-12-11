@@ -1,4 +1,6 @@
 use backtrace::Backtrace;
+use clap::Parser;
+use clap::ValueEnum;
 use metriken_exposition::{MsgpackToParquet, ParquetOptions};
 use reqwest::Client;
 use reqwest::Url;
@@ -11,6 +13,127 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum Format {
+    Parquet,
+    Raw,
+}
+
+#[derive(Parser)]
+#[command(version)]
+#[command(about = "An on-demand tool for recording Rezolus metrics to a file", long_about = None)]
+struct Config {
+    #[arg(short, long, default_value_t = humantime::Duration::from(Duration::from_secs(1)))]
+    interval: humantime::Duration,
+    #[arg(short, long)]
+    duration: Option<humantime::Duration>,
+    #[arg(short, long, value_enum, default_value_t = Format::Parquet)]
+    output_format: Format,
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+    #[arg(value_name = "SOURCE")]
+    source: String,
+    #[arg(value_name = "FILE")]
+    destination: String,
+}
+
+impl Config {
+    /// Opens the destination file. This will be the final output file.
+    fn destination(&self) -> std::fs::File {
+        match std::fs::File::create(self.destination_path()) {
+            Ok(f) => f,
+            Err(error) => {
+                eprintln!(
+                    "could not open destination: {:?}\n{error}",
+                    self.destination
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// Get the path to the destination file.
+    fn destination_path(&self) -> PathBuf {
+        match self.destination.parse() {
+            Ok(p) => p,
+            Err(error) => {
+                eprintln!(
+                    "destination is not a valid path: {}\n{error}",
+                    self.destination
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    /// Get the duration for time-limited run. If this is `None` we sample until
+    /// ctrl-c
+    fn duration(&self) -> Option<Duration> {
+        self.duration.map(|v| v.into())
+    }
+
+    /// The interval between each sample.
+    fn interval(&self) -> Duration {
+        self.interval.into()
+    }
+
+    /// An optional temporary file. Some formats may record directly to the
+    /// destination while others may need post-processing to transform from our
+    /// raw format.
+    fn temporary(&self) -> Option<tokio::fs::File> {
+        if self.output_format != Format::Raw {
+            // tempfile will be in same directory as out destination file
+            let mut temp_path = self.destination_path();
+            temp_path.pop();
+
+            let temporary = match tempfile_in(temp_path.clone()) {
+                Ok(t) => t,
+                Err(error) => {
+                    eprintln!("could not open temporary file in: {:?}\n{error}", temp_path);
+                    std::process::exit(1);
+                }
+            };
+
+            Some(tokio::fs::File::from_std(temporary))
+        } else {
+            None
+        }
+    }
+
+    /// The url to request. Currently we expect that if this is a complete URL
+    /// that the path is root-level. We accept host:port, or IP:port here too.
+    /// We then sample `/metrics/binary` which is the Rezolus msgpack endpoint.
+    fn url(&self) -> Url {
+        // parse source address
+        let mut url: Url = {
+            let source = self.source.clone();
+
+            let source = if source.starts_with("http://") || source.starts_with("https://") {
+                source.to_string()
+            } else {
+                format!("http://{source}")
+            };
+
+            match source.parse::<Url>() {
+                Ok(c) => c,
+                Err(error) => {
+                    eprintln!("source is not a valid URL: {source}\n{error}");
+                    std::process::exit(1);
+                }
+            }
+        };
+
+        if url.path() != "/" {
+            eprintln!("URL should not have an non-root path: {url}");
+            std::process::exit(1);
+        }
+
+        url.set_path("/metrics/binary");
+
+        url
+    }
+}
+
 fn main() {
     // custom panic hook to terminate whole process after unwinding
     std::panic::set_hook(Box::new(|s| {
@@ -20,141 +143,12 @@ fn main() {
     }));
 
     // parse command line options
-    let matches = clap::Command::new(env!("CARGO_BIN_NAME"))
-        .version(env!("CARGO_PKG_VERSION"))
-        .long_about(
-            "Rezolus recorder periodically samples Rezolus to produce a parquet file of metrics.",
-        )
-        .arg(
-            clap::Arg::new("INTERVAL")
-                .long("interval")
-                .action(clap::ArgAction::Set)
-                .value_name("INTERVAL")
-                .help("Sampling interval. Defaults to 1 second"),
-        )
-        .arg(
-            clap::Arg::new("DURATION")
-                .long("duration")
-                .action(clap::ArgAction::Set)
-                .value_name("DURATION")
-                .help("Limits the collection to the provided duration."),
-        )
-        .arg(
-            clap::Arg::new("VERBOSE")
-                .short('v')
-                .long("verbose")
-                .action(clap::ArgAction::Count)
-                .value_name("VERBOSE")
-                .help("Increase logging verbosity by one level"),
-        )
-        .arg(
-            clap::Arg::new("SOURCE")
-                .help("Rezolus address")
-                .action(clap::ArgAction::Set)
-                .required(true)
-                .index(1),
-        )
-        .arg(
-            clap::Arg::new("DESTINATION")
-                .help("Parquet output file")
-                .action(clap::ArgAction::Set)
-                .required(true)
-                .index(2),
-        )
-        .get_matches();
-
-    let interval: Duration = {
-        let interval = matches
-            .get_one::<String>("INTERVAL")
-            .map(|v| v.to_string())
-            .unwrap_or("1s".to_string());
-        match interval.parse::<humantime::Duration>() {
-            Ok(c) => c.into(),
-            Err(error) => {
-                eprintln!("interval is not valid: {interval}\n{error}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    let duration: Option<Duration> = {
-        if let Some(duration) = matches.get_one::<String>("DURATION") {
-            match duration.parse::<humantime::Duration>() {
-                Ok(c) => Some(c.into()),
-                Err(error) => {
-                    eprintln!("duration is not valid: {duration}\n{error}");
-                    std::process::exit(1);
-                }
-            }
-        } else {
-            None
-        }
-    };
-
-    // parse source address
-    let mut url: Url = {
-        let source = matches.get_one::<String>("SOURCE").unwrap();
-
-        let source = if source.starts_with("http://") || source.starts_with("https://") {
-            source.to_string()
-        } else {
-            format!("http://{source}")
-        };
-
-        match source.parse::<Url>() {
-            Ok(c) => c,
-            Err(error) => {
-                eprintln!("source is not a valid URL: {source}\n{error}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    if url.path() != "/" {
-        eprintln!("URL should not have an non-root path: {url}");
-        std::process::exit(1);
-    }
-
-    url.set_path("/metrics/binary");
-
-    // convert destination to a path
-    let path: PathBuf = {
-        let path = matches.get_one::<String>("DESTINATION").unwrap();
-        match path.parse() {
-            Ok(p) => p,
-            Err(error) => {
-                eprintln!("destination is not a valid path: {path}\n{error}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    // open destination file
-    let destination: std::fs::File = {
-        match std::fs::File::create(path.clone()) {
-            Ok(f) => f,
-            Err(error) => {
-                eprintln!("could not open destination: {:?}\n{error}", path);
-                std::process::exit(1);
-            }
-        }
-    };
-
-    // open temporary (intermediate msgpack) file
-    let mut temp_path = path.clone();
-    temp_path.pop();
-    let temporary = match tempfile_in(temp_path.clone()) {
-        Ok(t) => t,
-        Err(error) => {
-            eprintln!("could not open temporary file in: {:?}\n{error}", temp_path);
-            std::process::exit(1);
-        }
-    };
+    let config = Config::parse();
 
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
 
-    let level = match matches.get_count("VERBOSE") {
+    let level = match config.verbose {
         0 => Level::Info,
         1 => Level::Debug,
         _ => Level::Trace,
@@ -204,32 +198,43 @@ fn main() {
 
     // spawn recorder thread
     rt.block_on(async move {
-        recorder(url, destination, temporary, interval, duration).await;
+        recorder(config).await;
     });
 }
 
-async fn recorder(
-    url: Url,
-    destination: std::fs::File,
-    temporary: std::fs::File,
-    interval: Duration,
-    duration: Option<Duration>,
-) {
-    let mut temporary = tokio::fs::File::from_std(temporary);
+async fn recorder(config: Config) {
+    // load the url to connect to
+    let url = config.url();
 
-    let mut interval = tokio::time::interval(interval);
+    // open destination and (optional) temporary files
+    let mut destination = Some(config.destination());
+    let mut temporary = config.temporary();
 
+    // our http client
     let mut client = None;
 
+    // sampling interval
+    let mut interval = tokio::time::interval(config.interval());
+
+    // start time
     let start = std::time::Instant::now();
 
+    // writer will be either the temporary file or the final destination file
+    // depending on the output format
+    let mut writer = temporary
+        .take()
+        .unwrap_or_else(|| destination.take().unwrap().into());
+
+    // sample in a loop until RUNNING is false or duration has completed
     while RUNNING.load(Ordering::Relaxed) {
-        if let Some(duration) = duration {
+        // check if the duration has completed
+        if let Some(duration) = config.duration() {
             if start.elapsed() >= duration {
                 break;
             }
         }
 
+        // connect to rezolus
         if client.is_none() {
             debug!("connecting to Rezolus at: {url}");
 
@@ -245,41 +250,47 @@ async fn recorder(
 
         let c = client.take().unwrap();
 
+        // wait to sample
         interval.tick().await;
 
         let start = Instant::now();
 
+        // sample rezolus
         if let Ok(response) = c.get(url.clone()).send().await {
             if let Ok(body) = response.bytes().await {
                 let latency = start.elapsed();
 
                 debug!("sampling latency: {} us", latency.as_micros());
 
-                if let Err(e) = temporary.write_all(&body).await {
+                if let Err(e) = writer.write_all(&body).await {
                     error!("error writing to temporary file: {e}");
                     std::process::exit(1);
                 }
-
-                debug!("wrote: {} bytes", body.len());
-
-                debug!("recording latency: {} us", start.elapsed().as_micros());
 
                 client = Some(c);
             }
         }
     }
 
-    debug!("flushing and seeking to start of temp file");
+    debug!("flushing writer");
+    let _ = writer.flush().await;
 
-    let _ = temporary.flush().await;
-    let _ = temporary.rewind().await;
-    let temporary = temporary.into_std().await;
+    // handle any output format specific transforms
+    match config.output_format {
+        Format::Raw => {
+            debug!("finished");
+        }
+        Format::Parquet => {
+            debug!("converting temp file to parquet");
 
-    debug!("converting temp file to parquet");
+            let _ = writer.rewind().await;
+            let temporary = writer.into_std().await;
 
-    if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
-        .convert_file_handle(temporary, destination)
-    {
-        eprintln!("error saving parquet file: {e}");
+            if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
+                .convert_file_handle(temporary, destination.unwrap())
+            {
+                eprintln!("error saving parquet file: {e}");
+            }
+        }
     }
 }
