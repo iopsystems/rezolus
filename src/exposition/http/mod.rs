@@ -1,14 +1,9 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
-use crate::Arc;
-use crate::Config;
-use crate::Sampler;
+use crate::{Arc, Config, Sampler};
 use axum::extract::State;
 use axum::routing::get;
 use axum::Router;
-use histogram::AtomicHistogram;
-use metriken::Counter;
-use metriken::Gauge;
-use metriken::RwLockHistogram;
+use metriken::{AtomicHistogram, RwLockHistogram, Value};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
@@ -107,12 +102,11 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
     let mut data = Vec::new();
 
     for metric in &metriken::metrics() {
-        let any = match metric.as_any() {
-            Some(any) => any,
-            None => {
-                continue;
-            }
-        };
+        let value = metric.value();
+
+        if value.is_none() {
+            continue;
+        }
 
         let name = metric.name();
 
@@ -137,17 +131,33 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
             format!("{}{{{metadata}}}", metric.name())
         };
 
-        if let Some(counter) = any.downcast_ref::<Counter>() {
-            data.push(format!(
-                "# TYPE {name} counter\n{name_with_metadata} {} {timestamp}",
-                counter.value()
-            ));
-        } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-            data.push(format!(
-                "# TYPE {name} gauge\n{name_with_metadata} {} {timestamp}",
-                gauge.value()
-            ));
-        } else if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
+        match value {
+            Some(Value::Counter(value)) => {
+                data.push(format!(
+                    "# TYPE {name} counter\n{name_with_metadata} {value} {timestamp}"
+                ));
+                continue;
+            }
+            Some(Value::Gauge(value)) => {
+                 data.push(format!(
+                    "# TYPE {name} gauge\n{name_with_metadata} {value} {timestamp}"
+                ));
+                continue;
+            }
+            Some(_) => { }
+            None => {
+                continue;
+            }
+        }
+
+        let any = match metric.as_any() {
+            Some(any) => any,
+            None => {
+                continue;
+            }
+        };
+
+        if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
             if state.config.prometheus().histograms() {
                 if let Some(histogram) = histogram.load() {
                     let current = HISTOGRAM_GROUPING_POWER;
@@ -224,12 +234,11 @@ fn simple_stats(quoted: bool) -> Vec<String> {
     let q = if quoted { "\"" } else { "" };
 
     for metric in &metriken::metrics() {
-        let any = match metric.as_any() {
-            Some(any) => any,
-            None => {
-                continue;
-            }
-        };
+        let value = metric.value();
+
+        if value.is_none() {
+            continue;
+        }
 
         if metric.name().starts_with("log_") {
             continue;
@@ -237,10 +246,14 @@ fn simple_stats(quoted: bool) -> Vec<String> {
 
         let simple_name = metric.formatted(metriken::Format::Simple);
 
-        if let Some(counter) = any.downcast_ref::<Counter>() {
-            data.push(format!("{q}{simple_name}{q}: {}", counter.value()));
-        } else if let Some(gauge) = any.downcast_ref::<Gauge>() {
-            data.push(format!("{q}{simple_name}{q}: {}", gauge.value()));
+        match value {
+            Some(Value::Counter(value)) => {
+                data.push(format!("{q}{simple_name}{q}: {value}"));
+            }
+            Some(Value::Gauge(value)) => {
+                data.push(format!("{q}{simple_name}{q}: {value}"));
+            }
+            Some(_) | None => { }
         }
     }
 
