@@ -64,19 +64,13 @@ pub static CPU_CYCLES: LazyCounter = LazyCounter::new(Counter::default);
 )]
 pub static CPU_INSTRUCTIONS: LazyCounter = LazyCounter::new(Counter::default);
 
-#[metric(
-    name = "cpu/aperf/total"
-)]
+#[metric(name = "cpu/aperf/total")]
 pub static CPU_APERF: LazyCounter = LazyCounter::new(Counter::default);
 
-#[metric(
-    name = "cpu/mperf/total"
-)]
+#[metric(name = "cpu/mperf/total")]
 pub static CPU_MPERF: LazyCounter = LazyCounter::new(Counter::default);
 
-#[metric(
-    name = "cpu/tsc/total"
-)]
+#[metric(name = "cpu/tsc/total")]
 pub static CPU_TSC: LazyCounter = LazyCounter::new(Counter::default);
 
 pub fn simple_formatter(metric: &MetricEntry, _format: Format) -> String {

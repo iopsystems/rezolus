@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub struct PerfEvent {
-    inner: Event
+    inner: Event,
 }
 
 enum Event {
@@ -32,21 +32,21 @@ impl Event {
 impl PerfEvent {
     pub fn cpu_cycles() -> Self {
         Self {
-            inner: Event::Hardware(perf_event::events::Hardware::CPU_CYCLES)
+            inner: Event::Hardware(perf_event::events::Hardware::CPU_CYCLES),
         }
     }
 
     pub fn instructions() -> Self {
         Self {
-            inner: Event::Hardware(perf_event::events::Hardware::INSTRUCTIONS)
+            inner: Event::Hardware(perf_event::events::Hardware::INSTRUCTIONS),
         }
     }
 
     pub fn msr(msr_id: perf_event::events::x86::MsrId) -> Result<Self, std::io::Error> {
         let msr = perf_event::events::x86::Msr::new(msr_id)?;
-        
+
         Ok(Self {
-            inner: Event::Msr(msr)
+            inner: Event::Msr(msr),
         })
     }
 }
@@ -134,7 +134,9 @@ where
                     let mut counters = Vec::new();
 
                     for cpu in 0..=cpus {
-                        let mut counter = event.inner.builder()
+                        let mut counter = event
+                            .inner
+                            .builder()
                             .one_cpu(cpu)
                             .any_pid()
                             .exclude_hv(false)
