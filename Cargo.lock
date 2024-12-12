@@ -1688,9 +1688,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-core"
-version = "0.1.2"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c84b78d9ac6c12b6dbeb4d9992d671a337bb745a883913da1e806c36d053d58"
+checksum = "7744f65aa093636813cc885c7966610b42bd352906fd366e645e961d7c8d8667"
 dependencies = [
  "linkme",
  "parking_lot",
@@ -2310,6 +2310,7 @@ dependencies = [
  "linkme",
  "memmap2 0.9.5",
  "metriken",
+ "metriken-core",
  "metriken-exposition",
  "nvml-wrapper",
  "ouroboros",

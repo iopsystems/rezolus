@@ -6,6 +6,9 @@
 //! And produces these stats:
 //! * `cpu/cycles`
 //! * `cpu/instructions`
+//!
+//! These stats can be used to calculate the IPC and IPNS in post-processing or
+//! in an observability stack.
 
 const NAME: &str = "cpu_perf";
 
@@ -50,8 +53,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     println!("initializing bpf for: {NAME}");
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .perf_event("cycles", perf_event::events::Hardware::CPU_CYCLES)
-        .perf_event("instructions", perf_event::events::Hardware::INSTRUCTIONS)
+        .perf_event("cycles", PerfEvent::cpu_cycles())
+        .perf_event("instructions", PerfEvent::instructions())
         .cpu_counters("counters", totals, individual)
         .build()?;
 
