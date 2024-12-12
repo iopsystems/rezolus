@@ -139,12 +139,12 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
                 continue;
             }
             Some(Value::Gauge(value)) => {
-                 data.push(format!(
+                data.push(format!(
                     "# TYPE {name} gauge\n{name_with_metadata} {value} {timestamp}"
                 ));
                 continue;
             }
-            Some(_) => { }
+            Some(_) => {}
             None => {
                 continue;
             }
@@ -253,7 +253,7 @@ fn simple_stats(quoted: bool) -> Vec<String> {
             Some(Value::Gauge(value)) => {
                 data.push(format!("{q}{simple_name}{q}: {value}"));
             }
-            Some(_) | None => { }
+            Some(_) | None => {}
         }
     }
 
