@@ -79,20 +79,6 @@ pub static CPU_MPERF: LazyCounter = LazyCounter::new(Counter::default);
 )]
 pub static CPU_TSC: LazyCounter = LazyCounter::new(Counter::default);
 
-#[metric(
-    name = "cpu/base_frequency/average",
-    description = "Average base CPU frequency (MHz)",
-    metadata = { unit = "megahertz" }
-)]
-pub static CPU_BASE_FREQUENCY_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
-
-#[metric(
-    name = "cpu/frequency/average",
-    description = "Average running CPU frequency (MHz): SUM(RUNNING_FREQUENCY_CPU0...N)/N",
-    metadata = { unit = "megahertz" }
-)]
-pub static CPU_FREQUENCY_AVERAGE: LazyGauge = LazyGauge::new(Gauge::default);
-
 pub fn simple_formatter(metric: &MetricEntry, _format: Format) -> String {
     metric.name().to_string()
 }
