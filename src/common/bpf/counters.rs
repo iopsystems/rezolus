@@ -128,7 +128,7 @@ impl<'a> Counters<'a> {
 pub struct CpuCounters<'a> {
     counter_map: CounterMap<'a>,
     totals: Vec<&'static LazyCounter>,
-    individual: ScopedCounters,
+    individual: Vec<&'static CounterGroup>,
     values: Vec<u64>,
 }
 
@@ -138,7 +138,7 @@ impl<'a> CpuCounters<'a> {
     pub fn new(
         map: &'a Map,
         totals: Vec<&'static LazyCounter>,
-        individual: ScopedCounters,
+        individual: Vec<&'static CounterGroup>,
     ) -> Self {
         // we need temporary buffer so we can total up the per-CPU values
         let values = vec![0; totals.len()];
@@ -167,14 +167,14 @@ impl<'a> CpuCounters<'a> {
 
         // iterate through and increment our local value for each cpu counter
         for cpu in 0..MAX_CPUS {
-            for idx in 0..self.totals.len() {
+            for idx in 0..self.individual.len() {
                 let value = counters[idx + cpu * bank_width];
 
                 // add this CPU's counter to the combined value for this counter
                 self.values[idx] = self.values[idx].wrapping_add(value);
 
                 // set this CPU's counter to the new value
-                let _ = self.individual.set(cpu, idx, value);
+                let _ = self.individual[idx].set(cpu, value);
             }
         }
 
