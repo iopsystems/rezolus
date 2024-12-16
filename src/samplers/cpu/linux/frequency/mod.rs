@@ -40,6 +40,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .perf_event("mperf", PerfEvent::msr(MsrId::MPERF)?)
         .perf_event("tsc", PerfEvent::msr(MsrId::TSC)?)
         .cpu_counters("counters", totals, individual)
+        .packed_counters("cgroup_aperf", &CGROUP_CPU_APERF)
+        .packed_counters("cgroup_mperf", &CGROUP_CPU_MPERF)
+        .packed_counters("cgroup_tsc", &CGROUP_CPU_TSC)
         .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -48,6 +51,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
 impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
+            "cgroup_aperf" => &self.maps.cgroup_aperf,
+            "cgroup_mperf" => &self.maps.cgroup_mperf,
+            "cgroup_tsc" => &self.maps.cgroup_tsc,
             "counters" => &self.maps.counters,
             "aperf" => &self.maps.aperf,
             "mperf" => &self.maps.mperf,
@@ -59,6 +65,10 @@ impl SkelExt for ModSkel<'_> {
 
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
+        debug!(
+            "{NAME} cpuacct_account_field() BPF instruction count: {}",
+            self.progs.cpuacct_account_field_kprobe.insn_cnt()
+        );
         debug!(
             "{NAME} handle__sched_switch() BPF instruction count: {}",
             self.progs.handle__sched_switch.insn_cnt()
