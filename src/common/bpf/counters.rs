@@ -232,8 +232,8 @@ impl<'a> PackedCounters<'a> {
 
         // update all individual counters
         for (idx, value) in values.iter().enumerate() {
-            if value != 0 {
-                let _ = self.counters.set(idx, value);
+            if *value != 0 {
+                let _ = self.counters.set(idx, *value);
             }
         }
     }
