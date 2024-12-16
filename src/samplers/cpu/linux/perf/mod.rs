@@ -30,27 +30,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let cpus = crate::common::linux::cpus()?;
-
     let totals = vec![&CPU_CYCLES, &CPU_INSTRUCTIONS];
-
-    let metrics = ["cpu/cycles", "cpu/instructions"];
-
-    let mut individual = ScopedCounters::new();
-
-    for cpu in cpus {
-        for metric in metrics {
-            individual.push(
-                cpu,
-                DynamicCounterBuilder::new(metric)
-                    .metadata("id", format!("{}", cpu))
-                    .formatter(cpu_metric_percore_formatter)
-                    .build(),
-            );
-        }
-    }
-
-    println!("initializing bpf for: {NAME}");
+    let individual = vec![&CPU_CYCLES_PERCORE, &CPU_INSTRUCTIONS_PERCORE];
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .perf_event("cycles", PerfEvent::cpu_cycles())

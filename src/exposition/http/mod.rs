@@ -1,4 +1,4 @@
-use crate::common::HISTOGRAM_GROUPING_POWER;
+use crate::common::{CounterGroup, HISTOGRAM_GROUPING_POWER};
 use crate::{Arc, Config, Sampler};
 use axum::extract::State;
 use axum::routing::get;
@@ -136,76 +136,94 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
                 data.push(format!(
                     "# TYPE {name} counter\n{name_with_metadata} {value} {timestamp}"
                 ));
-                continue;
             }
             Some(Value::Gauge(value)) => {
                 data.push(format!(
                     "# TYPE {name} gauge\n{name_with_metadata} {value} {timestamp}"
                 ));
-                continue;
             }
-            Some(_) => {}
-            None => {
-                continue;
-            }
-        }
+            Some(Value::Other(any)) => {
+                if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
+                    if state.config.prometheus().histograms() {
+                        if let Some(histogram) = histogram.load() {
+                            let current = HISTOGRAM_GROUPING_POWER;
+                            let target = state.config.prometheus().histogram_grouping_power();
 
-        let any = match metric.as_any() {
-            Some(any) => any,
-            None => {
-                continue;
-            }
-        };
+                            // downsample the histogram if necessary
+                            let downsampled: Option<histogram::Histogram> = if current == target {
+                                // the powers matched, we don't need to downsample
+                                None
+                            } else {
+                                Some(histogram.downsample(target).unwrap())
+                            };
 
-        if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-            if state.config.prometheus().histograms() {
-                if let Some(histogram) = histogram.load() {
-                    let current = HISTOGRAM_GROUPING_POWER;
-                    let target = state.config.prometheus().histogram_grouping_power();
+                            // reassign to either use the downsampled histogram or the original
+                            let histogram = if let Some(histogram) = downsampled.as_ref() {
+                                histogram
+                            } else {
+                                &histogram
+                            };
 
-                    // downsample the histogram if necessary
-                    let downsampled: Option<histogram::Histogram> = if current == target {
-                        // the powers matched, we don't need to downsample
-                        None
-                    } else {
-                        Some(histogram.downsample(target).unwrap())
-                    };
+                            // we need to export a total count (free-running)
+                            let mut count = 0;
+                            // we also need to export a total sum of all observations
+                            // which is also free-running
+                            let mut sum = 0;
 
-                    // reassign to either use the downsampled histogram or the original
-                    let histogram = if let Some(histogram) = downsampled.as_ref() {
-                        histogram
-                    } else {
-                        &histogram
-                    };
+                            let mut entry = format!("# TYPE {name}_distribution histogram\n");
+                            for bucket in histogram {
+                                // add this bucket's sum of observations
+                                sum += bucket.count() * bucket.end();
 
-                    // we need to export a total count (free-running)
-                    let mut count = 0;
-                    // we also need to export a total sum of all observations
-                    // which is also free-running
-                    let mut sum = 0;
+                                // add the count to the aggregate
+                                count += bucket.count();
 
-                    let mut entry = format!("# TYPE {name}_distribution histogram\n");
-                    for bucket in histogram {
-                        // add this bucket's sum of observations
-                        sum += bucket.count() * bucket.end();
+                                entry += &format!(
+                                    "{name}_distribution_bucket{{le=\"{}\"}} {count} {timestamp}\n",
+                                    bucket.end()
+                                );
+                            }
 
-                        // add the count to the aggregate
-                        count += bucket.count();
+                            entry += &format!(
+                                "{name}_distribution_bucket{{le=\"+Inf\"}} {count} {timestamp}\n"
+                            );
+                            entry += &format!("{name}_distribution_count {count} {timestamp}\n");
+                            entry += &format!("{name}_distribution_sum {sum} {timestamp}");
 
-                        entry += &format!(
-                            "{name}_distribution_bucket{{le=\"{}\"}} {count} {timestamp}\n",
-                            bucket.end()
-                        );
+                            data.push(entry);
+                        }
                     }
+                } else if let Some(counters) = any.downcast_ref::<CounterGroup>() {
+                    if let Some(counters) = counters.load() {
+                        let mut entry = format!("# TYPE {name} counter");
 
-                    entry +=
-                        &format!("{name}_distribution_bucket{{le=\"+Inf\"}} {count} {timestamp}\n");
-                    entry += &format!("{name}_distribution_count {count} {timestamp}\n");
-                    entry += &format!("{name}_distribution_sum {sum} {timestamp}");
+                        let metadata: Vec<String> = metric
+                            .metadata()
+                            .iter()
+                            .map(|(key, value)| format!("{key}=\"{value}\""))
+                            .collect();
 
-                    data.push(entry);
+                        let metadata = metadata.join(", ");
+
+                        for (id, value) in counters.iter().enumerate() {
+                            if *value == 0 {
+                                continue;
+                            }
+
+                            if metadata.is_empty() {
+                                entry += &format!("\n{name}{{id=\"{id}\"}} {value} {timestamp}");
+                            } else {
+                                entry += &format!(
+                                    "\n{name}{{{metadata}, id=\"{id}\"}} {value} {timestamp}"
+                                );
+                            }
+                        }
+
+                        data.push(entry);
+                    }
                 }
             }
+            _ => {}
         }
     }
 
@@ -252,6 +270,19 @@ fn simple_stats(quoted: bool) -> Vec<String> {
             }
             Some(Value::Gauge(value)) => {
                 data.push(format!("{q}{simple_name}{q}: {value}"));
+            }
+            Some(Value::Other(any)) => {
+                if let Some(counters) = any.downcast_ref::<CounterGroup>() {
+                    if let Some(counters) = counters.load() {
+                        for (id, value) in counters.iter().enumerate() {
+                            if *value == 0 {
+                                continue;
+                            }
+
+                            data.push(format!("{q}{simple_name}/{id}{q}: {value}"));
+                        }
+                    }
+                }
             }
             Some(_) | None => {}
         }

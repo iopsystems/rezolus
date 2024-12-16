@@ -33,8 +33,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let cpus = crate::common::linux::cpus()?;
-
     let totals = vec![
         &CPU_USAGE_BUSY,
         &CPU_USAGE_USER,
@@ -47,32 +45,17 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CPU_USAGE_GUEST_NICE,
     ];
 
-    let states = [
-        "busy",
-        "user",
-        "nice",
-        "system",
-        "softirq",
-        "irq",
-        "steal",
-        "guest",
-        "guest_nice",
+    let individual = vec![
+        &CPU_USAGE_PERCORE_BUSY,
+        &CPU_USAGE_PERCORE_USER,
+        &CPU_USAGE_PERCORE_NICE,
+        &CPU_USAGE_PERCORE_SYSTEM,
+        &CPU_USAGE_PERCORE_SOFTIRQ,
+        &CPU_USAGE_PERCORE_IRQ,
+        &CPU_USAGE_PERCORE_STEAL,
+        &CPU_USAGE_PERCORE_GUEST,
+        &CPU_USAGE_PERCORE_GUEST_NICE,
     ];
-
-    let mut individual = ScopedCounters::new();
-
-    for cpu in cpus {
-        for state in states {
-            individual.push(
-                cpu,
-                DynamicCounterBuilder::new("cpu/usage")
-                    .metadata("id", format!("{}", cpu))
-                    .metadata("state", state)
-                    .formatter(cpu_usage_percore_formatter)
-                    .build(),
-            );
-        }
-    }
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .cpu_counters("counters", totals, individual)
