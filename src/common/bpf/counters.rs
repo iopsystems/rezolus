@@ -231,9 +231,9 @@ impl<'a> PackedCounters<'a> {
         let (_prefix, values, _suffix) = unsafe { self.mmap.align_to::<u64>() };
 
         // update all individual counters
-        for idx in 0..self.counters.len() {
-            if values[idx] != 0 {
-                let _ = self.counters.set(idx, values[idx]);
+        for (idx, value) in values.iter().enumerate() {
+            if value != 0 {
+                let _ = self.counters.set(idx, value);
             }
         }
     }
