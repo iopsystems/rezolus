@@ -1,4 +1,4 @@
-use crate::common::{HISTOGRAM_GROUPING_POWER, CounterGroup};
+use crate::common::{CounterGroup, HISTOGRAM_GROUPING_POWER};
 use crate::{Arc, Config, Sampler};
 use axum::extract::State;
 use axum::routing::get;

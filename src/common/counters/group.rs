@@ -1,8 +1,8 @@
 use metriken::Metric;
+use metriken::Value;
 use parking_lot::RwLock;
 use std::sync::OnceLock;
 use thiserror::Error;
-use metriken::Value;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum CounterGroupError {
