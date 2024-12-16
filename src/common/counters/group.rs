@@ -1,8 +1,11 @@
 use metriken::Metric;
 use metriken::Value;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use thiserror::Error;
+
+type OnceLockVec<T> = OnceLock<RwLock<Vec<T>>>;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum CounterGroupError {
@@ -12,7 +15,8 @@ pub enum CounterGroupError {
 
 /// A group of counters that's protected by a reader-writer lock.
 pub struct CounterGroup {
-    inner: OnceLock<RwLock<Vec<u64>>>,
+    values: OnceLockVec<u64>,
+    metadata: OnceLockVec<HashMap<String, String>>,
     entries: usize,
 }
 
@@ -30,7 +34,8 @@ impl CounterGroup {
     /// Create a new counter group
     pub const fn new(entries: usize) -> Self {
         Self {
-            inner: OnceLock::new(),
+            values: OnceLock::new(),
+            metadata: OnceLock::new(),
             entries,
         }
     }
@@ -50,7 +55,7 @@ impl CounterGroup {
 
     /// Load the counter values
     pub fn load(&self) -> Option<Vec<u64>> {
-        self.inner.get().map(|v| v.read().clone())
+        self.values.get().map(|v| v.read().clone())
     }
 
     pub fn len(&self) -> usize {
@@ -58,6 +63,28 @@ impl CounterGroup {
     }
 
     fn get_or_init(&self) -> &RwLock<Vec<u64>> {
-        self.inner.get_or_init(|| vec![0; self.entries].into())
+        self.values.get_or_init(|| vec![0; self.entries].into())
+    }
+
+    pub fn load_metadata(&self, idx: usize) -> Option<HashMap<String, String>> {
+        match self.metadata.get() {
+            Some(metadata) => metadata.read().get(idx).cloned(),
+            None => None,
+        }
+    }
+
+    pub fn clear_metadata(&self, idx: usize) {
+        if let Some(metadata) = self.metadata.get() {
+            let _ = metadata.write().get(idx).cloned();
+        }
+    }
+
+    pub fn insert_metadata(&self, idx: usize, key: String, value: String) {
+        let metadata = self
+            .metadata
+            .get_or_init(|| vec![HashMap::new(); self.entries].into());
+        if let Some(metadata) = metadata.write().get_mut(idx) {
+            metadata.insert(key, value);
+        }
     }
 }

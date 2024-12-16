@@ -194,7 +194,7 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
                         }
                     }
                 } else if let Some(counters) = any.downcast_ref::<CounterGroup>() {
-                    if let Some(counters) = counters.load() {
+                    if let Some(c) = counters.load() {
                         let mut entry = format!("# TYPE {name} counter");
 
                         let metadata: Vec<String> = metric
@@ -205,16 +205,33 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
 
                         let metadata = metadata.join(", ");
 
-                        for (id, value) in counters.iter().enumerate() {
+                        for (id, value) in c.iter().enumerate() {
                             if *value == 0 {
                                 continue;
                             }
 
-                            if metadata.is_empty() {
+                            let counter_metadata: Vec<String> =
+                                if let Some(md) = counters.load_metadata(id) {
+                                    md.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect()
+                                } else {
+                                    Vec::new()
+                                };
+
+                            let counter_metadata = counter_metadata.join(", ");
+
+                            if metadata.is_empty() && counter_metadata.is_empty() {
                                 entry += &format!("\n{name}{{id=\"{id}\"}} {value} {timestamp}");
-                            } else {
+                            } else if counter_metadata.is_empty() {
                                 entry += &format!(
                                     "\n{name}{{{metadata}, id=\"{id}\"}} {value} {timestamp}"
+                                );
+                            } else if metadata.is_empty() {
+                                entry += &format!(
+                                    "\n{name}{{{counter_metadata}, id=\"{id}\"}} {value} {timestamp}"
+                                );
+                            } else {
+                                entry += &format!(
+                                    "\n{name}{{{metadata}, {counter_metadata}, id=\"{id}\"}} {value} {timestamp}"
                                 );
                             }
                         }
@@ -273,10 +290,17 @@ fn simple_stats(quoted: bool) -> Vec<String> {
             }
             Some(Value::Other(any)) => {
                 if let Some(counters) = any.downcast_ref::<CounterGroup>() {
-                    if let Some(counters) = counters.load() {
-                        for (id, value) in counters.iter().enumerate() {
+                    if let Some(c) = counters.load() {
+                        for (id, value) in c.iter().enumerate() {
                             if *value == 0 {
                                 continue;
+                            }
+
+                            if let Some(metadata) = counters.load_metadata(id) {
+                                if let Some(name) = metadata.get("name") {
+                                    data.push(format!("{q}{simple_name}/{name}{q}: {value}"));
+                                    continue;
+                                }
                             }
 
                             data.push(format!("{q}{simple_name}/{id}{q}: {value}"));
