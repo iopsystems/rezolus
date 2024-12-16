@@ -23,7 +23,10 @@ const CACHELINE_SIZE: usize = 64;
 const PAGE_SIZE: usize = 4096;
 
 // This is the maximum number of CPUs we track with BPF counters.
-const MAX_CPUS: usize = 1024;
+pub const MAX_CPUS: usize = 1024;
+
+// This is the maximum number of cgroups we track with BPF counters.
+pub const MAX_CGROUPS: usize = 4096;
 
 const COUNTER_SIZE: usize = std::mem::size_of::<u64>();
 
@@ -37,7 +40,7 @@ fn whole_pages<T>(count: usize) -> usize {
     ((count * std::mem::size_of::<T>()) + PAGE_SIZE - 1) / PAGE_SIZE
 }
 
-use counters::{Counters, CpuCounters};
+use counters::{Counters, CpuCounters, PackedCounters};
 use histogram::Histogram;
 use sync_primitive::SyncPrimitive;
 

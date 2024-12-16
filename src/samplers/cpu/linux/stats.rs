@@ -1,9 +1,7 @@
-use crate::common::CounterGroup;
+use crate::common::*;
 use crate::samplers::cpu::stats::*;
 
 use metriken::*;
-
-pub static MAX_CPUS: usize = 1024;
 
 #[metric(
     name = "cpu/usage/total",
@@ -174,6 +172,22 @@ pub static CPU_MPERF_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
 )]
 pub static CPU_TSC_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
 
+#[metric(
+    name = "cgroup/cpu/cycles",
+    description = "The number of elapsed CPU cycles on a per-cgroup basis",
+    formatter = cpu_metric_cgroup_formatter,
+    metadata = { unit = "cycles" }
+)]
+pub static CGROUP_CPU_CYCLES: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup/cpu/instructions",
+    description = "The number of elapsed CPU cycles on a per-cgroup basis",
+    formatter = cpu_metric_cgroup_formatter,
+    metadata = { unit = "cycles" }
+)]
+pub static CGROUP_CPU_INSTRUCTIONS: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
 pub fn cpu_metric_percore_formatter(metric: &MetricEntry, format: Format) -> String {
     match format {
         Format::Simple => {
@@ -191,6 +205,15 @@ pub fn cpu_usage_percore_formatter(metric: &MetricEntry, format: Format) -> Stri
                 .get("state")
                 .expect("no `state` for metric formatter");
             format!("{}/{state}/cpu", metric.name())
+        }
+        _ => metric.name().to_string(),
+    }
+}
+
+pub fn cpu_metric_cgroup_formatter(metric: &MetricEntry, format: Format) -> String {
+    match format {
+        Format::Simple => {
+            format!("{}/cgroup", metric.name())
         }
         _ => metric.name().to_string(),
     }

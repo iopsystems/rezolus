@@ -62,6 +62,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         Vec<&'static CounterGroup>,
     )>,
     perf_events: Vec<(&'static str, PerfEvent)>,
+    packed_counters: Vec<(&'static str, &'static CounterGroup)>,
 }
 
 impl<T: 'static> Builder<T>
@@ -78,6 +79,7 @@ where
             maps: Vec::new(),
             cpu_counters: Vec::new(),
             perf_events: Vec::new(),
+            packed_counters: Vec::new(),
         }
     }
 
@@ -177,6 +179,12 @@ where
                 perf_events.len()
             );
 
+            let mut packed_counters: Vec<PackedCounters> = self
+                .packed_counters
+                .into_iter()
+                .map(|(name, counters)| PackedCounters::new(skel.map(name), counters))
+                .collect();
+
             // load any data from userspace into BPF maps
             for (name, values) in self.maps.into_iter() {
                 let fd = skel.map(name).as_fd().as_raw_fd();
@@ -220,6 +228,10 @@ where
                 }
 
                 for v in &mut cpu_counters {
+                    v.refresh();
+                }
+
+                for v in &mut packed_counters {
                     v.refresh();
                 }
 
@@ -293,6 +305,15 @@ where
     /// Specify a perf event array name and an associated perf event.
     pub fn perf_event(mut self, name: &'static str, event: PerfEvent) -> Self {
         self.perf_events.push((name, event));
+        self
+    }
+
+    /// Register a set of packed counters. The `name` is the BPF map name and
+    /// the `counters` are a set of userspace dynamic counters. The BPF map is
+    /// expected to be densely packed, meaning there is no padding. The order of
+    /// the `counters` must exactly match the order in the BPF map.
+    pub fn packed_counters(mut self, name: &'static str, counters: &'static CounterGroup) -> Self {
+        self.packed_counters.push((name, counters));
         self
     }
 }
