@@ -34,14 +34,33 @@ fn handle_event(data: &[u8]) -> i32 {
     if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
         let name = std::str::from_utf8(&cgroup_info.name)
             .unwrap()
-            .trim_end_matches(char::from(0));
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d","-");
+
+        let pname = std::str::from_utf8(&cgroup_info.pname)
+            .unwrap()
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d","-");
+
+        let gpname = std::str::from_utf8(&cgroup_info.gpname)
+            .unwrap()
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d","-");
+
+        let name = if !gpname.is_empty() {
+            format!("{gpname}_{pname}_{name}")
+        } else if !pname.is_empty() {
+            format!("{pname}_{name}")
+        } else {
+            name.to_string()
+        };
 
         let id = cgroup_info.id;
 
         if !name.is_empty() {
-            CGROUP_CPU_APERF.insert_metadata(id as usize, "name".to_string(), name.to_string());
-            CGROUP_CPU_MPERF.insert_metadata(id as usize, "name".to_string(), name.to_string());
-            CGROUP_CPU_TSC.insert_metadata(id as usize, "name".to_string(), name.to_string());
+            CGROUP_CPU_APERF.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_MPERF.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_TSC.insert_metadata(id as usize, "name".to_string(), name);
         }
     }
 
