@@ -35,17 +35,17 @@ fn handle_event(data: &[u8]) -> i32 {
         let name = std::str::from_utf8(&cgroup_info.name)
             .unwrap()
             .trim_end_matches(char::from(0))
-            .replace("\\x2d","-");
+            .replace("\\x2d", "-");
 
         let pname = std::str::from_utf8(&cgroup_info.pname)
             .unwrap()
             .trim_end_matches(char::from(0))
-            .replace("\\x2d","-");
+            .replace("\\x2d", "-");
 
         let gpname = std::str::from_utf8(&cgroup_info.gpname)
             .unwrap()
             .trim_end_matches(char::from(0))
-            .replace("\\x2d","-");
+            .replace("\\x2d", "-");
 
         let name = if !gpname.is_empty() {
             format!("{gpname}_{pname}_{name}")
