@@ -64,13 +64,13 @@ Rust >= 1.70.0
 
 #### Linux
 
-A minimum kernel version of 5.5 is required. The following distributions should
+A minimum kernel version of 5.8 is required. The following distributions should
 work:
 
-* Debian: Bullseye and newer
-* Ubuntu: 20.10 and newer
-* Red Hat: RHEL 9 and newer
-* Amazon Linux: AL2 w/ 5.10 or newer, AL2023
+* Debian: Bullseye and newer (5.10+)
+* Ubuntu: 20.10 and newer (5.8+)
+* Red Hat: RHEL 9 and newer (5.14+)
+* Amazon Linux: AL2 w/ 5.10 or newer, AL2023 (6.1+)
 * Any rolling-release distro: Arch, Gentoo, ...
 
 In addition to the base dependencies, the following are needed:

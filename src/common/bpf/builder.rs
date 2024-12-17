@@ -2,7 +2,7 @@ use crate::common::bpf::*;
 use crate::common::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::{MapCore, MapFlags, OpenObject};
+use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
 use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
@@ -63,6 +63,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     )>,
     perf_events: Vec<(&'static str, PerfEvent)>,
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
+    ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
 }
 
 impl<T: 'static> Builder<T>
@@ -80,6 +81,7 @@ where
             cpu_counters: Vec::new(),
             perf_events: Vec::new(),
             packed_counters: Vec::new(),
+            ringbuf_handler: Vec::new(),
         }
     }
 
@@ -174,6 +176,18 @@ where
                 })
                 .collect();
 
+            let ringbuffer: Option<RingBuffer> = if self.ringbuf_handler.is_empty() {
+                None
+            } else {
+                let mut builder = RingBufferBuilder::new();
+
+                for (name, handler) in self.ringbuf_handler.into_iter() {
+                    let _ = builder.add(skel.map(name), handler);
+                }
+
+                Some(builder.build().expect("failed to initialize ringbuffer"))
+            };
+
             debug!(
                 "initialized perf events for: {} hardware counters",
                 perf_events.len()
@@ -216,6 +230,11 @@ where
             loop {
                 // blocking wait until we are notified to start, no cpu consumed
                 sync.wait_trigger();
+
+                // consume all data from ringbuffers
+                if let Some(ref rb) = ringbuffer {
+                    let _ = rb.consume();
+                }
 
                 // refresh all the metrics
 
@@ -314,6 +333,11 @@ where
     /// the `counters` must exactly match the order in the BPF map.
     pub fn packed_counters(mut self, name: &'static str, counters: &'static CounterGroup) -> Self {
         self.packed_counters.push((name, counters));
+        self
+    }
+
+    pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {
+        self.ringbuf_handler.push((name, handler));
         self
     }
 }
