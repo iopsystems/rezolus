@@ -73,14 +73,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let totals = vec![&CPU_APERF, &CPU_MPERF, &CPU_TSC];
-    let individual = vec![&CPU_APERF_PERCORE, &CPU_MPERF_PERCORE, &CPU_TSC_PERCORE];
-
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .perf_event("aperf", PerfEvent::msr(MsrId::APERF)?)
-        .perf_event("mperf", PerfEvent::msr(MsrId::MPERF)?)
-        .perf_event("tsc", PerfEvent::msr(MsrId::TSC)?)
-        .cpu_counters("counters", totals, individual)
+        .perf_event("aperf", PerfEvent::msr(MsrId::APERF)?, &CPU_APERF_PERCORE)
+        .perf_event("mperf", PerfEvent::msr(MsrId::MPERF)?, &CPU_MPERF_PERCORE)
+        .perf_event("tsc", PerfEvent::msr(MsrId::TSC)?, &CPU_TSC_PERCORE)
         .packed_counters("cgroup_aperf", &CGROUP_CPU_APERF)
         .packed_counters("cgroup_mperf", &CGROUP_CPU_MPERF)
         .packed_counters("cgroup_tsc", &CGROUP_CPU_TSC)
@@ -97,7 +93,6 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_info" => &self.maps.cgroup_info,
             "cgroup_mperf" => &self.maps.cgroup_mperf,
             "cgroup_tsc" => &self.maps.cgroup_tsc,
-            "counters" => &self.maps.counters,
             "aperf" => &self.maps.aperf,
             "mperf" => &self.maps.mperf,
             "tsc" => &self.maps.tsc,
@@ -108,10 +103,6 @@ impl SkelExt for ModSkel<'_> {
 
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
-        debug!(
-            "{NAME} cpuacct_account_field() BPF instruction count: {}",
-            self.progs.cpuacct_account_field_kprobe.insn_cnt()
-        );
         debug!(
             "{NAME} handle__sched_switch() BPF instruction count: {}",
             self.progs.handle__sched_switch.insn_cnt()

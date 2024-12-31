@@ -6,13 +6,70 @@ use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
 use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
+use std::collections::HashMap;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub struct PerfEvent {
     inner: Event,
+}
+
+pub struct PerfCounter {
+    counter: perf_event::Counter,
+    group: &'static CounterGroup,
+}
+
+pub struct CpuPerfCounters {
+    cpu: usize,
+    counters: Vec<PerfCounter>,
+}
+
+impl CpuPerfCounters {
+    pub fn new(cpu: usize) -> Self {
+        Self {
+            cpu,
+            counters: Vec::new(),
+        }
+    }
+
+    pub fn push(
+        &mut self,
+        counter: perf_event::Counter,
+        group: &'static CounterGroup,
+    ) -> &mut Self {
+        self.counters.push(PerfCounter { counter, group });
+
+        self
+    }
+
+    pub fn refresh(&mut self) {
+        for c in self.counters.iter_mut() {
+            if let Ok(value) = c.counter.read() {
+                let _ = c.group.set(self.cpu, value);
+            }
+        }
+    }
+}
+
+pub struct PerfCounters {
+    inner: HashMap<usize, CpuPerfCounters>,
+}
+
+impl PerfCounters {
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    pub fn push(&mut self, cpu: usize, counter: perf_event::Counter, group: &'static CounterGroup) {
+        let counters = self.inner.entry(cpu).or_insert(CpuPerfCounters::new(cpu));
+        counters.push(counter, group);
+    }
 }
 
 enum Event {
@@ -61,7 +118,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         Vec<&'static LazyCounter>,
         Vec<&'static CounterGroup>,
     )>,
-    perf_events: Vec<(&'static str, PerfEvent)>,
+    perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
 }
@@ -91,6 +148,16 @@ where
 
         let initialized = Arc::new(AtomicBool::new(false));
         let initialized2 = initialized.clone();
+
+        let cpus = match common::linux::cpus() {
+            Ok(cpus) => cpus.last().copied().unwrap_or(1023),
+            Err(_) => 1023,
+        };
+
+        let cpus = cpus + 1;
+
+        let (perf_threads_tx, perf_threads_rx) = sync_channel(cpus);
+        let (perf_sync_tx, perf_sync_rx) = sync_channel(cpus);
 
         let thread = std::thread::spawn(move || {
             // storage for the BPF object file
@@ -128,53 +195,135 @@ where
                 })
                 .collect();
 
-            let cpus = match common::linux::cpus() {
-                Ok(cpus) => cpus.last().copied().unwrap_or(1023),
-                Err(_) => 1023,
-            };
+            debug!(
+                "initializing perf counters for: {} events",
+                self.perf_events.len()
+            );
 
-            let perf_events: Vec<Vec<std::io::Result<perf_event::Counter>>> = self
-                .perf_events
-                .into_iter()
-                .map(|(name, event)| {
-                    let map = skel.map(name);
+            let mut perf_counters = PerfCounters::new();
 
-                    let mut counters = Vec::new();
+            for (name, event, group) in self.perf_events.into_iter() {
+                let map = skel.map(name);
 
-                    for cpu in 0..=cpus {
-                        let mut counter = event
-                            .inner
-                            .builder()
-                            .one_cpu(cpu)
-                            .any_pid()
-                            .exclude_hv(false)
-                            .exclude_kernel(false)
-                            .pinned(true)
-                            .read_format(
-                                ReadFormat::TOTAL_TIME_ENABLED
-                                    | ReadFormat::TOTAL_TIME_RUNNING
-                                    | ReadFormat::GROUP,
-                            )
-                            .build();
+                for cpu in 0..cpus {
+                    if let Ok(mut counter) = event
+                        .inner
+                        .builder()
+                        .one_cpu(cpu)
+                        .any_pid()
+                        .exclude_hv(false)
+                        .exclude_kernel(false)
+                        .pinned(true)
+                        .read_format(
+                            ReadFormat::TOTAL_TIME_ENABLED
+                                | ReadFormat::TOTAL_TIME_RUNNING
+                                | ReadFormat::GROUP,
+                        )
+                        .build()
+                    {
+                        let _ = counter.enable();
 
-                        if let Ok(c) = counter.as_mut() {
-                            let _ = c.enable();
+                        let fd = counter.as_raw_fd();
 
-                            let fd = c.as_raw_fd();
+                        let _ = map.update(
+                            &((cpu as u32).to_ne_bytes()),
+                            &(fd.to_ne_bytes()),
+                            MapFlags::ANY,
+                        );
 
-                            let _ = map.update(
-                                &((cpu as u32).to_ne_bytes()),
-                                &(fd.to_ne_bytes()),
-                                MapFlags::ANY,
-                            );
+                        perf_counters.push(cpu, counter, group);
+                    }
+                }
+            }
+
+            let (unpinned_tx, unpinned_rx) = sync_channel(cpus);
+
+            let pt_pending = Arc::new(AtomicUsize::new(perf_counters.inner.len()));
+
+            debug!(
+                "launching {} threads to read perf counters",
+                pt_pending.load(Ordering::SeqCst)
+            );
+
+            for (cpu, mut counters) in perf_counters.inner.into_iter() {
+                debug!("launching perf thread for cpu {}", cpu);
+
+                let psync = SyncPrimitive::new();
+                let psync2 = psync.clone();
+
+                let unpinned = unpinned_tx.clone();
+                let perf_threads = perf_threads_tx.clone();
+                let perf_sync = perf_sync_tx.clone();
+
+                let pt_pending = pt_pending.clone();
+
+                perf_threads
+                    .send(std::thread::spawn(move || {
+                        if !core_affinity::set_for_current(core_affinity::CoreId { id: cpu }) {
+                            unpinned
+                                .send(counters)
+                                .expect("failed to send unpinned perf counters");
+                            pt_pending.fetch_sub(1, Ordering::Relaxed);
+                            return;
                         }
 
-                        counters.push(counter);
-                    }
+                        pt_pending.fetch_sub(1, Ordering::Relaxed);
 
-                    counters
-                })
-                .collect();
+                        loop {
+                            psync.wait_trigger();
+
+                            counters.refresh();
+
+                            psync.notify();
+                        }
+                    }))
+                    .expect("failed to send perf thread handle");
+
+                perf_sync
+                    .send(psync2)
+                    .expect("failed to send perf thread sync primitive");
+            }
+
+            debug!("waiting for perf threads to launch");
+
+            while pt_pending.load(Ordering::Relaxed) > 0 {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+
+            debug!("checking for unpinned perf threads");
+
+            let mut unpinned: Vec<_> = unpinned_rx.try_iter().collect();
+
+            debug!(
+                "there are {} perf threads which could not be pinned",
+                unpinned.len()
+            );
+
+            if !unpinned.is_empty() {
+                let psync = SyncPrimitive::new();
+                let psync2 = psync.clone();
+
+                let perf_threads = perf_threads_tx.clone();
+                let perf_sync = perf_sync_tx.clone();
+
+                perf_threads
+                    .send(std::thread::spawn(move || loop {
+                        psync.wait_trigger();
+
+                        for counters in unpinned.iter_mut() {
+                            counters.refresh();
+                        }
+
+                        psync.notify();
+                    }))
+                    .expect("failed to send perf thread handle");
+
+                perf_sync
+                    .send(psync2)
+                    .expect("failed to send perf thread sync primitive");
+            }
+
+            debug!("all perf threads launched");
 
             let ringbuffer: Option<RingBuffer> = if self.ringbuf_handler.is_empty() {
                 None
@@ -187,11 +336,6 @@ where
 
                 Some(builder.build().expect("failed to initialize ringbuffer"))
             };
-
-            debug!(
-                "initialized perf events for: {} hardware counters",
-                perf_events.len()
-            );
 
             let mut packed_counters: Vec<PackedCounters> = self
                 .packed_counters
@@ -259,6 +403,8 @@ where
             }
         });
 
+        debug!("waiting for sampler thread to finish initialization");
+
         // wait for the sampler thread to either error out or finish initializing
         loop {
             if thread.is_finished() {
@@ -275,9 +421,19 @@ where
             }
         }
 
+        debug!("gathering perf thread sync primitives and join handles");
+
+        // gather perf thread sync primitives and join handles
+        let perf_sync = perf_sync_rx.try_iter().collect();
+        let perf_threads = perf_threads_rx.try_iter().collect();
+
+        debug!("completed BPF sampler initialization");
+
         Ok(AsyncBpf {
             thread,
             sync: sync2,
+            perf_threads,
+            perf_sync,
         })
     }
 
@@ -322,8 +478,13 @@ where
     }
 
     /// Specify a perf event array name and an associated perf event.
-    pub fn perf_event(mut self, name: &'static str, event: PerfEvent) -> Self {
-        self.perf_events.push((name, event));
+    pub fn perf_event(
+        mut self,
+        name: &'static str,
+        event: PerfEvent,
+        group: &'static CounterGroup,
+    ) -> Self {
+        self.perf_events.push((name, event, group));
         self
     }
 
