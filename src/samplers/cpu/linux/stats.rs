@@ -116,44 +116,12 @@ pub static CPU_USAGE_PERCORE_GUEST: CounterGroup = CounterGroup::new(MAX_CPUS);
 pub static CPU_USAGE_PERCORE_GUEST_NICE: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
-    name = "cpu/cycles/total",
-    description = "The number of elapsed CPU cycles",
-    metadata = { unit = "cycles" }
-)]
-pub static CPU_CYCLES: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "cpu/instructions/total",
-    description = "The number of instructions retired",
-    metadata = { unit = "instructions" }
-)]
-pub static CPU_INSTRUCTIONS: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "cpu/aperf/total",
-    metadata = { unit = "cycles" }
-)]
-pub static CPU_APERF: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "cpu/mperf/total",
-    metadata = { unit = "cycles" }
-)]
-pub static CPU_MPERF: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
-    name = "cpu/tsc/total",
-    metadata = { unit = "cycles" }
-)]
-pub static CPU_TSC: LazyCounter = LazyCounter::new(Counter::default);
-
-#[metric(
     name = "cpu/cycles",
     description = "The number of elapsed CPU cycles",
     formatter = cpu_metric_percore_formatter,
     metadata = { unit = "cycles" }
 )]
-pub static CPU_CYCLES_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static CPU_CYCLES: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu/instructions",
@@ -161,28 +129,28 @@ pub static CPU_CYCLES_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
     formatter = cpu_metric_percore_formatter,
     metadata = { unit = "instructions" }
 )]
-pub static CPU_INSTRUCTIONS_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static CPU_INSTRUCTIONS: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu/aperf",
     formatter = cpu_metric_percore_formatter,
     metadata = { unit = "cycles" }
 )]
-pub static CPU_APERF_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static CPU_APERF: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu/mperf",
     formatter = cpu_metric_percore_formatter,
     metadata = { unit = "cycles" }
 )]
-pub static CPU_MPERF_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static CPU_MPERF: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu/tsc",
     formatter = cpu_metric_percore_formatter,
     metadata = { unit = "cycles" }
 )]
-pub static CPU_TSC_PERCORE: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static CPU_TSC: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cgroup/cpu/cycles",
