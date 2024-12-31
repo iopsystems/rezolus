@@ -1,4 +1,5 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
+use crate::debug;
 
 use ringlog::Level;
 use serde::Deserialize;
@@ -93,9 +94,18 @@ impl Config {
     }
 
     pub fn enabled(&self, name: &str) -> bool {
-        self.samplers
+        let enabled = self
+            .samplers
             .get(name)
             .and_then(|v| v.enabled())
-            .unwrap_or(self.defaults.enabled().unwrap_or(enabled()))
+            .unwrap_or(self.defaults.enabled().unwrap_or(enabled()));
+
+        if enabled {
+            debug!("'{name}' sampler is enabled");
+        } else {
+            debug!("'{name}' sampler is not enabled");
+        }
+
+        enabled
     }
 }

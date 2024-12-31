@@ -40,14 +40,7 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_serial_numbers SEC(".maps");
 
-// counters (see constants defined at top)
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
-} counters SEC(".maps");
+// counters for various events
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -64,6 +57,8 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_instructions SEC(".maps");
+
+// previous readings for various events
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -120,24 +115,6 @@ static __always_inline __s64 get_task_state(void *task)
 	return BPF_CORE_READ((struct task_struct___o *)task, state);
 }
 
-// attach a kprobe cpuacct to update per-cpu counters
-
-SEC("kprobe/cpuacct_account_field")
-int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
-{
-	u32 idx;
-	u32 processor_id = bpf_get_smp_processor_id();
-
-	u64 c = bpf_perf_event_read(&cycles, BPF_F_CURRENT_CPU);
-	u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
-
-	idx = processor_id * COUNTER_GROUP_WIDTH + CYCLES;
-	bpf_map_update_elem(&counters, &idx, &c, BPF_ANY);
-
-	idx = processor_id * COUNTER_GROUP_WIDTH + INSTRUCTIONS;
-	bpf_map_update_elem(&counters, &idx, &i, BPF_ANY);
-}
-
 // attach a tracepoint on sched_switch for per-cgroup accounting
 
 SEC("tp_btf/sched_switch")
@@ -156,12 +133,6 @@ int handle__sched_switch(u64 *ctx)
 
 	u64 c = bpf_perf_event_read(&cycles, BPF_F_CURRENT_CPU);
 	u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
-
-	idx = processor_id * COUNTER_GROUP_WIDTH + CYCLES;
-	bpf_map_update_elem(&counters, &idx, &c, BPF_ANY);
-
-	idx = processor_id * COUNTER_GROUP_WIDTH + INSTRUCTIONS;
-	bpf_map_update_elem(&counters, &idx, &i, BPF_ANY);
 
 	if (bpf_core_field_exists(prev->sched_task_group)) {
 		int cgroup_id = prev->sched_task_group->css.id;
