@@ -71,12 +71,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .perf_event("cycles", PerfEvent::cpu_cycles(), &CPU_CYCLES_PERCORE)
-        .perf_event(
-            "instructions",
-            PerfEvent::instructions(),
-            &CPU_INSTRUCTIONS_PERCORE,
-        )
+        .perf_event("cycles", PerfEvent::cpu_cycles(), &CPU_CYCLES)
+        .perf_event("instructions", PerfEvent::instructions(), &CPU_INSTRUCTIONS)
         .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES)
         .packed_counters("cgroup_instructions", &CGROUP_CPU_INSTRUCTIONS)
         .ringbuf_handler("cgroup_info", handle_event)
