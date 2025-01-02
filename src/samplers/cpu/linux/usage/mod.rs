@@ -21,11 +21,13 @@ mod bpf {
 use bpf::*;
 
 use crate::common::*;
-use crate::samplers::cpu::linux::stats::*;
-use crate::samplers::cpu::stats::*;
 use crate::*;
 
 use std::sync::Arc;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -33,7 +35,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let totals = vec![
+    let counters = vec![
         &CPU_USAGE_BUSY,
         &CPU_USAGE_USER,
         &CPU_USAGE_NICE,
@@ -45,20 +47,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CPU_USAGE_GUEST_NICE,
     ];
 
-    let individual = vec![
-        &CPU_USAGE_PERCORE_BUSY,
-        &CPU_USAGE_PERCORE_USER,
-        &CPU_USAGE_PERCORE_NICE,
-        &CPU_USAGE_PERCORE_SYSTEM,
-        &CPU_USAGE_PERCORE_SOFTIRQ,
-        &CPU_USAGE_PERCORE_IRQ,
-        &CPU_USAGE_PERCORE_STEAL,
-        &CPU_USAGE_PERCORE_GUEST,
-        &CPU_USAGE_PERCORE_GUEST_NICE,
-    ];
-
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .cpu_counters("counters", totals, individual)
+        .cpu_counters("counters", counters)
         .build()?;
 
     Ok(Some(Box::new(bpf)))

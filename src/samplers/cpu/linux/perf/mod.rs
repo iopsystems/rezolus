@@ -19,10 +19,13 @@ mod bpf {
 use bpf::*;
 
 use crate::common::*;
-use crate::samplers::cpu::linux::stats::*;
 use crate::*;
 
 use std::sync::Arc;
+
+mod stats;
+
+use stats::*;
 
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 
