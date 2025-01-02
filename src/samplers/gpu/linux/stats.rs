@@ -1,44 +1,54 @@
 use metriken::*;
 
+use crate::common::*;
+
+const MAX_GPUS: usize = 32;
+
+// Memory
+
 #[metric(
     name = "gpu/memory",
-    description = "The total amount of GPU memory free.",
+    description = "The amount of GPU memory free.",
     formatter = gpu_metric_formatter,
     metadata = { state = "free", unit = "bytes" }
 )]
-pub static GPU_MEMORY_FREE: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_MEMORY_FREE: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpu/memory",
-    description = "The total amount of GPU memory used.",
+    description = "The amount of GPU memory used.",
     formatter = gpu_metric_formatter,
     metadata = { state = "used", unit = "bytes" }
 )]
-pub static GPU_MEMORY_USED: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_MEMORY_USED: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+// PCIe
 
 #[metric(
     name = "gpu/pcie/bandwidth",
-    description = "The total PCIe bandwidth in Bytes/s.",
+    description = "The PCIe bandwidth in Bytes/s.",
     formatter = gpu_metric_formatter,
     metadata = { direction = "receive", unit = "bytes/second" }
 )]
-pub static GPU_PCIE_BANDWIDTH: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_PCIE_BANDWIDTH: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpu/pcie/throughput",
-    description = "The current PCIe throughput in Bytes/s.",
+    description = "The current PCIe receive throughput in Bytes/s.",
     formatter = gpu_metric_formatter,
     metadata = { direction = "receive", unit = "bytes/second" }
 )]
-pub static GPU_PCIE_THROUGHPUT_RX: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_PCIE_THROUGHPUT_RX: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpu/pcie/throughput",
-    description = "The current PCIe throughput in Bytes/s.",
+    description = "The current PCIe transmit throughput in Bytes/s.",
     formatter = gpu_metric_formatter,
     metadata = { direction = "transmit", unit = "bytes/second" }
 )]
-pub static GPU_PCIE_THROUGHPUT_TX: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_PCIE_THROUGHPUT_TX: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+// Power and Energy
 
 #[metric(
     name = "gpu/power/usage",
@@ -46,7 +56,61 @@ pub static GPU_PCIE_THROUGHPUT_TX: LazyGauge = LazyGauge::new(Gauge::default);
     formatter = gpu_metric_formatter,
     metadata = { unit = "milliwatts" }
 )]
-pub static GPU_POWER_USAGE: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_POWER_USAGE: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu/energy/consumption",
+    description = "The energy consumption in milliJoules (mJ).",
+    formatter = gpu_metric_formatter,
+    metadata = { unit = "milliJoules" }
+)]
+pub static GPU_ENERGY_CONSUMPTION: CounterGroup = CounterGroup::new(MAX_GPUS);
+
+// Thermals
+
+#[metric(
+    name = "gpu/temperature",
+    description = "The current temperature in degrees Celsius (C).",
+    formatter = gpu_metric_formatter,
+    metadata = { unit = "Celsius" }
+)]
+pub static GPU_TEMPERATURE: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+// Clocks
+
+#[metric(
+    name = "gpu/clock",
+    description = "The current clock speed in Hertz (Hz).",
+    formatter = gpu_metric_formatter,
+    metadata = { clock = "compute", unit = "Hz" }
+)]
+pub static GPU_CLOCK_COMPUTE: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu/clock",
+    description = "The current clock speed in Hertz (Hz).",
+    formatter = gpu_metric_formatter,
+    metadata = { clock = "graphics", unit = "Hz" }
+)]
+pub static GPU_CLOCK_GRAPHICS: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu/clock",
+    description = "The current clock speed in Hertz (Hz).",
+    formatter = gpu_metric_formatter,
+    metadata = { clock = "memory", unit = "Hz" }
+)]
+pub static GPU_CLOCK_MEMORY: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu/clock",
+    description = "The current clock speed in Hertz (Hz).",
+    formatter = gpu_metric_formatter,
+    metadata = { clock = "video", unit = "Hz" }
+)]
+pub static GPU_CLOCK_VIDEO: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+// Utilization
 
 #[metric(
     name = "gpu/utilization/gpu",
@@ -54,7 +118,7 @@ pub static GPU_POWER_USAGE: LazyGauge = LazyGauge::new(Gauge::default);
     formatter = gpu_metric_formatter,
     metadata = { unit = "percentage" }
 )]
-pub static GPU_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpu/memory_utilization",
@@ -62,7 +126,7 @@ pub static GPU_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
     formatter = gpu_metric_formatter,
     metadata = { unit = "percentage" }
 )]
-pub static GPU_MEMORY_UTILIZATION: LazyGauge = LazyGauge::new(Gauge::default);
+pub static GPU_MEMORY_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 
 /// A function to format the gpu metrics that allows for export of both total
 /// and per-GPU metrics.
@@ -90,41 +154,14 @@ pub fn gpu_metric_formatter(metric: &MetricEntry, format: Format) -> String {
                 name
             };
 
-            let name = if let Some(ty) = metric.metadata().get("type") {
-                format!("{name}/{ty}")
+            let name = if let Some(clock) = metric.metadata().get("clock") {
+                format!("{name}/{clock}")
             } else {
                 name
             };
 
-            if metric.metadata().contains_key("id") {
-                format!(
-                    "{name}/gpu{}",
-                    metric.metadata().get("id").unwrap_or("unknown"),
-                )
-            } else {
-                format!("{name}/total",)
-            }
+            format!("{name}/gpu")
         }
-        Format::Prometheus => {
-            let metadata: Vec<String> = metric
-                .metadata()
-                .iter()
-                .map(|(key, value)| format!("{key}=\"{value}\""))
-                .collect();
-            let metadata = metadata.join(", ");
-
-            let name = if metric.metadata().contains_key("id") {
-                metric.name().to_string()
-            } else {
-                format!("{}/total", metric.name())
-            };
-
-            if metadata.is_empty() {
-                name
-            } else {
-                format!("{}{{{metadata}}}", name)
-            }
-        }
-        _ => metriken::default_formatter(metric, format),
+        _ => metric.name().to_string(),
     }
 }
