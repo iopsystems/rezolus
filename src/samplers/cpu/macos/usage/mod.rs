@@ -1,6 +1,5 @@
 const NAME: &str = "cpu_usage";
 
-use crate::samplers::cpu::stats::*;
 use crate::*;
 
 use libc::mach_host_self;
@@ -8,6 +7,10 @@ use libc::mach_port_t;
 use tokio::sync::Mutex;
 
 use std::io::Error;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {

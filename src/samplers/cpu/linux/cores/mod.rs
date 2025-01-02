@@ -1,11 +1,14 @@
 const NAME: &str = "cpu_cores";
 
-use crate::samplers::cpu::stats::*;
 use crate::*;
 
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -49,7 +52,7 @@ impl Sampler for Cores {
             }
 
             match (first, second) {
-                (Some(_), None) => {
+                (Some(_single), None) => {
                     online += 1;
                 }
                 (Some(start), Some(stop)) => {

@@ -113,11 +113,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     counters: Vec<(&'static str, Vec<&'static LazyCounter>)>,
     histograms: Vec<(&'static str, &'static RwLockHistogram)>,
     maps: Vec<(&'static str, Vec<u64>)>,
-    cpu_counters: Vec<(
-        &'static str,
-        Vec<&'static LazyCounter>,
-        Vec<&'static CounterGroup>,
-    )>,
+    cpu_counters: Vec<(&'static str, Vec<&'static CounterGroup>)>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
@@ -190,9 +186,7 @@ where
             let mut cpu_counters: Vec<CpuCounters> = self
                 .cpu_counters
                 .into_iter()
-                .map(|(name, totals, individual)| {
-                    CpuCounters::new(skel.map(name), totals, individual)
-                })
+                .map(|(name, counters)| CpuCounters::new(skel.map(name), counters))
                 .collect();
 
             debug!(
@@ -464,16 +458,15 @@ where
         self
     }
 
-    /// Register a set of counters for this BPF sampler where both totals and
+    /// Register a set of counters for this BPF sampler where just the
     /// individual CPU counters are tracked. See `Counters` for more details on
     /// the details and assumptions for the BPF map.
     pub fn cpu_counters(
         mut self,
         name: &'static str,
-        totals: Vec<&'static LazyCounter>,
-        individual: Vec<&'static CounterGroup>,
+        counters: Vec<&'static CounterGroup>,
     ) -> Self {
-        self.cpu_counters.push((name, totals, individual));
+        self.cpu_counters.push((name, counters));
         self
     }
 
