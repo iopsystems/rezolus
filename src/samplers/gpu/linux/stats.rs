@@ -113,7 +113,7 @@ pub static GPU_CLOCK_VIDEO: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 // Utilization
 
 #[metric(
-    name = "gpu/utilization/gpu",
+    name = "gpu/utilization",
     description = "The running average percentage of time the GPU was executing one or more kernels. (0-100).",
     formatter = gpu_metric_formatter,
     metadata = { unit = "percentage" }
