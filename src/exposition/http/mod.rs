@@ -1,4 +1,4 @@
-use crate::common::{CounterGroup, HISTOGRAM_GROUPING_POWER};
+use crate::common::*;
 use crate::{Arc, Config, Sampler};
 use axum::extract::State;
 use axum::routing::get;
@@ -212,6 +212,51 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
 
                             let counter_metadata: Vec<String> =
                                 if let Some(md) = counters.load_metadata(id) {
+                                    md.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect()
+                                } else {
+                                    Vec::new()
+                                };
+
+                            let counter_metadata = counter_metadata.join(", ");
+
+                            if metadata.is_empty() && counter_metadata.is_empty() {
+                                entry += &format!("\n{name}{{id=\"{id}\"}} {value} {timestamp}");
+                            } else if counter_metadata.is_empty() {
+                                entry += &format!(
+                                    "\n{name}{{{metadata}, id=\"{id}\"}} {value} {timestamp}"
+                                );
+                            } else if metadata.is_empty() {
+                                entry += &format!(
+                                    "\n{name}{{{counter_metadata}, id=\"{id}\"}} {value} {timestamp}"
+                                );
+                            } else {
+                                entry += &format!(
+                                    "\n{name}{{{metadata}, {counter_metadata}, id=\"{id}\"}} {value} {timestamp}"
+                                );
+                            }
+                        }
+
+                        data.push(entry);
+                    }
+                } else if let Some(gauges) = any.downcast_ref::<GaugeGroup>() {
+                    if let Some(g) = gauges.load() {
+                        let mut entry = format!("# TYPE {name} gauge");
+
+                        let metadata: Vec<String> = metric
+                            .metadata()
+                            .iter()
+                            .map(|(key, value)| format!("{key}=\"{value}\""))
+                            .collect();
+
+                        let metadata = metadata.join(", ");
+
+                        for (id, value) in g.iter().enumerate() {
+                            if *value == i64::MIN {
+                                continue;
+                            }
+
+                            let counter_metadata: Vec<String> =
+                                if let Some(md) = gauges.load_metadata(id) {
                                     md.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect()
                                 } else {
                                     Vec::new()
