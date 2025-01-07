@@ -13,6 +13,9 @@ use std::time::SystemTime;
 // TODO(bmartin): this representation can be optimized to be aware of counter
 // and gauge groups
 
+// TODO(bmartin): we can also consider splitting the metadata out into a
+// separate endpoint and moving group metadata publication OOB.
+
 #[derive(Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Counter {
@@ -65,7 +68,7 @@ impl Snapshot {
             histograms: Vec::new(),
         };
 
-        for (id, metric) in metriken::metrics().iter().enumerate() {
+        for (metric_id, metric) in metriken::metrics().iter().enumerate() {
             let value = metric.value();
 
             if value.is_none() {
@@ -85,7 +88,7 @@ impl Snapshot {
                 metadata.insert(k.to_string(), v.to_string());
             }
 
-            let name = format!("{id}");
+            let name = format!("{metric_id}");
 
             match value {
                 Some(Value::Counter(value)) => s.counters.push(Counter {
@@ -109,21 +112,21 @@ impl Snapshot {
                         }
                     } else if let Some(counters) = any.downcast_ref::<CounterGroup>() {
                         if let Some(c) = counters.load() {
-                            for (id, counter) in c.iter().enumerate() {
+                            for (counter_id, counter) in c.iter().enumerate() {
                                 if *counter == 0 {
                                     continue;
                                 }
 
                                 let mut metadata = metadata.clone();
 
-                                if let Some(m) = counters.load_metadata(id) {
+                                if let Some(m) = counters.load_metadata(counter_id) {
                                     for (k, v) in m {
                                         metadata.insert(k, v);
                                     }
                                 }
 
                                 s.counters.push(Counter {
-                                    name: name.clone(),
+                                    name: format!("{metric_id}x{counter_id}"),
                                     value: *counter,
                                     metadata,
                                 })
@@ -131,21 +134,21 @@ impl Snapshot {
                         }
                     } else if let Some(gauges) = any.downcast_ref::<GaugeGroup>() {
                         if let Some(g) = gauges.load() {
-                            for (id, gauge) in g.iter().enumerate() {
+                            for (gauge_id, gauge) in g.iter().enumerate() {
                                 if *gauge == i64::MIN {
                                     continue;
                                 }
 
                                 let mut metadata = metadata.clone();
 
-                                if let Some(m) = gauges.load_metadata(id) {
+                                if let Some(m) = gauges.load_metadata(gauge_id) {
                                     for (k, v) in m {
                                         metadata.insert(k, v);
                                     }
                                 }
 
                                 s.gauges.push(Gauge {
-                                    name: name.clone(),
+                                    name: format!("{metric_id}x{gauge_id}"),
                                     value: *gauge,
                                     metadata,
                                 })
