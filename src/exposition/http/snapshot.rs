@@ -2,10 +2,10 @@ use crate::exposition::http::CounterGroup;
 use crate::exposition::http::GaugeGroup;
 use metriken::RwLockHistogram;
 use metriken::Value;
-use std::time::SystemTime;
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 // These definitions are taken from `metriken-exposition` for compatibility with
 // existing pipeline.
@@ -58,7 +58,8 @@ impl Snapshot {
             metadata: [
                 ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
                 ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-                ].into(),
+            ]
+            .into(),
             counters: Vec::new(),
             gauges: Vec::new(),
             histograms: Vec::new(),
@@ -77,7 +78,8 @@ impl Snapshot {
                 continue;
             }
 
-            let mut metadata: HashMap<String, String> = [("metric".to_string(), name.to_string())].into();
+            let mut metadata: HashMap<String, String> =
+                [("metric".to_string(), name.to_string())].into();
 
             for (k, v) in metric.metadata().iter() {
                 metadata.insert(k.to_string(), v.to_string());
@@ -86,20 +88,16 @@ impl Snapshot {
             let name = format!("{id}");
 
             match value {
-                Some(Value::Counter(value)) => {
-                    s.counters.push(Counter {
-                        name,
-                        value,
-                        metadata,
-                    })
-                }
-                Some(Value::Gauge(value)) => {
-                    s.gauges.push(Gauge {
-                        name,
-                        value,
-                        metadata,
-                    })
-                }
+                Some(Value::Counter(value)) => s.counters.push(Counter {
+                    name,
+                    value,
+                    metadata,
+                }),
+                Some(Value::Gauge(value)) => s.gauges.push(Gauge {
+                    name,
+                    value,
+                    metadata,
+                }),
                 Some(Value::Other(any)) => {
                     if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
                         if let Some(value) = histogram.load() {
