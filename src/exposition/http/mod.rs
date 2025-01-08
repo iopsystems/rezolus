@@ -1,11 +1,11 @@
-use crate::debug;
-use std::time::Instant;
 use crate::common::*;
+use crate::debug;
 use crate::{Arc, Config, Sampler};
 use axum::extract::State;
 use axum::routing::get;
 use axum::Router;
 use metriken::{RwLockHistogram, Value};
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
@@ -277,4 +277,3 @@ async fn root() -> String {
     let version = env!("CARGO_PKG_VERSION");
     format!("Rezolus {version}\nFor information, see: https://rezolus.com\n")
 }
-
