@@ -36,6 +36,7 @@ ouroboros = "0.18.4"
 parking_lot = "0.12.3"
 reqwest = "0.12.9"
 ringlog = "0.8.0"
+rmp-serde = "1.1.2"
 serde = { version = "1.0.209", features = ["derive"] }
 syscall-numbers = "4.0.0"
 sysconf = "0.3.4"

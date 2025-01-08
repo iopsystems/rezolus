@@ -1,16 +1,33 @@
 use crate::common::*;
+use crate::debug;
 use crate::{Arc, Config, Sampler};
 use axum::extract::State;
 use axum::routing::get;
 use axum::Router;
-use metriken::{AtomicHistogram, RwLockHistogram, Value};
+use metriken::{RwLockHistogram, Value};
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 
+mod snapshot;
+
+use snapshot::Snapshot;
+
 struct AppState {
     config: Arc<Config>,
     samplers: Arc<Box<[Box<dyn Sampler>]>>,
+}
+
+impl AppState {
+    async fn refresh(&self) {
+        let s: Vec<_> = self.samplers.iter().map(|s| s.refresh()).collect();
+
+        let start = Instant::now();
+        futures::future::join_all(s).await;
+        let duration = start.elapsed().as_micros();
+        debug!("sampling latency: {duration} us");
+    }
 }
 
 pub async fn serve(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) {
@@ -33,11 +50,8 @@ pub async fn serve(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) 
 fn app(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(root))
-        .route("/admin/metrics.json", get(json))
         .route("/metrics", get(prometheus))
         .route("/metrics/binary", get(msgpack))
-        .route("/vars", get(human_readable))
-        .route("/vars.json", get(json))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
@@ -46,54 +60,16 @@ fn app(state: Arc<AppState>) -> Router {
         )
 }
 
-async fn human_readable(State(state): State<Arc<AppState>>) -> String {
-    refresh(&state.samplers).await;
-
-    let data = simple_stats(false);
-
-    let mut content = data.join("\n");
-    content += "\n";
-
-    content
-}
-
-async fn json(State(state): State<Arc<AppState>>) -> String {
-    refresh(&state.samplers).await;
-
-    let data = simple_stats(true);
-
-    let mut content = "{".to_string();
-    content += &data.join(", ");
-    content += "}";
-
-    content
-}
-
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
-    refresh(&state.samplers).await;
+    state.refresh().await;
 
-    let snapshot = metriken_exposition::SnapshotterBuilder::new()
-        .metadata("source".to_string(), env!("CARGO_BIN_NAME").to_string())
-        .metadata("version".to_string(), env!("CARGO_PKG_VERSION").to_string())
-        .filter(|metric| {
-            if let Some(m) = metric.as_any() {
-                if m.downcast_ref::<AtomicHistogram>().is_some() {
-                    false
-                } else {
-                    !metric.name().starts_with("log_")
-                }
-            } else {
-                false
-            }
-        })
-        .build()
-        .snapshot();
+    let snapshot = Snapshot::new();
 
-    metriken_exposition::Snapshot::to_msgpack(&snapshot).unwrap()
+    rmp_serde::encode::to_vec(&snapshot).expect("failed to serialize snapshot")
 }
 
 async fn prometheus(State(state): State<Arc<AppState>>) -> String {
-    refresh(&state.samplers).await;
+    state.refresh().await;
 
     let timestamp = clocksource::precise::UnixInstant::EPOCH
         .elapsed()
@@ -300,63 +276,4 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
 async fn root() -> String {
     let version = env!("CARGO_PKG_VERSION");
     format!("Rezolus {version}\nFor information, see: https://rezolus.com\n")
-}
-
-async fn refresh(samplers: &[Box<dyn Sampler>]) {
-    let s: Vec<_> = samplers.iter().map(|s| s.refresh()).collect();
-
-    futures::future::join_all(s).await;
-}
-
-fn simple_stats(quoted: bool) -> Vec<String> {
-    let mut data = Vec::new();
-
-    let q = if quoted { "\"" } else { "" };
-
-    for metric in &metriken::metrics() {
-        let value = metric.value();
-
-        if value.is_none() {
-            continue;
-        }
-
-        if metric.name().starts_with("log_") {
-            continue;
-        }
-
-        let simple_name = metric.formatted(metriken::Format::Simple);
-
-        match value {
-            Some(Value::Counter(value)) => {
-                data.push(format!("{q}{simple_name}{q}: {value}"));
-            }
-            Some(Value::Gauge(value)) => {
-                data.push(format!("{q}{simple_name}{q}: {value}"));
-            }
-            Some(Value::Other(any)) => {
-                if let Some(counters) = any.downcast_ref::<CounterGroup>() {
-                    if let Some(c) = counters.load() {
-                        for (id, value) in c.iter().enumerate() {
-                            if *value == 0 {
-                                continue;
-                            }
-
-                            if let Some(metadata) = counters.load_metadata(id) {
-                                if let Some(name) = metadata.get("name") {
-                                    data.push(format!("{q}{simple_name}/{name}{q}: {value}"));
-                                    continue;
-                                }
-                            }
-
-                            data.push(format!("{q}{simple_name}/{id}{q}: {value}"));
-                        }
-                    }
-                }
-            }
-            Some(_) | None => {}
-        }
-    }
-
-    data.sort();
-    data
 }
