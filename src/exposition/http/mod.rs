@@ -1,3 +1,5 @@
+use crate::debug;
+use std::time::Instant;
 use crate::common::*;
 use crate::{Arc, Config, Sampler};
 use axum::extract::State;
@@ -15,6 +17,17 @@ use snapshot::Snapshot;
 struct AppState {
     config: Arc<Config>,
     samplers: Arc<Box<[Box<dyn Sampler>]>>,
+}
+
+impl AppState {
+    async fn refresh(&self) {
+        let s: Vec<_> = self.samplers.iter().map(|s| s.refresh()).collect();
+
+        let start = Instant::now();
+        futures::future::join_all(s).await;
+        let duration = start.elapsed().as_micros();
+        debug!("sampling latency: {duration} us");
+    }
 }
 
 pub async fn serve(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) {
@@ -48,7 +61,7 @@ fn app(state: Arc<AppState>) -> Router {
 }
 
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
-    refresh(&state.samplers).await;
+    state.refresh().await;
 
     let snapshot = Snapshot::new();
 
@@ -56,7 +69,7 @@ async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
 }
 
 async fn prometheus(State(state): State<Arc<AppState>>) -> String {
-    refresh(&state.samplers).await;
+    state.refresh().await;
 
     let timestamp = clocksource::precise::UnixInstant::EPOCH
         .elapsed()
@@ -265,8 +278,3 @@ async fn root() -> String {
     format!("Rezolus {version}\nFor information, see: https://rezolus.com\n")
 }
 
-async fn refresh(samplers: &[Box<dyn Sampler>]) {
-    let s: Vec<_> = samplers.iter().map(|s| s.refresh()).collect();
-
-    futures::future::join_all(s).await;
-}
