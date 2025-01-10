@@ -104,6 +104,15 @@ impl Snapshot {
                 Some(Value::Other(any)) => {
                     if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
                         if let Some(value) = histogram.load() {
+                            metadata.insert(
+                                "grouping_power".to_string(),
+                                histogram.config().grouping_power().to_string(),
+                            );
+                            metadata.insert(
+                                "max_value_power".to_string(),
+                                histogram.config().max_value_power().to_string(),
+                            );
+
                             s.histograms.push(Histogram {
                                 name,
                                 value,
@@ -116,10 +125,10 @@ impl Snapshot {
                                 if *counter == 0 {
                                     continue;
                                 }
-
                                 let mut metadata = metadata.clone();
 
                                 metadata.insert("id".to_string(), counter_id.to_string());
+                                metadata.insert("group_id".to_string(), metric_id.to_string());
 
                                 if let Some(m) = counters.load_metadata(counter_id) {
                                     for (k, v) in m {
@@ -144,6 +153,7 @@ impl Snapshot {
                                 let mut metadata = metadata.clone();
 
                                 metadata.insert("id".to_string(), gauge_id.to_string());
+                                metadata.insert("group_id".to_string(), metric_id.to_string());
 
                                 if let Some(m) = gauges.load_metadata(gauge_id) {
                                     for (k, v) in m {
