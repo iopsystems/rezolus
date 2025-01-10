@@ -119,6 +119,8 @@ impl Snapshot {
 
                                 let mut metadata = metadata.clone();
 
+                                metadata.insert("id".to_string(), counter_id.to_string());
+
                                 if let Some(m) = counters.load_metadata(counter_id) {
                                     for (k, v) in m {
                                         metadata.insert(k, v);
@@ -140,6 +142,8 @@ impl Snapshot {
                                 }
 
                                 let mut metadata = metadata.clone();
+
+                                metadata.insert("id".to_string(), gauge_id.to_string());
 
                                 if let Some(m) = gauges.load_metadata(gauge_id) {
                                     for (k, v) in m {
