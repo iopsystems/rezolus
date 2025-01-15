@@ -129,15 +129,26 @@ fn main() {
                         .short('i')
                         .help("Sets the collection interval")
                         .action(clap::ArgAction::Set)
+                        .default_value("1s")
                         .value_parser(value_parser!(humantime::Duration)),
                 )
                 .arg(
                     clap::Arg::new("DURATION")
-                        .long("interval")
-                        .short('i')
+                        .long("duration")
+                        .short('d')
                         .help("Sets the collection interval")
                         .action(clap::ArgAction::Set)
+                        .default_value("15m")
                         .value_parser(value_parser!(humantime::Duration)),
+                )
+                .arg(
+                    clap::Arg::new("FORMAT")
+                        .long("format")
+                        .short('f')
+                        .help("Sets the collection format")
+                        .action(clap::ArgAction::Set)
+                        .default_value("parquet")
+                        .value_parser(value_parser!(Format)),
                 ),
         )
         .subcommand(
@@ -172,15 +183,25 @@ fn main() {
                         .short('i')
                         .help("Sets the collection interval")
                         .action(clap::ArgAction::Set)
+                        .default_value("1s")
                         .value_parser(value_parser!(humantime::Duration)),
                 )
                 .arg(
                     clap::Arg::new("DURATION")
-                        .long("interval")
-                        .short('i')
+                        .long("duration")
+                        .short('d')
                         .help("Sets the collection interval")
                         .action(clap::ArgAction::Set)
                         .value_parser(value_parser!(humantime::Duration)),
+                )
+                .arg(
+                    clap::Arg::new("FORMAT")
+                        .long("format")
+                        .short('f')
+                        .help("Sets the collection format")
+                        .action(clap::ArgAction::Set)
+                        .default_value("parquet")
+                        .value_parser(value_parser!(Format)),
                 ),
         )
         .get_matches();
@@ -201,7 +222,10 @@ fn main() {
             duration: *args
                 .get_one::<humantime::Duration>("DURATION")
                 .unwrap_or(&humantime::Duration::from_str("15m").unwrap()),
-            format: Format::Parquet,
+            format: args
+                .get_one::<Format>("FORMAT")
+                .copied()
+                .unwrap_or(Format::Parquet),
         }),
         Some(("record", args)) => recorder::run(RecorderConfig {
             url: args.get_one::<Url>("URL").unwrap().clone(),
@@ -211,7 +235,10 @@ fn main() {
                 .get_one::<humantime::Duration>("INTERVAL")
                 .unwrap_or(&humantime::Duration::from_str("1s").unwrap()),
             duration: args.get_one::<humantime::Duration>("DURATION").copied(),
-            format: Format::Parquet,
+            format: args
+                .get_one::<Format>("FORMAT")
+                .copied()
+                .unwrap_or(Format::Parquet),
         }),
         _ => {
             unimplemented!()
