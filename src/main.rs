@@ -222,7 +222,10 @@ fn main() {
             duration: *args
                 .get_one::<humantime::Duration>("DURATION")
                 .unwrap_or(&humantime::Duration::from_str("15m").unwrap()),
-            format: args.get_one::<Format>("FORMAT").copied().unwrap_or(Format::Parquet),
+            format: args
+                .get_one::<Format>("FORMAT")
+                .copied()
+                .unwrap_or(Format::Parquet),
         }),
         Some(("record", args)) => recorder::run(RecorderConfig {
             url: args.get_one::<Url>("URL").unwrap().clone(),
@@ -232,7 +235,10 @@ fn main() {
                 .get_one::<humantime::Duration>("INTERVAL")
                 .unwrap_or(&humantime::Duration::from_str("1s").unwrap()),
             duration: args.get_one::<humantime::Duration>("DURATION").copied(),
-            format: args.get_one::<Format>("FORMAT").copied().unwrap_or(Format::Parquet),
+            format: args
+                .get_one::<Format>("FORMAT")
+                .copied()
+                .unwrap_or(Format::Parquet),
         }),
         _ => {
             unimplemented!()
