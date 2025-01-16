@@ -99,6 +99,7 @@ curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
 dpkg-source --build .
 
 # Generate the changelog file
+export RELEASE="$RELEASE"
 cp -p debian/changelog /tmp/changelog
 trap 'cp -fp /tmp/changelog debian/changelog' EXIT
 ./debian/gen-changelog.sh > debian/changelog
