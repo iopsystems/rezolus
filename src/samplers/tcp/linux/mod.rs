@@ -1,5 +1,3 @@
-mod stats;
-
 mod connect_latency;
 mod connection_state;
 mod packet_latency;

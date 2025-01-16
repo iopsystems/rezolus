@@ -1,8 +1,11 @@
 const NAME: &str = "rezolus_rusage";
 
 use crate::common::*;
-use crate::samplers::rezolus::stats::*;
 use crate::*;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {

@@ -1,12 +1,15 @@
 const NAME: &str = "filesystem_descriptors";
 
 use crate::common::*;
-use crate::samplers::filesystem::linux::stats::*;
 use crate::*;
 
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {

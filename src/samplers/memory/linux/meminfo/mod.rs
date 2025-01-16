@@ -1,7 +1,6 @@
 const NAME: &str = "memory_meminfo";
 
 use crate::common::*;
-use crate::samplers::memory::linux::stats::*;
 use crate::*;
 
 use metriken::LazyGauge;
@@ -10,6 +9,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
 
 use std::collections::HashMap;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {

@@ -1,6 +1,9 @@
 const NAME: &str = "tcp_connection_state";
 
-use crate::samplers::tcp::linux::stats::*;
+mod stats;
+
+use stats::*;
+
 use crate::*;
 
 use metriken::LazyGauge;

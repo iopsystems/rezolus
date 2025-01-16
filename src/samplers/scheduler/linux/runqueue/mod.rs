@@ -15,10 +15,12 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/scheduler_runqueue.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
+use stats::*;
 
 use crate::common::*;
-use crate::samplers::scheduler::linux::stats::*;
 use crate::*;
 
 use std::sync::Arc;

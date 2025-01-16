@@ -12,10 +12,12 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/blockio_requests.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
+use stats::*;
 
 use crate::common::*;
-use crate::samplers::blockio::linux::stats::*;
 use crate::*;
 
 use std::sync::Arc;
