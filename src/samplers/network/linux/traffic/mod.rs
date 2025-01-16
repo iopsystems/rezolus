@@ -15,10 +15,12 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/network_traffic.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
+use stats::*;
 
 use crate::common::*;
-use crate::samplers::network::linux::stats::*;
 use crate::*;
 
 use std::sync::Arc;

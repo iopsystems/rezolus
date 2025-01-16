@@ -1,6 +1,5 @@
 const NAME: &str = "gpu_nvidia";
 
-use crate::samplers::gpu::linux::stats::*;
 use crate::*;
 
 use nvml_wrapper::enum_wrappers::device::*;
@@ -8,6 +7,10 @@ use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use parking_lot::Mutex;
 use tokio::task::spawn_blocking;
+
+mod stats;
+
+use stats::*;
 
 const KB: i64 = 1024;
 const MB: i64 = 1024 * KB;

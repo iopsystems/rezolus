@@ -12,7 +12,10 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_packet_latency.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
+use stats::*;
 
 use crate::common::*;
 use crate::samplers::tcp::linux::stats::*;

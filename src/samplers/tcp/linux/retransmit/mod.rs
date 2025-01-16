@@ -10,10 +10,12 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/tcp_retransmit.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
+use stats::*;
 
 use crate::common::*;
-use crate::samplers::tcp::linux::stats::*;
 use crate::*;
 
 use std::sync::Arc;

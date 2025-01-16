@@ -1,5 +1,3 @@
-mod stats;
-
 mod sysfs;
 
 mod interfaces;

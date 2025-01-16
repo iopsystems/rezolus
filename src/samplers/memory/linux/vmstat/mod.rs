@@ -1,6 +1,5 @@
 const NAME: &str = "memory_vmstat";
 
-use crate::samplers::memory::linux::stats::*;
 use crate::*;
 
 use metriken::LazyCounter;
@@ -9,6 +8,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
 
 use std::collections::HashMap;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {

@@ -1,10 +1,13 @@
 const NAME: &str = "network_interfaces";
 
-use crate::samplers::network::linux::stats::*;
 use crate::samplers::network::linux::sysfs::SysfsSampler;
 use crate::*;
 
 use tokio::sync::Mutex;
+
+mod stats;
+
+use stats::*;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {

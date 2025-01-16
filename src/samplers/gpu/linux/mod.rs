@@ -1,3 +1,1 @@
-mod stats;
-
 mod nvidia;

@@ -18,10 +18,12 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/syscall_latency.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
+use stats::*;
 
 use crate::common::*;
-use crate::samplers::syscall::linux::stats::*;
 use crate::samplers::syscall::linux::syscall_lut;
 use crate::*;
 
