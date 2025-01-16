@@ -13,9 +13,9 @@ mod bpf {
 }
 
 use bpf::*;
+use stats::*;
 
 use crate::common::*;
-use crate::samplers::blockio::linux::stats::*;
 use crate::*;
 
 use std::sync::Arc;
