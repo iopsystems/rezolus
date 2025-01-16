@@ -12,6 +12,8 @@ mod bpf {
     include!(concat!(env!("OUT_DIR"), "/blockio_requests.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
 use stats::*;
 
