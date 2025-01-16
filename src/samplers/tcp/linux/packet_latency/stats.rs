@@ -2,7 +2,7 @@ use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::*;
 
 #[metric(
-    name = "tcp/packet_latency",
+    name = "tcp_packet_latency",
     description = "Distribution of latency from a socket becoming readable until a userspace read",
     metadata = { unit = "nanoseconds" }
 )]

@@ -25,7 +25,6 @@ pub static BLOCKIO_WRITE_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_
 #[metric(
     name = "blockio_operations",
     description = "The number of completed read operations for block devices",
-    formatter = blockio_ops_metric_formatter,
     metadata = { op = "read", unit = "operations" }
 )]
 pub static BLOCKIO_READ_OPS: LazyCounter = LazyCounter::new(Counter::default);
@@ -33,7 +32,6 @@ pub static BLOCKIO_READ_OPS: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "blockio_operations",
     description = "The number of completed write operations for block devices",
-    formatter = blockio_ops_metric_formatter,
     metadata = { op = "write", unit = "operations" }
 )]
 pub static BLOCKIO_WRITE_OPS: LazyCounter = LazyCounter::new(Counter::default);
@@ -41,7 +39,6 @@ pub static BLOCKIO_WRITE_OPS: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "blockio_operations",
     description = "The number of completed discard operations for block devices",
-    formatter = blockio_ops_metric_formatter,
     metadata = { op = "discard", unit = "operations" }
 )]
 pub static BLOCKIO_DISCARD_OPS: LazyCounter = LazyCounter::new(Counter::default);
@@ -49,7 +46,6 @@ pub static BLOCKIO_DISCARD_OPS: LazyCounter = LazyCounter::new(Counter::default)
 #[metric(
     name = "blockio_operations",
     description = "The number of completed flush operations for block devices",
-    formatter = blockio_ops_metric_formatter,
     metadata = { op = "flush", unit = "operations" }
 )]
 pub static BLOCKIO_FLUSH_OPS: LazyCounter = LazyCounter::new(Counter::default);
@@ -57,7 +53,6 @@ pub static BLOCKIO_FLUSH_OPS: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "blockio_bytes",
     description = "The number of bytes read for block devices",
-    formatter = blockio_bytes_metric_formatter,
     metadata = { op = "read", unit = "bytes" }
 )]
 pub static BLOCKIO_READ_BYTES: LazyCounter = LazyCounter::new(Counter::default);
@@ -65,7 +60,6 @@ pub static BLOCKIO_READ_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "blockio_bytes",
     description = "The number of bytes written for block devices",
-    formatter = blockio_bytes_metric_formatter,
     metadata = { op = "write", unit = "bytes" }
 )]
 pub static BLOCKIO_WRITE_BYTES: LazyCounter = LazyCounter::new(Counter::default);
@@ -73,7 +67,6 @@ pub static BLOCKIO_WRITE_BYTES: LazyCounter = LazyCounter::new(Counter::default)
 #[metric(
     name = "blockio_bytes",
     description = "The number of bytes discarded for block devices",
-    formatter = blockio_bytes_metric_formatter,
     metadata = { op = "discard", unit = "bytes" }
 )]
 pub static BLOCKIO_DISCARD_BYTES: LazyCounter = LazyCounter::new(Counter::default);
@@ -81,35 +74,6 @@ pub static BLOCKIO_DISCARD_BYTES: LazyCounter = LazyCounter::new(Counter::defaul
 #[metric(
     name = "blockio_bytes",
     description = "The number of bytes flushed for block devices",
-    formatter = blockio_bytes_metric_formatter,
     metadata = { op = "flush", unit = "bytes" }
 )]
 pub static BLOCKIO_FLUSH_BYTES: LazyCounter = LazyCounter::new(Counter::default);
-
-// metric formatters
-
-pub fn blockio_bytes_metric_formatter(metric: &MetricEntry, format: Format) -> String {
-    match format {
-        Format::Simple => {
-            let op = metric
-                .metadata()
-                .get("op")
-                .expect("no `op` for metric formatter");
-            format!("blockio_{op}_bytes")
-        }
-        _ => metric.name().to_string(),
-    }
-}
-
-pub fn blockio_ops_metric_formatter(metric: &MetricEntry, format: Format) -> String {
-    match format {
-        Format::Simple => {
-            let op = metric
-                .metadata()
-                .get("op")
-                .expect("no `op` for metric formatter");
-            format!("blockio_{op}_operations")
-        }
-        _ => metric.name().to_string(),
-    }
-}
