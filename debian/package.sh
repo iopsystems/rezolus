@@ -73,7 +73,7 @@ done
 pushgroup() {
     (
         set +x
-        if [ -n "$CI" ]; then
+        if [ -n "${CI:-}" ]; then
             echo "::group::$*"
         fi
     )
@@ -82,7 +82,7 @@ pushgroup() {
 nextgroup() {
     (
         set +x
-        if [ -n "$CI" ]; then
+        if [ -n "${CI:-}" ]; then
             echo "::endgroup::"
             echo "::group::$*"
         fi
@@ -92,7 +92,7 @@ nextgroup() {
 popgroup() {
     (
         set +x
-        if [ -n "$CI" ]; then
+        if [ -n "${CI:-}" ]; then
             echo "::endgroup::"
         fi
     )
