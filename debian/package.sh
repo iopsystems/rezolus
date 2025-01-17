@@ -10,11 +10,10 @@ REZOLUS=/mnt/rezolus
 OUTPUT=/mnt/output
 RELEASE=0
 CHOWN=
-ARCH=
 
 help() {
     cat <<EOF
-$PROGRAM - Built rezolus debian packages.
+$PROGRAM - Build rezolus debian packages.
 
 USAGE:
     $PROGRAM <FLAGS>
@@ -93,7 +92,7 @@ apt-get -q install -y build-essential curl jq lsb-release unzip gpg
 
 # Install rust
 curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
-. "$HOME/.cargo/env"
+export PATH="$HOME/.cargo/env:$PATH"
 
 # Build source package
 dpkg-source --build .
