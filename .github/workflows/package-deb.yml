@@ -87,7 +87,7 @@ jobs:
       - name: run packaging script
         run: |
           mkdir -p target/debian
-          docker run -it --rm                   \
+          docker run --rm                   \
             -v $(pwd):/mnt/rezolus              \
             -v $(pwd)/target/debian:/mnt/output \
             ${{ matrix.distro }}:${{ matrix.release }} \
