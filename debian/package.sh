@@ -70,6 +70,26 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+pushgroup() {
+    if [ -n "$CI" ]; then
+        echo "::group::$*"
+    fi
+}
+
+nextgroup() {
+    if [ -n "$CI" ]; then
+        echo "::endgroup::"
+        echo "::group::$*"
+    fi
+}
+
+popgroup() {
+    if [ -n "$CI" ]; then
+        echo "::endgroup::"
+    fi
+}
+
+
 if $VERBOSE; then
     set -x
 fi
@@ -82,7 +102,7 @@ shopt -s nullglob globstar
 
 cd "$REZOLUS"
 
-# Install required dependencies
+pushgroup install required dependencies
 
 # Disable tzdata requests or other things that may require user interaction
 export DEBIAN_FRONTEND=noninteractive
@@ -90,29 +110,31 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get -q update
 apt-get -q install -y build-essential curl jq lsb-release unzip gpg
 
-# Install rust
+nextgroup install rust
 curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
-export PATH="$HOME/.cargo/env:$PATH"
+. "$HOME/.cargo/env"
 
-# Build source package
+nextgroup build source package
 dpkg-source --build .
 
-# Generate the changelog file
+nextgroup generate changelog
 export RELEASE="$RELEASE"
 cp -p debian/changelog /tmp/changelog
 trap 'cp -fp /tmp/changelog debian/changelog' EXIT
-./debian/gen-changelog.sh > debian/changelog
+./debian/gen-changelog.sh | tee debian/changelog
 
-# Install build dependencies
+nextgroup install build dependencies
 apt-get -q build-dep -y ../rezolus*.dsc
 
-# Build the package
+nextgroup build the package
 dpkg-buildpackage -b -us -uc
 
-# Change ownership of the deb files, if requested
+nextgroup change ownership of deb files
 if [ -n "$CHOWN" ]; then
     chown "$CHOWN" ../*.deb ../*.ddeb
 fi
 
-# Copy the debs to the output directory
+nextgroup copy deb files to the output directory
 cp ../*.deb ../*.ddeb "$OUTPUT"
+
+popgroup
