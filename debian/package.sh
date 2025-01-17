@@ -71,22 +71,31 @@ while [ $# -gt 0 ]; do
 done
 
 pushgroup() {
-    if [ -n "$CI" ]; then
-        echo "::group::$*"
-    fi
+    (
+        set +x
+        if [ -n "$CI" ]; then
+            echo "::group::$*"
+        fi
+    )
 }
 
 nextgroup() {
-    if [ -n "$CI" ]; then
-        echo "::endgroup::"
-        echo "::group::$*"
-    fi
+    (
+        set +x
+        if [ -n "$CI" ]; then
+            echo "::endgroup::"
+            echo "::group::$*"
+        fi
+    )
 }
 
 popgroup() {
-    if [ -n "$CI" ]; then
-        echo "::endgroup::"
-    fi
+    (
+        set +x
+        if [ -n "$CI" ]; then
+            echo "::endgroup::"
+        fi
+    )
 }
 
 
