@@ -34,7 +34,7 @@ USE WITH DOCKER:
     docker run -it --rm \\
         -v \$(pwd):/mnt/rezolus \\
         -v \$(pwd)/target/debian:/mnt/output \\
-        ubuntu:focal /mnt/rezolus/debian/package.sh --release 0 --chown \$(id -u) --verbose
+        ubuntu:noble /mnt/rezolus/debian/package.sh --release 0 --chown \$(id -u) --verbose
 
     You should be able to swap out the docker container in order to build for different
     distros, provided that rezolus can be built on each distro. Note that you may have to
