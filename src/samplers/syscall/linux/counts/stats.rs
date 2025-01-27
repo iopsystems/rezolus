@@ -1,5 +1,7 @@
 use metriken::*;
 
+use crate::common::*;
+
 #[metric(
     name = "syscall_total",
     description = "The total number of syscalls",
@@ -62,3 +64,10 @@ pub static SYSCALL_SOCKET: LazyCounter = LazyCounter::new(Counter::default);
     metadata = { unit = "syscalls" }
 )]
 pub static SYSCALL_YIELD: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "cgroup_syscall_total",
+    description = "The total number of syscalls on a per-cgroup basis",
+    metadata = { unit = "syscalls" }
+)]
+pub static CGROUP_SYSCALL_TOTAL: CounterGroup = CounterGroup::new(MAX_CGROUPS);

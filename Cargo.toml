@@ -48,13 +48,13 @@ core_affinity = "0.8.1"
 chrono = "0.4.39"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libbpf-rs = { version = "0.24.2" }
-libbpf-sys = { version = "1.4.3" }
+libbpf-rs = { version = "0.24.8" }
+libbpf-sys = { version = "1.5.0" }
 perf-event2 = "0.7.4"
 nvml-wrapper = "0.10.0"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
-libbpf-cargo = { version = "0.24.2" }
+libbpf-cargo = { version = "0.24.8" }
 
 [profile.bench]
 debug = true
