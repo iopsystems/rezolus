@@ -6,6 +6,7 @@ Standards-Version: 4.6.2
 Build-Depends: 
     debhelper (>= 10),
     pkg-config,
+    libssl-dev,
     libelf-dev,
     libelf-dev:native,
     clang:native

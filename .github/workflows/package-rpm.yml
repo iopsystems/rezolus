@@ -59,7 +59,7 @@ jobs:
       - name: install build dependencies
         shell: bash
         run: |
-          yum install -y gcc elfutils-devel clang
+          yum install -y gcc elfutils-devel clang openssl-devel
 
       - uses: Swatinem/rust-cache@v2
         with:

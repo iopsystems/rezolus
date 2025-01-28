@@ -45,7 +45,6 @@ jobs:
   build-deb:
     name: "${{ matrix.distro }}:${{ matrix.release }}"
     runs-on: buildjet-16vcpu-ubuntu-2204${{ matrix.arch == 'arm64' && '-arm' || '' }}
-    container: "${{ matrix.distro }}:${{ matrix.release }}"
     strategy:
       matrix:
         include:
@@ -73,59 +72,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install buildsystem apt dependencies
-        run: |
-          apt-get update
-          apt-get install -y            \
-            build-essential             \
-            curl jq lsb-release unzip gpg
-
-      - name: install rust
-        run: |
-          curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
-          echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: build-deb-${{ matrix.distro }}-${{ matrix.release }}-${{ matrix.arch }}
-
-      - name: check cargo
-        shell: bash
-        run: |
-          echo "::group::rustc -vV"
-          rustc -vV
-          echo "::endgroup::"
-          echo "::group::cargo -vV"
-          cargo -vV
-          echo "::endgroup::"
-
       - name: set release env var
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         run: |
           echo 'RELEASE=${{ github.event.inputs.release }}' >> $GITHUB_ENV
-
-      # Changelogs with revisions cause dpkg-source to emit an error when
-      # building. We only use the source package to install the build deps
-      # so building it with an invalid version is ok.
-      - name: build source package
-        run: dpkg-source --build .
-
-      - name: generate changelog
-        shell: bash
-        run: ./debian/gen-changelog.sh > debian/changelog
-
-      - name: install build dependencies
-        run: apt-get build-dep -y ../rezolus*.dsc
-      - name: build package
-        run: dpkg-buildpackage -b -us -uc
-
-      - name: copy debs
+      
+      - name: set release env var
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         shell: bash
         run: |
-          shopt -s nullglob
+          echo 'RELEASE=0' >> $GITHUB_ENV
+
+      - name: run packaging script
+        run: |
           mkdir -p target/debian
-          cp ../*.deb ../*.ddeb target/debian/
+          docker run --rm                   \
+            -v $(pwd):/mnt/rezolus              \
+            -v $(pwd)/target/debian:/mnt/output \
+            ${{ matrix.distro }}:${{ matrix.release }} \
+            /mnt/rezolus/debian/package.sh      \
+            --release "$RELEASE"                \
+            --chown "$(id -u)"                  \
+            --verbose
 
       - uses: actions/upload-artifact@v4
         with:
