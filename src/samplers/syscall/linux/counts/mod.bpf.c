@@ -66,7 +66,10 @@ struct {
 	__uint(max_entries, MAX_SYSCALL_ID);
 } syscall_lut SEC(".maps");
 
-// per-cgroup syscalls - other
+/*
+ * per-cgroup counters
+ */
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -75,7 +78,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_other SEC(".maps");
 
-// per-cgroup syscalls - read
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -84,7 +86,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_read SEC(".maps");
 
-// per-cgroup syscalls - write
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -93,7 +94,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_write SEC(".maps");
 
-// per-cgroup syscalls - write
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -102,7 +102,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_poll SEC(".maps");
 
-// per-cgroup syscalls - write
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -111,7 +110,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_lock SEC(".maps");
 
-// per-cgroup syscalls - write
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -120,7 +118,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_time SEC(".maps");
 
-// per-cgroup syscalls - write
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -129,7 +126,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_sleep SEC(".maps");
 
-// per-cgroup syscalls - write
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -138,7 +134,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_socket SEC(".maps");
 
-// per-cgroup syscalls - write
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
