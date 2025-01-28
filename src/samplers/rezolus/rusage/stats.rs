@@ -3,14 +3,14 @@ use metriken::*;
 #[metric(
     name = "rezolus_cpu_usage",
     description = "The amount of CPU time Rezolus was executing in user mode",
-    metadata = { mode = "user", unit = "nanoseconds" }
+    metadata = { state = "user", unit = "nanoseconds" }
 )]
 pub static RU_UTIME: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "rezolus_cpu_usage",
     description = "The amount of CPU time Rezolus was executing in system mode",
-    metadata = { mode = "system", unit = "nanoseconds" }
+    metadata = { state = "system", unit = "nanoseconds" }
 )]
 pub static RU_STIME: LazyCounter = LazyCounter::new(Counter::default);
 
