@@ -36,7 +36,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .histogram("total_latency", &SYSCALL_TOTAL_LATENCY)
+        .histogram("other_latency", &SYSCALL_OTHER_LATENCY)
         .histogram("read_latency", &SYSCALL_READ_LATENCY)
         .histogram("write_latency", &SYSCALL_WRITE_LATENCY)
         .histogram("poll_latency", &SYSCALL_POLL_LATENCY)
@@ -54,7 +54,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
-            "total_latency" => &self.maps.total_latency,
+            "other_latency" => &self.maps.other_latency,
             "read_latency" => &self.maps.read_latency,
             "write_latency" => &self.maps.write_latency,
             "poll_latency" => &self.maps.poll_latency,
