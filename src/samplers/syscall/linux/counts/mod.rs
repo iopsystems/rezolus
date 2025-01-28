@@ -61,7 +61,9 @@ fn handle_event(data: &[u8]) -> i32 {
         let id = cgroup_info.id;
 
         if !name.is_empty() {
-            CGROUP_SYSCALL_TOTAL.insert_metadata(id as usize, "name".to_string(), name);
+            CGROUP_SYSCALL_OTHER.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_READ.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_WRITE.insert_metadata(id as usize, "name".to_string(), name);
         }
     }
 
@@ -75,7 +77,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     let counters = vec![
-        &SYSCALL_TOTAL,
+        &SYSCALL_OTHER,
         &SYSCALL_READ,
         &SYSCALL_WRITE,
         &SYSCALL_POLL,
@@ -89,7 +91,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .counters("counters", counters)
         .map("syscall_lut", syscall_lut())
-        .packed_counters("cgroup_syscall_total", &CGROUP_SYSCALL_TOTAL)
+        .packed_counters("cgroup_syscall_other", &CGROUP_SYSCALL_OTHER)
+        .packed_counters("cgroup_syscall_read", &CGROUP_SYSCALL_READ)
+        .packed_counters("cgroup_syscall_write", &CGROUP_SYSCALL_WRITE)
         .ringbuf_handler("cgroup_info", handle_event)
         .build()?;
 
@@ -100,7 +104,9 @@ impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "cgroup_info" => &self.maps.cgroup_info,
-            "cgroup_syscall_total" => &self.maps.cgroup_syscall_total,
+            "cgroup_syscall_other" => &self.maps.cgroup_syscall_other,
+            "cgroup_syscall_read" => &self.maps.cgroup_syscall_read,
+            "cgroup_syscall_write" => &self.maps.cgroup_syscall_write,
             "counters" => &self.maps.counters,
             "syscall_lut" => &self.maps.syscall_lut,
             _ => unimplemented!(),
