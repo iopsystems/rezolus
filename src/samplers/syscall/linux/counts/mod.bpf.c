@@ -46,7 +46,7 @@ struct {
 } cgroup_serial_numbers SEC(".maps");
 
 // counters for syscalls
-// 0 - total
+// 0 - other
 // 1..COUNTER_GROUP_WIDTH - grouped syscalls defined in userspace in the
 //                          `syscall_lut` map
 struct {
@@ -66,19 +66,37 @@ struct {
 	__uint(max_entries, MAX_SYSCALL_ID);
 } syscall_lut SEC(".maps");
 
-// per-cgroup total syscalls
+// per-cgroup syscalls - other
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, MAX_CGROUPS);
-} cgroup_syscall_total SEC(".maps");
+} cgroup_syscall_other SEC(".maps");
+
+// per-cgroup syscalls - read
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_syscall_read SEC(".maps");
+
+// per-cgroup syscalls - write
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_syscall_write SEC(".maps");
 
 SEC("tracepoint/raw_syscalls/sys_enter")
 int sys_enter(struct trace_event_raw_sys_enter *args)
 {
-	u32 offset, idx;
+	u32 offset, idx, group = 0;
 	u64 *elem;
 
 	if (args->id < 0) {
@@ -88,9 +106,6 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 	u32 syscall_id = args->id;
 	offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
-	// update the total counter
-	array_incr(&counters, offset);
-
 	// for some syscalls, we track counts by "family" of syscall. check the
 	// lookup table and increment the appropriate counter
 	idx = 0;
@@ -98,15 +113,12 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
 
 		if (counter_offset && *counter_offset && *counter_offset < COUNTER_GROUP_WIDTH) {
-			idx = offset + ((u32)*counter_offset);
-			array_incr(&counters, idx);
-		} else {
-			// syscall counter offset was outside of the expected range
-			// this indicates that the LUT contains invalid values
+			group = (u32)*counter_offset;
 		}
-	} else {
-		// syscall id was out of the expected range
 	}
+
+	idx = offset + group;
+	array_incr(&counters, idx);
 
 	struct task_struct *current = bpf_get_current_task_btf();
 
@@ -123,7 +135,9 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 			if (elem && *elem != serial_nr) {
 				// zero the counters, they will not be exported until they are non-zero
 				u64 zero = 0;
-				bpf_map_update_elem(&cgroup_syscall_total, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_syscall_other, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_syscall_read, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_syscall_write, &cgroup_id, &zero, BPF_ANY);
 
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
@@ -146,7 +160,17 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 				bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
 			}
 
-			array_incr(&cgroup_syscall_total, cgroup_id);
+			switch (group) {
+			    case 1:
+			        array_incr(&cgroup_syscall_read, cgroup_id);
+			        break;
+			    case 2:
+			        array_incr(&cgroup_syscall_write, cgroup_id);
+			        break;
+			    default:
+			        array_incr(&cgroup_syscall_other, cgroup_id);
+			        break;
+			}
 		}
 	}
 
