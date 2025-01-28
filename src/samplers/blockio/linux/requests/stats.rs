@@ -27,7 +27,8 @@ pub static BLOCKIO_FLUSH_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_
     description = "Distribution of blockio discard operation sizes in bytes",
     metadata = { op = "discard", unit = "bytes" }
 )]
-pub static BLOCKIO_DISCARD_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_DISCARD_SIZE: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_operations",
