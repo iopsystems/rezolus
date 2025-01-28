@@ -2,15 +2,8 @@
 /// * `raw_syscalls/sys_enter`
 ///
 /// And produces these stats:
-/// * `syscall/total`
-/// * `syscall/read`
-/// * `syscall/write`
-/// * `syscall/poll`
-/// * `syscall/lock`
-/// * `syscall/time`
-/// * `syscall/sleep`
-/// * `syscall/socket`
-/// * `syscall/yield`
+/// * `syscall`
+/// * `cgroup_syscall`
 
 const NAME: &str = "syscall_counts";
 
@@ -63,7 +56,13 @@ fn handle_event(data: &[u8]) -> i32 {
         if !name.is_empty() {
             CGROUP_SYSCALL_OTHER.insert_metadata(id as usize, "name".to_string(), name.clone());
             CGROUP_SYSCALL_READ.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_WRITE.insert_metadata(id as usize, "name".to_string(), name);
+            CGROUP_SYSCALL_WRITE.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_POLL.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_LOCK.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_TIME.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_SLEEP.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_SOCKET.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_SYSCALL_YIELD.insert_metadata(id as usize, "name".to_string(), name);
         }
     }
 
@@ -94,6 +93,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .packed_counters("cgroup_syscall_other", &CGROUP_SYSCALL_OTHER)
         .packed_counters("cgroup_syscall_read", &CGROUP_SYSCALL_READ)
         .packed_counters("cgroup_syscall_write", &CGROUP_SYSCALL_WRITE)
+        .packed_counters("cgroup_syscall_poll", &CGROUP_SYSCALL_POLL)
+        .packed_counters("cgroup_syscall_lock", &CGROUP_SYSCALL_LOCK)
+        .packed_counters("cgroup_syscall_time", &CGROUP_SYSCALL_TIME)
+        .packed_counters("cgroup_syscall_sleep", &CGROUP_SYSCALL_SLEEP)
+        .packed_counters("cgroup_syscall_socket", &CGROUP_SYSCALL_SOCKET)
+        .packed_counters("cgroup_syscall_yield", &CGROUP_SYSCALL_YIELD)
         .ringbuf_handler("cgroup_info", handle_event)
         .build()?;
 
@@ -107,6 +112,12 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_syscall_other" => &self.maps.cgroup_syscall_other,
             "cgroup_syscall_read" => &self.maps.cgroup_syscall_read,
             "cgroup_syscall_write" => &self.maps.cgroup_syscall_write,
+            "cgroup_syscall_poll" => &self.maps.cgroup_syscall_poll,
+            "cgroup_syscall_lock" => &self.maps.cgroup_syscall_lock,
+            "cgroup_syscall_time" => &self.maps.cgroup_syscall_time,
+            "cgroup_syscall_sleep" => &self.maps.cgroup_syscall_sleep,
+            "cgroup_syscall_socket" => &self.maps.cgroup_syscall_socket,
+            "cgroup_syscall_yield" => &self.maps.cgroup_syscall_yield,
             "counters" => &self.maps.counters,
             "syscall_lut" => &self.maps.syscall_lut,
             _ => unimplemented!(),
