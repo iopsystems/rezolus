@@ -24,7 +24,7 @@
 #define MAX_PID 4194304
 #define MAX_SYSCALL_ID 1024
 
-#define TOTAL 0
+#define OTHER 0
 #define READ 1
 #define WRITE 2
 #define POLL 3
@@ -41,14 +41,14 @@ struct {
 	__type(value, u64);
 } start SEC(".maps");
 
-// tracks the latency distribution of all syscalls
+// tracks the latency distribution of all other syscalls
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, HISTOGRAM_BUCKETS);
-} total_latency SEC(".maps");
+} other_latency SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -167,14 +167,12 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	// calculate the histogram index for this latency value
 	idx = value_to_index(lat, HISTOGRAM_POWER);
 
-	// update the total latency histogram
-	array_incr(&total_latency, idx);
-
 	// increment latency histogram for the syscall family
 	if (syscall_id < MAX_SYSCALL_ID) {
 		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
 
 		if (!counter_offset) {
+			array_incr(&other_latency, idx);
 			return 0;
 		}
 
@@ -203,7 +201,12 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 			case YIELD:
 				array_incr(&yield_latency, idx);
 				break;
+			default:
+				array_incr(&other_latency, idx);
+				break;
 		}
+	} else {
+		array_incr(&other_latency, idx);
 	}
 
 	return 0;
