@@ -8,7 +8,7 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
-#define COUNTER_GROUP_WIDTH 16
+#define COUNTER_GROUP_WIDTH 8
 #define MAX_CPUS 1024
 #define MAX_CGROUPS 4096
 #define RINGBUF_CAPACITY 32768
@@ -37,17 +37,16 @@ struct {
 } cgroup_serial_numbers SEC(".maps");
 
 // cpu usage stat index (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
-// 0 - busy total
-// 1 - user
-// 2 - nice
-// 3 - system
-// 4 - softirq
-// 5 - irq
+// 0 - user
+// 1 - nice
+// 2 - system
+// 3 - softirq
+// 4 - irq
 //   - idle - *NOTE* this will not increment. User-space must calculate it. This index is skipped
 //   - iowait - *NOTE* this will not increment. This index is skipped
-// 6 - steal
-// 7 - guest
-// 8 - guest_nice
+// 5 - steal
+// 6 - guest
+// 7 - guest_nice
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -56,35 +55,82 @@ struct {
 	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
-// per-cgroup busy
+// per-cgroup user
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, MAX_CGROUPS);
-} cgroup_busy SEC(".maps");
+} cgroup_user SEC(".maps");
 
-int account_delta(u64 delta, u32 usage_idx)
-{
-	u32 idx;
+// per-cgroup nice
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_nice SEC(".maps");
 
-	if (usage_idx < COUNTER_GROUP_WIDTH) {
-		// increment busy total
-		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
-		array_add(&counters, idx, delta);
+// per-cgroup system
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_system SEC(".maps");
 
-		// increment counter for this usage category
-		idx = idx + usage_idx;
-		array_add(&counters, idx, delta);
-	}
+// per-cgroup softirq
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_softirq SEC(".maps");
 
-	return 0;
-}
+// per-cgroup irq
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_irq SEC(".maps");
+
+// per-cgroup steal
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_steal SEC(".maps");
+
+// per-cgroup guest
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_guest SEC(".maps");
+
+// per-cgroup guest nice
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_guest_nice SEC(".maps");
 
 SEC("kprobe/cpuacct_account_field")
 int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 {
+	u32 idx;
 	u64 *elem;
 	
   // ignore both the idle and the iowait counting since both count the idle time
@@ -97,9 +143,11 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 	// this prevents having those counters mapped to non-incrementing values in
 	// this BPF program
 	if (index < IDLE_STAT_INDEX) {
-		account_delta(delta, index + 1);
+		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + index;
+		array_add(&counters, idx, delta);
 	} else {
-		account_delta(delta, index - 1);
+		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + index - 2;
+		array_add(&counters, idx, delta);
 	}
 
 	struct task_struct *current = bpf_get_current_task_btf();
@@ -117,7 +165,14 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 			if (elem && *elem != serial_nr) {
 				// zero the counters, they will not be exported until they are non-zero
 				u64 zero = 0;
-				bpf_map_update_elem(&cgroup_busy, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_user, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_nice, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_softirq, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_irq, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_steal, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_guest, &cgroup_id, &zero, BPF_ANY);
+				bpf_map_update_elem(&cgroup_guest_nice, &cgroup_id, &zero, BPF_ANY);
 
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
@@ -140,7 +195,34 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 				bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
 			}
 
-			array_add(&cgroup_busy, cgroup_id, delta);
+			switch (index) {
+				case 0:
+					array_add(&cgroup_user, cgroup_id, delta);
+					break;
+				case 1:
+					array_add(&cgroup_nice, cgroup_id, delta);
+					break;
+				case 2:
+					array_add(&cgroup_system, cgroup_id, delta);
+					break;
+				case 3:
+					array_add(&cgroup_softirq, cgroup_id, delta);
+					break;
+				case 4:
+					array_add(&cgroup_irq, cgroup_id, delta);
+					break;
+				case 7:
+					array_add(&cgroup_steal, cgroup_id, delta);
+					break;
+				case 8:
+					array_add(&cgroup_guest, cgroup_id, delta);
+					break;
+				case 9:
+					array_add(&cgroup_guest_nice, cgroup_id, delta);
+					break;
+				default:
+					break;
+			}
 		}
 	}
 

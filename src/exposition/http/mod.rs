@@ -90,10 +90,6 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
             continue;
         }
 
-        if name == "cpu/usage" && metric.metadata().get("state") == Some("busy") {
-            continue;
-        }
-
         let metadata: Vec<String> = metric
             .metadata()
             .iter()
