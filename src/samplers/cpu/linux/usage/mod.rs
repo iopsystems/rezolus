@@ -54,7 +54,14 @@ fn handle_event(data: &[u8]) -> i32 {
         let id = cgroup_info.id;
 
         if !name.is_empty() {
-            CGROUP_CPU_USAGE_BUSY.insert_metadata(id as usize, "name".to_string(), name);
+            CGROUP_CPU_USAGE_USER.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_USAGE_NICE.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_USAGE_SYSTEM.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_USAGE_SOFTIRQ.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_USAGE_IRQ.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_USAGE_STEAL.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_USAGE_GUEST.insert_metadata(id as usize, "name".to_string(), name.clone());
+            CGROUP_CPU_USAGE_GUEST_NICE.insert_metadata(id as usize, "name".to_string(), name);
         }
     }
 
@@ -68,7 +75,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     let counters = vec![
-        &CPU_USAGE_BUSY,
         &CPU_USAGE_USER,
         &CPU_USAGE_NICE,
         &CPU_USAGE_SYSTEM,
@@ -81,7 +87,14 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .cpu_counters("counters", counters)
-        .packed_counters("cgroup_busy", &CGROUP_CPU_USAGE_BUSY)
+        .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
+        .packed_counters("cgroup_nice", &CGROUP_CPU_USAGE_NICE)
+        .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
+        .packed_counters("cgroup_softirq", &CGROUP_CPU_USAGE_SOFTIRQ)
+        .packed_counters("cgroup_irq", &CGROUP_CPU_USAGE_IRQ)
+        .packed_counters("cgroup_steal", &CGROUP_CPU_USAGE_STEAL)
+        .packed_counters("cgroup_guest", &CGROUP_CPU_USAGE_GUEST)
+        .packed_counters("cgroup_guest_nice", &CGROUP_CPU_USAGE_GUEST_NICE)
         .ringbuf_handler("cgroup_info", handle_event)
         .build()?;
 
@@ -92,7 +105,14 @@ impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "cgroup_info" => &self.maps.cgroup_info,
-            "cgroup_busy" => &self.maps.cgroup_busy,
+            "cgroup_user" => &self.maps.cgroup_user,
+            "cgroup_nice" => &self.maps.cgroup_nice,
+            "cgroup_system" => &self.maps.cgroup_system,
+            "cgroup_softirq" => &self.maps.cgroup_softirq,
+            "cgroup_irq" => &self.maps.cgroup_irq,
+            "cgroup_steal" => &self.maps.cgroup_steal,
+            "cgroup_guest" => &self.maps.cgroup_guest,
+            "cgroup_guest_nice" => &self.maps.cgroup_guest_nice,
             "counters" => &self.maps.counters,
             _ => unimplemented!(),
         }
