@@ -47,14 +47,6 @@ struct {
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, HISTOGRAM_BUCKETS);
-} size SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
 } read_size SEC(".maps");
 
 struct {
@@ -64,6 +56,22 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, HISTOGRAM_BUCKETS);
 } write_size SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} flush_size SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} discard_size SEC(".maps");
 
 static int handle_block_rq_complete(struct request *rq, int error, unsigned int nr_bytes)
 {
@@ -84,16 +92,19 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 
 		idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
 
-		// increment size histogram for all ops
-		array_incr(&size, idx);
-
-		// incremenet per-operation size histogram
+		// increment per-operation size histogram
 		switch (op) {
 			case REQ_OP_READ:
 				array_incr(&read_size, idx);
 				break;
 			case REQ_OP_WRITE:
 				array_incr(&write_size, idx);
+				break;
+			case REQ_OP_FLUSH:
+				array_incr(&flush_size, idx);
+				break;
+			case REQ_OP_DISCARD:
+				array_incr(&discard_size, idx);
 				break;
 		}
 	}

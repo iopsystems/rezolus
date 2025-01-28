@@ -2,9 +2,9 @@
 /// * `block_rq_complete`
 ///
 /// And produces these stats:
-/// * `blockio/*/operations`
-/// * `blockio/*/bytes`
-/// * `blockio/size`
+/// * `blockio_bytes`
+/// * `blockio_operations`
+/// * `blockio_size`
 
 static NAME: &str = "blockio_requests";
 
@@ -41,9 +41,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .counters("counters", counters)
-        .histogram("size", &BLOCKIO_SIZE)
         .histogram("read_size", &BLOCKIO_READ_SIZE)
         .histogram("write_size", &BLOCKIO_WRITE_SIZE)
+        .histogram("flush_size", &BLOCKIO_FLUSH_SIZE)
+        .histogram("discard_size", &BLOCKIO_DISCARD_SIZE)
         .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -53,9 +54,10 @@ impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "counters" => &self.maps.counters,
-            "size" => &self.maps.size,
             "read_size" => &self.maps.read_size,
             "write_size" => &self.maps.write_size,
+            "flush_size" => &self.maps.flush_size,
+            "discard_size" => &self.maps.discard_size,
             _ => unimplemented!(),
         }
     }
