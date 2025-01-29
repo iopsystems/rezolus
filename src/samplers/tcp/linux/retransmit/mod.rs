@@ -26,7 +26,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let counters = vec![&TCP_TX_RETRANSMIT];
+    let counters = vec![&TCP_RETRANSMIT];
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .counters("counters", counters)
