@@ -37,14 +37,6 @@ struct {
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, HISTOGRAM_BUCKETS);
-} latency SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
 } read_latency SEC(".maps");
 
 struct {
@@ -54,6 +46,22 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, HISTOGRAM_BUCKETS);
 } write_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} flush_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} discard_latency SEC(".maps");
 
 static int __always_inline trace_rq_start(struct request *rq, int issue)
 {
@@ -92,16 +100,19 @@ static int handle_block_rq_complete(struct request *rq, int error, unsigned int 
 
 		idx = value_to_index(delta, HISTOGRAM_POWER);
 
-		// increment total latency histogram
-		array_incr(&latency, idx);
-
-		// incremenet per-operation latency histogram
+		// increment per-operation latency histogram
 		switch (op) {
 			case REQ_OP_READ:
 				array_incr(&read_latency, idx);
 				break;
 			case REQ_OP_WRITE:
 				array_incr(&write_latency, idx);
+				break;
+			case REQ_OP_FLUSH:
+				array_incr(&flush_latency, idx);
+				break;
+			case REQ_OP_DISCARD:
+				array_incr(&discard_latency, idx);
 				break;
 		}
 	}

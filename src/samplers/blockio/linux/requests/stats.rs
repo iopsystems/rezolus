@@ -3,24 +3,32 @@ use metriken::*;
 
 #[metric(
     name = "blockio_size",
-    description = "Distribution of blockio operation sizes in bytes",
-    metadata = { unit = "bytes" }
-)]
-pub static BLOCKIO_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
-
-#[metric(
-    name = "blockio_read_size",
     description = "Distribution of blockio read operation sizes in bytes",
-    metadata = { unit = "bytes" }
+    metadata = { op = "read", unit = "bytes" }
 )]
 pub static BLOCKIO_READ_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
-    name = "blockio_write_size",
+    name = "blockio_size",
     description = "Distribution of blockio write operation sizes in bytes",
-    metadata = { unit = "bytes" }
+    metadata = { op = "write", unit = "bytes" }
 )]
 pub static BLOCKIO_WRITE_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio_size",
+    description = "Distribution of blockio flush operation sizes in bytes",
+    metadata = { op = "flush", unit = "bytes" }
+)]
+pub static BLOCKIO_FLUSH_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio_size",
+    description = "Distribution of blockio discard operation sizes in bytes",
+    metadata = { op = "discard", unit = "bytes" }
+)]
+pub static BLOCKIO_DISCARD_SIZE: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_operations",
