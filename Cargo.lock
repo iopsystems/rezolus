@@ -2308,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "4.1.3-alpha.0"
+version = "5.0.0-alpha.0"
 dependencies = [
  "anyhow",
  "async-trait",
