@@ -24,16 +24,6 @@
 #define MAX_PID 4194304
 #define MAX_SYSCALL_ID 1024
 
-#define OTHER 0
-#define READ 1
-#define WRITE 2
-#define POLL 3
-#define LOCK 4
-#define TIME 5
-#define SLEEP 6
-#define SOCKET 7
-#define YIELD 8
-
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(max_entries, MAX_PID);
@@ -140,7 +130,7 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 {
 	u64 id = bpf_get_current_pid_tgid();
 	u64 *start_ts, lat = 0;
-	u32 tid = id;
+	u32 tid = id, group = 0;
 
 	u32 idx;
 
@@ -171,42 +161,39 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 	if (syscall_id < MAX_SYSCALL_ID) {
 		u32 *counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
 
-		if (!counter_offset) {
-			array_incr(&other_latency, idx);
-			return 0;
+		if (counter_offset && *counter_offset && *counter_offset < COUNTER_GROUP_WIDTH) {
+			group = (u32)*counter_offset;
 		}
+	}
 
-		switch (*counter_offset) {
-			case READ:
-				array_incr(&read_latency, idx);
-				break;
-			case WRITE:
-				array_incr(&write_latency, idx);
-				break;
-			case POLL:
-				array_incr(&poll_latency, idx);
-				break;
-			case LOCK:
-				array_incr(&lock_latency, idx);
-				break;
-			case TIME:
-				array_incr(&time_latency, idx);
-				break;
-			case SLEEP:
-				array_incr(&sleep_latency, idx);
-				break;
-			case SOCKET:
-				array_incr(&socket_latency, idx);
-				break;
-			case YIELD:
-				array_incr(&yield_latency, idx);
-				break;
-			default:
-				array_incr(&other_latency, idx);
-				break;
-		}
-	} else {
-		array_incr(&other_latency, idx);
+	switch (group) {
+		case 1:
+			array_incr(&read_latency, idx);
+			break;
+		case 2:
+			array_incr(&write_latency, idx);
+			break;
+		case 3:
+			array_incr(&poll_latency, idx);
+			break;
+		case 4:
+			array_incr(&lock_latency, idx);
+			break;
+		case 5:
+			array_incr(&time_latency, idx);
+			break;
+		case 6:
+			array_incr(&sleep_latency, idx);
+			break;
+		case 7:
+			array_incr(&socket_latency, idx);
+			break;
+		case 8:
+			array_incr(&yield_latency, idx);
+			break;
+		default:
+			array_incr(&other_latency, idx);
+			break;
 	}
 
 	return 0;

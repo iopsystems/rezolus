@@ -216,33 +216,33 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 			}
 
 			switch (group) {
-			    case 1:
-			        array_incr(&cgroup_syscall_read, cgroup_id);
-			        break;
-			    case 2:
-			        array_incr(&cgroup_syscall_write, cgroup_id);
-			        break;
-			    case 3:
-			        array_incr(&cgroup_syscall_poll, cgroup_id);
-			        break;
-			    case 4:
-			        array_incr(&cgroup_syscall_lock, cgroup_id);
-			        break;
-			    case 5:
-			        array_incr(&cgroup_syscall_time, cgroup_id);
-			        break;
-			    case 6:
-			        array_incr(&cgroup_syscall_sleep, cgroup_id);
-			        break;
-			    case 7:
-			        array_incr(&cgroup_syscall_socket, cgroup_id);
-			        break;
-			    case 8:
-			        array_incr(&cgroup_syscall_yield, cgroup_id);
-			        break;
-			    default:
-			        array_incr(&cgroup_syscall_other, cgroup_id);
-			        break;
+				case 1:
+					array_incr(&cgroup_syscall_read, cgroup_id);
+					break;
+				case 2:
+					array_incr(&cgroup_syscall_write, cgroup_id);
+					break;
+				case 3:
+					array_incr(&cgroup_syscall_poll, cgroup_id);
+					break;
+				case 4:
+					array_incr(&cgroup_syscall_lock, cgroup_id);
+					break;
+				case 5:
+					array_incr(&cgroup_syscall_time, cgroup_id);
+					break;
+				case 6:
+					array_incr(&cgroup_syscall_sleep, cgroup_id);
+					break;
+				case 7:
+					array_incr(&cgroup_syscall_socket, cgroup_id);
+					break;
+				case 8:
+					array_incr(&cgroup_syscall_yield, cgroup_id);
+					break;
+				default:
+					array_incr(&cgroup_syscall_other, cgroup_id);
+					break;
 			}
 		}
 	}

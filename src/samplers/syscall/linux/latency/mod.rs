@@ -12,7 +12,7 @@
 /// * `syscall/socket`
 /// * `syscall/yield`
 
-const NAME: &str = "syscall_counts";
+const NAME: &str = "syscall_latency";
 
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/syscall_latency.bpf.rs"));
