@@ -1,9 +1,9 @@
-/// Collects Syscall stats using BPF and traces:
-/// * `raw_syscalls/sys_enter`
-///
-/// And produces these stats:
-/// * `syscall`
-/// * `cgroup_syscall`
+//! Collects Syscall stats using BPF and traces:
+//! * `raw_syscalls/sys_enter`
+//!
+//! And produces these stats:
+//! * `syscall`
+//! * `cgroup_syscall`
 
 const NAME: &str = "syscall_counts";
 

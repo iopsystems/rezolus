@@ -1,18 +1,11 @@
-/// Collects Syscall stats using BPF and traces:
-/// * `raw_syscalls/sys_enter`
-///
-/// And produces these stats:
-/// * `syscall/total`
-/// * `syscall/read`
-/// * `syscall/write`
-/// * `syscall/poll`
-/// * `syscall/lock`
-/// * `syscall/time`
-/// * `syscall/sleep`
-/// * `syscall/socket`
-/// * `syscall/yield`
+//! Collects Syscall stats using BPF and traces:
+//! * `raw_syscalls/sys_enter`
+//! * `raw_syscalls/sys_exit`
+//!
+//! And produces these stats:
+//! * `syscall_latency`
 
-const NAME: &str = "syscall_counts";
+const NAME: &str = "syscall_latency";
 
 mod bpf {
     include!(concat!(env!("OUT_DIR"), "/syscall_latency.bpf.rs"));
