@@ -56,7 +56,9 @@ jobs:
           - { distro: debian, release: bookworm, arch: x86_64 }
           - { distro: debian, release: bookworm, arch: arm64 }
 
-          # ubuntu kernels supported from 20.10 and up
+          # ubuntu kernels supported from 20.10 and up, but we can build for focal too
+          - { distro: ubuntu, release: focal, arch: x86_64 } # 20.04
+          - { distro: ubuntu, release: focal, arch: arm64 } # 20.04
           - { distro: ubuntu, release: jammy, arch: x86_64 } # 22.04
           - { distro: ubuntu, release: jammy, arch: arm64 } # 22.04
           - { distro: ubuntu, release: noble, arch: x86_64 } # 24.04
