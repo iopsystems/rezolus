@@ -3,6 +3,7 @@ Section: devel
 Priority: optional
 Maintainer: IOP Systems <team@iop.systems>
 Standards-Version: 4.6.2
+Kernel-Version: 5.5
 Build-Depends: 
     debhelper (>= 10),
     pkg-config,
