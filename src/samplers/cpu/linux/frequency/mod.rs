@@ -51,9 +51,9 @@ fn handle_event(data: &[u8]) -> i32 {
             .replace("\\x2d", "-");
 
         let name = if !gpname.is_empty() {
-            format!("{gpname}_{pname}_{name}")
+            format!("{gpname}/{pname}/{name}")
         } else if !pname.is_empty() {
-            format!("{pname}_{name}")
+            format!("{pname}/{name}")
         } else {
             name.to_string()
         };
