@@ -230,7 +230,7 @@ pub fn run(config: FlightRecorderConfig) {
                         let mut i = idx + offset;
 
                         // handle wrap-around in the ring-buffer
-                        if i > snapshot_len {
+                        if i >= snapshot_len {
                             i -= snapshot_len;
                         }
 
