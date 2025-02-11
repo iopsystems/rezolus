@@ -1,12 +1,12 @@
 [Unit]
-Description=Rezolus is a systems performance telemetry agent
+Description=Rezolus systems performance telemetry agent
 Documentation=https://github.com/iopsystems/rezolus
 After=network-online.target
 
 [Service]
 User=root
 Group=root
-ExecStart=/usr/bin/rezolus /etc/rezolus/config.toml
+ExecStart=/usr/bin/rezolus /etc/rezolus/agent.toml
 KillMode=control-group
 Restart=on-failure
 
