@@ -23,7 +23,7 @@
 #define MAX_CGROUPS 4096
 #define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
-#define RINGBUF_CAPACITY 32768
+#define RINGBUF_CAPACITY 262144
 
 // dummy instance for skeleton to generate definition
 struct cgroup_info _cgroup_info = {};
