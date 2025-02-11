@@ -3,11 +3,9 @@ Section: devel
 Priority: optional
 Maintainer: IOP Systems <team@iop.systems>
 Standards-Version: 4.6.2
-Kernel-Version: 5.5
 Build-Depends: 
     debhelper (>= 10),
     pkg-config,
-    libssl-dev,
     libelf-dev,
     libelf-dev:native,
     clang:native
@@ -16,3 +14,4 @@ Package: rezolus
 Architecture: any
 Description: High resolution systems performance telemetry agent
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Pre-Depends: adduser

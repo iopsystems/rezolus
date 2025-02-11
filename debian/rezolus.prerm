@@ -1,0 +1,18 @@
+#!/bin/bash
+
+set -eu
+
+function remove() {
+    userdel rezolus
+}
+
+function purge() {
+    remove "$@"
+}
+
+#DEBHELPER#
+
+case "$1" in
+    remove) remove "$@" ;;
+    purge)  purge  "$@" ;;
+esac

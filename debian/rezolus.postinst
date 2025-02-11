@@ -1,0 +1,20 @@
+#!/bin/bash
+
+set -eu
+
+function configure() {
+    adduser rezolus    \
+        --quiet                 \
+        --system                \
+        --no-create-home        \
+        --disabled-login        \
+        --home /nonexistent
+}
+
+case "$1" in
+    configure)
+        configure "$@"
+        ;;
+esac
+
+#DEBHELPER#

@@ -1,4 +1,92 @@
+use std::fs::OpenOptions;
+use clap::ArgMatches;
 use super::*;
+
+pub struct Config {
+    interval: humantime::Duration,
+    duration: humantime::Duration,
+    format: Format,
+    verbose: u8,
+    url: Url,
+    output: PathBuf,
+}
+
+impl TryFrom<ArgMatches> for Config {
+    type Error = String;
+
+    fn try_from(args: ArgMatches) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
+        Ok(Config {
+            url: args.get_one::<Url>("URL").ok_or("missing url")?.clone(),
+            output: args.get_one::<PathBuf>("OUTPUT").ok_or("missing output")?.to_path_buf(),
+            verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
+            interval: *args
+                .get_one::<humantime::Duration>("INTERVAL")
+                .unwrap_or(&humantime::Duration::from_str("1s").unwrap()),
+            duration: *args
+                .get_one::<humantime::Duration>("DURATION")
+                .unwrap_or(&humantime::Duration::from_str("15m").unwrap()),
+            format: args
+                .get_one::<Format>("FORMAT")
+                .copied()
+                .unwrap_or(Format::Parquet),
+        })
+    }
+}
+
+pub fn command() -> Command {
+    Command::new("flight-recorder")
+        .about("Continuous recording to an on-disk ring buffer")
+        .arg(
+            clap::Arg::new("URL")
+                .help("Rezolus HTTP endpoint")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(Url))
+                .required(true)
+                .index(1),
+        )
+        .arg(
+            clap::Arg::new("OUTPUT")
+                .help("Path to the output file")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf))
+                .required(true)
+                .index(2),
+        )
+        .arg(
+            clap::Arg::new("VERBOSE")
+                .long("verbose")
+                .short('v')
+                .help("Increase the verbosity")
+                .action(clap::ArgAction::Count),
+        )
+        .arg(
+            clap::Arg::new("INTERVAL")
+                .long("interval")
+                .short('i')
+                .help("Sets the collection interval")
+                .action(clap::ArgAction::Set)
+                .default_value("1s")
+                .value_parser(value_parser!(humantime::Duration)),
+        )
+        .arg(
+            clap::Arg::new("DURATION")
+                .long("duration")
+                .short('d')
+                .help("Sets the collection interval")
+                .action(clap::ArgAction::Set)
+                .default_value("15m")
+                .value_parser(value_parser!(humantime::Duration)),
+        )
+        .arg(
+            clap::Arg::new("FORMAT")
+                .long("format")
+                .short('f')
+                .help("Sets the collection format")
+                .action(clap::ArgAction::Set)
+                .default_value("parquet")
+                .value_parser(value_parser!(Format)),
+        )
+}
 
 /// Runs the Rezolus `flight-recorder` which is a Rezolus client that pulls data
 /// from the msgpack endpoint and maintains an on-disk buffer across some span
@@ -13,7 +101,7 @@ use super::*;
 /// not only cover the duration of an anomalous event but give time for an
 /// engineer or automated process to respond and trigger the process to persist
 /// the ring buffer.
-pub fn run(config: FlightRecorderConfig) {
+pub fn run(config: Config) {
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
 
@@ -88,15 +176,21 @@ pub fn run(config: FlightRecorderConfig) {
         }
     };
 
-    // open our destination file to make sure we can
-    let _ = std::fs::File::create(config.output.clone())
+    // create our destination file if it doesn't exist, otherwise open the
+    // existing file - it will be truncated only before we write into it
+    let mut destination = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(config.output.clone())
         .map_err(|e| {
             error!("failed to open destination file: {e}");
             std::process::exit(1);
         })
         .unwrap();
 
-    // our writer will always be a temporary file
+    // our writer will always be a new temporary file
     let mut writer = {
         let mut path: PathBuf = config.output.clone();
         path.pop();
@@ -165,14 +259,7 @@ pub fn run(config: FlightRecorderConfig) {
         // sampling interval
         let mut interval = tokio::time::interval_at(start, config.interval.into());
         while STATE.load(Ordering::Relaxed) < TERMINATING {
-            let mut destination = std::fs::File::create(config.output.clone())
-                .map_err(|e| {
-                    error!("failed to open destination file: {e}");
-                    std::process::exit(1);
-                })
-                .unwrap();
-
-            // sample in a loop until RUNNING is false or duration has completed
+            // sample in a loop until RUNNING is false
             while STATE.load(Ordering::Relaxed) == RUNNING {
                 // wait to sample
                 interval.tick().await;
@@ -216,8 +303,10 @@ pub fn run(config: FlightRecorderConfig) {
                 }
             }
 
-            debug!("flushing writer");
+            debug!("flushing writer and preparing destination");
             let _ = writer.flush();
+            let _ = destination.seek(SeekFrom::Start(0));
+            let _ = destination.set_len(0);
 
             // handle any output format specific transforms
             match config.format {
@@ -323,10 +412,12 @@ pub fn run(config: FlightRecorderConfig) {
                     let _ = packed.rewind();
 
                     if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
-                        .convert_file_handle(packed, destination)
+                        .convert_file_handle(packed, &destination)
                     {
                         eprintln!("error saving parquet file: {e}");
                     }
+
+                    let _ = destination.flush();
                 }
             }
 

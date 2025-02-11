@@ -5,15 +5,14 @@ use super::*;
 /// Rezolus-specific msgpack endpoint.
 ///
 /// This is the default mode for running Rezolus.
-pub fn run(args: AgentArgs) {
+pub fn run(config: PathBuf) {
     // load config from file
     let config: Arc<Config> = {
-        let file = args.config;
-        debug!("loading config: {:?}", file);
-        match Config::load(&file) {
+        debug!("loading config: {:?}", config);
+        match Config::load(&config) {
             Ok(c) => c.into(),
             Err(error) => {
-                eprintln!("error loading config file: {:?}\n{error}", file);
+                eprintln!("error loading config file: {:?}\n{error}", config);
                 std::process::exit(1);
             }
         }
