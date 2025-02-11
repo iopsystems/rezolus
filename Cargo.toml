@@ -70,7 +70,7 @@ codegen-units = 1
 auto_req = "builtin"
 assets = [
     { source = "target/release/rezolus", dest = "/usr/bin/", mode = "755" },
-    { source = "configs/agent.toml", dest = "/etc/rezolus/", mode = "644" },
+    { source = "config/agent.toml", dest = "/etc/rezolus/", mode = "644" },
     { source = "debian/rezolus.service", dest = "/usr/lib/systemd/system/", mode = "644" },
     { source = "debian/rezolus-flight-recorder.service", dest = "/usr/lib/systemd/system/", mode = "644" },
 ]
