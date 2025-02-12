@@ -31,6 +31,7 @@ metriken-exposition = "0.10.0"
 ouroboros = "0.18.4"
 parking_lot = "0.12.3"
 reqwest = { version = "0.12.9", default-features = false, features = ["blocking"] }
+rezolus-exposition = { path = "./crates/rezolus-exposition" }
 ringlog = "0.8.0"
 rmp-serde = "1.1.2"
 serde = { version = "1.0.209", features = ["derive"] }
@@ -46,6 +47,9 @@ walkdir = "2.5.0"
 plain = "0.2.3"
 core_affinity = "0.8.1"
 chrono = "0.4.39"
+async-stream = "0.3.6"
+http-body = "1.0.1"
+bytes = "1.10.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.24.8" }
@@ -75,3 +79,9 @@ assets = [
 ]
 post_install_script = "rpm/systemd-start.sh"
 pre_uninstall_script = "rpm/systemd-stop.sh"
+
+[workspace]
+members = [
+    ".",
+    "./crates/*"
+, "crates/rezolus-exposition"]

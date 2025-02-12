@@ -11,6 +11,7 @@ use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 
 mod snapshot;
+mod subscribe;
 
 use snapshot::Snapshot;
 
@@ -52,6 +53,7 @@ fn app(state: Arc<AppState>) -> Router {
         .route("/", get(root))
         .route("/metrics", get(prometheus))
         .route("/metrics/binary", get(msgpack))
+        .route("/metrics/subscribe", get(subscribe::subscribe))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
