@@ -1,6 +1,6 @@
-use std::fs::OpenOptions;
-use clap::ArgMatches;
 use super::*;
+use clap::ArgMatches;
+use std::fs::OpenOptions;
 
 pub struct Config {
     interval: humantime::Duration,
@@ -14,10 +14,15 @@ pub struct Config {
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
 
-    fn try_from(args: ArgMatches) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
+    fn try_from(
+        args: ArgMatches,
+    ) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
         Ok(Config {
             url: args.get_one::<Url>("URL").ok_or("missing url")?.clone(),
-            output: args.get_one::<PathBuf>("OUTPUT").ok_or("missing output")?.to_path_buf(),
+            output: args
+                .get_one::<PathBuf>("OUTPUT")
+                .ok_or("missing output")?
+                .to_path_buf(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
             interval: *args
                 .get_one::<humantime::Duration>("INTERVAL")

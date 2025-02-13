@@ -86,7 +86,8 @@ fn main() {
             agent::run(config)
         }
         Some(("flight-recorder", args)) => {
-            let config = flight_recorder::Config::try_from(args.clone()).expect("failed to configure");
+            let config =
+                flight_recorder::Config::try_from(args.clone()).expect("failed to configure");
 
             flight_recorder::run(config)
         }

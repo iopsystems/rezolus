@@ -1,5 +1,5 @@
-use clap::ArgMatches;
 use super::*;
+use clap::ArgMatches;
 
 pub struct Config {
     interval: humantime::Duration,
@@ -12,7 +12,9 @@ pub struct Config {
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
 
-    fn try_from(args: ArgMatches) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
+    fn try_from(
+        args: ArgMatches,
+    ) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
         Ok(Config {
             url: args.get_one::<Url>("URL").unwrap().clone(),
             output: args.get_one::<PathBuf>("OUTPUT").unwrap().to_path_buf(),
@@ -82,8 +84,6 @@ pub fn command() -> Command {
                 .value_parser(value_parser!(Format)),
         )
 }
-
-
 
 /// Runs the Rezolus `recorder` which is a Rezolus client that pulls data from
 /// the msgpack endpoint and writes it to disk. The caller may use either timed
