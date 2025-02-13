@@ -177,7 +177,7 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
 					.id = cgroup_id,
-					.level = prev->sched_task_group->css.cgroup->level,
+					.level = current->sched_task_group->css.cgroup->level,
 				};
 
 				// read the cgroup name
