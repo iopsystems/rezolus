@@ -153,7 +153,7 @@ int handle__sched_switch(u64 *ctx)
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
 					.id = cgroup_id,
-					.level = prev->sched_task_group->css.cgroup.level,
+					.level = prev->sched_task_group->css.cgroup->level,
 				};
 
 				// read the cgroup name
