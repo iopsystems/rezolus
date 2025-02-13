@@ -35,7 +35,7 @@ and provide signals for optimization efforts.
 
 ### Configuration
 
-Rezolus uses a TOML configuration. See `config.toml` in this project for an
+See the [configs/agent.toml file][config] for an example configuration with
 example config file.
 
 ### Dashboard
@@ -144,7 +144,7 @@ Rezolus is dual-licensed under the [Apache License v2.0][license apache] and the
 Detailed licensing information can be found in the
 [COPYRIGHT document][copyright]
 
-[config]: https://github.com/iopsystems/rezolus/blob/main/config.toml
+[config]: https://github.com/iopsystems/rezolus/blob/main/configs/agent.toml
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT
 [create a fork]: https://github.com/iopsystems/rpc-perf/fork
 [discord]: https://discord.gg/YC5GDsH4dG
