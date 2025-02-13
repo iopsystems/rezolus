@@ -64,7 +64,7 @@ fn handle_event(data: &[u8]) -> i32 {
 
         let id = cgroup_info.id;
 
-        set_name(id, name)
+        set_name(id as usize, name)
     }
 
     0
@@ -72,8 +72,8 @@ fn handle_event(data: &[u8]) -> i32 {
 
 fn set_name(id: usize, name: String) {
     if !name.is_empty() {
-        CGROUP_CPU_CYCLES.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_CPU_INSTRUCTIONS.insert_metadata(id as usize, "name".to_string(), name);
+        CGROUP_CPU_CYCLES.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_CPU_INSTRUCTIONS.insert_metadata(id, "name".to_string(), name);
     }
 }
 

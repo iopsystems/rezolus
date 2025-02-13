@@ -59,7 +59,7 @@ fn handle_event(data: &[u8]) -> i32 {
 
         let id = cgroup_info.id;
 
-        set_name(id, name)
+        set_name(id as usize, name)
     }
 
     0
@@ -67,15 +67,15 @@ fn handle_event(data: &[u8]) -> i32 {
 
 fn set_name(id: usize, name: String) {
     if !name.is_empty() {
-        CGROUP_SYSCALL_OTHER.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_READ.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_WRITE.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_POLL.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_LOCK.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_TIME.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_SLEEP.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_SOCKET.insert_metadata(id as usize, "name".to_string(), name.clone());
-        CGROUP_SYSCALL_YIELD.insert_metadata(id as usize, "name".to_string(), name);
+        CGROUP_SYSCALL_OTHER.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_READ.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_WRITE.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_POLL.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_LOCK.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_TIME.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_SLEEP.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_SOCKET.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_YIELD.insert_metadata(id, "name".to_string(), name);
     }
 }
 
