@@ -197,6 +197,7 @@ int sys_enter(struct trace_event_raw_sys_enter *args)
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
 					.id = cgroup_id,
+					.level = current->sched_task_group->css.cgroup->level,
 				};
 
 				// read the cgroup name
