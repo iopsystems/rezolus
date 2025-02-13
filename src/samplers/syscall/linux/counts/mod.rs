@@ -44,29 +44,39 @@ fn handle_event(data: &[u8]) -> i32 {
             .replace("\\x2d", "-");
 
         let name = if !gpname.is_empty() {
-            format!("{gpname}/{pname}/{name}")
+            if cgroup_info.level > 3 {
+                format!(".../{gpname}/{pname}/{name}")
+            } else {
+                format!("/{gpname}/{pname}/{name}")
+            }
         } else if !pname.is_empty() {
-            format!("{pname}/{name}")
+            format!("/{pname}/{name}")
+        } else if !name.is_empty() {
+            format!("/{name}")
         } else {
-            name.to_string()
+            "".to_string()
         };
 
         let id = cgroup_info.id;
 
-        if !name.is_empty() {
-            CGROUP_SYSCALL_OTHER.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_READ.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_WRITE.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_POLL.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_LOCK.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_TIME.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_SLEEP.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_SOCKET.insert_metadata(id as usize, "name".to_string(), name.clone());
-            CGROUP_SYSCALL_YIELD.insert_metadata(id as usize, "name".to_string(), name);
-        }
+        set_name(id, name)
     }
 
     0
+}
+
+fn set_name(id: usize, name: String) {
+    if !name.is_empty() {
+        CGROUP_SYSCALL_OTHER.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_READ.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_WRITE.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_POLL.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_LOCK.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_TIME.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_SLEEP.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_SOCKET.insert_metadata(id as usize, "name".to_string(), name.clone());
+        CGROUP_SYSCALL_YIELD.insert_metadata(id as usize, "name".to_string(), name);
+    }
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -74,6 +84,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
+
+    set_name(1, "/".to_string());
 
     let counters = vec![
         &SYSCALL_OTHER,
