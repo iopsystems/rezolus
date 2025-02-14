@@ -291,10 +291,7 @@ async fn prometheus(State(state): State<Arc<AppState>>) -> String {
 
     data.sort();
     data.dedup();
-    let mut content = data.join("\n");
-    content += "\n";
-    let parts: Vec<&str> = content.split('/').collect();
-    parts.join("_")
+    data.join("\n") + "\n"
 }
 
 async fn root() -> String {
