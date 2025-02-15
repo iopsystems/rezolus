@@ -416,6 +416,10 @@ pub fn run(config: Config) {
                     let _ = packed.rewind();
 
                     if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
+                        .metadata(
+                            "sampling_interval_ms".to_string(),
+                            config.interval.as_millis().to_string(),
+                        )
                         .convert_file_handle(packed, &destination)
                     {
                         eprintln!("error saving parquet file: {e}");
