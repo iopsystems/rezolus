@@ -6,7 +6,7 @@ use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-pub fn new_snapshot() -> Snapshot {
+pub fn create() -> Snapshot {
     let mut s = Snapshot {
         systemtime: SystemTime::now(),
         metadata: [
