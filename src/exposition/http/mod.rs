@@ -12,8 +12,6 @@ use tower_http::{compression::CompressionLayer, decompression::RequestDecompress
 
 mod snapshot;
 
-use snapshot::Snapshot;
-
 struct AppState {
     config: Arc<Config>,
     samplers: Arc<Box<[Box<dyn Sampler>]>>,
@@ -63,7 +61,7 @@ fn app(state: Arc<AppState>) -> Router {
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
     state.refresh().await;
 
-    let snapshot = Snapshot::new();
+    let snapshot = snapshot::create();
 
     rmp_serde::encode::to_vec(&snapshot).expect("failed to serialize snapshot")
 }
