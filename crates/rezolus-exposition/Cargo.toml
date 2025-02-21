@@ -1,0 +1,8 @@
+[package]
+name = "rezolus-exposition"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+histogram = { version = "0.11.2", features = ["serde"] }
+serde = { version = "1.0.217", features = ["derive"] }
