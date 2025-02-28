@@ -1,11 +1,10 @@
-use crate::exposition::http::CounterGroup;
-use crate::exposition::http::GaugeGroup;
-use metriken::RwLockHistogram;
-use metriken::Value;
+use crate::exposition::http::{CounterGroup, GaugeGroup};
+
+use metriken::{RwLockHistogram, Value};
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot, SnapshotV2};
+
 use std::collections::HashMap;
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
     let mut s = SnapshotV2 {

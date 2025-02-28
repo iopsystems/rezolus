@@ -1,15 +1,15 @@
 use crate::common::*;
-use crate::debug;
-use crate::{Arc, Config, Sampler};
+use crate::{debug, Arc, Config, Sampler};
+
 use axum::extract::State;
 use axum::routing::get;
 use axum::Router;
 use metriken::{RwLockHistogram, Value};
-use std::time::Instant;
-use std::time::SystemTime;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
+
+use std::time::{Instant, SystemTime};
 
 mod snapshot;
 
