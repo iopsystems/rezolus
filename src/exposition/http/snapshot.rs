@@ -1,10 +1,10 @@
-use std::time::Duration;
 use crate::exposition::http::CounterGroup;
 use crate::exposition::http::GaugeGroup;
 use metriken::RwLockHistogram;
 use metriken::Value;
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot, SnapshotV2};
 use std::collections::HashMap;
+use std::time::Duration;
 use std::time::SystemTime;
 
 pub fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
