@@ -1,3 +1,4 @@
+use std::time::SystemTime;
 use crate::common::*;
 use crate::debug;
 use crate::{Arc, Config, Sampler};
@@ -59,19 +60,24 @@ fn app(state: Arc<AppState>) -> Router {
 }
 
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
+    let ts = SystemTime::now();
+    let start = Instant::now();
+
     state.refresh().await;
 
-    let snapshot = snapshot::create();
+    let duration = start.elapsed();
+
+    let snapshot = snapshot::create(ts, duration);
 
     rmp_serde::encode::to_vec(&snapshot).expect("failed to serialize snapshot")
 }
 
 async fn prometheus(State(state): State<Arc<AppState>>) -> String {
-    state.refresh().await;
-
     let timestamp = clocksource::precise::UnixInstant::EPOCH
         .elapsed()
         .as_millis();
+
+    state.refresh().await;
 
     let mut data = Vec::new();
 

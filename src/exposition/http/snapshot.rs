@@ -1,14 +1,16 @@
+use std::time::Duration;
 use crate::exposition::http::CounterGroup;
 use crate::exposition::http::GaugeGroup;
 use metriken::RwLockHistogram;
 use metriken::Value;
-use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
+use metriken_exposition::{Counter, Gauge, Histogram, Snapshot, SnapshotV2};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-pub fn create() -> Snapshot {
-    let mut s = Snapshot {
-        systemtime: SystemTime::now(),
+pub fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
+    let mut s = SnapshotV2 {
+        systemtime: timestamp,
+        duration,
         metadata: [
             ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
             ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
@@ -123,5 +125,5 @@ pub fn create() -> Snapshot {
         }
     }
 
-    s
+    Snapshot::V2(s)
 }
