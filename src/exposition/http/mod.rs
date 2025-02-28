@@ -60,14 +60,12 @@ fn app(state: Arc<AppState>) -> Router {
 }
 
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
-    let ts = SystemTime::now();
+    let timestamp = SystemTime::now();
     let start = Instant::now();
 
     state.refresh().await;
 
-    let duration = start.elapsed();
-
-    let snapshot = snapshot::create(ts, duration);
+    let snapshot = snapshot::create(timestamp, start.elapsed());
 
     rmp_serde::encode::to_vec(&snapshot).expect("failed to serialize snapshot")
 }
