@@ -58,10 +58,6 @@ enabled = true
 # host_processor_info() is used
 [samplers.cpu_usage]
 
-# Instruments the number of currently open file descriptors using
-# /proc/sys/fs/file-nr
-[samplers.filesystem_descriptors]
-
 # Produces various nVIDIA specific GPU metrics using NVML
 [samplers.gpu_nvidia]
 
@@ -90,9 +86,6 @@ enabled = true
 # BPF sampler that instruments syscall enter and exit to gather syscall latency
 # distributions.
 [samplers.syscall_latency]
-
-# Instruments TCP connection states by reading /proc/net/tcp
-[samplers.tcp_connection_state]
 
 # BPF sampler that probes TCP receive path to measure latency from a packet
 # being received until application reads from the socket.
