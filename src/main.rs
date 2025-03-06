@@ -29,6 +29,7 @@ use std::sync::Arc;
 mod agent;
 mod flight_recorder;
 mod recorder;
+mod summarize;
 
 /// general modules for core functionality
 mod common;
@@ -77,6 +78,7 @@ fn main() {
         )
         .subcommand(flight_recorder::command())
         .subcommand(recorder::command())
+        .subcommand(summarize::command())
         .get_matches();
 
     match cli.subcommand() {
@@ -95,6 +97,11 @@ fn main() {
             let config = recorder::Config::try_from(args.clone()).expect("failed to configure");
 
             recorder::run(config)
+        }
+        Some(("summarize", args)) => {
+            let config = summarize::Config::try_from(args.clone()).expect("failed to configure");
+
+            summarize::run(config)
         }
         _ => {
             unimplemented!()
