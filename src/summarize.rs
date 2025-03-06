@@ -128,18 +128,7 @@ pub fn run(config: Config) {
     });
 
     ctrlc::set_handler(move || {
-        let state = STATE.load(Ordering::SeqCst);
-
-        if state == RUNNING {
-            info!("triggering ringbuffer capture");
-            STATE.store(CAPTURING, Ordering::SeqCst);
-        } else if state == CAPTURING {
-            info!("waiting for capture to complete before exiting");
-            STATE.store(TERMINATING, Ordering::SeqCst);
-        } else {
-            info!("terminating immediately");
-            std::process::exit(2);
-        }
+        std::process::exit(2);
     })
     .expect("failed to set ctrl-c handler");
 
@@ -181,8 +170,8 @@ pub fn run(config: Config) {
         // previous snapshot
         let mut previous = None;
 
-        // sample in a loop until RUNNING is false
-        while STATE.load(Ordering::Relaxed) == RUNNING {
+        // sample in a loop
+        loop {
             // wait to sample
             interval.tick().await;
 
