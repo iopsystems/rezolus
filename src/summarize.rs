@@ -1,18 +1,18 @@
-use tower_http::decompression::RequestDecompressionLayer;
-use tower_http::compression::CompressionLayer;
-use tower::ServiceBuilder;
+use super::*;
 use axum::routing::get;
-use tokio::net::TcpListener;
 use axum::Router;
+use clap::ArgMatches;
+use metriken_exposition::Snapshot;
+use metriken_exposition::SnapshotV2;
+use metriken_exposition::*;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use metriken_exposition::*;
-use std::time::SystemTime;
-use metriken_exposition::SnapshotV2;
 use std::net::SocketAddr;
-use metriken_exposition::Snapshot;
-use super::*;
-use clap::ArgMatches;
+use std::time::SystemTime;
+use tokio::net::TcpListener;
+use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
+use tower_http::decompression::RequestDecompressionLayer;
 
 static SUMMARIZED: Mutex<Option<SnapshotV2>> = Mutex::new(None);
 
@@ -186,17 +186,17 @@ pub fn run(config: Config) {
 
                     let mut reader = std::io::Cursor::new(body.as_ref());
 
-                    if let Ok(current) = rmp_serde::from_read::<&mut std::io::Cursor<&[u8]>, Snapshot>(&mut reader) {
+                    if let Ok(current) =
+                        rmp_serde::from_read::<&mut std::io::Cursor<&[u8]>, Snapshot>(&mut reader)
+                    {
                         if let Some(previous) = previous.take() {
                             let summarized = summarize(&previous, &current);
 
                             let mut s = SUMMARIZED.lock();
                             *s = Some(summarized);
                         }
-                        
+
                         previous = Some(current);
-
-
                     }
                 } else {
                     error!("failed read response. terminating early");
@@ -248,7 +248,9 @@ pub fn metadata(snapshot: &Snapshot) -> &HashMap<String, String> {
 pub fn summarize(previous: &Snapshot, current: &Snapshot) -> SnapshotV2 {
     let mut summarized = SnapshotV2 {
         systemtime: systemtime(current),
-        duration: systemtime(current).duration_since(systemtime(previous)).unwrap(),
+        duration: systemtime(current)
+            .duration_since(systemtime(previous))
+            .unwrap(),
         metadata: metadata(current).clone(),
         counters: Vec::new(),
         gauges: Vec::new(),
@@ -322,7 +324,7 @@ pub fn summarize(previous: &Snapshot, current: &Snapshot) -> SnapshotV2 {
                         metadata,
                     })
                 }
-            }   
+            }
         }
     }
 
@@ -353,9 +355,7 @@ fn app() -> Router {
 }
 
 async fn prometheus() -> String {
-    let summarized = {
-        SUMMARIZED.lock().clone()
-    };
+    let summarized = { SUMMARIZED.lock().clone() };
 
     let mut data = Vec::new();
 
@@ -365,7 +365,11 @@ async fn prometheus() -> String {
 
     let mut summarized = summarized.unwrap();
 
-    let timestamp = summarized.systemtime.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis();
+    let timestamp = summarized
+        .systemtime
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
 
     for mut metric in summarized.counters.drain(..) {
         let name = metric.name.clone();
@@ -422,4 +426,3 @@ async fn root() -> String {
     let version = env!("CARGO_PKG_VERSION");
     format!("Rezolus {version}\nFor information, see: https://rezolus.com\n")
 }
-
