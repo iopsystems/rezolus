@@ -338,7 +338,7 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 {
 	u32 cpu = bpf_get_smp_processor_id();
 	u64 *elem, *start_ts, dur = 0;
-	u32 offset, idx, group = 0;
+	u32 idx, group = 0;
 
 	u32 irq_id = 0;
 
@@ -354,11 +354,11 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 	dur = bpf_ktime_get_ns() - *start_ts;
 
 	// update the cpu usage
-	offset = CPU_USAGE_GROUP_WIDTH * cpu + SOFTIRQ_OFFSET;
+	idx = CPU_USAGE_GROUP_WIDTH * cpu + SOFTIRQ_OFFSET;
 	array_add(&cpu_usage, idx, dur);
 
 	// update the softirq time
-	offset = SOFTIRQ_GROUP_WIDTH * cpu + args->vec;
+	idx = SOFTIRQ_GROUP_WIDTH * cpu + args->vec;
 	array_add(&softirq_time, idx, dur);
 
 	// clear the start timestamp
