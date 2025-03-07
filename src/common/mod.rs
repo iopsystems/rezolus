@@ -32,6 +32,7 @@ pub const BYTES: u64 = 1;
 
 // Max attempts to get an 'aligned' UTC and monotonic clock time
 const ALIGN_RETRIES: usize = 5;
+const MAX_ALIGN_ERROR: Duration = Duration::from_millis(1);
 
 pub fn aligned_interval(interval: Duration) -> tokio::time::Interval {
     let (utc, now) = utc_instant();
@@ -48,7 +49,7 @@ pub fn utc_instant() -> (DateTime<Utc>, Instant) {
         let utc = Utc::now();
         let t1 = Instant::now();
 
-        if t1.duration_since(t0).as_millis() <= 1 {
+        if t1.duration_since(t0) <= MAX_ALIGN_ERROR {
             return (utc, t0);
         }
     }
