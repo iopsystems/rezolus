@@ -374,11 +374,12 @@ async fn prometheus() -> String {
     for mut metric in summarized.counters.drain(..) {
         let name = metric.name.clone();
 
-        let metadata: Vec<String> = metric
+        let mut metadata: Vec<String> = metric
             .metadata
             .drain()
             .map(|(key, value)| format!("{key}=\"{value}\""))
             .collect();
+        metadata.sort();
         let metadata = metadata.join(", ");
 
         let name_with_metadata = if metadata.is_empty() {
@@ -397,11 +398,12 @@ async fn prometheus() -> String {
     for mut metric in summarized.gauges.drain(..) {
         let name = metric.name.clone();
 
-        let metadata: Vec<String> = metric
+        let mut metadata: Vec<String> = metric
             .metadata
             .drain()
             .map(|(key, value)| format!("{key}=\"{value}\""))
             .collect();
+        metadata.sort();
         let metadata = metadata.join(", ");
 
         let name_with_metadata = if metadata.is_empty() {
