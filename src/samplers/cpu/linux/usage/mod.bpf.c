@@ -319,7 +319,7 @@ int softirq_enter(struct trace_event_raw_softirq *args)
 
 	u32 idx = cpu * SOFTIRQ_GROUP_WIDTH + args->vec;
 
-	bpf_map_update_elem(&start, &cpu, &ts, 0);
+	bpf_map_update_elem(&softirq_start, &cpu, &ts, 0);
 	array_incr(&softirq, idx);
 
 	return 0;
@@ -335,7 +335,7 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 	u32 irq_id = 0;
 
 	// lookup the start time
-	start_ts = bpf_map_lookup_elem(&start, &cpu);
+	start_ts = bpf_map_lookup_elem(&softirq_start, &cpu);
 
 	// possible we missed the start
 	if (!start_ts || *start_ts == 0) {
