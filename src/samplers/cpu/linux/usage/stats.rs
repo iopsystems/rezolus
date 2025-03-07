@@ -205,67 +205,67 @@ pub static SOFTIRQ_RCU: CounterGroup = CounterGroup::new(MAX_CPUS);
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "hi" }
 )]
-pub static SOFTIRQ_HI: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_HI: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "timer" }
 )]
-pub static SOFTIRQ_TIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_TIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "net_tx" }
 )]
-pub static SOFTIRQ_NET_TX: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_NET_TX: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "net_rx" }
 )]
-pub static SOFTIRQ_NET_RX: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_NET_RX: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "block" }
 )]
-pub static SOFTIRQ_BLOCK: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_BLOCK: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "irq_poll" }
 )]
-pub static SOFTIRQ_IRQ_POLL: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_ITIME_RQ_POLL: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "tasklet" }
 )]
-pub static SOFTIRQ_TASKLET: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_TASKLET: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "sched" }
 )]
-pub static SOFTIRQ_SCHED: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_SCHED: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "hrtimer" }
 )]
-pub static SOFTIRQ_HRTIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_HRTIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "rcu" }
 )]
-pub static SOFTIRQ_RCU: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_RCU: CounterGroup = CounterGroup::new(MAX_CPUS);
