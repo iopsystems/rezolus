@@ -115,6 +115,14 @@ struct {
 } softirq_time SEC(".maps");
 
 // per-cpu cpu usage tracking in nanoseconds by category
+// 0 - USER
+// 1 - NICE
+// 2 - SYSTEM
+// 3 - SOFTIRQ
+// 4 - IRQ
+// 5 - STEAL
+// 6 - GUEST
+// 7 - GUEST_NICE
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
