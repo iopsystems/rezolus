@@ -399,9 +399,7 @@ trait PrometheusFormat {
         let value = self.value();
         let kind = self.kind();
 
-        format!(
-            "# TYPE {name} {kind}\n{name_with_metadata} {value} {timestamp}"
-        )
+        format!("# TYPE {name} {kind}\n{name_with_metadata} {value} {timestamp}")
     }
 }
 
@@ -443,13 +441,12 @@ impl PrometheusFormat for Gauge {
 
 fn format_metadata(metadata: &HashMap<String, String>) -> String {
     let mut metadata: Vec<String> = metadata
-            .iter()
-            .map(|(key, value)| format!("{key}=\"{value}\""))
-            .collect();
+        .iter()
+        .map(|(key, value)| format!("{key}=\"{value}\""))
+        .collect();
     metadata.sort();
     metadata.join(", ")
 }
-
 
 async fn root() -> String {
     let version = env!("CARGO_PKG_VERSION");
