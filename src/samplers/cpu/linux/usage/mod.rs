@@ -1,17 +1,17 @@
-/// Collects CPU usage stats using BPF and traces:
-/// * `cpuacct_account_field`
-/// * `softirq_entry`
-/// * `softirq_exit`
-///
-/// And produces these stats:
-/// * `cpu_usage`
-/// * `cgroup_cpu_usage`
-/// * `softirq`
-/// * `softirq_time`
-///
-/// Note: softirq is included because we need to trace softirq entry/exit in
-/// order to provide accurate accounting of cpu_usage for softirq. That makes
-/// these additional metrics free.
+//! Collects CPU usage stats using BPF and traces:
+//! * `cpuacct_account_field`
+//! * `softirq_entry`
+//! * `softirq_exit`
+//!
+//! And produces these stats:
+//! * `cpu_usage`
+//! * `cgroup_cpu_usage`
+//! * `softirq`
+//! * `softirq_time`
+//!
+//! Note: softirq is included because we need to trace softirq entry/exit in
+//! order to provide accurate accounting of cpu_usage for softirq. That makes
+//! these additional metrics free.
 
 const NAME: &str = "cpu_usage";
 
