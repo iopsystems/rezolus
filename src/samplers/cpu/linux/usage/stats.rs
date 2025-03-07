@@ -240,7 +240,7 @@ pub static SOFTIRQ_TIME_BLOCK: CounterGroup = CounterGroup::new(MAX_CPUS);
     description = "The time spent in softirq handlers",
     metadata = { unit = "nanoseconds", kind = "irq_poll" }
 )]
-pub static SOFTIRQ_ITIME_RQ_POLL: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SOFTIRQ_TIME_RQ_POLL: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
