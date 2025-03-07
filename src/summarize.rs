@@ -22,6 +22,7 @@ pub struct Config {
     url: Url,
     listen: SocketAddr,
 }
+
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
 
@@ -205,42 +206,42 @@ pub fn run(config: Config) {
     })
 }
 
-pub fn systemtime(snapshot: &Snapshot) -> SystemTime {
+fn systemtime(snapshot: &Snapshot) -> SystemTime {
     match snapshot {
         Snapshot::V1(s) => s.systemtime,
         Snapshot::V2(s) => s.systemtime,
     }
 }
 
-pub fn counters(snapshot: &Snapshot) -> &Vec<Counter> {
+fn counters(snapshot: &Snapshot) -> &Vec<Counter> {
     match snapshot {
         Snapshot::V1(s) => &s.counters,
         Snapshot::V2(s) => &s.counters,
     }
 }
 
-pub fn gauges(snapshot: &Snapshot) -> &Vec<Gauge> {
+fn gauges(snapshot: &Snapshot) -> &Vec<Gauge> {
     match snapshot {
         Snapshot::V1(s) => &s.gauges,
         Snapshot::V2(s) => &s.gauges,
     }
 }
 
-pub fn histograms(snapshot: &Snapshot) -> &Vec<Histogram> {
+fn histograms(snapshot: &Snapshot) -> &Vec<Histogram> {
     match snapshot {
         Snapshot::V1(s) => &s.histograms,
         Snapshot::V2(s) => &s.histograms,
     }
 }
 
-pub fn metadata(snapshot: &Snapshot) -> &HashMap<String, String> {
+fn metadata(snapshot: &Snapshot) -> &HashMap<String, String> {
     match snapshot {
         Snapshot::V1(s) => &s.metadata,
         Snapshot::V2(s) => &s.metadata,
     }
 }
 
-pub fn summarize(previous: &Snapshot, current: &Snapshot) -> SnapshotV2 {
+fn summarize(previous: &Snapshot, current: &Snapshot) -> SnapshotV2 {
     let mut summarized = SnapshotV2 {
         systemtime: systemtime(current),
         duration: systemtime(current)
@@ -326,7 +327,7 @@ pub fn summarize(previous: &Snapshot, current: &Snapshot) -> SnapshotV2 {
     summarized
 }
 
-pub async fn serve(config: Arc<Config>) {
+async fn serve(config: Arc<Config>) {
     let app: Router = app();
 
     let listener = TcpListener::bind(config.listen)
@@ -366,58 +367,89 @@ async fn prometheus() -> String {
         .unwrap()
         .as_millis();
 
-    for mut metric in summarized.counters.drain(..) {
-        let name = metric.name.clone();
-
-        let mut metadata: Vec<String> = metric
-            .metadata
-            .drain()
-            .map(|(key, value)| format!("{key}=\"{value}\""))
-            .collect();
-        metadata.sort();
-        let metadata = metadata.join(", ");
-
-        let name_with_metadata = if metadata.is_empty() {
-            metric.name
-        } else {
-            format!("{}{{{metadata}}}", metric.name)
-        };
-
-        let value = metric.value;
-
-        data.push(format!(
-            "# TYPE {name} counter\n{name_with_metadata} {value} {timestamp}"
-        ));
+    for metric in summarized.counters.drain(..) {
+        data.push(metric.format(timestamp));
     }
 
-    for mut metric in summarized.gauges.drain(..) {
-        let name = metric.name.clone();
-
-        let mut metadata: Vec<String> = metric
-            .metadata
-            .drain()
-            .map(|(key, value)| format!("{key}=\"{value}\""))
-            .collect();
-        metadata.sort();
-        let metadata = metadata.join(", ");
-
-        let name_with_metadata = if metadata.is_empty() {
-            metric.name
-        } else {
-            format!("{}{{{metadata}}}", metric.name)
-        };
-
-        let value = metric.value;
-
-        data.push(format!(
-            "# TYPE {name} gauge\n{name_with_metadata} {value} {timestamp}"
-        ));
+    for metric in summarized.gauges.drain(..) {
+        data.push(metric.format(timestamp));
     }
 
     data.sort();
     data.dedup();
     data.join("\n") + "\n"
 }
+
+trait PrometheusFormat {
+    fn name(&self) -> &str;
+    fn kind(&self) -> &str;
+    fn metadata(&self) -> String;
+    fn value(&self) -> String;
+
+    fn format(&self, timestamp: u128) -> String {
+        let name = self.name();
+        let metadata = self.metadata();
+
+        let name_with_metadata = if metadata.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}{{{metadata}}}", name)
+        };
+
+        let value = self.value();
+        let kind = self.kind();
+
+        format!(
+            "# TYPE {name} {kind}\n{name_with_metadata} {value} {timestamp}"
+        )
+    }
+}
+
+impl PrometheusFormat for Counter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn kind(&self) -> &str {
+        "counter"
+    }
+
+    fn metadata(&self) -> String {
+        format_metadata(&self.metadata)
+    }
+
+    fn value(&self) -> String {
+        format!("{}", self.value)
+    }
+}
+
+impl PrometheusFormat for Gauge {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn kind(&self) -> &str {
+        "gauge"
+    }
+
+    fn metadata(&self) -> String {
+        format_metadata(&self.metadata)
+    }
+
+    fn value(&self) -> String {
+        format!("{}", self.value)
+    }
+}
+
+fn format_metadata(metadata: &HashMap<String, String>) -> String {
+    let mut metadata: Vec<String> = metadata
+            .iter()
+            .map(|(key, value)| format!("{key}=\"{value}\""))
+            .collect();
+    metadata.sort();
+    metadata.join(", ")
+}
+
 
 async fn root() -> String {
     let version = env!("CARGO_PKG_VERSION");
