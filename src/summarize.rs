@@ -52,7 +52,7 @@ pub fn command() -> Command {
         )
         .arg(
             clap::Arg::new("LISTEN")
-                .help("Path to the output file")
+                .help("IP:Port pair to listen on")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(SocketAddr))
                 .required(true)
