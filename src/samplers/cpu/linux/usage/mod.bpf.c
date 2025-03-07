@@ -92,7 +92,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+	__uint(max_entries, MAX_CPUS * SOFTIRQ_GROUP_WIDTH);
 } softirq SEC(".maps");
 
 // per-cpu softirq time in nanoseconds by category
@@ -111,7 +111,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+	__uint(max_entries, MAX_CPUS * SOFTIRQ_GROUP_WIDTH);
 } softirq_time SEC(".maps");
 
 // per-cpu cpu usage tracking in nanoseconds by category
@@ -120,7 +120,7 @@ struct {
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+	__uint(max_entries, MAX_CPUS * CPU_USAGE_GROUP_WIDTH);
 } cpu_usage SEC(".maps");
 
 // per-cgroup user
