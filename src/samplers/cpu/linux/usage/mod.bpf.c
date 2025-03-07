@@ -8,13 +8,45 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
-#define COUNTER_GROUP_WIDTH 8
+#define CPU_USAGE_GROUP_WIDTH 8
 #define MAX_CPUS 1024
 #define MAX_CGROUPS 4096
 #define RINGBUF_CAPACITY 262144
+#define SOFTIRQ_GROUP_WIDTH 16
 
-#define IDLE_STAT_INDEX 5
-#define IOWAIT_STAT_INDEX 6
+// cpu usage stat index (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
+#define USER 0
+#define NICE 1
+#define SYSTEM 2
+#define SOFTIRQ 3
+#define IRQ 4
+#define IDLE 5
+#define IOWAIT 6
+#define STEAL 7
+#define GUEST 8
+#define GUEST_NICE 9
+
+// the offsets to use in the `counters` group
+#define USER_OFFSET 0
+#define NICE_OFFSET 1
+#define SYSTEM_OFFSET 2
+#define SOFTIRQ_OFFSET 3
+#define IRQ_OFFSET 4
+#define STEAL_OFFSET 5
+#define GUEST_OFFSET 6
+#define GUEST_NICE_OFFSET 7
+
+// the offsets to use in the `softirqs` group
+#define HI 0
+#define TIMER 1
+#define NET_TX 2
+#define NET_RX 3
+#define BLOCK 4
+#define IRQ_POLL 5
+#define TASKLET 6
+#define SCHED 7
+#define HRTIMER 8
+#define RCU 9
 
 // dummy instance for skeleton to generate definition
 struct cgroup_info _cgroup_info = {};
@@ -36,24 +68,60 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_serial_numbers SEC(".maps");
 
-// cpu usage stat index (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
-// 0 - user
-// 1 - nice
-// 2 - system
-// 3 - softirq
-// 4 - irq
-//   - idle - *NOTE* this will not increment. User-space must calculate it. This index is skipped
-//   - iowait - *NOTE* this will not increment. This index is skipped
-// 5 - steal
-// 6 - guest
-// 7 - guest_nice
+// track the start time of softirq
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, MAX_CPUS);
+	__type(key, u32);
+	__type(value, u64);
+} softirq_start SEC(".maps");
+
+// per-cpu softirq counts by category
+// 0 - HI
+// 1 - TIMER
+// 2 - NET_TX
+// 3 - NET_RX
+// 4 - BLOCK
+// 5 - IRQ_POLL
+// 6 - TASKLET
+// 7 - SCHED
+// 8 - HRTIMER
+// 9 - RCU
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
 	__type(key, u32);
 	__type(value, u64);
 	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
-} counters SEC(".maps");
+} softirq SEC(".maps");
+
+// per-cpu softirq time in nanoseconds by category
+// 0 - HI
+// 1 - TIMER
+// 2 - NET_TX
+// 3 - NET_RX
+// 4 - BLOCK
+// 5 - IRQ_POLL
+// 6 - TASKLET
+// 7 - SCHED
+// 8 - HRTIMER
+// 9 - RCU
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+} softirq_time SEC(".maps");
+
+// per-cpu cpu usage tracking in nanoseconds by category
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+} cpu_usage SEC(".maps");
 
 // per-cgroup user
 struct {
@@ -130,25 +198,44 @@ struct {
 SEC("kprobe/cpuacct_account_field")
 int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 {
-	u32 idx;
+	u32 idx, offset;
 	u64 *elem;
-	
-  // ignore both the idle and the iowait counting since both count the idle time
-  // https://elixir.bootlin.com/linux/v6.9-rc4/source/kernel/sched/cputime.c#L227
-	if (index == IDLE_STAT_INDEX || index == IOWAIT_STAT_INDEX) {
-		return 0;
+
+	// softirq is tracked with separate tracepoints for better accuracy
+	//
+	// ignore both the idle and the iowait counting since both count the idle time
+    // https://elixir.bootlin.com/linux/v6.9-rc4/source/kernel/sched/cputime.c#L227
+	switch (index) {
+		case USER:
+			offset = USER_OFFSET;
+			break;
+		case NICE:
+			offset = NICE_OFFSET;
+			break;
+		case SYSTEM:
+			offset = SYSTEM_OFFSET;
+			break;
+		case IRQ:
+			offset = IRQ_OFFSET;
+			break;
+		case STEAL:
+			offset = STEAL_OFFSET;
+			break;
+		case GUEST:
+			offset = GUEST_OFFSET;
+			break;
+		case GUEST_NICE:
+			offset = NICE_OFFSET;
+			break;
+		default:
+			return 0;
 	}
 
-	// we pack the counters by skipping over the index values for idle and iowait
-	// this prevents having those counters mapped to non-incrementing values in
-	// this BPF program
-	if (index < IDLE_STAT_INDEX) {
-		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + index;
-		array_add(&counters, idx, delta);
-	} else {
-		idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + index - 2;
-		array_add(&counters, idx, delta);
-	}
+	// calculate the counter index and increment the counter
+	idx = CPU_USAGE_GROUP_WIDTH * bpf_get_smp_processor_id() + offset;
+	array_add(&cpu_usage, idx, delta);
+
+	// additional accounting on a per-cgroup basis follows
 
 	struct task_struct *current = bpf_get_current_task_btf();
 
@@ -197,28 +284,22 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 			}
 
 			switch (index) {
-				case 0:
+				case USER:
 					array_add(&cgroup_user, cgroup_id, delta);
 					break;
-				case 1:
+				case NICE:
 					array_add(&cgroup_nice, cgroup_id, delta);
 					break;
-				case 2:
+				case SYSTEM:
 					array_add(&cgroup_system, cgroup_id, delta);
 					break;
-				case 3:
-					array_add(&cgroup_softirq, cgroup_id, delta);
-					break;
-				case 4:
-					array_add(&cgroup_irq, cgroup_id, delta);
-					break;
-				case 7:
+				case STEAL:
 					array_add(&cgroup_steal, cgroup_id, delta);
 					break;
-				case 8:
+				case GUEST:
 					array_add(&cgroup_guest, cgroup_id, delta);
 					break;
-				case 9:
+				case GUEST_NICE:
 					array_add(&cgroup_guest_nice, cgroup_id, delta);
 					break;
 				default:
@@ -226,6 +307,54 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 			}
 		}
 	}
+
+	return 0;
+}
+
+SEC("tracepoint/irq/softirq_entry")
+int softirq_enter(struct trace_event_raw_softirq *args)
+{
+	u32 cpu = bpf_get_smp_processor_id();
+	u64 ts = bpf_ktime_get_ns();
+
+	u32 idx = cpu * SOFTIRQ_GROUP_WIDTH + args->vec;
+
+	bpf_map_update_elem(&start, &cpu, &ts, 0);
+	array_incr(&softirq, idx);
+
+	return 0;
+}
+
+SEC("tracepoint/irq/softirq_exit")
+int softirq_exit(struct trace_event_raw_softirq *args)
+{
+	u32 cpu = bpf_get_smp_processor_id();
+	u64 *elem, *start_ts, dur = 0;
+	u32 offset, idx, group = 0;
+
+	u32 irq_id = 0;
+
+	// lookup the start time
+	start_ts = bpf_map_lookup_elem(&start, &cpu);
+
+	// possible we missed the start
+	if (!start_ts || *start_ts == 0) {
+		return 0;
+	}
+
+	// calculate the duration
+	dur = bpf_ktime_get_ns() - *start_ts;
+
+	// update the cpu usage
+	offset = CPU_USAGE_GROUP_WIDTH * cpu + SOFTIRQ_OFFSET;
+	array_add(&cpu_usage, idx, dur);
+
+	// update the softirq time
+	offset = SOFTIRQ_GROUP_WIDTH * cpu + args->vec;
+	array_add(&softirq_time, idx, dur);
+
+	// clear the start timestamp
+	*start_ts = 0;
 
 	return 0;
 }

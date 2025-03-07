@@ -1,9 +1,17 @@
 /// Collects CPU usage stats using BPF and traces:
 /// * `cpuacct_account_field`
+/// * `softirq_entry`
+/// * `softirq_exit`
 ///
 /// And produces these stats:
 /// * `cpu_usage`
 /// * `cgroup_cpu_usage`
+/// * `softirq`
+/// * `softirq_time`
+///
+/// Note: softirq is included because we need to trace softirq entry/exit in
+/// order to provide accurate accounting of cpu_usage for softirq. That makes
+/// these additional metrics free.
 
 const NAME: &str = "cpu_usage";
 
@@ -86,7 +94,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     set_name(1, "/".to_string());
 
-    let counters = vec![
+    let cpu_usage = vec![
         &CPU_USAGE_USER,
         &CPU_USAGE_NICE,
         &CPU_USAGE_SYSTEM,
@@ -97,8 +105,36 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CPU_USAGE_GUEST_NICE,
     ];
 
+    let softirq = vec![
+        &SOFTIRQ_HI,
+        &SOFTIRQ_TIMER,
+        &SOFTIRQ_NET_TX,
+        &SOFTIRQ_NET_RX,
+        &SOFTIRQ_BLOCK,
+        &SOFTIRQ_IRQ_POLL,
+        &SOFTIRQ_TASKLET,
+        &SOFTIRQ_SCHED,
+        &SOFTIRQ_HRTIMER,
+        &SOFTIRQ_RCU,
+    ];
+
+    let softirq_time = vec![
+        &SOFTIRQ_TIME_HI,
+        &SOFTIRQ_TIME_TIMER,
+        &SOFTIRQ_TIME_NET_TX,
+        &SOFTIRQ_TIME_NET_RX,
+        &SOFTIRQ_TIME_BLOCK,
+        &SOFTIRQ_TIME_IRQ_POLL,
+        &SOFTIRQ_TIME_TASKLET,
+        &SOFTIRQ_TIME_SCHED,
+        &SOFTIRQ_TIME_HRTIMER,
+        &SOFTIRQ_TIME_RCU,
+    ];
+
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .cpu_counters("counters", counters)
+        .cpu_counters("cpu_usage", cpu_usage)
+        .cpu_counters("softirq", softirq)
+        .cpu_counters("softirq_time", softirq_time)
         .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
         .packed_counters("cgroup_nice", &CGROUP_CPU_USAGE_NICE)
         .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
@@ -125,7 +161,9 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_steal" => &self.maps.cgroup_steal,
             "cgroup_guest" => &self.maps.cgroup_guest,
             "cgroup_guest_nice" => &self.maps.cgroup_guest_nice,
-            "counters" => &self.maps.counters,
+            "cpu_usage" => &self.maps.cpu_usage,
+            "softirq" => &self.maps.softirq,
+            "softirq_time" => &self.maps.softirq_time,
             _ => unimplemented!(),
         }
     }
