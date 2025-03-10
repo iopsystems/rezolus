@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use crate::agent::Config;
-use linkme::distributed_slice;
 use async_trait::async_trait;
+use linkme::distributed_slice;
+use std::sync::Arc;
 
 mod blockio;
 mod cpu;

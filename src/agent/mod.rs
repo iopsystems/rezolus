@@ -6,7 +6,7 @@ mod metrics;
 mod samplers;
 
 use config::Config;
-use samplers::{SAMPLERS, Sampler, SamplerResult};
+use samplers::{Sampler, SamplerResult, SAMPLERS};
 
 #[allow(unused_imports)]
 use metrics::{CounterGroup, CounterGroupError, GaugeGroup, GaugeGroupError};
