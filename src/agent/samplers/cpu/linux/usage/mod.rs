@@ -13,7 +13,7 @@ mod bpf {
 
 use bpf::*;
 
-use crate::common::*;
+use crate::agent::*;
 use crate::*;
 
 use std::sync::Arc;

@@ -1,18 +1,3 @@
-mod counters;
-mod gauges;
-
-pub use counters::*;
-pub use gauges::*;
-
-#[cfg(target_os = "linux")]
-pub mod bpf;
-
-#[cfg(target_os = "linux")]
-pub use bpf::*;
-
-#[cfg(target_os = "linux")]
-pub mod linux;
-
 pub static HISTOGRAM_GROUPING_POWER: u8 = 3;
 
 // Time units with base unit as nanoseconds

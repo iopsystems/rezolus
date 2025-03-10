@@ -1,42 +1,9 @@
-use walkdir::{DirEntry, WalkDir};
+mod sysfs;
 
-use std::io::Error;
+mod interfaces;
+mod traffic;
 
-pub fn cpus() -> Result<Vec<usize>, Error> {
-    let raw =
-        std::fs::read_to_string("/sys/devices/system/cpu/present").map(|v| v.trim().to_string())?;
-
-    let mut ids = Vec::new();
-
-    for range in raw.split(',') {
-        let mut parts = range.split('-');
-
-        let first: Option<usize> = parts
-            .next()
-            .map(|text| text.parse())
-            .transpose()
-            .map_err(|_| Error::other("could not parse"))?;
-        let second: Option<usize> = parts
-            .next()
-            .map(|text| text.parse())
-            .transpose()
-            .map_err(|_| Error::other("could not parse"))?;
-
-        if parts.next().is_some() {
-            // The line is invalid.
-            return Err(Error::other("could not parse"));
-        }
-
-        match (first, second) {
-            (Some(value), None) => ids.push(value),
-            (Some(start), Some(stop)) => ids.extend(start..=stop),
-            _ => continue,
-        }
-    }
-
-    Ok(ids)
-}
-
+/// Helper function to filter hidden folders while walking directories.
 pub(crate) fn is_hidden(entry: &DirEntry) -> bool {
     entry
         .file_name()
@@ -45,6 +12,7 @@ pub(crate) fn is_hidden(entry: &DirEntry) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns a list of network interface names.
 pub fn network_interfaces() -> Result<Vec<String>, Error> {
     let mut interfaces = Vec::new();
 

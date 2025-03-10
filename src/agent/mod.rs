@@ -1,5 +1,22 @@
 use super::*;
 
+mod config;
+mod exposition;
+mod metrics;
+mod samplers;
+
+use config::Config;
+use samplers::{SAMPLERS, Sampler, SamplerResult};
+
+#[allow(unused_imports)]
+use metrics::{CounterGroup, CounterGroupError, GaugeGroup, GaugeGroupError};
+
+#[cfg(target_os = "linux")]
+mod bpf;
+
+#[cfg(target_os = "linux")]
+use bpf::*;
+
 /// Runs Rezolus in `agent` mode in which it gathers systems telemetry and
 /// exposes metrics on an OTel/Prometheus compatible endpoint and a
 /// Rezolus-specific msgpack endpoint.

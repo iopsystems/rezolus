@@ -1,4 +1,4 @@
-use crate::config::*;
+use super::*;
 
 #[derive(Deserialize, Default)]
 pub struct Sampler {

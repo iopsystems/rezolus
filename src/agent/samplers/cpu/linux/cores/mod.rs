@@ -1,6 +1,6 @@
 const NAME: &str = "cpu_cores";
 
-use crate::*;
+use crate::agent::samplers::*;
 
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};

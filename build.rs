@@ -33,14 +33,14 @@ mod bpf {
         let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
         for (sampler, prog) in SOURCES {
-            let src = format!("src/samplers/{sampler}/linux/{prog}/mod.bpf.c");
+            let src = format!("src/agent/samplers/{sampler}/linux/{prog}/mod.bpf.c");
             let tgt = format!("{out_dir}/{sampler}_{prog}.bpf.rs");
 
             if target_arch == "x86_64" {
                 SkeletonBuilder::new()
                     .source(&src)
                     .clang_args([
-                        "-Isrc/common/bpf/x86_64",
+                        "-Isrc/agent/bpf/x86_64",
                         "-fno-unwind-tables",
                         "-D__TARGET_ARCH_x86",
                     ])
@@ -50,7 +50,7 @@ mod bpf {
                 SkeletonBuilder::new()
                     .source(&src)
                     .clang_args([
-                        "-Isrc/common/bpf/aarch64",
+                        "-Isrc/agent/bpf/aarch64",
                         "-fno-unwind-tables",
                         "-D__TARGET_ARCH_arm64",
                     ])
@@ -63,7 +63,7 @@ mod bpf {
             println!("cargo:rerun-if-changed={src}");
         }
 
-        println!("cargo:rerun-if-changed=src/common/bpf/histogram.h");
-        println!("cargo:rerun-if-changed=src/common/bpf/vmlinux.h");
+        println!("cargo:rerun-if-changed=src/agent/bpf/histogram.h");
+        println!("cargo:rerun-if-changed=src/agent/bpf/vmlinux.h");
     }
 }

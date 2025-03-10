@@ -1,4 +1,4 @@
-use crate::exposition::http::{CounterGroup, GaugeGroup};
+use crate::agent::*;
 
 use metriken::{RwLockHistogram, Value};
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot, SnapshotV2};

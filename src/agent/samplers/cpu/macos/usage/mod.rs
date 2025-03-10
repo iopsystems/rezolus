@@ -1,6 +1,6 @@
 const NAME: &str = "cpu_usage";
 
-use crate::*;
+use crate::agent::*;
 
 use libc::mach_host_self;
 use libc::mach_port_t;
