@@ -73,6 +73,7 @@ assets = [
     { source = "config/agent.toml", dest = "/etc/rezolus/", mode = "644" },
     { source = "debian/rezolus.service", dest = "/usr/lib/systemd/system/", mode = "644" },
     { source = "debian/rezolus-flight-recorder.service", dest = "/usr/lib/systemd/system/", mode = "644" },
+    { source = "debian/rezolus-summarize.service", dest = "/usr/lib/systemd/system/", mode = "644" },
 ]
 post_install_script = "rpm/systemd-start.sh"
 pre_uninstall_script = "rpm/systemd-stop.sh"
