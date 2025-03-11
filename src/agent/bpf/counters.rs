@@ -1,6 +1,5 @@
 use super::*;
 use crate::agent::*;
-use crate::*;
 
 use libbpf_rs::Map;
 use memmap2::{MmapMut, MmapOptions};

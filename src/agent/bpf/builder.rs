@@ -1,6 +1,5 @@
 use super::*;
 use crate::agent::*;
-use crate::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
@@ -146,7 +145,7 @@ where
         let initialized = Arc::new(AtomicBool::new(false));
         let initialized2 = initialized.clone();
 
-        let cpus = match crate::agent::samplers::cpu::linux::cpus() {
+        let cpus = match crate::common::cpus() {
             Ok(cpus) => cpus.last().copied().unwrap_or(1023),
             Err(_) => 1023,
         };
