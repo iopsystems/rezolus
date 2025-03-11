@@ -1,11 +1,11 @@
-/// Collects TCP packet latency stats using BPF and traces:
-/// * `tcp_v4_connect`
-/// * `tcp_v6_connect`
-/// * `tcp_rcv_state_process`
-/// * `tcp_destroy_sock`
-///
-/// And produces these stats:
-/// * `tcp/connect_latency`
+//! Collects TCP packet latency stats using BPF and traces:
+//! * `tcp_v4_connect`
+//! * `tcp_v6_connect`
+//! * `tcp_rcv_state_process`
+//! * `tcp_destroy_sock`
+//!
+//! And produces these stats:
+//! * `tcp/connect_latency`
 
 const NAME: &str = "tcp_connect_latency";
 

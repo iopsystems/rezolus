@@ -1,10 +1,10 @@
-/// Collects BlockIO Latency stats using BPF and traces:
-/// * `block_rq_insert`
-/// * `block_rq_issue`
-/// * `block_rq_complete`
-///
-/// And produces these stats:
-/// * `blockio_latency`
+//! Collects BlockIO Latency stats using BPF and traces:
+//! * `block_rq_insert`
+//! * `block_rq_issue`
+//! * `block_rq_complete`
+//!
+//! And produces these stats:
+//! * `blockio_latency`
 
 static NAME: &str = "blockio_latency";
 

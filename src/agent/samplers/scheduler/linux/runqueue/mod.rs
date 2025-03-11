@@ -1,13 +1,13 @@
-/// Collects Scheduler Runqueue stats using BPF and traces:
-/// * `sched_wakeup`
-/// * `sched_wakeup_new`
-/// * `sched_switch`
-///
-/// And produces these stats:
-/// * `scheduler/runqueue/latency`
-/// * `scheduler/running`
-/// * `scheduler/offcpu`
-/// * `scheduler/context_switch/involuntary`
+//! Collects Scheduler Runqueue stats using BPF and traces:
+//! * `sched_wakeup`
+//! * `sched_wakeup_new`
+//! * `sched_switch`
+//!
+//! And produces these stats:
+//! * `scheduler/runqueue/latency`
+//! * `scheduler/running`
+//! * `scheduler/offcpu`
+//! * `scheduler/context_switch/involuntary`
 
 const NAME: &str = "scheduler_runqueue";
 

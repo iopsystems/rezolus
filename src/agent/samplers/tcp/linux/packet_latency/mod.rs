@@ -1,10 +1,10 @@
-/// Collects TCP packet latency stats using BPF and traces:
-/// * `tcp_destroy_sock`
-/// * `tcp_probe`
-/// * `tcp_rcv_space_adjust`
-///
-/// And produces these stats:
-/// * `tcp/receive/packet_latency`
+//! Collects TCP packet latency stats using BPF and traces:
+//! * `tcp_destroy_sock`
+//! * `tcp_probe`
+//! * `tcp_rcv_space_adjust`
+//!
+//! And produces these stats:
+//! * `tcp/receive/packet_latency`
 
 const NAME: &str = "tcp_packet_latency";
 

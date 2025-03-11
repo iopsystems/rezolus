@@ -1,14 +1,14 @@
-/// Collects TCP stats using BPF and traces:
-/// * `tcp_sendmsg`
-/// * `tcp_cleanup_rbuf`
-///
-/// And produces these stats:
-/// * `tcp/receive/bytes`
-/// * `tcp/receive/packets`
-/// * `tcp/receive/size`
-/// * `tcp/transmit/bytes`
-/// * `tcp/transmit/packets`
-/// * `tcp/transmit/size`
+//! Collects TCP stats using BPF and traces:
+//! * `tcp_sendmsg`
+//! * `tcp_cleanup_rbuf`
+//!
+//! And produces these stats:
+//! * `tcp/receive/bytes`
+//! * `tcp/receive/packets`
+//! * `tcp/receive/size`
+//! * `tcp/transmit/bytes`
+//! * `tcp/transmit/packets`
+//! * `tcp/transmit/size`
 
 const NAME: &str = "tcp_traffic";
 

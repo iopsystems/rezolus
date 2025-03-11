@@ -1,8 +1,8 @@
-/// Collects TCP Retransmit stats using BPF and traces:
-/// * `tcp_retransmit_timer`
-///
-/// And produces these stats:
-/// * `tcp/transmit/retransmit`
+//! Collects TCP Retransmit stats using BPF and traces:
+//! * `tcp_retransmit_timer`
+//!
+//! And produces these stats:
+//! * `tcp/transmit/retransmit`
 
 const NAME: &str = "tcp_retransmit";
 

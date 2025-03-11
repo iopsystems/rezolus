@@ -1,12 +1,12 @@
-/// Collects Network Traffic stats using BPF and traces:
-/// * `netif_receive_skb`
-/// * `netdev_start_xmit`
-///
-/// And produces these stats:
-/// * `network/receive/bytes`
-/// * `network/receive/frames`
-/// * `network/transmit/bytes`
-/// * `network/transmit/frames`
+//! Collects Network Traffic stats using BPF and traces:
+//! * `netif_receive_skb`
+//! * `netdev_start_xmit`
+//!
+//! And produces these stats:
+//! * `network/receive/bytes`
+//! * `network/receive/frames`
+//! * `network/transmit/bytes`
+//! * `network/transmit/frames`
 
 const NAME: &str = "network_traffic";
 

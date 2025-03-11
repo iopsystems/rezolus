@@ -1,10 +1,10 @@
-/// Collects BlockIO Request stats using BPF and traces:
-/// * `block_rq_complete`
-///
-/// And produces these stats:
-/// * `blockio_bytes`
-/// * `blockio_operations`
-/// * `blockio_size`
+//! Collects BlockIO Request stats using BPF and traces:
+//! * `block_rq_complete`
+//!
+//! And produces these stats:
+//! * `blockio_bytes`
+//! * `blockio_operations`
+//! * `blockio_size`
 
 static NAME: &str = "blockio_requests";
 

@@ -1,9 +1,9 @@
-/// Collects TCP Receive stats using BPF and traces:
-/// * `tcp_rcv_established`
-///
-/// And produces these stats:
-/// * `tcp/receive/jitter`
-/// * `tcp/receive/srtt`
+//! Collects TCP Receive stats using BPF and traces:
+//! * `tcp_rcv_established`
+//!
+//! And produces these stats:
+//! * `tcp/receive/jitter`
+//! * `tcp/receive/srtt`
 
 const NAME: &str = "tcp_receive";
 
