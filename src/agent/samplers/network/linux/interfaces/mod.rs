@@ -1,7 +1,7 @@
 const NAME: &str = "network_interfaces";
 
 use super::sysfs::SysfsSampler;
-use crate::*;
+use crate::agent::*;
 
 use tokio::sync::Mutex;
 

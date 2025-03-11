@@ -1,6 +1,6 @@
 const NAME: &str = "memory_vmstat";
 
-use crate::*;
+use crate::agent::*;
 
 use metriken::LazyCounter;
 use tokio::fs::File;

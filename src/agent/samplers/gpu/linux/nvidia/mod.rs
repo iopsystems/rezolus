@@ -1,6 +1,6 @@
 const NAME: &str = "gpu_nvidia";
 
-use crate::*;
+use crate::agent::*;
 
 use nvml_wrapper::enum_wrappers::device::*;
 use nvml_wrapper::error::NvmlError;
