@@ -22,7 +22,6 @@ mod bpf {
 use bpf::*;
 
 use crate::agent::*;
-use crate::*;
 
 use std::sync::Arc;
 

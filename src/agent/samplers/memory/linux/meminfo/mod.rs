@@ -1,7 +1,6 @@
 const NAME: &str = "memory_meminfo";
 
 use crate::agent::*;
-use crate::*;
 
 use metriken::LazyGauge;
 use tokio::fs::File;
