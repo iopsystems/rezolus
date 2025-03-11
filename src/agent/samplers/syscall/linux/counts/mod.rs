@@ -17,7 +17,7 @@ use bpf::*;
 use stats::*;
 
 use crate::agent::*;
-use crate::samplers::syscall::linux::syscall_lut;
+use super::syscall_lut;
 use crate::*;
 
 use std::sync::Arc;
