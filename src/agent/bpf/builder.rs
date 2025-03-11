@@ -1,5 +1,6 @@
 use super::*;
 use crate::common::*;
+use crate::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
