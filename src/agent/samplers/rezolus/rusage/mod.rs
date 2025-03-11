@@ -1,7 +1,6 @@
 const NAME: &str = "rezolus_rusage";
 
 use crate::agent::*;
-use crate::common::*;
 
 mod stats;
 

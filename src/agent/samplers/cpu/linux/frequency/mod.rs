@@ -20,7 +20,7 @@ mod bpf {
 use bpf::*;
 use perf_event::events::x86::MsrId;
 
-use crate::common::*;
+use crate::agent::*;
 use crate::*;
 
 use std::sync::Arc;

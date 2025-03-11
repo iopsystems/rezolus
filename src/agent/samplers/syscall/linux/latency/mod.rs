@@ -16,7 +16,7 @@ mod stats;
 use bpf::*;
 use stats::*;
 
-use crate::common::*;
+use crate::agent::*;
 use crate::samplers::syscall::linux::syscall_lut;
 use crate::*;
 

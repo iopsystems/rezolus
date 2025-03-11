@@ -1,6 +1,6 @@
 const NAME: &str = "memory_meminfo";
 
-use crate::common::*;
+use crate::agent::*;
 use crate::*;
 
 use metriken::LazyGauge;
