@@ -10,7 +10,7 @@
 // srtt.
 
 #include <vmlinux.h>
-#include "../../../common/bpf/helpers.h"
+#include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
