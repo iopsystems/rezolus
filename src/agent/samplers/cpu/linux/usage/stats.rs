@@ -1,6 +1,6 @@
 use metriken::*;
 
-use crate::common::*;
+use crate::agent::*;
 
 /*
  * per-cpu metrics

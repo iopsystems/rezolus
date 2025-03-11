@@ -1,6 +1,6 @@
 use metriken::*;
 
-use crate::common::*;
+use crate::agent::*;
 
 const MAX_GPUS: usize = 32;
 
