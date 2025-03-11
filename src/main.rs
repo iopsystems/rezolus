@@ -30,17 +30,9 @@ mod agent;
 mod flight_recorder;
 mod recorder;
 
-/// general modules for core functionality
 mod common;
-mod config;
-mod exposition;
-mod samplers;
 
-use config::Config;
-use samplers::{Sampler, SamplerResult};
-
-#[distributed_slice]
-pub static SAMPLERS: [fn(config: Arc<Config>) -> SamplerResult] = [..];
+pub use common::*;
 
 static STATE: AtomicUsize = AtomicUsize::new(RUNNING);
 
