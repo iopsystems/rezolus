@@ -6,7 +6,7 @@ mod sync_primitive;
 pub use builder::Builder as BpfBuilder;
 pub use builder::PerfEvent;
 
-use crate::samplers::Sampler;
+use crate::agent::samplers::Sampler;
 use crate::*;
 
 pub trait OpenSkelExt {
