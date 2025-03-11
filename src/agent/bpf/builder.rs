@@ -146,7 +146,7 @@ where
         let initialized = Arc::new(AtomicBool::new(false));
         let initialized2 = initialized.clone();
 
-        let cpus = match common::linux::cpus() {
+        let cpus = match crate::agent::samplers::cpu::linux::cpus() {
             Ok(cpus) => cpus.last().copied().unwrap_or(1023),
             Err(_) => 1023,
         };
