@@ -3,6 +3,10 @@ mod sysfs;
 mod interfaces;
 mod traffic;
 
+use walkdir::{DirEntry, WalkDir};
+
+use std::io::Error;
+
 /// Helper function to filter hidden folders while walking directories.
 pub(crate) fn is_hidden(entry: &DirEntry) -> bool {
     entry

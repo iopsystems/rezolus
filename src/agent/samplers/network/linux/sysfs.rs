@@ -13,7 +13,7 @@ impl SysfsSampler {
     pub fn new(
         mut metrics: Vec<(&'static LazyCounter, &'static str)>,
     ) -> Result<Self, std::io::Error> {
-        let interfaces = crate::common::linux::network_interfaces()?;
+        let interfaces = super::network_interfaces()?;
 
         let mut stats = Vec::new();
         let mut data = String::new();

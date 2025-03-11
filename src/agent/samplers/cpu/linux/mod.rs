@@ -4,6 +4,8 @@ mod perf;
 mod tlb_flush;
 mod usage;
 
+use std::io::Error;
+
 /// Returns a vector of logical CPU IDs for CPUs which are present.
 pub fn cpus() -> Result<Vec<usize>, Error> {
     let raw =
