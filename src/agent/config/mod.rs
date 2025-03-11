@@ -77,14 +77,6 @@ impl Config {
         &self.log
     }
 
-    pub fn defaults(&self) -> &SamplerConfig {
-        &self.defaults
-    }
-
-    pub fn sampler_config(&self, name: &str) -> Option<&SamplerConfig> {
-        self.samplers.get(name)
-    }
-
     pub fn general(&self) -> &General {
         &self.general
     }

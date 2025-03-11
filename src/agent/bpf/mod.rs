@@ -33,11 +33,11 @@ const COUNTER_SIZE: usize = std::mem::size_of::<u64>();
 const COUNTERS_PER_CACHELINE: usize = CACHELINE_SIZE / COUNTER_SIZE;
 
 fn whole_cachelines<T>(count: usize) -> usize {
-    ((count * std::mem::size_of::<T>()) + CACHELINE_SIZE - 1) / CACHELINE_SIZE
+    (count * std::mem::size_of::<T>()).div_ceil(CACHELINE_SIZE)
 }
 
 fn whole_pages<T>(count: usize) -> usize {
-    ((count * std::mem::size_of::<T>()) + PAGE_SIZE - 1) / PAGE_SIZE
+    (count * std::mem::size_of::<T>()).div_ceil(PAGE_SIZE)
 }
 
 use counters::{Counters, CpuCounters, PackedCounters};
