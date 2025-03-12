@@ -256,13 +256,9 @@ pub fn run(config: Config) {
     let mut idx = 0;
 
     rt.block_on(async move {
-        // get an aligned start time
-        let start = tokio::time::Instant::now()
-            - Duration::from_nanos(Utc::now().nanosecond() as u64)
-            + config.interval.into();
-
         // sampling interval
-        let mut interval = tokio::time::interval_at(start, config.interval.into());
+        let mut interval = crate::common::aligned_interval(config.interval.into());
+
         while STATE.load(Ordering::Relaxed) < TERMINATING {
             // sample in a loop until RUNNING is false
             while STATE.load(Ordering::Relaxed) == RUNNING {

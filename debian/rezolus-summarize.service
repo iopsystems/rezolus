@@ -1,0 +1,15 @@
+[Unit]
+Description=Rezolus summary metrics proxy
+Documentation=https://github.com/iopsystems/rezolus
+After=rezolus.service
+
+[Service]
+User=rezolus
+ExecStart=/usr/bin/rezolus summarize http://localhost:4242 0.0.0.0:4243 --interval 1s
+KillMode=control-group
+Restart=on-failure
+KillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target
+Alias=rezolus-summarize.service
