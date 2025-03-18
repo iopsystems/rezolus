@@ -4,8 +4,10 @@
 //! Initializes perf events to collect cycles and instructions.
 //!
 //! And produces these stats:
-//! * `cpu/cycles`
-//! * `cpu/instructions`
+//! * `cpu_cycles`
+//! * `cpu_instructions`
+//! * `cgroup_cpu_cycles`
+//! * `cgroup_cpu_instructions`
 //!
 //! These stats can be used to calculate the IPC and IPNS in post-processing or
 //! in an observability stack.
