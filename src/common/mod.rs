@@ -10,7 +10,9 @@ pub const NANOSECONDS: u64 = 1;
 pub const KIBIBYTES: u64 = 1024 * BYTES;
 pub const BYTES: u64 = 1;
 
+use chrono::{Timelike, Utc};
 use std::io::Error;
+use std::time::Duration;
 
 /// Returns a vector of logical CPU IDs for CPUs which are present.
 pub fn cpus() -> Result<Vec<usize>, Error> {
@@ -46,4 +48,13 @@ pub fn cpus() -> Result<Vec<usize>, Error> {
     }
 
     Ok(ids)
+}
+
+pub fn aligned_interval(interval: Duration) -> tokio::time::Interval {
+    // get an aligned start time
+    let start = tokio::time::Instant::now() - Duration::from_nanos(Utc::now().nanosecond() as u64)
+        + interval.into();
+
+    // sampling interval
+    tokio::time::interval_at(start, interval.into())
 }

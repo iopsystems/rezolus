@@ -1,0 +1,15 @@
+[Unit]
+Description=Rezolus metrics exporter
+Documentation=https://github.com/iopsystems/rezolus
+After=rezolus.service
+
+[Service]
+User=rezolus
+ExecStart=/usr/bin/rezolus exporter /etc/rezolus/exporter.toml
+KillMode=control-group
+Restart=on-failure
+KillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target
+Alias=rezolus-exporter.service

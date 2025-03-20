@@ -26,7 +26,7 @@ pub fn syscall_lut() -> Vec<u64> {
                     // sleep
                     "clock_nanosleep" | "nanosleep" => 6,
                     // socket creation and management
-                    "accept" | "bind" | "connect" | "getpeername" | "getsockname"
+                    "accept" | "accept4" | "bind" | "connect" | "getpeername" | "getsockname"
                     | "getsockopt" | "listen" | "setsockopt" | "shutdown" | "socket"
                     | "socketpair" => 7,
                     // yield

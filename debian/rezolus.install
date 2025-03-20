@@ -1,4 +1,4 @@
 bin/rezolus usr/bin/
 config/*.toml etc/rezolus/
-debian/90-rezolus-flight-recorder.preset usr/lib/systemd/system-preset/
-debian/rezolus-flight-recorder.service usr/lib/systemd/system/
+debian/90-rezolus-*.preset usr/lib/systemd/system-preset/
+debian/rezolus-*.service usr/lib/systemd/system/

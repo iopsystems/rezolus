@@ -1,26 +1,43 @@
-use crate::debug;
+use std::path::PathBuf;
+use clap::ArgMatches;
+use crate::common::HISTOGRAM_GROUPING_POWER;
 
 use ringlog::Level;
 use serde::Deserialize;
 
-use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 
 mod general;
 mod log;
-mod sampler;
+mod prometheus;
 
 use general::General;
 use log::Log;
-use sampler::Sampler as SamplerConfig;
+use prometheus::Prometheus;
+
+fn disabled() -> bool {
+    false
+}
 
 fn enabled() -> bool {
     true
 }
 
+fn histogram_grouping_power() -> u8 {
+    HISTOGRAM_GROUPING_POWER
+}
+
 fn listen() -> String {
+    "0.0.0.0:4243".into()
+}
+
+fn target() -> String {
     "0.0.0.0:4242".into()
+}
+
+fn interval() -> String {
+    "1s".into()
 }
 
 #[derive(Deserialize, Default)]
@@ -30,9 +47,24 @@ pub struct Config {
     #[serde(default)]
     log: Log,
     #[serde(default)]
-    defaults: SamplerConfig,
-    #[serde(default)]
-    samplers: HashMap<String, SamplerConfig>,
+    prometheus: Prometheus,
+}
+
+impl TryFrom<ArgMatches> for Config {
+    type Error = String;
+
+    fn try_from(
+        args: ArgMatches,
+    ) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
+        let config: PathBuf = args.get_one::<PathBuf>("CONFIG").unwrap().to_path_buf();
+        match Config::load(&config) {
+            Ok(c) => Ok(c),
+            Err(error) => {
+                eprintln!("error loading config file: {:?}\n{error}", config);
+                std::process::exit(1);
+            }
+        }
+    }
 }
 
 impl Config {
@@ -53,11 +85,7 @@ impl Config {
 
         config.general.check();
 
-        config.defaults.check("default");
-
-        for (name, config) in config.samplers.iter() {
-            config.check(name);
-        }
+        config.prometheus().check();
 
         Ok(config)
     }
@@ -70,19 +98,7 @@ impl Config {
         &self.general
     }
 
-    pub fn enabled(&self, name: &str) -> bool {
-        let enabled = self
-            .samplers
-            .get(name)
-            .and_then(|v| v.enabled())
-            .unwrap_or(self.defaults.enabled().unwrap_or(enabled()));
-
-        if enabled {
-            debug!("'{name}' sampler is enabled");
-        } else {
-            debug!("'{name}' sampler is not enabled");
-        }
-
-        enabled
+    pub fn prometheus(&self) -> &Prometheus {
+        &self.prometheus
     }
 }
