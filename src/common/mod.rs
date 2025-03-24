@@ -53,8 +53,8 @@ pub fn cpus() -> Result<Vec<usize>, Error> {
 pub fn aligned_interval(interval: Duration) -> tokio::time::Interval {
     // get an aligned start time
     let start = tokio::time::Instant::now() - Duration::from_nanos(Utc::now().nanosecond() as u64)
-        + interval.into();
+        + interval;
 
     // sampling interval
-    tokio::time::interval_at(start, interval.into())
+    tokio::time::interval_at(start, interval)
 }
