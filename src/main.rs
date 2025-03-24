@@ -70,8 +70,7 @@ fn main() {
             agent::run(config)
         }
         Some(("exporter", args)) => {
-            let config =
-                exporter::Config::try_from(args.clone()).expect("failed to configure");
+            let config = exporter::Config::try_from(args.clone()).expect("failed to configure");
 
             exporter::run(config)
         }

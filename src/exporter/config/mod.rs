@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use clap::ArgMatches;
 use crate::common::HISTOGRAM_GROUPING_POWER;
+use clap::ArgMatches;
+use std::path::PathBuf;
 
 use ringlog::Level;
 use serde::Deserialize;

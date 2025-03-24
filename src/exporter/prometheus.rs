@@ -132,22 +132,15 @@ impl PrometheusFormat for Histogram {
         }
 
         if metadata.is_empty() {
-            entry += &format!(
-                "{name}_distribution_bucket{{le=\"+Inf\"}} {count} {timestamp}\n"
-            );
-            entry +=
-                &format!("{name}_distribution_count {count} {timestamp}\n");
+            entry += &format!("{name}_distribution_bucket{{le=\"+Inf\"}} {count} {timestamp}\n");
+            entry += &format!("{name}_distribution_count {count} {timestamp}\n");
             entry += &format!("{name}_distribution_sum {sum} {timestamp}");
         } else {
             entry += &format!(
                 "{name}_distribution_bucket{{{metadata}, le=\"+Inf\"}} {count} {timestamp}\n"
             );
-            entry += &format!(
-                "{name}_distribution_count{{{metadata}}} {count} {timestamp}\n"
-            );
-            entry += &format!(
-                "{name}_distribution_sum{{{metadata}}} {sum} {timestamp}"
-            );
+            entry += &format!("{name}_distribution_count{{{metadata}}} {count} {timestamp}\n");
+            entry += &format!("{name}_distribution_sum{{{metadata}}} {sum} {timestamp}");
         }
 
         entry

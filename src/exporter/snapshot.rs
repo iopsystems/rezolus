@@ -4,7 +4,8 @@ use super::*;
 pub fn snapshot(config: &Config, mut previous: Snapshot, mut current: Snapshot) -> SnapshotV2 {
     let mut snapshot = SnapshotV2 {
         systemtime: current.systemtime(),
-        duration: current.systemtime()
+        duration: current
+            .systemtime()
             .duration_since(previous.systemtime())
             .unwrap(),
         metadata: current.metadata(),
@@ -46,16 +47,14 @@ pub fn snapshot(config: &Config, mut previous: Snapshot, mut current: Snapshot) 
             metadata,
         })
     }
-    
-    'outer: for (prev, curr) in previous.histograms().iter().zip(current.histograms()) {
 
+    'outer: for (prev, curr) in previous.histograms().iter().zip(current.histograms()) {
         // optionally, generate summaries from histograms
         //
         // This requires some care as we are responsible for detecting if the
         // histogram has reset. This would happen if the agent has restarted. In
         // that case we skip summary exposition until the next snapshot.
         if config.prometheus().summaries() {
-
             let mut metadata = curr.metadata.clone();
 
             // the real metric name is encoded in the metadata
@@ -78,7 +77,7 @@ pub fn snapshot(config: &Config, mut previous: Snapshot, mut current: Snapshot) 
 
             // detect reset by looking for buckets with unusually large deltas
             for count in delta.iter().map(|bucket| bucket.count()) {
-                if count > 1<<63 {
+                if count > 1 << 63 {
                     continue 'outer;
                 }
             }
@@ -111,10 +110,14 @@ pub fn snapshot(config: &Config, mut previous: Snapshot, mut current: Snapshot) 
             };
 
             // downsample the histogram if required
-            let value = if config.prometheus().histogram_grouping_power() >= curr.value.config().grouping_power() {
+            let value = if config.prometheus().histogram_grouping_power()
+                >= curr.value.config().grouping_power()
+            {
                 curr.value.clone()
             } else {
-                curr.value.downsample(config.prometheus().histogram_grouping_power()).unwrap()
+                curr.value
+                    .downsample(config.prometheus().histogram_grouping_power())
+                    .unwrap()
             };
 
             snapshot.histograms.push(Histogram {

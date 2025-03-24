@@ -1,5 +1,5 @@
-use crate::Url;
 use super::*;
+use crate::Url;
 
 #[derive(Deserialize, Default)]
 pub struct General {

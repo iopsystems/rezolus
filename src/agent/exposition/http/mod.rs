@@ -27,9 +27,7 @@ impl AppState {
 }
 
 pub async fn serve(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) {
-    let state = Arc::new(AppState {
-        samplers,
-    });
+    let state = Arc::new(AppState { samplers });
 
     let app: Router = app(state);
 
