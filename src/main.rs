@@ -1,32 +1,23 @@
 use async_trait::async_trait;
 use backtrace::Backtrace;
-use chrono::Timelike;
-use chrono::Utc;
-use clap::value_parser;
-use clap::Command;
-use clap::ValueEnum;
+use clap::{value_parser, Command, ValueEnum};
 use linkme::distributed_slice;
-use metriken_exposition::MsgpackToParquet;
-use metriken_exposition::ParquetOptions;
+use metriken_exposition::{MsgpackToParquet, ParquetOptions};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use ringlog::*;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
-use std::io::Write;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
-use std::time::Instant;
 use tempfile::tempfile_in;
 
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// modules for each mode of operation
 mod agent;
+mod exporter;
 mod flight_recorder;
 mod recorder;
 
@@ -61,12 +52,13 @@ fn main() {
         .subcommand_negates_reqs(true)
         .arg(
             clap::Arg::new("CONFIG")
-                .help("Server configuration file")
+                .help("Configuration file")
                 .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set)
                 .required(true)
                 .index(1),
         )
+        .subcommand(exporter::command())
         .subcommand(flight_recorder::command())
         .subcommand(recorder::command())
         .get_matches();
@@ -76,6 +68,11 @@ fn main() {
             let config: PathBuf = cli.get_one::<PathBuf>("CONFIG").unwrap().to_path_buf();
 
             agent::run(config)
+        }
+        Some(("exporter", args)) => {
+            let config = exporter::Config::try_from(args.clone()).expect("failed to configure");
+
+            exporter::run(config)
         }
         Some(("flight-recorder", args)) => {
             let config =
