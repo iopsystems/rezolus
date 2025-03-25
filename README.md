@@ -42,6 +42,47 @@ Provides artifacts for incident investigation:
 - Snapshot metrics during or after performance incidents
 - Capture detailed system state when unexpected events occur
 
+## Use Cases
+We believe that Rezolus is useful for:
+- Performance engineering
+- DevOps and SRE troubleshooting
+
+### Performance Engineering
+Rezolus can be run with just the Agent and the Recorder can be used to take
+on-demand captures during tests run in lab environments or to capture production
+performance data to help characterize workload and understand what conditions
+you may want to replicate in test environments.
+
+Simply run the following command to collect a secondly recording for 15 minutes:
+```bash
+rezolus record --interval 1s --duration 15m http://localhost:4241 rezolus.parquet
+```
+
+### DevOps and SRE Troubleshooting
+Rezolus also has value for people operating services. The Agent and Exporter can
+be used to integrate Rezolus telemetry with your observability stack and give
+deeper insights into production behaviors. The Exporter is designed to allow
+summarization of histograms to just a few percentiles, which greatly reduces the
+storage requirements to get insights around distributions.
+
+Unfortunately, sometimes it is too expensive to collect telemetry on a secondly
+basis. And some problems are very difficult to understand without fine-grained
+metrics. This is exactly what the Rezolus Flight Recorder is designed for. By
+keeping a high-resolution ring buffer on disk, you can record a snapshot to disk
+after a problem has already happened! Imagine being able to go back in time and
+get that high-resolution data to root cause a production performance issue. With
+the Rezolus Flight Recorder, you can do exactly that.
+
+## Community & Support
+- [Discord Community][discore]
+- [GitHub Issues][new issue]
+
+## License
+Dual-licensed under [Apache 2.0][license apache] and [MIT][license mit], unless
+otherwise specified.
+
+Detailed licensing information can be found in the [COPYRIGHT][copyright] file.
+
 ## Deployment
 
 ### Supported Environments
@@ -54,16 +95,74 @@ Find an appropriate package for your OS for our [latest release][latest release]
 and install it using your package manager.
 
 By default the `rezolus` service will be running as the agent and the
-`rezolus-exporter` service will be running so there is prometheus exposition. To
-enable the flight-recorder, you can do:
+`rezolus-exporter` service will be running so there is Prometheus exposition. By
+default, the config assumes secondly collection. Please review the config and
+adjust as necessary for your environment.
+
+The `flight-recorder` service is disabled by default. Please review the config
+before enabling.
 
 ```bash
+# enable and start the service
 systemctl enable rezolus-flight-recorder
 systemctl start rezolus-flight-recorder
 ```
 
-The flight-recorder can be configured in the service file which will be located
-at `/etc/systemd/system/rezolus-flight-recorder.service`.
+### Configuration
+Rezolus has three services each with its own configuration.
+
+#### Agent
+The agent config may be adjusted to enable/disable individual samplers.
+
+Please see the [config/agent.toml][agent.toml] to review all configuration
+options and their defaults.
+
+```bash
+# edit the agent config file
+editor /etc/rezolus/agent.toml
+
+# restart the service to apply changes
+systemctl restart rezolus
+```
+
+#### Exporter
+The exporter **must** be configured so that the `interval` matches the scrape
+interval for metrics in your environment. If the interval is too short, any
+summary metrics will not cover the entire period between scrapes of the metrics
+endpoint. Setting it too long will cause stale metrics to be served.
+
+Additionally, the exporter may be configured to expose full histograms instead
+of summary percentiles.
+
+Please see the [config/exporter.toml][exporter.toml] to review all configuration
+options and their defaults.
+
+```bash
+# edit the exporter config file
+sudo editor /etc/rezolus/exporter.toml
+
+# restart the exporter to apply changes
+sudo systemsctl restart rezolus-exporter
+```
+
+#### Flight Recorder
+This service is disabled by default. Please review the configuration and make
+any necessary changes before you enable it.
+
+Please see the [config/flight-recorder.toml][flight-recorder.toml] to review all
+configuration options and their defaults.
+
+```bash
+# review the config file and make any desired changes
+sudo editor /etc/rezolus/flight-recorder.toml
+
+# enable and start the service
+sudo systemctl enable rezolus-flight-recorder
+sudo systemctl start rezolus-flight-recorder
+
+# trigger a save of the ring buffer to the output file
+sudo systemctl kill -sHUP rezolus-flight-recorder
+```
 
 ### Build from source
 ```bash
@@ -81,23 +180,8 @@ sudo target/release/rezolus exporter config/exporter.toml
 target/release/rezolus record http://localhost:4241 rezolus.parquet
 
 # to run the flight recorder
-target/release/rezolus flight-recorder http://localhost:4241 rezolus.parquet
+target/release/rezolus flight-recorder config/flight-recorder.toml
 ```
-
-## Use Cases
-- Performance engineering
-- System behavior analysis
-- DevOps and SRE troubleshooting
-
-## Community & Support
-- [Discord Community][discore]
-- [GitHub Issues][new issue]
-
-## License
-Dual-licensed under [Apache 2.0][license apache] and [MIT][license mit], unless
-otherwise specified.
-
-Detailed licensing information can be found in the [COPYRIGHT][copyright] file.
 
 ## Contributing
 To contribute to Rezolus first check if there are any open pull requests or
