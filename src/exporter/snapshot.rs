@@ -1,7 +1,12 @@
 use super::*;
 
 /// Produces a snapshot from a previous and current snapshot
-pub fn snapshot(config: &Config, mut previous: Snapshot, mut current: Snapshot, latency: Duration) -> SnapshotV2 {
+pub fn snapshot(
+    config: &Config,
+    mut previous: Snapshot,
+    mut current: Snapshot,
+    latency: Duration,
+) -> SnapshotV2 {
     let duration = current.duration().unwrap_or(latency);
 
     let mut snapshot = SnapshotV2 {
