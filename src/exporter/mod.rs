@@ -103,7 +103,7 @@ pub fn run(config: Config) {
     // timed loop to calculate summary metrics
     rt.block_on(async move {
         // sampling interval
-        let mut interval = crate::common::aligned_interval(config.prometheus().interval().into());
+        let mut interval = crate::common::aligned_interval(config.general().interval().into());
 
         // previous snapshot
         let mut previous = None;

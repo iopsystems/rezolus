@@ -1,17 +1,42 @@
 use super::*;
 use crate::Url;
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 pub struct General {
+    // the exporter samples periodically, this controls that interval
+    #[serde(default = "interval")]
+    interval: String,
+
+    // the listen address of the exporter
     #[serde(default = "listen")]
     listen: String,
 
+    // the address of the Rezolus agent to target
     #[serde(default = "target")]
     target: String,
 }
 
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            interval: interval(),
+            listen: listen(),
+            target: target(),
+        }
+    }
+}
+
 impl General {
-    pub fn check(&self) {}
+    pub fn check(&self) {
+        if let Err(e) = self.interval.parse::<humantime::Duration>() {
+            eprintln!("prometheus sample interval couldn't be parsed: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    pub fn interval(&self) -> humantime::Duration {
+        self.interval.parse().unwrap()
+    }
 
     pub fn listen(&self) -> SocketAddr {
         self.listen
