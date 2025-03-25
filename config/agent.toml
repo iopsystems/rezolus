@@ -1,5 +1,5 @@
 [general]
-listen = "0.0.0.0:4242"
+listen = "0.0.0.0:4241"
 
 [log]
 # Controls the log level: "error", "warn", "info", "debug", "trace"

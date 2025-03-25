@@ -5,7 +5,7 @@ After=rezolus.service
 
 [Service]
 User=rezolus
-ExecStart=/usr/bin/rezolus flight-recorder http://localhost:4242 /tmp/flight-recorder.parquet
+ExecStart=/usr/bin/rezolus flight-recorder http://localhost:4241 /tmp/flight-recorder.parquet
 KillMode=control-group
 Restart=on-failure
 KillSignal=SIGKILL

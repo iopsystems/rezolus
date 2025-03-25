@@ -29,11 +29,11 @@ fn histogram_grouping_power() -> u8 {
 }
 
 fn listen() -> String {
-    "0.0.0.0:4243".into()
+    "0.0.0.0:4242".into()
 }
 
 fn target() -> String {
-    "0.0.0.0:4242".into()
+    "0.0.0.0:4241".into()
 }
 
 fn interval() -> String {
