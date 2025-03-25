@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use async_trait::async_trait;
 use backtrace::Backtrace;
 use clap::{value_parser, Command, ValueEnum};
@@ -7,6 +6,7 @@ use metriken_exposition::{MsgpackToParquet, ParquetOptions};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use ringlog::*;
+use serde::Deserialize;
 use tempfile::tempfile_in;
 
 use std::io::{Read, Seek, SeekFrom, Write};
