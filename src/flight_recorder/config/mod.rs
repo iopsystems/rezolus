@@ -13,14 +13,6 @@ mod log;
 use general::General;
 use log::Log;
 
-fn disabled() -> bool {
-    false
-}
-
-fn enabled() -> bool {
-    true
-}
-
 fn source() -> String {
     "0.0.0.0:4241".into()
 }
