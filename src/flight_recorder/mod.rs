@@ -1,95 +1,20 @@
 use super::*;
-use clap::ArgMatches;
 use std::fs::OpenOptions;
 
-pub struct Config {
-    interval: humantime::Duration,
-    duration: humantime::Duration,
-    format: Format,
-    verbose: u8,
-    url: Url,
-    output: PathBuf,
-}
+mod config;
 
-impl TryFrom<ArgMatches> for Config {
-    type Error = String;
-
-    fn try_from(
-        args: ArgMatches,
-    ) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
-        Ok(Config {
-            url: args.get_one::<Url>("URL").ok_or("missing url")?.clone(),
-            output: args
-                .get_one::<PathBuf>("OUTPUT")
-                .ok_or("missing output")?
-                .to_path_buf(),
-            verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
-            interval: *args
-                .get_one::<humantime::Duration>("INTERVAL")
-                .unwrap_or(&humantime::Duration::from_str("1s").unwrap()),
-            duration: *args
-                .get_one::<humantime::Duration>("DURATION")
-                .unwrap_or(&humantime::Duration::from_str("15m").unwrap()),
-            format: args
-                .get_one::<Format>("FORMAT")
-                .copied()
-                .unwrap_or(Format::Parquet),
-        })
-    }
-}
+pub use config::Config;
 
 pub fn command() -> Command {
     Command::new("flight-recorder")
         .about("Continuous recording to an on-disk ring buffer")
         .arg(
-            clap::Arg::new("URL")
-                .help("Rezolus HTTP endpoint")
+            clap::Arg::new("CONFIG")
+                .help("Rezolus flight-recorder configuration file")
+                .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(Url))
                 .required(true)
                 .index(1),
-        )
-        .arg(
-            clap::Arg::new("OUTPUT")
-                .help("Path to the output file")
-                .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(PathBuf))
-                .required(true)
-                .index(2),
-        )
-        .arg(
-            clap::Arg::new("VERBOSE")
-                .long("verbose")
-                .short('v')
-                .help("Increase the verbosity")
-                .action(clap::ArgAction::Count),
-        )
-        .arg(
-            clap::Arg::new("INTERVAL")
-                .long("interval")
-                .short('i')
-                .help("Sets the collection interval")
-                .action(clap::ArgAction::Set)
-                .default_value("1s")
-                .value_parser(value_parser!(humantime::Duration)),
-        )
-        .arg(
-            clap::Arg::new("DURATION")
-                .long("duration")
-                .short('d')
-                .help("Sets the collection interval")
-                .action(clap::ArgAction::Set)
-                .default_value("15m")
-                .value_parser(value_parser!(humantime::Duration)),
-        )
-        .arg(
-            clap::Arg::new("FORMAT")
-                .long("format")
-                .short('f')
-                .help("Sets the collection format")
-                .action(clap::ArgAction::Set)
-                .default_value("parquet")
-                .value_parser(value_parser!(Format)),
         )
 }
 
@@ -107,14 +32,13 @@ pub fn command() -> Command {
 /// engineer or automated process to respond and trigger the process to persist
 /// the ring buffer.
 pub fn run(config: Config) {
+    // load config from file
+    let config: Arc<Config> = config.into();
+
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
 
-    let level = match config.verbose {
-        0 => Level::Info,
-        1 => Level::Debug,
-        _ => Level::Trace,
-    };
+    let level = config.log().level();
 
     let debug_log = if level <= Level::Info {
         LogBuilder::new().format(ringlog::default_format)
@@ -163,7 +87,7 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    let mut url = config.url.clone();
+    let mut url = config.general().url();
 
     if url.path() != "/" {
         eprintln!("URL should not have an non-root path: {}", url);
@@ -188,7 +112,7 @@ pub fn run(config: Config) {
         .write(true)
         .create(true)
         .truncate(false)
-        .open(config.output.clone())
+        .open(config.general().output())
         .map_err(|e| {
             error!("failed to open destination file: {e}");
             std::process::exit(1);
@@ -197,7 +121,7 @@ pub fn run(config: Config) {
 
     // our writer will always be a new temporary file
     let mut writer = {
-        let mut path: PathBuf = config.output.clone();
+        let mut path: PathBuf = config.general().output();
         path.pop();
 
         match tempfile_in(path.clone()) {
@@ -230,7 +154,7 @@ pub fn run(config: Config) {
     };
 
     // check that the sampling interval and sample latency are compatible
-    if config.interval.as_micros() < (latency.as_micros() * 2) {
+    if config.general().interval().as_micros() < (latency.as_micros() * 2) {
         error!("the sampling interval is too short to reliably record");
         error!(
             "set the interval to at least: {} us",
@@ -245,7 +169,7 @@ pub fn run(config: Config) {
     let snapshot_len = (1 + snap_len as u64 * 4 / 4096) * 4096;
 
     // the total number of snapshots
-    let snapshot_count = (1 + config.duration.as_micros() / config.interval.as_micros()) as u64;
+    let snapshot_count = (1 + config.general().interval().as_micros() / config.general().interval().as_micros()) as u64;
 
     // expand the temporary file to hold enough room for all the snapshots
     let _ = writer.set_len(snapshot_len * snapshot_count).map_err(|e| {
@@ -257,7 +181,7 @@ pub fn run(config: Config) {
 
     rt.block_on(async move {
         // sampling interval
-        let mut interval = crate::common::aligned_interval(config.interval.into());
+        let mut interval = crate::common::aligned_interval(config.general().interval().into());
 
         // sampling loop
         while STATE.load(Ordering::Relaxed) < TERMINATING {
@@ -314,7 +238,7 @@ pub fn run(config: Config) {
             //
             // note: as the idx is the position we will write to next, it is
             //       also the position to start reading from
-            match config.format {
+            match config.general().format() {
                 Format::Raw => {
                     debug!("capturing ringbuffer and writing to raw");
 
@@ -366,7 +290,7 @@ pub fn run(config: Config) {
 
                     // our writer will always be a temporary file
                     let mut packed = {
-                        let mut path: PathBuf = config.output.clone();
+                        let mut path: PathBuf = config.general().output();
                         path.pop();
 
                         match tempfile_in(path.clone()) {
@@ -415,7 +339,7 @@ pub fn run(config: Config) {
                     if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
                         .metadata(
                             "sampling_interval_ms".to_string(),
-                            config.interval.as_millis().to_string(),
+                            config.general().interval().as_millis().to_string(),
                         )
                         .convert_file_handle(packed, &destination)
                     {

@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use async_trait::async_trait;
 use backtrace::Backtrace;
 use clap::{value_parser, Command, ValueEnum};
@@ -31,7 +32,7 @@ static RUNNING: usize = 0;
 static CAPTURING: usize = 1;
 static TERMINATING: usize = 2;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Deserialize)]
 enum Format {
     Parquet,
     Raw,

@@ -71,6 +71,8 @@ auto_req = "builtin"
 assets = [
     { source = "target/release/rezolus", dest = "/usr/bin/", mode = "755" },
     { source = "config/agent.toml", dest = "/etc/rezolus/", mode = "644" },
+    { source = "config/exporter.toml", dest = "/etc/rezolus/", mode = "644" },
+    { source = "config/flight-recorder.toml", dest = "/etc/rezolus/", mode = "644" },
     { source = "debian/rezolus.service", dest = "/usr/lib/systemd/system/", mode = "644" },
     { source = "debian/rezolus-exporter.service", dest = "/usr/lib/systemd/system/", mode = "644" },
     { source = "debian/rezolus-flight-recorder.service", dest = "/usr/lib/systemd/system/", mode = "644" },
