@@ -130,7 +130,7 @@ pub fn run(config: Config) {
                         rmp_serde::from_read::<&mut std::io::Cursor<&[u8]>, Snapshot>(&mut reader)
                     {
                         if let Some(previous) = previous.take() {
-                            let snapshot = snapshot(&config, previous, current.clone());
+                            let snapshot = snapshot(&config, previous, current.clone(), latency);
 
                             let mut s = SNAPSHOT.lock();
                             *s = Some(snapshot);
