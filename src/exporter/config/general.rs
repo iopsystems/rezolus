@@ -11,9 +11,9 @@ pub struct General {
     #[serde(default = "listen")]
     listen: String,
 
-    // the address of the Rezolus agent to target
-    #[serde(default = "target")]
-    target: String,
+    // the address of the Rezolus agent
+    #[serde(default = "source")]
+    source: String,
 }
 
 impl Default for General {
@@ -21,7 +21,7 @@ impl Default for General {
         Self {
             interval: interval(),
             listen: listen(),
-            target: target(),
+            source: source(),
         }
     }
 }
@@ -55,7 +55,7 @@ impl General {
     }
 
     pub fn target(&self) -> SocketAddr {
-        self.target
+        self.source
             .to_socket_addrs()
             .map_err(|e| {
                 eprintln!("bad target address: {e}");

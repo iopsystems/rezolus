@@ -1,36 +1,17 @@
-use crate::common::HISTOGRAM_GROUPING_POWER;
-use clap::ArgMatches;
-use std::path::PathBuf;
+use crate::Format;
 
+use clap::ArgMatches;
 use ringlog::Level;
 use serde::Deserialize;
 
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 mod general;
 mod log;
-mod prometheus;
 
 use general::General;
 use log::Log;
-use prometheus::Prometheus;
-
-fn disabled() -> bool {
-    false
-}
-
-fn enabled() -> bool {
-    true
-}
-
-fn histogram_grouping_power() -> u8 {
-    HISTOGRAM_GROUPING_POWER
-}
-
-fn listen() -> String {
-    "0.0.0.0:4242".into()
-}
 
 fn source() -> String {
     "0.0.0.0:4241".into()
@@ -40,14 +21,20 @@ fn interval() -> String {
     "1s".into()
 }
 
+fn output() -> String {
+    "/tmp/rezolus.parquet".into()
+}
+
+fn parquet() -> Format {
+    Format::Parquet
+}
+
 #[derive(Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     general: General,
     #[serde(default)]
     log: Log,
-    #[serde(default)]
-    prometheus: Prometheus,
 }
 
 impl TryFrom<ArgMatches> for Config {
@@ -85,8 +72,6 @@ impl Config {
 
         config.general.check();
 
-        config.prometheus().check();
-
         Ok(config)
     }
 
@@ -96,9 +81,5 @@ impl Config {
 
     pub fn general(&self) -> &General {
         &self.general
-    }
-
-    pub fn prometheus(&self) -> &Prometheus {
-        &self.prometheus
     }
 }

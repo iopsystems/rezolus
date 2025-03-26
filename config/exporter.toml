@@ -3,7 +3,7 @@
 listen = "0.0.0.0:4242"
 
 # Specify the address of the Rezolus Agent
-target = "127.0.0.1:4241"
+source = "127.0.0.1:4241"
 
 [log]
 # Controls the log level: "error", "warn", "info", "debug", "trace"

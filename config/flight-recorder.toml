@@ -1,0 +1,17 @@
+[general]
+# Specify the sampling interval
+interval = "1s"
+
+# Specify the address of the Rezolus Agent
+source = "127.0.0.1:4241"
+
+# Specify the path for output file. The directory for the output file is also
+# the location that is used for the ring buffer.
+output = "/tmp/rezolus.parquet"
+
+# Specify the output format
+format = "parquet"
+
+[log]
+# Controls the log level: "error", "warn", "info", "debug", "trace"
+level = "info"

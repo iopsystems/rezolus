@@ -6,6 +6,7 @@ use metriken_exposition::{MsgpackToParquet, ParquetOptions};
 use reqwest::blocking::Client;
 use reqwest::Url;
 use ringlog::*;
+use serde::Deserialize;
 use tempfile::tempfile_in;
 
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -31,7 +32,7 @@ static RUNNING: usize = 0;
 static CAPTURING: usize = 1;
 static TERMINATING: usize = 2;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Deserialize)]
 enum Format {
     Parquet,
     Raw,
