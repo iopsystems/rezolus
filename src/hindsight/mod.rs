@@ -6,11 +6,11 @@ mod config;
 pub use config::Config;
 
 pub fn command() -> Command {
-    Command::new("flight-recorder")
+    Command::new("hindsight")
         .about("Continuous recording to an on-disk ring buffer")
         .arg(
             clap::Arg::new("CONFIG")
-                .help("Rezolus flight-recorder configuration file")
+                .help("Rezolus Hindsight configuration file")
                 .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set)
                 .required(true)

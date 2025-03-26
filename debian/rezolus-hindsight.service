@@ -1,15 +1,15 @@
 [Unit]
-Description=Rezolus flight recorder collection agent
+Description=Rezolus Hindsight recording service
 Documentation=https://github.com/iopsystems/rezolus
 After=rezolus.service
 
 [Service]
 User=rezolus
-ExecStart=/usr/bin/rezolus flight-recorder /etc/rezolus/flight-recorder.toml
+ExecStart=/usr/bin/rezolus hindsight /etc/rezolus/hindsight.toml
 KillMode=control-group
 Restart=on-failure
 KillSignal=SIGKILL
 
 [Install]
 WantedBy=multi-user.target
-Alias=rezolus-flight-recorder.service
+Alias=rezolus-hindsight.service

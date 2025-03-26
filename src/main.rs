@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 /// modules for each mode of operation
 mod agent;
 mod exporter;
-mod flight_recorder;
+mod hindsight;
 mod recorder;
 
 mod common;
@@ -60,7 +60,7 @@ fn main() {
                 .index(1),
         )
         .subcommand(exporter::command())
-        .subcommand(flight_recorder::command())
+        .subcommand(hindsight::command())
         .subcommand(recorder::command())
         .get_matches();
 
@@ -75,11 +75,10 @@ fn main() {
 
             exporter::run(config)
         }
-        Some(("flight-recorder", args)) => {
-            let config =
-                flight_recorder::Config::try_from(args.clone()).expect("failed to configure");
+        Some(("hindsight", args)) => {
+            let config = hindsight::Config::try_from(args.clone()).expect("failed to configure");
 
-            flight_recorder::run(config)
+            hindsight::run(config)
         }
         Some(("record", args)) => {
             let config = recorder::Config::try_from(args.clone()).expect("failed to configure");
