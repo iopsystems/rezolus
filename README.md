@@ -36,8 +36,8 @@ Enables on-demand metric collection:
 - Write metrics directly to file
 - Flexible, targeted performance analysis
 
-### Flight Recorder
-Provides artifacts for incident investigation:
+### Hindsight
+Provides after-the-fact artifacts for incident investigation:
 - Maintains a rolling, high-resolution metrics buffer
 - Snapshot metrics during or after performance incidents
 - Capture detailed system state when unexpected events occur
@@ -67,11 +67,11 @@ storage requirements to get insights around distributions.
 
 Unfortunately, sometimes it is too expensive to collect telemetry on a secondly
 basis. And some problems are very difficult to understand without fine-grained
-metrics. This is exactly what the Rezolus Flight Recorder is designed for. By
-keeping a high-resolution ring buffer on disk, you can record a snapshot to disk
-after a problem has already happened! Imagine being able to go back in time and
-get that high-resolution data to root cause a production performance issue. With
-the Rezolus Flight Recorder, you can do exactly that.
+metrics. This is exactly what the Rezolus Hindsight is designed for. By keeping
+a high-resolution ring buffer on disk, you can record a snapshot to disk after a
+problem has already happened! Imagine being able to go back in time and get that
+high-resolution data to root cause a production performance issue. With Rezolus
+Hindsight, you can do exactly that.
 
 ## Community & Support
 - [Discord Community][discore]
@@ -99,13 +99,13 @@ By default the `rezolus` service will be running as the agent and the
 default, the config assumes secondly collection. Please review the config and
 adjust as necessary for your environment.
 
-The `flight-recorder` service is disabled by default. Please review the config
+The `rezolus-hindsight` service is disabled by default. Please review the config
 before enabling.
 
 ```bash
 # enable and start the service
-systemctl enable rezolus-flight-recorder
-systemctl start rezolus-flight-recorder
+systemctl enable rezolus-hindsight
+systemctl start rezolus-hindsight
 ```
 
 ### Configuration
@@ -145,23 +145,23 @@ sudo editor /etc/rezolus/exporter.toml
 sudo systemsctl restart rezolus-exporter
 ```
 
-#### Flight Recorder
+#### Hindsight
 This service is disabled by default. Please review the configuration and make
 any necessary changes before you enable it.
 
-Please see the [config/flight-recorder.toml][flight-recorder.toml] to review all
+Please see the [config/hindsight.toml][hindsight.toml] to review all
 configuration options and their defaults.
 
 ```bash
 # review the config file and make any desired changes
-sudo editor /etc/rezolus/flight-recorder.toml
+sudo editor /etc/rezolus/hindsight.toml
 
 # enable and start the service
-sudo systemctl enable rezolus-flight-recorder
-sudo systemctl start rezolus-flight-recorder
+sudo systemctl enable rezolus-hindsight
+sudo systemctl start rezolus-hindsight
 
 # trigger a save of the ring buffer to the output file
-sudo systemctl kill -sHUP rezolus-flight-recorder
+sudo systemctl kill -sHUP rezolus-hindsight
 ```
 
 ### Build from source
@@ -179,8 +179,8 @@ sudo target/release/rezolus exporter config/exporter.toml
 # to record
 target/release/rezolus record http://localhost:4241 rezolus.parquet
 
-# to run the flight recorder
-target/release/rezolus flight-recorder config/flight-recorder.toml
+# to run the hindsight
+target/release/rezolus hindsight config/hindsight.toml
 ```
 
 ## Contributing

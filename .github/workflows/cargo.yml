@@ -21,7 +21,9 @@ jobs:
           shared-key: check-${{ matrix.os }}
       - name: Install dependencies
         shell: bash
-        run: sudo apt-get -y install libelf-dev
+        run: |
+          sudo apt update
+          sudo apt-get -y install libelf-dev
       - name: cargo check
         run: |
           cargo check --all-targets
@@ -37,7 +39,9 @@ jobs:
           tool: clippy-sarif,sarif-fmt
       - name: Install dependencies
         shell: bash
-        run: sudo apt-get -y install libelf-dev
+        run: |
+          sudo apt update
+          sudo apt-get -y install libelf-dev
       - name: run clippy
         run: |
           cargo clippy --all-targets --all-features --message-format json \
@@ -118,7 +122,9 @@ jobs:
       - name: Install dependencies
         if: ${{ matrix.os != 'macos-latest' }}
         shell: bash
-        run: sudo apt-get -y install libelf-dev
+        run: |
+          sudo apt update
+          sudo apt-get -y install libelf-dev
 
       - name: build
         shell: bash
