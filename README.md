@@ -1,128 +1,189 @@
-# Rezolus
+# Rezolus: High-Resolution Systems Performance Telemetry
 
-Rezolus captures and exports high resolution data about systems performance. It
-sets itself apart from other telemetry agents by using:
+## What is Rezolus?
 
-* **eBPF**: Uses eBPF on Linux to instrument individual events and aggregate
-  them into distributions. Rezolus will report on things like block io size and
-  latency distributions, system call latency, TCP segment sizes, and more. By
-  using eBPF we are able to instrument low-level events efficiently and provide
-  new insights into system performance and workload characteristics.
+Rezolus is a Linux performance telemetry agent that provides detailed insights
+into system behavior through efficient, low-overhead instrumentation.
 
-* **Perf Events**: On x86_64 we support gathering data from the CPU using
-  performance counters. Rezolus gathers information about instructions being
-  retired, the number of CPU cyles, and fine-grained CPU frequency data. This
-  helps expose how efficient workload execution is on the hardware.
+## Performance Metrics
 
-## Overview
+Rezolus captures a comprehensive set of system performance metrics across
+multiple domains:
 
-Rezolus is designed to produce high resolution systems performance telemetry. It
-has a collection of samplers which instrument various aspects of systems
-performance including CPU, GPU, task scheduling, system calls, TCP, block IO,
-and more.
+- **CPU**: Measure utilization and performance metrics
+- **Scheduler**: Probe task execution and system responsiveness
+- **Block IO**: Analyze workload characteristics and performance
+- **Network**: Explore traffic and protocol dynamics
+- **System Calls**: Examine invocation patterns and latencies
+- **Container-level**: Quantify container-level performance dynamics
 
-All of Rezolus's sampler focus on capturing key signals that can be used to
-understand how the workload is running on the underlying system. These insights
-are useful for understanding where bottlenecks and optimization opportunities
-might be. With high frequency sampling and eBPF, Rezolus can also provide
-insights into your workload itself like what typical block and network IO sizes
-are, the number and type of system calls being executed, and if there's spikes
-in utilization metrics.
+By using eBPF, Rezolus provides high-resolution, low-overhead instrumentation
+that reveals detailed system behavior.
 
-Rezolus provides valuable data about systems performance and can be used to root
-cause production performance issues, capture better data in test environments,
-and provide signals for optimization efforts.
+## Operating Modes
 
-### Configuration
+### Agent
+The core component of Rezolus that collects performance metrics from the system.
+It provides the foundational telemetry gathering capabilities.
 
-See the [configs/agent.toml file][config] for an example configuration with
-example config file.
+### Exporter
+Transforms collected metrics for Prometheus compatibility:
+- Exposes metrics on a Prometheus-compatible endpoint
+- Allows conversion of histogram distributions to summary metrics
 
-### Dashboard
+### Recorder
+Enables on-demand metric collection:
+- Write metrics directly to file
+- Flexible, targeted performance analysis
 
-If you are running Prometheus and Grafana for collecting and visualizing
-metrics, the `dashboard.json` file is an example Grafana dashboard that
-demonstrates some ways to use the collected data. This can help you get started
-on your own dashboards.
+### Flight Recorder
+Provides artifacts for incident investigation:
+- Maintains a rolling, high-resolution metrics buffer
+- Snapshot metrics during or after performance incidents
+- Capture detailed system state when unexpected events occur
 
-## Getting Help
+## Use Cases
+We believe that Rezolus is useful for:
+- Performance engineering
+- DevOps and SRE troubleshooting
 
-Join our [Discord server][discord] to ask questions and have discussions.
+### Performance Engineering
+Rezolus can be run with just the Agent and the Recorder can be used to take
+on-demand captures during tests run in lab environments or to capture production
+performance data to help characterize workload and understand what conditions
+you may want to replicate in test environments.
 
-If you have a problem using Rezolus or a question about Rezolus that you can't
-find an answer to, please open a
-[new issue on GitHub][new issue]
-
-## Building
-
-Rezolus is built using the Rust toolchain. If you do not have the Rust toolchain
-installed, please see [rust-lang.org][rust-lang.org] to get started with Rust.
-
-### Build Dependencies
-
-Rust >= 1.70.0
-
-#### Linux
-
-A minimum kernel version of 5.8 is required. The following distributions should
-work:
-
-* Debian: Bullseye and newer (5.10+)
-* Ubuntu: 20.10 and newer (5.8+)
-* Red Hat: RHEL 9 and newer (5.14+)
-* Amazon Linux: AL2 w/ 5.10 or newer, AL2023 (6.1+)
-* Any rolling-release distro: Arch, Gentoo, ...
-
-In addition to the base dependencies, the following are needed:
-
-* clang >= 11.0
-* libelf-dev >= 0.183
-* make >= 4.3
-* pkg-config >= 0.29.2
-
-Debian and Ubuntu users can install all the required dependencies for a default
-build with:
-
+Simply run the following command to collect a secondly recording for 15 minutes:
 ```bash
-sudo apt install clang libelf-dev make pkg-config
+rezolus record --interval 1s --duration 15m http://localhost:4241 rezolus.parquet
 ```
 
-### Steps
+### DevOps and SRE Troubleshooting
+Rezolus also has value for people operating services. The Agent and Exporter can
+be used to integrate Rezolus telemetry with your observability stack and give
+deeper insights into production behaviors. The Exporter is designed to allow
+summarization of histograms to just a few percentiles, which greatly reduces the
+storage requirements to get insights around distributions.
 
-* clone this repository or transfer the contents of the repository to your build
-  machine
-* change directory into the repository root
-* run `cargo build` in release mode
+Unfortunately, sometimes it is too expensive to collect telemetry on a secondly
+basis. And some problems are very difficult to understand without fine-grained
+metrics. This is exactly what the Rezolus Flight Recorder is designed for. By
+keeping a high-resolution ring buffer on disk, you can record a snapshot to disk
+after a problem has already happened! Imagine being able to go back in time and
+get that high-resolution data to root cause a production performance issue. With
+the Rezolus Flight Recorder, you can do exactly that.
 
+## Community & Support
+- [Discord Community][discore]
+- [GitHub Issues][new issue]
+
+## License
+Dual-licensed under [Apache 2.0][license apache] and [MIT][license mit], unless
+otherwise specified.
+
+Detailed licensing information can be found in the [COPYRIGHT][copyright] file.
+
+## Deployment
+
+### Supported Environments
+- Architectures: x86_64 and ARM64
+- Deployment: Bare-metal and cloud environments
+- Linux kernel 5.8+
+
+### Install
+Find an appropriate package for your OS for our [latest release][latest release]
+and install it using your package manager.
+
+By default the `rezolus` service will be running as the agent and the
+`rezolus-exporter` service will be running so there is Prometheus exposition. By
+default, the config assumes secondly collection. Please review the config and
+adjust as necessary for your environment.
+
+The `flight-recorder` service is disabled by default. Please review the config
+before enabling.
+
+```bash
+# enable and start the service
+systemctl enable rezolus-flight-recorder
+systemctl start rezolus-flight-recorder
+```
+
+### Configuration
+Rezolus has three services each with its own configuration.
+
+#### Agent
+The agent config may be adjusted to enable/disable individual samplers.
+
+Please see the [config/agent.toml][agent.toml] to review all configuration
+options and their defaults.
+
+```bash
+# edit the agent config file
+editor /etc/rezolus/agent.toml
+
+# restart the service to apply changes
+systemctl restart rezolus
+```
+
+#### Exporter
+The exporter **must** be configured so that the `interval` matches the scrape
+interval for metrics in your environment. If the interval is too short, any
+summary metrics will not cover the entire period between scrapes of the metrics
+endpoint. Setting it too long will cause stale metrics to be served.
+
+Additionally, the exporter may be configured to expose full histograms instead
+of summary percentiles.
+
+Please see the [config/exporter.toml][exporter.toml] to review all configuration
+options and their defaults.
+
+```bash
+# edit the exporter config file
+sudo editor /etc/rezolus/exporter.toml
+
+# restart the exporter to apply changes
+sudo systemsctl restart rezolus-exporter
+```
+
+#### Flight Recorder
+This service is disabled by default. Please review the configuration and make
+any necessary changes before you enable it.
+
+Please see the [config/flight-recorder.toml][flight-recorder.toml] to review all
+configuration options and their defaults.
+
+```bash
+# review the config file and make any desired changes
+sudo editor /etc/rezolus/flight-recorder.toml
+
+# enable and start the service
+sudo systemctl enable rezolus-flight-recorder
+sudo systemctl start rezolus-flight-recorder
+
+# trigger a save of the ring buffer to the output file
+sudo systemctl kill -sHUP rezolus-flight-recorder
+```
+
+### Build from source
 ```bash
 git clone https://github.com/iopsystems/rezolus
 cd rezolus
 cargo build --release
-```
 
-### Configuration
+# to run the agent
+sudo target/release/rezolus config/agent.toml
 
-See the [config.toml file][config] for an example configuration with
-explanations for the various options.
+# to run the exporter
+sudo target/release/rezolus exporter config/exporter.toml
 
-### Installation
+# to record
+target/release/rezolus record http://localhost:4241 rezolus.parquet
 
-You can either manually install Rezolus and register it with your init system
-(eg systemd) or if you're using Debian or Ubuntu you can build a package for
-Rezolus using `dpkg-buildpackage -b` in the repository root. Note: you will need
-both `devscripts` and `jq` installed to generate the package.
-
-### Running
-
-You may also run Rezolus manually after building from source. In the repository
-root you can run:
-
-```bash
-sudo target/release/rezolus config.toml
+# to run the flight recorder
+target/release/rezolus flight-recorder config/flight-recorder.toml
 ```
 
 ## Contributing
-
 To contribute to Rezolus first check if there are any open pull requests or
 issues related to the bugfix or feature you wish to contribute. If there is not,
 please start by opening a [new issue on GitHub][new issue] to either report the
@@ -136,18 +197,10 @@ Once you're ready to contribute some changes, the workflow is:
 * push your feature branch to your fork
 * open a [new pull request][new pull request]
 
-## License
-
-Rezolus is dual-licensed under the [Apache License v2.0][license apache] and the
-[MIT License][license mit], unless otherwise specified.
-
-Detailed licensing information can be found in the
-[COPYRIGHT document][copyright]
-
-[config]: https://github.com/iopsystems/rezolus/blob/main/configs/agent.toml
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT
 [create a fork]: https://github.com/iopsystems/rpc-perf/fork
 [discord]: https://discord.gg/YC5GDsH4dG
+[latest release]: https://github.com/iopsystems/rezolus/releases/latest
 [license apache]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-APACHE
 [license mit]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-MIT
 [new issue]: https://github.com/iopsystems/rezolus/issues/new
