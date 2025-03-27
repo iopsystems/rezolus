@@ -1,6 +1,6 @@
 [package]
 name = "rezolus"
-version = "5.0.0-alpha.7"
+version = "5.0.0-alpha.8"
 license = "MIT OR Apache-2.0"
 edition = "2021"
 description = "High resolution systems performance telemetry agent"
