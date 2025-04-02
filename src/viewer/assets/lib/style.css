@@ -1,0 +1,15 @@
+* { margin: 0; padding: 0; }
+
+:root {
+  --bg: #121212;
+  --bg-secondary: #1E1E1E;
+  --fg: #E0E0E0;
+  --fg-secondary: #ABABAB;
+  --accent: #4299E1;
+  --border: #2D2D2D;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
