@@ -1,4 +1,4 @@
-* { margin: 0; padding: 0; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
   --bg: #121212;
@@ -7,9 +7,52 @@
   --fg-secondary: #ABABAB;
   --accent: #4299E1;
   --border: #2D2D2D;
+  --width: 800px;
+  --sidebar-width: 125px
 }
 
 body {
   background: var(--bg);
   color: var(--fg);
+}
+
+header {
+  max-width: var(--width);
+  margin: 0 auto;
+  padding-left: var(--sidebar-width);
+}
+
+main {
+  max-width: var(--width);
+  margin: 0 auto;
+  display: flex;
+}
+
+#sidebar {
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  text-align: right;
+  width: var(--sidebar-width);
+  position: sticky;
+  align-self: flex-start;
+  top: 2em;
+  padding-right: 1em;;
+}
+
+#sections {
+  flex: 1;
+
+  .section {
+    .plots {
+      display: flex;
+      flex-wrap: wrap;
+
+      .plot {
+        max-width: 50%;
+        width: 50%;
+        height: 200px;
+        margin-bottom: 100px; /* for the legend */
+
+      }
+    }
+  }
 }
