@@ -1,3 +1,13 @@
+// TODO:
+// - Heatmap hover value display
+// - Linked hover across charts
+// - Linked zoom across charts
+// - Improve plot colors
+// - Improve plot tick labels
+// - Allow both log and non-log line plots
+// - Fix the spacing between the heatmap canvas rects (in screen space)
+// - Fix the value-size-dependent overflow behavior of the "legend hovers".
+
 import uPlot from './uPlot.esm.js';
 
 const log = console.log.bind(console);
@@ -11,8 +21,8 @@ const cursorSyncOpts = {
   key: state.sync.key,
   setSeries: true,
   match: [
-    (own, ext) => own == ext, 
-    (own, ext) => own == ext
+    (own, ext) => own == ext, // x
+    (own, ext) => own == ext, // y
   ],
   filters: {
     pub(type) {
@@ -31,21 +41,13 @@ function toTitleCase(str) {
 const Sidebar = {
   view({ attrs }) {
     return m("div#sidebar", [
-      // todo: check slash thungs
-      attrs.sections.map((section) => m('div.section', m(m.route.Link, { class: attrs.route === section.route ? 'selected' : '', href: section.route, }, section.name)))
+      attrs.sections.map((section) => m('div.section', m(m.route.Link, { 
+        class: attrs.route === section.route ? 'selected' : '', 
+        href: section.route,
+      }, section.name)))
     ]);
   }
 };
-
-// TODO:
-// - Heatmap hover value display
-// - Linked hover across charts
-// - Linked zoom across charts
-// - Improve plot colors
-// - Improve plot tick labels
-// - Allow both log and non-log line plots
-// - Fix the spacing between the heatmap canvas rects (in screen space)
-// - Fix the value-size-dependent overflow behavior of the "legend hovers".
 
 const Main = {
   view({ attrs: { route, groups, sections } }) {
@@ -80,7 +82,9 @@ const Group = {
 function Plot() {
   let resizeObserver, plot;
 
-  // todo: for updates, see plot.setData(data, resetScales)
+  // TODO:
+  // - for updates, see plot.setData(data, resetScales)
+  // - figure out if we need to do anything onremove (I don't think so?)
 
   return {
     oncreate: function (vnode) {
@@ -145,6 +149,7 @@ function Plot() {
           uPlotData = attrs.data;
           break;
         case 'heatmap':
+          // code mostly adapted from https://leeoniya.github.io/uPlot/demos/latency-heatmap.html
           function heatmapPaths(opts) {
             const { disp } = opts;
 
@@ -204,7 +209,7 @@ function Plot() {
             };
           }
 
-          // 16-color gradient (white -> orange -> red -> purple)
+          // 16-color gradient (viridis)
           const colors = [
             "#440154",
             "#481a6c",
@@ -339,7 +344,7 @@ function Plot() {
           uPlotData = [null, [xValues, yValues, zValues]];
           break;
         default:
-          throw new Error(`undefined style: ${attrs.opts.style}`);
+          throw new Error(`undefined style in provided plot opts: ${attrs.opts.style}`);
       }
 
       if (uPlotOpts !== undefined) {
@@ -367,8 +372,7 @@ function Plot() {
   };
 }
 
-m.route.prefix = "";
-
+m.route.prefix = ""; // use regular paths for nagivation, eg. /overview
 m.route(document.body, "/overview", {
   "/:section": {
     onmatch(params, requestedPath) {
@@ -394,4 +398,3 @@ m.route(document.body, "/overview", {
     }
   }
 });
-
