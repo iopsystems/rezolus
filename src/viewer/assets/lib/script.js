@@ -1,4 +1,3 @@
-import { heatmapPlugin } from './heatmap.js';
 import uPlot from './uPlot.esm.js';
 
 const log = console.log.bind(console);
