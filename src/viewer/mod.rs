@@ -19,6 +19,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
 
 mod tsdb;
+mod queries;
 
 use tsdb::*;
 
@@ -159,30 +160,25 @@ pub fn run(config: Config) {
 
         let mut utilization = Group::new("Utilization", "utilization");
 
-        let cpu_cores = data.get("cpu_cores", &Labels::default()).unwrap().sum();
+        let cpu_usage = queries::cpu_usage_percent(&data, Labels::default());
+        cpu_overview.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage.clone()));
+        utilization.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage));
 
-        let mut cpu_usage_series = data.get("cpu_usage", &Labels::default()).unwrap().sum();
-        cpu_usage_series.divide_scalar(1000000000.0);
-        cpu_usage_series.divide(&cpu_cores);
+        let cpu_usage = queries::cpu_usage_heatmap(&data, Labels::default());
+        cpu_overview.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", cpu_usage.clone()));
+        utilization.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", cpu_usage));
 
-        cpu_overview.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage_series.as_data()));
-        utilization.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage_series.as_data()));
+        for (label, id, state) in &[
+            ("User %", "user-pct", "user"),
+            ("System %", "system-pct", "system"),
+            ("Soft IRQ %", "softirq-pct", "softirq"),
+        ] {
+            let cpu_usage = queries::cpu_usage_percent(&data, [("state".to_string(), state.to_string())]);
+            utilization.plots.push(Plot::line(label.to_string(), id.to_string(), cpu_usage));
 
-        let mut heatmap_data = Vec::new();
-
-        for series in data.get("cpu_usage", &Labels::default()).unwrap().sum_by_cpu().iter_mut() {
-            series.divide_scalar(1000000000.0);
-            let d = series.as_data();
-
-            if heatmap_data.is_empty() {
-                heatmap_data.push(d[0].clone());
-            }
-
-            heatmap_data.push(d[1].clone());
+            let cpu_usage = queries::cpu_usage_heatmap(&data, [("state".to_string(), state.to_string())]);
+            utilization.plots.push(Plot::heatmap(label.to_string(), id.to_string(), cpu_usage));
         }
-
-        cpu_overview.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", heatmap_data.clone()));
-        utilization.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", heatmap_data));
 
         overview.groups.push(cpu_overview);
         cpu.groups.push(utilization);
@@ -409,12 +405,4 @@ impl PlotOpts {
             style: "line".to_string(),
         }
     }
-
-    // pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self{
-    //     Self {
-    //         title: title.into(),
-    //         id: id.into(),
-    //         style: "line".to_string(),
-    //     }
-    // }
 }

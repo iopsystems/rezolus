@@ -217,6 +217,14 @@ impl Labels {
     }
 }
 
+impl<T> From<T> for Labels where T: Into<BTreeMap<String, String>> {
+    fn from(other: T) -> Self {
+        Self {
+            inner: other.into(),
+        }
+    }
+}
+
 #[derive(Default)]
 #[derive(Clone)]
 pub struct TimeSeries {
