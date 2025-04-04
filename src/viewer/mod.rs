@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use super::*;
 use clap::ArgMatches;
 use notify::Watcher;
@@ -39,12 +40,20 @@ pub fn command() -> Command {
                 .required(true)
                 .index(2),
         )
+        .arg(
+            clap::Arg::new("TESTING")
+                .long("testing")
+                .short('t')
+                .help("Use testing data")
+                .action(clap::ArgAction::SetTrue),
+        )
 }
 
 pub struct Config {
     input: PathBuf,
     verbose: u8,
     listen: SocketAddr,
+    testing: bool,
 }
 
 impl TryFrom<ArgMatches> for Config {
@@ -57,6 +66,7 @@ impl TryFrom<ArgMatches> for Config {
             input: args.get_one::<PathBuf>("INPUT").unwrap().to_path_buf(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
             listen: *args.get_one::<SocketAddr>("LISTEN").unwrap(),
+            testing: *args.get_one::<bool>("TESTING").unwrap_or(&false),
         })
     }
 }
@@ -115,15 +125,16 @@ pub fn run(config: Config) {
     .expect("failed to set ctrl-c handler");
 
     // code to load data from parquet will go here
+    let state = AppState::default();
 
     // launch the HTTP listener
     let c = config.clone();
-    rt.block_on(async move { serve(c).await });
+    rt.block_on(async move { serve(c, state).await });
 
     std::thread::sleep(Duration::from_millis(200));
 }
 
-async fn serve(config: Arc<Config>) {
+async fn serve(config: Arc<Config>, state: AppState) {
     let livereload = LiveReloadLayer::new();
     let reloader = livereload.reloader();
 
@@ -136,7 +147,7 @@ async fn serve(config: Arc<Config>) {
         )
         .expect("failed to watch assets folder");
 
-    let app: Router = app(config.clone(), livereload);
+    let app: Router = app(config.clone(), livereload, state);
 
     let listener = TcpListener::bind(config.listen)
         .await
@@ -147,20 +158,32 @@ async fn serve(config: Arc<Config>) {
         .expect("failed to run http server");
 }
 
-struct AppState {}
+#[derive(Default)]
+struct AppState {
+    sections: HashMap<String, String>,
+}
 
 // NOTE: we're going to want to include the assets in the binary for release
 // builds. For now, we just serve from the assets folder
-fn app(_config: Arc<Config>, livereload: LiveReloadLayer) -> Router {
-    let state = Arc::new(AppState {});
+fn app(config: Arc<Config>, livereload: LiveReloadLayer, state: AppState) -> Router {
+    let state = Arc::new(state);
 
-    Router::new()
+    let router = Router::new()
         .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
         .route("/about", get(about))
-        .route("/dashboard.json", get(dashboard_json))
-        .with_state(state)
-        .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
-        .nest_service("/data", ServeDir::new(Path::new("src/viewer/assets/data")))
+        .with_state(state.clone())
+        .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")));
+
+    let router = if config.testing {
+        router.nest_service("/data", ServeDir::new(Path::new("src/viewer/assets/data")))
+    } else {
+        router.route("/data/{section}", get({
+            let state = Arc::clone(&state);
+            move |path| section_json(path, state)
+        }))
+    };
+
+    router
         .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
         .layer(
             ServiceBuilder::new()
@@ -179,6 +202,6 @@ async fn about() -> String {
 // This function returns the dashboard json
 //
 // NOTE: currently a placeholder
-async fn dashboard_json() -> String {
-    "{ }".to_string()
+async fn section_json(axum::extract::Path(section): axum::extract::Path<String>, state: Arc<AppState>) -> String {
+    state.sections.get(&section).map(|v| v.to_string()).unwrap_or("{ }".to_string())
 }
