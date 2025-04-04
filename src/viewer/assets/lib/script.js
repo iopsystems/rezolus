@@ -22,6 +22,15 @@ const Sidebar = {
   }
 };
 
+// TODO:
+// - Add a header for the current section name
+// - Heatmap hover value display
+// - Linked hover across charts
+// - Linked zoom across charts
+// - Improve plot colors
+// - Improve plot tick labels
+// - Allow both log and non-log line plots
+
 const Main = {
   view({ attrs: { route, groups, sections } }) {
     return m("div", 
