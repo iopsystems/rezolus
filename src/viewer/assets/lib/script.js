@@ -30,6 +30,8 @@ const Sidebar = {
 // - Improve plot colors
 // - Improve plot tick labels
 // - Allow both log and non-log line plots
+// - Fix the spacing between the heatmap canvas rects (in screen space)
+// - Fix the value-size-dependent overflow behavior of the "legend hovers".
 
 const Main = {
   view({ attrs: { route, groups, sections } }) {
