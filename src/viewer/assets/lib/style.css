@@ -5,7 +5,7 @@
   --bg-secondary: #1E1E1E;
   --fg: #E0E0E0;
   --fg-secondary: #ABABAB;
-  --width: 800px;
+  --width: 90%;
   --sidebar-width: 125px
 }
 
@@ -51,7 +51,7 @@ main {
       .plot {
         max-width: 50%;
         width: 50%;
-        height: 200px;
+        height: 400px;
         margin-bottom: 150px; /* for the legend */
 
       }
