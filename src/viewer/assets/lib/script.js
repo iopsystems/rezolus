@@ -111,42 +111,40 @@ function Plot() {
         case 'heatmap':
           // note: assumes nonempty data
           const data = attrs.data;
+          const numRows = data[0].length;
+          const numCols = data.length;
 
-          const config = {
-            // Dimensions of data matrix
-            rows: data[0].length,
-            cols: data.length,
-              
+          const config = {              
             // Color palette (purple to orange to white)
             colorPalette: [
-              "rgb(131,58,180)", // Dark purple
-              "rgb(154,65,159)",
-              "rgb(178,67,136)",
-              "rgb(202,63,111)",
-              "rgb(228,53,80)",
-              "rgb(253,29,29)", // Red
-              "rgb(255,76,37)",
-              "rgb(256,106,45)",
-              "rgb(256,131,53)",
-              "rgb(255,154,61)",
-              "rgb(252,176,69)",
-              "rgb(254,193,115)",
-              "rgb(255,209,153)",
-              "rgb(256,224,188)",
-              "rgb(256,240,222)"
-            ].reverse(),
+              "#440154",
+              "#481b6d",
+              "#46327e",
+              "#3f4788",
+              "#365c8d",
+              "#2e6e8e",
+              "#277f8e",
+              "#21918c",
+              "#1fa187",
+              "#2db27d",
+              "#4ac16d",
+              "#73d056",
+              "#a0da39",
+              "#d0e11c",
+              "#fde725"
+            ],
 
             // Minimum cell size in pixels (prevents cells from becoming too small)
             minCellSize: 4
           };
 
           // Flatten the 2D data matrix
-          const xValues = Array.from({ length: config.cols }, (_, i) => i);
-          const yValues = Array.from({ length: config.rows }, (_, i) => i);
+          const xValues = Array.from({ length: numCols }, (_, i) => i);
+          const yValues = Array.from({ length: numRows }, (_, i) => i);
           const zValues = [];
-          for (let i = 0; i < config.cols; i++) {
+          for (let i = 0; i < numCols; i++) {
             const row = data[i];
-            for (let j = 0; j < config.rows; j++) {
+            for (let j = 0; j < numRows; j++) {
               zValues.push(row[j]);
             }
           }
@@ -170,12 +168,12 @@ function Plot() {
               x: {
                 time: false,
                 // auto: false,
-                range: [0, config.cols - 1],
+                range: [0, numCols - 1],
               },
               y: {
                 time: false,
                 // auto: false,
-                range: [0, config.rows - 1],
+                range: [0, numRows - 1],
                 dir: -1, // Invert y-axis so (0,0) is at top-left
               }
             },

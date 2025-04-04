@@ -3,7 +3,6 @@ export function heatmapPlugin(config) {
         hooks: {
             // Draw the heatmap
             draw: u => {
-                console.log('draw');
                 const { ctx, data } = u;
                         
                 const [xValues, yValues, zValues] = data;
