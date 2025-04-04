@@ -156,8 +156,9 @@ pub fn run(config: Config) {
         
         // CPU
 
-        let mut cpu_overview = Group::new("CPU", "cpu");
+        // CPU Utilization
 
+        let mut cpu_overview = Group::new("CPU", "cpu");
         let mut utilization = Group::new("Utilization", "utilization");
 
         let cpu_usage = queries::cpu_usage_percent(&data, Labels::default());
@@ -183,6 +184,17 @@ pub fn run(config: Config) {
         overview.groups.push(cpu_overview);
         cpu.groups.push(utilization);
 
+        // CPU Performance
+
+        let mut performance = Group::new("Performance", "performance");
+
+        let ipc = queries::cpu_ipc(&data);
+        performance.plots.push(Plot::line("Instructions per Cycle (IPC)", "ipc", ipc));
+
+        let ipc = queries::cpu_ipc_heatmap(&data);
+        performance.plots.push(Plot::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", ipc));
+
+        cpu.groups.push(performance);
 
         // Network overview
 
