@@ -242,36 +242,35 @@ function Plot() {
           const data = attrs.data;
           const timeData = data[0];
           const rows = data.slice(1);
-          const numRows = rows[0].length;
-          const numCols = rows.length;
+          const numRows = rows.length;
+          const numCols = rows[0].length;
+
+          console.log(timeData, numRows);
 
           // Flatten the 2D data matrix into triples: (xValues, yValues, zValues)
-          const xValues = []; // Array.from({ length: numCols }, (_, i) => i);
-          const yValues = []; // Array.from({ length: numRows }, (_, i) => i);
+          const xValues = [];
+          const yValues = [];
           const zValues = [];
-          for (let i = 0; i < numCols; i++) {
-            const row = rows[i];
-            for (let j = 0; j < numRows; j++) {
-              // note: round quantizes time samples to display on the temporal grid
-              xValues.push(Math.round(timeData[i] + 0.5));
-              yValues.push(j);
-              zValues.push(row[j]);
+
+          // This is an inefficient access pattern but it looks like uPlot requires
+          // sorted data (even if you specify sorted: false for the x facet)
+          for (let colIndex = 0; colIndex < numCols; colIndex++) {
+            for (let rowIndex = 0; rowIndex < numRows; rowIndex++) {
+              const row = rows[rowIndex];
+              // Quantize time samples to display on the grid
+              xValues.push(Math.round(timeData[colIndex] + 0.5));
+              yValues.push(rowIndex);
+              zValues.push(row[colIndex]);
             }
           }
-          log({ xValues, yValues, zValues });
 
           uPlotOpts = {
-            // ...attrs.opts,
+            ...attrs.opts,
             mode: 2,
             ms: 1e-3,
             cursor: {
               points: { show: false },
               drag: { x: true, y: false },
-              dataIdx: (u, seriesIdx, closestIdx, xValue) => {
-                // For heatmaps we want to return the closestIdx
-                log(seriesIdx, xValue, closestIdx);
-                return closestIdx;
-              },
             },
             scales: {
               x: {
@@ -312,21 +311,13 @@ function Plot() {
                   {
                     scale: 'x',
                     auto: true,
-                    sorted: 1,
+                    sorted: true,
                   },
                   {
                     scale: 'y',
                     auto: true,
                   },
                 ],
-                value: (u, seriesIdx, idx, value) => {
-                  // Find the closest heatmap value to cursor position
-                  let yVal = u.cursor.top / u.bbox.height * 1000;
-                  console.log(yVal);
-                  return Math.random().toString();
-                  // let intensity = findIntensityAtPosition(u.data[1], idx, yVal);
-                  // return intensity !== null ? intensity.toFixed(2) + "ms" : "--";
-                },
               },
             ],
           };
