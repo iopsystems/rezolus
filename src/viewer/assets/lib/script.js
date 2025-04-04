@@ -2,16 +2,6 @@ import uPlot from './uPlot.esm.js';
 
 const log = console.log.bind(console);
 
-const layout = {
-  sections: [
-    { name: "Summary", id: "summary", plots: [1, 2] },
-    { name: "CPU", id: "cpu", plots: [1, 2] },
-    { name: "GPU", id: "gpu", plots: [1, 2] },
-    { name: "Network", id: "network", plots: [1, 2] },
-    { name: "Block I/O", id: "block-io", plots: [1, 2] },
-  ]
-};
-
 const Sidebar = {
   view({ attrs }) {
     return m("div#sidebar", [
