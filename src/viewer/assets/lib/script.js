@@ -109,72 +109,173 @@ function Plot() {
           uPlotData = attrs.data;
           break;
         case 'heatmap':
-          // note: assumes nonempty data
-          const data = attrs.data;
-          const numRows = data[0].length;
-          const numCols = data.length;
+          function heatmapPaths(opts) {
+            const { disp } = opts;
 
-          const config = {              
-            // Color palette (purple to orange to white)
-            colorPalette: [
-              "#440154",
-              "#481b6d",
-              "#46327e",
-              "#3f4788",
-              "#365c8d",
-              "#2e6e8e",
-              "#277f8e",
-              "#21918c",
-              "#1fa187",
-              "#2db27d",
-              "#4ac16d",
-              "#73d056",
-              "#a0da39",
-              "#d0e11c",
-              "#fde725"
-            ],
+            return (u, seriesIdx, idx0, idx1) => {
+              uPlot.orient(u, seriesIdx, (series, dataX, dataY, scaleX, scaleY, valToPosX, valToPosY, xOff, yOff, xDim, yDim, moveTo, lineTo, rect, arc) => {
+                let d = u.data[seriesIdx];
+                let [xs, ys, counts] = d;
+                let dlen = xs.length;
 
-            // Minimum cell size in pixels (prevents cells from becoming too small)
-            minCellSize: 4
+                // fill colors are mapped from interpolating densities / counts along some gradient
+                // (should be quantized to 64 colors/levels max. e.g. 16)
+                let fills = disp.fill.values(u, seriesIdx);
+
+                //  let fillPaths = new Map(); // #rgba => Path2D
+
+                let fillPalette = disp.fill.lookup ?? [...new Set(fills)];
+
+                let fillPaths = fillPalette.map(color => new Path2D());
+
+                // fillPalette.forEach(fill => {
+                //  fillPaths.set(fill, new Path2D());
+                // });
+
+                // detect x and y bin qtys by detecting layout repetition in x & y data
+                let yBinQty = dlen - ys.lastIndexOf(ys[0]);
+                let xBinQty = dlen / yBinQty;
+                let yBinIncr = ys[1] - ys[0];
+                let xBinIncr = xs[yBinQty] - xs[0];
+
+                // uniform tile sizes based on zoom level
+                let xSize = valToPosX(xBinIncr, scaleX, xDim, xOff) - valToPosX(0, scaleX, xDim, xOff);
+                let ySize = valToPosY(yBinIncr, scaleY, yDim, yOff) - valToPosY(0, scaleY, yDim, yOff);
+
+                // pre-compute x and y offsets
+                let cys = ys.slice(0, yBinQty).map(y => Math.round(valToPosY(y, scaleY, yDim, yOff) - ySize / 2));
+                let cxs = Array.from({ length: xBinQty }, (v, i) => Math.round(valToPosX(xs[i * yBinQty], scaleX, xDim, xOff) - xSize / 2));
+
+                for (let i = 0; i < dlen; i++) {
+                  // filter out 0 counts and out of view
+                  if (
+                    counts[i] > 0 &&
+                    xs[i] >= scaleX.min && xs[i] <= scaleX.max &&
+                    ys[i] >= scaleY.min && ys[i] <= scaleY.max
+                  ) {
+                    let cx = cxs[~~(i / yBinQty)];
+                    let cy = cys[i % yBinQty];
+
+                    //  let fillPath = fillPaths.get(fills[i]);
+                    //  let fillPath = fillPaths.get(fillIndex[fills[i]]);
+
+                    let fillPath = fillPaths[fills[i]];
+
+                    rect(fillPath, cx, cy, xSize, ySize);
+
+                    /*
+                        qt.add({
+                            x: cx - size - u.bbox.left,
+                            y: cy - size - u.bbox.top,
+                            w: size * 2,
+                            h: size * 2,
+                            sidx: seriesIdx,
+                            didx: i
+                        });
+                    */
+                  }
+                }
+
+                u.ctx.save();
+                u.ctx.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height);
+                u.ctx.clip();
+                fillPaths.forEach((p, i) => {
+                  u.ctx.fillStyle = fillPalette[i];
+                  u.ctx.fill(p);
+                });
+                u.ctx.restore();
+              });
+            };
+          }
+
+          // 16-color gradient (white -> orange -> red -> purple)
+          const colors = [
+            "#440154",
+            "#481a6c",
+            "#472f7d",
+            "#414487",
+            "#39568c",
+            "#31688e",
+            "#2a788e",
+            "#23888e",
+            "#1f988b",
+            "#22a884",
+            "#35b779",
+            "#54c568",
+            "#7ad151",
+            "#a5db36",
+            "#d2e21b",
+            "#fde725"
+          ];
+
+          let palette = colors;
+
+          const countsToFills = (u, seriesIdx) => {
+            let counts = u.data[seriesIdx][2];
+
+            // TODO: integrate 1e-9 hideThreshold?
+            const hideThreshold = 0;
+
+            let minCount = Infinity;
+            let maxCount = -Infinity;
+
+            for (let i = 0; i < counts.length; i++) {
+              if (counts[i] > hideThreshold) {
+                minCount = Math.min(minCount, counts[i]);
+                maxCount = Math.max(maxCount, counts[i]);
+              }
+            }
+
+            let range = maxCount - minCount;
+
+            let paletteSize = palette.length;
+
+            let indexedFills = Array(counts.length);
+
+            for (let i = 0; i < counts.length; i++)
+              indexedFills[i] = counts[i] === 0 ? -1 : Math.min(paletteSize - 1, Math.floor((paletteSize * (counts[i] - minCount)) / range));
+
+            return indexedFills;
           };
 
-          // Flatten the 2D data matrix
-          const xValues = Array.from({ length: numCols }, (_, i) => i);
-          const yValues = Array.from({ length: numRows }, (_, i) => i);
+          // note: assumes nonempty data
+          const data = attrs.data;
+          const timeData = data[0];
+          const rows = data.slice(1);
+          const numRows = rows[0].length;
+          const numCols = rows.length;
+
+          // Flatten the 2D data matrix into triples: (xValues, yValues, zValues)
+          const xValues = []; // Array.from({ length: numCols }, (_, i) => i);
+          const yValues = []; // Array.from({ length: numRows }, (_, i) => i);
           const zValues = [];
           for (let i = 0; i < numCols; i++) {
-            const row = data[i];
+            const row = rows[i];
             for (let j = 0; j < numRows; j++) {
+              // note: round quantizes time samples to display on the temporal grid
+              xValues.push(Math.round(timeData[i] + 0.5));
+              yValues.push(j);
               zValues.push(row[j]);
             }
           }
-          log(xValues, yValues, zValues);
+          log({ xValues, yValues, zValues });
 
           uPlotOpts = {
-            ...attrs.opts,
-
+            // ...attrs.opts,
+            mode: 2,
+            ms: 1e-3,
             cursor: {
-              lock: false,
-              points: {
-                show: false,
-              },
-              drag: {
-                setScale: true,
-                x: true,
-                y: false,
+              points: { show: false },
+              drag: { x: true, y: false },
+              dataIdx: (u, seriesIdx, closestIdx, xValue) => {
+                // For heatmaps we want to return the closestIdx
+                log(seriesIdx, xValue, closestIdx);
+                return closestIdx;
               },
             },
             scales: {
               x: {
-                time: false,
-                // auto: false,
-                range: [0, numCols - 1],
-              },
-              y: {
-                time: false,
-                // auto: false,
-                range: [0, numRows - 1],
-                dir: -1, // Invert y-axis so (0,0) is at top-left
+                time: true,
               }
             },
             axes: [
@@ -185,7 +286,6 @@ function Plot() {
                 ticks: { stroke: () => "#333333", },
                 grid: { show: false },
                 scale: 'x',
-                values: (u, vals) => vals.map(v => v.toFixed(0)),
               },
               {
                 // Y axis options
@@ -194,29 +294,44 @@ function Plot() {
                 ticks: { stroke: () => "#333333", },
                 grid: { show: false },
                 scale: "y",
-                values: (u, vals) => vals.map(v => v.toFixed(0)),
               },
             ],
-
             series: [
               {},
               {
-                scale: 'y',
-                paths: () => null, // No line drawing
-                points: { show: false },
+                label: "Latency",
+                paths: heatmapPaths({
+                  disp: {
+                    fill: {
+                      lookup: colors,
+                      values: countsToFills
+                    }
+                  }
+                }),
+                facets: [
+                  {
+                    scale: 'x',
+                    auto: true,
+                    sorted: 1,
+                  },
+                  {
+                    scale: 'y',
+                    auto: true,
+                  },
+                ],
+                value: (u, seriesIdx, idx, value) => {
+                  // Find the closest heatmap value to cursor position
+                  let yVal = u.cursor.top / u.bbox.height * 1000;
+                  console.log(yVal);
+                  return Math.random().toString();
+                  // let intensity = findIntensityAtPosition(u.data[1], idx, yVal);
+                  // return intensity !== null ? intensity.toFixed(2) + "ms" : "--";
+                },
               },
-              {
-                scale: 'y',
-                paths: () => null, // No line drawing
-                points: { show: false },
-              }
-            ],
-            plugins: [
-              heatmapPlugin(config),
             ],
           };
           
-          uPlotData = [xValues, yValues, zValues];
+          uPlotData = [null, [xValues, yValues, zValues]];
           break;
       }
       if (uPlotOpts !== undefined) {
