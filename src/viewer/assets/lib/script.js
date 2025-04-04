@@ -17,7 +17,7 @@ const Sidebar = {
   view({ attrs }) {
     return m("div#sidebar", [
       // todo: check slash thungs
-      attrs.sections.map((section) => m('div.section', m(m.route.Link, { class: attrs.route === section.route || (attrs.route === '/overview' && section.route === '/') ? 'selected' : '', href: section.route, }, section.name)))
+      attrs.sections.map((section) => m('div.section', m(m.route.Link, { class: attrs.route === section.route ? 'selected' : '', href: section.route, }, section.name)))
     ]);
   }
 };
