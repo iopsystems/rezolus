@@ -32,18 +32,11 @@ const cursorSyncOpts = {
   }
 };
 
-function toTitleCase(str) {
-  return str.replace(
-    /\w\S*/g,
-    text => text.charAt(0).toUpperCase() + text.substring(1).toLowerCase()
-  );
-}
-
 const Sidebar = {
   view({ attrs }) {
     return m("div#sidebar", [
       attrs.sections.map((section) => m('div.section', m(m.route.Link, { 
-        class: attrs.route === section.route ? 'selected' : '', 
+        class: attrs.activeSection === section ? 'selected' : '', 
         href: section.route,
       }, section.name)))
     ]);
@@ -51,19 +44,13 @@ const Sidebar = {
 };
 
 const Main = {
-  view({ attrs: { route, groups, sections } }) {
-    let title;
-    switch (route) {
-      case '/cpu': title = 'CPU Metrics'; break;
-      default: title = toTitleCase(route.slice(1)); break;
-    }
-
+  view({ attrs: { activeSection, groups, sections } }) {
     return m("div", 
       m("header", [
-        m('h1', 'Rezolus', m('span.div', ' » '), title),
+        m('h1', 'Rezolus', m('span.div', ' » '), activeSection.name),
       ]),
       m("main", [
-        m(Sidebar, { route, sections }),
+        m(Sidebar, { activeSection, sections }),
         m('div#groups', 
           groups.map((group) => m(Group, group))
         )
@@ -390,9 +377,10 @@ m.route(document.body, "/overview", {
         withCredentials: true,
       }).then(data => {
         console.timeEnd(`Load ${url}`);
+        const activeSection = data.sections.find(section => section.route === requestedPath);
         return ({
           view() {
-            return m(Main, { ...data, route: requestedPath });
+            return m(Main, { ...data, activeSection });
           }
         });
       });
