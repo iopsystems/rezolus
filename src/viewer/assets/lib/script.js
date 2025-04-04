@@ -246,7 +246,7 @@ function Plot() {
 
 
 
-// m.route.prefix = "";
+m.route.prefix = "";
 
 m.route(document.body, "/overview", {
   "/:section": {
