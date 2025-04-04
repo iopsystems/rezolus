@@ -41,12 +41,6 @@ main {
   flex-direction: column;
   gap: 0.5em;
 
-  h2 {
-    font-size: 1rem;
-    margin-bottom: 1em;
-/*    line-height: 1rem;*/
-  }
-
   a {
     color: var(--fg);
     text-decoration: underline;
@@ -62,6 +56,12 @@ main {
 
 #groups {
   flex: 1;
+
+  h2 {
+    margin-bottom: 0.5em;
+    padding-bottom: 0.5em;
+    border-bottom: 1px solid #fff6;
+  }
 
   .group {
     .plots {

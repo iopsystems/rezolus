@@ -3,23 +3,30 @@ import uPlot from './uPlot.esm.js';
 const log = console.log.bind(console);
 
 const state = {
+  // for synchronizing plot state (eg. hovers)
   sync: uPlot.sync("groups"),
 };
-
-function upDownFilter(type) {
-  return type != "mouseup" && type != "mousedown";
-}
-
-const matchSyncKeys = (own, ext) => own == ext;
 
 const cursorSyncOpts = {
   key: state.sync.key,
   setSeries: true,
-  match: [matchSyncKeys, matchSyncKeys],
+  match: [
+    (own, ext) => own == ext, 
+    (own, ext) => own == ext
+  ],
   filters: {
-    pub: upDownFilter,
+    pub(type) {
+      return type != "mouseup" && type != "mousedown";
+    },
   }
-}; 
+};
+
+function toTitleCase(str) {
+  return str.replace(
+    /\w\S*/g,
+    text => text.charAt(0).toUpperCase() + text.substring(1).toLowerCase()
+  );
+}
 
 const Sidebar = {
   view({ attrs }) {
@@ -43,6 +50,12 @@ const Sidebar = {
 
 const Main = {
   view({ attrs: { route, groups, sections } }) {
+    let title;
+    switch (route) {
+      case '/cpu': title = 'CPU Metrics'; break;
+      default: title = toTitleCase(route.slice(1)); break;
+    }
+
     return m("div", 
       m("header", [
         m('h1', 'Rezolus'),
@@ -50,6 +63,7 @@ const Main = {
       m("main", [
         m(Sidebar, { route, sections }),
         m('div#groups', 
+          m('h2', title),
           groups.map((group) => m(Group, group))
         )
       ]));
@@ -59,7 +73,7 @@ const Main = {
 const Group = {
   view({ attrs }) {
     return m("div.group", { id: attrs.id }, [
-      m("h2", `${attrs.name}`),
+      m("h3", `${attrs.name}`),
       m("div.plots", attrs.plots.map(spec => m(Plot, spec))),
     ]);
   }
