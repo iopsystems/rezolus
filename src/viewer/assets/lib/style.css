@@ -12,12 +12,15 @@
 body {
   background: var(--bg);
   color: var(--fg);
+  font-family: system-ui, sans-serif;
+  font-size: 16px;
 }
 
 header {
   max-width: var(--width);
-  margin: 0 auto;
+  margin: 2em auto;
   padding-left: var(--sidebar-width);
+  font-size: 1rem;
 }
 
 main {
@@ -33,11 +36,28 @@ main {
   position: sticky;
   align-self: flex-start;
   top: 2em;
-  padding-right: 1em;
+  padding-right: 2em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+
+  h2 {
+    font-size: 1rem;
+    margin-bottom: 1em;
+/*    line-height: 1rem;*/
+  }
 
   a {
-    color: var(--fg)
+    color: var(--fg);
+    text-decoration: underline;
+    color: #aaa;
+    &.selected {
+      color: #fff;
+      font-weight: bold;
+    text-decoration: none;
+    }
   }
+
 }
 
 #groups {

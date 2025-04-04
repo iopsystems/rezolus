@@ -16,19 +16,20 @@ const layout = {
 const Sidebar = {
   view({ attrs }) {
     return m("div#sidebar", [
-      attrs.sections.map((section) => m('div.section', m(m.route.Link, { href: section.route, }, section.name)))
+      // todo: check slash thungs
+      attrs.sections.map((section) => m('div.section', m(m.route.Link, { class: attrs.route === section.route || (attrs.route === '/overview' && section.route === '/') ? 'selected' : '', href: section.route, }, section.name)))
     ]);
   }
 };
 
 const Main = {
-  view({ attrs: { groups, sections } }) {
+  view({ attrs: { route, groups, sections } }) {
     return m("div", 
       m("header", [
         m('h1', 'Rezolus'),
       ]),
       m("main", [
-        m(Sidebar, { sections }),
+        m(Sidebar, { route, sections }),
         m('div#groups', 
           groups.map((group) => m(Group, group))
         )
@@ -245,8 +246,6 @@ function Plot() {
           const numRows = rows.length;
           const numCols = rows[0].length;
 
-          console.log(timeData, numRows);
-
           // Flatten the 2D data matrix into triples: (xValues, yValues, zValues)
           const xValues = [];
           const yValues = [];
@@ -326,7 +325,6 @@ function Plot() {
           break;
       }
       if (uPlotOpts !== undefined) {
-        // log('opts', opts, attrs.opts.style);
         plot = new uPlot(uPlotOpts, uPlotData, vnode.dom);
 
         // We maintain a resize observer per plot.
@@ -363,7 +361,7 @@ m.route(document.body, "/overview", {
         withCredentials: true,
       }).then(data => ({
         view() {
-          return m(Main, data);
+          return m(Main, { ...data, route: '/' + params.section });
         }
       }));
     }
