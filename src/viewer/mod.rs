@@ -159,7 +159,9 @@ fn app(_config: Arc<Config>, livereload: LiveReloadLayer) -> Router {
         .route("/about", get(about))
         .route("/dashboard.json", get(dashboard_json))
         .with_state(state)
-        .fallback_service(ServeDir::new(Path::new("src/viewer/assets")))
+        .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
+        .nest_service("/data", ServeDir::new(Path::new("src/viewer/assets/data")))
+        .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
         .layer(
             ServiceBuilder::new()
                 .layer(RequestDecompressionLayer::new())
