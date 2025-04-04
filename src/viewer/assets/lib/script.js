@@ -362,15 +362,20 @@ m.route.prefix = "";
 m.route(document.body, "/overview", {
   "/:section": {
     onmatch(params) {
+      const url = `/data/${params.section}.json`;
+      console.time(`Load ${url}`);
       return m.request({
         method: "GET",
-        url: `/data/${params.section}.json`,
+        url,
         withCredentials: true,
-      }).then(data => ({
-        view() {
-          return m(Main, { ...data, route: '/' + params.section });
-        }
-      }));
+      }).then(data => {
+        console.timeEnd(`Load ${url}`);
+        return ({
+          view() {
+            return m(Main, { ...data, route: '/' + params.section });
+          }
+        });
+      });
     }
   }
 });
