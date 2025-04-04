@@ -1,5 +1,27 @@
 use crate::viewer::*;
 
+// get a simple metric `sum(metric{labels})`
+pub fn get_sum(data: &Tsdb, metric: &str, labels: impl Into<Labels>) -> Vec<Vec<f64>> {
+	data.get(metric, &Labels::default()).unwrap().sum().as_data()
+}
+
+// get a cpu heatmap series for a metric `sum by(id) (metric{labels})`
+pub fn get_cpu_heatmap(data: &Tsdb, metric: &str, labels: impl Into<Labels>) -> Vec<Vec<f64>> {
+	let mut heatmap = Vec::new();
+
+    for series in data.get(metric, &labels.into()).unwrap().sum_by_cpu().iter_mut() {
+        let d = series.as_data();
+
+        if heatmap.is_empty() {
+            heatmap.push(d[0].clone());
+        }
+
+        heatmap.push(d[1].clone());
+    }
+
+    heatmap
+}
+
 
 pub fn cpu_usage_percent(data: &Tsdb, labels: impl Into<Labels>) -> Vec<Vec<f64>> {
 	let cpu_cores = data.get("cpu_cores", &Labels::default()).unwrap().sum();

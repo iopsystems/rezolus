@@ -178,7 +178,7 @@ pub fn run(config: Config) {
             utilization.plots.push(Plot::line(label.to_string(), id.to_string(), cpu_usage));
 
             let cpu_usage = queries::cpu_usage_heatmap(&data, [("state".to_string(), state.to_string())]);
-            utilization.plots.push(Plot::heatmap(label.to_string(), id.to_string(), cpu_usage));
+            utilization.plots.push(Plot::heatmap(label.to_string(), format!("{id}-heatmap"), cpu_usage));
         }
 
         overview.groups.push(cpu_overview);
@@ -195,6 +195,31 @@ pub fn run(config: Config) {
         performance.plots.push(Plot::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", ipc));
 
         cpu.groups.push(performance);
+
+        // CPU TLB
+
+        let mut tlb = Group::new("TLB", "tlb");
+
+        let series = queries::get_sum(&data, "cpu_tlb_flush", Labels::default());
+        tlb.plots.push(Plot::line("Total", "tlb-total", series));
+
+        let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", Labels::default());
+        tlb.plots.push(Plot::heatmap("Total", "tlb-total", heatmap));
+
+        for (label, id, reason) in &[
+            ("Local MM Shootdown", "tlb-local-mm-shootdown", "local_mm_shootdown"),
+            ("Remote Send IPI", "tlb-remote-send-ipi", "remote_send_ipi"),
+            ("Remote Shootdown", "tlb-remote-shootdown", "remote_shootdown"),
+            ("Task Switch", "tlb-task-switch", "task_switch"),
+        ] {
+            let series = queries::get_sum(&data, "cpu_tlb_flush", [("reason".to_string(), reason.to_string())]);
+            tlb.plots.push(Plot::line(label.to_string(), id.to_string(), series));
+
+            let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", [("reason".to_string(), reason.to_string())]);
+            tlb.plots.push(Plot::heatmap(label.to_string(), format!("{id}-heatmap"), heatmap));
+        }
+
+        cpu.groups.push(tlb);
 
         // Network overview
 
