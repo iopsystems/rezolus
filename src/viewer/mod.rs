@@ -1,3 +1,7 @@
+use axum::handler::Handler;
+use http::Uri;
+use http::StatusCode;
+use serde::Serialize;
 use std::collections::HashMap;
 use super::*;
 use clap::ArgMatches;
@@ -13,6 +17,10 @@ use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
+
+mod tsdb;
+
+use tsdb::*;
 
 pub fn command() -> Command {
     Command::new("view")
@@ -125,7 +133,115 @@ pub fn run(config: Config) {
     .expect("failed to set ctrl-c handler");
 
     // code to load data from parquet will go here
-    let state = AppState::default();
+    let mut state = AppState::new(config.clone());
+
+    if !config.testing {
+        let data = Tsdb::load(&config.input).map_err(|e| {
+            eprintln!("failed to load data from parquet: {e}");
+            std::process::exit(1);
+        }).unwrap();
+
+        // define our sections
+        let sections = vec![
+            Section { name: "Overview".to_string(), route: "/overview".to_string() },
+            Section { name: "CPU".to_string(), route: "/cpu".to_string() },
+            Section { name: "Network".to_string(), route: "/network".to_string() },
+        ];
+
+        // define views for each section
+        let mut overview = View::new(sections.clone());
+        let mut cpu = View::new(sections.clone());
+        let mut network = View::new(sections.clone());
+        
+        // CPU
+
+        let mut cpu_overview = Group::new("CPU", "cpu");
+
+        let mut utilization = Group::new("Utilization", "utilization");
+
+        let cpu_cores = data.get("cpu_cores", &Labels::default()).unwrap().sum();
+
+        let mut cpu_usage_series = data.get("cpu_usage", &Labels::default()).unwrap().sum();
+        cpu_usage_series.divide_scalar(1000000000.0);
+        cpu_usage_series.divide(&cpu_cores);
+
+        cpu_overview.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage_series.as_data()));
+        utilization.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage_series.as_data()));
+
+        let mut heatmap_data = Vec::new();
+
+        for series in data.get("cpu_usage", &Labels::default()).unwrap().sum_by_cpu().iter_mut() {
+            series.divide_scalar(1000000000.0);
+            let d = series.as_data();
+
+            if heatmap_data.is_empty() {
+                heatmap_data.push(d[0].clone());
+            }
+
+            heatmap_data.push(d[1].clone());
+        }
+
+        cpu_overview.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", heatmap_data.clone()));
+        utilization.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", heatmap_data));
+
+        overview.groups.push(cpu_overview);
+        cpu.groups.push(utilization);
+
+
+        // Network overview
+
+        let mut network_overview = Group::new("Network", "network");
+        let mut traffic = Group::new("Traffic", "traffic");
+
+        let mut network_data = Vec::new();
+
+        let mut network_tx = data.get("network_bytes", &Labels { inner: [("direction".to_string(), "transmit".to_string())].into() }).unwrap().sum();
+        network_tx.multiply_scalar(8.0);
+
+        let d = network_tx.as_data();
+
+        network_data.push(d[0].clone());
+        network_data.push(d[1].clone());
+
+        let mut network_rx = data.get("network_bytes", &Labels { inner: [("direction".to_string(), "receive".to_string())].into() }).unwrap().sum();
+        network_rx.multiply_scalar(8.0);
+
+        let d = network_rx.as_data();
+
+        network_data.push(d[0].clone());
+
+        network_overview.plots.push(Plot::line("Bandwidth", "network-bandwidth", network_data.clone()));
+        traffic.plots.push(Plot::line("Bandwidth", "network-bandwidth", network_data));
+
+
+        let mut network_data = Vec::new();
+
+        let network_tx = data.get("network_packets", &Labels { inner: [("direction".to_string(), "transmit".to_string())].into() }).unwrap().sum();
+
+        let d = network_tx.as_data();
+
+        network_data.push(d[0].clone());
+        network_data.push(d[1].clone());
+
+        let network_rx = data.get("network_packets", &Labels { inner: [("direction".to_string(), "receive".to_string())].into() }).unwrap().sum();
+
+        let d = network_rx.as_data();
+
+        network_data.push(d[0].clone());
+
+        network_overview.plots.push(Plot::line("Packets", "network-packets", network_data.clone()));
+        traffic.plots.push(Plot::line("Packets", "network-packets", network_data));
+
+        overview.groups.push(network_overview);
+        network.groups.push(traffic);
+
+        state.sections.insert("overview.json".to_string(), serde_json::to_string(&overview).unwrap());
+        state.sections.insert("cpu.json".to_string(), serde_json::to_string(&cpu).unwrap());
+        state.sections.insert("network.json".to_string(), serde_json::to_string(&network).unwrap());
+
+    }
+
+    
 
     // launch the HTTP listener
     let c = config.clone();
@@ -147,7 +263,7 @@ async fn serve(config: Arc<Config>, state: AppState) {
         )
         .expect("failed to watch assets folder");
 
-    let app: Router = app(config.clone(), livereload, state);
+    let app = app(livereload, state);
 
     let listener = TcpListener::bind(config.listen)
         .await
@@ -158,32 +274,31 @@ async fn serve(config: Arc<Config>, state: AppState) {
         .expect("failed to run http server");
 }
 
-#[derive(Default)]
 struct AppState {
+    config: Arc<Config>,
     sections: HashMap<String, String>,
+}
+
+impl AppState {
+    pub fn new(config: Arc<Config>) -> Self {
+        Self {
+            config,
+            sections: Default::default(),
+        }
+    }
 }
 
 // NOTE: we're going to want to include the assets in the binary for release
 // builds. For now, we just serve from the assets folder
-fn app(config: Arc<Config>, livereload: LiveReloadLayer, state: AppState) -> Router {
+fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
     let state = Arc::new(state);
 
-    let router = Router::new()
+    Router::new()
         .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
         .route("/about", get(about))
         .with_state(state.clone())
-        .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")));
-
-    let router = if config.testing {
-        router.nest_service("/data", ServeDir::new(Path::new("src/viewer/assets/data")))
-    } else {
-        router.route("/data/{section}", get({
-            let state = Arc::clone(&state);
-            move |path| section_json(path, state)
-        }))
-    };
-
-    router
+        .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
+        .nest_service("/data", data.with_state(state))
         .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
         .layer(
             ServiceBuilder::new()
@@ -199,9 +314,107 @@ async fn about() -> String {
     format!("Rezolus {version} Viewer\nFor information, see: https://rezolus.com\n")
 }
 
-// This function returns the dashboard json
-//
-// NOTE: currently a placeholder
-async fn section_json(axum::extract::Path(section): axum::extract::Path<String>, state: Arc<AppState>) -> String {
-    state.sections.get(&section).map(|v| v.to_string()).unwrap_or("{ }".to_string())
+async fn data(axum::extract::State(state): axum::extract::State<Arc<AppState>>, uri: Uri) -> (StatusCode, String) {
+    let path = uri.path();
+    let parts: Vec<&str> = path.split('/').collect();
+
+    if state.config.testing {
+        (StatusCode::OK, std::fs::read_to_string(format!("src/viewer/assets/data/{}", parts[1])).unwrap_or("{ }".to_string()))
+    } else {
+        (StatusCode::OK, state.sections.get(parts[1]).map(|v| v.to_string()).unwrap_or("{ }".to_string()))
+    }
+}
+
+#[derive(Default, Serialize)]
+pub struct View {
+    groups: Vec<Group>,
+    sections: Vec<Section>,
+}
+
+impl View {
+    pub fn new(sections: Vec<Section>) -> Self {
+        Self {
+            groups: Vec::new(),
+            sections,
+        }
+    }
+}
+
+#[derive(Clone)]
+#[derive(Serialize)]
+pub struct Section {
+    name: String,
+    route: String,
+}
+
+#[derive(Serialize)]
+pub struct Group {
+    name: String,
+    id: String,
+    plots: Vec<Plot>,
+}
+
+impl Group {
+    pub fn new<T: Into<String>, U: Into<String>>(name: T, id: U) -> Self{
+        Self {
+            name: name.into(),
+            id: id.into(),
+            plots: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct Plot {
+    data: Vec<Vec<f64>>,
+    opts: PlotOpts,
+}
+
+impl Plot {
+    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U, data: Vec<Vec<f64>>) -> Self {
+        Self {
+            data,
+            opts: PlotOpts::line(title, id),
+        }
+    }
+
+    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, data: Vec<Vec<f64>>) -> Self {
+        Self {
+            data,
+            opts: PlotOpts::heatmap(title, id),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct PlotOpts {
+    title: String,
+    id: String,
+    style: String,
+}
+
+impl PlotOpts {
+    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self{
+        Self {
+            title: title.into(),
+            id: id.into(),
+            style: "heatmap".to_string(),
+        }
+    }
+
+    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self{
+        Self {
+            title: title.into(),
+            id: id.into(),
+            style: "line".to_string(),
+        }
+    }
+
+    // pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self{
+    //     Self {
+    //         title: title.into(),
+    //         id: id.into(),
+    //         style: "line".to_string(),
+    //     }
+    // }
 }

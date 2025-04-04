@@ -2313,6 +2313,7 @@ dependencies = [
  "ringlog",
  "rmp-serde",
  "serde",
+ "serde_json",
  "syscall-numbers",
  "sysconf",
  "tempfile",
