@@ -7,6 +7,7 @@
 // - Allow both log and non-log line plots
 // - Fix the spacing between the heatmap canvas rects (in screen space)
 // - Fix the value-size-dependent overflow behavior of the "legend hovers".
+// - Allow a "href" specification for group names, so eg. the overview groups can link to their respective sections
 
 import uPlot from './uPlot.esm.js';
 
