@@ -123,15 +123,9 @@ function Plot() {
                 // (should be quantized to 64 colors/levels max. e.g. 16)
                 let fills = disp.fill.values(u, seriesIdx);
 
-                //  let fillPaths = new Map(); // #rgba => Path2D
-
                 let fillPalette = disp.fill.lookup ?? [...new Set(fills)];
 
                 let fillPaths = fillPalette.map(color => new Path2D());
-
-                // fillPalette.forEach(fill => {
-                //  fillPaths.set(fill, new Path2D());
-                // });
 
                 // detect x and y bin qtys by detecting layout repetition in x & y data
                 let yBinQty = dlen - ys.lastIndexOf(ys[0]);
@@ -146,7 +140,7 @@ function Plot() {
                 // pre-compute x and y offsets
                 let cys = ys.slice(0, yBinQty).map(y => Math.round(valToPosY(y, scaleY, yDim, yOff) - ySize / 2));
                 let cxs = Array.from({ length: xBinQty }, (v, i) => Math.round(valToPosX(xs[i * yBinQty], scaleX, xDim, xOff) - xSize / 2));
-
+       
                 for (let i = 0; i < dlen; i++) {
                   // filter out 0 counts and out of view
                   if (
@@ -157,23 +151,9 @@ function Plot() {
                     let cx = cxs[~~(i / yBinQty)];
                     let cy = cys[i % yBinQty];
 
-                    //  let fillPath = fillPaths.get(fills[i]);
-                    //  let fillPath = fillPaths.get(fillIndex[fills[i]]);
-
                     let fillPath = fillPaths[fills[i]];
 
                     rect(fillPath, cx, cy, xSize, ySize);
-
-                    /*
-                        qt.add({
-                            x: cx - size - u.bbox.left,
-                            y: cy - size - u.bbox.top,
-                            w: size * 2,
-                            h: size * 2,
-                            sidx: seriesIdx,
-                            didx: i
-                        });
-                    */
                   }
                 }
 
