@@ -252,9 +252,7 @@ function Plot() {
               drag: { x: true, y: false },
             },
             scales: {
-              x: {
-                time: true,
-              }
+              x: { time: true, }
             },
             axes: [
               {
@@ -277,7 +275,7 @@ function Plot() {
             series: [
               {},
               {
-                label: "Latency",
+                label: "Value",
                 paths: heatmapPaths({
                   disp: {
                     fill: {
@@ -300,10 +298,12 @@ function Plot() {
               },
             ],
           };
-          
           uPlotData = [null, [xValues, yValues, zValues]];
           break;
+        default:
+          throw new Error(`undefined style: ${attrs.opts.style}`);
       }
+
       if (uPlotOpts !== undefined) {
         plot = new uPlot(uPlotOpts, uPlotData, vnode.dom);
 
