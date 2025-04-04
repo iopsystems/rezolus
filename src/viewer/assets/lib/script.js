@@ -38,7 +38,6 @@ const Sidebar = {
 };
 
 // TODO:
-// - Add a header for the current section name
 // - Heatmap hover value display
 // - Linked hover across charts
 // - Linked zoom across charts
@@ -58,12 +57,11 @@ const Main = {
 
     return m("div", 
       m("header", [
-        m('h1', 'Rezolus'),
+        m('h1', 'Rezolus', m('span.div', ' » '), title),
       ]),
       m("main", [
         m(Sidebar, { route, sections }),
         m('div#groups', 
-          m('h2', title),
           groups.map((group) => m(Group, group))
         )
       ]));
@@ -73,7 +71,7 @@ const Main = {
 const Group = {
   view({ attrs }) {
     return m("div.group", { id: attrs.id }, [
-      m("h3", `${attrs.name}`),
+      m("h2", `${attrs.name}`),
       m("div.plots", attrs.plots.map(spec => m(Plot, spec))),
     ]);
   }
@@ -373,7 +371,12 @@ m.route.prefix = "";
 
 m.route(document.body, "/overview", {
   "/:section": {
-    onmatch(params) {
+    onmatch(params, requestedPath) {
+      // Prevent a route change if we're already on this route
+      if (m.route.get() === requestedPath) {
+        return new Promise(function () {});
+      }
+
       const url = `/data/${params.section}.json`;
       console.time(`Load ${url}`);
       return m.request({
@@ -384,7 +387,7 @@ m.route(document.body, "/overview", {
         console.timeEnd(`Load ${url}`);
         return ({
           view() {
-            return m(Main, { ...data, route: '/' + params.section });
+            return m(Main, { ...data, route: requestedPath });
           }
         });
       });

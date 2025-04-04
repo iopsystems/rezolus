@@ -21,6 +21,12 @@ header {
   margin: 2em auto;
   padding-left: var(--sidebar-width);
   font-size: 1rem;
+
+  .div {
+    opacity: 0.5;
+    font-weight: normal;
+    padding: 0 0.1em;
+  }
 }
 
 main {
@@ -58,8 +64,8 @@ main {
   flex: 1;
 
   h2 {
-    margin-bottom: 0.5em;
-    padding-bottom: 0.5em;
+    margin-bottom: 0.25em;
+    padding-bottom: 0.25em;
     border-bottom: 1px solid #fff6;
   }
 
