@@ -2,6 +2,25 @@ import uPlot from './uPlot.esm.js';
 
 const log = console.log.bind(console);
 
+const state = {
+  sync: uPlot.sync("groups"),
+};
+
+function upDownFilter(type) {
+  return type != "mouseup" && type != "mousedown";
+}
+
+const matchSyncKeys = (own, ext) => own == ext;
+
+const cursorSyncOpts = {
+  key: state.sync.key,
+  setSeries: true,
+  match: [matchSyncKeys, matchSyncKeys],
+  filters: {
+    pub: upDownFilter,
+  }
+}; 
+
 const Sidebar = {
   view({ attrs }) {
     return m("div#sidebar", [
@@ -60,7 +79,11 @@ function Plot() {
         case 'line':
           uPlotOpts = {
             ...attrs.opts,
-
+            cursor: {
+              lock: true,
+              focus: { prox: 16, },
+              sync: cursorSyncOpts,
+            },
             series: 
               attrs.data.map((d, i) => i === 0 ? {
                 // X-axis
@@ -250,6 +273,9 @@ function Plot() {
             cursor: {
               points: { show: false },
               drag: { x: true, y: false },
+              lock: true,
+              focus: { prox: 16, },
+              sync: cursorSyncOpts,
             },
             scales: {
               x: { time: true, }
@@ -306,6 +332,7 @@ function Plot() {
 
       if (uPlotOpts !== undefined) {
         plot = new uPlot(uPlotOpts, uPlotData, vnode.dom);
+        state.sync.sub(plot);
 
         // We maintain a resize observer per plot.
         resizeObserver = new ResizeObserver(entries => {
