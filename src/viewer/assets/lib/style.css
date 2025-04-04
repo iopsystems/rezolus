@@ -1,12 +1,10 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #121212;
+  --bg: #111;
   --bg-secondary: #1E1E1E;
   --fg: #E0E0E0;
   --fg-secondary: #ABABAB;
-  --accent: #4299E1;
-  --border: #2D2D2D;
   --width: 800px;
   --sidebar-width: 125px
 }
@@ -35,13 +33,17 @@ main {
   position: sticky;
   align-self: flex-start;
   top: 2em;
-  padding-right: 1em;;
+  padding-right: 1em;
+
+  a {
+    color: var(--fg)
+  }
 }
 
-#sections {
+#groups {
   flex: 1;
 
-  .section {
+  .group {
     .plots {
       display: flex;
       flex-wrap: wrap;
@@ -50,9 +52,10 @@ main {
         max-width: 50%;
         width: 50%;
         height: 200px;
-        margin-bottom: 100px; /* for the legend */
+        margin-bottom: 150px; /* for the legend */
 
       }
     }
   }
 }
+

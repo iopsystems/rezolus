@@ -12,36 +12,32 @@ const layout = {
   ]
 };
 
-const state = {
-  //
-};
-
 const Sidebar = {
-  view() {
-    return m("div#sidebar", { onclick: state.inc }, [
-      layout.sections.map((section) => m('div.section', m('a', { href: `#${section.id}` }, section.name)))
+  view({ attrs }) {
+    return m("div#sidebar", [
+      attrs.sections.map((section) => m('div.section', m(m.route.Link, { href: section.route, }, section.name)))
     ]);
   }
 };
 
 const Main = {
-  view() {
+  view({ attrs: { groups, sections } }) {
     return m("div", 
       m("header", [
         m('h1', 'Rezolus'),
       ]),
       m("main", [
-        m(Sidebar),
-        m('div#sections', 
-          layout.sections.map((section) => m(Section, section))
+        m(Sidebar, { sections }),
+        m('div#groups', 
+          groups.map((group) => m(Group, group))
         )
       ]));
   }
 };
 
-const Section = {
+const Group = {
   view({ attrs }) {
-    return m("div.section", { id: attrs.id }, [
+    return m("div.group", { id: attrs.id }, [
       m("h2", `${attrs.name}`),
       m("div.plots", attrs.plots.map(spec => m(Plot, spec))),
     ]);
@@ -55,14 +51,78 @@ function Plot() {
 
   return {
     oncreate: function (vnode) {
-      plot = makePlot(vnode.dom);
-      // We maintain a resize observer per plot.
-      resizeObserver = new ResizeObserver(entries => {
-        for (const entry of entries) {
-          plot.setSize(entry.contentRect);
-        }
-      });
-      resizeObserver.observe(vnode.dom);
+      const { attrs } = vnode;
+
+      let opts;
+      switch (attrs.opts.style) {
+        case 'line':
+          opts = {
+            title: attrs.opts.title,
+            id: attrs.opts.id,
+
+            series: 
+              attrs.data.map((d, i) => i === 0 ? {
+                // X-axis
+                label: "Time",
+                scale: "x"
+              } : i === 1 ? {
+                // First line
+                label: "Line 1",
+                stroke: "red",
+                width: 2
+              } : i >= 2 ? 
+                {
+                  // Second line
+                  label: "Line 2",
+                  stroke: "blue",
+                  width: 2
+                } : null
+              ),
+            axes: [
+              {
+                // X axis options
+                label: "Time",
+                stroke: () => "#ABABAB",
+                ticks: { stroke: () => "#333333", },
+                grid: { stroke: () => "#333333", }
+              },
+              {
+                // Y axis options
+                label: "Value",
+                stroke: () => "#ABABAB",
+                ticks: { stroke: () => "#333333", },
+                grid: { stroke: () => "#333333", },
+                scale: "y",
+                values: (self, ticks) => {
+                  // Format the tick values in scientific notation
+                  return ticks.map(v => v ? v.toExponential(1) : v); // 1 decimal place in exponent
+                }
+              },
+            ],
+            scales: {
+              y: {
+                log: 10,
+                distr: 3, // 1 = linear, 2 = ordinal, 3 = log, 4 = asinh, 100 = custom
+              },
+            }
+          };
+          break;
+        case 'heatmap':
+          // todo
+          break;
+      }
+      if (opts !== undefined) {
+        // log('opts', opts, attrs.opts.style);
+        plot = new uPlot(opts, attrs.data, vnode.dom);
+
+        // We maintain a resize observer per plot.
+        resizeObserver = new ResizeObserver(entries => {
+          for (const entry of entries) {
+            plot.setSize(entry.contentRect);
+          }
+        });
+        resizeObserver.observe(vnode.dom);
+      }
     },
   
     onremove(vnode) {
@@ -71,62 +131,27 @@ function Plot() {
     },
 
     view: function () {
-      return m('div.plot', 'Hello world');
+      return m('div.plot');
     }
   };
 }
 
+// m.route.prefix = "";
 
-function makePlot(parent) {
-  const data = [
-    [1546300800, 1546387200], // x-values (timestamps)
-    [35, 71], // y-values (series 1)
-    [90, 15] // y-values (series 2)
-  ];
-
-  let { width, height } = parent.getBoundingClientRect();
-  log(width, height);
-
-  const opts = {
-    title: "Plot",
-    width: width,
-    height: height,
-    legend: {
-      show: true,
-
-    },
-    axes: [
-      {
-        stroke: () => "#ABABAB",
-        ticks: {
-          stroke: () => "#333333",
-        },
-        grid: {
-          stroke: () => "#333333",
+m.route(document.body, "/overview", {
+  "/:section": {
+    onmatch(params) {
+      console.log('params', params);
+      return m.request({
+        method: "GET",
+        url: `/data/${params.section}.json`,
+        withCredentials: true,
+      }).then(data => ({
+        view() {
+          return m(Main, data);
         }
-      },
-      {
-        stroke: () => "#ABABAB",
-        ticks: {
-          stroke: () => "#333333",
-        },
-        grid: {
-          stroke: () => "#333333",
-        }
-      },
-    ],
-    series: [
-      {},
-      {
-        stroke: "blue",
-        width: 1,
-        fill: "#333",
-        dash: [10, 5]
-      }
-    ]
-  };
+      }));
+    }
+  }
+});
 
-  return uPlot(opts, data, parent);
-}
-
-m.mount(document.body, Main);
