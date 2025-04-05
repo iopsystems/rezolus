@@ -29,7 +29,9 @@ const cursorSyncOpts = {
     pub(type) {
       return type != "mouseup" && type != "mousedown";
     },
-  }
+  },
+  scales: ["x", null], // Explicitly tell sync which scales to sync
+  values: [null, null],
 };
 
 const Sidebar = {
@@ -66,6 +68,37 @@ const Group = {
     ]);
   }
 };
+
+function syncZoom(plots) {
+  let xMin = null;
+  let xMax = null;
+  let zooming = false;
+
+  function onZoom(u) {
+    if (zooming) return; // Prevent recursion
+
+    zooming = true;
+
+    const scales = u.scales.x;
+
+    const newMin = scales.min;
+    const newMax = scales.max;
+
+    // Update all other plots to match this min/max
+    plots.forEach(p => {
+      if (p !== u && p.scales.x) {
+        p.setScale('x', {
+          min: newMin,
+          max: newMax
+        });
+      }
+    });
+
+    zooming = false;
+  }
+
+  return onZoom;
+}
 
 function Plot() {
   let resizeObserver, plot;
@@ -335,7 +368,84 @@ function Plot() {
           throw new Error(`undefined style in provided plot opts: ${attrs.opts.style}`);
       }
 
+      if (uPlotOpts) {
+        // Enable zooming on all plots
+        uPlotOpts.hooks = uPlotOpts.hooks || {};
+
+        // Hook into setScale to detect when a user zooms
+        // This is the key part that synchronizes the zoom
+        const existingSetScale = uPlotOpts.hooks.setScale;
+
+        uPlotOpts.hooks.setScale = (u, key) => {
+          if (existingSetScale)
+            existingSetScale(u, key);
+
+          // Only sync zoom for x-axis changes
+          if (key === 'x') {
+            // Get all plots that are part of the sync group
+            const syncKey = state.sync.key;
+            const plots = syncKey != null ? uPlot.sync(syncKey).plots : [];
+
+            // Call the syncZoom handler to update all other plots
+            syncZoom(plots)(u);
+          }
+        };
+      }
+
       if (uPlotOpts !== undefined) {
+        // Add the sync plugin for zoom
+        let zoomingSync = false;
+
+        // Initialize hooks object properly
+        uPlotOpts.hooks = uPlotOpts.hooks || {};
+
+        // Add setScale hook to synchronize zoom
+        uPlotOpts.hooks.setScale = [(u, scaleKey) => {
+          // Only sync x-axis changes and prevent recursion
+          if (scaleKey === 'x' && !zoomingSync) {
+            zoomingSync = true;
+
+            const syncKey = state.sync.key;
+            const plots = syncKey != null ? uPlot.sync(syncKey).plots : [];
+
+            // Get the new scale values
+            const newMin = u.scales.x.min;
+            const newMax = u.scales.x.max;
+
+            // Update all other plots to match
+            plots.forEach(p => {
+              if (p !== u && p.scales.x) {
+                p.setScale('x', {
+                  min: newMin,
+                  max: newMax
+                });
+              }
+            });
+
+            zoomingSync = false;
+          }
+        }];
+
+        // Add double-click hook to reset zoom on all plots
+        uPlotOpts.hooks.dblclick = [(u, e) => {
+          if (!zoomingSync) {
+            zoomingSync = true;
+
+            const syncKey = state.sync.key;
+            const plots = syncKey != null ? uPlot.sync(syncKey).plots : [];
+
+            // Reset all plots
+            plots.forEach(p => {
+              if (p !== u) {
+                p.setScale('x', null);
+                p.redraw();
+              }
+            });
+
+            zoomingSync = false;
+          }
+        }];
+
         plot = new uPlot(uPlotOpts, uPlotData, vnode.dom);
         state.sync.sub(plot);
 
@@ -348,7 +458,7 @@ function Plot() {
         resizeObserver.observe(vnode.dom);
       }
     },
-  
+
     onremove(vnode) {
       resizeObserver?.disconnect();
       resizeObserver = null;
