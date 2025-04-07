@@ -134,7 +134,7 @@ function formatTime() {
   return (self, splits, axisIdx, foundSpace, foundIncr) => {
     return splits.map(split => {
       const date = new Date(split * 1000);
-      return timeFormat(date) + "\n" + dateFormat(date);
+      return timeFormat(date);
     });
   };
 }
