@@ -1,12 +1,12 @@
-use arrow::array::UInt64Array;
 use arrow::array::Int64Array;
+use arrow::array::UInt64Array;
 use arrow::datatypes::DataType;
-use std::fs::File;
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::collections::HashMap;
-use std::path::Path;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::path::Path;
 
 #[derive(Default)]
 pub struct Tsdb {
@@ -91,7 +91,8 @@ impl Tsdb {
                                     // for counters, we care about rates. So calculate the rate here.
                                     if series.init {
                                         let (prev_ts, prev_v) = series.prev;
-                                        let rate = v.wrapping_sub(prev_v) as f64 / ((*ts - prev_ts) as f64 / 1000000000.0);
+                                        let rate = v.wrapping_sub(prev_v) as f64
+                                            / ((*ts - prev_ts) as f64 / 1000000000.0);
                                         series.inner.insert(*ts, rate);
                                         series.prev = (*ts, v);
                                     } else {
@@ -181,7 +182,11 @@ impl TimeSeriesCollection {
         let mut result = Vec::new();
 
         for id in 0..1024 {
-            let series = self.filter(&Labels { inner: [("id".to_string(), format!("{id}"))].into() }).sum();
+            let series = self
+                .filter(&Labels {
+                    inner: [("id".to_string(), format!("{id}"))].into(),
+                })
+                .sum();
 
             if series.inner.is_empty() {
                 break;
@@ -194,9 +199,7 @@ impl TimeSeriesCollection {
     }
 }
 
-#[derive(Default, Eq, PartialEq, Hash)]
-#[derive(Clone)]
-#[derive(Debug)]
+#[derive(Default, Eq, PartialEq, Hash, Clone, Debug)]
 pub struct Labels {
     pub inner: BTreeMap<String, String>,
 }
@@ -217,7 +220,10 @@ impl Labels {
     }
 }
 
-impl<T> From<T> for Labels where T: Into<BTreeMap<String, String>> {
+impl<T> From<T> for Labels
+where
+    T: Into<BTreeMap<String, String>>,
+{
     fn from(other: T) -> Self {
         Self {
             inner: other.into(),
@@ -225,8 +231,7 @@ impl<T> From<T> for Labels where T: Into<BTreeMap<String, String>> {
     }
 }
 
-#[derive(Default)]
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct TimeSeries {
     inner: BTreeMap<u64, f64>,
     prev: (u64, u64),

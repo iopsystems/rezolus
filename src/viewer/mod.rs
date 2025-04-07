@@ -1,11 +1,11 @@
+use super::*;
 use axum::handler::Handler;
-use http::Uri;
+use clap::ArgMatches;
 use http::StatusCode;
+use http::Uri;
+use notify::Watcher;
 use serde::Serialize;
 use std::collections::HashMap;
-use super::*;
-use clap::ArgMatches;
-use notify::Watcher;
 use std::net::SocketAddr;
 use std::path::Path;
 use tower_http::services::{ServeDir, ServeFile};
@@ -18,8 +18,8 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
 
-mod tsdb;
 mod queries;
+mod tsdb;
 
 use tsdb::*;
 
@@ -137,23 +137,34 @@ pub fn run(config: Config) {
     let mut state = AppState::new(config.clone());
 
     if !config.testing {
-        let data = Tsdb::load(&config.input).map_err(|e| {
-            eprintln!("failed to load data from parquet: {e}");
-            std::process::exit(1);
-        }).unwrap();
+        let data = Tsdb::load(&config.input)
+            .map_err(|e| {
+                eprintln!("failed to load data from parquet: {e}");
+                std::process::exit(1);
+            })
+            .unwrap();
 
         // define our sections
         let sections = vec![
-            Section { name: "Overview".to_string(), route: "/overview".to_string() },
-            Section { name: "CPU".to_string(), route: "/cpu".to_string() },
-            Section { name: "Network".to_string(), route: "/network".to_string() },
+            Section {
+                name: "Overview".to_string(),
+                route: "/overview".to_string(),
+            },
+            Section {
+                name: "CPU".to_string(),
+                route: "/cpu".to_string(),
+            },
+            Section {
+                name: "Network".to_string(),
+                route: "/network".to_string(),
+            },
         ];
 
         // define views for each section
         let mut overview = View::new(sections.clone());
         let mut cpu = View::new(sections.clone());
         let mut network = View::new(sections.clone());
-        
+
         // CPU
 
         // CPU Utilization
@@ -162,23 +173,46 @@ pub fn run(config: Config) {
         let mut utilization = Group::new("Utilization", "utilization");
 
         let cpu_usage = queries::cpu_usage_percent(&data, Labels::default());
-        cpu_overview.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage.clone()));
-        utilization.plots.push(Plot::line("Busy %", "busy-pct", cpu_usage));
+        cpu_overview
+            .plots
+            .push(Plot::line("Busy %", "busy-pct", cpu_usage.clone()));
+        utilization
+            .plots
+            .push(Plot::line("Busy %", "busy-pct", cpu_usage));
 
         let cpu_usage = queries::cpu_usage_heatmap(&data, Labels::default());
-        cpu_overview.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", cpu_usage.clone()));
-        utilization.plots.push(Plot::heatmap("Busy %", "busy-pct-heatmap", cpu_usage));
+        cpu_overview.plots.push(Plot::heatmap(
+            "Busy %",
+            "busy-pct-heatmap",
+            cpu_usage.clone(),
+        ));
+        utilization
+            .plots
+            .push(Plot::heatmap("Busy %", "busy-pct-heatmap", cpu_usage));
 
         for (label, id, state) in &[
             ("User %", "user-pct", "user"),
             ("System %", "system-pct", "system"),
             ("Soft IRQ %", "softirq-pct", "softirq"),
         ] {
-            let cpu_usage = queries::cpu_usage_percent(&data, [("state".to_string(), state.to_string())]);
-            utilization.plots.push(Plot::line(label.to_string(), id.to_string(), cpu_usage));
+            let cpu_usage =
+                queries::cpu_usage_percent(&data, [("state".to_string(), state.to_string())]);
 
-            let cpu_usage = queries::cpu_usage_heatmap(&data, [("state".to_string(), state.to_string())]);
-            utilization.plots.push(Plot::heatmap(label.to_string(), format!("{id}-heatmap"), cpu_usage));
+            if cpu_usage.is_empty() {
+                continue;
+            }
+
+            utilization
+                .plots
+                .push(Plot::line(label.to_string(), id.to_string(), cpu_usage));
+
+            let cpu_usage =
+                queries::cpu_usage_heatmap(&data, [("state".to_string(), state.to_string())]);
+            utilization.plots.push(Plot::heatmap(
+                label.to_string(),
+                format!("{id}-heatmap"),
+                cpu_usage,
+            ));
         }
 
         overview.groups.push(cpu_overview);
@@ -189,10 +223,16 @@ pub fn run(config: Config) {
         let mut performance = Group::new("Performance", "performance");
 
         let ipc = queries::cpu_ipc(&data);
-        performance.plots.push(Plot::line("Instructions per Cycle (IPC)", "ipc", ipc));
+        performance
+            .plots
+            .push(Plot::line("Instructions per Cycle (IPC)", "ipc", ipc));
 
         let ipc = queries::cpu_ipc_heatmap(&data);
-        performance.plots.push(Plot::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", ipc));
+        performance.plots.push(Plot::heatmap(
+            "Instructions per Cycle (IPC)",
+            "ipc-heatmap",
+            ipc,
+        ));
 
         cpu.groups.push(performance);
 
@@ -201,22 +241,54 @@ pub fn run(config: Config) {
         let mut tlb = Group::new("TLB", "tlb");
 
         let series = queries::get_sum(&data, "cpu_tlb_flush", Labels::default());
-        tlb.plots.push(Plot::line("Total", "tlb-total", series));
+
+        if !(series.is_empty()) {
+            tlb.plots.push(Plot::line("Total", "tlb-total", series));
+        }
 
         let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", Labels::default());
-        tlb.plots.push(Plot::heatmap("Total", "tlb-total", heatmap));
+
+        if !(heatmap.is_empty()) {
+            tlb.plots.push(Plot::heatmap("Total", "tlb-total", heatmap));
+        }
 
         for (label, id, reason) in &[
-            ("Local MM Shootdown", "tlb-local-mm-shootdown", "local_mm_shootdown"),
+            (
+                "Local MM Shootdown",
+                "tlb-local-mm-shootdown",
+                "local_mm_shootdown",
+            ),
             ("Remote Send IPI", "tlb-remote-send-ipi", "remote_send_ipi"),
-            ("Remote Shootdown", "tlb-remote-shootdown", "remote_shootdown"),
+            (
+                "Remote Shootdown",
+                "tlb-remote-shootdown",
+                "remote_shootdown",
+            ),
             ("Task Switch", "tlb-task-switch", "task_switch"),
         ] {
-            let series = queries::get_sum(&data, "cpu_tlb_flush", [("reason".to_string(), reason.to_string())]);
-            tlb.plots.push(Plot::line(label.to_string(), id.to_string(), series));
+            let series = queries::get_sum(
+                &data,
+                "cpu_tlb_flush",
+                [("reason".to_string(), reason.to_string())],
+            );
 
-            let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", [("reason".to_string(), reason.to_string())]);
-            tlb.plots.push(Plot::heatmap(label.to_string(), format!("{id}-heatmap"), heatmap));
+            if series.is_empty() {
+                continue;
+            }
+
+            tlb.plots
+                .push(Plot::line(label.to_string(), id.to_string(), series));
+
+            let heatmap = queries::get_cpu_heatmap(
+                &data,
+                "cpu_tlb_flush",
+                [("reason".to_string(), reason.to_string())],
+            );
+            tlb.plots.push(Plot::heatmap(
+                label.to_string(),
+                format!("{id}-heatmap"),
+                heatmap,
+            ));
         }
 
         cpu.groups.push(tlb);
@@ -228,7 +300,15 @@ pub fn run(config: Config) {
 
         let mut network_data = Vec::new();
 
-        let mut network_tx = data.get("network_bytes", &Labels { inner: [("direction".to_string(), "transmit".to_string())].into() }).unwrap().sum();
+        let mut network_tx = data
+            .get(
+                "network_bytes",
+                &Labels {
+                    inner: [("direction".to_string(), "transmit".to_string())].into(),
+                },
+            )
+            .unwrap()
+            .sum();
         network_tx.multiply_scalar(8.0);
 
         let d = network_tx.as_data();
@@ -236,45 +316,85 @@ pub fn run(config: Config) {
         network_data.push(d[0].clone());
         network_data.push(d[1].clone());
 
-        let mut network_rx = data.get("network_bytes", &Labels { inner: [("direction".to_string(), "receive".to_string())].into() }).unwrap().sum();
+        let mut network_rx = data
+            .get(
+                "network_bytes",
+                &Labels {
+                    inner: [("direction".to_string(), "receive".to_string())].into(),
+                },
+            )
+            .unwrap()
+            .sum();
         network_rx.multiply_scalar(8.0);
 
         let d = network_rx.as_data();
 
         network_data.push(d[0].clone());
 
-        network_overview.plots.push(Plot::line("Bandwidth", "network-bandwidth", network_data.clone()));
-        traffic.plots.push(Plot::line("Bandwidth", "network-bandwidth", network_data));
-
+        network_overview.plots.push(Plot::line(
+            "Bandwidth",
+            "network-bandwidth",
+            network_data.clone(),
+        ));
+        traffic
+            .plots
+            .push(Plot::line("Bandwidth", "network-bandwidth", network_data));
 
         let mut network_data = Vec::new();
 
-        let network_tx = data.get("network_packets", &Labels { inner: [("direction".to_string(), "transmit".to_string())].into() }).unwrap().sum();
+        let network_tx = data
+            .get(
+                "network_packets",
+                &Labels {
+                    inner: [("direction".to_string(), "transmit".to_string())].into(),
+                },
+            )
+            .unwrap()
+            .sum();
 
         let d = network_tx.as_data();
 
         network_data.push(d[0].clone());
         network_data.push(d[1].clone());
 
-        let network_rx = data.get("network_packets", &Labels { inner: [("direction".to_string(), "receive".to_string())].into() }).unwrap().sum();
+        let network_rx = data
+            .get(
+                "network_packets",
+                &Labels {
+                    inner: [("direction".to_string(), "receive".to_string())].into(),
+                },
+            )
+            .unwrap()
+            .sum();
 
         let d = network_rx.as_data();
 
         network_data.push(d[0].clone());
 
-        network_overview.plots.push(Plot::line("Packets", "network-packets", network_data.clone()));
-        traffic.plots.push(Plot::line("Packets", "network-packets", network_data));
+        network_overview.plots.push(Plot::line(
+            "Packets",
+            "network-packets",
+            network_data.clone(),
+        ));
+        traffic
+            .plots
+            .push(Plot::line("Packets", "network-packets", network_data));
 
         overview.groups.push(network_overview);
         network.groups.push(traffic);
 
-        state.sections.insert("overview.json".to_string(), serde_json::to_string(&overview).unwrap());
-        state.sections.insert("cpu.json".to_string(), serde_json::to_string(&cpu).unwrap());
-        state.sections.insert("network.json".to_string(), serde_json::to_string(&network).unwrap());
-
+        state.sections.insert(
+            "overview.json".to_string(),
+            serde_json::to_string(&overview).unwrap(),
+        );
+        state
+            .sections
+            .insert("cpu.json".to_string(), serde_json::to_string(&cpu).unwrap());
+        state.sections.insert(
+            "network.json".to_string(),
+            serde_json::to_string(&network).unwrap(),
+        );
     }
-
-    
 
     // launch the HTTP listener
     let c = config.clone();
@@ -347,14 +467,28 @@ async fn about() -> String {
     format!("Rezolus {version} Viewer\nFor information, see: https://rezolus.com\n")
 }
 
-async fn data(axum::extract::State(state): axum::extract::State<Arc<AppState>>, uri: Uri) -> (StatusCode, String) {
+async fn data(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    uri: Uri,
+) -> (StatusCode, String) {
     let path = uri.path();
     let parts: Vec<&str> = path.split('/').collect();
 
     if state.config.testing {
-        (StatusCode::OK, std::fs::read_to_string(format!("src/viewer/assets/data/{}", parts[1])).unwrap_or("{ }".to_string()))
+        (
+            StatusCode::OK,
+            std::fs::read_to_string(format!("src/viewer/assets/data/{}", parts[1]))
+                .unwrap_or("{ }".to_string()),
+        )
     } else {
-        (StatusCode::OK, state.sections.get(parts[1]).map(|v| v.to_string()).unwrap_or("{ }".to_string()))
+        (
+            StatusCode::OK,
+            state
+                .sections
+                .get(parts[1])
+                .map(|v| v.to_string())
+                .unwrap_or("{ }".to_string()),
+        )
     }
 }
 
@@ -373,8 +507,7 @@ impl View {
     }
 }
 
-#[derive(Clone)]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Section {
     name: String,
     route: String,
@@ -388,7 +521,7 @@ pub struct Group {
 }
 
 impl Group {
-    pub fn new<T: Into<String>, U: Into<String>>(name: T, id: U) -> Self{
+    pub fn new<T: Into<String>, U: Into<String>>(name: T, id: U) -> Self {
         Self {
             name: name.into(),
             id: id.into(),
@@ -427,7 +560,7 @@ pub struct PlotOpts {
 }
 
 impl PlotOpts {
-    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self{
+    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
@@ -435,7 +568,7 @@ impl PlotOpts {
         }
     }
 
-    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self{
+    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
