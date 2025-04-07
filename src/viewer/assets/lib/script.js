@@ -125,18 +125,23 @@ function throttle(func, limit) {
   };
 }
 
+// format function for the x-axis labels, date time is split onto two lines
+// to keep it compact
 function formatTime() {
-  // Custom time formatter for 24-hour format
   const timeFormat = uPlot.fmtDate("{HH}:{mm}:{ss}");
   const dateFormat = uPlot.fmtDate("{YYYY}-{MM}-{DD}");
 
-  // Combined format with newline
   return (self, splits, axisIdx, foundSpace, foundIncr) => {
     return splits.map(split => {
-      const date = new Date(split * 1000); // convert seconds to milliseconds
+      const date = new Date(split * 1000);
       return timeFormat(date) + "\n" + dateFormat(date);
     });
   };
+}
+
+// format function for the date time in the legend
+function formatTimeLegend() {
+  return uPlot.fmtDate("{YYYY}-{MM}-{DD} {HH}:{mm}:{ss}");
 }
 
 function Plot() {
@@ -184,7 +189,8 @@ function Plot() {
               attrs.data.map((d, i) => i === 0 ? {
                 // X-axis
                 label: "Time",
-                scale: "x"
+                scale: "x",
+                value: (u, v) => v == null ? "-" : formatTimeLegend()(new Date(v * 1000))
               } : i === 1 ? {
                 // First line
                 label: "Line 1",
