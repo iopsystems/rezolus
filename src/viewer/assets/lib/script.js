@@ -211,7 +211,8 @@ function Plot() {
                 stroke: () => "#ABABAB",
                 ticks: { stroke: () => "#333333", },
                 grid: { stroke: () => "#333333", },
-                values: formatTime()
+                // TODO: we should override the formatting, but it's complicated
+                // values: formatTime()
               },
               {
                 // Y axis options
@@ -392,7 +393,8 @@ function Plot() {
                 ticks: { stroke: () => "#333333", },
                 grid: { show: false },
                 scale: 'x',
-                values: formatTime()
+                // TODO: we should override the formatting, but it's complicated
+                // values: formatTime()
               },
               {
                 // Y axis options

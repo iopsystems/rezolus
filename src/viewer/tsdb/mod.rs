@@ -181,6 +181,8 @@ impl TimeSeriesCollection {
     pub fn sum_by_cpu(&self) -> Vec<TimeSeries> {
         let mut result = Vec::new();
 
+        let mut max_cpu = 0;
+
         for id in 0..1024 {
             let series = self
                 .filter(&Labels {
@@ -188,12 +190,14 @@ impl TimeSeriesCollection {
                 })
                 .sum();
 
-            if series.inner.is_empty() {
-                break;
+            if !series.inner.is_empty() {
+                max_cpu = id;
             }
 
             result.push(series);
         }
+
+        result.truncate(max_cpu + 1);
 
         result
     }
