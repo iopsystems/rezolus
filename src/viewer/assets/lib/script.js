@@ -100,6 +100,31 @@ function syncZoom(plots) {
   return onZoom;
 }
 
+function throttle(func, limit) {
+  let inThrottle;
+  let lastFunc;
+  let lastRan;
+
+  return function() {
+    const context = this;
+    const args = arguments;
+
+    if (!inThrottle) {
+      func.apply(context, args);
+      lastRan = Date.now();
+      inThrottle = true;
+    } else {
+      clearTimeout(lastFunc);
+      lastFunc = setTimeout(function() {
+        if ((Date.now() - lastRan) >= limit) {
+          func.apply(context, args);
+          lastRan = Date.now();
+        }
+      }, limit - (Date.now() - lastRan));
+    }
+  };
+}
+
 function Plot() {
   let resizeObserver, plot;
 
@@ -119,6 +144,26 @@ function Plot() {
             cursor: {
               lock: true,
               focus: { prox: 16, },
+              bind: {
+                // throttling to reduce processing load and smooth mouse
+                // movement over data-dense area
+                mousemove: (self, targ, handler) => {
+                  const throttledHandler = throttle((e) => {
+                    handler(e);
+                  }, 35);
+
+                  return (e) => {
+                    throttledHandler(e);
+                  };
+                },
+                // For other events, use the default behavior
+                mousedown: (self, targ, handler) => (e) => handler(e),
+                mouseup: (self, targ, handler) => (e) => handler(e),
+                click: (self, targ, handler) => (e) => handler(e),
+                dblclick: (self, targ, handler) => (e) => handler(e),
+                mouseenter: (self, targ, handler) => (e) => handler(e),
+                mouseleave: (self, targ, handler) => (e) => handler(e),
+              },
               sync: cursorSyncOpts,
             },
             series: 
