@@ -125,6 +125,20 @@ function throttle(func, limit) {
   };
 }
 
+function formatTime() {
+  // Custom time formatter for 24-hour format
+  const timeFormat = uPlot.fmtDate("{HH}:{mm}:{ss}");
+  const dateFormat = uPlot.fmtDate("{YYYY}-{MM}-{DD}");
+
+  // Combined format with newline
+  return (self, splits, axisIdx, foundSpace, foundIncr) => {
+    return splits.map(split => {
+      const date = new Date(split * 1000); // convert seconds to milliseconds
+      return timeFormat(date) + "\n" + dateFormat(date);
+    });
+  };
+}
+
 function Plot() {
   let resizeObserver, plot;
 
@@ -190,7 +204,8 @@ function Plot() {
                 label: "Time",
                 stroke: () => "#ABABAB",
                 ticks: { stroke: () => "#333333", },
-                grid: { stroke: () => "#333333", }
+                grid: { stroke: () => "#333333", },
+                values: formatTime()
               },
               {
                 // Y axis options
@@ -371,6 +386,7 @@ function Plot() {
                 ticks: { stroke: () => "#333333", },
                 grid: { show: false },
                 scale: 'x',
+                values: formatTime()
               },
               {
                 // Y axis options
