@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
+use std::ops::*;
 
 #[derive(Default)]
 pub struct Tsdb {
@@ -361,7 +362,7 @@ pub struct TimeSeries {
 }
 
 impl TimeSeries {
-    pub fn divide_scalar(mut self, divisor: f64) -> Self {
+    fn divide_scalar(mut self, divisor: f64) -> Self {
         for value in self.inner.values_mut() {
             *value /= divisor;
         }
@@ -369,7 +370,7 @@ impl TimeSeries {
         self
     }
 
-    pub fn divide(mut self, other: &TimeSeries) -> Self {
+    fn divide(mut self, other: &TimeSeries) -> Self {
         // remove any times in this series that aren't in other
         let times: Vec<u64> = self.inner.keys().copied().collect();
         for time in times {
@@ -388,7 +389,7 @@ impl TimeSeries {
         self
     }
 
-    pub fn multiply_scalar(mut self, multiplier: f64) -> Self {
+    fn multiply_scalar(mut self, multiplier: f64) -> Self {
         for value in self.inner.values_mut() {
             *value *= multiplier;
         }
@@ -396,7 +397,7 @@ impl TimeSeries {
         self
     }
 
-    pub fn multiply(mut self, other: &TimeSeries) -> Self {
+    fn multiply(mut self, other: &TimeSeries) -> Self {
         // remove any times in this series that aren't in other
         let times: Vec<u64> = self.inner.keys().copied().collect();
         for time in times {
@@ -426,6 +427,34 @@ impl TimeSeries {
         }
 
         vec![times, values]
+    }
+}
+
+impl Div<TimeSeries> for TimeSeries {
+    type Output = TimeSeries;
+    fn div(self, other: TimeSeries) -> <Self as Div<TimeSeries>>::Output {
+        self.divide(&other)
+    }
+}
+
+impl Div<f64> for TimeSeries {
+    type Output = TimeSeries;
+    fn div(self, other: f64) -> <Self as Div<TimeSeries>>::Output {
+        self.divide_scalar(other)
+    }
+}
+
+impl Mul<TimeSeries> for TimeSeries {
+    type Output = TimeSeries;
+    fn mul(self, other: TimeSeries) -> <Self as Mul<TimeSeries>>::Output {
+        self.multiply(&other)
+    }
+}
+
+impl Mul<f64> for TimeSeries {
+    type Output = TimeSeries;
+    fn mul(self, other: f64) -> <Self as Mul<TimeSeries>>::Output {
+        self.multiply_scalar(other)
     }
 }
 

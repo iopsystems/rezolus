@@ -28,7 +28,7 @@ pub fn cpu_usage_heatmap(data: &Tsdb, labels: impl Into<Labels>) -> Vec<Vec<f64>
         .sum_by_cpu()
         .drain(..)
     {
-        let series = series.divide_scalar(1000000000.0).as_data();
+        let series = (series / 1000000000.0).as_data();
 
         if heatmap.is_empty() {
             heatmap.push(series[0].clone());
@@ -53,7 +53,7 @@ pub fn cpu_ipc_heatmap(data: &Tsdb) -> Vec<Vec<f64>> {
         .sum_by_cpu();
 
     for (c, i) in cycles.drain(..).zip(instructions.drain(..)) {
-        let series = i.divide(&c).as_data();
+        let series = (i / c).as_data();
 
         if heatmap.is_empty() {
             heatmap.push(series[0].clone());
@@ -82,7 +82,7 @@ pub fn cpu_frequency_heatmap(data: &Tsdb) -> Vec<Vec<f64>> {
         .sum_by_cpu();
 
     for ((a, m), t) in aperf.drain(..).zip(mperf.drain(..)).zip(tsc.drain(..)) {
-        let series = t.multiply(&a.divide(&m)).as_data();
+        let series = (t * a / m).as_data();
 
         if heatmap.is_empty() {
             heatmap.push(series[0].clone());
@@ -125,11 +125,7 @@ pub fn cpu_ipns_heatmap(data: &Tsdb) -> Vec<Vec<f64>> {
         .zip(cycles.drain(..))
         .zip(instructions.drain(..))
     {
-        let series = i
-            .divide(&c)
-            .multiply(&t.multiply(&a.divide(&m)))
-            .divide_scalar(1000000000.0)
-            .as_data();
+        let series = ((i / c) * (t * a / m) / 1000000000.0).as_data();
 
         if heatmap.is_empty() {
             heatmap.push(series[0].clone());

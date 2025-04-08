@@ -180,7 +180,7 @@ pub fn run(config: Config) {
         let opts = PlotOpts::line("Busy %", "busy-pct");
         let series = data
             .cpu_avg("cpu_usage", Labels::default())
-            .map(|v| v.divide_scalar(10000000.0));
+            .map(|v| (v / 10000000.0));
         cpu_overview.plot(opts.clone(), series.clone());
         utilization.plot(opts.clone(), series.clone());
 
@@ -200,7 +200,7 @@ pub fn run(config: Config) {
             utilization.plot(
                 opts,
                 data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
-                    .map(|v| v.divide_scalar(10000000.0)),
+                    .map(|v| (v / 10000000.0)),
             );
 
             utilization.push(Plot::heatmap(
@@ -222,7 +222,7 @@ pub fn run(config: Config) {
             data.sum("cpu_cycles", Labels::default()),
             data.sum("cpu_instructions", Labels::default()),
         ) {
-            let ipc = instructions.divide(&cycles);
+            let ipc = instructions / cycles;
             performance.plot(opts, Some(ipc));
         }
 
@@ -248,11 +248,7 @@ pub fn run(config: Config) {
             data.sum("cpu_tsc", Labels::default()),
             data.sum("cpu_cores", Labels::default()),
         ) {
-            let ipns = instructions
-                .divide(&cycles)
-                .multiply(&tsc.multiply(&aperf.divide(&mperf)))
-                .divide(&cores)
-                .divide_scalar(1000000000.0);
+            let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
             performance.plot(opts, Some(ipns));
         }
 
@@ -269,7 +265,7 @@ pub fn run(config: Config) {
             data.sum("cpu_tsc", Labels::default()),
             data.sum("cpu_cores", Labels::default()),
         ) {
-            let frequency = tsc.multiply(&aperf.divide(&mperf)).divide(&cores);
+            let frequency = tsc * aperf / mperf / cores;
             performance.plot(opts, Some(frequency));
         }
 
@@ -329,7 +325,7 @@ pub fn run(config: Config) {
         let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx");
         let series = data
             .sum("network_bytes", [("direction", "transmit")])
-            .map(|v| v.multiply_scalar(8.0));
+            .map(|v| v * 8.0);
 
         network_overview.plot(opts.clone(), series.clone());
         traffic.plot(opts, series);
@@ -337,7 +333,7 @@ pub fn run(config: Config) {
         let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx");
         let series = data
             .sum("network_bytes", [("direction", "receive")])
-            .map(|v| v.multiply_scalar(8.0));
+            .map(|v| v * 8.0);
 
         network_overview.plot(opts.clone(), series.clone());
         traffic.plot(opts, series);
