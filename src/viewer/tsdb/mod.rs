@@ -3,11 +3,12 @@ use arrow::array::UInt64Array;
 use arrow::datatypes::DataType;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
-use std::path::Path;
 use std::ops::*;
+use std::path::Path;
 
 #[derive(Default)]
 pub struct Tsdb {
@@ -159,33 +160,20 @@ impl Tsdb {
         None
     }
 
-    pub fn cpu_heatmap(&self, metric: &str, labels: impl Into<Labels>) -> Heatmap {
+    pub fn cpu_heatmap(&self, metric: &str, labels: impl Into<Labels>) -> Option<Heatmap> {
         let mut heatmap = Heatmap::default();
 
-        // if let Some(collection) = self.get(metric, &labels.into()) {
-        //     for series in collection.sum_by_cpu().iter() {
-
-        //     }
-        // }
-        for series in self
-            .get(metric, &labels.into())
-            .unwrap()
-            .sum_by_cpu()
-            .drain(..)
-        {
-            let series = series.divide_scalar(1000000000.0);
-            // let d = series.as_data();
-
-            heatmap.inner.push(series.clone());
-
-            // if heatmap.is_empty() {
-            //     heatmap.push(d[0].clone());
-            // }
-
-            // heatmap.push(d[1].clone());
+        if let Some(collection) = self.get(metric, &labels.into()) {
+            for (id, series) in collection.sum_by_cpu().drain(..).enumerate() {
+                heatmap.inner.insert(id, series);
+            }
         }
 
-        heatmap
+        if heatmap.inner.is_empty() {
+            None
+        } else {
+            Some(heatmap)
+        }
     }
 }
 
@@ -310,42 +298,6 @@ impl<const N: usize> From<[(&str, String); N]> for Labels {
     }
 }
 
-// impl<T> From<T> for Labels
-// where
-//     T: Into<BTreeMap<String, String>>,
-// {
-//     fn from(other: T) -> Self {
-//         Self {
-//             inner: other.into(),
-//         }
-//     }
-// }
-
-// impl<'a, T> From<T<'a>> for Labels
-// where
-//     T: IntoIterator<Item = (&'a str, &'a str)>,
-// {
-//     fn from(other: T<'a>) -> Self {
-
-//         let inner = other.into_iter()
-//             .map(|(k, v)| (k.to_string(), v.to_string()))
-//             .collect();
-
-//         Self { inner }
-//     }
-// }
-
-// impl<T> From<T> for Labels
-// where
-//     T: Into<BTreeMap<String, String>>,
-// {
-//     fn from(other: T) -> Self {
-//         let inner: BTreeMap<String, String> = other.into();
-
-//         Self { inner }
-//     }
-// }
-
 impl From<&mut dyn Iterator<Item = (&str, &str)>> for Labels {
     fn from(other: &mut dyn Iterator<Item = (&str, &str)>) -> Self {
         Self {
@@ -437,6 +389,13 @@ impl Div<TimeSeries> for TimeSeries {
     }
 }
 
+impl Div<&TimeSeries> for TimeSeries {
+    type Output = TimeSeries;
+    fn div(self, other: &TimeSeries) -> <Self as Div<TimeSeries>>::Output {
+        self.divide(other)
+    }
+}
+
 impl Div<f64> for TimeSeries {
     type Output = TimeSeries;
     fn div(self, other: f64) -> <Self as Div<TimeSeries>>::Output {
@@ -451,6 +410,13 @@ impl Mul<TimeSeries> for TimeSeries {
     }
 }
 
+impl Mul<&TimeSeries> for TimeSeries {
+    type Output = TimeSeries;
+    fn mul(self, other: &TimeSeries) -> <Self as Mul<TimeSeries>>::Output {
+        self.multiply(other)
+    }
+}
+
 impl Mul<f64> for TimeSeries {
     type Output = TimeSeries;
     fn mul(self, other: f64) -> <Self as Mul<TimeSeries>>::Output {
@@ -460,5 +426,113 @@ impl Mul<f64> for TimeSeries {
 
 #[derive(Default, Clone)]
 pub struct Heatmap {
-    inner: Vec<TimeSeries>,
+    inner: BTreeMap<usize, TimeSeries>,
+}
+
+impl Heatmap {
+    pub fn as_data(&self) -> Vec<Vec<f64>> {
+        let mut timestamps = BTreeSet::new();
+
+        for series in self.inner.values() {
+            for ts in series.inner.keys() {
+                timestamps.insert(ts);
+            }
+        }
+
+        let timestamps: Vec<u64> = timestamps.into_iter().copied().collect();
+
+        let mut data = Vec::new();
+
+        data.push(
+            timestamps
+                .iter()
+                .map(|v| *v as f64 / 1000000000.0)
+                .collect(),
+        );
+
+        for (id, series) in self.inner.iter() {
+            let id = id + 1;
+
+            data.resize_with(id + 1, Vec::new);
+
+            if let Some((start, mut prev)) = series.inner.first_key_value() {
+                for ts in &timestamps {
+                    if ts < start {
+                        data[id].push(0.0);
+                    } else if let Some(v) = series.inner.get(ts) {
+                        data[id].push(*v);
+                        prev = v;
+                    } else {
+                        data[id].push(*prev);
+                    }
+                }
+            }
+        }
+
+        data
+    }
+}
+
+impl Div<Heatmap> for Heatmap {
+    type Output = Heatmap;
+    fn div(self, other: Heatmap) -> <Self as Div<TimeSeries>>::Output {
+        let mut result = Heatmap::default();
+
+        let mut this = self.inner.clone();
+
+        while let Some((id, this)) = this.pop_first() {
+            if let Some(other) = other.inner.get(&id) {
+                result.inner.insert(id, this / other);
+            }
+        }
+
+        result
+    }
+}
+
+impl Mul<Heatmap> for Heatmap {
+    type Output = Heatmap;
+    fn mul(self, other: Heatmap) -> <Self as Div<TimeSeries>>::Output {
+        let mut result = Heatmap::default();
+
+        let mut this = self.inner.clone();
+
+        while let Some((id, this)) = this.pop_first() {
+            if let Some(other) = other.inner.get(&id) {
+                result.inner.insert(id, this * other);
+            }
+        }
+
+        result
+    }
+}
+
+impl Div<TimeSeries> for Heatmap {
+    type Output = Heatmap;
+    fn div(self, other: TimeSeries) -> <Self as Div<TimeSeries>>::Output {
+        let mut result = Heatmap::default();
+
+        let mut this = self.inner.clone();
+
+        while let Some((id, series)) = this.pop_first() {
+            result.inner.insert(id, series / other.clone());
+        }
+
+        result
+    }
+}
+
+impl Div<f64> for Heatmap {
+    type Output = Heatmap;
+    fn div(self, other: f64) -> <Self as Div<TimeSeries>>::Output {
+        let mut result = Heatmap::default();
+
+        let mut this = self.inner.clone();
+
+        while let Some((id, series)) = this.pop_first() {
+            result.inner.insert(id, series / other);
+        }
+
+        result
+    }
 }

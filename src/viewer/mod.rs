@@ -18,7 +18,6 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
 
-mod queries;
 mod tsdb;
 
 use tsdb::*;
@@ -184,13 +183,12 @@ pub fn run(config: Config) {
         cpu_overview.plot(opts.clone(), series.clone());
         utilization.plot(opts.clone(), series.clone());
 
-        let plot = Plot::heatmap(
-            "Busy %",
-            "busy-pct-heatmap",
-            queries::cpu_usage_heatmap(&data, Labels::default()),
-        );
-        cpu_overview.push(plot.clone());
-        utilization.push(plot.clone());
+        let opts = PlotOpts::heatmap("Busy %", "busy-pct-heatmap");
+        let series = data
+            .cpu_heatmap("cpu_usage", Labels::default())
+            .map(|v| v / 1000000000.0);
+        cpu_overview.heatmap(opts.clone(), series.clone());
+        utilization.heatmap(opts.clone(), series.clone());
 
         for state in &["User", "System", "SoftIRQ"] {
             let opts = PlotOpts::line(
@@ -203,11 +201,15 @@ pub fn run(config: Config) {
                     .map(|v| (v / 10000000.0)),
             );
 
-            utilization.push(Plot::heatmap(
+            let opts = PlotOpts::heatmap(
                 format!("{state} %"),
                 format!("{}-pct-heatmap", state.to_lowercase()),
-                queries::cpu_usage_heatmap(&data, [("state", state.to_lowercase())]),
-            ));
+            );
+            utilization.heatmap(
+                opts,
+                data.cpu_heatmap("cpu_usage", [("state", state.to_lowercase())])
+                    .map(|v| v / 1000000000.0),
+            );
         }
 
         overview.groups.push(cpu_overview);
@@ -226,11 +228,14 @@ pub fn run(config: Config) {
             performance.plot(opts, Some(ipc));
         }
 
-        performance.push(Plot::heatmap(
-            "Instructions per Cycle (IPC)",
-            "ipc-heatmap",
-            queries::cpu_ipc_heatmap(&data),
-        ));
+        let opts = PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap");
+        if let (Some(cycles), Some(instructions)) = (
+            data.cpu_heatmap("cpu_cycles", Labels::default()),
+            data.cpu_heatmap("cpu_instructions", Labels::default()),
+        ) {
+            let ipc = instructions / cycles;
+            performance.heatmap(opts, Some(ipc));
+        }
 
         let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns");
         if let (
@@ -252,11 +257,25 @@ pub fn run(config: Config) {
             performance.plot(opts, Some(ipns));
         }
 
-        performance.push(Plot::heatmap(
-            "Instructions per Nanosecond (IPNS)",
-            "ipns-heatmap",
-            queries::cpu_ipns_heatmap(&data),
-        ));
+        let opts = PlotOpts::heatmap("Instructions per Nanosecond (IPNS)", "ipns-heatmap");
+        if let (
+            Some(cycles),
+            Some(instructions),
+            Some(aperf),
+            Some(mperf),
+            Some(tsc),
+            Some(cores),
+        ) = (
+            data.cpu_heatmap("cpu_cycles", Labels::default()),
+            data.cpu_heatmap("cpu_instructions", Labels::default()),
+            data.cpu_heatmap("cpu_aperf", Labels::default()),
+            data.cpu_heatmap("cpu_mperf", Labels::default()),
+            data.cpu_heatmap("cpu_tsc", Labels::default()),
+            data.sum("cpu_cores", Labels::default()),
+        ) {
+            let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
+            performance.heatmap(opts, Some(ipns));
+        }
 
         let opts = PlotOpts::line("Frequency", "frequency");
         if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
@@ -269,11 +288,16 @@ pub fn run(config: Config) {
             performance.plot(opts, Some(frequency));
         }
 
-        performance.push(Plot::heatmap(
-            "Frequency",
-            "frequency-heatmap",
-            queries::cpu_frequency_heatmap(&data),
-        ));
+        let opts = PlotOpts::heatmap("Frequency", "frequency-heatmap");
+        if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
+            data.cpu_heatmap("cpu_aperf", Labels::default()),
+            data.cpu_heatmap("cpu_mperf", Labels::default()),
+            data.cpu_heatmap("cpu_tsc", Labels::default()),
+            data.sum("cpu_cores", Labels::default()),
+        ) {
+            let frequency = tsc * aperf / mperf / cores;
+            performance.heatmap(opts, Some(frequency));
+        }
 
         cpu.groups.push(performance);
 
@@ -284,35 +308,36 @@ pub fn run(config: Config) {
         let opts = PlotOpts::line("Total", "tlb-total");
         tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
 
-        let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", Labels::default());
+        let opts = PlotOpts::line("Total", "tlb-total-heatmap");
+        tlb.heatmap(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
 
-        if !(heatmap.is_empty()) {
-            tlb.plots.push(Plot::heatmap("Total", "tlb-total", heatmap));
-        }
+        for reason in &["Local MM Shootdown", "Remote Shootdown"] {
+            let label = reason;
+            let id = format!(
+                "tlb-{}",
+                reason
+                    .to_lowercase()
+                    .split(' ')
+                    .collect::<Vec<&str>>()
+                    .join("-")
+            );
+            let reason = reason
+                .to_lowercase()
+                .split(' ')
+                .collect::<Vec<&str>>()
+                .join("_");
 
-        for (label, id, reason) in &[
-            (
-                "Local MM Shootdown",
-                "tlb-local-mm-shootdown",
-                "local_mm_shootdown",
-            ),
-            ("Remote Send IPI", "tlb-remote-send-ipi", "remote_send_ipi"),
-            (
-                "Remote Shootdown",
-                "tlb-remote-shootdown",
-                "remote_shootdown",
-            ),
-            ("Task Switch", "tlb-task-switch", "task_switch"),
-        ] {
-            let opts = PlotOpts::line(*label, *id);
-            tlb.plot(opts, data.sum("cpu_tlb_flush", [("reason", *reason)]));
+            let opts = PlotOpts::line(*label, &id);
+            tlb.plot(
+                opts,
+                data.sum("cpu_tlb_flush", [("reason", reason.clone())]),
+            );
 
-            let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", [("reason", *reason)]);
-            tlb.plots.push(Plot::heatmap(
-                label.to_string(),
-                format!("{id}-heatmap"),
-                heatmap,
-            ));
+            let opts = PlotOpts::line(*label, format!("{id}-heatmap"));
+            tlb.heatmap(
+                opts,
+                data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
+            );
         }
 
         cpu.groups.push(tlb);
@@ -526,16 +551,17 @@ impl Group {
         }
     }
 
-    /// Adds a plot to a group if it is not empty
-    pub fn push(&mut self, plot: Plot) {
-        if !plot.data.is_empty() {
-            self.plots.push(plot);
-        }
-    }
-
     pub fn plot(&mut self, opts: PlotOpts, series: Option<TimeSeries>) {
         if let Some(data) = series.map(|v| v.as_data()) {
             self.plots.push(Plot { opts, data })
+        }
+    }
+
+    pub fn heatmap(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
+        if let Some(data) = series.map(|v| v.as_data()) {
+            if data.len() > 1 {
+                self.plots.push(Plot { opts, data })
+            }
         }
     }
 }
@@ -544,15 +570,6 @@ impl Group {
 pub struct Plot {
     data: Vec<Vec<f64>>,
     opts: PlotOpts,
-}
-
-impl Plot {
-    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, data: Vec<Vec<f64>>) -> Self {
-        Self {
-            data,
-            opts: PlotOpts::heatmap(title, id),
-        }
-    }
 }
 
 #[derive(Serialize, Clone)]
