@@ -161,7 +161,7 @@ function Plot() {
           uPlotOpts = {
             ...attrs.opts,
             cursor: {
-              lock: true,
+              lock: false,
               focus: { prox: 16, },
               bind: {
                 // throttling to reduce processing load and smooth mouse
@@ -378,7 +378,7 @@ function Plot() {
             cursor: {
               points: { show: false },
               drag: { x: true, y: false },
-              lock: true,
+              lock: false,
               focus: { prox: 16, },
               sync: cursorSyncOpts,
             },
