@@ -174,8 +174,8 @@ pub fn run(config: Config) {
 
         let opts = PlotOpts::line("Busy %", "busy-pct");
         let series = data
-            .sum("cpu_usage", Labels::default())
-            .map(|v| v.divide_scalar(1000000000.0));
+            .cpu_avg("cpu_usage", Labels::default())
+            .map(|v| v.divide_scalar(10000000.0));
         cpu_overview.plot(opts.clone(), series.clone());
         utilization.plot(opts.clone(), series.clone());
 
@@ -195,8 +195,8 @@ pub fn run(config: Config) {
             let opts = PlotOpts::line(*label, *id);
             utilization.plot(
                 opts,
-                data.sum("cpu_usage", [("state", *state)])
-                    .map(|v| v.divide_scalar(1000000000.0)),
+                data.cpu_avg("cpu_usage", [("state", *state)])
+                    .map(|v| v.divide_scalar(10000000.0)),
             );
 
             utilization.push(Plot::heatmap(

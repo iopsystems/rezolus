@@ -160,8 +160,8 @@ impl Tsdb {
         None
     }
 
-    pub fn cpu_heatmap(&self, metric: &str, labels: impl Into<Labels>) -> Vec<TimeSeries> {
-        let mut heatmap = Vec::new();
+    pub fn cpu_heatmap(&self, metric: &str, labels: impl Into<Labels>) -> Heatmap {
+        let mut heatmap = Heatmap::default();
 
         // if let Some(collection) = self.get(metric, &labels.into()) {
         //     for series in collection.sum_by_cpu().iter() {
@@ -177,7 +177,7 @@ impl Tsdb {
             let series = series.divide_scalar(1000000000.0);
             // let d = series.as_data();
 
-            heatmap.push(series.clone());
+            heatmap.inner.push(series.clone());
 
             // if heatmap.is_empty() {
             //     heatmap.push(d[0].clone());
@@ -370,6 +370,6 @@ impl TimeSeries {
 }
 
 #[derive(Default, Clone)]
-pub struct HeatMap {
-    inner: Vec<BTreeMap<u64, f64>>,
+pub struct Heatmap {
+    inner: Vec<TimeSeries>,
 }
