@@ -9,6 +9,8 @@ pub fn get_sum(data: &Tsdb, metric: &str, labels: impl Into<Labels>) -> Vec<Vec<
     }
 }
 
+// pub fn sum(data: &Tsdb, metric: &str, )
+
 // get a cpu heatmap series for a metric `sum by(id) (metric{labels})`
 pub fn get_cpu_heatmap(data: &Tsdb, metric: &str, labels: impl Into<Labels>) -> Vec<Vec<f64>> {
     let mut heatmap = Vec::new();
@@ -28,15 +30,15 @@ pub fn get_cpu_heatmap(data: &Tsdb, metric: &str, labels: impl Into<Labels>) -> 
     heatmap
 }
 
-pub fn cpu_usage_percent(data: &Tsdb, labels: impl Into<Labels>) -> Vec<Vec<f64>> {
-    let cpu_cores = data.get("cpu_cores", &Labels::default()).unwrap().sum();
+// pub fn cpu_usage_percent(data: &Tsdb, labels: impl Into<Labels>) -> Option<TimeSeries> {
+//     let cpu_cores = data.get("cpu_cores", &Labels::default()).unwrap().sum();
 
-    let mut cpu_usage = data.get("cpu_usage", &labels.into()).unwrap().sum();
-    cpu_usage.divide_scalar(1000000000.0);
-    cpu_usage.divide(&cpu_cores);
+//     let mut cpu_usage = data.get("cpu_usage", &labels.into()).unwrap().sum().divide_scalar(1000000000.0);
+//     // cpu_usage.divide_scalar(1000000000.0);
+//     cpu_usage.divide(&cpu_cores);
 
-    cpu_usage.as_data()
-}
+//     cpu_usage
+// }
 
 pub fn cpu_usage_heatmap(data: &Tsdb, labels: impl Into<Labels>) -> Vec<Vec<f64>> {
     let mut heatmap = Vec::new();
@@ -45,9 +47,9 @@ pub fn cpu_usage_heatmap(data: &Tsdb, labels: impl Into<Labels>) -> Vec<Vec<f64>
         .get("cpu_usage", &labels.into())
         .unwrap()
         .sum_by_cpu()
-        .iter_mut()
+        .drain(..)
     {
-        series.divide_scalar(1000000000.0);
+        let series = series.divide_scalar(1000000000.0);
         let d = series.as_data();
 
         if heatmap.is_empty() {

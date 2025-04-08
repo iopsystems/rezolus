@@ -142,6 +142,52 @@ impl Tsdb {
             None
         }
     }
+
+    pub fn sum(&self, metric: &str, labels: impl Into<Labels>) -> Option<TimeSeries> {
+        self.get(metric, &labels.into())
+            .map(|collection| collection.sum())
+    }
+
+    pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<TimeSeries> {
+        if let Some(cores) = self.sum("cpu_cores", Labels::default()) {
+            if let Some(collection) = self.get(metric, &labels.into()) {
+                let mut sum = collection.sum();
+                sum.divide(&cores);
+                return Some(sum);
+            }
+        }
+
+        None
+    }
+
+    pub fn cpu_heatmap(&self, metric: &str, labels: impl Into<Labels>) -> Vec<TimeSeries> {
+        let mut heatmap = Vec::new();
+
+        // if let Some(collection) = self.get(metric, &labels.into()) {
+        //     for series in collection.sum_by_cpu().iter() {
+
+        //     }
+        // }
+        for series in self
+            .get(metric, &labels.into())
+            .unwrap()
+            .sum_by_cpu()
+            .drain(..)
+        {
+            let series = series.divide_scalar(1000000000.0);
+            // let d = series.as_data();
+
+            heatmap.push(series.clone());
+
+            // if heatmap.is_empty() {
+            //     heatmap.push(d[0].clone());
+            // }
+
+            // heatmap.push(d[1].clone());
+        }
+
+        heatmap
+    }
 }
 
 #[derive(Default)]
@@ -224,14 +270,30 @@ impl Labels {
     }
 }
 
+// impl<T> From<T> for Labels
+// where
+//     T: Into<BTreeMap<String, String>>,
+// {
+//     fn from(other: T) -> Self {
+//         Self {
+//             inner: other.into(),
+//         }
+//     }
+// }
+
 impl<T> From<T> for Labels
 where
-    T: Into<BTreeMap<String, String>>,
+    T: Into<BTreeMap<&'static str, &'static str>>,
 {
     fn from(other: T) -> Self {
-        Self {
-            inner: other.into(),
-        }
+        let labels: BTreeMap<&'static str, &'static str> = other.into();
+
+        let inner = labels
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+
+        Self { inner }
     }
 }
 
@@ -243,10 +305,12 @@ pub struct TimeSeries {
 }
 
 impl TimeSeries {
-    pub fn divide_scalar(&mut self, divisor: f64) {
+    pub fn divide_scalar(mut self, divisor: f64) -> Self {
         for value in self.inner.values_mut() {
             *value /= divisor;
         }
+
+        self
     }
 
     pub fn divide(&mut self, other: &TimeSeries) {
@@ -266,10 +330,12 @@ impl TimeSeries {
         }
     }
 
-    pub fn multiply_scalar(&mut self, multiplier: f64) {
+    pub fn multiply_scalar(mut self, multiplier: f64) -> Self {
         for value in self.inner.values_mut() {
             *value *= multiplier;
         }
+
+        self
     }
 
     pub fn multiply(&mut self, other: &TimeSeries) {
@@ -301,4 +367,9 @@ impl TimeSeries {
 
         vec![times, values]
     }
+}
+
+#[derive(Default, Clone)]
+pub struct HeatMap {
+    inner: Vec<BTreeMap<u64, f64>>,
 }

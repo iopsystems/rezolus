@@ -172,46 +172,37 @@ pub fn run(config: Config) {
         let mut cpu_overview = Group::new("CPU", "cpu");
         let mut utilization = Group::new("Utilization", "utilization");
 
-        let cpu_usage = queries::cpu_usage_percent(&data, Labels::default());
-        cpu_overview
-            .plots
-            .push(Plot::line("Busy %", "busy-pct", cpu_usage.clone()));
-        utilization
-            .plots
-            .push(Plot::line("Busy %", "busy-pct", cpu_usage));
+        let opts = PlotOpts::line("Busy %", "busy-pct");
+        let series = data
+            .sum("cpu_usage", Labels::default())
+            .map(|v| v.divide_scalar(1000000000.0));
+        cpu_overview.plot(opts.clone(), series.clone());
+        utilization.plot(opts.clone(), series.clone());
 
-        let cpu_usage = queries::cpu_usage_heatmap(&data, Labels::default());
-        cpu_overview.plots.push(Plot::heatmap(
+        let plot = Plot::heatmap(
             "Busy %",
             "busy-pct-heatmap",
-            cpu_usage.clone(),
-        ));
-        utilization
-            .plots
-            .push(Plot::heatmap("Busy %", "busy-pct-heatmap", cpu_usage));
+            queries::cpu_usage_heatmap(&data, Labels::default()),
+        );
+        cpu_overview.push(plot.clone());
+        utilization.push(plot.clone());
 
         for (label, id, state) in &[
             ("User %", "user-pct", "user"),
             ("System %", "system-pct", "system"),
             ("Soft IRQ %", "softirq-pct", "softirq"),
         ] {
-            let cpu_usage =
-                queries::cpu_usage_percent(&data, [("state".to_string(), state.to_string())]);
+            let opts = PlotOpts::line(*label, *id);
+            utilization.plot(
+                opts,
+                data.sum("cpu_usage", [("state", *state)])
+                    .map(|v| v.divide_scalar(1000000000.0)),
+            );
 
-            if cpu_usage.is_empty() {
-                continue;
-            }
-
-            utilization
-                .plots
-                .push(Plot::line(label.to_string(), id.to_string(), cpu_usage));
-
-            let cpu_usage =
-                queries::cpu_usage_heatmap(&data, [("state".to_string(), state.to_string())]);
-            utilization.plots.push(Plot::heatmap(
-                label.to_string(),
+            utilization.push(Plot::heatmap(
+                *label,
                 format!("{id}-heatmap"),
-                cpu_usage,
+                queries::cpu_usage_heatmap(&data, [("state", *state)]),
             ));
         }
 
@@ -222,16 +213,19 @@ pub fn run(config: Config) {
 
         let mut performance = Group::new("Performance", "performance");
 
-        let ipc = queries::cpu_ipc(&data);
-        performance
-            .plots
-            .push(Plot::line("Instructions per Cycle (IPC)", "ipc", ipc));
+        let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc");
+        if let (Some(cycles), Some(mut instructions)) = (
+            data.sum("cpu_cycles", Labels::default()),
+            data.sum("cpu_instructions", Labels::default()),
+        ) {
+            instructions.divide(&cycles);
+            performance.plot(opts, Some(instructions));
+        }
 
-        let ipc = queries::cpu_ipc_heatmap(&data);
-        performance.plots.push(Plot::heatmap(
+        performance.push(Plot::heatmap(
             "Instructions per Cycle (IPC)",
             "ipc-heatmap",
-            ipc,
+            queries::cpu_ipc_heatmap(&data),
         ));
 
         cpu.groups.push(performance);
@@ -240,11 +234,10 @@ pub fn run(config: Config) {
 
         let mut tlb = Group::new("TLB", "tlb");
 
-        let series = queries::get_sum(&data, "cpu_tlb_flush", Labels::default());
+        let opts = PlotOpts::line("Total", "tlb-total");
+        tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
 
-        if !(series.is_empty()) {
-            tlb.plots.push(Plot::line("Total", "tlb-total", series));
-        }
+        // tlb.push(Plot::line("Total", "tlb-total", queries::get_sum(&data, "cpu_tlb_flush", Labels::default())));
 
         let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", Labels::default());
 
@@ -266,24 +259,10 @@ pub fn run(config: Config) {
             ),
             ("Task Switch", "tlb-task-switch", "task_switch"),
         ] {
-            let series = queries::get_sum(
-                &data,
-                "cpu_tlb_flush",
-                [("reason".to_string(), reason.to_string())],
-            );
+            let opts = PlotOpts::line(*label, *id);
+            tlb.plot(opts, data.sum("cpu_tlb_flush", [("reason", *reason)]));
 
-            if series.is_empty() {
-                continue;
-            }
-
-            tlb.plots
-                .push(Plot::line(label.to_string(), id.to_string(), series));
-
-            let heatmap = queries::get_cpu_heatmap(
-                &data,
-                "cpu_tlb_flush",
-                [("reason".to_string(), reason.to_string())],
-            );
+            let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", [("reason", *reason)]);
             tlb.plots.push(Plot::heatmap(
                 label.to_string(),
                 format!("{id}-heatmap"),
@@ -298,87 +277,33 @@ pub fn run(config: Config) {
         let mut network_overview = Group::new("Network", "network");
         let mut traffic = Group::new("Traffic", "traffic");
 
-        let mut network_data = Vec::new();
+        let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx");
+        let series = data
+            .sum("network_bytes", [("direction", "transmit")])
+            .map(|v| v.multiply_scalar(8.0));
 
-        let mut network_tx = data
-            .get(
-                "network_bytes",
-                &Labels {
-                    inner: [("direction".to_string(), "transmit".to_string())].into(),
-                },
-            )
-            .unwrap()
-            .sum();
-        network_tx.multiply_scalar(8.0);
+        network_overview.plot(opts.clone(), series.clone());
+        traffic.plot(opts, series);
 
-        let d = network_tx.as_data();
+        let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx");
+        let series = data
+            .sum("network_bytes", [("direction", "receive")])
+            .map(|v| v.multiply_scalar(8.0));
 
-        network_data.push(d[0].clone());
-        network_data.push(d[1].clone());
+        network_overview.plot(opts.clone(), series.clone());
+        traffic.plot(opts, series);
 
-        let mut network_rx = data
-            .get(
-                "network_bytes",
-                &Labels {
-                    inner: [("direction".to_string(), "receive".to_string())].into(),
-                },
-            )
-            .unwrap()
-            .sum();
-        network_rx.multiply_scalar(8.0);
+        let opts = PlotOpts::line("Packets Transmit", "packets-tx");
+        let series = data.sum("network_packets", [("direction", "transmit")]);
 
-        let d = network_rx.as_data();
+        network_overview.plot(opts.clone(), series.clone());
+        traffic.plot(opts, series);
 
-        network_data.push(d[0].clone());
+        let opts = PlotOpts::line("Packets Receive", "packets-rx");
+        let series = data.sum("network_packets", [("direction", "receive")]);
 
-        network_overview.plots.push(Plot::line(
-            "Bandwidth",
-            "network-bandwidth",
-            network_data.clone(),
-        ));
-        traffic
-            .plots
-            .push(Plot::line("Bandwidth", "network-bandwidth", network_data));
-
-        let mut network_data = Vec::new();
-
-        let network_tx = data
-            .get(
-                "network_packets",
-                &Labels {
-                    inner: [("direction".to_string(), "transmit".to_string())].into(),
-                },
-            )
-            .unwrap()
-            .sum();
-
-        let d = network_tx.as_data();
-
-        network_data.push(d[0].clone());
-        network_data.push(d[1].clone());
-
-        let network_rx = data
-            .get(
-                "network_packets",
-                &Labels {
-                    inner: [("direction".to_string(), "receive".to_string())].into(),
-                },
-            )
-            .unwrap()
-            .sum();
-
-        let d = network_rx.as_data();
-
-        network_data.push(d[0].clone());
-
-        network_overview.plots.push(Plot::line(
-            "Packets",
-            "network-packets",
-            network_data.clone(),
-        ));
-        traffic
-            .plots
-            .push(Plot::line("Packets", "network-packets", network_data));
+        network_overview.plot(opts.clone(), series.clone());
+        traffic.plot(opts, series);
 
         overview.groups.push(network_overview);
         network.groups.push(traffic);
@@ -528,22 +453,28 @@ impl Group {
             plots: Vec::new(),
         }
     }
+
+    /// Adds a plot to a group if it is not empty
+    pub fn push(&mut self, plot: Plot) {
+        if !plot.data.is_empty() {
+            self.plots.push(plot);
+        }
+    }
+
+    pub fn plot(&mut self, opts: PlotOpts, series: Option<TimeSeries>) {
+        if let Some(data) = series.map(|v| v.as_data()) {
+            self.plots.push(Plot { opts, data })
+        }
+    }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Plot {
     data: Vec<Vec<f64>>,
     opts: PlotOpts,
 }
 
 impl Plot {
-    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U, data: Vec<Vec<f64>>) -> Self {
-        Self {
-            data,
-            opts: PlotOpts::line(title, id),
-        }
-    }
-
     pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, data: Vec<Vec<f64>>) -> Self {
         Self {
             data,
@@ -552,7 +483,7 @@ impl Plot {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct PlotOpts {
     title: String,
     id: String,
