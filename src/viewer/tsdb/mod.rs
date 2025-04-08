@@ -268,6 +268,47 @@ impl Labels {
     }
 }
 
+impl From<&[(&str, &str)]> for Labels {
+    fn from(other: &[(&str, &str)]) -> Self {
+        Labels {
+            inner: other
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl<const N: usize> From<[(&str, &str); N]> for Labels {
+    fn from(other: [(&str, &str); N]) -> Self {
+        Labels {
+            inner: other
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+impl<const N: usize> From<[(String, String); N]> for Labels {
+    fn from(other: [(String, String); N]) -> Self {
+        Labels {
+            inner: other.iter().cloned().collect(),
+        }
+    }
+}
+
+impl<const N: usize> From<[(&str, String); N]> for Labels {
+    fn from(other: [(&str, String); N]) -> Self {
+        Labels {
+            inner: other
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        }
+    }
+}
+
 // impl<T> From<T> for Labels
 // where
 //     T: Into<BTreeMap<String, String>>,
@@ -279,19 +320,36 @@ impl Labels {
 //     }
 // }
 
-impl<T> From<T> for Labels
-where
-    T: Into<BTreeMap<&'static str, &'static str>>,
-{
-    fn from(other: T) -> Self {
-        let labels: BTreeMap<&'static str, &'static str> = other.into();
+// impl<'a, T> From<T<'a>> for Labels
+// where
+//     T: IntoIterator<Item = (&'a str, &'a str)>,
+// {
+//     fn from(other: T<'a>) -> Self {
 
-        let inner = labels
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+//         let inner = other.into_iter()
+//             .map(|(k, v)| (k.to_string(), v.to_string()))
+//             .collect();
 
-        Self { inner }
+//         Self { inner }
+//     }
+// }
+
+// impl<T> From<T> for Labels
+// where
+//     T: Into<BTreeMap<String, String>>,
+// {
+//     fn from(other: T) -> Self {
+//         let inner: BTreeMap<String, String> = other.into();
+
+//         Self { inner }
+//     }
+// }
+
+impl From<&mut dyn Iterator<Item = (&str, &str)>> for Labels {
+    fn from(other: &mut dyn Iterator<Item = (&str, &str)>) -> Self {
+        Self {
+            inner: other.map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
     }
 }
 

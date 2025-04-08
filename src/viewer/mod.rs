@@ -158,12 +158,17 @@ pub fn run(config: Config) {
                 name: "Network".to_string(),
                 route: "/network".to_string(),
             },
+            Section {
+                name: "Syscall".to_string(),
+                route: "/syscall".to_string(),
+            },
         ];
 
         // define views for each section
         let mut overview = View::new(sections.clone());
         let mut cpu = View::new(sections.clone());
         let mut network = View::new(sections.clone());
+        let mut syscall = View::new(sections.clone());
 
         // CPU
 
@@ -187,22 +192,21 @@ pub fn run(config: Config) {
         cpu_overview.push(plot.clone());
         utilization.push(plot.clone());
 
-        for (label, id, state) in &[
-            ("User %", "user-pct", "user"),
-            ("System %", "system-pct", "system"),
-            ("Soft IRQ %", "softirq-pct", "softirq"),
-        ] {
-            let opts = PlotOpts::line(*label, *id);
+        for state in &["User", "System", "SoftIRQ"] {
+            let opts = PlotOpts::line(
+                format!("{state} %"),
+                format!("{}-pct", state.to_lowercase()),
+            );
             utilization.plot(
                 opts,
-                data.cpu_avg("cpu_usage", [("state", *state)])
+                data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
                     .map(|v| v.divide_scalar(10000000.0)),
             );
 
             utilization.push(Plot::heatmap(
-                *label,
-                format!("{id}-heatmap"),
-                queries::cpu_usage_heatmap(&data, [("state", *state)]),
+                format!("{state} %"),
+                format!("{}-pct-heatmap", state.to_lowercase()),
+                queries::cpu_usage_heatmap(&data, [("state", state.to_lowercase())]),
             ));
         }
 
@@ -226,6 +230,53 @@ pub fn run(config: Config) {
             "Instructions per Cycle (IPC)",
             "ipc-heatmap",
             queries::cpu_ipc_heatmap(&data),
+        ));
+
+        let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns");
+        if let (
+            Some(cycles),
+            Some(instructions),
+            Some(aperf),
+            Some(mperf),
+            Some(tsc),
+            Some(cores),
+        ) = (
+            data.sum("cpu_cycles", Labels::default()),
+            data.sum("cpu_instructions", Labels::default()),
+            data.sum("cpu_aperf", Labels::default()),
+            data.sum("cpu_mperf", Labels::default()),
+            data.sum("cpu_tsc", Labels::default()),
+            data.sum("cpu_cores", Labels::default()),
+        ) {
+            let ipns = instructions
+                .divide(&cycles)
+                .multiply(&tsc.multiply(&aperf.divide(&mperf)))
+                .divide(&cores)
+                .divide_scalar(1000000000.0);
+            performance.plot(opts, Some(ipns));
+        }
+
+        performance.push(Plot::heatmap(
+            "Instructions per Nanosecond (IPNS)",
+            "ipns-heatmap",
+            queries::cpu_ipns_heatmap(&data),
+        ));
+
+        let opts = PlotOpts::line("Frequency", "frequency");
+        if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
+            data.sum("cpu_aperf", Labels::default()),
+            data.sum("cpu_mperf", Labels::default()),
+            data.sum("cpu_tsc", Labels::default()),
+            data.sum("cpu_cores", Labels::default()),
+        ) {
+            let frequency = tsc.multiply(&aperf.divide(&mperf)).divide(&cores);
+            performance.plot(opts, Some(frequency));
+        }
+
+        performance.push(Plot::heatmap(
+            "Frequency",
+            "frequency-heatmap",
+            queries::cpu_frequency_heatmap(&data),
         ));
 
         cpu.groups.push(performance);
@@ -306,6 +357,29 @@ pub fn run(config: Config) {
         overview.groups.push(network_overview);
         network.groups.push(traffic);
 
+        // Syscall Overview
+
+        let mut syscall_overview = Group::new("Syscall", "syscall");
+        let mut syscall_group = Group::new("Syscall", "syscall");
+
+        let opts = PlotOpts::line("Total", "syscall-total");
+
+        let series = data.sum("syscall", Labels::default());
+        syscall_overview.plot(opts.clone(), series.clone());
+        syscall_group.plot(opts, series);
+
+        for op in &[
+            "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
+        ] {
+            let series = data.sum("syscall", [("op", op.to_lowercase())]);
+            syscall_group.plot(PlotOpts::line(*op, format!("syscall-{op}")), series);
+        }
+
+        overview.groups.push(syscall_overview);
+        syscall.groups.push(syscall_group);
+
+        // Finalize
+
         state.sections.insert(
             "overview.json".to_string(),
             serde_json::to_string(&overview).unwrap(),
@@ -316,6 +390,10 @@ pub fn run(config: Config) {
         state.sections.insert(
             "network.json".to_string(),
             serde_json::to_string(&network).unwrap(),
+        );
+        state.sections.insert(
+            "syscall.json".to_string(),
+            serde_json::to_string(&syscall).unwrap(),
         );
     }
 
