@@ -151,9 +151,7 @@ impl Tsdb {
     pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<TimeSeries> {
         if let Some(cores) = self.sum("cpu_cores", Labels::default()) {
             if let Some(collection) = self.get(metric, &labels.into()) {
-                let mut sum = collection.sum();
-                sum.divide(&cores);
-                return Some(sum);
+                return Some(collection.sum().divide(&cores));
             }
         }
 
@@ -313,7 +311,7 @@ impl TimeSeries {
         self
     }
 
-    pub fn divide(&mut self, other: &TimeSeries) {
+    pub fn divide(mut self, other: &TimeSeries) -> Self {
         // remove any times in this series that aren't in other
         let times: Vec<u64> = self.inner.keys().copied().collect();
         for time in times {
@@ -328,6 +326,8 @@ impl TimeSeries {
                 *v /= divisor;
             }
         }
+
+        self
     }
 
     pub fn multiply_scalar(mut self, multiplier: f64) -> Self {
@@ -338,7 +338,7 @@ impl TimeSeries {
         self
     }
 
-    pub fn multiply(&mut self, other: &TimeSeries) {
+    pub fn multiply(mut self, other: &TimeSeries) -> Self {
         // remove any times in this series that aren't in other
         let times: Vec<u64> = self.inner.keys().copied().collect();
         for time in times {
@@ -353,6 +353,8 @@ impl TimeSeries {
                 *v *= multiplier;
             }
         }
+
+        self
     }
 
     pub fn as_data(&self) -> Vec<Vec<f64>> {

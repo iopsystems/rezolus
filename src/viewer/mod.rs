@@ -214,12 +214,12 @@ pub fn run(config: Config) {
         let mut performance = Group::new("Performance", "performance");
 
         let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc");
-        if let (Some(cycles), Some(mut instructions)) = (
+        if let (Some(cycles), Some(instructions)) = (
             data.sum("cpu_cycles", Labels::default()),
             data.sum("cpu_instructions", Labels::default()),
         ) {
-            instructions.divide(&cycles);
-            performance.plot(opts, Some(instructions));
+            let ipc = instructions.divide(&cycles);
+            performance.plot(opts, Some(ipc));
         }
 
         performance.push(Plot::heatmap(
@@ -236,8 +236,6 @@ pub fn run(config: Config) {
 
         let opts = PlotOpts::line("Total", "tlb-total");
         tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
-
-        // tlb.push(Plot::line("Total", "tlb-total", queries::get_sum(&data, "cpu_tlb_flush", Labels::default())));
 
         let heatmap = queries::get_cpu_heatmap(&data, "cpu_tlb_flush", Labels::default());
 
