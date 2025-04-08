@@ -161,6 +161,10 @@ pub fn run(config: Config) {
                 name: "Syscall".to_string(),
                 route: "/syscall".to_string(),
             },
+            Section {
+                name: "BlockIO".to_string(),
+                route: "/blockio".to_string(),
+            },
         ];
 
         // define views for each section
@@ -168,6 +172,7 @@ pub fn run(config: Config) {
         let mut cpu = View::new(sections.clone());
         let mut network = View::new(sections.clone());
         let mut syscall = View::new(sections.clone());
+        let mut blockio = View::new(sections.clone());
 
         // CPU
 
@@ -311,7 +316,7 @@ pub fn run(config: Config) {
         let opts = PlotOpts::line("Total", "tlb-total-heatmap");
         tlb.heatmap(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
 
-        for reason in &["Local MM Shootdown", "Remote Shootdown"] {
+        for reason in &["Local MM Shootdown", "Remote Send IPI", "Remote Shootdown", "Task Switch"] {
             let label = reason;
             let id = format!(
                 "tlb-{}",
@@ -399,6 +404,36 @@ pub fn run(config: Config) {
         overview.groups.push(syscall_overview);
         syscall.groups.push(syscall_group);
 
+        let mut blockio_overview = Group::new("BlockIO", "blockio");
+        let mut blockio_throughput = Group::new("Throughput", "throughput");
+        let mut blockio_iops = Group::new("IOPS", "iops");
+
+        let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read");
+        blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "read")]));
+
+        let opts = PlotOpts::line("Write Throughput", "blockio-throughput-write");
+        blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "write")]));
+
+        let opts = PlotOpts::line("Read IOPS", "blockio-iops-read");
+        blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "read")]));
+
+        let opts = PlotOpts::line("Write IOPS", "blockio-iops-write");
+        blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "write")]));
+
+        overview.groups.push(blockio_overview);
+
+
+        for op in &["Read", "Write", "Flush", "Discard"] {
+            let opts = PlotOpts::line(*op, format!("throughput-{}", op.to_lowercase()));
+            blockio_throughput.plot(opts, data.sum("blockio_bytes", [("op", op.to_lowercase())]));
+
+            let opts = PlotOpts::line(*op, format!("iops-{}", op.to_lowercase()));
+            blockio_iops.plot(opts, data.sum("blockio_operations", [("op", op.to_lowercase())]));
+        }
+
+        blockio.groups.push(blockio_throughput);
+        blockio.groups.push(blockio_iops);
+
         // Finalize
 
         state.sections.insert(
@@ -415,6 +450,10 @@ pub fn run(config: Config) {
         state.sections.insert(
             "syscall.json".to_string(),
             serde_json::to_string(&syscall).unwrap(),
+        );
+        state.sections.insert(
+            "blockio.json".to_string(),
+            serde_json::to_string(&blockio).unwrap(),
         );
     }
 
