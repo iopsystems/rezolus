@@ -11,73 +11,26 @@
 //! These stats can be used to calculate the base frequency and running
 //! frequency in post-processing or in an observability stack.
 
+/// This sampler is used to measure CPU L3 cache access and misses. It does this
+/// by using two uncore PMUs for each L3 cache domain.
+///
+/// This requires that we identify each L3 cache domain but also identify the
+/// correct raw perf events to use which are processor dependent.
+
 const NAME: &str = "cpu_frequency";
-
-mod bpf {
-    include!(concat!(env!("OUT_DIR"), "/cpu_frequency.bpf.rs"));
-}
-
-use bpf::*;
-use perf_event::events::x86::MsrId;
 
 use crate::agent::*;
 
-use std::sync::Arc;
+use perf_event::ReadFormat;
+use perf_event::events::x86::{Msr, MsrId};
+use tokio::sync::Mutex;
+use walkdir::WalkDir;
+
+use std::collections::HashSet;
 
 mod stats;
 
 use stats::*;
-
-unsafe impl plain::Plain for bpf::types::cgroup_info {}
-
-fn handle_event(data: &[u8]) -> i32 {
-    let mut cgroup_info = bpf::types::cgroup_info::default();
-
-    if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
-        let name = std::str::from_utf8(&cgroup_info.name)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let pname = std::str::from_utf8(&cgroup_info.pname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let gpname = std::str::from_utf8(&cgroup_info.gpname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let name = if !gpname.is_empty() {
-            if cgroup_info.level > 3 {
-                format!(".../{gpname}/{pname}/{name}")
-            } else {
-                format!("/{gpname}/{pname}/{name}")
-            }
-        } else if !pname.is_empty() {
-            format!("/{pname}/{name}")
-        } else if !name.is_empty() {
-            format!("/{name}")
-        } else {
-            "".to_string()
-        };
-
-        let id = cgroup_info.id;
-
-        set_name(id as usize, name)
-    }
-
-    0
-}
-
-fn set_name(id: usize, name: String) {
-    if !name.is_empty() {
-        CGROUP_CPU_APERF.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_MPERF.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_TSC.insert_metadata(id, "name".to_string(), name);
-    }
-}
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -85,41 +38,231 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    set_name(1, "/".to_string());
+    let inner = FrequencyInner::new()?;
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .perf_event("aperf", PerfEvent::msr(MsrId::APERF)?, &CPU_APERF)
-        .perf_event("mperf", PerfEvent::msr(MsrId::MPERF)?, &CPU_MPERF)
-        .perf_event("tsc", PerfEvent::msr(MsrId::TSC)?, &CPU_TSC)
-        .packed_counters("cgroup_aperf", &CGROUP_CPU_APERF)
-        .packed_counters("cgroup_mperf", &CGROUP_CPU_MPERF)
-        .packed_counters("cgroup_tsc", &CGROUP_CPU_TSC)
-        .ringbuf_handler("cgroup_info", handle_event)
-        .build()?;
-
-    Ok(Some(Box::new(bpf)))
+    Ok(Some(Box::new(Frequency {
+        inner: inner.into(),
+    })))
 }
 
-impl SkelExt for ModSkel<'_> {
-    fn map(&self, name: &str) -> &libbpf_rs::Map {
-        match name {
-            "cgroup_aperf" => &self.maps.cgroup_aperf,
-            "cgroup_info" => &self.maps.cgroup_info,
-            "cgroup_mperf" => &self.maps.cgroup_mperf,
-            "cgroup_tsc" => &self.maps.cgroup_tsc,
-            "aperf" => &self.maps.aperf,
-            "mperf" => &self.maps.mperf,
-            "tsc" => &self.maps.tsc,
-            _ => unimplemented!(),
+struct Frequency {
+    inner: Mutex<FrequencyInner>,
+}
+
+#[async_trait]
+impl Sampler for Frequency {
+    async fn refresh(&self) {
+        let mut inner = self.inner.lock().await;
+
+        let _ = inner.refresh().await;
+    }
+}
+
+struct FrequencyInner {
+    cores: Vec<Core>,
+}
+
+impl FrequencyInner {
+    pub fn new() -> Result<Self, std::io::Error> {
+        let cores = get_cores()?;
+
+        println!("initialized frequency counters for: {} cores", cores.len());
+
+        Ok(Self { cores })
+    }
+
+    pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
+        for core in &mut self.cores {
+            if let Ok(group) = core.tsc.read_group() {
+                if let (Some(aperf), Some(mperf), Some(tsc)) =
+                    (group.get(&core.aperf), group.get(&core.mperf), group.get(&core.tsc))
+                {
+                    let aperf = aperf.value();
+                    let mperf = mperf.value();
+                    let tsc = tsc.value();
+
+                    for cpu in &core.siblings {
+                        let _ = CPU_APERF.set(*cpu, aperf);
+                        let _ = CPU_MPERF.set(*cpu, mperf);
+                        let _ = CPU_TSC.set(*cpu, tsc);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// A struct that represents a physical core and contains the counters necessary
+/// for calculating running frequency as well as the set of siblings (logical
+/// cores)
+struct Core {
+    /// perf events for this core
+    aperf: perf_event::Counter,
+    mperf: perf_event::Counter,
+    tsc: perf_event::Counter,
+    /// all sibling cores
+    siblings: Vec<usize>,
+}
+
+impl Core {
+    pub fn new(siblings: Vec<usize>) -> Result<Self, ()> {
+        let cpu = *siblings.first().expect("empty physical core");
+
+        let aperf_event = match Msr::new(MsrId::APERF) {
+            Ok(msr) => msr,
+            Err(e) => {
+                debug!("failed to initialize aperf msr: {e}");
+                return Err(());
+            }
+        };
+
+        let mperf_event = match Msr::new(MsrId::MPERF) {
+            Ok(msr) => msr,
+            Err(e) => {
+                debug!("failed to initialize mperf msr: {e}");
+                return Err(());
+            }
+        };
+
+        let tsc_event = match Msr::new(MsrId::TSC) {
+            Ok(msr) => msr,
+            Err(e) => {
+                debug!("failed to initialize tsc msr: {e}");
+                return Err(());
+            }
+        };
+
+        match perf_event::Builder::new(tsc_event)
+            .one_cpu(cpu)
+            .any_pid()
+            .exclude_hv(false)
+            .exclude_kernel(false)
+            .pinned(true)
+            .read_format(
+                ReadFormat::TOTAL_TIME_ENABLED | ReadFormat::TOTAL_TIME_RUNNING | ReadFormat::GROUP,
+            )
+            .build()
+        {
+            Ok(mut tsc) => {
+                match perf_event::Builder::new(aperf_event)
+                    .one_cpu(cpu)
+                    .any_pid()
+                    .exclude_hv(false)
+                    .exclude_kernel(false)
+                    .build_with_group(&mut tsc)
+                {
+                    Ok(aperf) => {
+                        match perf_event::Builder::new(mperf_event)
+                            .one_cpu(cpu)
+                            .any_pid()
+                            .exclude_hv(false)
+                            .exclude_kernel(false)
+                            .build_with_group(&mut tsc)
+                        {
+                            Ok(mperf) => {
+                                match tsc.enable_group() {
+                                    Ok(_) => {
+                                        Ok(Core {
+                                            aperf,
+                                            mperf,
+                                            tsc,
+                                            siblings,
+                                        })
+                                    }
+                                    Err(e) => {
+                                        error!("failed to enable the perf group on CPU{cpu}: {e}");
+                                        Err(())
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                debug!("failed to enable the mperf counter on CPU{cpu}: {e}");
+                                Err(())
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!("failed to enable the aperf counter on CPU{cpu}: {e}");
+                        Err(())
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("failed to enable the tsc counter on CPU{cpu}: {e}");
+                Err(())
+            }
         }
     }
 }
 
-impl OpenSkelExt for ModSkel<'_> {
-    fn log_prog_instructions(&self) {
-        debug!(
-            "{NAME} handle__sched_switch() BPF instruction count: {}",
-            self.progs.handle__sched_switch.insn_cnt()
-        );
+fn physical_cores() -> Result<Vec<Vec<usize>>, std::io::Error> {
+    let mut cores = Vec::new();
+    let mut processed = HashSet::new();
+
+    // walk the cpu devices directory
+    for entry in WalkDir::new("/sys/devices/system/cpu")
+        .min_depth(1)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        let filename = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+
+        // check if this is a cpu directory
+        if filename.starts_with("cpu") && filename[3..].chars().all(char::is_numeric) {
+            let siblings_list = path.join("topology").join("thread_siblings_list");
+
+            if let Ok(siblings_list) = std::fs::read_to_string(&siblings_list) {
+                println!("parsing siblings list: {}", siblings_list);
+                let siblings = parse_cpu_list(&siblings_list);
+
+                // avoid duplicates
+                if !processed.contains(&siblings) {
+                    processed.insert(siblings.clone());
+                    cores.push(siblings);
+                }
+            }
+        }
     }
+
+    Ok(cores)
+}
+
+fn get_cores() -> Result<Vec<Core>, std::io::Error> {
+    let mut physical_cores = physical_cores()?;
+
+    let mut cores = Vec::new();
+
+    for siblings in physical_cores.drain(..) {
+        if let Ok(core) = Core::new(siblings) {
+            cores.push(core);
+        }
+    }
+
+    Ok(cores)
+}
+
+fn parse_cpu_list(list: &str) -> Vec<usize> {
+    let mut cores = Vec::new();
+
+    for range in list.trim().split(',') {
+        if let Some((start, end)) = range.split_once('-') {
+            // Range of cores
+            if let (Ok(start_num), Ok(end_num)) = (start.parse::<usize>(), end.parse::<usize>()) {
+                cores.extend(start_num..=end_num);
+            }
+        } else {
+            // Single core
+            if let Ok(core) = range.parse::<usize>() {
+                cores.push(core);
+            }
+        }
+    }
+
+    cores.sort_unstable();
+    cores.dedup();
+    cores
 }
