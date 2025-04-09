@@ -1,37 +1,11 @@
-// TODO:
-// - Heatmap hover value display
-// - Linked hover across charts
-// - Linked zoom across charts
-// - Improve plot colors
-// - Improve plot tick labels
-// - Allow both log and non-log line plots
-// - Fix the spacing between the heatmap canvas rects (in screen space)
-// - Fix the value-size-dependent overflow behavior of the "legend hovers".
-// - Allow a "href" specification for group names, so eg. the overview groups can link to their respective sections
-
-import uPlot from './uPlot.esm.js';
+// Rezolus Performance Visualization with Apache ECharts
+// This replaces the original uPlot implementation
 
 const log = console.log.bind(console);
 
 const state = {
-  // for synchronizing plot state (eg. hovers)
-  sync: uPlot.sync("groups"),
-};
-
-const cursorSyncOpts = {
-  key: state.sync.key,
-  setSeries: true,
-  match: [
-    (own, ext) => own == ext, // x
-    (own, ext) => own == ext, // y
-  ],
-  filters: {
-    pub(type) {
-      return type != "mouseup" && type != "mousedown";
-    },
-  },
-  scales: ["x", null], // Explicitly tell sync which scales to sync
-  values: [null, null],
+  // for tracking current visualization state
+  current: null
 };
 
 const Sidebar = {
@@ -69,477 +43,483 @@ const Group = {
   }
 };
 
-function syncZoom(plots) {
-  let xMin = null;
-  let xMax = null;
-  let zooming = false;
-
-  function onZoom(u) {
-    if (zooming) return; // Prevent recursion
-
-    zooming = true;
-
-    const scales = u.scales.x;
-
-    const newMin = scales.min;
-    const newMax = scales.max;
-
-    // Update all other plots to match this min/max
-    plots.forEach(p => {
-      if (p !== u && p.scales.x) {
-        p.setScale('x', {
-          min: newMin,
-          max: newMax
-        });
-      }
+// Plot component that renders ECharts visualizations
+const Plot = {
+  oncreate: function(vnode) {
+    const { attrs } = vnode;
+    const chartDom = vnode.dom;
+    const chart = echarts.init(chartDom);
+    
+    // Store chart instance for cleanup
+    vnode.state.chart = chart;
+    
+    // Configure and render the chart based on plot style
+    const option = createChartOption(attrs);
+    chart.setOption(option);
+    
+    // Enable brush select for zooming
+    chart.dispatchAction({
+      type: 'takeGlobalCursor',
+      key: 'dataZoomSelect',
+      dataZoomSelectActive: true
     });
-
-    zooming = false;
+    
+    // Add window resize handler
+    const resizeHandler = () => {
+      chart.resize();
+    };
+    window.addEventListener('resize', resizeHandler);
+    vnode.state.resizeHandler = resizeHandler;
+  },
+  
+  onupdate: function(vnode) {
+    // Update chart if data changed
+    if (vnode.state.chart) {
+      const option = createChartOption(vnode.attrs);
+      vnode.state.chart.setOption(option);
+    }
+  },
+  
+  onremove: function(vnode) {
+    // Clean up chart instance and event handlers
+    if (vnode.state.chart) {
+      window.removeEventListener('resize', vnode.state.resizeHandler);
+      vnode.state.chart.dispose();
+    }
+  },
+  
+  view: function() {
+    return m('div.plot');
   }
+};
 
-  return onZoom;
-}
-
-function throttle(func, limit) {
-  let inThrottle;
-  let lastFunc;
-  let lastRan;
-
-  return function() {
-    const context = this;
-    const args = arguments;
-
-    if (!inThrottle) {
-      func.apply(context, args);
-      lastRan = Date.now();
-      inThrottle = true;
-    } else {
-      clearTimeout(lastFunc);
-      lastFunc = setTimeout(function() {
-        if ((Date.now() - lastRan) >= limit) {
-          func.apply(context, args);
-          lastRan = Date.now();
+// Create ECharts options based on plot type
+function createChartOption(plotSpec) {
+  const { opts, data } = plotSpec;
+  
+  // Basic option template
+  const option = {
+    grid: {
+      left: '5%',
+      right: '5%',
+      top: '40',
+      bottom: '40',
+      containLabel: true
+    },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: {
+        type: 'cross',
+        animation: false,
+        label: {
+          backgroundColor: '#505765'
         }
-      }, limit - (Date.now() - lastRan));
-    }
+      }
+    },
+    title: {
+      text: opts.title,
+      left: 'center',
+      textStyle: {
+        color: '#E0E0E0'
+      }
+    },
+    toolbox: {
+      feature: {
+        dataZoom: {
+          yAxisIndex: 'none',
+          icon: {
+            zoom: 'path://M10.525,4.217c3.12-3.12,8.2-3.12,11.32,0c3.12,3.12,3.12,8.199,0,11.32c-3.12,3.119-8.199,3.119-11.32,0C7.405,12.416,7.405,7.337,10.525,4.217 M16.185,3.741c-4.475-4.474-11.787-4.355-16.261,0.12C-4.552,8.336-4.552,15.77,0,20.322l3.741-3.741c-3.12-3.119-3.12-8.198,0-11.319c3.119-3.119,8.198-3.119,11.319,0L16.185,3.741z',
+            back: 'M1.352,4.851l3.451-1.451v3.862c0,0.808-0.655,1.463-1.463,1.463s-1.462-0.654-1.462-1.462c0-0.534,0.293-0.98,0.724-1.232C2.873,5.983,3.06,6,3.25,6C3.23,5.898,3.204,5.798,3.176,5.699c-0.096-0.34-0.14-0.691-0.115-1.051H3.043C2.696,4.648,2.352,4.648,2.009,4.648c-0.218,0-0.437,0.068-0.637,0.19C1.272,4.884,1.17,4.964,1.07,5.066C0.868,5.27,0.737,5.576,0.686,5.857c-0.05,0.28-0.01,0.568,0.116,0.82c0.127,0.251,0.333,0.447,0.581,0.551c0.249,0.104,0.53,0.119,0.789,0.048c0.148-0.042,0.297-0.077,0.428-0.145l-1.403-1.421C1.203,5.649,1.28,5.248,1.352,4.851z'
+          }
+        }
+      },
+      iconStyle: {
+        borderColor: '#ABABAB'
+      }
+    },
+    dataZoom: [
+      {
+        // Inside zoom (mouse wheel and pinch zoom)
+        type: 'inside',
+        filterMode: 'none', // Don't filter data points outside zoom range
+        xAxisIndex: 0,
+        start: 0,
+        end: 100,
+        zoomLock: false
+      },
+      {
+        // Brush select zoom
+        type: 'slider',
+        show: false,
+        xAxisIndex: 0,
+        filterMode: 'none',
+        start: 0,
+        end: 100
+      }
+    ],
+    brush: {
+      toolbox: ['rect'],
+      xAxisIndex: 0,
+      brushLink: 'all', // Link all charts
+      outOfBrush: {
+        colorAlpha: 0.1 // Show out-of-brush area with more transparency
+      },
+      brushStyle: {
+        borderWidth: 1,
+        color: 'rgba(120, 140, 180, 0.3)',
+        borderColor: 'rgba(120, 140, 180, 0.8)'
+      }
+    },
+    textStyle: {
+      color: '#E0E0E0'
+    },
+    darkMode: true,
+    backgroundColor: 'transparent'
   };
+  
+  // Handle different plot types
+  if (opts.style === 'line') {
+    return createLineChartOption(option, plotSpec);
+  } else if (opts.style === 'heatmap') {
+    return createHeatmapOption(option, plotSpec);
+  }
+  
+  return option;
 }
 
-// format function for the x-axis labels, date time is split onto two lines
-// to keep it compact
-function formatTime() {
-  const timeFormat = uPlot.fmtDate("{HH}:{mm}:{ss}");
-  const dateFormat = uPlot.fmtDate("{YYYY}-{MM}-{DD}");
-
-  return (self, splits, axisIdx, foundSpace, foundIncr) => {
-    return splits.map(split => {
-      const date = new Date(split * 1000);
-      return timeFormat(date);
-    });
-  };
-}
-
-// format function for the date time in the legend
-function formatTimeLegend() {
-  return uPlot.fmtDate("{YYYY}-{MM}-{DD} {HH}:{mm}:{ss}");
-}
-
-function Plot() {
-  let resizeObserver, plot;
-
-  // TODO:
-  // - for updates, see plot.setData(data, resetScales)
-  // - figure out if we need to do anything onremove (I don't think so?)
-
+function createLineChartOption(baseOption, plotSpec) {
+  const { data } = plotSpec;
+  
+  if (!data || data.length < 2) {
+    return baseOption;
+  }
+  
+  const timeData = data[0];
+  const valueData = data[1];
+  
+  // Format time for x-axis
+  const formattedTimeData = timeData.map(timestamp => {
+    const date = new Date(timestamp * 1000);
+    return date.toISOString().replace('T', ' ').substr(0, 19);
+  });
+  
+  // Return line chart configuration
   return {
-    oncreate: function (vnode) {
-      const { attrs } = vnode;
+    ...baseOption,
+    xAxis: {
+      type: 'category',
+      data: formattedTimeData,
+      axisLine: {
+        lineStyle: {
+          color: '#ABABAB'
+        }
+      },
+      axisLabel: {
+        color: '#ABABAB',
+        formatter: function(value) {
+          // Show just time for short format
+          return value.split(' ')[1];
+        }
+      }
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLine: {
+        lineStyle: {
+          color: '#ABABAB'
+        }
+      },
+      axisLabel: {
+        color: '#ABABAB',
+        formatter: function(value) {
+          // Use scientific notation for large/small numbers
+          if (Math.abs(value) > 10000 || (Math.abs(value) > 0 && Math.abs(value) < 0.01)) {
+            return value.toExponential(1);
+          }
+          return value;
+        }
+      },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(171, 171, 171, 0.2)'
+        }
+      }
+    },
+    series: [{
+      data: valueData,
+      type: 'line',
+      name: plotSpec.opts.title,
+      showSymbol: false,
+      emphasis: {
+        focus: 'series'
+      },
+      lineStyle: {
+        width: 2
+      },
+      animationDuration: 0
+    }]
+  };
+}
 
-      let uPlotOpts, uPlotData;
-      switch (attrs.opts.style) {
-        case 'line':
-          uPlotOpts = {
-            ...attrs.opts,
-            cursor: {
-              lock: false,
-              focus: { prox: 16, },
-              bind: {
-                // throttling to reduce processing load and smooth mouse
-                // movement over data-dense area
-                mousemove: (self, targ, handler) => {
-                  const throttledHandler = throttle((e) => {
-                    handler(e);
-                  }, 35);
+function createHeatmapOption(baseOption, plotSpec) {
+  const { data } = plotSpec;
+  
+  if (!data || data.length < 3) {
+    return baseOption;
+  }
+  
+  const timeData = data[0]; // X axis (time)
+  // Create y-indices correctly accounting for all data rows (CPUs)
+  const yIndices = Array.from({ length: data.length - 1 }, (_, i) => i); // Y axis (CPU indices)
+  
+  // Process data for heatmap format - converts from series of arrays to array of [x, y, value] items
+  const heatmapData = [];
+  
+  // Start from 1 to skip the time array (data[0])
+  for (let y = 1; y < data.length; y++) {
+    const rowData = data[y];
+    if (!rowData) continue;
+    
+    for (let x = 0; x < timeData.length; x++) {
+      if (rowData[x] !== undefined && rowData[x] !== null) {
+        // Adjust y-index to be zero-based (y-1) since we're skipping the first row (time data)
+        heatmapData.push([x, y-1, rowData[x]]);
+      }
+    }
+  }
+  
+  // Format time for x-axis
+  const formattedTimeData = timeData.map(timestamp => {
+    const date = new Date(timestamp * 1000);
+    return date.toISOString().replace('T', ' ').substr(0, 19);
+  });
+  
+  // Calculate value range for color scale
+  let minValue = Infinity;
+  let maxValue = -Infinity;
+  
+  heatmapData.forEach(item => {
+    const value = item[2];
+    if (value < minValue) minValue = value;
+    if (value > maxValue) maxValue = value;
+  });
+  
+  return {
+    ...baseOption,
+    tooltip: {
+      position: 'top',
+      formatter: function(params) {
+        const value = params.data[2];
+        const time = formattedTimeData[params.data[0]];
+        const cpu = params.data[1];
+        return `Time: ${time}<br>CPU: ${cpu}<br>Value: ${value.toFixed(6)}`;
+      }
+    },
+    grid: {
+      height: '70%',
+      top: '60'
+    },
+    xAxis: {
+      type: 'category',
+      data: formattedTimeData,
+      splitArea: {
+        show: true
+      },
+      axisLabel: {
+        color: '#ABABAB',
+        formatter: function(value) {
+          // Show just time for short format
+          return value.split(' ')[1];
+        }
+      }
+    },
+    yAxis: {
+      type: 'category',
+      data: yIndices,
+      splitArea: {
+        show: true
+      },
+      axisLabel: {
+        color: '#ABABAB'
+      }
+    },
+    visualMap: {
+      min: minValue,
+      max: maxValue,
+      calculable: true,
+      orient: 'horizontal',
+      left: 'center',
+      bottom: '0%',
+      textStyle: {
+        color: '#E0E0E0'
+      },
+      inRange: {
+        color: [
+          '#440154', '#481a6c', '#472f7d', '#414487', '#39568c',
+          '#31688e', '#2a788e', '#23888e', '#1f988b', '#22a884',
+          '#35b779', '#54c568', '#7ad151', '#a5db36', '#d2e21b', '#fde725'
+        ]
+      }
+    },
+    series: [{
+      name: plotSpec.opts.title,
+      type: 'heatmap',
+      data: heatmapData,
+      emphasis: {
+        itemStyle: {
+          shadowBlur: 10,
+          shadowColor: 'rgba(0, 0, 0, 0.5)'
+        }
+      },
+      progressive: 1000,
+      animation: false
+    }]
+  };
+}
 
-                  return (e) => {
-                    throttledHandler(e);
-                  };
-                },
-                // For other events, use the default behavior
-                mousedown: (self, targ, handler) => (e) => handler(e),
-                mouseup: (self, targ, handler) => (e) => handler(e),
-                click: (self, targ, handler) => (e) => handler(e),
-                dblclick: (self, targ, handler) => (e) => handler(e),
-                mouseenter: (self, targ, handler) => (e) => handler(e),
-                mouseleave: (self, targ, handler) => (e) => handler(e),
-              },
-              sync: cursorSyncOpts,
-            },
-            series: 
-              attrs.data.map((d, i) => i === 0 ? {
-                // X-axis
-                label: "Time",
-                scale: "x",
-                value: (u, v) => v == null ? "-" : formatTimeLegend()(new Date(v * 1000))
-              } : i === 1 ? {
-                // First line
-                label: "Line 1",
-                stroke: "red",
-                width: 2
-              } : i >= 2 ? 
-                {
-                  // Second line
-                  label: "Line 2",
-                  stroke: "blue",
-                  width: 2
-                } : null
-              ),
-            axes: [
-              {
-                // X axis options
-                label: "Time",
-                stroke: () => "#ABABAB",
-                ticks: { stroke: () => "#333333", },
-                grid: { stroke: () => "#333333", },
-                // TODO: we should override the formatting, but it's complicated
-                // values: formatTime()
-              },
-              {
-                // Y axis options
-                label: "Value",
-                stroke: () => "#ABABAB",
-                ticks: { stroke: () => "#333333", },
-                grid: { stroke: () => "#333333", },
-                scale: "y",
-                values: (self, ticks) => {
-                  // Format the tick values in scientific notation
-                  return ticks.map(v => v ? v.toExponential(1) : v); // 1 decimal place in exponent
-                }
-              },
-            ],
-            scales: {
-              y: {
-                log: 10,
-                distr: 3, // 1 = linear, 2 = ordinal, 3 = log, 4 = asinh, 100 = custom
-              },
-            }
-          };
-          uPlotData = attrs.data;
-          break;
-        case 'heatmap':
-          // code mostly adapted from https://leeoniya.github.io/uPlot/demos/latency-heatmap.html
-          function heatmapPaths(opts) {
-            const { disp } = opts;
-
-            return (u, seriesIdx, idx0, idx1) => {
-              uPlot.orient(u, seriesIdx, (series, dataX, dataY, scaleX, scaleY, valToPosX, valToPosY, xOff, yOff, xDim, yDim, moveTo, lineTo, rect, arc) => {
-                let d = u.data[seriesIdx];
-                let [xs, ys, counts] = d;
-                let dlen = xs.length;
-
-                // fill colors are mapped from interpolating densities / counts along some gradient
-                // (should be quantized to 64 colors/levels max. e.g. 16)
-                let fills = disp.fill.values(u, seriesIdx);
-
-                let fillPalette = disp.fill.lookup ?? [...new Set(fills)];
-
-                let fillPaths = fillPalette.map(color => new Path2D());
-
-                // detect x and y bin qtys by detecting layout repetition in x & y data
-                let yBinQty = dlen - ys.lastIndexOf(ys[0]);
-                let xBinQty = dlen / yBinQty;
-                let yBinIncr = ys[1] - ys[0];
-                let xBinIncr = xs[yBinQty] - xs[0];
-
-                // uniform tile sizes based on zoom level
-                let xSize = valToPosX(xBinIncr, scaleX, xDim, xOff) - valToPosX(0, scaleX, xDim, xOff);
-                let ySize = valToPosY(yBinIncr, scaleY, yDim, yOff) - valToPosY(0, scaleY, yDim, yOff);
-
-                // pre-compute x and y offsets
-                let cys = ys.slice(0, yBinQty).map(y => Math.round(valToPosY(y, scaleY, yDim, yOff) - ySize / 2));
-                let cxs = Array.from({ length: xBinQty }, (v, i) => Math.round(valToPosX(xs[i * yBinQty], scaleX, xDim, xOff) - xSize / 2));
-       
-                for (let i = 0; i < dlen; i++) {
-                  // filter out 0 counts and out of view
-                  if (
-                    counts[i] > 0 &&
-                    xs[i] >= scaleX.min && xs[i] <= scaleX.max &&
-                    ys[i] >= scaleY.min && ys[i] <= scaleY.max
-                  ) {
-                    let cx = cxs[~~(i / yBinQty)];
-                    let cy = cys[i % yBinQty];
-
-                    let fillPath = fillPaths[fills[i]];
-
-                    rect(fillPath, cx, cy, xSize, ySize);
-                  }
-                }
-
-                u.ctx.save();
-                u.ctx.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height);
-                u.ctx.clip();
-                fillPaths.forEach((p, i) => {
-                  u.ctx.fillStyle = fillPalette[i];
-                  u.ctx.fill(p);
-                });
-                u.ctx.restore();
+// Handle the synchronization of cursors between charts
+function setupChartSync(charts) {
+  // Flag to prevent infinite recursion
+  let isSyncing = false;
+  // Flag for zoom synchronization
+  let isZooming = false;
+  
+  charts.forEach(mainChart => {
+    // Setup brush events for zooming
+    mainChart.on('brushSelected', function(params) {
+      if (isZooming) return;
+      isZooming = true;
+      
+      try {
+        // Only handle rectangle brush type (for zooming)
+        if (params.brushType === 'rect') {
+          // Get the range from the brush
+          const areas = params.areas[0];
+          if (areas && areas.coordRange) {
+            const [start, end] = areas.coordRange;
+            
+            // Get x-axis data range
+            const xAxis = mainChart.getModel().getComponent('xAxis', 0);
+            const axisExtent = xAxis.axis.scale.getExtent();
+            const axisRange = axisExtent[1] - axisExtent[0];
+            
+            // Calculate percentage
+            const startPercent = ((start - axisExtent[0]) / axisRange) * 100;
+            const endPercent = ((end - axisExtent[0]) / axisRange) * 100;
+            
+            // Apply zoom to all charts
+            charts.forEach(chart => {
+              chart.dispatchAction({
+                type: 'dataZoom',
+                start: startPercent,
+                end: endPercent
               });
-            };
-          }
-
-          // 16-color gradient (viridis)
-          const colors = [
-            "#440154",
-            "#481a6c",
-            "#472f7d",
-            "#414487",
-            "#39568c",
-            "#31688e",
-            "#2a788e",
-            "#23888e",
-            "#1f988b",
-            "#22a884",
-            "#35b779",
-            "#54c568",
-            "#7ad151",
-            "#a5db36",
-            "#d2e21b",
-            "#fde725"
-          ];
-
-          let palette = colors;
-
-          const countsToFills = (u, seriesIdx) => {
-            let counts = u.data[seriesIdx][2];
-
-            // TODO: integrate 1e-9 hideThreshold?
-            const hideThreshold = 0;
-
-            let minCount = Infinity;
-            let maxCount = -Infinity;
-
-            for (let i = 0; i < counts.length; i++) {
-              if (counts[i] > hideThreshold) {
-                minCount = Math.min(minCount, counts[i]);
-                maxCount = Math.max(maxCount, counts[i]);
-              }
-            }
-
-            let range = maxCount - minCount;
-
-            let paletteSize = palette.length;
-
-            let indexedFills = Array(counts.length);
-
-            for (let i = 0; i < counts.length; i++)
-              indexedFills[i] = counts[i] === 0 ? -1 : Math.min(paletteSize - 1, Math.floor((paletteSize * (counts[i] - minCount)) / range));
-
-            return indexedFills;
-          };
-
-          // note: assumes nonempty data
-          const data = attrs.data;
-          const timeData = data[0];
-          const rows = data.slice(1);
-          const numRows = rows.length;
-          const numCols = rows[0].length;
-
-          // Flatten the 2D data matrix into triples: (xValues, yValues, zValues)
-          const xValues = [];
-          const yValues = [];
-          const zValues = [];
-
-          // This is an inefficient access pattern but it looks like uPlot requires
-          // sorted data (even if you specify sorted: false for the x facet)
-          for (let colIndex = 0; colIndex < numCols; colIndex++) {
-            for (let rowIndex = 0; rowIndex < numRows; rowIndex++) {
-              const row = rows[rowIndex];
-              // Quantize time samples to display on the grid
-              xValues.push(Math.round(timeData[colIndex] + 0.5));
-              yValues.push(rowIndex);
-              zValues.push(row[colIndex]);
-            }
-          }
-
-          uPlotOpts = {
-            ...attrs.opts,
-            mode: 2,
-            ms: 1e-3,
-            cursor: {
-              points: { show: false },
-              drag: { x: true, y: false },
-              lock: false,
-              focus: { prox: 16, },
-              sync: cursorSyncOpts,
-            },
-            scales: {
-              x: { time: true, }
-            },
-            axes: [
-              {
-                // X axis options
-                label: "Time",
-                stroke: () => "#ABABAB",
-                ticks: { stroke: () => "#333333", },
-                grid: { show: false },
-                scale: 'x',
-                // TODO: we should override the formatting, but it's complicated
-                // values: formatTime()
-              },
-              {
-                // Y axis options
-                label: "Value",
-                stroke: () => "#ABABAB",
-                ticks: { stroke: () => "#333333", },
-                grid: { show: false },
-                scale: "y",
-              },
-            ],
-            series: [
-              {},
-              {
-                label: "Value",
-                paths: heatmapPaths({
-                  disp: {
-                    fill: {
-                      lookup: colors,
-                      values: countsToFills
-                    }
-                  }
-                }),
-                facets: [
-                  {
-                    scale: 'x',
-                    auto: true,
-                    sorted: true,
-                  },
-                  {
-                    scale: 'y',
-                    auto: true,
-                  },
-                ],
-              },
-            ],
-          };
-          uPlotData = [null, [xValues, yValues, zValues]];
-          break;
-        default:
-          throw new Error(`undefined style in provided plot opts: ${attrs.opts.style}`);
-      }
-
-      if (uPlotOpts) {
-        // Enable zooming on all plots
-        uPlotOpts.hooks = uPlotOpts.hooks || {};
-
-        // Hook into setScale to detect when a user zooms
-        // This is the key part that synchronizes the zoom
-        const existingSetScale = uPlotOpts.hooks.setScale;
-
-        uPlotOpts.hooks.setScale = (u, key) => {
-          if (existingSetScale)
-            existingSetScale(u, key);
-
-          // Only sync zoom for x-axis changes
-          if (key === 'x') {
-            // Get all plots that are part of the sync group
-            const syncKey = state.sync.key;
-            const plots = syncKey != null ? uPlot.sync(syncKey).plots : [];
-
-            // Call the syncZoom handler to update all other plots
-            syncZoom(plots)(u);
-          }
-        };
-      }
-
-      if (uPlotOpts !== undefined) {
-        // Add the sync plugin for zoom
-        let zoomingSync = false;
-
-        // Initialize hooks object properly
-        uPlotOpts.hooks = uPlotOpts.hooks || {};
-
-        // Add setScale hook to synchronize zoom
-        uPlotOpts.hooks.setScale = [(u, scaleKey) => {
-          // Only sync x-axis changes and prevent recursion
-          if (scaleKey === 'x' && !zoomingSync) {
-            zoomingSync = true;
-
-            const syncKey = state.sync.key;
-            const plots = syncKey != null ? uPlot.sync(syncKey).plots : [];
-
-            // Get the new scale values
-            const newMin = u.scales.x.min;
-            const newMax = u.scales.x.max;
-
-            // Update all other plots to match
-            plots.forEach(p => {
-              if (p !== u && p.scales.x) {
-                p.setScale('x', {
-                  min: newMin,
-                  max: newMax
-                });
-              }
+              
+              // Clear the brush
+              chart.dispatchAction({
+                type: 'brush',
+                command: 'clear',
+                areas: []
+              });
             });
-
-            zoomingSync = false;
           }
-        }];
-
-        // Add double-click hook to reset zoom on all plots
-        uPlotOpts.hooks.dblclick = [(u, e) => {
-          if (!zoomingSync) {
-            zoomingSync = true;
-
-            const syncKey = state.sync.key;
-            const plots = syncKey != null ? uPlot.sync(syncKey).plots : [];
-
-            // Reset all plots
-            plots.forEach(p => {
-              if (p !== u) {
-                p.setScale('x', null);
-                p.redraw();
-              }
+        }
+      } finally {
+        setTimeout(() => {
+          isZooming = false;
+        }, 0);
+      }
+    });
+    
+    // Setup double-click handler for zoom reset
+    mainChart.getZr().on('dblclick', function() {
+      if (isZooming) return;
+      isZooming = true;
+      
+      try {
+        // Reset zoom on all charts
+        charts.forEach(chart => {
+          chart.dispatchAction({
+            type: 'dataZoom',
+            start: 0,
+            end: 100
+          });
+        });
+      } finally {
+        setTimeout(() => {
+          isZooming = false;
+        }, 0);
+      }
+    });
+    
+    // Sync cursor across charts
+    mainChart.on('updateAxisPointer', function(event) {
+      // Skip if we're already in a synchronization process
+      if (isSyncing) return;
+      
+      // Set flag to indicate we're synchronizing
+      isSyncing = true;
+      
+      try {
+        // Update all other charts when this chart's cursor moves
+        charts.forEach(chart => {
+          if (chart !== mainChart) {
+            chart.dispatchAction({
+              type: 'updateAxisPointer',
+              currTrigger: 'mousemove',
+              x: event.topX,
+              y: event.topY
             });
-
-            zoomingSync = false;
-          }
-        }];
-
-        plot = new uPlot(uPlotOpts, uPlotData, vnode.dom);
-        state.sync.sub(plot);
-
-        // We maintain a resize observer per plot.
-        resizeObserver = new ResizeObserver(entries => {
-          for (const entry of entries) {
-            plot.setSize(entry.contentRect);
           }
         });
-        resizeObserver.observe(vnode.dom);
+      } finally {
+        // Reset flag after synchronization
+        setTimeout(() => {
+          isSyncing = false;
+        }, 0);
       }
-    },
-
-    onremove(vnode) {
-      resizeObserver?.disconnect();
-      resizeObserver = null;
-    },
-
-    view: function () {
-      return m('div.plot');
-    }
-  };
+    });
+    
+    // Sync zooming across charts
+    mainChart.on('dataZoom', function(event) {
+      // Skip if we're already in a zooming process
+      if (isZooming) return;
+      
+      // Set flag to indicate we're zooming
+      isZooming = true;
+      
+      try {
+        // Only sync zooming actions initiated by user interaction
+        if (event.batch) {
+          // Get zoom range from the event
+          const { start, end } = event.batch[0];
+          
+          // Apply the same zoom to all other charts
+          charts.forEach(chart => {
+            if (chart !== mainChart) {
+              chart.dispatchAction({
+                type: 'dataZoom',
+                start: start,
+                end: end,
+                // Use 'dataZoomId' from the chart's first dataZoom instance
+                dataZoomId: chart.getOption().dataZoom[0].id
+              });
+            }
+          });
+        }
+      } finally {
+        // Reset flag after synchronization
+        setTimeout(() => {
+          isZooming = false;
+        }, 0);
+      }
+    });
+  });
 }
 
-m.route.prefix = ""; // use regular paths for nagivation, eg. /overview
+// Main application entry point
+m.route.prefix = ""; // use regular paths for navigation, eg. /overview
 m.route(document.body, "/overview", {
   "/:section": {
     onmatch(params, requestedPath) {
@@ -560,6 +540,19 @@ m.route(document.body, "/overview", {
         return ({
           view() {
             return m(Main, { ...data, activeSection });
+          },
+          oncreate(vnode) {
+            // After the view is rendered, set up chart synchronization
+            setTimeout(() => {
+              const chartElements = document.querySelectorAll('.plot');
+              const charts = Array.from(chartElements)
+                .map(el => echarts.getInstanceByDom(el))
+                .filter(Boolean);
+              
+              if (charts.length > 1) {
+                setupChartSync(charts);
+              }
+            }, 100);
           }
         });
       });

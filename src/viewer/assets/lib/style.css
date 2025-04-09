@@ -21,12 +21,12 @@ header {
   margin: 2em auto;
   padding-left: var(--sidebar-width);
   font-size: 1rem;
+}
 
-  .div {
-    opacity: 0.5;
-    font-weight: normal;
-    padding: 0 0.1em;
-  }
+header .div {
+  opacity: 0.5;
+  font-weight: normal;
+  padding: 0 0.1em;
 }
 
 main {
@@ -46,46 +46,55 @@ main {
   display: flex;
   flex-direction: column;
   gap: 0.5em;
+}
 
-  a {
-    color: var(--fg);
-    text-decoration: underline;
-    color: #aaa;
-    &.selected {
-      color: #fff;
-      font-weight: bold;
-    text-decoration: none;
-    }
-  }
+#sidebar a {
+  color: var(--fg);
+  text-decoration: underline;
+  color: #aaa;
+}
 
+#sidebar a.selected {
+  color: #fff;
+  font-weight: bold;
+  text-decoration: none;
 }
 
 #groups {
   flex: 1;
+}
 
-  h2 {
-    margin-bottom: 0.25em;
-    padding-bottom: 0.25em;
-    border-bottom: 1px solid #fff6;
-  }
+#groups h2 {
+  margin-bottom: 0.25em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid #fff6;
+}
 
-  .group {
-    .plots {
-      display: flex;
-      flex-wrap: wrap;
+.group .plots {
+  display: flex;
+  flex-wrap: wrap;
+}
 
-      .plot {
-        max-width: 50%;
-        width: 50%;
-        height: 400px;
-        margin-bottom: 150px; /* for the legend */
+.plot {
+  max-width: 50%;
+  width: 50%;
+  height: 400px;
+  margin-bottom: 50px; /* Reduced from 150px since ECharts handles legends differently */
+}
 
-      }
-    }
-  }
+/* ECharts tooltip styling */
+.echarts-tooltip {
+  background: rgba(50, 50, 50, 0.9) !important;
+  border-color: rgba(70, 70, 70, 0.9) !important;
+  border-radius: 4px;
+  color: #E0E0E0 !important;
+  line-height: 1.5;
+  padding: 10px;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.4);
+}
 
-  .u-select {
-    background-color: rgba(255, 255, 255, 0.3); 
-    border: 1px solid rgba(255, 255, 255, 0.5); 
-  }
+/* Zoom rectangle styling */
+.echarts-tooltip-selected-region {
+  background-color: rgba(255, 255, 255, 0.3) !important;
+  border: 1px solid rgba(255, 255, 255, 0.5) !important;
 }
