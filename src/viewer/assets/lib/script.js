@@ -1,3 +1,20 @@
+// Helper function to format dates consistently across chart types
+function formatDateTime(timestamp, format = 'time') {
+  const date = new Date(timestamp * 1000);
+  const isoString = date.toISOString().replace('T', ' ').substr(0, 19);
+
+  if (format === 'time') {
+    // Return only the time portion (HH:MM:SS)
+    return isoString.split(' ')[1];
+  } else if (format === 'short') {
+    // Return HH:MM format for compact display
+    return isoString.split(' ')[1].substr(0, 5);
+  } else {
+    // Return the full datetime
+    return isoString;
+  }
+}
+
 // Helper function to check if a chart element is visible in the viewport
 function isChartVisible(chartDom) {
   if (!chartDom) return false;
@@ -15,9 +32,103 @@ function isChartVisible(chartDom) {
   );
 }
 
-// Rezolus Performance Visualization with Apache ECharts
-// This replaces the original uPlot implementation with optimized ECharts version
+// Calculate shared visible ticks for consistent tick spacing across all charts
+function calculateSharedVisibleTicks(dataLength, zoomStart, zoomEnd) {
+  // Full view zoom (special case to prevent label pile-up)
+  if (zoomStart === 0 && zoomEnd === 100) {
+    // For full view, create fewer evenly spaced ticks
+    const maxTicks = Math.min(8, dataLength);
+    const interval = Math.max(1, Math.floor(dataLength / maxTicks));
 
+    const ticks = [];
+    for (let i = 0; i < dataLength; i += interval) {
+      ticks.push(i);
+    }
+
+    // Add last tick if not already included
+    if (dataLength > 0 && (dataLength - 1) % interval !== 0) {
+      ticks.push(dataLength - 1);
+    }
+
+    return ticks;
+  }
+
+  // Normal zoom case:
+  // Convert start and end percentages to indices
+  let startIdx = Math.floor(dataLength * (zoomStart / 100));
+  let endIdx = Math.ceil(dataLength * (zoomEnd / 100));
+
+  // Ensure bounds
+  startIdx = Math.max(0, startIdx);
+  endIdx = Math.min(dataLength - 1, endIdx);
+
+  // Calculate number of visible data points
+  const visiblePoints = endIdx - startIdx;
+
+  // Determine desired number of ticks - 8-10 is usually good for readability
+  const desiredTicks = Math.min(10, Math.max(4, visiblePoints));
+
+  // Calculate tick interval
+  const interval = Math.max(1, Math.floor(visiblePoints / desiredTicks));
+
+  // Generate tick array
+  const ticks = [];
+  for (let i = startIdx; i <= endIdx; i += interval) {
+    ticks.push(i);
+  }
+
+  // Ensure we have the end tick if not already included
+  if (ticks.length > 0 && ticks[ticks.length - 1] !== endIdx) {
+    ticks.push(endIdx);
+  }
+
+  return ticks;
+}
+
+// Directly force chart updates after zooming - simpler approach
+function updateChartsAfterZoom(start, end) {
+  // Clear existing tick configuration
+  state.sharedAxisConfig.visibleTicks = [];
+  state.sharedAxisConfig.lastUpdate = 0;
+
+  // Get the first chart to calculate shared ticks (if available)
+  let sharedTicks = [];
+  const firstChart = state.initializedCharts.values().next().value;
+  if (firstChart) {
+    const chartOption = firstChart.getOption();
+    if (chartOption.xAxis && chartOption.xAxis[0] && chartOption.xAxis[0].data) {
+      const dataLength = chartOption.xAxis[0].data.length;
+      sharedTicks = calculateSharedVisibleTicks(dataLength, start, end);
+
+      // Store in shared config for other charts
+      state.sharedAxisConfig.visibleTicks = sharedTicks;
+      state.sharedAxisConfig.lastUpdate = Date.now();
+    }
+  }
+
+  // Update all charts with new zoom level
+  state.initializedCharts.forEach((chart) => {
+    // Apply zoom to all charts
+    chart.dispatchAction({
+      type: 'dataZoom',
+      start: start,
+      end: end
+    });
+
+    // Update the chart with new axis configuration
+    chart.setOption({
+      xAxis: {
+        axisLabel: {
+          interval: function(index) {
+            return state.sharedAxisConfig.visibleTicks.includes(index);
+          }
+        }
+      }
+    });
+  });
+}
+
+// Rezolus Performance Visualization with Apache ECharts
 const log = console.log.bind(console);
 
 const state = {
@@ -36,7 +147,14 @@ const state = {
   // Flag to prevent recursive cursor updates
   isCursorSyncing: false,
   // Track which charts need zoom update (for lazy updating)
-  chartsNeedingZoomUpdate: new Set()
+  chartsNeedingZoomUpdate: new Set(),
+  // Store shared axis tick settings for consistency across charts
+  sharedAxisConfig: {
+    // Track visible tick indices for consistent tick spacing
+    visibleTicks: [],
+    // Store last update timestamp to avoid too frequent recalculations
+    lastUpdate: 0
+  }
 };
 
 const Sidebar = {
@@ -96,6 +214,9 @@ const Plot = {
       attrs
     } = vnode;
     const chartDom = vnode.dom;
+
+    // Store the attributes for later reference
+    chartDom._attrs = attrs;
 
     // Set up the Intersection Observer to lazy load the chart
     const observer = new IntersectionObserver((entries) => {
@@ -294,13 +415,41 @@ function createLineChartOption(baseOption, plotSpec) {
 
   // For line charts, we expect the classic 2-row format: [times, values]
   const timeData = data[0];
+
+  // Use consistent formatting for timestamps
+  const formattedTimeData = timeData.map(timestamp => formatDateTime(timestamp, 'time'));
+
   const valueData = data[1];
 
-  // Format time for x-axis
-  const formattedTimeData = timeData.map(timestamp => {
-    const date = new Date(timestamp * 1000);
-    return date.toISOString().replace('T', ' ').substr(0, 19);
-  });
+  // Use shared ticks if already calculated, otherwise calculate new ones
+  if (state.sharedAxisConfig.visibleTicks.length === 0 ||
+    Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
+    // For full view (no zoom), use fewer ticks to prevent label pile-up
+    if (state.globalZoom.start === 0 && state.globalZoom.end === 100) {
+      const maxTicks = Math.min(8, timeData.length);
+      const interval = Math.max(1, Math.floor(timeData.length / maxTicks));
+
+      const ticks = [];
+      for (let i = 0; i < timeData.length; i += interval) {
+        ticks.push(i);
+      }
+
+      // Add last tick if not already included
+      if (timeData.length > 0 && (timeData.length - 1) % interval !== 0) {
+        ticks.push(timeData.length - 1);
+      }
+
+      state.sharedAxisConfig.visibleTicks = ticks;
+    } else {
+      // For zoomed view, calculate normal ticks
+      state.sharedAxisConfig.visibleTicks = calculateSharedVisibleTicks(
+        timeData.length,
+        state.globalZoom.start,
+        state.globalZoom.end
+      );
+    }
+    state.sharedAxisConfig.lastUpdate = Date.now();
+  }
 
   // Return line chart configuration
   return {
@@ -316,8 +465,11 @@ function createLineChartOption(baseOption, plotSpec) {
       axisLabel: {
         color: '#ABABAB',
         formatter: function(value) {
-          // Show just time for short format
-          return value.split(' ')[1];
+          return value; // Already formatted properly by formatDateTime
+        },
+        // Using custom ticks based on our shared configuration
+        interval: function(index) {
+          return state.sharedAxisConfig.visibleTicks.includes(index);
         }
       }
     },
@@ -385,10 +537,8 @@ function createHeatmapOption(baseOption, plotSpec) {
     yIndices.add(item[1]);
   });
 
-  const formattedTimeData = time_data.map(timestamp => {
-    const date = new Date(timestamp * 1000);
-    return date.toISOString().replace('T', ' ').substr(0, 19);
-  });
+  // Use consistent formatting for time values
+  const formattedTimeData = time_data.map(timestamp => formatDateTime(timestamp, 'time'));
 
   // Calculate min/max values if not provided by backend
   let minValue = min_value !== undefined ? min_value : Infinity;
@@ -402,15 +552,47 @@ function createHeatmapOption(baseOption, plotSpec) {
     });
   }
 
+  // Use shared ticks if already calculated, otherwise calculate new ones
+  if (state.sharedAxisConfig.visibleTicks.length === 0 ||
+    Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
+    // For full view (no zoom), use fewer ticks to prevent label pile-up
+    if (state.globalZoom.start === 0 && state.globalZoom.end === 100) {
+      const maxTicks = Math.min(8, time_data.length);
+      const interval = Math.max(1, Math.floor(time_data.length / maxTicks));
+
+      const ticks = [];
+      for (let i = 0; i < time_data.length; i += interval) {
+        ticks.push(i);
+      }
+
+      // Add last tick if not already included
+      if (time_data.length > 0 && (time_data.length - 1) % interval !== 0) {
+        ticks.push(time_data.length - 1);
+      }
+
+      state.sharedAxisConfig.visibleTicks = ticks;
+    } else {
+      // For zoomed view, calculate normal ticks
+      state.sharedAxisConfig.visibleTicks = calculateSharedVisibleTicks(
+        time_data.length,
+        state.globalZoom.start,
+        state.globalZoom.end
+      );
+    }
+    state.sharedAxisConfig.lastUpdate = Date.now();
+  }
+
   return {
     ...baseOption,
     tooltip: {
       position: 'top',
       formatter: function(params) {
         const value = params.data[2];
-        const time = formattedTimeData[params.data[0]];
+        const timeIndex = params.data[0];
+        const fullTime = time_data[timeIndex];
+        const formattedTime = formatDateTime(fullTime, 'full'); // Use full format for tooltip
         const cpu = params.data[1];
-        return `Time: ${time}<br>CPU: ${cpu}<br>Value: ${value.toFixed(6)}`;
+        return `Time: ${formattedTime}<br>CPU: ${cpu}<br>Value: ${value.toFixed(6)}`;
       }
     },
     grid: {
@@ -426,8 +608,12 @@ function createHeatmapOption(baseOption, plotSpec) {
       axisLabel: {
         color: '#ABABAB',
         formatter: function(value) {
-          // Show short format for x-axis labels
+          // Show time only format for x-axis labels, already properly formatted
           return value;
+        },
+        // Use the same tick interval configuration as line charts
+        interval: function(index) {
+          return state.sharedAxisConfig.visibleTicks.includes(index);
         }
       }
     },
@@ -562,22 +748,12 @@ function setupChartSync(charts) {
         // Clear the charts needing update set
         state.chartsNeedingZoomUpdate.clear();
 
-        // Reset zoom only on visible charts
-        state.initializedCharts.forEach((chart, chartId) => {
-          const chartDom = chart.getDom();
+        // Reset shared tick configuration to force recalculation
+        state.sharedAxisConfig.visibleTicks = [];
+        state.sharedAxisConfig.lastUpdate = 0;
 
-          if (isChartVisible(chartDom)) {
-            // Update visible charts immediately
-            chart.dispatchAction({
-              type: 'dataZoom',
-              start: 0,
-              end: 100
-            });
-          } else {
-            // Mark invisible charts for lazy update
-            state.chartsNeedingZoomUpdate.add(chartId);
-          }
-        });
+        // Use the dedicated function to update all charts with reset zoom
+        updateChartsAfterZoom(0, 100);
       } finally {
         // Reset flag after a short delay
         setTimeout(() => {
@@ -636,26 +812,8 @@ function setupChartSync(charts) {
           state.globalZoom.end = end;
           state.globalZoom.isZoomed = start !== 0 || end !== 100;
 
-          // Apply zoom only to visible charts, mark others for lazy update
-          state.initializedCharts.forEach((chart, chartId) => {
-            if (chart !== mainChart) {
-              const chartDom = chart.getDom();
-
-              if (isChartVisible(chartDom)) {
-                // Update visible charts immediately
-                chart.dispatchAction({
-                  type: 'dataZoom',
-                  start: start,
-                  end: end
-                });
-                // Remove from charts needing update since we just updated it
-                state.chartsNeedingZoomUpdate.delete(chartId);
-              } else {
-                // Mark invisible charts for lazy update
-                state.chartsNeedingZoomUpdate.add(chartId);
-              }
-            }
-          });
+          // Update all charts with new zoom level and tick settings
+          updateChartsAfterZoom(start, end);
         } finally {
           // Always reset the synchronization flag to allow future events
           setTimeout(() => {
