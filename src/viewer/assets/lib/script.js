@@ -123,26 +123,13 @@ function createChartOption(plotSpec) {
         color: '#E0E0E0'
       }
     },
-    toolbox: {
-      feature: {
-        dataZoom: {
-          yAxisIndex: 'none',
-          icon: {
-            zoom: 'path://M10.525,4.217c3.12-3.12,8.2-3.12,11.32,0c3.12,3.12,3.12,8.199,0,11.32c-3.12,3.119-8.199,3.119-11.32,0C7.405,12.416,7.405,7.337,10.525,4.217 M16.185,3.741c-4.475-4.474-11.787-4.355-16.261,0.12C-4.552,8.336-4.552,15.77,0,20.322l3.741-3.741c-3.12-3.119-3.12-8.198,0-11.319c3.119-3.119,8.198-3.119,11.319,0L16.185,3.741z',
-            back: 'M1.352,4.851l3.451-1.451v3.862c0,0.808-0.655,1.463-1.463,1.463s-1.462-0.654-1.462-1.462c0-0.534,0.293-0.98,0.724-1.232C2.873,5.983,3.06,6,3.25,6C3.23,5.898,3.204,5.798,3.176,5.699c-0.096-0.34-0.14-0.691-0.115-1.051H3.043C2.696,4.648,2.352,4.648,2.009,4.648c-0.218,0-0.437,0.068-0.637,0.19C1.272,4.884,1.17,4.964,1.07,5.066C0.868,5.27,0.737,5.576,0.686,5.857c-0.05,0.28-0.01,0.568,0.116,0.82c0.127,0.251,0.333,0.447,0.581,0.551c0.249,0.104,0.53,0.119,0.789,0.048c0.148-0.042,0.297-0.077,0.428-0.145l-1.403-1.421C1.203,5.649,1.28,5.248,1.352,4.851z'
-          }
-        }
-      },
-      iconStyle: {
-        borderColor: '#ABABAB'
-      }
-    },
     dataZoom: [
       {
         // Inside zoom (mouse wheel and pinch zoom)
         type: 'inside',
         filterMode: 'none', // Don't filter data points outside zoom range
         xAxisIndex: 0,
+        yAxisIndex: 'none',
         start: 0,
         end: 100,
         zoomLock: false
@@ -158,7 +145,7 @@ function createChartOption(plotSpec) {
       }
     ],
     brush: {
-      toolbox: ['rect'],
+      toolbox: [],
       xAxisIndex: 0,
       brushLink: 'all', // Link all charts
       outOfBrush: {
@@ -347,7 +334,8 @@ function createHeatmapOption(baseOption, plotSpec) {
     visualMap: {
       min: minValue,
       max: maxValue,
-      calculable: true,
+      calculable: false,
+      show: false,
       orient: 'horizontal',
       left: 'center',
       bottom: '0%',
@@ -372,7 +360,7 @@ function createHeatmapOption(baseOption, plotSpec) {
           shadowColor: 'rgba(0, 0, 0, 0.5)'
         }
       },
-      progressive: 1000,
+      progressive: 2000,
       animation: false
     }]
   };
