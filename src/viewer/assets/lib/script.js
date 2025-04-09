@@ -1,3 +1,20 @@
+// Helper function to check if a chart element is visible in the viewport
+function isChartVisible(chartDom) {
+  if (!chartDom) return false;
+
+  const rect = chartDom.getBoundingClientRect();
+  const windowHeight = window.innerHeight || document.documentElement.clientHeight;
+  const windowWidth = window.innerWidth || document.documentElement.clientWidth;
+
+  // Consider charts partially in view to be visible
+  return (
+    rect.top <= windowHeight &&
+    rect.bottom >= 0 &&
+    rect.left <= windowWidth &&
+    rect.right >= 0
+  );
+}
+
 // Rezolus Performance Visualization with Apache ECharts
 // This replaces the original uPlot implementation with optimized ECharts version
 
@@ -7,7 +24,19 @@ const state = {
   // for tracking current visualization state
   current: null,
   // Store initialized charts to prevent re-rendering
-  initializedCharts: new Map()
+  initializedCharts: new Map(),
+  // Global zoom state to apply to all charts
+  globalZoom: {
+    start: 0,
+    end: 100,
+    isZoomed: false
+  },
+  // Flag to prevent recursive synchronization
+  isZoomSyncing: false,
+  // Flag to prevent recursive cursor updates
+  isCursorSyncing: false,
+  // Track which charts need zoom update (for lazy updating)
+  chartsNeedingZoomUpdate: new Set()
 };
 
 const Sidebar = {
@@ -84,6 +113,15 @@ const Plot = {
             const option = createChartOption(attrs);
             chart.setOption(option);
 
+            // Apply global zoom state if it exists
+            if (state.globalZoom.isZoomed) {
+              chart.dispatchAction({
+                type: 'dataZoom',
+                start: state.globalZoom.start,
+                end: state.globalZoom.end
+              });
+            }
+
             // Enable brush select for zooming
             chart.dispatchAction({
               type: 'takeGlobalCursor',
@@ -91,11 +129,26 @@ const Plot = {
               dataZoomSelectActive: true
             });
 
+            // Add this chart to the chart sync system
+            setupChartSync([chart]);
+
             // Store chart in vnode state for updates and cleanup
             vnode.state.chart = chart;
           } else {
             // Chart was already initialized, just reference it
             vnode.state.chart = state.initializedCharts.get(chartId);
+
+            // Check if this chart needs a zoom update
+            if (state.chartsNeedingZoomUpdate.has(chartId)) {
+              vnode.state.chart.dispatchAction({
+                type: 'dataZoom',
+                start: state.globalZoom.start,
+                end: state.globalZoom.end
+              });
+
+              // Remove from charts needing update
+              state.chartsNeedingZoomUpdate.delete(chartId);
+            }
           }
 
           // Once initialized, we can stop observing
@@ -127,6 +180,19 @@ const Plot = {
     if (vnode.state.chart) {
       const option = createChartOption(vnode.attrs);
       vnode.state.chart.setOption(option);
+
+      // Check if this chart needs a zoom update
+      const chartId = vnode.attrs.opts.id;
+      if (state.chartsNeedingZoomUpdate.has(chartId)) {
+        vnode.state.chart.dispatchAction({
+          type: 'dataZoom',
+          start: state.globalZoom.start,
+          end: state.globalZoom.end
+        });
+
+        // Remove from charts needing update
+        state.chartsNeedingZoomUpdate.delete(chartId);
+      }
     }
   },
 
@@ -188,8 +254,8 @@ function createChartOption(plotSpec) {
       filterMode: 'none', // Don't filter data points outside zoom range
       xAxisIndex: 0,
       yAxisIndex: 'none',
-      start: 0,
-      end: 100,
+      start: state.globalZoom.start,
+      end: state.globalZoom.end,
       zoomLock: false
     }, {
       // Brush select zoom
@@ -197,8 +263,8 @@ function createChartOption(plotSpec) {
       show: false,
       xAxisIndex: 0,
       filterMode: 'none',
-      start: 0,
-      end: 100
+      start: state.globalZoom.start,
+      end: state.globalZoom.end
     }],
     textStyle: {
       color: '#E0E0E0'
@@ -412,18 +478,16 @@ function createHeatmapOption(baseOption, plotSpec) {
 
 // Handle the synchronization of cursors between charts
 function setupChartSync(charts) {
-  // Flag to prevent infinite recursion
-  let isSyncing = false;
-  // Flag for zoom synchronization
-  let isZooming = false;
-
   charts.forEach(mainChart => {
     // Setup brush events for zooming
     mainChart.on('brushSelected', function(params) {
-      if (isZooming) return;
-      isZooming = true;
+      // Prevent infinite recursion
+      if (state.isZoomSyncing) return;
 
       try {
+        // Set synchronization flag
+        state.isZoomSyncing = true;
+
         // Only handle rectangle brush type (for zooming)
         if (params.brushType === 'rect') {
           // Get the range from the brush
@@ -440,62 +504,99 @@ function setupChartSync(charts) {
             const startPercent = ((start - axisExtent[0]) / axisRange) * 100;
             const endPercent = ((end - axisExtent[0]) / axisRange) * 100;
 
-            // Apply zoom to all charts
-            charts.forEach(chart => {
-              chart.dispatchAction({
-                type: 'dataZoom',
-                start: startPercent,
-                end: endPercent
-              });
+            // Update the global zoom state
+            state.globalZoom.start = startPercent;
+            state.globalZoom.end = endPercent;
+            state.globalZoom.isZoomed = true;
 
-              // Clear the brush
-              chart.dispatchAction({
-                type: 'brush',
-                command: 'clear',
-                areas: []
-              });
+            // Apply zoom only to visible charts, mark others for lazy update
+            state.initializedCharts.forEach((chart, chartId) => {
+              const chartDom = chart.getDom();
+
+              if (isChartVisible(chartDom)) {
+                // Update visible charts immediately
+                chart.dispatchAction({
+                  type: 'dataZoom',
+                  start: startPercent,
+                  end: endPercent
+                });
+
+                // Clear the brush
+                chart.dispatchAction({
+                  type: 'brush',
+                  command: 'clear',
+                  areas: []
+                });
+
+                // Remove from charts needing update
+                state.chartsNeedingZoomUpdate.delete(chartId);
+              } else {
+                // Mark invisible charts for lazy update
+                state.chartsNeedingZoomUpdate.add(chartId);
+              }
             });
           }
         }
       } finally {
+        // Reset flag after a short delay
         setTimeout(() => {
-          isZooming = false;
+          state.isZoomSyncing = false;
         }, 0);
       }
     });
 
     // Setup double-click handler for zoom reset
     mainChart.getZr().on('dblclick', function() {
-      if (isZooming) return;
-      isZooming = true;
+      // Prevent infinite recursion
+      if (state.isZoomSyncing) return;
 
       try {
-        // Reset zoom on all charts
-        charts.forEach(chart => {
-          chart.dispatchAction({
-            type: 'dataZoom',
-            start: 0,
-            end: 100
-          });
+        // Set synchronization flag
+        state.isZoomSyncing = true;
+
+        // Reset the global zoom state
+        state.globalZoom.start = 0;
+        state.globalZoom.end = 100;
+        state.globalZoom.isZoomed = false;
+
+        // Clear the charts needing update set
+        state.chartsNeedingZoomUpdate.clear();
+
+        // Reset zoom only on visible charts
+        state.initializedCharts.forEach((chart, chartId) => {
+          const chartDom = chart.getDom();
+
+          if (isChartVisible(chartDom)) {
+            // Update visible charts immediately
+            chart.dispatchAction({
+              type: 'dataZoom',
+              start: 0,
+              end: 100
+            });
+          } else {
+            // Mark invisible charts for lazy update
+            state.chartsNeedingZoomUpdate.add(chartId);
+          }
         });
       } finally {
+        // Reset flag after a short delay
         setTimeout(() => {
-          isZooming = false;
+          state.isZoomSyncing = false;
         }, 0);
       }
     });
 
     // Sync cursor across charts
     mainChart.on('updateAxisPointer', function(event) {
-      // Skip if we're already in a synchronization process
-      if (isSyncing) return;
-
-      // Set flag to indicate we're synchronizing
-      isSyncing = true;
+      // Prevent infinite recursion
+      if (state.isCursorSyncing) return;
 
       try {
+        // Set synchronization flag
+        state.isCursorSyncing = true;
+
         // Update all other charts when this chart's cursor moves
-        charts.forEach(chart => {
+        state.initializedCharts.forEach(chart => {
           if (chart !== mainChart) {
             chart.dispatchAction({
               type: 'updateAxisPointer',
@@ -506,48 +607,61 @@ function setupChartSync(charts) {
           }
         });
       } finally {
-        // Reset flag after synchronization
+        // Reset flag after a short delay
         setTimeout(() => {
-          isSyncing = false;
+          state.isCursorSyncing = false;
         }, 0);
       }
     });
 
-    // Sync zooming across charts
+    // Sync zooming across charts and update global state
     mainChart.on('dataZoom', function(event) {
-      // Skip if we're already in a zooming process
-      if (isZooming) return;
+      // Prevent infinite recursion by using a flag
+      if (state.isZoomSyncing) return;
 
-      // Set flag to indicate we're zooming
-      isZooming = true;
+      // Only sync zooming actions initiated by user interaction
+      if (event.batch) {
+        try {
+          // Set synchronization flag to prevent recursion
+          state.isZoomSyncing = true;
 
-      try {
-        // Only sync zooming actions initiated by user interaction
-        if (event.batch) {
           // Get zoom range from the event
           const {
             start,
             end
           } = event.batch[0];
 
-          // Apply the same zoom to all other charts
-          charts.forEach(chart => {
+          // Update global zoom state
+          state.globalZoom.start = start;
+          state.globalZoom.end = end;
+          state.globalZoom.isZoomed = start !== 0 || end !== 100;
+
+          // Apply zoom only to visible charts, mark others for lazy update
+          state.initializedCharts.forEach((chart, chartId) => {
             if (chart !== mainChart) {
-              chart.dispatchAction({
-                type: 'dataZoom',
-                start: start,
-                end: end,
-                // Use 'dataZoomId' from the chart's first dataZoom instance
-                dataZoomId: chart.getOption().dataZoom[0].id
-              });
+              const chartDom = chart.getDom();
+
+              if (isChartVisible(chartDom)) {
+                // Update visible charts immediately
+                chart.dispatchAction({
+                  type: 'dataZoom',
+                  start: start,
+                  end: end
+                });
+                // Remove from charts needing update since we just updated it
+                state.chartsNeedingZoomUpdate.delete(chartId);
+              } else {
+                // Mark invisible charts for lazy update
+                state.chartsNeedingZoomUpdate.add(chartId);
+              }
             }
           });
+        } finally {
+          // Always reset the synchronization flag to allow future events
+          setTimeout(() => {
+            state.isZoomSyncing = false;
+          }, 0);
         }
-      } finally {
-        // Reset flag after synchronization
-        setTimeout(() => {
-          isZooming = false;
-        }, 0);
       }
     });
   });
@@ -566,6 +680,16 @@ m.route(document.body, "/overview", {
       // Clear initialized charts when changing sections
       if (requestedPath !== m.route.get()) {
         state.initializedCharts.clear();
+
+        // Reset global zoom state when changing sections
+        state.globalZoom = {
+          start: 0,
+          end: 100,
+          isZoomed: false
+        };
+
+        // Clear the charts needing update set
+        state.chartsNeedingZoomUpdate.clear();
       }
 
       const url = `/data/${params.section}.json`;
@@ -584,41 +708,47 @@ m.route(document.body, "/overview", {
             });
           },
           oncreate(vnode) {
-            // After the view is rendered, set up chart synchronization
-            setTimeout(() => {
-              // Only sync charts that are already initialized (visible)
-              const syncedCharts = Array.from(state.initializedCharts.values());
+            // Set up scroll handler to check for charts needing updates
+            const scrollHandler = () => {
+              if (state.chartsNeedingZoomUpdate.size > 0 && !state.isZoomSyncing) {
+                // Get all chart IDs that need updates
+                const chartIdsToUpdate = [...state.chartsNeedingZoomUpdate];
 
-              if (syncedCharts.length > 1) {
-                setupChartSync(syncedCharts);
-              }
+                // Check each chart if it's now visible
+                for (const chartId of chartIdsToUpdate) {
+                  const chart = state.initializedCharts.get(chartId);
+                  if (chart && isChartVisible(chart.getDom())) {
+                    // Chart is now visible, apply zoom update
+                    try {
+                      state.isZoomSyncing = true;
+                      chart.dispatchAction({
+                        type: 'dataZoom',
+                        start: state.globalZoom.start,
+                        end: state.globalZoom.end
+                      });
 
-              // Set up a MutationObserver to handle new charts being initialized
-              const chartContainer = document.getElementById('groups');
-              if (chartContainer) {
-                const chartObserver = new MutationObserver(() => {
-                  // Get all currently initialized charts
-                  const currentCharts = Array.from(state.initializedCharts.values());
-                  if (currentCharts.length > 1) {
-                    setupChartSync(currentCharts);
+                      // Remove from update list
+                      state.chartsNeedingZoomUpdate.delete(chartId);
+                    } finally {
+                      setTimeout(() => {
+                        state.isZoomSyncing = false;
+                      }, 0);
+                    }
                   }
-                });
-
-                // Observe changes to the chart container
-                chartObserver.observe(chartContainer, {
-                  subtree: true,
-                  childList: true
-                });
-
-                // Store for cleanup
-                vnode.state.chartObserver = chartObserver;
+                }
               }
-            }, 100);
+            };
+
+            // Attach scroll listener
+            window.addEventListener('scroll', scrollHandler, {
+              passive: true
+            });
+            vnode.state.scrollHandler = scrollHandler;
           },
           onremove(vnode) {
-            // Clean up the observer when changing routes
-            if (vnode.state.chartObserver) {
-              vnode.state.chartObserver.disconnect();
+            // Clean up scroll handler
+            if (vnode.state.scrollHandler) {
+              window.removeEventListener('scroll', vnode.state.scrollHandler);
             }
           }
         });
