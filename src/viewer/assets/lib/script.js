@@ -1,5 +1,5 @@
 // Rezolus Performance Visualization with Apache ECharts
-// This replaces the original uPlot implementation
+// This replaces the original uPlot implementation with optimized ECharts version
 
 const log = console.log.bind(console);
 
@@ -226,6 +226,7 @@ function createLineChartOption(baseOption, plotSpec) {
     return baseOption;
   }
 
+  // For line charts, we expect the classic 2-row format: [times, values]
   const timeData = data[0];
   const valueData = data[1];
 
@@ -296,50 +297,38 @@ function createLineChartOption(baseOption, plotSpec) {
 
 function createHeatmapOption(baseOption, plotSpec) {
   const {
-    data
+    data,
+    min_value,
+    max_value
   } = plotSpec;
 
-  if (!data || data.length < 3) {
+  if (!data || data.length < 1) {
     return baseOption;
   }
 
-  const timeData = data[0]; // X axis (time)
-  // Create y-indices correctly accounting for all data rows (CPUs)
-  const yIndices = Array.from({
-    length: data.length - 1
-  }, (_, i) => i); // Y axis (CPU indices)
+  // In the optimized format, data is already in [x, y, value] format
+  // and min_value/max_value are pre-calculated
 
-  // Process data for heatmap format - converts from series of arrays to array of [x, y, value] items
-  const heatmapData = [];
+  // Get unique x indices (timestamps) and y indices (CPUs)
+  const xIndices = new Set();
+  const yIndices = new Set();
 
-  // Start from 1 to skip the time array (data[0])
-  for (let y = 1; y < data.length; y++) {
-    const rowData = data[y];
-    if (!rowData) continue;
+  data.forEach(item => {
+    xIndices.add(item[0]);
+    yIndices.add(item[1]);
+  });
 
-    for (let x = 0; x < timeData.length; x++) {
-      if (rowData[x] !== undefined && rowData[x] !== null) {
-        // Adjust y-index to be zero-based (y-1) since we're skipping the first row (time data)
-        heatmapData.push([x, y - 1, rowData[x]]);
-      }
-    }
+  // Calculate min/max values if not provided by backend
+  let minValue = min_value !== undefined ? min_value : Infinity;
+  let maxValue = max_value !== undefined ? max_value : -Infinity;
+
+  if (minValue === Infinity || maxValue === -Infinity) {
+    data.forEach(item => {
+      const value = item[2];
+      minValue = Math.min(minValue, value);
+      maxValue = Math.max(maxValue, value);
+    });
   }
-
-  // Format time for x-axis
-  const formattedTimeData = timeData.map(timestamp => {
-    const date = new Date(timestamp * 1000);
-    return date.toISOString().replace('T', ' ').substr(0, 19);
-  });
-
-  // Calculate value range for color scale
-  let minValue = Infinity;
-  let maxValue = -Infinity;
-
-  heatmapData.forEach(item => {
-    const value = item[2];
-    if (value < minValue) minValue = value;
-    if (value > maxValue) maxValue = value;
-  });
 
   return {
     ...baseOption,
@@ -347,9 +336,7 @@ function createHeatmapOption(baseOption, plotSpec) {
       position: 'top',
       formatter: function(params) {
         const value = params.data[2];
-        const time = formattedTimeData[params.data[0]];
-        const cpu = params.data[1];
-        return `Time: ${time}<br>CPU: ${cpu}<br>Value: ${value.toFixed(6)}`;
+        return `CPU: ${params.data[1]}<br>Value: ${value.toFixed(6)}`;
       }
     },
     grid: {
@@ -358,21 +345,21 @@ function createHeatmapOption(baseOption, plotSpec) {
     },
     xAxis: {
       type: 'category',
-      data: formattedTimeData,
+      data: Array.from(xIndices).sort((a, b) => a - b),
       splitArea: {
         show: true
       },
       axisLabel: {
         color: '#ABABAB',
         formatter: function(value) {
-          // Show just time for short format
-          return value.split(' ')[1];
+          // Show short format for x-axis labels
+          return value;
         }
       }
     },
     yAxis: {
       type: 'category',
-      data: yIndices,
+      data: Array.from(yIndices).sort((a, b) => a - b),
       splitArea: {
         show: true
       },
@@ -402,7 +389,7 @@ function createHeatmapOption(baseOption, plotSpec) {
     series: [{
       name: plotSpec.opts.title,
       type: 'heatmap',
-      data: heatmapData,
+      data: data,
       emphasis: {
         itemStyle: {
           shadowBlur: 10,

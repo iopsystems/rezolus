@@ -192,8 +192,8 @@ pub fn run(config: Config) {
         let series = data
             .cpu_heatmap("cpu_usage", Labels::default())
             .map(|v| v / 1000000000.0);
-        cpu_overview.heatmap(opts.clone(), series.clone());
-        utilization.heatmap(opts.clone(), series.clone());
+        cpu_overview.heatmap_echarts(opts.clone(), series.clone());
+        utilization.heatmap_echarts(opts.clone(), series.clone());
 
         for state in &["User", "System", "SoftIRQ"] {
             let opts = PlotOpts::line(
@@ -210,7 +210,7 @@ pub fn run(config: Config) {
                 format!("{state} %"),
                 format!("{}-pct-heatmap", state.to_lowercase()),
             );
-            utilization.heatmap(
+            utilization.heatmap_echarts(
                 opts,
                 data.cpu_heatmap("cpu_usage", [("state", state.to_lowercase())])
                     .map(|v| v / 1000000000.0),
@@ -239,7 +239,7 @@ pub fn run(config: Config) {
             data.cpu_heatmap("cpu_instructions", Labels::default()),
         ) {
             let ipc = instructions / cycles;
-            performance.heatmap(opts, Some(ipc));
+            performance.heatmap_echarts(opts, Some(ipc));
         }
 
         let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns");
@@ -279,7 +279,7 @@ pub fn run(config: Config) {
             data.sum("cpu_cores", Labels::default()),
         ) {
             let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
-            performance.heatmap(opts, Some(ipns));
+            performance.heatmap_echarts(opts, Some(ipns));
         }
 
         let opts = PlotOpts::line("Frequency", "frequency");
@@ -301,7 +301,7 @@ pub fn run(config: Config) {
             data.sum("cpu_cores", Labels::default()),
         ) {
             let frequency = tsc * aperf / mperf / cores;
-            performance.heatmap(opts, Some(frequency));
+            performance.heatmap_echarts(opts, Some(frequency));
         }
 
         cpu.groups.push(performance);
@@ -314,7 +314,7 @@ pub fn run(config: Config) {
         tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
 
         let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap");
-        tlb.heatmap(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
+        tlb.heatmap_echarts(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
 
         for reason in &[
             "Local MM Shootdown",
@@ -344,7 +344,7 @@ pub fn run(config: Config) {
             );
 
             let opts = PlotOpts::heatmap(*label, format!("{id}-heatmap"));
-            tlb.heatmap(
+            tlb.heatmap_echarts(
                 opts,
                 data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
             );
@@ -599,14 +599,40 @@ impl Group {
 
     pub fn plot(&mut self, opts: PlotOpts, series: Option<TimeSeries>) {
         if let Some(data) = series.map(|v| v.as_data()) {
-            self.plots.push(Plot { opts, data })
+            self.plots.push(Plot {
+                opts,
+                data,
+                min_value: None,
+                max_value: None,
+            })
         }
     }
 
     pub fn heatmap(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
         if let Some(data) = series.map(|v| v.as_data()) {
             if data.len() > 1 {
-                self.plots.push(Plot { opts, data })
+                self.plots.push(Plot {
+                    opts,
+                    data,
+                    min_value: None,
+                    max_value: None,
+                })
+            }
+        }
+    }
+
+    // New method to use the ECharts optimized heatmap data format
+    pub fn heatmap_echarts(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
+        if let Some(heatmap) = series {
+            let echarts_data = heatmap.as_echarts_data();
+            // Only add if there's data
+            if !echarts_data.data.is_empty() {
+                self.plots.push(Plot {
+                    opts,
+                    data: echarts_data.data,
+                    min_value: Some(echarts_data.min_value),
+                    max_value: Some(echarts_data.max_value),
+                })
             }
         }
     }
@@ -616,6 +642,10 @@ impl Group {
 pub struct Plot {
     data: Vec<Vec<f64>>,
     opts: PlotOpts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_value: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]

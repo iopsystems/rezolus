@@ -2,6 +2,7 @@ use arrow::array::Int64Array;
 use arrow::array::UInt64Array;
 use arrow::datatypes::DataType;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -429,6 +430,13 @@ pub struct Heatmap {
     inner: BTreeMap<usize, TimeSeries>,
 }
 
+#[derive(Serialize)]
+pub struct HeatmapData {
+    pub data: Vec<Vec<f64>>,
+    pub min_value: f64,
+    pub max_value: f64,
+}
+
 impl Heatmap {
     pub fn as_data(&self) -> Vec<Vec<f64>> {
         let mut timestamps = BTreeSet::new();
@@ -470,6 +478,48 @@ impl Heatmap {
         }
 
         data
+    }
+
+    // New method to return data in a format directly consumable by ECharts
+    pub fn as_echarts_data(&self) -> HeatmapData {
+        let mut timestamps = BTreeSet::new();
+        let mut min_value = f64::MAX;
+        let mut max_value = f64::MIN;
+
+        // Collect all timestamps and find min/max values
+        for series in self.inner.values() {
+            for (ts, value) in series.inner.iter() {
+                timestamps.insert(*ts);
+                min_value = min_value.min(*value);
+                max_value = max_value.max(*value);
+            }
+        }
+
+        let timestamps: Vec<u64> = timestamps.into_iter().collect();
+
+        // Pre-format timestamps to unix seconds
+        let timestamp_seconds: Vec<f64> = timestamps
+            .iter()
+            .map(|ts| *ts as f64 / 1000000000.0)
+            .collect();
+
+        // Convert to ECharts format: [[x, y, value], ...]
+        let mut heatmap_data = Vec::new();
+
+        for (cpu_id, series) in self.inner.iter() {
+            for (i, ts) in timestamps.iter().enumerate() {
+                if let Some(value) = series.inner.get(ts) {
+                    // x index (timestamp index), y index (CPU ID), value
+                    heatmap_data.push(vec![i as f64, *cpu_id as f64, *value]);
+                }
+            }
+        }
+
+        HeatmapData {
+            data: heatmap_data,
+            min_value,
+            max_value,
+        }
     }
 }
 
