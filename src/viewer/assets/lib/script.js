@@ -200,19 +200,6 @@ function createChartOption(plotSpec) {
       start: 0,
       end: 100
     }],
-    brush: {
-      toolbox: [],
-      xAxisIndex: 0,
-      brushLink: 'all', // Link all charts
-      outOfBrush: {
-        colorAlpha: 0.1 // Show out-of-brush area with more transparency
-      },
-      brushStyle: {
-        borderWidth: 1,
-        color: 'rgba(120, 140, 180, 0.3)',
-        borderColor: 'rgba(120, 140, 180, 0.8)'
-      }
-    },
     textStyle: {
       color: '#E0E0E0'
     },
