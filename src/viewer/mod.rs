@@ -313,7 +313,7 @@ pub fn run(config: Config) {
         let opts = PlotOpts::line("Total", "tlb-total");
         tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
 
-        let opts = PlotOpts::line("Total", "tlb-total-heatmap");
+        let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap");
         tlb.heatmap(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
 
         for reason in &[
@@ -343,7 +343,7 @@ pub fn run(config: Config) {
                 data.sum("cpu_tlb_flush", [("reason", reason.clone())]),
             );
 
-            let opts = PlotOpts::line(*label, format!("{id}-heatmap"));
+            let opts = PlotOpts::heatmap(*label, format!("{id}-heatmap"));
             tlb.heatmap(
                 opts,
                 data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
