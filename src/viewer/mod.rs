@@ -604,6 +604,7 @@ impl Group {
                 data,
                 min_value: None,
                 max_value: None,
+                time_data: None,
             })
         }
     }
@@ -616,6 +617,7 @@ impl Group {
                     data,
                     min_value: None,
                     max_value: None,
+                    time_data: None,
                 })
             }
         }
@@ -632,6 +634,7 @@ impl Group {
                     data: echarts_data.data,
                     min_value: Some(echarts_data.min_value),
                     max_value: Some(echarts_data.max_value),
+                    time_data: Some(echarts_data.time),
                 })
             }
         }
@@ -646,6 +649,8 @@ pub struct Plot {
     min_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_data: Option<Vec<f64>>,
 }
 
 #[derive(Serialize, Clone)]

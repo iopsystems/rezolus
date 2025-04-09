@@ -432,6 +432,7 @@ pub struct Heatmap {
 
 #[derive(Serialize)]
 pub struct HeatmapData {
+    pub time: Vec<f64>,
     pub data: Vec<Vec<f64>>,
     pub min_value: f64,
     pub max_value: f64,
@@ -516,6 +517,7 @@ impl Heatmap {
         }
 
         HeatmapData {
+            time: timestamp_seconds,
             data: heatmap_data,
             min_value,
             max_value,

@@ -297,6 +297,7 @@ function createLineChartOption(baseOption, plotSpec) {
 
 function createHeatmapOption(baseOption, plotSpec) {
   const {
+    time_data,
     data,
     min_value,
     max_value
@@ -318,6 +319,11 @@ function createHeatmapOption(baseOption, plotSpec) {
     yIndices.add(item[1]);
   });
 
+  const formattedTimeData = time_data.map(timestamp => {
+    const date = new Date(timestamp * 1000);
+    return date.toISOString().replace('T', ' ').substr(0, 19);
+  });
+
   // Calculate min/max values if not provided by backend
   let minValue = min_value !== undefined ? min_value : Infinity;
   let maxValue = max_value !== undefined ? max_value : -Infinity;
@@ -336,7 +342,9 @@ function createHeatmapOption(baseOption, plotSpec) {
       position: 'top',
       formatter: function(params) {
         const value = params.data[2];
-        return `CPU: ${params.data[1]}<br>Value: ${value.toFixed(6)}`;
+        const time = formattedTimeData[params.data[0]];
+        const cpu = params.data[1];
+        return `Time: ${time}<br>CPU: ${cpu}<br>Value: ${value.toFixed(6)}`;
       }
     },
     grid: {
@@ -345,7 +353,7 @@ function createHeatmapOption(baseOption, plotSpec) {
     },
     xAxis: {
       type: 'category',
-      data: Array.from(xIndices).sort((a, b) => a - b),
+      data: formattedTimeData,
       splitArea: {
         show: true
       },
