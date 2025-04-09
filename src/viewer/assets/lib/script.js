@@ -5,29 +5,42 @@ const log = console.log.bind(console);
 
 const state = {
   // for tracking current visualization state
-  current: null
+  current: null,
+  // Store initialized charts to prevent re-rendering
+  initializedCharts: new Map()
 };
 
 const Sidebar = {
-  view({ attrs }) {
+  view({
+    attrs
+  }) {
     return m("div#sidebar", [
-      attrs.sections.map((section) => m('div.section', m(m.route.Link, { 
-        class: attrs.activeSection === section ? 'selected' : '', 
+      attrs.sections.map((section) => m(m.route.Link, {
+        class: attrs.activeSection === section ? 'selected' : '',
         href: section.route,
-      }, section.name)))
+      }, section.name))
     ]);
   }
 };
 
 const Main = {
-  view({ attrs: { activeSection, groups, sections } }) {
-    return m("div", 
+  view({
+    attrs: {
+      activeSection,
+      groups,
+      sections
+    }
+  }) {
+    return m("div",
       m("header", [
         m('h1', 'Rezolus', m('span.div', ' » '), activeSection.name),
       ]),
       m("main", [
-        m(Sidebar, { activeSection, sections }),
-        m('div#groups', 
+        m(Sidebar, {
+          activeSection,
+          sections
+        }),
+        m('div#groups',
           groups.map((group) => m(Group, group))
         )
       ]));
@@ -35,59 +48,102 @@ const Main = {
 };
 
 const Group = {
-  view({ attrs }) {
-    return m("div.group", { id: attrs.id }, [
+  view({
+    attrs
+  }) {
+    return m("div.group", {
+      id: attrs.id
+    }, [
       m("h2", `${attrs.name}`),
       m("div.plots", attrs.plots.map(spec => m(Plot, spec))),
     ]);
   }
 };
 
-// Plot component that renders ECharts visualizations
+// Plot component that renders ECharts visualizations with lazy loading
 const Plot = {
   oncreate: function(vnode) {
-    const { attrs } = vnode;
+    const {
+      attrs
+    } = vnode;
     const chartDom = vnode.dom;
-    const chart = echarts.init(chartDom);
-    
-    // Store chart instance for cleanup
-    vnode.state.chart = chart;
-    
-    // Configure and render the chart based on plot style
-    const option = createChartOption(attrs);
-    chart.setOption(option);
-    
-    // Enable brush select for zooming
-    chart.dispatchAction({
-      type: 'takeGlobalCursor',
-      key: 'dataZoomSelect',
-      dataZoomSelectActive: true
+
+    // Set up the Intersection Observer to lazy load the chart
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          // Check if we already initialized this chart
+          const chartId = attrs.opts.id;
+          if (!state.initializedCharts.has(chartId)) {
+            // Initialize the chart
+            const chart = echarts.init(chartDom);
+            // Store chart instance for cleanup and to prevent re-initialization
+            state.initializedCharts.set(chartId, chart);
+
+            // Configure and render the chart based on plot style
+            const option = createChartOption(attrs);
+            chart.setOption(option);
+
+            // Enable brush select for zooming
+            chart.dispatchAction({
+              type: 'takeGlobalCursor',
+              key: 'dataZoomSelect',
+              dataZoomSelectActive: true
+            });
+
+            // Store chart in vnode state for updates and cleanup
+            vnode.state.chart = chart;
+          } else {
+            // Chart was already initialized, just reference it
+            vnode.state.chart = state.initializedCharts.get(chartId);
+          }
+
+          // Once initialized, we can stop observing
+          observer.unobserve(chartDom);
+        }
+      });
+    }, {
+      root: null, // Use viewport as root
+      rootMargin: '100px', // Load when within 100px of viewport
+      threshold: 0.1 // Trigger when at least 10% visible
     });
-    
+
+    // Start observing the chart element
+    observer.observe(chartDom);
+
     // Add window resize handler
     const resizeHandler = () => {
-      chart.resize();
+      if (vnode.state.chart) {
+        vnode.state.chart.resize();
+      }
     };
     window.addEventListener('resize', resizeHandler);
     vnode.state.resizeHandler = resizeHandler;
+    vnode.state.observer = observer;
   },
-  
+
   onupdate: function(vnode) {
-    // Update chart if data changed
+    // Update chart if data changed and chart is initialized
     if (vnode.state.chart) {
       const option = createChartOption(vnode.attrs);
       vnode.state.chart.setOption(option);
     }
   },
-  
+
   onremove: function(vnode) {
     // Clean up chart instance and event handlers
+    if (vnode.state.observer) {
+      vnode.state.observer.disconnect();
+    }
+
     if (vnode.state.chart) {
       window.removeEventListener('resize', vnode.state.resizeHandler);
-      vnode.state.chart.dispose();
+      // Don't dispose the chart since it's stored in initializedCharts
+      // Only remove our reference to it
+      vnode.state.chart = null;
     }
   },
-  
+
   view: function() {
     return m('div.plot');
   }
@@ -95,8 +151,11 @@ const Plot = {
 
 // Create ECharts options based on plot type
 function createChartOption(plotSpec) {
-  const { opts, data } = plotSpec;
-  
+  const {
+    opts,
+    data
+  } = plotSpec;
+
   // Basic option template
   const option = {
     grid: {
@@ -123,27 +182,24 @@ function createChartOption(plotSpec) {
         color: '#E0E0E0'
       }
     },
-    dataZoom: [
-      {
-        // Inside zoom (mouse wheel and pinch zoom)
-        type: 'inside',
-        filterMode: 'none', // Don't filter data points outside zoom range
-        xAxisIndex: 0,
-        yAxisIndex: 'none',
-        start: 0,
-        end: 100,
-        zoomLock: false
-      },
-      {
-        // Brush select zoom
-        type: 'slider',
-        show: false,
-        xAxisIndex: 0,
-        filterMode: 'none',
-        start: 0,
-        end: 100
-      }
-    ],
+    dataZoom: [{
+      // Inside zoom (mouse wheel and pinch zoom)
+      type: 'inside',
+      filterMode: 'none', // Don't filter data points outside zoom range
+      xAxisIndex: 0,
+      yAxisIndex: 'none',
+      start: 0,
+      end: 100,
+      zoomLock: false
+    }, {
+      // Brush select zoom
+      type: 'slider',
+      show: false,
+      xAxisIndex: 0,
+      filterMode: 'none',
+      start: 0,
+      end: 100
+    }],
     brush: {
       toolbox: [],
       xAxisIndex: 0,
@@ -163,33 +219,35 @@ function createChartOption(plotSpec) {
     darkMode: true,
     backgroundColor: 'transparent'
   };
-  
+
   // Handle different plot types
   if (opts.style === 'line') {
     return createLineChartOption(option, plotSpec);
   } else if (opts.style === 'heatmap') {
     return createHeatmapOption(option, plotSpec);
   }
-  
+
   return option;
 }
 
 function createLineChartOption(baseOption, plotSpec) {
-  const { data } = plotSpec;
-  
+  const {
+    data
+  } = plotSpec;
+
   if (!data || data.length < 2) {
     return baseOption;
   }
-  
+
   const timeData = data[0];
   const valueData = data[1];
-  
+
   // Format time for x-axis
   const formattedTimeData = timeData.map(timestamp => {
     const date = new Date(timestamp * 1000);
     return date.toISOString().replace('T', ' ').substr(0, 19);
   });
-  
+
   // Return line chart configuration
   return {
     ...baseOption,
@@ -250,48 +308,52 @@ function createLineChartOption(baseOption, plotSpec) {
 }
 
 function createHeatmapOption(baseOption, plotSpec) {
-  const { data } = plotSpec;
-  
+  const {
+    data
+  } = plotSpec;
+
   if (!data || data.length < 3) {
     return baseOption;
   }
-  
+
   const timeData = data[0]; // X axis (time)
   // Create y-indices correctly accounting for all data rows (CPUs)
-  const yIndices = Array.from({ length: data.length - 1 }, (_, i) => i); // Y axis (CPU indices)
-  
+  const yIndices = Array.from({
+    length: data.length - 1
+  }, (_, i) => i); // Y axis (CPU indices)
+
   // Process data for heatmap format - converts from series of arrays to array of [x, y, value] items
   const heatmapData = [];
-  
+
   // Start from 1 to skip the time array (data[0])
   for (let y = 1; y < data.length; y++) {
     const rowData = data[y];
     if (!rowData) continue;
-    
+
     for (let x = 0; x < timeData.length; x++) {
       if (rowData[x] !== undefined && rowData[x] !== null) {
         // Adjust y-index to be zero-based (y-1) since we're skipping the first row (time data)
-        heatmapData.push([x, y-1, rowData[x]]);
+        heatmapData.push([x, y - 1, rowData[x]]);
       }
     }
   }
-  
+
   // Format time for x-axis
   const formattedTimeData = timeData.map(timestamp => {
     const date = new Date(timestamp * 1000);
     return date.toISOString().replace('T', ' ').substr(0, 19);
   });
-  
+
   // Calculate value range for color scale
   let minValue = Infinity;
   let maxValue = -Infinity;
-  
+
   heatmapData.forEach(item => {
     const value = item[2];
     if (value < minValue) minValue = value;
     if (value > maxValue) maxValue = value;
   });
-  
+
   return {
     ...baseOption,
     tooltip: {
@@ -372,13 +434,13 @@ function setupChartSync(charts) {
   let isSyncing = false;
   // Flag for zoom synchronization
   let isZooming = false;
-  
+
   charts.forEach(mainChart => {
     // Setup brush events for zooming
     mainChart.on('brushSelected', function(params) {
       if (isZooming) return;
       isZooming = true;
-      
+
       try {
         // Only handle rectangle brush type (for zooming)
         if (params.brushType === 'rect') {
@@ -386,16 +448,16 @@ function setupChartSync(charts) {
           const areas = params.areas[0];
           if (areas && areas.coordRange) {
             const [start, end] = areas.coordRange;
-            
+
             // Get x-axis data range
             const xAxis = mainChart.getModel().getComponent('xAxis', 0);
             const axisExtent = xAxis.axis.scale.getExtent();
             const axisRange = axisExtent[1] - axisExtent[0];
-            
+
             // Calculate percentage
             const startPercent = ((start - axisExtent[0]) / axisRange) * 100;
             const endPercent = ((end - axisExtent[0]) / axisRange) * 100;
-            
+
             // Apply zoom to all charts
             charts.forEach(chart => {
               chart.dispatchAction({
@@ -403,7 +465,7 @@ function setupChartSync(charts) {
                 start: startPercent,
                 end: endPercent
               });
-              
+
               // Clear the brush
               chart.dispatchAction({
                 type: 'brush',
@@ -419,12 +481,12 @@ function setupChartSync(charts) {
         }, 0);
       }
     });
-    
+
     // Setup double-click handler for zoom reset
     mainChart.getZr().on('dblclick', function() {
       if (isZooming) return;
       isZooming = true;
-      
+
       try {
         // Reset zoom on all charts
         charts.forEach(chart => {
@@ -440,15 +502,15 @@ function setupChartSync(charts) {
         }, 0);
       }
     });
-    
+
     // Sync cursor across charts
     mainChart.on('updateAxisPointer', function(event) {
       // Skip if we're already in a synchronization process
       if (isSyncing) return;
-      
+
       // Set flag to indicate we're synchronizing
       isSyncing = true;
-      
+
       try {
         // Update all other charts when this chart's cursor moves
         charts.forEach(chart => {
@@ -468,21 +530,24 @@ function setupChartSync(charts) {
         }, 0);
       }
     });
-    
+
     // Sync zooming across charts
     mainChart.on('dataZoom', function(event) {
       // Skip if we're already in a zooming process
       if (isZooming) return;
-      
+
       // Set flag to indicate we're zooming
       isZooming = true;
-      
+
       try {
         // Only sync zooming actions initiated by user interaction
         if (event.batch) {
           // Get zoom range from the event
-          const { start, end } = event.batch[0];
-          
+          const {
+            start,
+            end
+          } = event.batch[0];
+
           // Apply the same zoom to all other charts
           charts.forEach(chart => {
             if (chart !== mainChart) {
@@ -513,7 +578,12 @@ m.route(document.body, "/overview", {
     onmatch(params, requestedPath) {
       // Prevent a route change if we're already on this route
       if (m.route.get() === requestedPath) {
-        return new Promise(function () {});
+        return new Promise(function() {});
+      }
+
+      // Clear initialized charts when changing sections
+      if (requestedPath !== m.route.get()) {
+        state.initializedCharts.clear();
       }
 
       const url = `/data/${params.section}.json`;
@@ -527,20 +597,47 @@ m.route(document.body, "/overview", {
         const activeSection = data.sections.find(section => section.route === requestedPath);
         return ({
           view() {
-            return m(Main, { ...data, activeSection });
+            return m(Main, {...data,
+              activeSection
+            });
           },
           oncreate(vnode) {
             // After the view is rendered, set up chart synchronization
             setTimeout(() => {
-              const chartElements = document.querySelectorAll('.plot');
-              const charts = Array.from(chartElements)
-                .map(el => echarts.getInstanceByDom(el))
-                .filter(Boolean);
-              
-              if (charts.length > 1) {
-                setupChartSync(charts);
+              // Only sync charts that are already initialized (visible)
+              const syncedCharts = Array.from(state.initializedCharts.values());
+
+              if (syncedCharts.length > 1) {
+                setupChartSync(syncedCharts);
+              }
+
+              // Set up a MutationObserver to handle new charts being initialized
+              const chartContainer = document.getElementById('groups');
+              if (chartContainer) {
+                const chartObserver = new MutationObserver(() => {
+                  // Get all currently initialized charts
+                  const currentCharts = Array.from(state.initializedCharts.values());
+                  if (currentCharts.length > 1) {
+                    setupChartSync(currentCharts);
+                  }
+                });
+
+                // Observe changes to the chart container
+                chartObserver.observe(chartContainer, {
+                  subtree: true,
+                  childList: true
+                });
+
+                // Store for cleanup
+                vnode.state.chartObserver = chartObserver;
               }
             }, 100);
+          },
+          onremove(vnode) {
+            // Clean up the observer when changing routes
+            if (vnode.state.chartObserver) {
+              vnode.state.chartObserver.disconnect();
+            }
           }
         });
       });
