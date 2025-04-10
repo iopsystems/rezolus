@@ -1,21 +1,15 @@
-//! Collects CPU perf counters using BPF and traces:
+//! Collects CPU perf counters and traces:
 //! * `sched_switch`
 //!
 //! Initializes perf events to collect MSRs for APERF, MPERF, and TSC.
 //!
 //! And produces these stats:
-//! * `cpu/aperf`
-//! * `cpu/mperf`
-//! * `cpu/tsc`
+//! * `cpu_aperf`
+//! * `cpu_mperf`
+//! * `cpu_tsc`
 //!
 //! These stats can be used to calculate the base frequency and running
 //! frequency in post-processing or in an observability stack.
-
-/// This sampler is used to measure CPU L3 cache access and misses. It does this
-/// by using two uncore PMUs for each L3 cache domain.
-///
-/// This requires that we identify each L3 cache domain but also identify the
-/// correct raw perf events to use which are processor dependent.
 
 const NAME: &str = "cpu_frequency";
 
