@@ -15,8 +15,8 @@ const NAME: &str = "cpu_frequency";
 
 use crate::agent::*;
 
-use perf_event::ReadFormat;
 use perf_event::events::x86::{Msr, MsrId};
+use perf_event::ReadFormat;
 use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
@@ -68,9 +68,11 @@ impl FrequencyInner {
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
         for core in &mut self.cores {
             if let Ok(group) = core.tsc.read_group() {
-                if let (Some(aperf), Some(mperf), Some(tsc)) =
-                    (group.get(&core.aperf), group.get(&core.mperf), group.get(&core.tsc))
-                {
+                if let (Some(aperf), Some(mperf), Some(tsc)) = (
+                    group.get(&core.aperf),
+                    group.get(&core.mperf),
+                    group.get(&core.tsc),
+                ) {
                     let aperf = aperf.value();
                     let mperf = mperf.value();
                     let tsc = tsc.value();
@@ -155,22 +157,18 @@ impl Core {
                             .exclude_kernel(false)
                             .build_with_group(&mut tsc)
                         {
-                            Ok(mperf) => {
-                                match tsc.enable_group() {
-                                    Ok(_) => {
-                                        Ok(Core {
-                                            aperf,
-                                            mperf,
-                                            tsc,
-                                            siblings,
-                                        })
-                                    }
-                                    Err(e) => {
-                                        error!("failed to enable the perf group on CPU{cpu}: {e}");
-                                        Err(())
-                                    }
+                            Ok(mperf) => match tsc.enable_group() {
+                                Ok(_) => Ok(Core {
+                                    aperf,
+                                    mperf,
+                                    tsc,
+                                    siblings,
+                                }),
+                                Err(e) => {
+                                    error!("failed to enable the perf group on CPU{cpu}: {e}");
+                                    Err(())
                                 }
-                            }
+                            },
                             Err(e) => {
                                 debug!("failed to enable the mperf counter on CPU{cpu}: {e}");
                                 Err(())

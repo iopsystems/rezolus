@@ -21,4 +21,3 @@ pub static CPU_MPERF: CounterGroup = CounterGroup::new(MAX_CPUS);
     metadata = { unit = "cycles" }
 )]
 pub static CPU_TSC: CounterGroup = CounterGroup::new(MAX_CPUS);
-
