@@ -30,7 +30,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     let counters = vec![
         &SOFTNET_TIME_SQUEEZED,
-        &SOFTNET_BUDGET_EXHAUSTED, 
+        &SOFTNET_BUDGET_EXHAUSTED,
         &SOFTNET_PROCESSED,
         &SOFTNET_POLL,
     ];
