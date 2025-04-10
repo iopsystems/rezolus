@@ -1,6 +1,7 @@
 mod sysfs;
 
 mod interfaces;
+mod softnet;
 mod traffic;
 
 use walkdir::{DirEntry, WalkDir};
