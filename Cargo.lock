@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.0.0-alpha.9"
+version = "5.0.0-alpha.10"
 dependencies = [
  "anyhow",
  "async-trait",
