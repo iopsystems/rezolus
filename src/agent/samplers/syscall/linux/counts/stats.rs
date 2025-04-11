@@ -69,6 +69,55 @@ pub static SYSCALL_SOCKET: LazyCounter = LazyCounter::new(Counter::default);
 )]
 pub static SYSCALL_YIELD: LazyCounter = LazyCounter::new(Counter::default);
 
+#[metric(
+    name = "syscall",
+    description = "The number of filesystem operations (open, close, stat, chmod, mkdir, ...)",
+    metadata = { unit = "syscalls", op = "filesystem" }
+)]
+pub static SYSCALL_FILESYSTEM: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "syscall",
+    description = "The number of memory management syscalls (mmap, munmap, mprotect, brk, ...)",
+    metadata = { unit = "syscalls", op = "memory" }
+)]
+pub static SYSCALL_MEMORY: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "syscall",
+    description = "The number of process control syscalls (fork, clone, exec, wait, kill, ...)",
+    metadata = { unit = "syscalls", op = "process" }
+)]
+pub static SYSCALL_PROCESS: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "syscall",
+    description = "The number of resource query syscalls (getrusage, getrlimit, getpid, ...)",
+    metadata = { unit = "syscalls", op = "query" }
+)]
+pub static SYSCALL_QUERY: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "syscall",
+    description = "The number of IPC syscalls (pipe, msgget, semop, shmat, mq_open, ...)",
+    metadata = { unit = "syscalls", op = "ipc" }
+)]
+pub static SYSCALL_IPC: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "syscall",
+    description = "The number of timer syscalls (alarm, setitimer, timer_create, ...)",
+    metadata = { unit = "syscalls", op = "timer" }
+)]
+pub static SYSCALL_TIMER: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "syscall",
+    description = "The number of event notification syscalls (eventfd, inotify, io_uring, ...)",
+    metadata = { unit = "syscalls", op = "event" }
+)]
+pub static SYSCALL_EVENT: LazyCounter = LazyCounter::new(Counter::default);
+
 /*
  * per-cgroup
  */
@@ -135,3 +184,52 @@ pub static CGROUP_SYSCALL_SOCKET: CounterGroup = CounterGroup::new(MAX_CGROUPS);
     metadata = { unit = "syscalls", op = "yield" }
 )]
 pub static CGROUP_SYSCALL_YIELD: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_syscall",
+    description = "The number of filesystem operations on a per-cgroup basis (open, stat, mkdir, ...)",
+    metadata = { unit = "syscalls", op = "filesystem" }
+)]
+pub static CGROUP_SYSCALL_FILESYSTEM: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_syscall",
+    description = "The number of memory management syscalls on a per-cgroup basis (mmap, brk, ...)",
+    metadata = { unit = "syscalls", op = "memory" }
+)]
+pub static CGROUP_SYSCALL_MEMORY: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_syscall",
+    description = "The number of process control syscalls on a per-cgroup basis (fork, exec, ...)",
+    metadata = { unit = "syscalls", op = "process" }
+)]
+pub static CGROUP_SYSCALL_PROCESS: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_syscall",
+    description = "The number of resource query syscalls on a per-cgroup basis (getrusage, ...)",
+    metadata = { unit = "syscalls", op = "query" }
+)]
+pub static CGROUP_SYSCALL_QUERY: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_syscall",
+    description = "The number of IPC syscalls on a per-cgroup basis (pipe, semop, shmat, ...)",
+    metadata = { unit = "syscalls", op = "ipc" }
+)]
+pub static CGROUP_SYSCALL_IPC: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_syscall",
+    description = "The number of timer syscalls on a per-cgroup basis (setitimer, timer_create, ...)",
+    metadata = { unit = "syscalls", op = "timer" }
+)]
+pub static CGROUP_SYSCALL_TIMER: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_syscall",
+    description = "The number of event notification syscalls on a per-cgroup basis (inotify, io_uring, ...)",
+    metadata = { unit = "syscalls", op = "event" }
+)]
+pub static CGROUP_SYSCALL_EVENT: CounterGroup = CounterGroup::new(MAX_CGROUPS);
