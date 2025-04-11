@@ -180,7 +180,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
       min: minValue,
       max: maxValue,
       calculable: false,
-      show: true, // Show the color scale
+      show: false, // Show the color scale
       orient: 'horizontal',
       left: 'center',
       bottom: '0%',
