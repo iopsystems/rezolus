@@ -230,7 +230,7 @@ function createChartOption(plotSpec) {
   // Basic option template
   const baseOption = {
     grid: {
-      left: '5%',
+      left: '10%',  // Default left margin, specific chart types will override as needed
       right: '5%',
       top: '40',
       bottom: '40',

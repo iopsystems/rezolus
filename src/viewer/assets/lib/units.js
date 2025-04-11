@@ -39,6 +39,18 @@ const UNIT_SYSTEMS = {
       { threshold: 1000000000000, suffix: 'Tbps', divisor: 1000000000000 }
     ]
   },
+
+  // Data rate (bits per second)
+  datarate: {
+    base: 'B/s',
+    scales: [
+      { threshold: 0, suffix: 'B/s', divisor: 1 },
+      { threshold: 1000, suffix: 'KB/s', divisor: 1000 },
+      { threshold: 1000000, suffix: 'MB/s', divisor: 1000000 },
+      { threshold: 1000000000, suffix: 'GB/s', divisor: 1000000000 },
+      { threshold: 1000000000000, suffix: 'TB/s', divisor: 1000000000000 }
+    ]
+  },
   
   // Percentage (already formatted, just add %)
   percentage: {
@@ -67,6 +79,17 @@ const UNIT_SYSTEMS = {
       { threshold: 1000, suffix: 'K', divisor: 1000 },
       { threshold: 1000000, suffix: 'M', divisor: 1000000 },
       { threshold: 1000000000, suffix: 'B', divisor: 1000000000 }
+    ]
+  },
+
+  // Rate (no units, just numbers with K/s, M/s, B/s suffixes)
+  rate: {
+    base: '',
+    scales: [
+      { threshold: 0, suffix: '/s', divisor: 1 },
+      { threshold: 1000, suffix: 'K/s', divisor: 1000 },
+      { threshold: 1000000, suffix: 'M/s', divisor: 1000000 },
+      { threshold: 1000000000, suffix: 'B/s', divisor: 1000000000 }
     ]
   }
 };

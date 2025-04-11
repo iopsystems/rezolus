@@ -1,4 +1,4 @@
-// scatter.js - Scatter chart configuration and rendering
+// scatter.js - Scatter chart configuration with improved alignment consistency
 
 import { createAxisLabelFormatter, createTooltipFormatter } from './units.js';
 import { calculateSharedVisibleTicks, formatDateTime } from './utils.js';
@@ -139,6 +139,20 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
     };
   }
 
+  // Detect if this is a scheduler or time-based chart by looking at title or unit
+  const isSchedulerChart = 
+    (plotSpec.opts.title && (plotSpec.opts.title.includes('Latency') || plotSpec.opts.title.includes('Time'))) ||
+    unitSystem === 'time';
+
+  // Standardized grid with consistent spacing for all charts
+  const updatedGrid = {
+    left: '14%',  // Fixed generous margin for all charts
+    right: '5%',
+    top: '40',
+    bottom: '40',
+    containLabel: false
+  };
+
   // Create Y-axis configuration with label and unit formatting
   const yAxis = {
     type: logScale ? 'log' : 'value',
@@ -146,7 +160,7 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
     scale: true,
     name: yAxisLabel || opts.title,
     nameLocation: 'middle',
-    nameGap: 50,
+    nameGap: 95, // Fixed consistent nameGap for all charts
     nameTextStyle: {
       color: '#E0E0E0',
       fontSize: 14
@@ -158,9 +172,14 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
     },
     axisLabel: {
       color: '#ABABAB',
+      margin: 12, // Fixed consistent margin for all charts
       formatter: unitSystem 
         ? createAxisLabelFormatter(unitSystem)
         : function(value) {
+            // Format log scale labels more compactly if needed
+            if (logScale && Math.abs(value) >= 1000) {
+              return value.toExponential(0);
+            }
             // Use scientific notation for large/small numbers
             if (Math.abs(value) > 10000 || (Math.abs(value) > 0 && Math.abs(value) < 0.01)) {
               return value.toExponential(1);
@@ -182,6 +201,7 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
   // Return scatter chart configuration
   return {
     ...baseOption,
+    grid: updatedGrid,
     tooltip: tooltipFormatter ? {...baseOption.tooltip, ...tooltipFormatter} : baseOption.tooltip,
     xAxis: {
       type: 'category',

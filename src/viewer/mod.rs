@@ -193,7 +193,7 @@ pub fn run(config: Config) {
         let mut cpu_overview = Group::new("CPU", "cpu");
         let mut utilization = Group::new("Utilization", "utilization");
 
-        let opts = PlotOpts::line("Busy %", "busy-pct")
+        let opts = PlotOpts::line("Busy %", "busy-pct", Unit::Percentage)
             .with_axis_label("Utilization")
             .with_unit_system("percentage");
         let series = data
@@ -202,7 +202,7 @@ pub fn run(config: Config) {
         cpu_overview.plot(opts.clone(), series.clone());
         utilization.plot(opts.clone(), series.clone());
 
-        let opts = PlotOpts::heatmap("Busy %", "busy-pct-heatmap")
+        let opts = PlotOpts::heatmap("Busy %", "busy-pct-heatmap", Unit::Percentage)
             .with_axis_label("CPU")
             .with_unit_system("percentage");
         let series = data
@@ -212,20 +212,18 @@ pub fn run(config: Config) {
         utilization.heatmap_echarts(opts.clone(), series.clone());
 
         for state in &["User", "System", "SoftIRQ"] {
-            let opts = PlotOpts::line(
-                format!("{state} %"),
-                format!("{}-pct", state.to_lowercase()),
-            );
+            let opts = PlotOpts::line(format!("{state} %"), format!("{}-pct", state.to_lowercase()), Unit::Percentage)
+                .with_axis_label("Utilization")
+                .with_unit_system("percentage");
             utilization.plot(
                 opts,
                 data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
                     .map(|v| (v / 1000000000.0)),
             );
 
-            let opts = PlotOpts::heatmap(
-                format!("{state} %"),
-                format!("{}-pct-heatmap", state.to_lowercase()),
-            );
+            let opts = PlotOpts::heatmap(format!("{state} %"), format!("{}-pct-heatmap", state.to_lowercase()), Unit::Percentage)
+                .with_axis_label("CPU")
+                .with_unit_system("percentage");
             utilization.heatmap_echarts(
                 opts,
                 data.cpu_heatmap("cpu_usage", [("state", state.to_lowercase())])
@@ -240,7 +238,7 @@ pub fn run(config: Config) {
 
         let mut performance = Group::new("Performance", "performance");
 
-        let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc");
+        let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count);
         if let (Some(cycles), Some(instructions)) = (
             data.sum("cpu_cycles", Labels::default()),
             data.sum("cpu_instructions", Labels::default()),
@@ -249,7 +247,7 @@ pub fn run(config: Config) {
             performance.plot(opts, Some(ipc));
         }
 
-        let opts = PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap");
+        let opts = PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", Unit::Count);
         if let (Some(cycles), Some(instructions)) = (
             data.cpu_heatmap("cpu_cycles", Labels::default()),
             data.cpu_heatmap("cpu_instructions", Labels::default()),
@@ -258,7 +256,7 @@ pub fn run(config: Config) {
             performance.heatmap_echarts(opts, Some(ipc));
         }
 
-        let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns");
+        let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count);
         if let (
             Some(cycles),
             Some(instructions),
@@ -278,27 +276,25 @@ pub fn run(config: Config) {
             performance.plot(opts, Some(ipns));
         }
 
-        let opts = PlotOpts::heatmap("Instructions per Nanosecond (IPNS)", "ipns-heatmap");
+        let opts = PlotOpts::heatmap("Instructions per Nanosecond (IPNS)", "ipns-heatmap", Unit::Count);
         if let (
             Some(cycles),
             Some(instructions),
             Some(aperf),
             Some(mperf),
             Some(tsc),
-            Some(cores),
         ) = (
             data.cpu_heatmap("cpu_cycles", Labels::default()),
             data.cpu_heatmap("cpu_instructions", Labels::default()),
             data.cpu_heatmap("cpu_aperf", Labels::default()),
             data.cpu_heatmap("cpu_mperf", Labels::default()),
             data.cpu_heatmap("cpu_tsc", Labels::default()),
-            data.sum("cpu_cores", Labels::default()),
         ) {
-            let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
+            let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0;
             performance.heatmap_echarts(opts, Some(ipns));
         }
 
-        let opts = PlotOpts::line("Frequency", "frequency");
+        let opts = PlotOpts::line("Frequency", "frequency", Unit::Frequency);
         if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
             data.sum("cpu_aperf", Labels::default()),
             data.sum("cpu_mperf", Labels::default()),
@@ -309,14 +305,14 @@ pub fn run(config: Config) {
             performance.plot(opts, Some(frequency));
         }
 
-        let opts = PlotOpts::heatmap("Frequency", "frequency-heatmap");
-        if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
+        let opts = PlotOpts::heatmap("Frequency", "frequency-heatmap", Unit::Frequency)
+            .with_unit_system("frequency");
+        if let (Some(aperf), Some(mperf), Some(tsc)) = (
             data.cpu_heatmap("cpu_aperf", Labels::default()),
             data.cpu_heatmap("cpu_mperf", Labels::default()),
             data.cpu_heatmap("cpu_tsc", Labels::default()),
-            data.sum("cpu_cores", Labels::default()),
         ) {
-            let frequency = tsc * aperf / mperf / cores;
+            let frequency = tsc * aperf / mperf;
             performance.heatmap_echarts(opts, Some(frequency));
         }
 
@@ -326,10 +322,10 @@ pub fn run(config: Config) {
 
         let mut tlb = Group::new("TLB", "tlb");
 
-        let opts = PlotOpts::line("Total", "tlb-total");
+        let opts = PlotOpts::line("Total", "tlb-total", Unit::Rate);
         tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
 
-        let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap");
+        let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap", Unit::Rate);
         tlb.heatmap_echarts(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
 
         for reason in &[
@@ -353,13 +349,13 @@ pub fn run(config: Config) {
                 .collect::<Vec<&str>>()
                 .join("_");
 
-            let opts = PlotOpts::line(*label, &id);
+            let opts = PlotOpts::line(*label, &id, Unit::Rate);
             tlb.plot(
                 opts,
                 data.sum("cpu_tlb_flush", [("reason", reason.clone())]),
             );
 
-            let opts = PlotOpts::heatmap(*label, format!("{id}-heatmap"));
+            let opts = PlotOpts::heatmap(*label, format!("{id}-heatmap"), Unit::Rate);
             tlb.heatmap_echarts(
                 opts,
                 data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
@@ -373,7 +369,7 @@ pub fn run(config: Config) {
         let mut network_overview = Group::new("Network", "network");
         let mut traffic = Group::new("Traffic", "traffic");
 
-        let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx");
+        let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate).with_unit_system("bitrate");
         let series = data
             .sum("network_bytes", [("direction", "transmit")])
             .map(|v| v * 8.0);
@@ -381,7 +377,7 @@ pub fn run(config: Config) {
         network_overview.plot(opts.clone(), series.clone());
         traffic.plot(opts, series);
 
-        let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx");
+        let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate).with_unit_system("bitrate");
         let series = data
             .sum("network_bytes", [("direction", "receive")])
             .map(|v| v * 8.0);
@@ -389,13 +385,13 @@ pub fn run(config: Config) {
         network_overview.plot(opts.clone(), series.clone());
         traffic.plot(opts, series);
 
-        let opts = PlotOpts::line("Packets Transmit", "packets-tx");
+        let opts = PlotOpts::line("Packets Transmit", "packets-tx", Unit::Rate);
         let series = data.sum("network_packets", [("direction", "transmit")]);
 
         network_overview.plot(opts.clone(), series.clone());
         traffic.plot(opts, series);
 
-        let opts = PlotOpts::line("Packets Receive", "packets-rx");
+        let opts = PlotOpts::line("Packets Receive", "packets-rx", Unit::Rate);
         let series = data.sum("network_packets", [("direction", "receive")]);
 
         network_overview.plot(opts.clone(), series.clone());
@@ -409,7 +405,7 @@ pub fn run(config: Config) {
         let mut scheduler_overview = Group::new("Scheduler", "scheduler");
         let mut scheduler_group = Group::new("Scheduler", "scheduler");
 
-        let opts = PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency")
+        let opts = PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency", Unit::Time)
             .with_axis_label("Latency")
             .with_unit_system("time")
             .with_log_scale(true);
@@ -417,7 +413,7 @@ pub fn run(config: Config) {
         scheduler_overview.scatter(opts.clone(), series.clone());
         scheduler_group.scatter(opts, series);
 
-        let opts = PlotOpts::scatter("Off CPU Time", "scheduler-offcpu-time")
+        let opts = PlotOpts::scatter("Off CPU Time", "scheduler-offcpu-time", Unit::Time)
             .with_axis_label("Time")
             .with_unit_system("time")
             .with_log_scale(true);
@@ -425,7 +421,7 @@ pub fn run(config: Config) {
         scheduler_overview.scatter(opts.clone(), series.clone());
         scheduler_group.scatter(opts, series);
 
-        let opts = PlotOpts::scatter("Running Time", "scheduler-running-time")
+        let opts = PlotOpts::scatter("Running Time", "scheduler-running-time", Unit::Time)
             .with_axis_label("Time")
             .with_unit_system("time")
             .with_log_scale(true);
@@ -440,7 +436,7 @@ pub fn run(config: Config) {
         let mut syscall_overview = Group::new("Syscall", "syscall");
         let mut syscall_group = Group::new("Syscall", "syscall");
 
-        let opts = PlotOpts::line("Total", "syscall-total");
+        let opts = PlotOpts::line("Total", "syscall-total", Unit::Rate);
 
         let series = data.sum("syscall", Labels::default());
         syscall_overview.plot(opts.clone(), series.clone());
@@ -448,7 +444,7 @@ pub fn run(config: Config) {
 
         let percentiles = data.percentiles("syscall_latency", Labels::default());
         syscall_group.scatter(
-            PlotOpts::scatter("Total", "syscall-total-latency"),
+            PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time),
             percentiles,
         );
 
@@ -456,11 +452,11 @@ pub fn run(config: Config) {
             "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
         ] {
             let series = data.sum("syscall", [("op", op.to_lowercase())]);
-            syscall_group.plot(PlotOpts::line(*op, format!("syscall-{op}")), series);
+            syscall_group.plot(PlotOpts::line(*op, format!("syscall-{op}"), Unit::Rate), series);
 
             let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())]);
             syscall_group.scatter(
-                PlotOpts::scatter(*op, format!("syscall-{op}-latency")),
+                PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time),
                 percentiles,
             );
         }
@@ -473,23 +469,23 @@ pub fn run(config: Config) {
         let mut softirq_overview = Group::new("Softirq", "softirq");
         let mut softirq_total = Group::new("Total", "total");
 
-        let opts = PlotOpts::line("Rate", "softirq-total-rate");
+        let opts = PlotOpts::line("Rate", "softirq-total-rate", Unit::Rate);
         let series = data.sum("softirq", Labels::default());
         softirq_overview.plot(opts.clone(), series.clone());
         softirq_total.plot(opts.clone(), series.clone());
 
-        let opts = PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap");
+        let opts = PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap", Unit::Rate);
         let series = data.cpu_heatmap("softirq", Labels::default());
         softirq_overview.heatmap_echarts(opts.clone(), series.clone());
         softirq_total.heatmap_echarts(opts.clone(), series.clone());
 
-        let opts = PlotOpts::line("CPU %", "softirq-total-time");
+        let opts = PlotOpts::line("CPU %", "softirq-total-time", Unit::Percentage);
         let series = data
             .cpu_avg("softirq_time", Labels::default())
             .map(|v| v / 1000000000.0);
         softirq_total.plot(opts, series);
 
-        let opts = PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap");
+        let opts = PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap", Unit::Percentage);
         let series = data
             .cpu_heatmap("softirq_time", Labels::default())
             .map(|v| v / 1000000000.0);
@@ -512,21 +508,21 @@ pub fn run(config: Config) {
         ] {
             let mut group = Group::new(label, format!("softirq-{kind}"));
 
-            let opts = PlotOpts::line("Rate", format!("softirq-{kind}-rate"));
+            let opts = PlotOpts::line("Rate", format!("softirq-{kind}-rate"), Unit::Rate);
             let series = data.sum("softirq", [("kind", kind)]);
             group.plot(opts, series);
 
-            let opts = PlotOpts::heatmap("Rate", format!("softirq-{kind}-rate-heatmap"));
+            let opts = PlotOpts::heatmap("Rate", format!("softirq-{kind}-rate-heatmap"), Unit::Rate);
             let series = data.cpu_heatmap("softirq", [("kind", kind)]);
             group.heatmap_echarts(opts, series);
 
-            let opts = PlotOpts::line("CPU %", format!("softirq-{kind}-time"));
+            let opts = PlotOpts::line("CPU %", format!("softirq-{kind}-time"), Unit::Percentage);
             let series = data
                 .cpu_avg("softirq_time", [("kind", kind)])
                 .map(|v| v / 1000000000.0);
             group.plot(opts, series);
 
-            let opts = PlotOpts::heatmap("CPU %", format!("softirq-{kind}-time-heatmap"));
+            let opts = PlotOpts::heatmap("CPU %", format!("softirq-{kind}-time-heatmap"), Unit::Percentage);
             let series = data
                 .cpu_heatmap("softirq_time", [("kind", kind)])
                 .map(|v| v / 1000000000.0);
@@ -543,37 +539,37 @@ pub fn run(config: Config) {
         let mut blockio_latency = Group::new("Latency", "latency");
         let mut blockio_size = Group::new("Size", "size");
 
-        let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read");
+        let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read", Unit::Datarate);
         blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "read")]));
 
-        let opts = PlotOpts::line("Write Throughput", "blockio-throughput-write");
+        let opts = PlotOpts::line("Write Throughput", "blockio-throughput-write", Unit::Datarate);
         blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "write")]));
 
-        let opts = PlotOpts::line("Read IOPS", "blockio-iops-read");
+        let opts = PlotOpts::line("Read IOPS", "blockio-iops-read", Unit::Count);
         blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "read")]));
 
-        let opts = PlotOpts::line("Write IOPS", "blockio-iops-write");
+        let opts = PlotOpts::line("Write IOPS", "blockio-iops-write", Unit::Count);
         blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "write")]));
 
         overview.groups.push(blockio_overview);
 
         for op in &["Read", "Write", "Flush", "Discard"] {
-            let opts = PlotOpts::line(*op, format!("throughput-{}", op.to_lowercase()));
+            let opts = PlotOpts::line(*op, format!("throughput-{}", op.to_lowercase()), Unit::Datarate);
             blockio_throughput.plot(opts, data.sum("blockio_bytes", [("op", op.to_lowercase())]));
 
-            let opts = PlotOpts::line(*op, format!("iops-{}", op.to_lowercase()));
+            let opts = PlotOpts::line(*op, format!("iops-{}", op.to_lowercase()), Unit::Count);
             blockio_iops.plot(
                 opts,
                 data.sum("blockio_operations", [("op", op.to_lowercase())]),
             );
 
-            let opts = PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()));
+            let opts = PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time);
             blockio_latency.scatter(
                 opts,
                 data.percentiles("blockio_latency", [("op", op.to_lowercase())]),
             );
 
-            let opts = PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()));
+            let opts = PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()), Unit::Bytes);
             blockio_size.scatter(
                 opts,
                 data.percentiles("blockio_size", [("op", op.to_lowercase())]),
@@ -870,30 +866,30 @@ pub struct FormatConfig {
 
 impl PlotOpts {
     // Basic constructors without formatting
-    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
+    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
             style: "line".to_string(),
-            format: None,
+            format: Some(FormatConfig::new(unit)),
         }
     }
     
-    pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
+    pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
             style: "scatter".to_string(),
-            format: None,
+            format: Some(FormatConfig::new(unit)),
         }
     }
     
-    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
+    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
             style: "heatmap".to_string(),
-            format: None,
+            format: Some(FormatConfig::new(unit)),
         }
     }
     
@@ -905,9 +901,9 @@ impl PlotOpts {
     
     // Convenience methods
     pub fn with_unit_system<T: Into<String>>(mut self, unit_system: T) -> Self {
-        if self.format.is_none() {
-            self.format = Some(FormatConfig::default());
-        }
+        // if self.format.is_none() {
+        //     self.format = Some(FormatConfig::default());
+        // }
         
         if let Some(ref mut format) = self.format {
             format.unit_system = Some(unit_system.into());
@@ -917,9 +913,9 @@ impl PlotOpts {
     }
     
     pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
-        if self.format.is_none() {
-            self.format = Some(FormatConfig::default());
-        }
+        // if self.format.is_none() {
+        //     self.format = Some(FormatConfig::default());
+        // }
         
         if let Some(ref mut format) = self.format {
             format.y_axis_label = Some(y_label.into());
@@ -929,9 +925,9 @@ impl PlotOpts {
     }
     
     pub fn with_log_scale(mut self, log_scale: bool) -> Self {
-        if self.format.is_none() {
-            self.format = Some(FormatConfig::default());
-        }
+        // if self.format.is_none() {
+        //     self.format = Some(FormatConfig::default());
+        // }
         
         if let Some(ref mut format) = self.format {
             format.log_scale = Some(log_scale);
@@ -941,18 +937,45 @@ impl PlotOpts {
     }
 }
 
-// Implement Default for FormatConfig
-impl Default for FormatConfig {
-    fn default() -> Self {
+impl FormatConfig {
+    pub fn new(unit: Unit) -> Self {
         Self {
             x_axis_label: None,
             y_axis_label: None,
-            unit_system: None,
+            unit_system: Some(unit.to_string()),
             precision: Some(2),
             log_scale: None,
             min: None,
             max: None,
             value_label: None,
         }
+    }
+}
+
+pub enum Unit {
+    Count,
+    Rate,
+    Time,
+    Bytes,
+    Datarate,
+    Bitrate,
+    Percentage,
+    Frequency,
+}
+
+impl std::fmt::Display for Unit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let s = match self {
+            Self::Count => "count",
+            Self::Rate => "rate",
+            Self::Time => "time",
+            Self::Bytes => "bytes",
+            Self::Datarate => "datarate",
+            Self::Bitrate => "bitrate",
+            Self::Percentage => "percentage",
+            Self::Frequency => "frequency",
+        };
+
+        write!(f, "{s}")
     }
 }

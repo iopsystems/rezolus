@@ -1,4 +1,4 @@
-// heatmap.js - Heatmap chart configuration and rendering
+// heatmap.js - Heatmap chart configuration and rendering with improved Y-axis positioning
 
 import { createAxisLabelFormatter } from './units.js';
 import { calculateSharedVisibleTicks, formatDateTime } from './utils.js';
@@ -125,16 +125,22 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     }
   }
 
+  // Standardized grid with consistent spacing for all charts
+  const updatedGrid = {
+    left: '14%',  // Fixed generous margin for all charts
+    right: '5%',
+    top: '40',
+    bottom: '40',
+    containLabel: false
+  };
+
   return {
     ...baseOption,
     tooltip: {
       position: 'top',
       formatter: tooltipFormatter
     },
-    grid: {
-      height: '70%',
-      top: '60'
-    },
+    grid: updatedGrid,
     xAxis: {
       type: 'category',
       data: formattedTimeData,
@@ -157,7 +163,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
       type: 'category',
       name: yAxisLabel || 'CPU',
       nameLocation: 'middle',
-      nameGap: 50,
+      nameGap: 95, // Fixed consistent nameGap for all charts
       nameTextStyle: {
         color: '#E0E0E0',
         fontSize: 14

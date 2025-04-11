@@ -1,4 +1,4 @@
-// line.js - Line chart configuration and rendering
+// line.js - Line chart configuration and rendering with standardized spacing
 
 import { createAxisLabelFormatter, createTooltipFormatter } from './units.js';
 import { calculateSharedVisibleTicks, formatDateTime } from './utils.js';
@@ -105,13 +105,23 @@ export function createLineChartOption(baseOption, plotSpec, state) {
     };
   }
 
+  // Standardized grid with consistent spacing for all charts
+  const updatedGrid = {
+    left: '14%',  // Fixed generous margin for all charts
+    right: '5%',
+    top: '40',
+    bottom: '40',
+    containLabel: false
+  };
+
   // Create Y-axis configuration with label and unit formatting
   const yAxis = {
-    type: 'value',
+    type: logScale ? 'log' : 'value',
+    logBase: 10,
     scale: true,
     name: yAxisLabel || opts.title,
     nameLocation: 'middle',
-    nameGap: 50,
+    nameGap: 95, // Fixed consistent nameGap for all charts
     nameTextStyle: {
       color: '#E0E0E0',
       fontSize: 14
@@ -123,6 +133,7 @@ export function createLineChartOption(baseOption, plotSpec, state) {
     },
     axisLabel: {
       color: '#ABABAB',
+      margin: 16, // Fixed consistent margin for all charts
       formatter: unitSystem 
         ? createAxisLabelFormatter(unitSystem)
         : function(value) {
@@ -147,6 +158,7 @@ export function createLineChartOption(baseOption, plotSpec, state) {
   // Return line chart configuration
   return {
     ...baseOption,
+    grid: updatedGrid,
     tooltip: tooltipFormatter ? {...baseOption.tooltip, ...tooltipFormatter} : baseOption.tooltip,
     xAxis: {
       type: 'category',
