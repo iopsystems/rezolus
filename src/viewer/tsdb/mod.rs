@@ -1,6 +1,9 @@
+use crate::viewer::PERCENTILES;
 use arrow::array::Int64Array;
+use arrow::array::ListArray;
 use arrow::array::UInt64Array;
 use arrow::datatypes::DataType;
+use histogram::Histogram;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -8,6 +11,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
+use std::num::ParseIntError;
 use std::ops::*;
 use std::path::Path;
 
@@ -62,13 +66,19 @@ impl Tsdb {
                     continue;
                 }
 
-                let meta = field.metadata();
+                let mut meta = field.metadata().clone();
 
-                let name = if let Some(n) = meta.get("metric") {
+                let name = if let Some(n) = meta.get("metric").cloned() {
                     n
                 } else {
                     continue;
                 };
+
+                let grouping_power: Option<Result<u8, ParseIntError>> =
+                    meta.remove("grouping_power").map(|v| v.parse());
+
+                let max_value_power: Option<Result<u8, ParseIntError>> =
+                    meta.remove("max_value_power").map(|v| v.parse());
 
                 let mut labels = Labels::default();
 
@@ -91,17 +101,7 @@ impl Tsdb {
                         for (id, value) in values.iter().enumerate() {
                             if let Some(v) = value {
                                 if let Some(ts) = timestamps.get(&id) {
-                                    // for counters, we care about rates. So calculate the rate here.
-                                    if series.init {
-                                        let (prev_ts, prev_v) = series.prev;
-                                        let rate = v.wrapping_sub(prev_v) as f64
-                                            / ((*ts - prev_ts) as f64 / 1000000000.0);
-                                        series.inner.insert(*ts, rate);
-                                        series.prev = (*ts, v);
-                                    } else {
-                                        series.prev = (*ts, v);
-                                        series.init = true;
-                                    }
+                                    series.inner.insert(*ts, Value::Counter(v));
                                 }
                             }
                         }
@@ -115,10 +115,47 @@ impl Tsdb {
                         for (id, value) in values.iter().enumerate() {
                             if let Some(v) = value {
                                 if let Some(ts) = timestamps.get(&id) {
-                                    if series.init {
-                                        series.inner.insert(*ts, v as f64);
-                                    } else {
-                                        series.init = true;
+                                    series.inner.insert(*ts, Value::Gauge(v));
+                                }
+                            }
+                        }
+                    }
+                    DataType::List(field_type) => {
+                        if field_type.data_type() == &DataType::UInt64 {
+                            let list_array = column
+                                .as_any()
+                                .downcast_ref::<ListArray>()
+                                .expect("Failed to downcast to ListArray");
+
+                            let grouping_power = if let Some(Ok(v)) = grouping_power {
+                                v
+                            } else {
+                                continue;
+                            };
+
+                            let max_value_power = if let Some(Ok(v)) = max_value_power {
+                                v
+                            } else {
+                                continue;
+                            };
+
+                            for (id, value) in list_array.iter().enumerate() {
+                                if let Some(list_value) = value {
+                                    if let Some(ts) = timestamps.get(&id) {
+                                        let data = list_value
+                                            .as_any()
+                                            .downcast_ref::<UInt64Array>()
+                                            .expect("Failed to downcast to UInt64Array");
+
+                                        let buckets: Vec<u64> = data.iter().flatten().collect();
+
+                                        if let Ok(h) = Histogram::from_buckets(
+                                            grouping_power,
+                                            max_value_power,
+                                            buckets,
+                                        ) {
+                                            series.inner.insert(*ts, Value::Histogram(h));
+                                        }
                                     }
                                 }
                             }
@@ -151,6 +188,11 @@ impl Tsdb {
             .map(|collection| collection.sum())
     }
 
+    pub fn percentiles(&self, metric: &str, labels: impl Into<Labels>) -> Option<Vec<Vec<f64>>> {
+        self.get(metric, &labels.into())
+            .map(|collection| collection.percentiles())
+    }
+
     pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<TimeSeries> {
         if let Some(cores) = self.sum("cpu_cores", Labels::default()) {
             if let Some(collection) = self.get(metric, &labels.into()) {
@@ -180,7 +222,7 @@ impl Tsdb {
 
 #[derive(Default)]
 pub struct TimeSeriesCollection {
-    inner: HashMap<Labels, TimeSeries>,
+    inner: HashMap<Labels, InternalTimeSeries>,
 }
 
 impl TimeSeriesCollection {
@@ -200,13 +242,85 @@ impl TimeSeriesCollection {
         let mut result = TimeSeries::default();
 
         for series in self.inner.values() {
-            for (time, value) in series.inner.iter() {
-                if !result.inner.contains_key(time) {
-                    result.inner.insert(*time, 0.0);
-                }
+            let mut prev_v = 0;
+            let mut prev_ts = 0;
 
-                *result.inner.get_mut(time).unwrap() += value;
+            for (time, value) in series.inner.iter() {
+                match value {
+                    Value::Counter(v) => {
+                        if prev_ts != 0 {
+                            let rate = v.wrapping_sub(prev_v) as f64
+                                / ((time - prev_ts) as f64 / 1000000000.0);
+
+                            if !result.inner.contains_key(time) {
+                                result.inner.insert(*time, rate);
+                            } else {
+                                *result.inner.get_mut(time).unwrap() += rate;
+                            }
+
+                            result.inner.insert(*time, rate);
+                        }
+
+                        prev_ts = *time;
+                        prev_v = *v;
+                    }
+                    Value::Gauge(v) => {
+                        if prev_ts != 0 {
+                            if !result.inner.contains_key(time) {
+                                result.inner.insert(*time, *v as f64);
+                            } else {
+                                *result.inner.get_mut(time).unwrap() += *v as f64;
+                            }
+                        }
+                        prev_ts = *time;
+                    }
+                    Value::Histogram(_) => {}
+                }
             }
+        }
+
+        result
+    }
+
+    pub fn percentiles(&self) -> Vec<Vec<f64>> {
+        let mut tmp: BTreeMap<u64, Histogram> = BTreeMap::new();
+
+        let mut result = vec![Vec::new(); PERCENTILES.len() + 1];
+
+        // aggregate the histograms
+        for series in self.inner.values() {
+            for (time, value) in series.inner.iter() {
+                if let Value::Histogram(h) = value {
+                    tmp.entry(*time)
+                        .and_modify(|sum| *sum = sum.wrapping_add(h).unwrap())
+                        .or_insert(h.clone());
+                }
+            }
+        }
+
+        if tmp.is_empty() {
+            println!("tmp is empty");
+            return result;
+        }
+
+        let (_, mut prev) = tmp.pop_first().unwrap();
+
+        for (time, curr) in tmp.iter() {
+            let delta = curr.wrapping_sub(&prev).unwrap();
+
+            result[0].push(*time as f64 / 1000000000.0);
+
+            if let Ok(Some(percentiles)) = delta.percentiles(PERCENTILES) {
+                for (id, (_, bucket)) in percentiles.iter().enumerate() {
+                    result[id + 1].push(bucket.end() as f64);
+                }
+            } else {
+                for series in result.iter_mut().skip(1) {
+                    series.push(0.0);
+                }
+            }
+
+            prev = curr.clone();
         }
 
         result
@@ -308,10 +422,20 @@ impl From<&mut dyn Iterator<Item = (&str, &str)>> for Labels {
 }
 
 #[derive(Default, Clone)]
+pub struct InternalTimeSeries {
+    inner: BTreeMap<u64, Value>,
+}
+
+#[derive(Clone)]
+pub enum Value {
+    Counter(u64),
+    Gauge(i64),
+    Histogram(Histogram),
+}
+
+#[derive(Default, Clone)]
 pub struct TimeSeries {
     inner: BTreeMap<u64, f64>,
-    prev: (u64, u64),
-    init: bool,
 }
 
 impl TimeSeries {

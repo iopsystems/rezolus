@@ -399,6 +399,8 @@ function createChartOption(plotSpec) {
     return createLineChartOption(option, plotSpec);
   } else if (opts.style === 'heatmap') {
     return createHeatmapOption(option, plotSpec);
+  } else if (opts.style === 'scatter') {
+    return createScatterChartOption(option, plotSpec);
   }
 
   return option;
@@ -659,6 +661,137 @@ function createHeatmapOption(baseOption, plotSpec) {
       progressive: 2000,
       animation: false
     }]
+  };
+}
+
+// Create a scatter chart option for percentile data
+function createScatterChartOption(baseOption, plotSpec) {
+  const {
+    data
+  } = plotSpec;
+
+  if (!data || data.length < 2) {
+    return baseOption;
+  }
+
+  // For percentile data, the format is [times, percentile1Values, percentile2Values, ...]
+  const timeData = data[0];
+
+  // Use consistent formatting for timestamps
+  const formattedTimeData = timeData.map(timestamp => formatDateTime(timestamp, 'time'));
+
+  // Use shared ticks if already calculated, otherwise calculate new ones
+  if (state.sharedAxisConfig.visibleTicks.length === 0 ||
+    Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
+    // For full view (no zoom), use fewer ticks to prevent label pile-up
+    if (state.globalZoom.start === 0 && state.globalZoom.end === 100) {
+      const maxTicks = Math.min(8, timeData.length);
+      const interval = Math.max(1, Math.floor(timeData.length / maxTicks));
+
+      const ticks = [];
+      for (let i = 0; i < timeData.length; i += interval) {
+        ticks.push(i);
+      }
+
+      // Add last tick if not already included
+      if (timeData.length > 0 && (timeData.length - 1) % interval !== 0) {
+        ticks.push(timeData.length - 1);
+      }
+
+      state.sharedAxisConfig.visibleTicks = ticks;
+    } else {
+      // For zoomed view, calculate normal ticks
+      state.sharedAxisConfig.visibleTicks = calculateSharedVisibleTicks(
+        timeData.length,
+        state.globalZoom.start,
+        state.globalZoom.end
+      );
+    }
+    state.sharedAxisConfig.lastUpdate = Date.now();
+  }
+
+  // Create series for each percentile
+  const series = [];
+
+  // Determine percentiles based on the data structure
+  // Assuming data format: [timestamps, p50values, p99values, ...]
+  const percentileLabels = ['p50', 'p90', 'p99', 'p99.9', 'p99.99']; // Default labels, can be customized
+
+  for (let i = 1; i < data.length; i++) {
+    const percentileData = [];
+    const percentileValues = data[i];
+
+    // Create data points in the format [time, value]
+    for (let j = 0; j < timeData.length; j++) {
+      if (percentileValues[j] !== undefined && !isNaN(percentileValues[j])) {
+        percentileData.push([formattedTimeData[j], percentileValues[j]]);
+      }
+    }
+
+    // Add a series for this percentile
+    series.push({
+      name: percentileLabels[i - 1] || `Percentile ${i}`,
+      type: 'scatter',
+      data: percentileData,
+      symbolSize: 6,
+      emphasis: {
+        focus: 'series',
+        itemStyle: {
+          shadowBlur: 10,
+          shadowColor: 'rgba(255, 255, 255, 0.5)'
+        }
+      }
+    });
+  }
+
+  // Return scatter chart configuration
+  return {
+    ...baseOption,
+    xAxis: {
+      type: 'category',
+      data: formattedTimeData,
+      axisLine: {
+        lineStyle: {
+          color: '#ABABAB'
+        }
+      },
+      axisLabel: {
+        color: '#ABABAB',
+        formatter: function(value) {
+          return value; // Already formatted properly by formatDateTime
+        },
+        // Using custom ticks based on our shared configuration
+        interval: function(index) {
+          return state.sharedAxisConfig.visibleTicks.includes(index);
+        }
+      }
+    },
+    yAxis: {
+      type: 'log',
+      logBase: 10,
+      scale: true,
+      axisLine: {
+        lineStyle: {
+          color: '#ABABAB'
+        }
+      },
+      axisLabel: {
+        color: '#ABABAB',
+        formatter: function(value) {
+          // Use scientific notation for large/small numbers
+          if (Math.abs(value) > 10000 || (Math.abs(value) > 0 && Math.abs(value) < 0.01)) {
+            return value.toExponential(1);
+          }
+          return value;
+        }
+      },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(171, 171, 171, 0.2)'
+        }
+      }
+    },
+    series: series
   };
 }
 

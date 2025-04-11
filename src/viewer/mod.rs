@@ -18,6 +18,8 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
 
+const PERCENTILES: &[f64] = &[50.0, 90.0, 99.0, 99.9, 99.99];
+
 mod tsdb;
 
 use tsdb::*;
@@ -399,11 +401,23 @@ pub fn run(config: Config) {
         syscall_overview.plot(opts.clone(), series.clone());
         syscall_group.plot(opts, series);
 
+        let percentiles = data.percentiles("syscall_latency", Labels::default());
+        syscall_group.scatter(
+            PlotOpts::scatter("Total", "syscall-total-latency"),
+            percentiles,
+        );
+
         for op in &[
             "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
         ] {
             let series = data.sum("syscall", [("op", op.to_lowercase())]);
             syscall_group.plot(PlotOpts::line(*op, format!("syscall-{op}")), series);
+
+            let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())]);
+            syscall_group.scatter(
+                PlotOpts::scatter(*op, format!("syscall-{op}-latency")),
+                percentiles,
+            );
         }
 
         overview.groups.push(syscall_overview);
@@ -639,6 +653,30 @@ impl Group {
             }
         }
     }
+
+    pub fn scatter(&mut self, opts: PlotOpts, data: Option<Vec<Vec<f64>>>) {
+        if data.is_none() {
+            return;
+        }
+
+        let data = data.unwrap();
+
+        if data.is_empty() {
+            return;
+        }
+
+        if data[0].is_empty() {
+            return;
+        }
+
+        self.plots.push(Plot {
+            opts,
+            data,
+            min_value: None,
+            max_value: None,
+            time_data: None,
+        })
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -674,6 +712,14 @@ impl PlotOpts {
             title: title.into(),
             id: id.into(),
             style: "line".to_string(),
+        }
+    }
+
+    pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
+        Self {
+            title: title.into(),
+            id: id.into(),
+            style: "scatter".to_string(),
         }
     }
 }
