@@ -74,7 +74,7 @@ high-resolution data to root cause a production performance issue. With Rezolus
 Hindsight, you can do exactly that.
 
 ## Community & Support
-- [Discord Community][discore]
+- [Discord Community][discord]
 - [GitHub Issues][new issue]
 
 ## License
