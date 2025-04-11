@@ -527,17 +527,24 @@ function createHeatmapOption(baseOption, plotSpec) {
     return baseOption;
   }
 
-  // In the optimized format, data is already in [x, y, value] format
-  // and min_value/max_value are pre-calculated
-
   // Get unique x indices (timestamps) and y indices (CPUs)
   const xIndices = new Set();
   const yIndices = new Set();
 
+  // Extract all unique CPU IDs and timestamp indices
   data.forEach(item => {
-    xIndices.add(item[0]);
-    yIndices.add(item[1]);
+    xIndices.add(item[0]); // timestamp index
+    yIndices.add(item[1]); // CPU ID
   });
+
+  // Convert to array and sort numerically
+  const cpuIds = Array.from(yIndices).sort((a, b) => a - b);
+
+  // Ensure we have a continuous range of CPUs from 0 to max
+  const maxCpuId = cpuIds.length > 0 ? Math.max(...cpuIds) : 0;
+  const continuousCpuIds = Array.from({
+    length: maxCpuId + 1
+  }, (_, i) => i);
 
   // Use consistent formatting for time values
   const formattedTimeData = time_data.map(timestamp => formatDateTime(timestamp, 'time'));
@@ -554,7 +561,7 @@ function createHeatmapOption(baseOption, plotSpec) {
     });
   }
 
-  // Use shared ticks if already calculated, otherwise calculate new ones
+  // Use shared ticks for formatting
   if (state.sharedAxisConfig.visibleTicks.length === 0 ||
     Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
     // For full view (no zoom), use fewer ticks to prevent label pile-up
@@ -582,6 +589,11 @@ function createHeatmapOption(baseOption, plotSpec) {
       );
     }
     state.sharedAxisConfig.lastUpdate = Date.now();
+  }
+
+  // Ensure maxValue is always at least slightly higher than minValue for visualization
+  if (maxValue === minValue) {
+    maxValue = minValue + 0.001;
   }
 
   return {
@@ -621,7 +633,7 @@ function createHeatmapOption(baseOption, plotSpec) {
     },
     yAxis: {
       type: 'category',
-      data: Array.from(yIndices).sort((a, b) => a - b),
+      data: continuousCpuIds, // Use the continuous range of CPU IDs
       splitArea: {
         show: true
       },

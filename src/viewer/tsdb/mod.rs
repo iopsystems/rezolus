@@ -257,8 +257,6 @@ impl TimeSeriesCollection {
                             } else {
                                 *result.inner.get_mut(time).unwrap() += rate;
                             }
-
-                            result.inner.insert(*time, rate);
                         }
 
                         prev_ts = *time;
@@ -507,6 +505,32 @@ impl TimeSeries {
     }
 }
 
+impl Add<TimeSeries> for TimeSeries {
+    type Output = TimeSeries;
+
+    fn add(self, other: TimeSeries) -> Self::Output {
+        self.add(&other)
+    }
+}
+
+impl Add<&TimeSeries> for TimeSeries {
+    type Output = TimeSeries;
+
+    fn add(mut self, other: &TimeSeries) -> Self::Output {
+        // Add values from other TimeSeries where timestamps match
+        for (time, value) in other.inner.iter() {
+            if let Some(existing) = self.inner.get_mut(time) {
+                *existing += value;
+            } else {
+                // If timestamp doesn't exist in self, add it
+                self.inner.insert(*time, *value);
+            }
+        }
+
+        self
+    }
+}
+
 impl Div<TimeSeries> for TimeSeries {
     type Output = TimeSeries;
     fn div(self, other: TimeSeries) -> <Self as Div<TimeSeries>>::Output {
@@ -611,6 +635,13 @@ impl Heatmap {
         let mut min_value = f64::MAX;
         let mut max_value = f64::MIN;
 
+        // Find the maximum CPU ID to determine the range
+        let max_cpu_id = if self.inner.is_empty() {
+            0
+        } else {
+            *self.inner.keys().max().unwrap_or(&0)
+        };
+
         // Collect all timestamps and find min/max values
         for series in self.inner.values() {
             for (ts, value) in series.inner.iter() {
@@ -631,13 +662,30 @@ impl Heatmap {
         // Convert to ECharts format: [[x, y, value], ...]
         let mut heatmap_data = Vec::new();
 
-        for (cpu_id, series) in self.inner.iter() {
+        // Make sure we have data for all CPUs from 0 to max_cpu_id
+        for cpu_id in 0..=max_cpu_id {
+            let series = self.inner.get(&cpu_id);
+
             for (i, ts) in timestamps.iter().enumerate() {
-                if let Some(value) = series.inner.get(ts) {
-                    // x index (timestamp index), y index (CPU ID), value
-                    heatmap_data.push(vec![i as f64, *cpu_id as f64, *value]);
-                }
+                // If we have data for this CPU and timestamp, use it
+                // Otherwise, use zero
+                let value = if let Some(cpu_series) = series {
+                    cpu_series.inner.get(ts).copied().unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+
+                // Add the data point: [timestamp index, CPU ID, value]
+                heatmap_data.push(vec![i as f64, cpu_id as f64, value]);
             }
+        }
+
+        // Ensure min_value and max_value are meaningful
+        if min_value == f64::MAX {
+            min_value = 0.0;
+        }
+        if max_value == f64::MIN {
+            max_value = 0.0;
         }
 
         HeatmapData {

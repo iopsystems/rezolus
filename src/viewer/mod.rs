@@ -160,8 +160,16 @@ pub fn run(config: Config) {
                 route: "/network".to_string(),
             },
             Section {
+                name: "Scheduler".to_string(),
+                route: "/scheduler".to_string(),
+            },
+            Section {
                 name: "Syscall".to_string(),
                 route: "/syscall".to_string(),
+            },
+            Section {
+                name: "Softirq".to_string(),
+                route: "/softirq".to_string(),
             },
             Section {
                 name: "BlockIO".to_string(),
@@ -173,7 +181,9 @@ pub fn run(config: Config) {
         let mut overview = View::new(sections.clone());
         let mut cpu = View::new(sections.clone());
         let mut network = View::new(sections.clone());
+        let mut scheduler = View::new(sections.clone());
         let mut syscall = View::new(sections.clone());
+        let mut softirq = View::new(sections.clone());
         let mut blockio = View::new(sections.clone());
 
         // CPU
@@ -390,6 +400,28 @@ pub fn run(config: Config) {
         overview.groups.push(network_overview);
         network.groups.push(traffic);
 
+        // Scheduler
+
+        let mut scheduler_overview = Group::new("Scheduler", "scheduler");
+        let mut scheduler_group = Group::new("Scheduler", "scheduler");
+
+        let opts = PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency");
+        let series = data.percentiles("scheduler_runqueue_latency", Labels::default());
+        scheduler_overview.scatter(opts.clone(), series.clone());
+        scheduler_group.scatter(opts, series);
+
+        let opts = PlotOpts::scatter("Off CPU Time", "scheduler-off-cpu-time");
+        let series = data.percentiles("scheduler_offcpu", Labels::default());
+        scheduler_overview.scatter(opts.clone(), series.clone());
+        scheduler_group.scatter(opts, series);
+
+        let opts = PlotOpts::scatter("Running Time", "scheduler-running-time");
+        let series = data.percentiles("scheduler_running", Labels::default());
+        scheduler_group.scatter(opts, series);
+
+        overview.groups.push(scheduler_overview);
+        scheduler.groups.push(scheduler_group);
+
         // Syscall Overview
 
         let mut syscall_overview = Group::new("Syscall", "syscall");
@@ -423,9 +455,80 @@ pub fn run(config: Config) {
         overview.groups.push(syscall_overview);
         syscall.groups.push(syscall_group);
 
+        // Softirq
+
+        let mut softirq_overview = Group::new("Softirq", "softirq");
+        let mut softirq_total = Group::new("Total", "total");
+
+        let opts = PlotOpts::line("Rate", "softirq-total-rate");
+        let series = data.sum("softirq", Labels::default());
+        softirq_overview.plot(opts.clone(), series.clone());
+        softirq_total.plot(opts.clone(), series.clone());
+
+        let opts = PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap");
+        let series = data.cpu_heatmap("softirq", Labels::default());
+        softirq_overview.heatmap_echarts(opts.clone(), series.clone());
+        softirq_total.heatmap_echarts(opts.clone(), series.clone());
+
+        let opts = PlotOpts::line("CPU %", "softirq-total-time");
+        let series = data
+            .cpu_avg("softirq_time", Labels::default())
+            .map(|v| v / 1000000000.0);
+        softirq_total.plot(opts, series);
+
+        let opts = PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap");
+        let series = data
+            .cpu_heatmap("softirq_time", Labels::default())
+            .map(|v| v / 1000000000.0);
+        softirq_total.heatmap_echarts(opts, series);
+
+        overview.groups.push(softirq_overview);
+        softirq.groups.push(softirq_total);
+
+        for (label, kind) in [
+            ("Hardware Interrupts", "hi"),
+            ("IRQ Poll", "irq_poll"),
+            ("Network Transmit", "net_tx"),
+            ("Network Receive", "net_rx"),
+            ("RCU", "rcu"),
+            ("Sched", "sched"),
+            ("Tasklet", "tasklet"),
+            ("Timer", "timer"),
+            ("HR Timer", "hrtimer"),
+            ("Block", "block"),
+        ] {
+            let mut group = Group::new(label, format!("softirq-{kind}"));
+
+            let opts = PlotOpts::line("Rate", format!("softirq-{kind}-rate"));
+            let series = data.sum("softirq", [("kind", kind)]);
+            group.plot(opts, series);
+
+            let opts = PlotOpts::heatmap("Rate", format!("softirq-{kind}-rate-heatmap"));
+            let series = data.cpu_heatmap("softirq", [("kind", kind)]);
+            group.heatmap_echarts(opts, series);
+
+            let opts = PlotOpts::line("CPU %", format!("softirq-{kind}-time"));
+            let series = data
+                .cpu_avg("softirq_time", [("kind", kind)])
+                .map(|v| v / 1000000000.0);
+            group.plot(opts, series);
+
+            let opts = PlotOpts::heatmap("CPU %", format!("softirq-{kind}-time-heatmap"));
+            let series = data
+                .cpu_heatmap("softirq_time", [("kind", kind)])
+                .map(|v| v / 1000000000.0);
+            group.heatmap_echarts(opts, series);
+
+            softirq.groups.push(group);
+        }
+
+        // BlockIO
+
         let mut blockio_overview = Group::new("BlockIO", "blockio");
         let mut blockio_throughput = Group::new("Throughput", "throughput");
         let mut blockio_iops = Group::new("IOPS", "iops");
+        let mut blockio_latency = Group::new("Latency", "latency");
+        let mut blockio_size = Group::new("Size", "size");
 
         let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read");
         blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "read")]));
@@ -450,10 +553,24 @@ pub fn run(config: Config) {
                 opts,
                 data.sum("blockio_operations", [("op", op.to_lowercase())]),
             );
+
+            let opts = PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()));
+            blockio_latency.scatter(
+                opts,
+                data.percentiles("blockio_latency", [("op", op.to_lowercase())]),
+            );
+
+            let opts = PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()));
+            blockio_size.scatter(
+                opts,
+                data.percentiles("blockio_size", [("op", op.to_lowercase())]),
+            );
         }
 
         blockio.groups.push(blockio_throughput);
         blockio.groups.push(blockio_iops);
+        blockio.groups.push(blockio_latency);
+        blockio.groups.push(blockio_size);
 
         // Finalize
 
@@ -469,8 +586,16 @@ pub fn run(config: Config) {
             serde_json::to_string(&network).unwrap(),
         );
         state.sections.insert(
+            "scheduler.json".to_string(),
+            serde_json::to_string(&scheduler).unwrap(),
+        );
+        state.sections.insert(
             "syscall.json".to_string(),
             serde_json::to_string(&syscall).unwrap(),
+        );
+        state.sections.insert(
+            "softirq.json".to_string(),
+            serde_json::to_string(&softirq).unwrap(),
         );
         state.sections.insert(
             "blockio.json".to_string(),
