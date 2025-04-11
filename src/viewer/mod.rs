@@ -193,14 +193,18 @@ pub fn run(config: Config) {
         let mut cpu_overview = Group::new("CPU", "cpu");
         let mut utilization = Group::new("Utilization", "utilization");
 
-        let opts = PlotOpts::line("Busy %", "busy-pct");
+        let opts = PlotOpts::line("Busy %", "busy-pct")
+            .with_axis_label("Utilization")
+            .with_unit_system("percentage");
         let series = data
             .cpu_avg("cpu_usage", Labels::default())
-            .map(|v| (v / 10000000.0));
+            .map(|v| (v / 1000000000.0));
         cpu_overview.plot(opts.clone(), series.clone());
         utilization.plot(opts.clone(), series.clone());
 
-        let opts = PlotOpts::heatmap("Busy %", "busy-pct-heatmap");
+        let opts = PlotOpts::heatmap("Busy %", "busy-pct-heatmap")
+            .with_axis_label("CPU")
+            .with_unit_system("percentage");
         let series = data
             .cpu_heatmap("cpu_usage", Labels::default())
             .map(|v| v / 1000000000.0);
@@ -215,7 +219,7 @@ pub fn run(config: Config) {
             utilization.plot(
                 opts,
                 data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
-                    .map(|v| (v / 10000000.0)),
+                    .map(|v| (v / 1000000000.0)),
             );
 
             let opts = PlotOpts::heatmap(
@@ -405,17 +409,26 @@ pub fn run(config: Config) {
         let mut scheduler_overview = Group::new("Scheduler", "scheduler");
         let mut scheduler_group = Group::new("Scheduler", "scheduler");
 
-        let opts = PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency");
+        let opts = PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency")
+            .with_axis_label("Latency")
+            .with_unit_system("time")
+            .with_log_scale(true);
         let series = data.percentiles("scheduler_runqueue_latency", Labels::default());
         scheduler_overview.scatter(opts.clone(), series.clone());
         scheduler_group.scatter(opts, series);
 
-        let opts = PlotOpts::scatter("Off CPU Time", "scheduler-off-cpu-time");
+        let opts = PlotOpts::scatter("Off CPU Time", "scheduler-offcpu-time")
+            .with_axis_label("Time")
+            .with_unit_system("time")
+            .with_log_scale(true);
         let series = data.percentiles("scheduler_offcpu", Labels::default());
         scheduler_overview.scatter(opts.clone(), series.clone());
         scheduler_group.scatter(opts, series);
 
-        let opts = PlotOpts::scatter("Running Time", "scheduler-running-time");
+        let opts = PlotOpts::scatter("Running Time", "scheduler-running-time")
+            .with_axis_label("Time")
+            .with_unit_system("time")
+            .with_log_scale(true);
         let series = data.percentiles("scheduler_running", Labels::default());
         scheduler_group.scatter(opts, series);
 
@@ -786,11 +799,22 @@ impl Group {
 
         let data = data.unwrap();
 
-        if data.is_empty() {
+        if data.len() < 2 {
             return;
         }
 
-        if data[0].is_empty() {
+        for series in &data {
+            if series.is_empty() {
+                return;
+            }
+        }
+
+        // Check if ANY data series has valid non-zero values
+        let has_meaningful_data = data.iter().skip(1).any(|series| {
+            series.iter().any(|&value| value.is_finite() && !value.is_nan() && value > 0.0001)
+        });
+
+        if !has_meaningful_data {
             return;
         }
 
@@ -821,30 +845,114 @@ pub struct PlotOpts {
     title: String,
     id: String,
     style: String,
+    // Unified configuration for value formatting, axis labels, etc.
+    format: Option<FormatConfig>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct FormatConfig {
+    // Axis labels
+    x_axis_label: Option<String>,
+    y_axis_label: Option<String>,
+    
+    // Value formatting
+    unit_system: Option<String>,  // e.g., "percentage", "time", "bitrate"
+    precision: Option<u8>,       // Number of decimal places
+    
+    // Scale configuration
+    log_scale: Option<bool>,      // Whether to use log scale for y-axis
+    min: Option<f64>,            // Min value for y-axis
+    max: Option<f64>,            // Max value for y-axis
+    
+    // Additional customization
+    value_label: Option<String>,  // Label used in tooltips for the value
 }
 
 impl PlotOpts {
-    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            style: "heatmap".to_string(),
-        }
-    }
-
+    // Basic constructors without formatting
     pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
             style: "line".to_string(),
+            format: None,
         }
     }
-
+    
     pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
             style: "scatter".to_string(),
+            format: None,
+        }
+    }
+    
+    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
+        Self {
+            title: title.into(),
+            id: id.into(),
+            style: "heatmap".to_string(),
+            format: None,
+        }
+    }
+    
+    // Builder methods for configuring formatting
+    pub fn with_format(mut self, format: FormatConfig) -> Self {
+        self.format = Some(format);
+        self
+    }
+    
+    // Convenience methods
+    pub fn with_unit_system<T: Into<String>>(mut self, unit_system: T) -> Self {
+        if self.format.is_none() {
+            self.format = Some(FormatConfig::default());
+        }
+        
+        if let Some(ref mut format) = self.format {
+            format.unit_system = Some(unit_system.into());
+        }
+        
+        self
+    }
+    
+    pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
+        if self.format.is_none() {
+            self.format = Some(FormatConfig::default());
+        }
+        
+        if let Some(ref mut format) = self.format {
+            format.y_axis_label = Some(y_label.into());
+        }
+        
+        self
+    }
+    
+    pub fn with_log_scale(mut self, log_scale: bool) -> Self {
+        if self.format.is_none() {
+            self.format = Some(FormatConfig::default());
+        }
+        
+        if let Some(ref mut format) = self.format {
+            format.log_scale = Some(log_scale);
+        }
+        
+        self
+    }
+}
+
+// Implement Default for FormatConfig
+impl Default for FormatConfig {
+    fn default() -> Self {
+        Self {
+            x_axis_label: None,
+            y_axis_label: None,
+            unit_system: None,
+            precision: Some(2),
+            log_scale: None,
+            min: None,
+            max: None,
+            value_label: None,
         }
     }
 }
