@@ -163,10 +163,11 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
       type: 'category',
       name: yAxisLabel || 'CPU',
       nameLocation: 'middle',
-      nameGap: 95, // Fixed consistent nameGap for all charts
+      nameGap: 40,
       nameTextStyle: {
         color: '#E0E0E0',
-        fontSize: 14
+        fontSize: 14,
+        padding: [0, 0, 0, 20]
       },
       data: continuousCpuIds, // Use the continuous range of CPU IDs
       splitArea: {

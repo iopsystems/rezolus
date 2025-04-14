@@ -158,13 +158,6 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
     type: logScale ? 'log' : 'value',
     logBase: 10,
     scale: true,
-    name: yAxisLabel || opts.title,
-    nameLocation: 'middle',
-    nameGap: 95, // Fixed consistent nameGap for all charts
-    nameTextStyle: {
-      color: '#E0E0E0',
-      fontSize: 14
-    },
     axisLine: {
       lineStyle: {
         color: '#ABABAB'
