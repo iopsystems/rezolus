@@ -1,10 +1,10 @@
-// scatter.js - Scatter chart configuration with improved alignment consistency
+// scatter.js - Scatter chart configuration with improved human-friendly time axis
 
 import { createAxisLabelFormatter, createTooltipFormatter } from './units.js';
-import { calculateSharedVisibleTicks, formatDateTime } from './utils.js';
+import { calculateHumanFriendlyTicks, formatTimeAxisLabel, formatDateTime } from './utils.js';
 
 /**
- * Creates a scatter chart configuration for ECharts
+ * Creates a scatter chart configuration for ECharts with human-friendly time axis
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -20,38 +20,33 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
 
   // For percentile data, the format is [times, percentile1Values, percentile2Values, ...]
   const timeData = data[0];
+  
+  // Store original timestamps for calculations
+  const originalTimeData = timeData.slice();
+  
+  // Format timestamps using our enhanced formatter
+  const formattedTimeData = originalTimeData.map(timestamp => 
+    formatDateTime(timestamp, 'time')
+  );
 
-  // Use consistent formatting for timestamps
-  const formattedTimeData = timeData.map(timestamp => formatDateTime(timestamp, 'time'));
-
-  // Use shared ticks if already calculated, otherwise calculate new ones
+  // Calculate human-friendly ticks
+  let ticks;
   if (state.sharedAxisConfig.visibleTicks.length === 0 ||
-    Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
-    // For full view (no zoom), use fewer ticks to prevent label pile-up
-    if (state.globalZoom.start === 0 && state.globalZoom.end === 100) {
-      const maxTicks = Math.min(8, timeData.length);
-      const interval = Math.max(1, Math.floor(timeData.length / maxTicks));
-
-      const ticks = [];
-      for (let i = 0; i < timeData.length; i += interval) {
-        ticks.push(i);
-      }
-
-      // Add last tick if not already included
-      if (timeData.length > 0 && (timeData.length - 1) % interval !== 0) {
-        ticks.push(timeData.length - 1);
-      }
-
-      state.sharedAxisConfig.visibleTicks = ticks;
-    } else {
-      // For zoomed view, calculate normal ticks
-      state.sharedAxisConfig.visibleTicks = calculateSharedVisibleTicks(
-        timeData.length,
-        state.globalZoom.start,
-        state.globalZoom.end
-      );
-    }
+      Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
+    
+    // Calculate ticks based on zoom state
+    ticks = calculateHumanFriendlyTicks(
+      originalTimeData,
+      state.globalZoom.start,
+      state.globalZoom.end
+    );
+    
+    // Store in shared config for chart synchronization
+    state.sharedAxisConfig.visibleTicks = ticks;
     state.sharedAxisConfig.lastUpdate = Date.now();
+  } else {
+    // Use existing ticks from shared config
+    ticks = state.sharedAxisConfig.visibleTicks;
   }
 
   // Create series for each percentile
@@ -65,10 +60,10 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
     const percentileData = [];
     const percentileValues = data[i];
 
-    // Create data points in the format [time, value]
+    // Create data points in the format [time, value, original_index]
     for (let j = 0; j < timeData.length; j++) {
       if (percentileValues[j] !== undefined && !isNaN(percentileValues[j])) {
-        percentileData.push([formattedTimeData[j], percentileValues[j]]);
+        percentileData.push([formattedTimeData[j], percentileValues[j], j]); // Store original index
       }
     }
 
@@ -104,11 +99,12 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
       formatter: function(params) {
         if (!Array.isArray(params)) params = [params];
         
-        // Get the timestamp (first value in data array for scatter plots)
-        const timestamp = params[0].data[0];
+        // Get the original timestamp using the stored index
+        const originalIndex = params[0].data[2]; // Third value in data array
+        const fullTimestamp = formatDateTime(originalTimeData[originalIndex], 'full');
         
         // Start with the timestamp
-        let result = `<div>${timestamp}</div>`;
+        let result = `<div>${fullTimestamp}</div>`;
         
         // Add each series with right-justified values using flexbox
         params.forEach(param => {
@@ -191,7 +187,7 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
   if (minValue !== undefined) yAxis.min = minValue;
   if (maxValue !== undefined) yAxis.max = maxValue;
 
-  // Return scatter chart configuration
+  // Return scatter chart configuration with human-friendly time axis
   return {
     ...baseOption,
     grid: updatedGrid,
@@ -206,12 +202,13 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
       },
       axisLabel: {
         color: '#ABABAB',
-        formatter: function(value) {
-          return value; // Already formatted properly by formatDateTime
+        formatter: function(value, index) {
+          // Format time labels based on their alignment with time boundaries
+          return formatTimeAxisLabel(value, index, originalTimeData);
         },
-        // Using custom ticks based on our shared configuration
+        // Use human-friendly tick intervals
         interval: function(index) {
-          return state.sharedAxisConfig.visibleTicks.includes(index);
+          return ticks.includes(index);
         }
       }
     },

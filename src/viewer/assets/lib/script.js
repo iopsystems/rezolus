@@ -92,12 +92,10 @@ const Group = {
   }
 };
 
-// Plot component that renders ECharts visualizations with lazy loading
+// Plot component that renders ECharts visualizations with proper time axis
 const Plot = {
   oncreate: function(vnode) {
-    const {
-      attrs
-    } = vnode;
+    const { attrs } = vnode;
     const chartDom = vnode.dom;
 
     // Store the attributes for later reference
@@ -112,6 +110,18 @@ const Plot = {
           if (!state.initializedCharts.has(chartId)) {
             // Initialize the chart
             const chart = echarts.init(chartDom);
+            
+            // Store original time data for human-friendly tick calculation
+            if (attrs.data && attrs.data.length > 0) {
+              if (attrs.data[0] && Array.isArray(attrs.data[0])) {
+                // For line and scatter charts, time is in the first row
+                chart.originalTimeData = attrs.data[0];
+              }
+            } else if (attrs.time_data) {
+              // For heatmaps, time is in time_data property
+              chart.originalTimeData = attrs.time_data;
+            }
+            
             // Store chart instance for cleanup and to prevent re-initialization
             state.initializedCharts.set(chartId, chart);
 
@@ -184,6 +194,14 @@ const Plot = {
   onupdate: function(vnode) {
     // Update chart if data changed and chart is initialized
     if (vnode.state.chart) {
+      // Update original time data if needed
+      if (vnode.attrs.data && vnode.attrs.data.length > 0 && vnode.attrs.data[0]) {
+        vnode.state.chart.originalTimeData = vnode.attrs.data[0];
+      } else if (vnode.attrs.time_data) {
+        vnode.state.chart.originalTimeData = vnode.attrs.time_data;
+      }
+      
+      // Update the chart
       const option = createChartOption(vnode.attrs);
       vnode.state.chart.setOption(option);
 
@@ -221,11 +239,9 @@ const Plot = {
   }
 };
 
-// Create ECharts options based on plot type
+// Create ECharts options based on plot type with human-friendly time axis
 function createChartOption(plotSpec) {
-  const {
-    opts
-  } = plotSpec;
+  const { opts } = plotSpec;
 
   // Basic option template
   const baseOption = {

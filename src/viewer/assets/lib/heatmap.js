@@ -1,10 +1,10 @@
-// heatmap.js - Heatmap chart configuration and rendering with improved Y-axis positioning
+// heatmap.js - Heatmap chart configuration with human-friendly time axis
 
 import { createAxisLabelFormatter } from './units.js';
-import { calculateSharedVisibleTicks, formatDateTime } from './utils.js';
+import { calculateHumanFriendlyTicks, formatTimeAxisLabel, formatDateTime } from './utils.js';
 
 /**
- * Creates a heatmap chart configuration for ECharts
+ * Creates a heatmap chart configuration for ECharts with human-friendly time axis
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -17,6 +17,14 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   if (!data || data.length < 1) {
     return baseOption;
   }
+
+  // Store original timestamps for calculations
+  const originalTimeData = time_data.slice();
+  
+  // Format timestamps for display
+  const formattedTimeData = originalTimeData.map(timestamp => 
+    formatDateTime(timestamp, 'time')
+  );
 
   // Get unique x indices (timestamps) and y indices (CPUs)
   const xIndices = new Set();
@@ -37,9 +45,6 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     length: maxCpuId + 1
   }, (_, i) => i);
 
-  // Use consistent formatting for time values
-  const formattedTimeData = time_data.map(timestamp => formatDateTime(timestamp, 'time'));
-
   // Calculate min/max values if not provided by backend
   let minValue = min_value !== undefined ? min_value : Infinity;
   let maxValue = max_value !== undefined ? max_value : -Infinity;
@@ -52,34 +57,24 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     });
   }
 
-  // Use shared ticks for formatting
+  // Calculate human-friendly ticks
+  let ticks;
   if (state.sharedAxisConfig.visibleTicks.length === 0 ||
-    Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
-    // For full view (no zoom), use fewer ticks to prevent label pile-up
-    if (state.globalZoom.start === 0 && state.globalZoom.end === 100) {
-      const maxTicks = Math.min(8, time_data.length);
-      const interval = Math.max(1, Math.floor(time_data.length / maxTicks));
-
-      const ticks = [];
-      for (let i = 0; i < time_data.length; i += interval) {
-        ticks.push(i);
-      }
-
-      // Add last tick if not already included
-      if (time_data.length > 0 && (time_data.length - 1) % interval !== 0) {
-        ticks.push(time_data.length - 1);
-      }
-
-      state.sharedAxisConfig.visibleTicks = ticks;
-    } else {
-      // For zoomed view, calculate normal ticks
-      state.sharedAxisConfig.visibleTicks = calculateSharedVisibleTicks(
-        time_data.length,
-        state.globalZoom.start,
-        state.globalZoom.end
-      );
-    }
+      Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
+    
+    // Calculate ticks based on zoom state
+    ticks = calculateHumanFriendlyTicks(
+      originalTimeData,
+      state.globalZoom.start,
+      state.globalZoom.end
+    );
+    
+    // Store in shared config for chart synchronization
+    state.sharedAxisConfig.visibleTicks = ticks;
     state.sharedAxisConfig.lastUpdate = Date.now();
+  } else {
+    // Use existing ticks from shared config
+    ticks = state.sharedAxisConfig.visibleTicks;
   }
 
   // Ensure maxValue is always at least slightly higher than minValue for visualization
@@ -97,7 +92,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   let tooltipFormatter = function(params) {
     const value = params.data[2];
     const timeIndex = params.data[0];
-    const fullTime = time_data[timeIndex];
+    const fullTime = originalTimeData[timeIndex];
     const formattedTime = formatDateTime(fullTime, 'full'); // Use full format for tooltip
     const cpu = params.data[1];
     
@@ -149,13 +144,13 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
       },
       axisLabel: {
         color: '#ABABAB',
-        formatter: function(value) {
-          // Show time only format for x-axis labels, already properly formatted
-          return value;
+        formatter: function(value, index) {
+          // Format time labels based on their alignment with time boundaries
+          return formatTimeAxisLabel(value, index, originalTimeData);
         },
-        // Use the same tick interval configuration as line charts
+        // Use human-friendly tick intervals
         interval: function(index) {
-          return state.sharedAxisConfig.visibleTicks.includes(index);
+          return ticks.includes(index);
         }
       }
     },
