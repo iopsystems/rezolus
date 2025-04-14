@@ -137,480 +137,478 @@ pub fn run(config: Config) {
     // code to load data from parquet will go here
     let mut state = AppState::new(config.clone());
 
-    if !config.testing {
-        let data = Tsdb::load(&config.input)
-            .map_err(|e| {
-                eprintln!("failed to load data from parquet: {e}");
-                std::process::exit(1);
-            })
-            .unwrap();
+    let data = Tsdb::load(&config.input)
+        .map_err(|e| {
+            eprintln!("failed to load data from parquet: {e}");
+            std::process::exit(1);
+        })
+        .unwrap();
 
-        // define our sections
-        let sections = vec![
-            Section {
-                name: "Overview".to_string(),
-                route: "/overview".to_string(),
-            },
-            Section {
-                name: "CPU".to_string(),
-                route: "/cpu".to_string(),
-            },
-            Section {
-                name: "Network".to_string(),
-                route: "/network".to_string(),
-            },
-            Section {
-                name: "Scheduler".to_string(),
-                route: "/scheduler".to_string(),
-            },
-            Section {
-                name: "Syscall".to_string(),
-                route: "/syscall".to_string(),
-            },
-            Section {
-                name: "Softirq".to_string(),
-                route: "/softirq".to_string(),
-            },
-            Section {
-                name: "BlockIO".to_string(),
-                route: "/blockio".to_string(),
-            },
-        ];
+    // define our sections
+    let sections = vec![
+        Section {
+            name: "Overview".to_string(),
+            route: "/overview".to_string(),
+        },
+        Section {
+            name: "CPU".to_string(),
+            route: "/cpu".to_string(),
+        },
+        Section {
+            name: "Network".to_string(),
+            route: "/network".to_string(),
+        },
+        Section {
+            name: "Scheduler".to_string(),
+            route: "/scheduler".to_string(),
+        },
+        Section {
+            name: "Syscall".to_string(),
+            route: "/syscall".to_string(),
+        },
+        Section {
+            name: "Softirq".to_string(),
+            route: "/softirq".to_string(),
+        },
+        Section {
+            name: "BlockIO".to_string(),
+            route: "/blockio".to_string(),
+        },
+    ];
 
-        // define views for each section
-        let mut overview = View::new(sections.clone());
-        let mut cpu = View::new(sections.clone());
-        let mut network = View::new(sections.clone());
-        let mut scheduler = View::new(sections.clone());
-        let mut syscall = View::new(sections.clone());
-        let mut softirq = View::new(sections.clone());
-        let mut blockio = View::new(sections.clone());
+    // define views for each section
+    let mut overview = View::new(sections.clone());
+    let mut cpu = View::new(sections.clone());
+    let mut network = View::new(sections.clone());
+    let mut scheduler = View::new(sections.clone());
+    let mut syscall = View::new(sections.clone());
+    let mut softirq = View::new(sections.clone());
+    let mut blockio = View::new(sections.clone());
 
-        // CPU
+    // CPU
 
-        // CPU Utilization
+    // CPU Utilization
 
-        let mut cpu_overview = Group::new("CPU", "cpu");
-        let mut utilization = Group::new("Utilization", "utilization");
+    let mut cpu_overview = Group::new("CPU", "cpu");
+    let mut utilization = Group::new("Utilization", "utilization");
 
-        let opts = PlotOpts::line("Busy %", "busy-pct", Unit::Percentage)
+    let opts = PlotOpts::line("Busy %", "busy-pct", Unit::Percentage)
+        .with_axis_label("Utilization")
+        .with_unit_system("percentage");
+    let series = data
+        .cpu_avg("cpu_usage", Labels::default())
+        .map(|v| (v / 1000000000.0));
+    cpu_overview.plot(opts.clone(), series.clone());
+    utilization.plot(opts.clone(), series.clone());
+
+    let opts = PlotOpts::heatmap("Busy %", "busy-pct-heatmap", Unit::Percentage)
+        .with_axis_label("CPU")
+        .with_unit_system("percentage");
+    let series = data
+        .cpu_heatmap("cpu_usage", Labels::default())
+        .map(|v| v / 1000000000.0);
+    cpu_overview.heatmap_echarts(opts.clone(), series.clone());
+    utilization.heatmap_echarts(opts.clone(), series.clone());
+
+    for state in &["User", "System", "SoftIRQ"] {
+        let opts = PlotOpts::line(format!("{state} %"), format!("{}-pct", state.to_lowercase()), Unit::Percentage)
             .with_axis_label("Utilization")
             .with_unit_system("percentage");
-        let series = data
-            .cpu_avg("cpu_usage", Labels::default())
-            .map(|v| (v / 1000000000.0));
-        cpu_overview.plot(opts.clone(), series.clone());
-        utilization.plot(opts.clone(), series.clone());
+        utilization.plot(
+            opts,
+            data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
+                .map(|v| (v / 1000000000.0)),
+        );
 
-        let opts = PlotOpts::heatmap("Busy %", "busy-pct-heatmap", Unit::Percentage)
+        let opts = PlotOpts::heatmap(format!("{state} %"), format!("{}-pct-heatmap", state.to_lowercase()), Unit::Percentage)
             .with_axis_label("CPU")
             .with_unit_system("percentage");
-        let series = data
-            .cpu_heatmap("cpu_usage", Labels::default())
-            .map(|v| v / 1000000000.0);
-        cpu_overview.heatmap_echarts(opts.clone(), series.clone());
-        utilization.heatmap_echarts(opts.clone(), series.clone());
+        utilization.heatmap_echarts(
+            opts,
+            data.cpu_heatmap("cpu_usage", [("state", state.to_lowercase())])
+                .map(|v| v / 1000000000.0),
+        );
+    }
 
-        for state in &["User", "System", "SoftIRQ"] {
-            let opts = PlotOpts::line(format!("{state} %"), format!("{}-pct", state.to_lowercase()), Unit::Percentage)
-                .with_axis_label("Utilization")
-                .with_unit_system("percentage");
-            utilization.plot(
-                opts,
-                data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
-                    .map(|v| (v / 1000000000.0)),
-            );
+    overview.groups.push(cpu_overview);
+    cpu.groups.push(utilization);
 
-            let opts = PlotOpts::heatmap(format!("{state} %"), format!("{}-pct-heatmap", state.to_lowercase()), Unit::Percentage)
-                .with_axis_label("CPU")
-                .with_unit_system("percentage");
-            utilization.heatmap_echarts(
-                opts,
-                data.cpu_heatmap("cpu_usage", [("state", state.to_lowercase())])
-                    .map(|v| v / 1000000000.0),
-            );
-        }
+    // CPU Performance
 
-        overview.groups.push(cpu_overview);
-        cpu.groups.push(utilization);
+    let mut performance = Group::new("Performance", "performance");
 
-        // CPU Performance
+    let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count);
+    if let (Some(cycles), Some(instructions)) = (
+        data.sum("cpu_cycles", Labels::default()),
+        data.sum("cpu_instructions", Labels::default()),
+    ) {
+        let ipc = instructions / cycles;
+        performance.plot(opts, Some(ipc));
+    }
 
-        let mut performance = Group::new("Performance", "performance");
+    let opts = PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", Unit::Count);
+    if let (Some(cycles), Some(instructions)) = (
+        data.cpu_heatmap("cpu_cycles", Labels::default()),
+        data.cpu_heatmap("cpu_instructions", Labels::default()),
+    ) {
+        let ipc = instructions / cycles;
+        performance.heatmap_echarts(opts, Some(ipc));
+    }
 
-        let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count);
-        if let (Some(cycles), Some(instructions)) = (
-            data.sum("cpu_cycles", Labels::default()),
-            data.sum("cpu_instructions", Labels::default()),
-        ) {
-            let ipc = instructions / cycles;
-            performance.plot(opts, Some(ipc));
-        }
+    let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count);
+    if let (
+        Some(cycles),
+        Some(instructions),
+        Some(aperf),
+        Some(mperf),
+        Some(tsc),
+        Some(cores),
+    ) = (
+        data.sum("cpu_cycles", Labels::default()),
+        data.sum("cpu_instructions", Labels::default()),
+        data.sum("cpu_aperf", Labels::default()),
+        data.sum("cpu_mperf", Labels::default()),
+        data.sum("cpu_tsc", Labels::default()),
+        data.sum("cpu_cores", Labels::default()),
+    ) {
+        let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
+        performance.plot(opts, Some(ipns));
+    }
 
-        let opts = PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", Unit::Count);
-        if let (Some(cycles), Some(instructions)) = (
-            data.cpu_heatmap("cpu_cycles", Labels::default()),
-            data.cpu_heatmap("cpu_instructions", Labels::default()),
-        ) {
-            let ipc = instructions / cycles;
-            performance.heatmap_echarts(opts, Some(ipc));
-        }
+    let opts = PlotOpts::heatmap("Instructions per Nanosecond (IPNS)", "ipns-heatmap", Unit::Count);
+    if let (
+        Some(cycles),
+        Some(instructions),
+        Some(aperf),
+        Some(mperf),
+        Some(tsc),
+    ) = (
+        data.cpu_heatmap("cpu_cycles", Labels::default()),
+        data.cpu_heatmap("cpu_instructions", Labels::default()),
+        data.cpu_heatmap("cpu_aperf", Labels::default()),
+        data.cpu_heatmap("cpu_mperf", Labels::default()),
+        data.cpu_heatmap("cpu_tsc", Labels::default()),
+    ) {
+        let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0;
+        performance.heatmap_echarts(opts, Some(ipns));
+    }
 
-        let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count);
-        if let (
-            Some(cycles),
-            Some(instructions),
-            Some(aperf),
-            Some(mperf),
-            Some(tsc),
-            Some(cores),
-        ) = (
-            data.sum("cpu_cycles", Labels::default()),
-            data.sum("cpu_instructions", Labels::default()),
-            data.sum("cpu_aperf", Labels::default()),
-            data.sum("cpu_mperf", Labels::default()),
-            data.sum("cpu_tsc", Labels::default()),
-            data.sum("cpu_cores", Labels::default()),
-        ) {
-            let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
-            performance.plot(opts, Some(ipns));
-        }
+    let opts = PlotOpts::line("Frequency", "frequency", Unit::Frequency);
+    if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
+        data.sum("cpu_aperf", Labels::default()),
+        data.sum("cpu_mperf", Labels::default()),
+        data.sum("cpu_tsc", Labels::default()),
+        data.sum("cpu_cores", Labels::default()),
+    ) {
+        let frequency = tsc * aperf / mperf / cores;
+        performance.plot(opts, Some(frequency));
+    }
 
-        let opts = PlotOpts::heatmap("Instructions per Nanosecond (IPNS)", "ipns-heatmap", Unit::Count);
-        if let (
-            Some(cycles),
-            Some(instructions),
-            Some(aperf),
-            Some(mperf),
-            Some(tsc),
-        ) = (
-            data.cpu_heatmap("cpu_cycles", Labels::default()),
-            data.cpu_heatmap("cpu_instructions", Labels::default()),
-            data.cpu_heatmap("cpu_aperf", Labels::default()),
-            data.cpu_heatmap("cpu_mperf", Labels::default()),
-            data.cpu_heatmap("cpu_tsc", Labels::default()),
-        ) {
-            let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0;
-            performance.heatmap_echarts(opts, Some(ipns));
-        }
+    let opts = PlotOpts::heatmap("Frequency", "frequency-heatmap", Unit::Frequency)
+        .with_unit_system("frequency");
+    if let (Some(aperf), Some(mperf), Some(tsc)) = (
+        data.cpu_heatmap("cpu_aperf", Labels::default()),
+        data.cpu_heatmap("cpu_mperf", Labels::default()),
+        data.cpu_heatmap("cpu_tsc", Labels::default()),
+    ) {
+        let frequency = tsc * aperf / mperf;
+        performance.heatmap_echarts(opts, Some(frequency));
+    }
 
-        let opts = PlotOpts::line("Frequency", "frequency", Unit::Frequency);
-        if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
-            data.sum("cpu_aperf", Labels::default()),
-            data.sum("cpu_mperf", Labels::default()),
-            data.sum("cpu_tsc", Labels::default()),
-            data.sum("cpu_cores", Labels::default()),
-        ) {
-            let frequency = tsc * aperf / mperf / cores;
-            performance.plot(opts, Some(frequency));
-        }
+    cpu.groups.push(performance);
 
-        let opts = PlotOpts::heatmap("Frequency", "frequency-heatmap", Unit::Frequency)
-            .with_unit_system("frequency");
-        if let (Some(aperf), Some(mperf), Some(tsc)) = (
-            data.cpu_heatmap("cpu_aperf", Labels::default()),
-            data.cpu_heatmap("cpu_mperf", Labels::default()),
-            data.cpu_heatmap("cpu_tsc", Labels::default()),
-        ) {
-            let frequency = tsc * aperf / mperf;
-            performance.heatmap_echarts(opts, Some(frequency));
-        }
+    // CPU TLB
 
-        cpu.groups.push(performance);
+    let mut tlb = Group::new("TLB", "tlb");
 
-        // CPU TLB
+    let opts = PlotOpts::line("Total", "tlb-total", Unit::Rate);
+    tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
 
-        let mut tlb = Group::new("TLB", "tlb");
+    let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap", Unit::Rate);
+    tlb.heatmap_echarts(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
 
-        let opts = PlotOpts::line("Total", "tlb-total", Unit::Rate);
-        tlb.plot(opts, data.sum("cpu_tlb_flush", Labels::default()));
-
-        let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap", Unit::Rate);
-        tlb.heatmap_echarts(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
-
-        for reason in &[
-            "Local MM Shootdown",
-            "Remote Send IPI",
-            "Remote Shootdown",
-            "Task Switch",
-        ] {
-            let label = reason;
-            let id = format!(
-                "tlb-{}",
-                reason
-                    .to_lowercase()
-                    .split(' ')
-                    .collect::<Vec<&str>>()
-                    .join("-")
-            );
-            let reason = reason
+    for reason in &[
+        "Local MM Shootdown",
+        "Remote Send IPI",
+        "Remote Shootdown",
+        "Task Switch",
+    ] {
+        let label = reason;
+        let id = format!(
+            "tlb-{}",
+            reason
                 .to_lowercase()
                 .split(' ')
                 .collect::<Vec<&str>>()
-                .join("_");
+                .join("-")
+        );
+        let reason = reason
+            .to_lowercase()
+            .split(' ')
+            .collect::<Vec<&str>>()
+            .join("_");
 
-            let opts = PlotOpts::line(*label, &id, Unit::Rate);
-            tlb.plot(
-                opts,
-                data.sum("cpu_tlb_flush", [("reason", reason.clone())]),
-            );
-
-            let opts = PlotOpts::heatmap(*label, format!("{id}-heatmap"), Unit::Rate);
-            tlb.heatmap_echarts(
-                opts,
-                data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
-            );
-        }
-
-        cpu.groups.push(tlb);
-
-        // Network overview
-
-        let mut network_overview = Group::new("Network", "network");
-        let mut traffic = Group::new("Traffic", "traffic");
-
-        let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate).with_unit_system("bitrate");
-        let series = data
-            .sum("network_bytes", [("direction", "transmit")])
-            .map(|v| v * 8.0);
-
-        network_overview.plot(opts.clone(), series.clone());
-        traffic.plot(opts, series);
-
-        let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate).with_unit_system("bitrate");
-        let series = data
-            .sum("network_bytes", [("direction", "receive")])
-            .map(|v| v * 8.0);
-
-        network_overview.plot(opts.clone(), series.clone());
-        traffic.plot(opts, series);
-
-        let opts = PlotOpts::line("Packets Transmit", "packets-tx", Unit::Rate);
-        let series = data.sum("network_packets", [("direction", "transmit")]);
-
-        network_overview.plot(opts.clone(), series.clone());
-        traffic.plot(opts, series);
-
-        let opts = PlotOpts::line("Packets Receive", "packets-rx", Unit::Rate);
-        let series = data.sum("network_packets", [("direction", "receive")]);
-
-        network_overview.plot(opts.clone(), series.clone());
-        traffic.plot(opts, series);
-
-        overview.groups.push(network_overview);
-        network.groups.push(traffic);
-
-        // Scheduler
-
-        let mut scheduler_overview = Group::new("Scheduler", "scheduler");
-        let mut scheduler_group = Group::new("Scheduler", "scheduler");
-
-        let opts = PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency", Unit::Time)
-            .with_axis_label("Latency")
-            .with_unit_system("time")
-            .with_log_scale(true);
-        let series = data.percentiles("scheduler_runqueue_latency", Labels::default());
-        scheduler_overview.scatter(opts.clone(), series.clone());
-        scheduler_group.scatter(opts, series);
-
-        let opts = PlotOpts::scatter("Off CPU Time", "scheduler-offcpu-time", Unit::Time)
-            .with_axis_label("Time")
-            .with_unit_system("time")
-            .with_log_scale(true);
-        let series = data.percentiles("scheduler_offcpu", Labels::default());
-        scheduler_overview.scatter(opts.clone(), series.clone());
-        scheduler_group.scatter(opts, series);
-
-        let opts = PlotOpts::scatter("Running Time", "scheduler-running-time", Unit::Time)
-            .with_axis_label("Time")
-            .with_unit_system("time")
-            .with_log_scale(true);
-        let series = data.percentiles("scheduler_running", Labels::default());
-        scheduler_group.scatter(opts, series);
-
-        overview.groups.push(scheduler_overview);
-        scheduler.groups.push(scheduler_group);
-
-        // Syscall Overview
-
-        let mut syscall_overview = Group::new("Syscall", "syscall");
-        let mut syscall_group = Group::new("Syscall", "syscall");
-
-        let opts = PlotOpts::line("Total", "syscall-total", Unit::Rate);
-
-        let series = data.sum("syscall", Labels::default());
-        syscall_overview.plot(opts.clone(), series.clone());
-        syscall_group.plot(opts, series);
-
-        let percentiles = data.percentiles("syscall_latency", Labels::default());
-        syscall_group.scatter(
-            PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time),
-            percentiles,
+        let opts = PlotOpts::line(*label, &id, Unit::Rate);
+        tlb.plot(
+            opts,
+            data.sum("cpu_tlb_flush", [("reason", reason.clone())]),
         );
 
-        for op in &[
-            "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
-        ] {
-            let series = data.sum("syscall", [("op", op.to_lowercase())]);
-            syscall_group.plot(PlotOpts::line(*op, format!("syscall-{op}"), Unit::Rate), series);
-
-            let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())]);
-            syscall_group.scatter(
-                PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time),
-                percentiles,
-            );
-        }
-
-        overview.groups.push(syscall_overview);
-        syscall.groups.push(syscall_group);
-
-        // Softirq
-
-        let mut softirq_overview = Group::new("Softirq", "softirq");
-        let mut softirq_total = Group::new("Total", "total");
-
-        let opts = PlotOpts::line("Rate", "softirq-total-rate", Unit::Rate);
-        let series = data.sum("softirq", Labels::default());
-        softirq_overview.plot(opts.clone(), series.clone());
-        softirq_total.plot(opts.clone(), series.clone());
-
-        let opts = PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap", Unit::Rate);
-        let series = data.cpu_heatmap("softirq", Labels::default());
-        softirq_overview.heatmap_echarts(opts.clone(), series.clone());
-        softirq_total.heatmap_echarts(opts.clone(), series.clone());
-
-        let opts = PlotOpts::line("CPU %", "softirq-total-time", Unit::Percentage);
-        let series = data
-            .cpu_avg("softirq_time", Labels::default())
-            .map(|v| v / 1000000000.0);
-        softirq_total.plot(opts, series);
-
-        let opts = PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap", Unit::Percentage);
-        let series = data
-            .cpu_heatmap("softirq_time", Labels::default())
-            .map(|v| v / 1000000000.0);
-        softirq_total.heatmap_echarts(opts, series);
-
-        overview.groups.push(softirq_overview);
-        softirq.groups.push(softirq_total);
-
-        for (label, kind) in [
-            ("Hardware Interrupts", "hi"),
-            ("IRQ Poll", "irq_poll"),
-            ("Network Transmit", "net_tx"),
-            ("Network Receive", "net_rx"),
-            ("RCU", "rcu"),
-            ("Sched", "sched"),
-            ("Tasklet", "tasklet"),
-            ("Timer", "timer"),
-            ("HR Timer", "hrtimer"),
-            ("Block", "block"),
-        ] {
-            let mut group = Group::new(label, format!("softirq-{kind}"));
-
-            let opts = PlotOpts::line("Rate", format!("softirq-{kind}-rate"), Unit::Rate);
-            let series = data.sum("softirq", [("kind", kind)]);
-            group.plot(opts, series);
-
-            let opts = PlotOpts::heatmap("Rate", format!("softirq-{kind}-rate-heatmap"), Unit::Rate);
-            let series = data.cpu_heatmap("softirq", [("kind", kind)]);
-            group.heatmap_echarts(opts, series);
-
-            let opts = PlotOpts::line("CPU %", format!("softirq-{kind}-time"), Unit::Percentage);
-            let series = data
-                .cpu_avg("softirq_time", [("kind", kind)])
-                .map(|v| v / 1000000000.0);
-            group.plot(opts, series);
-
-            let opts = PlotOpts::heatmap("CPU %", format!("softirq-{kind}-time-heatmap"), Unit::Percentage);
-            let series = data
-                .cpu_heatmap("softirq_time", [("kind", kind)])
-                .map(|v| v / 1000000000.0);
-            group.heatmap_echarts(opts, series);
-
-            softirq.groups.push(group);
-        }
-
-        // BlockIO
-
-        let mut blockio_overview = Group::new("BlockIO", "blockio");
-        let mut blockio_throughput = Group::new("Throughput", "throughput");
-        let mut blockio_iops = Group::new("IOPS", "iops");
-        let mut blockio_latency = Group::new("Latency", "latency");
-        let mut blockio_size = Group::new("Size", "size");
-
-        let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read", Unit::Datarate);
-        blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "read")]));
-
-        let opts = PlotOpts::line("Write Throughput", "blockio-throughput-write", Unit::Datarate);
-        blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "write")]));
-
-        let opts = PlotOpts::line("Read IOPS", "blockio-iops-read", Unit::Count);
-        blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "read")]));
-
-        let opts = PlotOpts::line("Write IOPS", "blockio-iops-write", Unit::Count);
-        blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "write")]));
-
-        overview.groups.push(blockio_overview);
-
-        for op in &["Read", "Write", "Flush", "Discard"] {
-            let opts = PlotOpts::line(*op, format!("throughput-{}", op.to_lowercase()), Unit::Datarate);
-            blockio_throughput.plot(opts, data.sum("blockio_bytes", [("op", op.to_lowercase())]));
-
-            let opts = PlotOpts::line(*op, format!("iops-{}", op.to_lowercase()), Unit::Count);
-            blockio_iops.plot(
-                opts,
-                data.sum("blockio_operations", [("op", op.to_lowercase())]),
-            );
-
-            let opts = PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time);
-            blockio_latency.scatter(
-                opts,
-                data.percentiles("blockio_latency", [("op", op.to_lowercase())]),
-            );
-
-            let opts = PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()), Unit::Bytes);
-            blockio_size.scatter(
-                opts,
-                data.percentiles("blockio_size", [("op", op.to_lowercase())]),
-            );
-        }
-
-        blockio.groups.push(blockio_throughput);
-        blockio.groups.push(blockio_iops);
-        blockio.groups.push(blockio_latency);
-        blockio.groups.push(blockio_size);
-
-        // Finalize
-
-        state.sections.insert(
-            "overview.json".to_string(),
-            serde_json::to_string(&overview).unwrap(),
-        );
-        state
-            .sections
-            .insert("cpu.json".to_string(), serde_json::to_string(&cpu).unwrap());
-        state.sections.insert(
-            "network.json".to_string(),
-            serde_json::to_string(&network).unwrap(),
-        );
-        state.sections.insert(
-            "scheduler.json".to_string(),
-            serde_json::to_string(&scheduler).unwrap(),
-        );
-        state.sections.insert(
-            "syscall.json".to_string(),
-            serde_json::to_string(&syscall).unwrap(),
-        );
-        state.sections.insert(
-            "softirq.json".to_string(),
-            serde_json::to_string(&softirq).unwrap(),
-        );
-        state.sections.insert(
-            "blockio.json".to_string(),
-            serde_json::to_string(&blockio).unwrap(),
+        let opts = PlotOpts::heatmap(*label, format!("{id}-heatmap"), Unit::Rate);
+        tlb.heatmap_echarts(
+            opts,
+            data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
         );
     }
+
+    cpu.groups.push(tlb);
+
+    // Network overview
+
+    let mut network_overview = Group::new("Network", "network");
+    let mut traffic = Group::new("Traffic", "traffic");
+
+    let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate).with_unit_system("bitrate");
+    let series = data
+        .sum("network_bytes", [("direction", "transmit")])
+        .map(|v| v * 8.0);
+
+    network_overview.plot(opts.clone(), series.clone());
+    traffic.plot(opts, series);
+
+    let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate).with_unit_system("bitrate");
+    let series = data
+        .sum("network_bytes", [("direction", "receive")])
+        .map(|v| v * 8.0);
+
+    network_overview.plot(opts.clone(), series.clone());
+    traffic.plot(opts, series);
+
+    let opts = PlotOpts::line("Packets Transmit", "packets-tx", Unit::Rate);
+    let series = data.sum("network_packets", [("direction", "transmit")]);
+
+    network_overview.plot(opts.clone(), series.clone());
+    traffic.plot(opts, series);
+
+    let opts = PlotOpts::line("Packets Receive", "packets-rx", Unit::Rate);
+    let series = data.sum("network_packets", [("direction", "receive")]);
+
+    network_overview.plot(opts.clone(), series.clone());
+    traffic.plot(opts, series);
+
+    overview.groups.push(network_overview);
+    network.groups.push(traffic);
+
+    // Scheduler
+
+    let mut scheduler_overview = Group::new("Scheduler", "scheduler");
+    let mut scheduler_group = Group::new("Scheduler", "scheduler");
+
+    let opts = PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency", Unit::Time)
+        .with_axis_label("Latency")
+        .with_unit_system("time")
+        .with_log_scale(true);
+    let series = data.percentiles("scheduler_runqueue_latency", Labels::default());
+    scheduler_overview.scatter(opts.clone(), series.clone());
+    scheduler_group.scatter(opts, series);
+
+    let opts = PlotOpts::scatter("Off CPU Time", "scheduler-offcpu-time", Unit::Time)
+        .with_axis_label("Time")
+        .with_unit_system("time")
+        .with_log_scale(true);
+    let series = data.percentiles("scheduler_offcpu", Labels::default());
+    scheduler_overview.scatter(opts.clone(), series.clone());
+    scheduler_group.scatter(opts, series);
+
+    let opts = PlotOpts::scatter("Running Time", "scheduler-running-time", Unit::Time)
+        .with_axis_label("Time")
+        .with_unit_system("time")
+        .with_log_scale(true);
+    let series = data.percentiles("scheduler_running", Labels::default());
+    scheduler_group.scatter(opts, series);
+
+    overview.groups.push(scheduler_overview);
+    scheduler.groups.push(scheduler_group);
+
+    // Syscall Overview
+
+    let mut syscall_overview = Group::new("Syscall", "syscall");
+    let mut syscall_group = Group::new("Syscall", "syscall");
+
+    let opts = PlotOpts::line("Total", "syscall-total", Unit::Rate);
+
+    let series = data.sum("syscall", Labels::default());
+    syscall_overview.plot(opts.clone(), series.clone());
+    syscall_group.plot(opts, series);
+
+    let percentiles = data.percentiles("syscall_latency", Labels::default());
+    syscall_group.scatter(
+        PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time),
+        percentiles,
+    );
+
+    for op in &[
+        "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
+    ] {
+        let series = data.sum("syscall", [("op", op.to_lowercase())]);
+        syscall_group.plot(PlotOpts::line(*op, format!("syscall-{op}"), Unit::Rate), series);
+
+        let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())]);
+        syscall_group.scatter(
+            PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time),
+            percentiles,
+        );
+    }
+
+    overview.groups.push(syscall_overview);
+    syscall.groups.push(syscall_group);
+
+    // Softirq
+
+    let mut softirq_overview = Group::new("Softirq", "softirq");
+    let mut softirq_total = Group::new("Total", "total");
+
+    let opts = PlotOpts::line("Rate", "softirq-total-rate", Unit::Rate);
+    let series = data.sum("softirq", Labels::default());
+    softirq_overview.plot(opts.clone(), series.clone());
+    softirq_total.plot(opts.clone(), series.clone());
+
+    let opts = PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap", Unit::Rate);
+    let series = data.cpu_heatmap("softirq", Labels::default());
+    softirq_overview.heatmap_echarts(opts.clone(), series.clone());
+    softirq_total.heatmap_echarts(opts.clone(), series.clone());
+
+    let opts = PlotOpts::line("CPU %", "softirq-total-time", Unit::Percentage);
+    let series = data
+        .cpu_avg("softirq_time", Labels::default())
+        .map(|v| v / 1000000000.0);
+    softirq_total.plot(opts, series);
+
+    let opts = PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap", Unit::Percentage);
+    let series = data
+        .cpu_heatmap("softirq_time", Labels::default())
+        .map(|v| v / 1000000000.0);
+    softirq_total.heatmap_echarts(opts, series);
+
+    overview.groups.push(softirq_overview);
+    softirq.groups.push(softirq_total);
+
+    for (label, kind) in [
+        ("Hardware Interrupts", "hi"),
+        ("IRQ Poll", "irq_poll"),
+        ("Network Transmit", "net_tx"),
+        ("Network Receive", "net_rx"),
+        ("RCU", "rcu"),
+        ("Sched", "sched"),
+        ("Tasklet", "tasklet"),
+        ("Timer", "timer"),
+        ("HR Timer", "hrtimer"),
+        ("Block", "block"),
+    ] {
+        let mut group = Group::new(label, format!("softirq-{kind}"));
+
+        let opts = PlotOpts::line("Rate", format!("softirq-{kind}-rate"), Unit::Rate);
+        let series = data.sum("softirq", [("kind", kind)]);
+        group.plot(opts, series);
+
+        let opts = PlotOpts::heatmap("Rate", format!("softirq-{kind}-rate-heatmap"), Unit::Rate);
+        let series = data.cpu_heatmap("softirq", [("kind", kind)]);
+        group.heatmap_echarts(opts, series);
+
+        let opts = PlotOpts::line("CPU %", format!("softirq-{kind}-time"), Unit::Percentage);
+        let series = data
+            .cpu_avg("softirq_time", [("kind", kind)])
+            .map(|v| v / 1000000000.0);
+        group.plot(opts, series);
+
+        let opts = PlotOpts::heatmap("CPU %", format!("softirq-{kind}-time-heatmap"), Unit::Percentage);
+        let series = data
+            .cpu_heatmap("softirq_time", [("kind", kind)])
+            .map(|v| v / 1000000000.0);
+        group.heatmap_echarts(opts, series);
+
+        softirq.groups.push(group);
+    }
+
+    // BlockIO
+
+    let mut blockio_overview = Group::new("BlockIO", "blockio");
+    let mut blockio_throughput = Group::new("Throughput", "throughput");
+    let mut blockio_iops = Group::new("IOPS", "iops");
+    let mut blockio_latency = Group::new("Latency", "latency");
+    let mut blockio_size = Group::new("Size", "size");
+
+    let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read", Unit::Datarate);
+    blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "read")]));
+
+    let opts = PlotOpts::line("Write Throughput", "blockio-throughput-write", Unit::Datarate);
+    blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "write")]));
+
+    let opts = PlotOpts::line("Read IOPS", "blockio-iops-read", Unit::Count);
+    blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "read")]));
+
+    let opts = PlotOpts::line("Write IOPS", "blockio-iops-write", Unit::Count);
+    blockio_overview.plot(opts, data.sum("blockio_operations", [("op", "write")]));
+
+    overview.groups.push(blockio_overview);
+
+    for op in &["Read", "Write", "Flush", "Discard"] {
+        let opts = PlotOpts::line(*op, format!("throughput-{}", op.to_lowercase()), Unit::Datarate);
+        blockio_throughput.plot(opts, data.sum("blockio_bytes", [("op", op.to_lowercase())]));
+
+        let opts = PlotOpts::line(*op, format!("iops-{}", op.to_lowercase()), Unit::Count);
+        blockio_iops.plot(
+            opts,
+            data.sum("blockio_operations", [("op", op.to_lowercase())]),
+        );
+
+        let opts = PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time);
+        blockio_latency.scatter(
+            opts,
+            data.percentiles("blockio_latency", [("op", op.to_lowercase())]),
+        );
+
+        let opts = PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()), Unit::Bytes);
+        blockio_size.scatter(
+            opts,
+            data.percentiles("blockio_size", [("op", op.to_lowercase())]),
+        );
+    }
+
+    blockio.groups.push(blockio_throughput);
+    blockio.groups.push(blockio_iops);
+    blockio.groups.push(blockio_latency);
+    blockio.groups.push(blockio_size);
+
+    // Finalize
+
+    state.sections.insert(
+        "overview.json".to_string(),
+        serde_json::to_string(&overview).unwrap(),
+    );
+    state
+        .sections
+        .insert("cpu.json".to_string(), serde_json::to_string(&cpu).unwrap());
+    state.sections.insert(
+        "network.json".to_string(),
+        serde_json::to_string(&network).unwrap(),
+    );
+    state.sections.insert(
+        "scheduler.json".to_string(),
+        serde_json::to_string(&scheduler).unwrap(),
+    );
+    state.sections.insert(
+        "syscall.json".to_string(),
+        serde_json::to_string(&syscall).unwrap(),
+    );
+    state.sections.insert(
+        "softirq.json".to_string(),
+        serde_json::to_string(&softirq).unwrap(),
+    );
+    state.sections.insert(
+        "blockio.json".to_string(),
+        serde_json::to_string(&blockio).unwrap(),
+    );
 
     // launch the HTTP listener
     let c = config.clone();
@@ -690,22 +688,14 @@ async fn data(
     let path = uri.path();
     let parts: Vec<&str> = path.split('/').collect();
 
-    if state.config.testing {
-        (
-            StatusCode::OK,
-            std::fs::read_to_string(format!("src/viewer/assets/data/{}", parts[1]))
-                .unwrap_or("{ }".to_string()),
-        )
-    } else {
-        (
-            StatusCode::OK,
-            state
-                .sections
-                .get(parts[1])
-                .map(|v| v.to_string())
-                .unwrap_or("{ }".to_string()),
-        )
-    }
+    (
+        StatusCode::OK,
+        state
+            .sections
+            .get(parts[1])
+            .map(|v| v.to_string())
+            .unwrap_or("{ }".to_string()),
+    )
 }
 
 #[derive(Default, Serialize)]
