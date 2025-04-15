@@ -601,29 +601,50 @@ pub fn run(config: Config) {
     blockio.groups.push(blockio_latency);
     blockio.groups.push(blockio_size);
 
-    // Create a group for cgroup overview
-    let mut cgroup_overview = Group::new("Overview", "overview");
+    /*
+     * cgroup section
+     */
+    let mut cgroup_cpu = Group::new("CPU", "cpu");
+    let mut cgroup_performance = Group::new("Performance", "performance");
+    let mut cgroup_syscalls = Group::new("Syscalls", "syscalls");
 
-    // Create a multi-series chart for CPU usage of top cgroups
-    if let Some((multi_data, cgroup_names)) =
-        data.top_cgroups_avg_divide("cgroup_cpu_usage", 10, 1000000000.0)
-    {
-        let opts = PlotOpts::multi("Cores Utilized", "cgroups-cpu-multi", Unit::Count);
+    // cpu usage
 
-        // Add the plot spec with series names
-        cgroup_overview.plot_multi(opts, multi_data, cgroup_names);
+    let opts = PlotOpts::multi("Total Cores", "cgroup-total-cores", Unit::Count);
+    cgroup_cpu.multi(opts, data.cgroup("cgroup_cpu_usage", Labels::default()).map(|v| (v.sum() / 1000000000.0).top_n(10, average)));
+
+    let opts = PlotOpts::multi("User Cores", "cgroup-user-cores", Unit::Count);
+    cgroup_cpu.multi(opts, data.cgroup("cgroup_cpu_usage", [("state", "user")]).map(|v| (v.sum() / 1000000000.0).top_n(10, average)));
+
+    // performance
+
+    if let (Some(cycles), Some(instructions)) = (
+        data.cgroup("cgroup_cpu_cycles", Labels::default()).map(|v| v.sum()),
+        data.cgroup("cgroup_cpu_instructions", Labels::default()).map(|v| v.sum())
+    ) {
+        let opts = PlotOpts::multi("Best IPC", "cgroup-ipc-best", Unit::Count);
+        cgroup_performance.multi(opts, Some((cycles.clone() / instructions.clone()).top_n(10, average)));
+
+        let opts = PlotOpts::multi("Worst IPC", "cgroup-ipc-worst", Unit::Count);
+        cgroup_performance.multi(opts, Some((cycles / instructions).worst_n(10, average)));
     }
 
-    // Create a multi-series chart for CPU usage of top cgroups
-    if let Some((multi_data, cgroup_names)) = data.top_cgroups_avg("cgroup_syscall", 10) {
-        let opts = PlotOpts::multi("Syscall", "cgroups-syscall-multi", Unit::Count);
+    // syscalls
 
-        // Add the plot spec with series names
-        cgroup_overview.plot_multi(opts, multi_data, cgroup_names);
+    let opts = PlotOpts::multi("Total", "cgroup-syscalls", Unit::Rate);
+    cgroup_syscalls.multi(opts, data.cgroup("cgroup_syscall", Labels::default()).map(|v| v.sum().top_n(10, average)));
+
+    for op in &[
+        "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
+    ] {
+        let opts = PlotOpts::multi(*op, format!("syscall-{op}"), Unit::Rate);
+        cgroup_syscalls.multi(opts, data.cgroup("cgroup_syscall", [("op", op.to_lowercase())]).map(|v| v.sum().top_n(10, average)));
     }
 
     // Add all groups to the cgroups view
-    cgroups.groups.push(cgroup_overview);
+    cgroups.groups.push(cgroup_cpu);
+    cgroups.groups.push(cgroup_performance);
+    cgroups.groups.push(cgroup_syscalls);
 
     // Finalize
 
@@ -784,7 +805,7 @@ impl Group {
         }
     }
 
-    pub fn plot(&mut self, opts: PlotOpts, series: Option<TimeSeries>) {
+    pub fn plot(&mut self, opts: PlotOpts, series: Option<Timeseries>) {
         if let Some(data) = series.map(|v| v.as_data()) {
             self.plots.push(Plot {
                 opts,
@@ -869,9 +890,25 @@ impl Group {
     }
 
     // New method to add a multi-series plot
-    pub fn plot_multi(&mut self, opts: PlotOpts, data: Vec<Vec<f64>>, series_names: Vec<String>) {
-        if data.len() < 2 || data[0].is_empty() {
+    pub fn multi(&mut self, opts: PlotOpts, cgroup_data: Option<Vec<(String, Timeseries)>>) {
+        if cgroup_data.is_none() {
             return;
+        }
+
+        let mut cgroup_data = cgroup_data.unwrap();
+
+        let mut data = Vec::new();
+        let mut labels = Vec::new();
+
+        for (label, series) in cgroup_data.drain(..) {
+            labels.push(label);
+            let d = series.as_data();
+
+            if data.is_empty() {
+                data.push(d[0].clone());
+            }
+
+            data.push(d[1].clone());
         }
 
         self.plots.push(Plot {
@@ -880,7 +917,7 @@ impl Group {
             min_value: None,
             max_value: None,
             time_data: None,
-            series_names: Some(series_names),
+            series_names: Some(labels),
         });
     }
 }
