@@ -174,6 +174,10 @@ pub fn run(config: Config) {
             name: "BlockIO".to_string(),
             route: "/blockio".to_string(),
         },
+        Section {
+            name: "cgroups".to_string(),
+            route: "/cgroups".to_string(),
+        },
     ];
 
     // define views for each section
@@ -184,6 +188,7 @@ pub fn run(config: Config) {
     let mut syscall = View::new(sections.clone());
     let mut softirq = View::new(sections.clone());
     let mut blockio = View::new(sections.clone());
+    let mut cgroups = View::new(sections.clone());
 
     // CPU
 
@@ -580,6 +585,66 @@ pub fn run(config: Config) {
     blockio.groups.push(blockio_latency);
     blockio.groups.push(blockio_size);
 
+    // Get the top 20 cgroups
+    let top_cgroups: Vec<String> = data.top_cgroups_by_cpu(20).iter().map(|v| v.0.clone()).collect();
+
+    // Create a group for cgroup overview
+    let mut cgroup_overview = Group::new("Overview", "overview");
+
+    // Create a multi-series chart for CPU usage of top cgroups
+    if let Some((multi_data, cgroup_names)) = data.cgroups_cpu_usage_multi(20) {
+        let opts = PlotOpts::multi("CPU Usage by cGroup (Cores)", "cgroups-cpu-multi", Unit::Count)
+            .with_axis_label("CPU Cores");
+        
+        // Add the plot spec with series names
+        cgroup_overview.plot_multi(opts, multi_data, cgroup_names);
+    }
+
+    // Add all groups to the cgroups view
+    cgroups.groups.push(cgroup_overview);
+
+    // // Add charts for TLB flushes per cgroup
+    // let mut cgroup_tlb = Group::new("TLB Flushes", "tlb");
+    // let opts = PlotOpts::line("TLB Flushes by cGroup", "cgroup-tlb", Unit::Rate);
+
+    // for cgroup_name in &top_cgroups {
+    //     let series = data.sum("cpu_tlb_flush", [("cgroup", cgroup_name.as_str())]);
+    //     if let Some(series) = series {
+    //         cgroup_tlb.plot(opts.clone(), Some(series));
+    //     }
+    // }
+
+    // // Add charts for syscall activity
+    // let mut cgroup_syscalls = Group::new("Syscalls", "syscalls");
+    // let opts = PlotOpts::line("Syscall Rate by cGroup", "cgroup-syscalls", Unit::Rate);
+
+    // for cgroup_name in &top_cgroups {
+    //     let series = data.sum("syscall", [("cgroup", cgroup_name.as_str())]);
+    //     if let Some(series) = series {
+    //         cgroup_syscalls.plot(opts.clone(), Some(series));
+    //     }
+    // }
+
+    // // Add charts for IPC (Instructions Per Cycle)
+    // let mut cgroup_ipc = Group::new("Performance", "performance");
+    // let opts = PlotOpts::line("Instructions Per Cycle", "cgroup-ipc", Unit::Count);
+
+    // for cgroup_name in &top_cgroups {
+    //     if let (Some(cycles), Some(instructions)) = (
+    //         data.sum("cpu_cycles", [("cgroup", cgroup_name.as_str())]),
+    //         data.sum("cpu_instructions", [("cgroup", cgroup_name.as_str())]),
+    //     ) {
+    //         let ipc = instructions / cycles;
+    //         cgroup_ipc.plot(opts.clone(), Some(ipc));
+    //     }
+    // }
+
+    // // Add all groups to the cgroups view
+    // cgroups.groups.push(cgroup_overview);
+    // cgroups.groups.push(cgroup_tlb);
+    // cgroups.groups.push(cgroup_syscalls);
+    // cgroups.groups.push(cgroup_ipc);
+
     // Finalize
 
     state.sections.insert(
@@ -608,6 +673,10 @@ pub fn run(config: Config) {
     state.sections.insert(
         "blockio.json".to_string(),
         serde_json::to_string(&blockio).unwrap(),
+    );
+    state.sections.insert(
+        "cgroups.json".to_string(),
+        serde_json::to_string(&cgroups).unwrap(),
     );
 
     // launch the HTTP listener
@@ -743,6 +812,7 @@ impl Group {
                 min_value: None,
                 max_value: None,
                 time_data: None,
+                series_names: None,
             })
         }
     }
@@ -756,6 +826,7 @@ impl Group {
                     min_value: None,
                     max_value: None,
                     time_data: None,
+                    series_names: None,
                 })
             }
         }
@@ -773,6 +844,7 @@ impl Group {
                     min_value: Some(echarts_data.min_value),
                     max_value: Some(echarts_data.max_value),
                     time_data: Some(echarts_data.time),
+                    series_names: None,
                 })
             }
         }
@@ -810,7 +882,24 @@ impl Group {
             min_value: None,
             max_value: None,
             time_data: None,
+            series_names: None,
         })
+    }
+
+    // New method to add a multi-series plot
+    pub fn plot_multi(&mut self, opts: PlotOpts, data: Vec<Vec<f64>>, series_names: Vec<String>) {
+        if data.len() < 2 || data[0].is_empty() {
+            return;
+        }
+        
+        self.plots.push(Plot {
+            opts,
+            data,
+            min_value: None,
+            max_value: None,
+            time_data: None,
+            series_names: Some(series_names),
+        });
     }
 }
 
@@ -824,6 +913,8 @@ pub struct Plot {
     max_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     time_data: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    series_names: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -861,6 +952,15 @@ impl PlotOpts {
             title: title.into(),
             id: id.into(),
             style: "line".to_string(),
+            format: Some(FormatConfig::new(unit)),
+        }
+    }
+
+    pub fn multi<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
+        Self {
+            title: title.into(),
+            id: id.into(),
+            style: "multi".to_string(),
             format: Some(FormatConfig::new(unit)),
         }
     }

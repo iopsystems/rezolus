@@ -14,6 +14,9 @@ import {
   createHeatmapOption
 } from './heatmap.js';
 import {
+  createMultiSeriesChartOption
+} from './multi.js';
+import {
   formatDateTime,
   isChartVisible,
   updateChartsAfterZoom,
@@ -313,6 +316,9 @@ function createChartOption(plotSpec) {
     return createHeatmapOption(baseOption, plotSpec, state);
   } else if (opts.style === 'scatter') {
     return createScatterChartOption(baseOption, plotSpec, state);
+  } else if (opts.style === 'multi') { 
+    // New multi-series chart type
+    return createMultiSeriesChartOption(baseOption, plotSpec, state);
   }
 
   return baseOption;
