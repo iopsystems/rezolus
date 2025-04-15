@@ -195,10 +195,7 @@ const UNIT_SYSTEMS = {
 function formatWithUnit(value, unitSystem, precision = 2) {
   // Handle invalid or zero values
   if (value === null || value === undefined || isNaN(value)) {
-    return {
-      value: '0',
-      unit: UNIT_SYSTEMS[unitSystem] ? .base || ''
-    };
+    return { value: '0', unit: UNIT_SYSTEMS[unitSystem]?.base || '' };
   }
 
   // Get absolute value for scaling (we'll preserve sign later)
