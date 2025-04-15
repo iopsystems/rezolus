@@ -219,71 +219,66 @@ impl Tsdb {
         }
     }
 
-    // Find top N cgroups by average CPU usage
-    pub fn top_cgroups_by_cpu(&self, n: usize) -> Vec<(String, f64)> {
-        let mut cgroup_usage: HashMap<String, f64> = HashMap::new();
-        
-        // Collect all cgroups and their average CPU usage
-        if let Some(collection) = self.inner.get("cgroup_cpu_usage") {
+    fn find_top_cgroups_avg(&self, metric: &str, n: usize) -> Vec<String> {
+        let mut cgroups: HashMap<String, f64> = HashMap::new();
+
+        // Collect all cgroups and their average usage
+        if let Some(collection) = self.inner.get(metric) {
             let by_group = collection.sum_by_group();
 
             for (name, series) in by_group.iter() {
                 let avg_usage = series.average();
-                cgroup_usage.entry(name.clone())
+                cgroups
+                    .entry(name.clone())
                     .and_modify(|e| *e += avg_usage)
                     .or_insert(avg_usage);
             }
         }
-        
+
         // Sort by usage and take top N
-        let mut sorted: Vec<(String, f64)> = cgroup_usage.into_iter().collect();
+        let mut sorted: Vec<(String, f64)> = cgroups.into_iter().collect();
         sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         sorted.truncate(n);
-        
-        sorted
+
+        sorted.into_iter().map(|v| v.0).collect()
     }
 
     // New method to generate multi-series data for cgroups CPU usage
-    pub fn cgroups_cpu_usage_multi(&self, n: usize) -> Option<(Vec<Vec<f64>>, Vec<String>)> {
+    pub fn top_cgroups_avg(&self, metric: &str, n: usize) -> Option<(Vec<Vec<f64>>, Vec<String>)> {
         // Get the top N cgroups first
-        let top_cgroups = self.top_cgroups_by_cpu(n);
-        if top_cgroups.is_empty() {
+        let cgroups = self.find_top_cgroups_avg(metric, n);
+        if cgroups.is_empty() {
             return None;
         }
-        
-        // Create a vector of cgroup names for the chart labels
-        let cgroup_names: Vec<String> = top_cgroups.iter().map(|(name, _)| name.clone()).collect();
-        
+
         // First, find the timestamps - get any series to extract timestamps
         let mut timestamps = Vec::new();
-        
-        if let Some(collection) = self.inner.get("cgroup_cpu_usage") {
+
+        if let Some(collection) = self.inner.get(metric) {
             if let Some(series) = collection.sum_by_group().values().next() {
-                timestamps = series.inner.keys().map(|ts| *ts as f64 / 1000000000.0).collect();
+                timestamps = series
+                    .inner
+                    .keys()
+                    .map(|ts| *ts as f64 / 1000000000.0)
+                    .collect();
             }
         }
-        
+
         if timestamps.is_empty() {
             return None;
         }
-        
+
         // Build a matrix of [timestamps, cgroup1_values, cgroup2_values, ...]
-        let mut matrix = Vec::with_capacity(top_cgroups.len() + 1);
+        let mut matrix = Vec::with_capacity(cgroups.len() + 1);
         matrix.push(timestamps.clone());
-        
+
         // For each top cgroup, get its CPU usage timeseries
-        for (cgroup_name, _) in &top_cgroups {
-            if let Some(collection) = self.inner.get("cgroup_cpu_usage") {
+        for name in &cgroups {
+            if let Some(collection) = self.inner.get(metric) {
                 let by_group = collection.sum_by_group();
-                
-                if let Some(series) = by_group.get(cgroup_name) {
-                    // Extract values in the same order as timestamps
-                    let mut values = Vec::with_capacity(timestamps.len());
-                    
-                    for (ts, value) in &series.inner {
-                        values.push(*value / 1000000000.0); // Convert to CPU cores
-                    }
-                    
+
+                if let Some(series) = by_group.get(name) {
+                    let values = series.inner.values().copied().collect();
                     matrix.push(values);
                 } else {
                     // If no data for this cgroup, add zeros
@@ -291,8 +286,25 @@ impl Tsdb {
                 }
             }
         }
-        
-        Some((matrix, cgroup_names))
+
+        Some((matrix, cgroups))
+    }
+
+    pub fn top_cgroups_avg_divide(
+        &self,
+        metric: &str,
+        n: usize,
+        divisor: f64,
+    ) -> Option<(Vec<Vec<f64>>, Vec<String>)> {
+        let (mut data, labels) = self.top_cgroups_avg(metric, n)?;
+
+        for series in data.iter_mut().skip(1) {
+            for v in series.iter_mut() {
+                *v /= divisor;
+            }
+        }
+
+        Some((data, labels))
     }
 }
 
@@ -546,15 +558,15 @@ impl TimeSeries {
         if self.inner.is_empty() {
             return 0.0;
         }
-        
+
         let mut sum = 0.0;
         let mut count = 0;
-        
+
         for value in self.inner.values() {
             sum += *value;
             count += 1;
         }
-        
+
         if count > 0 {
             sum / count as f64
         } else {
@@ -566,18 +578,17 @@ impl TimeSeries {
         if self.inner.is_empty() {
             return 0.0;
         }
-        
+
         let values: Vec<f64> = self.inner.values().cloned().collect();
-        
+
         if values.is_empty() {
             return 0.0;
         }
-        
+
         let mean = values.iter().sum::<f64>() / values.len() as f64;
-        let variance = values.iter()
-            .map(|x| (*x - mean).powi(2))
-            .sum::<f64>() / values.len() as f64;
-        
+        let variance =
+            values.iter().map(|x| (*x - mean).powi(2)).sum::<f64>() / values.len() as f64;
+
         variance.sqrt()
     }
 

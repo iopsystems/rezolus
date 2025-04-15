@@ -216,18 +216,26 @@ pub fn run(config: Config) {
     utilization.heatmap_echarts(opts.clone(), series.clone());
 
     for state in &["User", "System", "SoftIRQ"] {
-        let opts = PlotOpts::line(format!("{state} %"), format!("{}-pct", state.to_lowercase()), Unit::Percentage)
-            .with_axis_label("Utilization")
-            .with_unit_system("percentage");
+        let opts = PlotOpts::line(
+            format!("{state} %"),
+            format!("{}-pct", state.to_lowercase()),
+            Unit::Percentage,
+        )
+        .with_axis_label("Utilization")
+        .with_unit_system("percentage");
         utilization.plot(
             opts,
             data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
                 .map(|v| (v / 1000000000.0)),
         );
 
-        let opts = PlotOpts::heatmap(format!("{state} %"), format!("{}-pct-heatmap", state.to_lowercase()), Unit::Percentage)
-            .with_axis_label("CPU")
-            .with_unit_system("percentage");
+        let opts = PlotOpts::heatmap(
+            format!("{state} %"),
+            format!("{}-pct-heatmap", state.to_lowercase()),
+            Unit::Percentage,
+        )
+        .with_axis_label("CPU")
+        .with_unit_system("percentage");
         utilization.heatmap_echarts(
             opts,
             data.cpu_heatmap("cpu_usage", [("state", state.to_lowercase())])
@@ -261,14 +269,7 @@ pub fn run(config: Config) {
     }
 
     let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count);
-    if let (
-        Some(cycles),
-        Some(instructions),
-        Some(aperf),
-        Some(mperf),
-        Some(tsc),
-        Some(cores),
-    ) = (
+    if let (Some(cycles), Some(instructions), Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
         data.sum("cpu_cycles", Labels::default()),
         data.sum("cpu_instructions", Labels::default()),
         data.sum("cpu_aperf", Labels::default()),
@@ -280,14 +281,12 @@ pub fn run(config: Config) {
         performance.plot(opts, Some(ipns));
     }
 
-    let opts = PlotOpts::heatmap("Instructions per Nanosecond (IPNS)", "ipns-heatmap", Unit::Count);
-    if let (
-        Some(cycles),
-        Some(instructions),
-        Some(aperf),
-        Some(mperf),
-        Some(tsc),
-    ) = (
+    let opts = PlotOpts::heatmap(
+        "Instructions per Nanosecond (IPNS)",
+        "ipns-heatmap",
+        Unit::Count,
+    );
+    if let (Some(cycles), Some(instructions), Some(aperf), Some(mperf), Some(tsc)) = (
         data.cpu_heatmap("cpu_cycles", Labels::default()),
         data.cpu_heatmap("cpu_instructions", Labels::default()),
         data.cpu_heatmap("cpu_aperf", Labels::default()),
@@ -373,7 +372,8 @@ pub fn run(config: Config) {
     let mut network_overview = Group::new("Network", "network");
     let mut traffic = Group::new("Traffic", "traffic");
 
-    let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate).with_unit_system("bitrate");
+    let opts = PlotOpts::line("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
+        .with_unit_system("bitrate");
     let series = data
         .sum("network_bytes", [("direction", "transmit")])
         .map(|v| v * 8.0);
@@ -381,7 +381,8 @@ pub fn run(config: Config) {
     network_overview.plot(opts.clone(), series.clone());
     traffic.plot(opts, series);
 
-    let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate).with_unit_system("bitrate");
+    let opts = PlotOpts::line("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
+        .with_unit_system("bitrate");
     let series = data
         .sum("network_bytes", [("direction", "receive")])
         .map(|v| v * 8.0);
@@ -456,7 +457,10 @@ pub fn run(config: Config) {
         "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
     ] {
         let series = data.sum("syscall", [("op", op.to_lowercase())]);
-        syscall_group.plot(PlotOpts::line(*op, format!("syscall-{op}"), Unit::Rate), series);
+        syscall_group.plot(
+            PlotOpts::line(*op, format!("syscall-{op}"), Unit::Rate),
+            series,
+        );
 
         let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())]);
         syscall_group.scatter(
@@ -526,7 +530,11 @@ pub fn run(config: Config) {
             .map(|v| v / 1000000000.0);
         group.plot(opts, series);
 
-        let opts = PlotOpts::heatmap("CPU %", format!("softirq-{kind}-time-heatmap"), Unit::Percentage);
+        let opts = PlotOpts::heatmap(
+            "CPU %",
+            format!("softirq-{kind}-time-heatmap"),
+            Unit::Percentage,
+        );
         let series = data
             .cpu_heatmap("softirq_time", [("kind", kind)])
             .map(|v| v / 1000000000.0);
@@ -546,7 +554,11 @@ pub fn run(config: Config) {
     let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read", Unit::Datarate);
     blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "read")]));
 
-    let opts = PlotOpts::line("Write Throughput", "blockio-throughput-write", Unit::Datarate);
+    let opts = PlotOpts::line(
+        "Write Throughput",
+        "blockio-throughput-write",
+        Unit::Datarate,
+    );
     blockio_overview.plot(opts, data.sum("blockio_bytes", [("op", "write")]));
 
     let opts = PlotOpts::line("Read IOPS", "blockio-iops-read", Unit::Count);
@@ -558,7 +570,11 @@ pub fn run(config: Config) {
     overview.groups.push(blockio_overview);
 
     for op in &["Read", "Write", "Flush", "Discard"] {
-        let opts = PlotOpts::line(*op, format!("throughput-{}", op.to_lowercase()), Unit::Datarate);
+        let opts = PlotOpts::line(
+            *op,
+            format!("throughput-{}", op.to_lowercase()),
+            Unit::Datarate,
+        );
         blockio_throughput.plot(opts, data.sum("blockio_bytes", [("op", op.to_lowercase())]));
 
         let opts = PlotOpts::line(*op, format!("iops-{}", op.to_lowercase()), Unit::Count);
@@ -589,57 +605,25 @@ pub fn run(config: Config) {
     let mut cgroup_overview = Group::new("Overview", "overview");
 
     // Create a multi-series chart for CPU usage of top cgroups
-    if let Some((multi_data, cgroup_names)) = data.cgroups_cpu_usage_multi(10) {
+    if let Some((multi_data, cgroup_names)) =
+        data.top_cgroups_avg_divide("cgroup_cpu_usage", 10, 1000000000.0)
+    {
         let opts = PlotOpts::multi("Cores Utilized", "cgroups-cpu-multi", Unit::Count);
-        
+
+        // Add the plot spec with series names
+        cgroup_overview.plot_multi(opts, multi_data, cgroup_names);
+    }
+
+    // Create a multi-series chart for CPU usage of top cgroups
+    if let Some((multi_data, cgroup_names)) = data.top_cgroups_avg("cgroup_syscall", 10) {
+        let opts = PlotOpts::multi("Syscall", "cgroups-syscall-multi", Unit::Count);
+
         // Add the plot spec with series names
         cgroup_overview.plot_multi(opts, multi_data, cgroup_names);
     }
 
     // Add all groups to the cgroups view
     cgroups.groups.push(cgroup_overview);
-
-    // // Add charts for TLB flushes per cgroup
-    // let mut cgroup_tlb = Group::new("TLB Flushes", "tlb");
-    // let opts = PlotOpts::line("TLB Flushes by cGroup", "cgroup-tlb", Unit::Rate);
-
-    // for cgroup_name in &top_cgroups {
-    //     let series = data.sum("cpu_tlb_flush", [("cgroup", cgroup_name.as_str())]);
-    //     if let Some(series) = series {
-    //         cgroup_tlb.plot(opts.clone(), Some(series));
-    //     }
-    // }
-
-    // // Add charts for syscall activity
-    // let mut cgroup_syscalls = Group::new("Syscalls", "syscalls");
-    // let opts = PlotOpts::line("Syscall Rate by cGroup", "cgroup-syscalls", Unit::Rate);
-
-    // for cgroup_name in &top_cgroups {
-    //     let series = data.sum("syscall", [("cgroup", cgroup_name.as_str())]);
-    //     if let Some(series) = series {
-    //         cgroup_syscalls.plot(opts.clone(), Some(series));
-    //     }
-    // }
-
-    // // Add charts for IPC (Instructions Per Cycle)
-    // let mut cgroup_ipc = Group::new("Performance", "performance");
-    // let opts = PlotOpts::line("Instructions Per Cycle", "cgroup-ipc", Unit::Count);
-
-    // for cgroup_name in &top_cgroups {
-    //     if let (Some(cycles), Some(instructions)) = (
-    //         data.sum("cpu_cycles", [("cgroup", cgroup_name.as_str())]),
-    //         data.sum("cpu_instructions", [("cgroup", cgroup_name.as_str())]),
-    //     ) {
-    //         let ipc = instructions / cycles;
-    //         cgroup_ipc.plot(opts.clone(), Some(ipc));
-    //     }
-    // }
-
-    // // Add all groups to the cgroups view
-    // cgroups.groups.push(cgroup_overview);
-    // cgroups.groups.push(cgroup_tlb);
-    // cgroups.groups.push(cgroup_syscalls);
-    // cgroups.groups.push(cgroup_ipc);
 
     // Finalize
 
@@ -865,7 +849,9 @@ impl Group {
 
         // Check if ANY data series has valid non-zero values
         let has_meaningful_data = data.iter().skip(1).any(|series| {
-            series.iter().any(|&value| value.is_finite() && !value.is_nan() && value > 0.0001)
+            series
+                .iter()
+                .any(|&value| value.is_finite() && !value.is_nan() && value > 0.0001)
         });
 
         if !has_meaningful_data {
@@ -887,7 +873,7 @@ impl Group {
         if data.len() < 2 || data[0].is_empty() {
             return;
         }
-        
+
         self.plots.push(Plot {
             opts,
             data,
@@ -927,18 +913,18 @@ pub struct FormatConfig {
     // Axis labels
     x_axis_label: Option<String>,
     y_axis_label: Option<String>,
-    
+
     // Value formatting
-    unit_system: Option<String>,  // e.g., "percentage", "time", "bitrate"
+    unit_system: Option<String>, // e.g., "percentage", "time", "bitrate"
     precision: Option<u8>,       // Number of decimal places
-    
+
     // Scale configuration
-    log_scale: Option<bool>,      // Whether to use log scale for y-axis
-    min: Option<f64>,            // Min value for y-axis
-    max: Option<f64>,            // Max value for y-axis
-    
+    log_scale: Option<bool>, // Whether to use log scale for y-axis
+    min: Option<f64>,        // Min value for y-axis
+    max: Option<f64>,        // Max value for y-axis
+
     // Additional customization
-    value_label: Option<String>,  // Label used in tooltips for the value
+    value_label: Option<String>, // Label used in tooltips for the value
 }
 
 impl PlotOpts {
@@ -960,7 +946,7 @@ impl PlotOpts {
             format: Some(FormatConfig::new(unit)),
         }
     }
-    
+
     pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
@@ -969,7 +955,7 @@ impl PlotOpts {
             format: Some(FormatConfig::new(unit)),
         }
     }
-    
+
     pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
@@ -978,47 +964,47 @@ impl PlotOpts {
             format: Some(FormatConfig::new(unit)),
         }
     }
-    
+
     // Builder methods for configuring formatting
     pub fn with_format(mut self, format: FormatConfig) -> Self {
         self.format = Some(format);
         self
     }
-    
+
     // Convenience methods
     pub fn with_unit_system<T: Into<String>>(mut self, unit_system: T) -> Self {
         // if self.format.is_none() {
         //     self.format = Some(FormatConfig::default());
         // }
-        
+
         if let Some(ref mut format) = self.format {
             format.unit_system = Some(unit_system.into());
         }
-        
+
         self
     }
-    
+
     pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
         // if self.format.is_none() {
         //     self.format = Some(FormatConfig::default());
         // }
-        
+
         if let Some(ref mut format) = self.format {
             format.y_axis_label = Some(y_label.into());
         }
-        
+
         self
     }
-    
+
     pub fn with_log_scale(mut self, log_scale: bool) -> Self {
         // if self.format.is_none() {
         //     self.format = Some(FormatConfig::default());
         // }
-        
+
         if let Some(ref mut format) = self.format {
             format.log_scale = Some(log_scale);
         }
-        
+
         self
     }
 }
