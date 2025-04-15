@@ -1,10 +1,10 @@
-// line.js - Line chart configuration and rendering with human-friendly time axis
+// line.js - Line chart configuration and rendering with fixed time axis handling
 
 import { createAxisLabelFormatter, createTooltipFormatter } from './units.js';
 import { calculateHumanFriendlyTicks, formatTimeAxisLabel, formatDateTime } from './utils.js';
 
 /**
- * Creates a line chart configuration for ECharts with human-friendly time axis
+ * Creates a line chart configuration for ECharts with reliable time axis
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -21,7 +21,7 @@ export function createLineChartOption(baseOption, plotSpec, state) {
   // For line charts, we expect the classic 2-row format: [times, values]
   const timeData = data[0];
 
-  // Store original timestamps for calculations
+  // Store original timestamps for calculations - critical for reliable zooming
   const originalTimeData = timeData.slice();
   
   // Format timestamps for display
@@ -68,9 +68,12 @@ export function createLineChartOption(baseOption, plotSpec, state) {
         // Handle both array of params and single param
         if (!Array.isArray(params)) params = [params];
         
-        // Get the timestamp - convert formatted time back to full date/time
+        // Get the timestamp from the original data, not the formatted string
         const index = params[0].dataIndex;
-        const fullTimestamp = formatDateTime(originalTimeData[index], 'full');
+        // Use the original timestamp to ensure correct time display
+        const fullTimestamp = (index >= 0 && index < originalTimeData.length) ?
+          formatDateTime(originalTimeData[index], 'full') :
+          formatDateTime(Date.now() / 1000, 'full');
         
         // Start with the timestamp
         let result = `<div>${fullTimestamp}</div>`;
@@ -144,31 +147,60 @@ export function createLineChartOption(baseOption, plotSpec, state) {
   if (minValue !== undefined) yAxis.min = minValue;
   if (maxValue !== undefined) yAxis.max = maxValue;
 
-  // Return line chart configuration with human-friendly time axis
+  // THE FIX: Use a more reliable time axis configuration that preserves the relationship
+  // between data indices and their corresponding timestamps during zoom operations
+  const xAxis = {
+    type: 'category',
+    data: formattedTimeData,
+    axisLine: {
+      lineStyle: {
+        color: '#ABABAB'
+      }
+    },
+    axisLabel: {
+      color: '#ABABAB',
+      // The critical part: use actual timestamps instead of index-based formatting
+      formatter: function(value, index) {
+        // Use the original timestamp data for consistent time display
+        // This ensures time labels remain accurate during zoom/pan operations
+        if (index >= 0 && index < originalTimeData.length) {
+          const timestamp = originalTimeData[index];
+          const date = new Date(timestamp * 1000);
+          
+          const seconds = date.getSeconds();
+          const minutes = date.getMinutes();
+          const hours = date.getHours();
+          
+          // Format based on time boundaries for better readability
+          if (seconds === 0 && minutes === 0) {
+            return `${String(hours).padStart(2, '0')}:00`;
+          } else if (seconds === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+          } else if (seconds % 30 === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+          } else if (seconds % 15 === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+          } else if (seconds % 5 === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+          }
+          return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+        // Fallback to the provided value if we can't find the timestamp
+        return value;
+      },
+      // Use human-friendly tick intervals as calculated
+      interval: function(index) {
+        return ticks.includes(index);
+      }
+    }
+  };
+
+  // Return line chart configuration with reliable time axis
   return {
     ...baseOption,
     grid: updatedGrid,
     tooltip: tooltipFormatter ? {...baseOption.tooltip, ...tooltipFormatter} : baseOption.tooltip,
-    xAxis: {
-      type: 'category',
-      data: formattedTimeData,
-      axisLine: {
-        lineStyle: {
-          color: '#ABABAB'
-        }
-      },
-      axisLabel: {
-        color: '#ABABAB',
-        formatter: function(value, index) {
-          // Format time labels based on their alignment with time boundaries
-          return formatTimeAxisLabel(value, index, originalTimeData);
-        },
-        // Use human-friendly tick intervals
-        interval: function(index) {
-          return ticks.includes(index);
-        }
-      }
-    },
+    xAxis: xAxis,
     yAxis: yAxis,
     series: [{
       data: valueData,

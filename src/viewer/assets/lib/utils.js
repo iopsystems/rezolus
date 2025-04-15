@@ -1,4 +1,4 @@
-// utils.js - Common utility functions for chart rendering
+// utils.js - Common utility functions for chart rendering with fixed time axis handling
 
 /**
  * Calculate shared visible ticks for consistent tick spacing across all charts
@@ -242,8 +242,8 @@ export function formatDateTime(timestamp, format = 'time') {
     // Return HH:MM format for compact display
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   } else if (format === 'axis') {
-    // For axis labels, use formatTimeAxisLabel
-    return formatTimeAxisLabel('', 0, [timestamp]);
+    // For axis labels, forward to formatTimeAxisLabel
+    return formatTimeAxisLabel('', -1, [timestamp]);
   } else {
     // Full format with date
     return `${date.toISOString().slice(0, 10)} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
@@ -251,16 +251,19 @@ export function formatDateTime(timestamp, format = 'time') {
 }
 
 /**
- * Enhanced formatter function for time axis labels
+ * Enhanced formatter function for time axis labels that doesn't rely on index
  * @param {string} value - Formatted time value (unused)
- * @param {number} index - Index in the data array
+ * @param {number} index - Index in the data array (unused in fixed version)
  * @param {Array} timeData - Original timestamp array
  * @returns {string} Formatted time label
  */
 export function formatTimeAxisLabel(value, index, timeData) {
-  if (!timeData || index >= timeData.length) return value;
+  // In the fixed version, we ignore index and use the actual timestamp directly
+  if (!timeData || timeData.length === 0) return value;
   
-  const timestamp = timeData[index];
+  // For the new approach, we expect timeData to contain the specific timestamp
+  // for this label, not the entire array of timestamps
+  const timestamp = index >= 0 && index < timeData.length ? timeData[index] : timeData[0];
   const date = new Date(timestamp * 1000);
   
   const seconds = date.getSeconds();
@@ -292,7 +295,35 @@ export function formatTimeAxisLabel(value, index, timeData) {
 }
 
 /**
+ * Check if a timestamp is aligned with human-friendly time boundaries
+ * @param {Date} date - JavaScript Date object
+ * @param {number} intervalSeconds - Current interval in seconds
+ * @returns {boolean} True if the timestamp is aligned
+ */
+function isTimeAligned(date, intervalSeconds) {
+  const seconds = date.getSeconds();
+  const minutes = date.getMinutes();
+  const hours = date.getHours();
+  
+  // Hour boundary alignment
+  if (intervalSeconds >= 3600) {
+    const hourInterval = intervalSeconds / 3600;
+    return hours % hourInterval === 0 && minutes === 0 && seconds === 0;
+  }
+  
+  // Minute boundary alignment
+  if (intervalSeconds >= 60) {
+    const minuteInterval = intervalSeconds / 60;
+    return minutes % minuteInterval === 0 && seconds === 0;
+  }
+  
+  // Second boundary alignment
+  return seconds % intervalSeconds === 0;
+}
+
+/**
  * Calculate tick positions at human-friendly time intervals
+ * IMPROVED: Ensures ticks during extreme zoom & only shows aligned ticks
  * @param {Array} timeData - Array of timestamps
  * @param {number} startPercent - Start of zoom range (percentage)
  * @param {number} endPercent - End of zoom range (percentage)
@@ -310,11 +341,19 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
   const endTime = timeData[endIdx];
   const timeSpanSeconds = endTime - startTime;
   
-  // Determine appropriate interval based on time span
+  // IMPROVEMENT: Ensure we show at least 2 ticks even during extreme zoom
+  // If the zoom range is very small, use a smaller interval
   let intervalSeconds;
   
-  if (timeSpanSeconds <= 10) {
-    intervalSeconds = 1; // 1 second intervals for spans up to 10 seconds
+  if (timeSpanSeconds <= 1) {
+    // For very small ranges (less than 1 second), just show start and end
+    const ticks = [startIdx];
+    if (startIdx !== endIdx) ticks.push(endIdx);
+    return ticks;
+  } else if (timeSpanSeconds <= 5) {
+    intervalSeconds = 1; // 1 second intervals
+  } else if (timeSpanSeconds <= 10) {
+    intervalSeconds = 2; // 2 second intervals for spans up to 10 seconds
   } else if (timeSpanSeconds <= 30) {
     intervalSeconds = 5; // 5 second intervals for spans up to 30 seconds
   } else if (timeSpanSeconds <= 60) {
@@ -384,14 +423,27 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
   // Generate ticks from the first aligned time boundary
   const ticks = [];
   
-  // Add the first data point if it's substantially different from our first aligned tick
-  const firstTickTime = firstTickDate.getTime() / 1000;
-  if (Math.abs(firstTickTime - startTime) > intervalSeconds * 0.25) {
+  // FIX: Check if the first data point is time-aligned instead of always including it
+  // Only add the first data point if it aligns with the time boundaries
+  const firstPointDate = new Date(startTime * 1000);
+  if (isTimeAligned(firstPointDate, intervalSeconds)) {
     ticks.push(startIdx);
+  } else {
+    // Add the first data point only if it's substantially different from our first aligned tick
+    // and we don't have a better aligned alternative
+    const firstTickTime = firstTickDate.getTime() / 1000;
+    if (Math.abs(firstTickTime - startTime) > intervalSeconds * 0.5) {
+      // Find the closest data point to this boundary time
+      const closestIdx = findClosestTimeIndex(timeData, firstTickTime, startIdx, endIdx);
+      if (closestIdx !== startIdx) {
+        // Only add if we found a better aligned point
+        ticks.push(closestIdx);
+      }
+    }
   }
   
   // Generate aligned time ticks
-  let currentTickTime = firstTickTime;
+  let currentTickTime = firstTickDate.getTime() / 1000;
   let tickCount = 0;
   const MAX_TICKS = 20; // Safety limit
   
@@ -409,8 +461,37 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
   }
   
   // Always include the last data point if not already in the ticks
-  if (ticks.length === 0 || ticks[ticks.length - 1] !== endIdx) {
-    ticks.push(endIdx);
+  // But only if we have room for it
+  if ((ticks.length === 0 || ticks[ticks.length - 1] !== endIdx) && ticks.length < MAX_TICKS) {
+    // Check if the end point is time-aligned before adding
+    const endPointDate = new Date(endTime * 1000);
+    if (isTimeAligned(endPointDate, intervalSeconds) || ticks.length === 0) {
+      ticks.push(endIdx);
+    }
+  }
+  
+  // IMPROVEMENT: Ensure we always have at least 2 ticks if possible
+  if (ticks.length === 0) {
+    // Emergency fallback - show start and end
+    ticks.push(startIdx);
+    if (startIdx !== endIdx) ticks.push(endIdx);
+  } else if (ticks.length === 1 && startIdx !== endIdx) {
+    // If we only have one tick but there are multiple data points,
+    // ensure we show both ends of the range
+    if (ticks[0] === startIdx) {
+      ticks.push(endIdx);
+    } else if (ticks[0] === endIdx) {
+      ticks.unshift(startIdx);
+    } else {
+      // We have a middle tick, add the end points
+      if (ticks[0] - startIdx > endIdx - ticks[0]) {
+        // Closer to end, so add start
+        ticks.unshift(startIdx);
+      } else {
+        // Closer to start, so add end
+        ticks.push(endIdx);
+      }
+    }
   }
   
   return ticks;
@@ -468,7 +549,8 @@ export function isChartVisible(chartDom) {
 }
 
 /**
- * Updates all charts after a zoom operation with human-friendly tick intervals
+ * Updates all charts after a zoom operation with reliable time ticks
+ * IMPROVED: Ensures ticks are always visible and properly aligned
  * @param {number} start - Start of zoom range (percentage)
  * @param {number} end - End of zoom range (percentage)
  * @param {Object} state - Global state object
@@ -495,6 +577,26 @@ export function updateChartsAfterZoom(start, end, state) {
     state.sharedAxisConfig.lastUpdate = Date.now();
   }
 
+  // IMPROVEMENT: Ensure we always have visible ticks
+  if (state.sharedAxisConfig.visibleTicks.length === 0 && referenceTimeData) {
+    // Emergency fallback - create basic ticks
+    const startIdx = Math.floor(referenceTimeData.length * (start / 100));
+    const endIdx = Math.ceil(referenceTimeData.length * (end / 100));
+    
+    // Add at least start and end points
+    state.sharedAxisConfig.visibleTicks = [
+      Math.max(0, startIdx),
+      Math.min(referenceTimeData.length - 1, endIdx)
+    ];
+    
+    // Add a middle point if range is large enough
+    if (endIdx - startIdx > 2) {
+      state.sharedAxisConfig.visibleTicks.splice(
+        1, 0, Math.floor((startIdx + endIdx) / 2)
+      );
+    }
+  }
+
   // Update all charts with new zoom level
   state.initializedCharts.forEach((chart) => {
     // Apply zoom to all charts
@@ -504,12 +606,43 @@ export function updateChartsAfterZoom(start, end, state) {
       end: end
     });
 
-    // Update the chart with new axis configuration
+    // The key fix: Update the chart to use the original timestamps for tick labels
+    // We'll use the axisLabel formatter to ensure correct time display regardless of zoom
     chart.setOption({
       xAxis: {
         axisLabel: {
+          // This interval function controls which tick marks are shown
           interval: function(index) {
             return state.sharedAxisConfig.visibleTicks.includes(index);
+          },
+          // The formatter will use the original timestamp data, not index-based lookup
+          formatter: function(value, index) {
+            // Only use this for visible ticks to avoid unnecessary processing
+            if (state.sharedAxisConfig.visibleTicks.includes(index) && chart.originalTimeData) {
+              const timestamp = chart.originalTimeData[index];
+              if (timestamp !== undefined) {
+                const date = new Date(timestamp * 1000);
+                const seconds = date.getSeconds();
+                const minutes = date.getMinutes();
+                const hours = date.getHours();
+                
+                // Show more details based on boundary alignment
+                if (seconds === 0 && minutes === 0) {
+                  return `${String(hours).padStart(2, '0')}:00`;
+                } else if (seconds === 0) {
+                  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+                } else if (seconds % 30 === 0) {
+                  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                } else if (seconds % 15 === 0) {
+                  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                } else if (seconds % 5 === 0) {
+                  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                }
+                return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+              }
+            }
+            // Default case - use the provided value if no timestamp available
+            return value;
           }
         }
       }

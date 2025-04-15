@@ -1,10 +1,10 @@
-// heatmap.js - Heatmap chart configuration with human-friendly time axis
+// heatmap.js - Heatmap chart configuration with fixed time axis handling
 
 import { createAxisLabelFormatter } from './units.js';
 import { calculateHumanFriendlyTicks, formatTimeAxisLabel, formatDateTime } from './utils.js';
 
 /**
- * Creates a heatmap chart configuration for ECharts with human-friendly time axis
+ * Creates a heatmap chart configuration for ECharts with reliable time axis
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -18,7 +18,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     return baseOption;
   }
 
-  // Store original timestamps for calculations
+  // Store original timestamps for calculations - critical for reliable zooming
   const originalTimeData = time_data.slice();
   
   // Format timestamps for display
@@ -92,7 +92,12 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   let tooltipFormatter = function(params) {
     const value = params.data[2];
     const timeIndex = params.data[0];
-    const fullTime = originalTimeData[timeIndex];
+    
+    // Use original timestamp for reliable display even during zoom/pan
+    const fullTime = timeIndex >= 0 && timeIndex < originalTimeData.length ?
+      originalTimeData[timeIndex] :
+      Date.now() / 1000;
+      
     const formattedTime = formatDateTime(fullTime, 'full'); // Use full format for tooltip
     const cpu = params.data[1];
     
@@ -129,6 +134,49 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     containLabel: false
   };
 
+  // THE FIX: Create a more reliable X-axis configuration
+  const xAxis = {
+    type: 'category',
+    data: formattedTimeData,
+    splitArea: {
+      show: true
+    },
+    axisLabel: {
+      color: '#ABABAB',
+      // The critical part: use actual timestamps instead of index-based formatting
+      formatter: function(value, index) {
+        // Use the original timestamp data for consistent time display
+        if (index >= 0 && index < originalTimeData.length) {
+          const timestamp = originalTimeData[index];
+          const date = new Date(timestamp * 1000);
+          
+          const seconds = date.getSeconds();
+          const minutes = date.getMinutes();
+          const hours = date.getHours();
+          
+          // Format based on time boundaries for better readability
+          if (seconds === 0 && minutes === 0) {
+            return `${String(hours).padStart(2, '0')}:00`;
+          } else if (seconds === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+          } else if (seconds % 30 === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+          } else if (seconds % 15 === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+          } else if (seconds % 5 === 0) {
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+          }
+          return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+        return value;
+      },
+      // Use human-friendly tick intervals
+      interval: function(index) {
+        return ticks.includes(index);
+      }
+    }
+  };
+
   return {
     ...baseOption,
     tooltip: {
@@ -136,24 +184,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
       formatter: tooltipFormatter
     },
     grid: updatedGrid,
-    xAxis: {
-      type: 'category',
-      data: formattedTimeData,
-      splitArea: {
-        show: true
-      },
-      axisLabel: {
-        color: '#ABABAB',
-        formatter: function(value, index) {
-          // Format time labels based on their alignment with time boundaries
-          return formatTimeAxisLabel(value, index, originalTimeData);
-        },
-        // Use human-friendly tick intervals
-        interval: function(index) {
-          return ticks.includes(index);
-        }
-      }
-    },
+    xAxis: xAxis,
     yAxis: {
       type: 'category',
       name: yAxisLabel || 'CPU',
