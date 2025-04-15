@@ -8,8 +8,8 @@ const NAME: &str = "cpu_l3";
 
 use crate::agent::*;
 
-use perf_event::ReadFormat;
 use perf_event::events::Event;
+use perf_event::ReadFormat;
 use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
@@ -84,10 +84,7 @@ pub struct LowLevelEvent {
 
 impl LowLevelEvent {
     pub fn new(event_type: u32, config: u64) -> Self {
-        Self {
-            event_type,
-            config,
-        }
+        Self { event_type, config }
     }
 }
 
@@ -252,7 +249,10 @@ fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
         println!("detected uarch: {uarch}");
 
         let events = match uarch.as_str() {
-            "zen" | "zen2" | "zen3" | "zen4" | "zen5" => (LowLevelEvent::new(0xb, 0xFF04), LowLevelEvent::new(0xb, 0x0104)),
+            "zen" | "zen2" | "zen3" | "zen4" | "zen5" => (
+                LowLevelEvent::new(0xb, 0xFF04),
+                LowLevelEvent::new(0xb, 0x0104),
+            ),
             _ => {
                 return None;
             }
