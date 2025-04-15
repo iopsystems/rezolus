@@ -1,13 +1,21 @@
 // Refactored script.js - Main application logic with modular chart components
 
 // Import our modular components
-import { PlotOpts } from './plot.js';
-import { createLineChartOption } from './line.js';
-import { createScatterChartOption } from './scatter.js';
-import { createHeatmapOption } from './heatmap.js';
-import { 
-  formatDateTime, 
-  isChartVisible, 
+import {
+  PlotOpts
+} from './plot.js';
+import {
+  createLineChartOption
+} from './line.js';
+import {
+  createScatterChartOption
+} from './scatter.js';
+import {
+  createHeatmapOption
+} from './heatmap.js';
+import {
+  formatDateTime,
+  isChartVisible,
   updateChartsAfterZoom,
   setupChartSync
 } from './utils.js';
@@ -95,7 +103,9 @@ const Group = {
 // Plot component that renders ECharts visualizations with proper time axis
 const Plot = {
   oncreate: function(vnode) {
-    const { attrs } = vnode;
+    const {
+      attrs
+    } = vnode;
     const chartDom = vnode.dom;
 
     // Store the attributes for later reference
@@ -110,7 +120,7 @@ const Plot = {
           if (!state.initializedCharts.has(chartId)) {
             // Initialize the chart
             const chart = echarts.init(chartDom);
-            
+
             // Store original time data for human-friendly tick calculation
             if (attrs.data && attrs.data.length > 0) {
               if (attrs.data[0] && Array.isArray(attrs.data[0])) {
@@ -121,7 +131,7 @@ const Plot = {
               // For heatmaps, time is in time_data property
               chart.originalTimeData = attrs.time_data;
             }
-            
+
             // Store chart instance for cleanup and to prevent re-initialization
             state.initializedCharts.set(chartId, chart);
 
@@ -200,7 +210,7 @@ const Plot = {
       } else if (vnode.attrs.time_data) {
         vnode.state.chart.originalTimeData = vnode.attrs.time_data;
       }
-      
+
       // Update the chart
       const option = createChartOption(vnode.attrs);
       vnode.state.chart.setOption(option);
@@ -241,12 +251,14 @@ const Plot = {
 
 // Create ECharts options based on plot type with human-friendly time axis
 function createChartOption(plotSpec) {
-  const { opts } = plotSpec;
+  const {
+    opts
+  } = plotSpec;
 
   // Basic option template
   const baseOption = {
     grid: {
-      left: '10%',  // Default left margin, specific chart types will override as needed
+      left: '10%', // Default left margin, specific chart types will override as needed
       right: '5%',
       top: '40',
       bottom: '40',

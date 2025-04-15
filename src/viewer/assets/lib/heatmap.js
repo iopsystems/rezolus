@@ -1,7 +1,13 @@
 // heatmap.js - Heatmap chart configuration with fixed time axis handling
 
-import { createAxisLabelFormatter } from './units.js';
-import { calculateHumanFriendlyTicks, formatTimeAxisLabel, formatDateTime } from './utils.js';
+import {
+  createAxisLabelFormatter
+} from './units.js';
+import {
+  calculateHumanFriendlyTicks,
+  formatTimeAxisLabel,
+  formatDateTime
+} from './utils.js';
 
 /**
  * Creates a heatmap chart configuration for ECharts with reliable time axis
@@ -12,7 +18,13 @@ import { calculateHumanFriendlyTicks, formatTimeAxisLabel, formatDateTime } from
  * @returns {Object} ECharts configuration object
  */
 export function createHeatmapOption(baseOption, plotSpec, state) {
-  const { time_data, data, min_value, max_value, opts } = plotSpec;
+  const {
+    time_data,
+    data,
+    min_value,
+    max_value,
+    opts
+  } = plotSpec;
 
   if (!data || data.length < 1) {
     return baseOption;
@@ -20,9 +32,9 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
 
   // Store original timestamps for calculations - critical for reliable zooming
   const originalTimeData = time_data.slice();
-  
+
   // Format timestamps for display
-  const formattedTimeData = originalTimeData.map(timestamp => 
+  const formattedTimeData = originalTimeData.map(timestamp =>
     formatDateTime(timestamp, 'time')
   );
 
@@ -60,15 +72,15 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   // Calculate human-friendly ticks
   let ticks;
   if (state.sharedAxisConfig.visibleTicks.length === 0 ||
-      Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
-    
+    Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
+
     // Calculate ticks based on zoom state
     ticks = calculateHumanFriendlyTicks(
       originalTimeData,
       state.globalZoom.start,
       state.globalZoom.end
     );
-    
+
     // Store in shared config for chart synchronization
     state.sharedAxisConfig.visibleTicks = ticks;
     state.sharedAxisConfig.lastUpdate = Date.now();
@@ -92,15 +104,15 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   let tooltipFormatter = function(params) {
     const value = params.data[2];
     const timeIndex = params.data[0];
-    
+
     // Use original timestamp for reliable display even during zoom/pan
     const fullTime = timeIndex >= 0 && timeIndex < originalTimeData.length ?
       originalTimeData[timeIndex] :
       Date.now() / 1000;
-      
+
     const formattedTime = formatDateTime(fullTime, 'full'); // Use full format for tooltip
     const cpu = params.data[1];
-    
+
     if (unitSystem) {
       const formatter = createAxisLabelFormatter(unitSystem);
       const labelName = valueLabel || 'Value';
@@ -113,10 +125,10 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   // Create formatted labels for visualMap if unit system is specified
   let visualMapFormatter;
   let visualMapText = ['High', 'Low'];
-  
+
   if (unitSystem) {
     visualMapFormatter = createAxisLabelFormatter(unitSystem);
-    
+
     // Create descriptive labels for the color scale
     if (valueLabel) {
       visualMapText = [`High ${valueLabel}`, `Low ${valueLabel}`];
@@ -127,7 +139,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
 
   // Standardized grid with consistent spacing for all charts
   const updatedGrid = {
-    left: '14%',  // Fixed generous margin for all charts
+    left: '14%', // Fixed generous margin for all charts
     right: '5%',
     top: '40',
     bottom: '40',
@@ -149,11 +161,11 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
         if (index >= 0 && index < originalTimeData.length) {
           const timestamp = originalTimeData[index];
           const date = new Date(timestamp * 1000);
-          
+
           const seconds = date.getSeconds();
           const minutes = date.getMinutes();
           const hours = date.getHours();
-          
+
           // Format based on time boundaries for better readability
           if (seconds === 0 && minutes === 0) {
             return `${String(hours).padStart(2, '0')}:00`;

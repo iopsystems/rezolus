@@ -16,18 +16,18 @@ export class PlotOpts {
     this.title = title;
     this.id = id;
     this.style = style;
-    
+
     // Y-axis configuration
     this.yAxis = {
       // Label to display on the Y-axis
       label: yAxis.label || null,
-      
+
       // Unit system for automatic scaling ('time', 'bytes', 'bitrate', etc.)
       unitSystem: yAxis.unitSystem || null,
-      
+
       // For log scale axes
       logScale: yAxis.logScale || false,
-      
+
       // Custom min/max values if needed
       min: yAxis.min,
       max: yAxis.max

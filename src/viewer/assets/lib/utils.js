@@ -234,7 +234,7 @@ export function setupChartSync(charts, state) {
  */
 export function formatDateTime(timestamp, format = 'time') {
   const date = new Date(timestamp * 1000);
-  
+
   if (format === 'time') {
     // Simple time format HH:MM:SS
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
@@ -260,16 +260,16 @@ export function formatDateTime(timestamp, format = 'time') {
 export function formatTimeAxisLabel(value, index, timeData) {
   // In the fixed version, we ignore index and use the actual timestamp directly
   if (!timeData || timeData.length === 0) return value;
-  
+
   // For the new approach, we expect timeData to contain the specific timestamp
   // for this label, not the entire array of timestamps
   const timestamp = index >= 0 && index < timeData.length ? timeData[index] : timeData[0];
   const date = new Date(timestamp * 1000);
-  
+
   const seconds = date.getSeconds();
   const minutes = date.getMinutes();
   const hours = date.getHours();
-  
+
   // On the hour boundary
   if (seconds === 0 && minutes === 0) {
     return `${String(hours).padStart(2, '0')}:00`;
@@ -304,19 +304,19 @@ function isTimeAligned(date, intervalSeconds) {
   const seconds = date.getSeconds();
   const minutes = date.getMinutes();
   const hours = date.getHours();
-  
+
   // Hour boundary alignment
   if (intervalSeconds >= 3600) {
     const hourInterval = intervalSeconds / 3600;
     return hours % hourInterval === 0 && minutes === 0 && seconds === 0;
   }
-  
+
   // Minute boundary alignment
   if (intervalSeconds >= 60) {
     const minuteInterval = intervalSeconds / 60;
     return minutes % minuteInterval === 0 && seconds === 0;
   }
-  
+
   // Second boundary alignment
   return seconds % intervalSeconds === 0;
 }
@@ -331,20 +331,20 @@ function isTimeAligned(date, intervalSeconds) {
  */
 export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) {
   if (!timeData || timeData.length === 0) return [];
-  
+
   // Convert percentages to indices
   const startIdx = Math.floor(timeData.length * (startPercent / 100));
   const endIdx = Math.min(Math.ceil(timeData.length * (endPercent / 100)), timeData.length - 1);
-  
+
   // Calculate time range in seconds
   const startTime = timeData[startIdx];
   const endTime = timeData[endIdx];
   const timeSpanSeconds = endTime - startTime;
-  
+
   // IMPROVEMENT: Ensure we show at least 2 ticks even during extreme zoom
   // If the zoom range is very small, use a smaller interval
   let intervalSeconds;
-  
+
   if (timeSpanSeconds <= 1) {
     // For very small ranges (less than 1 second), just show start and end
     const ticks = [startIdx];
@@ -371,7 +371,7 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
   } else {
     intervalSeconds = 21600; // 6 hour intervals for spans > 1 day
   }
-  
+
   // Find aligned time boundaries
   const startDate = new Date(startTime * 1000);
   const startYear = startDate.getFullYear();
@@ -380,16 +380,16 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
   const startHour = startDate.getHours();
   const startMinute = startDate.getMinutes();
   const startSecond = startDate.getSeconds();
-  
+
   // Create a properly aligned first tick based on interval
   let firstTickDate;
-  
+
   if (intervalSeconds < 60) {
     // For seconds-based intervals
     const targetSecond = Math.ceil(startSecond / intervalSeconds) * intervalSeconds;
-    firstTickDate = new Date(startYear, startMonth, startDay, startHour, startMinute, 
-                            targetSecond >= 60 ? 0 : targetSecond);
-    
+    firstTickDate = new Date(startYear, startMonth, startDay, startHour, startMinute,
+      targetSecond >= 60 ? 0 : targetSecond);
+
     // Handle minute rollover
     if (targetSecond >= 60) {
       firstTickDate.setMinutes(startMinute + 1);
@@ -398,10 +398,10 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
     // For minutes-based intervals
     const minuteInterval = intervalSeconds / 60;
     const targetMinute = Math.ceil(startMinute / minuteInterval) * minuteInterval;
-    
-    firstTickDate = new Date(startYear, startMonth, startDay, startHour, 
-                           targetMinute >= 60 ? 0 : targetMinute, 0);
-    
+
+    firstTickDate = new Date(startYear, startMonth, startDay, startHour,
+      targetMinute >= 60 ? 0 : targetMinute, 0);
+
     // Handle hour rollover
     if (targetMinute >= 60) {
       firstTickDate.setHours(startHour + 1);
@@ -410,19 +410,19 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
     // For hours-based intervals
     const hourInterval = intervalSeconds / 3600;
     const targetHour = Math.ceil(startHour / hourInterval) * hourInterval;
-    
-    firstTickDate = new Date(startYear, startMonth, startDay, 
-                          targetHour >= 24 ? 0 : targetHour, 0, 0);
-    
+
+    firstTickDate = new Date(startYear, startMonth, startDay,
+      targetHour >= 24 ? 0 : targetHour, 0, 0);
+
     // Handle day rollover
     if (targetHour >= 24) {
       firstTickDate.setDate(startDay + 1);
     }
   }
-  
+
   // Generate ticks from the first aligned time boundary
   const ticks = [];
-  
+
   // FIX: Check if the first data point is time-aligned instead of always including it
   // Only add the first data point if it aligns with the time boundaries
   const firstPointDate = new Date(startTime * 1000);
@@ -441,25 +441,25 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
       }
     }
   }
-  
+
   // Generate aligned time ticks
   let currentTickTime = firstTickDate.getTime() / 1000;
   let tickCount = 0;
   const MAX_TICKS = 20; // Safety limit
-  
+
   while (currentTickTime <= endTime && tickCount < MAX_TICKS) {
     // Find the closest data point to this time
     const closestIdx = findClosestTimeIndex(timeData, currentTickTime, startIdx, endIdx);
-    
+
     if (closestIdx >= startIdx && closestIdx <= endIdx && !ticks.includes(closestIdx)) {
       ticks.push(closestIdx);
       tickCount++;
     }
-    
+
     // Move to next interval
     currentTickTime += intervalSeconds;
   }
-  
+
   // Always include the last data point if not already in the ticks
   // But only if we have room for it
   if ((ticks.length === 0 || ticks[ticks.length - 1] !== endIdx) && ticks.length < MAX_TICKS) {
@@ -469,7 +469,7 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
       ticks.push(endIdx);
     }
   }
-  
+
   // IMPROVEMENT: Ensure we always have at least 2 ticks if possible
   if (ticks.length === 0) {
     // Emergency fallback - show start and end
@@ -493,7 +493,7 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
       }
     }
   }
-  
+
   return ticks;
 }
 
@@ -508,22 +508,22 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
 export function findClosestTimeIndex(timeArray, targetTime, startIdx = 0, endIdx = timeArray.length - 1) {
   let closestIdx = startIdx;
   let minDiff = Math.abs(timeArray[startIdx] - targetTime);
-  
+
   for (let i = startIdx + 1; i <= endIdx; i++) {
     if (i >= timeArray.length) break;
-    
+
     const diff = Math.abs(timeArray[i] - targetTime);
     if (diff < minDiff) {
       minDiff = diff;
       closestIdx = i;
     }
-    
+
     // If we're getting farther away, we can stop searching
     if (i > startIdx + 1 && diff > minDiff) {
       break;
     }
   }
-  
+
   return closestIdx;
 }
 
@@ -562,7 +562,7 @@ export function updateChartsAfterZoom(start, end, state) {
 
   // Find the first chart with original time data
   let referenceTimeData = null;
-  
+
   for (const chart of state.initializedCharts.values()) {
     if (chart.originalTimeData && chart.originalTimeData.length > 0) {
       referenceTimeData = chart.originalTimeData;
@@ -582,13 +582,13 @@ export function updateChartsAfterZoom(start, end, state) {
     // Emergency fallback - create basic ticks
     const startIdx = Math.floor(referenceTimeData.length * (start / 100));
     const endIdx = Math.ceil(referenceTimeData.length * (end / 100));
-    
+
     // Add at least start and end points
     state.sharedAxisConfig.visibleTicks = [
       Math.max(0, startIdx),
       Math.min(referenceTimeData.length - 1, endIdx)
     ];
-    
+
     // Add a middle point if range is large enough
     if (endIdx - startIdx > 2) {
       state.sharedAxisConfig.visibleTicks.splice(
@@ -625,7 +625,7 @@ export function updateChartsAfterZoom(start, end, state) {
                 const seconds = date.getSeconds();
                 const minutes = date.getMinutes();
                 const hours = date.getHours();
-                
+
                 // Show more details based on boundary alignment
                 if (seconds === 0 && minutes === 0) {
                   return `${String(hours).padStart(2, '0')}:00`;
