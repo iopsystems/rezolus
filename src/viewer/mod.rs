@@ -585,16 +585,12 @@ pub fn run(config: Config) {
     blockio.groups.push(blockio_latency);
     blockio.groups.push(blockio_size);
 
-    // Get the top 20 cgroups
-    let top_cgroups: Vec<String> = data.top_cgroups_by_cpu(20).iter().map(|v| v.0.clone()).collect();
-
     // Create a group for cgroup overview
     let mut cgroup_overview = Group::new("Overview", "overview");
 
     // Create a multi-series chart for CPU usage of top cgroups
-    if let Some((multi_data, cgroup_names)) = data.cgroups_cpu_usage_multi(20) {
-        let opts = PlotOpts::multi("CPU Usage by cGroup (Cores)", "cgroups-cpu-multi", Unit::Count)
-            .with_axis_label("CPU Cores");
+    if let Some((multi_data, cgroup_names)) = data.cgroups_cpu_usage_multi(10) {
+        let opts = PlotOpts::multi("Cores Utilized", "cgroups-cpu-multi", Unit::Count);
         
         // Add the plot spec with series names
         cgroup_overview.plot_multi(opts, multi_data, cgroup_names);

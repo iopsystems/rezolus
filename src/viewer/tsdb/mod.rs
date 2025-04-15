@@ -325,8 +325,14 @@ impl TimeSeriesCollection {
                 match value {
                     Value::Counter(v) => {
                         if prev_ts != 0 {
-                            let rate = v.wrapping_sub(prev_v) as f64
-                                / ((time - prev_ts) as f64 / 1000000000.0);
+                            let t_delta = (time - prev_ts) as f64 / 1000000000.0;
+                            let v_delta = v.wrapping_sub(prev_v);
+
+                            let rate = if v_delta < 1 << 63 {
+                                v_delta as f64 / t_delta
+                            } else {
+                                0.0
+                            };
 
                             if !result.inner.contains_key(time) {
                                 result.inner.insert(*time, rate);
