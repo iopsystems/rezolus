@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Default, Clone)]
 pub struct Heatmap {
-    inner: BTreeMap<usize, Timeseries>,
+    inner: BTreeMap<usize, UntypedSeries>,
 }
 
 #[derive(Serialize)]
@@ -18,7 +18,7 @@ impl Heatmap {
         self.inner.is_empty()
     }
     
-    pub fn insert(&mut self, id: usize, series: Timeseries) {
+    pub fn insert(&mut self, id: usize, series: UntypedSeries) {
         self.inner.insert(id, series);
     }
 
@@ -134,7 +134,7 @@ impl Heatmap {
 
 impl Div<Heatmap> for Heatmap {
     type Output = Heatmap;
-    fn div(self, other: Heatmap) -> <Self as Div<Timeseries>>::Output {
+    fn div(self, other: Heatmap) -> Self::Output {
         let mut result = Heatmap::default();
 
         let mut this = self.inner.clone();
@@ -151,7 +151,7 @@ impl Div<Heatmap> for Heatmap {
 
 impl Mul<Heatmap> for Heatmap {
     type Output = Heatmap;
-    fn mul(self, other: Heatmap) -> <Self as Div<Timeseries>>::Output {
+    fn mul(self, other: Heatmap) -> Self::Output {
         let mut result = Heatmap::default();
 
         let mut this = self.inner.clone();
@@ -166,9 +166,9 @@ impl Mul<Heatmap> for Heatmap {
     }
 }
 
-impl Div<Timeseries> for Heatmap {
+impl Div<UntypedSeries> for Heatmap {
     type Output = Heatmap;
-    fn div(self, other: Timeseries) -> <Self as Div<Timeseries>>::Output {
+    fn div(self, other: UntypedSeries) -> Self::Output {
         let mut result = Heatmap::default();
 
         let mut this = self.inner.clone();
@@ -183,7 +183,7 @@ impl Div<Timeseries> for Heatmap {
 
 impl Div<f64> for Heatmap {
     type Output = Heatmap;
-    fn div(self, other: f64) -> <Self as Div<Timeseries>>::Output {
+    fn div(self, other: f64) -> Self::Output {
         let mut result = Heatmap::default();
 
         let mut this = self.inner.clone();

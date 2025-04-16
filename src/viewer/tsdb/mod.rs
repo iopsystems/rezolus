@@ -18,22 +18,12 @@ use std::path::Path;
 mod collection;
 mod heatmap;
 mod labels;
-mod timeseries;
+mod series;
 
 pub use collection::{Counters, Gauges, Histograms};
 pub use heatmap::Heatmap;
 pub use labels::Labels;
-pub use timeseries::Timeseries;
-
-#[derive(Default, Clone)]
-pub struct RawTimeseries {
-    inner: BTreeMap<u64, Value>,
-}
-
-#[derive(Clone)]
-pub enum Value {
-    Histogram(Histogram),
-}
+pub use series::UntypedSeries;
 
 #[derive(Default)]
 pub struct Tsdb {
@@ -244,7 +234,7 @@ impl Tsdb {
             .map(|collection| collection.percentiles())
     }
 
-    pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<Timeseries> {
+    pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<UntypedSeries> {
         if let Some(cores) = self.gauges("cpu_cores", ()).map(|v| v.sum()) {
             if let Some(collection) = self.counters(metric, labels) {
                 return Some(collection.rate().sum() / cores);
@@ -258,8 +248,8 @@ impl Tsdb {
         let mut heatmap = Heatmap::default();
 
         if let Some(collection) = self.counters(metric, labels) {
-            for (id, series) in collection.by_cpu().drain(..).enumerate() {
-                heatmap.insert(id, series);
+            for (id, series) in collection.rate().by_id().inner.iter() {
+                heatmap.insert(*id, series.clone());
             }
         }
 
@@ -271,55 +261,13 @@ impl Tsdb {
     }
 }
 
-#[derive(Default)]
-pub struct CgroupCounters {
-    inner: HashMap<String, Counters>,
-}
-
-impl CgroupCounters {
-    pub fn insert(&mut self, name: String, counters: Counters) {
-        self.inner.insert(name, counters);
-    }
-
-    pub fn sum(&self) -> CgroupTimeseries {
-        let mut result = CgroupTimeseries::default();
-
-        for (name, counters) in self.inner.iter() {
-            result.inner.insert(name.to_string(), counters.rate().sum());
-        }
-
-        result
-    }
-}
-
-#[derive(Default)]
-pub struct CgroupGauges {
-    inner: HashMap<String, Gauges>,
-}
-
-impl CgroupGauges {
-    pub fn insert(&mut self, name: String, gauges: Gauges) {
-        self.inner.insert(name, gauges);
-    }
-
-    pub fn sum(&self) -> CgroupTimeseries {
-        let mut result = CgroupTimeseries::default();
-
-        for (name, gauges) in self.inner.iter() {
-            result.inner.insert(name.to_string(), gauges.sum());
-        }
-
-        result
-    }
-}
-
 #[derive(Default, Clone)]
-pub struct CgroupTimeseries {
-    inner: HashMap<String, Timeseries>,
+pub struct NamedSeries {
+    inner: BTreeMap<String, UntypedSeries>,
 }
 
-impl CgroupTimeseries {
-    pub fn top_n(&self, n: usize, rank: fn(&Timeseries) -> f64) -> Vec<(String, Timeseries)> {
+impl NamedSeries {
+    pub fn top_n(&self, n: usize, rank: fn(&UntypedSeries) -> f64) -> Vec<(String, UntypedSeries)> {
         let mut scores = Vec::new();
 
         for (name, series) in self.inner.iter() {
@@ -340,7 +288,7 @@ impl CgroupTimeseries {
         result
     }
 
-    pub fn bottom_n(&self, n: usize, rank: fn(&Timeseries) -> f64) -> Vec<(String, Timeseries)> {
+    pub fn bottom_n(&self, n: usize, rank: fn(&UntypedSeries) -> f64) -> Vec<(String, UntypedSeries)> {
         let mut scores = Vec::new();
 
         for (name, series) in self.inner.iter() {
@@ -363,14 +311,14 @@ impl CgroupTimeseries {
     }
 }
 
-impl Div<CgroupTimeseries> for CgroupTimeseries {
-    type Output = CgroupTimeseries;
-    fn div(self, other: CgroupTimeseries) -> <Self as Div<CgroupTimeseries>>::Output {
-        let mut result = CgroupTimeseries::default();
+impl Div<NamedSeries> for NamedSeries {
+    type Output = NamedSeries;
+    fn div(self, other: NamedSeries) -> <Self as Div<NamedSeries>>::Output {
+        let mut result = NamedSeries::default();
 
         let mut this = self.inner.clone();
 
-        for (name, series) in this.drain() {
+        while let Some((name, series)) = this.pop_first() {
             if let Some(other) = other.inner.get(&name) {
                 result.inner.insert(name, series / other);
             }
@@ -380,14 +328,14 @@ impl Div<CgroupTimeseries> for CgroupTimeseries {
     }
 }
 
-impl Div<Timeseries> for CgroupTimeseries {
-    type Output = CgroupTimeseries;
-    fn div(self, other: Timeseries) -> <Self as Div<Timeseries>>::Output {
-        let mut result = CgroupTimeseries::default();
+impl Div<UntypedSeries> for NamedSeries {
+    type Output = NamedSeries;
+    fn div(self, other: UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
+        let mut result = NamedSeries::default();
 
         let mut this = self.inner.clone();
 
-        for (name, series) in this.drain() {
+        while let Some((name, series)) = this.pop_first() {
             result.inner.insert(name, series / other.clone());
         }
 
@@ -395,14 +343,14 @@ impl Div<Timeseries> for CgroupTimeseries {
     }
 }
 
-impl Div<f64> for CgroupTimeseries {
-    type Output = CgroupTimeseries;
-    fn div(self, other: f64) -> <Self as Div<Timeseries>>::Output {
-        let mut result = CgroupTimeseries::default();
+impl Div<f64> for NamedSeries {
+    type Output = NamedSeries;
+    fn div(self, other: f64) -> <Self as Div<UntypedSeries>>::Output {
+        let mut result = NamedSeries::default();
 
         let mut this = self.inner.clone();
 
-        for (name, series) in this.drain() {
+        while let Some((name, series)) = this.pop_first() {
             result.inner.insert(name, series / other);
         }
 
@@ -410,6 +358,58 @@ impl Div<f64> for CgroupTimeseries {
     }
 }
 
-pub fn average(timeseries: &Timeseries) -> f64 {
-    timeseries.average()
+#[derive(Default, Clone)]
+pub struct IndexedSeries {
+    inner: BTreeMap<usize, UntypedSeries>,
+}
+
+impl Div<IndexedSeries> for IndexedSeries {
+    type Output = IndexedSeries;
+    fn div(self, other: IndexedSeries) -> <Self as Div<IndexedSeries>>::Output {
+        let mut result = IndexedSeries::default();
+
+        let mut this = self.inner.clone();
+
+        while let Some((id, series)) = this.pop_first() {
+            if let Some(other) = other.inner.get(&id) {
+                result.inner.insert(id, series / other);
+            }
+        }
+
+        result
+    }
+}
+
+impl Div<UntypedSeries> for IndexedSeries {
+    type Output = IndexedSeries;
+    fn div(self, other: UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
+        let mut result = IndexedSeries::default();
+
+        let mut this = self.inner.clone();
+
+        while let Some((id, series)) = this.pop_first() {
+            result.inner.insert(id, series / other.clone());
+        }
+
+        result
+    }
+}
+
+impl Div<f64> for IndexedSeries {
+    type Output = IndexedSeries;
+    fn div(self, other: f64) -> <Self as Div<UntypedSeries>>::Output {
+        let mut result = IndexedSeries::default();
+
+        let mut this = self.inner.clone();
+
+        while let Some((id, series)) = this.pop_first() {
+            result.inner.insert(id, series / other);
+        }
+
+        result
+    }
+}
+
+pub fn average(series: &UntypedSeries) -> f64 {
+    series.average()
 }

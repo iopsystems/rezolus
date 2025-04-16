@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use super::*;
 
+/// Represents a collection of counter timeseries keyed on label sets.
 #[derive(Default)]
 pub struct Counters {
     inner: HashMap<Labels, BTreeMap<u64, u64>>,
@@ -31,7 +32,7 @@ impl Counters {
         let mut result = Untyped::default();
 
         for (labels, series) in self.inner.iter() {
-            let mut rates = Timeseries::default();
+            let mut rates = UntypedSeries::default();
 
             let mut prev: Option<(u64, u64)> = None;
 
@@ -56,54 +57,9 @@ impl Counters {
 
          result
     }
-
-    pub fn by_cpu(&self) -> Vec<Timeseries> {
-        let mut result = Vec::new();
-
-        let mut max_cpu = 0;
-
-        for id in 0..1024 {
-            let series = self
-                .filter(&Labels {
-                    inner: [("id".to_string(), format!("{id}"))].into(),
-                })
-                .rate().sum();
-
-            if !series.inner.is_empty() {
-                max_cpu = id;
-            }
-
-            result.push(series);
-        }
-
-        result.truncate(max_cpu + 1);
-
-        result
-    }
-
-    pub fn by_group(&self) -> CgroupCounters {
-        let mut result = CgroupCounters::default();
-        let mut groups = BTreeSet::new();
-
-        for labels in self.inner.keys() {
-            if let Some(name) = labels.inner.get("name").cloned() {
-                groups.insert(name);
-            }
-        }
-
-        for group in groups {
-            let collection = self
-                .filter(&Labels {
-                    inner: [("name".to_string(), group.to_string())].into(),
-                });
-
-            result.insert(group, collection);
-        }
-
-        result
-    }
 }
 
+/// Represents a collection of gauge timeseries keyed on label sets.
 #[derive(Default)]
 pub struct Gauges {
     inner: HashMap<Labels, BTreeMap<u64, i64>>,
@@ -130,78 +86,27 @@ impl Gauges {
         result
     }
 
-    // pub fn irate(&self) -> Gauges {
+    /// Convert the gauge collection to a untyped collection by converting `i64`
+    /// gauges to `f64` representation.
+    pub fn untyped(&self) -> Untyped {
+        let mut result = Untyped::default();
 
-    // }
-
-    pub fn sum(&self) -> Timeseries {
-        let mut result = Timeseries::default();
-
-        for series in self.inner.values() {
-            let mut prev_ts = 0;
-
-            for (time, value) in series.iter() {
-                if prev_ts != 0 {
-                    if !result.inner.contains_key(time) {
-                        result.inner.insert(*time, *value as f64);
-                    } else {
-                        *result.inner.get_mut(time).unwrap() += *value as f64;
-                    }
-                }
-                prev_ts = *time;
-            }
+        for (labels, series) in self.inner.iter() {
+            let series = UntypedSeries { inner: series.iter().map(|(k, v)| (*k, *v as f64)).collect() };
+            result.inner.insert(labels.clone(), series);
         }
 
         result
     }
 
-    pub fn by_cpu(&self) -> Vec<Timeseries> {
-        let mut result = Vec::new();
-
-        let mut max_cpu = 0;
-
-        for id in 0..1024 {
-            let series = self
-                .filter(&Labels {
-                    inner: [("id".to_string(), format!("{id}"))].into(),
-                })
-                .sum();
-
-            if !series.inner.is_empty() {
-                max_cpu = id;
-            }
-
-            result.push(series);
-        }
-
-        result.truncate(max_cpu + 1);
-
-        result
-    }
-
-    pub fn by_group(&self) -> CgroupGauges {
-        let mut result = CgroupGauges::default();
-        let mut groups = BTreeSet::new();
-
-        for labels in self.inner.keys() {
-            if let Some(name) = labels.inner.get("name").cloned() {
-                groups.insert(name);
-            }
-        }
-
-        for group in groups {
-            let collection = self
-                .filter(&Labels {
-                    inner: [("name".to_string(), group.to_string())].into(),
-                });
-
-            result.insert(group, collection);
-        }
-
-        result
+    /// Convenience function to sum all gauges in the collection into a single
+    /// `UntypedSeries`
+    pub fn sum(&self) -> UntypedSeries {
+        self.untyped().sum()
     }
 }
 
+/// Represents a collection of histogram timeseries keyed on label sets.
 #[derive(Default)]
 pub struct Histograms {
     inner: HashMap<Labels, BTreeMap<u64, Histogram>>,
@@ -273,7 +178,7 @@ impl Histograms {
 
 #[derive(Default)]
 pub struct Untyped {
-    inner: HashMap<Labels, Timeseries>,
+    inner: HashMap<Labels, UntypedSeries>,
 }
 
 impl Untyped {
@@ -289,8 +194,8 @@ impl Untyped {
         result
     }
 
-    pub fn sum(&self) -> Timeseries {
-        let mut result = Timeseries::default();
+    pub fn sum(&self) -> UntypedSeries {
+        let mut result = UntypedSeries::default();
 
         for series in self.inner.values() {
             for (time, value) in series.inner.iter() {
@@ -304,4 +209,51 @@ impl Untyped {
 
         result
     }
+
+    pub fn by_id(&self) -> IndexedSeries {
+        let mut result = BTreeMap::new();
+        let mut ids = BTreeSet::new();
+
+        for labels in self.inner.keys() {
+            if let Some(Ok(id)) = labels.inner.get("id").cloned().map(|v| v.parse::<usize>()) {
+                ids.insert(id);
+            }
+        }
+
+        for id in ids {
+            let series = self
+                .filter(&Labels {
+                    inner: [("id".to_string(), id.to_string())].into(),
+                })
+                .sum();
+
+            result.insert(id, series);
+        }
+
+        IndexedSeries { inner: result }
+    }
+
+    pub fn by_name(&self) -> NamedSeries {
+        let mut result = BTreeMap::default();
+        let mut names = BTreeSet::new();
+
+        for labels in self.inner.keys() {
+            if let Some(name) = labels.inner.get("name").cloned() {
+                names.insert(name);
+            }
+        }
+
+        for name in names {
+            let series = self
+                .filter(&Labels {
+                    inner: [("name".to_string(), name.to_string())].into(),
+                })
+                .sum();
+
+            result.insert(name, series);
+        }
+
+        NamedSeries { inner: result }
+    }
 }
+

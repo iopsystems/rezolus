@@ -1,11 +1,11 @@
 use super::*;
 
 #[derive(Default, Clone)]
-pub struct Timeseries {
+pub struct UntypedSeries {
     pub inner: BTreeMap<u64, f64>,
 }
 
-impl Timeseries {
+impl UntypedSeries {
     pub fn average(&self) -> f64 {
         if self.inner.is_empty() {
             return 0.0;
@@ -52,7 +52,7 @@ impl Timeseries {
         self
     }
 
-    fn divide(mut self, other: &Timeseries) -> Self {
+    fn divide(mut self, other: &UntypedSeries) -> Self {
         // remove any times in this series that aren't in other
         let times: Vec<u64> = self.inner.keys().copied().collect();
         for time in times {
@@ -79,7 +79,7 @@ impl Timeseries {
         self
     }
 
-    fn multiply(mut self, other: &Timeseries) -> Self {
+    fn multiply(mut self, other: &UntypedSeries) -> Self {
         // remove any times in this series that aren't in other
         let times: Vec<u64> = self.inner.keys().copied().collect();
         for time in times {
@@ -112,18 +112,18 @@ impl Timeseries {
     }
 }
 
-impl Add<Timeseries> for Timeseries {
-    type Output = Timeseries;
+impl Add<UntypedSeries> for UntypedSeries {
+    type Output = UntypedSeries;
 
-    fn add(self, other: Timeseries) -> Self::Output {
+    fn add(self, other: UntypedSeries) -> Self::Output {
         self.add(&other)
     }
 }
 
-impl Add<&Timeseries> for Timeseries {
-    type Output = Timeseries;
+impl Add<&UntypedSeries> for UntypedSeries {
+    type Output = UntypedSeries;
 
-    fn add(mut self, other: &Timeseries) -> Self::Output {
+    fn add(mut self, other: &UntypedSeries) -> Self::Output {
         // Add values from other TimeSeries where timestamps match
         for (time, value) in other.inner.iter() {
             if let Some(existing) = self.inner.get_mut(time) {
@@ -138,44 +138,44 @@ impl Add<&Timeseries> for Timeseries {
     }
 }
 
-impl Div<Timeseries> for Timeseries {
-    type Output = Timeseries;
-    fn div(self, other: Timeseries) -> <Self as Div<Timeseries>>::Output {
+impl Div<UntypedSeries> for UntypedSeries {
+    type Output = UntypedSeries;
+    fn div(self, other: UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
         self.divide(&other)
     }
 }
 
-impl Div<&Timeseries> for Timeseries {
-    type Output = Timeseries;
-    fn div(self, other: &Timeseries) -> <Self as Div<Timeseries>>::Output {
+impl Div<&UntypedSeries> for UntypedSeries {
+    type Output = UntypedSeries;
+    fn div(self, other: &UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
         self.divide(other)
     }
 }
 
-impl Div<f64> for Timeseries {
-    type Output = Timeseries;
-    fn div(self, other: f64) -> <Self as Div<Timeseries>>::Output {
+impl Div<f64> for UntypedSeries {
+    type Output = UntypedSeries;
+    fn div(self, other: f64) -> <Self as Div<UntypedSeries>>::Output {
         self.divide_scalar(other)
     }
 }
 
-impl Mul<Timeseries> for Timeseries {
-    type Output = Timeseries;
-    fn mul(self, other: Timeseries) -> <Self as Mul<Timeseries>>::Output {
+impl Mul<UntypedSeries> for UntypedSeries {
+    type Output = UntypedSeries;
+    fn mul(self, other: UntypedSeries) -> <Self as Mul<UntypedSeries>>::Output {
         self.multiply(&other)
     }
 }
 
-impl Mul<&Timeseries> for Timeseries {
-    type Output = Timeseries;
-    fn mul(self, other: &Timeseries) -> <Self as Mul<Timeseries>>::Output {
+impl Mul<&UntypedSeries> for UntypedSeries {
+    type Output = UntypedSeries;
+    fn mul(self, other: &UntypedSeries) -> <Self as Mul<UntypedSeries>>::Output {
         self.multiply(other)
     }
 }
 
-impl Mul<f64> for Timeseries {
-    type Output = Timeseries;
-    fn mul(self, other: f64) -> <Self as Mul<Timeseries>>::Output {
+impl Mul<f64> for UntypedSeries {
+    type Output = UntypedSeries;
+    fn mul(self, other: f64) -> <Self as Mul<UntypedSeries>>::Output {
         self.multiply_scalar(other)
     }
 }
