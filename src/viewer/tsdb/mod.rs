@@ -294,7 +294,7 @@ impl CgroupTimeseries {
         result
     }
 
-    pub fn worst_n(&self, n: usize, rank: fn(&Timeseries) -> f64) -> Vec<(String, Timeseries)> {
+    pub fn bottom_n(&self, n: usize, rank: fn(&Timeseries) -> f64) -> Vec<(String, Timeseries)> {
         let mut scores = Vec::new();
 
         for (name, series) in self.inner.iter() {
