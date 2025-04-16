@@ -1,4 +1,4 @@
-// Refactored script.js - Main application logic with modular chart components
+// Refactored script.js - Main application logic with modular chart components and consistent cgroup colors
 
 // Import our modular components
 import {
@@ -22,33 +22,8 @@ import {
   updateChartsAfterZoom,
   setupChartSync
 } from './utils.js';
-
-// Application state management
-const state = {
-  // for tracking current visualization state
-  current: null,
-  // Store initialized charts to prevent re-rendering
-  initializedCharts: new Map(),
-  // Global zoom state to apply to all charts
-  globalZoom: {
-    start: 0,
-    end: 100,
-    isZoomed: false
-  },
-  // Flag to prevent recursive synchronization
-  isZoomSyncing: false,
-  // Flag to prevent recursive cursor updates
-  isCursorSyncing: false,
-  // Track which charts need zoom update (for lazy updating)
-  chartsNeedingZoomUpdate: new Set(),
-  // Store shared axis tick settings for consistency across charts
-  sharedAxisConfig: {
-    // Track visible tick indices for consistent tick spacing
-    visibleTicks: [],
-    // Store last update timestamp to avoid too frequent recalculations
-    lastUpdate: 0
-  }
-};
+// Import the global color mapper for consistent cgroup colors
+import globalColorMapper from './colormap.js';
 
 // Sidebar component
 const Sidebar = {
@@ -317,12 +292,41 @@ function createChartOption(plotSpec) {
   } else if (opts.style === 'scatter') {
     return createScatterChartOption(baseOption, plotSpec, state);
   } else if (opts.style === 'multi') { 
-    // New multi-series chart type
+    // Multi-series chart type with consistent cgroup colors
     return createMultiSeriesChartOption(baseOption, plotSpec, state);
   }
 
   return baseOption;
 }
+
+// Application state management
+const state = {
+  // for tracking current visualization state
+  current: null,
+  // Store initialized charts to prevent re-rendering
+  initializedCharts: new Map(),
+  // Global zoom state to apply to all charts
+  globalZoom: {
+    start: 0,
+    end: 100,
+    isZoomed: false
+  },
+  // Flag to prevent recursive synchronization
+  isZoomSyncing: false,
+  // Flag to prevent recursive cursor updates
+  isCursorSyncing: false,
+  // Track which charts need zoom update (for lazy updating)
+  chartsNeedingZoomUpdate: new Set(),
+  // Store shared axis tick settings for consistency across charts
+  sharedAxisConfig: {
+    // Track visible tick indices for consistent tick spacing
+    visibleTicks: [],
+    // Store last update timestamp to avoid too frequent recalculations
+    lastUpdate: 0
+  },
+  // Make the color mapper available in the state for potential future use
+  colorMapper: globalColorMapper
+};
 
 // Main application entry point
 m.route.prefix = ""; // use regular paths for navigation, eg. /overview
@@ -347,6 +351,11 @@ m.route(document.body, "/overview", {
 
         // Clear the charts needing update set
         state.chartsNeedingZoomUpdate.clear();
+        
+        // IMPORTANT: DO NOT clear the color mapper when changing sections
+        // This ensures consistent colors for cgroups across ALL views
+        // The deterministic hash-based mapping will ensure colors remain consistent
+        // even with page refreshes
       }
 
       const url = `/data/${params.section}.json`;

@@ -1,4 +1,4 @@
-// multi.js - Multi-series chart configuration with proper cgroup naming
+// multi.js - Multi-series chart configuration with deterministic cgroup colors
 
 import {
   createAxisLabelFormatter,
@@ -9,10 +9,11 @@ import {
   formatTimeAxisLabel,
   formatDateTime
 } from './utils.js';
+import globalColorMapper from './colormap.js';
 
 /**
  * Creates a multi-series line chart configuration for ECharts with reliable time axis
- * and proper cgroup naming
+ * and consistent cgroup colors across charts and page refreshes
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -209,6 +210,9 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
   // Use provided series names or generate default ones
   const names = plotSpec.series_names || [];
   
+  // Get deterministic colors for all cgroups in this chart
+  const cgroupColors = globalColorMapper.getColors(names);
+  
   for (let i = 1; i < data.length; i++) {
     // Get the series name (use provided name or default to "Series N")
     const name = (i <= names.length && names[i-1]) ? names[i-1] : `Series ${i}`;
@@ -217,25 +221,21 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
       name: name,
       type: 'line',
       data: data[i],
+      // Use deterministic color from our global mapper instead of the default color
+      itemStyle: {
+        color: (i <= cgroupColors.length) ? cgroupColors[i-1] : undefined
+      },
+      lineStyle: {
+        color: (i <= cgroupColors.length) ? cgroupColors[i-1] : undefined,
+        width: 2
+      },
       showSymbol: false,
       emphasis: {
         focus: 'series'
       },
-      lineStyle: {
-        width: 2
-      },
       animationDuration: 0
     });
   }
-
-  // Create a color palette for the series
-  const colorPalette = [
-    '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de',
-    '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#8d98b3',
-    '#e5cf0d', '#97b552', '#95706d', '#dc69aa', '#07a2a4',
-    '#9467bd', '#a05195', '#d45087', '#f95d6a', '#ff7c43',
-    '#ffa600'
-  ];
 
   // Return the complete chart configuration
   return {
@@ -247,6 +247,8 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
     xAxis: xAxis,
     yAxis: yAxis,
     series: series,
-    color: colorPalette, // Apply the color palette
+    // Don't use the default color palette - we're setting colors explicitly
+    // for consistent mapping across charts
+    color: cgroupColors,
   };
 }
