@@ -52,23 +52,50 @@ impl Timeseries {
         self
     }
 
-    fn divide(mut self, other: &Timeseries) -> Self {
-        // remove any times in this series that aren't in other
-        let times: Vec<u64> = self.inner.keys().copied().collect();
-        for time in times {
-            if !other.inner.contains_key(&time) {
-                let _ = self.inner.remove(&time);
+    fn divide(self, other: &Timeseries) -> Self {
+        let all_times: BTreeSet<u64> = self
+            .inner
+            .keys()
+            .chain(other.inner.keys())
+            .cloned()
+            .collect();
+
+        let mut result = Timeseries::default();
+
+        for &time in &all_times {
+            // Get values with interpolation for missing points
+            let self_value = self.get_interpolated_value(time);
+            let other_value = other.get_interpolated_value(time);
+
+            if let (Some(v1), Some(v2)) = (self_value, other_value) {
+                result.inner.insert(time, v1 / v2);
             }
         }
 
-        // divide all values with matching timestamps, leave nulls
-        for (time, divisor) in other.inner.iter() {
-            if let Some(v) = self.inner.get_mut(time) {
-                *v /= divisor;
-            }
+        result
+    }
+
+    // Add a new method for interpolation
+    fn get_interpolated_value(&self, time: u64) -> Option<f64> {
+        if let Some(value) = self.inner.get(&time) {
+            return Some(*value);
         }
 
-        self
+        // Find surrounding points for linear interpolation
+        let prev = self.inner.range(..time).next_back();
+        let next = self.inner.range(time..).next();
+
+        match (prev, next) {
+            (Some((&prev_time, &prev_val)), Some((&next_time, &next_val))) => {
+                // Linear interpolation
+                let ratio = (time - prev_time) as f64 / (next_time - prev_time) as f64;
+                Some(prev_val + ratio * (next_val - prev_val))
+            }
+            // Extrapolate with the nearest point if only one side is available
+            (Some((_prev_time, &prev_val)), None) => Some(prev_val),
+            (None, Some((_next_time, &next_val))) => Some(next_val),
+            (None, None) => None,
+        }
     }
 
     fn multiply_scalar(mut self, multiplier: f64) -> Self {

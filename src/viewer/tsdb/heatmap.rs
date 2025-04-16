@@ -17,7 +17,7 @@ impl Heatmap {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
-    
+
     pub fn insert(&mut self, id: usize, series: Timeseries) {
         self.inner.insert(id, series);
     }

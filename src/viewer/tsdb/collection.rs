@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use super::*;
+use std::collections::hash_map::Entry;
 
 #[derive(Default)]
 pub struct Collection {
@@ -154,10 +154,9 @@ impl Collection {
         }
 
         for group in groups {
-            let collection = self
-                .filter(&Labels {
-                    inner: [("name".to_string(), group.to_string())].into(),
-                });
+            let collection = self.filter(&Labels {
+                inner: [("name".to_string(), group.to_string())].into(),
+            });
 
             result.insert(group, collection);
         }

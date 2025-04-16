@@ -611,19 +611,32 @@ pub fn run(config: Config) {
     // cpu usage
 
     let opts = PlotOpts::multi("Total Cores", "cgroup-total-cores", Unit::Count);
-    cgroup_cpu.multi(opts, data.cgroup("cgroup_cpu_usage", Labels::default()).map(|v| (v.sum() / 1000000000.0).top_n(5, average)));
+    cgroup_cpu.multi(
+        opts,
+        data.cgroup("cgroup_cpu_usage", Labels::default())
+            .map(|v| (v.sum() / 1000000000.0).top_n(5, average)),
+    );
 
     let opts = PlotOpts::multi("User Cores", "cgroup-user-cores", Unit::Count);
-    cgroup_cpu.multi(opts, data.cgroup("cgroup_cpu_usage", [("state", "user")]).map(|v| (v.sum() / 1000000000.0).top_n(5, average)));
+    cgroup_cpu.multi(
+        opts,
+        data.cgroup("cgroup_cpu_usage", [("state", "user")])
+            .map(|v| (v.sum() / 1000000000.0).top_n(5, average)),
+    );
 
     // performance
 
     if let (Some(cycles), Some(instructions)) = (
-        data.cgroup("cgroup_cpu_cycles", Labels::default()).map(|v| v.sum()),
-        data.cgroup("cgroup_cpu_instructions", Labels::default()).map(|v| v.sum())
+        data.cgroup("cgroup_cpu_cycles", Labels::default())
+            .map(|v| v.sum()),
+        data.cgroup("cgroup_cpu_instructions", Labels::default())
+            .map(|v| v.sum()),
     ) {
         let opts = PlotOpts::multi("Highest IPC", "cgroup-ipc-low", Unit::Count);
-        cgroup_performance.multi(opts, Some((cycles.clone() / instructions.clone()).top_n(5, average)));
+        cgroup_performance.multi(
+            opts,
+            Some((cycles.clone() / instructions.clone()).top_n(5, average)),
+        );
 
         let opts = PlotOpts::multi("Lowest IPC", "cgroup-ipc-high", Unit::Count);
         cgroup_performance.multi(opts, Some((cycles / instructions).bottom_n(5, average)));
@@ -632,13 +645,21 @@ pub fn run(config: Config) {
     // syscalls
 
     let opts = PlotOpts::multi("Total", "cgroup-syscalls", Unit::Rate);
-    cgroup_syscalls.multi(opts, data.cgroup("cgroup_syscall", Labels::default()).map(|v| v.sum().top_n(5, average)));
+    cgroup_syscalls.multi(
+        opts,
+        data.cgroup("cgroup_syscall", Labels::default())
+            .map(|v| v.sum().top_n(5, average)),
+    );
 
     for op in &[
         "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
     ] {
         let opts = PlotOpts::multi(*op, format!("syscall-{op}"), Unit::Rate);
-        cgroup_syscalls.multi(opts, data.cgroup("cgroup_syscall", [("op", op.to_lowercase())]).map(|v| v.sum().top_n(5, average)));
+        cgroup_syscalls.multi(
+            opts,
+            data.cgroup("cgroup_syscall", [("op", op.to_lowercase())])
+                .map(|v| v.sum().top_n(5, average)),
+        );
     }
 
     // Add all groups to the cgroups view

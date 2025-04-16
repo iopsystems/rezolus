@@ -649,3 +649,98 @@ export function updateChartsAfterZoom(start, end, state) {
     });
   });
 }
+
+/**
+ * Normalizes multiple timeseries to share a common set of timestamps
+ * Handles sparse data by interpolating or using null for missing points
+ * 
+ * @param {Array} timeseriesArray - Array of timeseries objects
+ * @param {boolean} interpolate - Whether to interpolate missing values
+ * @returns {Object} Normalized timeseries data
+ */
+export function normalizeTimeseries(timeseriesArray, interpolate = false) {
+    // Extract all unique timestamps from all series
+    const allTimestamps = new Set();
+    
+    timeseriesArray.forEach(series => {
+        // Each series has a "inner" map with timestamps as keys
+        if (series && series.inner) {
+            Object.keys(series.inner).forEach(timestamp => {
+                allTimestamps.add(parseInt(timestamp, 10));
+            });
+        }
+    });
+    
+    // Sort timestamps chronologically
+    const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
+    
+    // Create normalized series with consistent timestamps
+    const normalizedSeries = [];
+    
+    timeseriesArray.forEach(series => {
+        const normalizedValues = [];
+        
+        sortedTimestamps.forEach(timestamp => {
+            if (series && series.inner && series.inner[timestamp] !== undefined) {
+                // Direct value exists
+                normalizedValues.push(series.inner[timestamp]);
+            } else if (interpolate) {
+                // Interpolate missing value
+                const interpolatedValue = interpolateValue(series, timestamp);
+                normalizedValues.push(interpolatedValue);
+            } else {
+                // Use null for missing value
+                normalizedValues.push(null);
+            }
+        });
+        
+        normalizedSeries.push(normalizedValues);
+    });
+    
+    return {
+        timestamps: sortedTimestamps,
+        series: normalizedSeries
+    };
+}
+
+/**
+ * Interpolates a value for a timestamp in a timeseries
+ * 
+ * @param {Object} series - Timeseries object
+ * @param {number} targetTimestamp - Target timestamp
+ * @returns {number|null} Interpolated value or null
+ */
+export function interpolateValue(series, targetTimestamp) {
+    if (!series || !series.inner) return null;
+    
+    // Convert to array of [timestamp, value] pairs
+    const points = Object.entries(series.inner)
+        .map(([ts, val]) => [parseInt(ts, 10), val])
+        .sort((a, b) => a[0] - b[0]);
+    
+    if (points.length === 0) return null;
+    
+    // Find surrounding points
+    let prevPoint = null;
+    let nextPoint = null;
+    
+    for (let i = 0; i < points.length; i++) {
+        if (points[i][0] <= targetTimestamp) {
+            prevPoint = points[i];
+        } else {
+            nextPoint = points[i];
+            break;
+        }
+    }
+    
+    // Handle edge cases
+    if (prevPoint === null) return nextPoint ? nextPoint[1] : null;
+    if (nextPoint === null) return prevPoint[1];
+    
+    // Linear interpolation
+    const [prevTime, prevValue] = prevPoint;
+    const [nextTime, nextValue] = nextPoint;
+    
+    const ratio = (targetTimestamp - prevTime) / (nextTime - prevTime);
+    return prevValue + ratio * (nextValue - prevValue);
+}

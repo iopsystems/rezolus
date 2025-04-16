@@ -274,14 +274,18 @@ pub struct CgroupTimeseries {
 
 impl CgroupTimeseries {
     pub fn top_n(&self, n: usize, rank: fn(&Timeseries) -> f64) -> Vec<(String, Timeseries)> {
+        // Ensure we're handling sparse timeseries properly when ranking
         let mut scores = Vec::new();
 
         for (name, series) in self.inner.iter() {
-            let score = rank(series);
-
-            scores.push((name, score));
+            // Only rank series that have at least some data
+            if !series.inner.is_empty() {
+                let score = rank(series);
+                scores.push((name, score));
+            }
         }
 
+        // Sort non-empty series and take top n
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scores.truncate(n);
 
@@ -294,17 +298,20 @@ impl CgroupTimeseries {
         result
     }
 
-    pub fn worst_n(&self, n: usize, rank: fn(&Timeseries) -> f64) -> Vec<(String, Timeseries)> {
+    pub fn bottom_n(&self, n: usize, rank: fn(&Timeseries) -> f64) -> Vec<(String, Timeseries)> {
+        // Ensure we're handling sparse timeseries properly when ranking
         let mut scores = Vec::new();
 
         for (name, series) in self.inner.iter() {
-            let score = rank(series);
-
-            scores.push((name, score));
+            // Only rank series that have at least some data
+            if !series.inner.is_empty() {
+                let score = rank(series);
+                scores.push((name, score));
+            }
         }
 
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scores.reverse();
+        // Sort non-empty series and take top n
+        scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         scores.truncate(n);
 
         let mut result = Vec::new();

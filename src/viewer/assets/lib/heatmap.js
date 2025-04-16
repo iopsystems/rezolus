@@ -1,4 +1,5 @@
 // heatmap.js - Heatmap chart configuration with fixed time axis handling
+// Improved to handle sparse timeseries data properly
 
 import {
   createAxisLabelFormatter
@@ -11,6 +12,7 @@ import {
 
 /**
  * Creates a heatmap chart configuration for ECharts with reliable time axis
+ * Enhanced to properly handle sparse timeseries data
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -31,7 +33,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   }
 
   // Store original timestamps for calculations - critical for reliable zooming
-  const originalTimeData = time_data.slice();
+  const originalTimeData = time_data ? time_data.slice() : [];
 
   // Format timestamps for display
   const formattedTimeData = originalTimeData.map(timestamp =>
@@ -42,8 +44,17 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   const xIndices = new Set();
   const yIndices = new Set();
 
-  // Extract all unique CPU IDs and timestamp indices
-  data.forEach(item => {
+  // Clean the data array by filtering out invalid values (null, undefined, NaN)
+  const cleanData = data.filter(item => 
+    item &&
+    item.length >= 3 &&
+    item[0] !== undefined && item[0] !== null && !isNaN(item[0]) && // x index
+    item[1] !== undefined && item[1] !== null && !isNaN(item[1]) && // y index
+    item[2] !== undefined && item[2] !== null && !isNaN(item[2])    // value
+  );
+
+  // Extract all unique CPU IDs and timestamp indices from clean data
+  cleanData.forEach(item => {
     xIndices.add(item[0]); // timestamp index
     yIndices.add(item[1]); // CPU ID
   });
@@ -62,12 +73,16 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
   let maxValue = max_value !== undefined ? max_value : -Infinity;
 
   if (minValue === Infinity || maxValue === -Infinity) {
-    data.forEach(item => {
+    cleanData.forEach(item => {
       const value = item[2];
       minValue = Math.min(minValue, value);
       maxValue = Math.max(maxValue, value);
     });
   }
+
+  // Set default values if data is completely empty
+  if (minValue === Infinity) minValue = 0;
+  if (maxValue === -Infinity) maxValue = 1;
 
   // Calculate human-friendly ticks
   let ticks;
@@ -102,8 +117,14 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
 
   // Configure tooltip with unit formatting if specified
   let tooltipFormatter = function(params) {
+    // Check if this is a valid data point (sparse heatmaps might have empty cells)
+    if (!params.data || params.data.length < 3) return '';
+    
     const value = params.data[2];
     const timeIndex = params.data[0];
+
+    // Skip showing tooltip for empty/invalid cells
+    if (value === null || value === undefined || isNaN(value)) return '';
 
     // Use original timestamp for reliable display even during zoom/pan
     const fullTime = timeIndex >= 0 && timeIndex < originalTimeData.length ?
@@ -116,9 +137,13 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     if (unitSystem) {
       const formatter = createAxisLabelFormatter(unitSystem);
       const labelName = valueLabel || 'Value';
-      return `Time: ${formattedTime}<br>CPU: ${cpu}<br>${labelName}: ${formatter(value)}`;
+      return `<div style="font-weight:bold;">Time: ${formattedTime}</div>
+              <div>CPU: ${cpu}</div>
+              <div>${labelName}: ${formatter(value)}</div>`;
     } else {
-      return `Time: ${formattedTime}<br>CPU: ${cpu}<br>Value: ${value.toFixed(6)}`;
+      return `<div style="font-weight:bold;">Time: ${formattedTime}</div>
+              <div>CPU: ${cpu}</div>
+              <div>Value: ${value.toFixed(6)}</div>`;
     }
   };
 
@@ -146,7 +171,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     containLabel: false
   };
 
-  // THE FIX: Create a more reliable X-axis configuration
+  // Create a more reliable X-axis configuration
   const xAxis = {
     type: 'category',
     data: formattedTimeData,
@@ -189,11 +214,48 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     }
   };
 
+  // Handle empty datasets gracefully
+  if (cleanData.length === 0) {
+    return {
+      ...baseOption,
+      grid: updatedGrid,
+      xAxis: xAxis,
+      yAxis: {
+        type: 'category',
+        name: yAxisLabel || 'CPU',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: {
+          color: '#E0E0E0',
+          fontSize: 14,
+          padding: [0, 0, 0, 20]
+        },
+        data: continuousCpuIds, // Use the continuous range of CPU IDs
+        splitArea: {
+          show: true
+        },
+        axisLabel: {
+          color: '#ABABAB'
+        }
+      },
+      series: [],
+      title: {
+        ...baseOption.title,
+        subtext: 'No data available',
+        subtextStyle: {
+          color: '#888'
+        }
+      }
+    };
+  }
+
   return {
     ...baseOption,
     tooltip: {
       position: 'top',
-      formatter: tooltipFormatter
+      formatter: tooltipFormatter,
+      // Added trigger: 'item' to better handle sparse data
+      trigger: 'item'
     },
     grid: updatedGrid,
     xAxis: xAxis,
@@ -219,7 +281,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
       min: minValue,
       max: maxValue,
       calculable: false,
-      show: false, // Show the color scale
+      show: true, // Show the color scale
       orient: 'horizontal',
       left: 'center',
       bottom: '0%',
@@ -239,7 +301,9 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     series: [{
       name: plotSpec.opts.title,
       type: 'heatmap',
-      data: data,
+      // Use our cleaned data with invalid values filtered out
+      data: cleanData,
+      // Set empty values to be transparent
       emphasis: {
         itemStyle: {
           shadowBlur: 10,
@@ -247,7 +311,14 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
         }
       },
       progressive: 2000,
-      animation: false
+      animation: false,
+      // For sparse data, add properties to better handle missing points
+      label: {
+        show: false
+      },
+      // Make large datasets render more efficiently
+      large: true,
+      largeThreshold: 5000
     }]
   };
 }
