@@ -27,10 +27,6 @@ impl Counters {
         result
     }
 
-    // pub fn irate(&self) -> Gauges {
-
-    // }
-
     pub fn sum(&self) -> Timeseries {
         let mut result = Timeseries::default();
 
@@ -209,19 +205,17 @@ impl Gauges {
     }
 }
 
-
-
 #[derive(Default)]
-pub struct Collection {
-    inner: HashMap<Labels, RawTimeseries>,
+pub struct Histograms {
+    inner: HashMap<Labels, BTreeMap<u64, Histogram>>,
 }
 
-impl Collection {
+impl Histograms {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    pub fn entry(&mut self, labels: Labels) -> Entry<'_, Labels, RawTimeseries> {
+    pub fn entry(&mut self, labels: Labels) -> Entry<'_, Labels, BTreeMap<u64, Histogram>> {
         self.inner.entry(labels)
     }
 
@@ -244,12 +238,10 @@ impl Collection {
 
         // aggregate the histograms
         for series in self.inner.values() {
-            for (time, value) in series.inner.iter() {
-                if let Value::Histogram(h) = value {
-                    tmp.entry(*time)
-                        .and_modify(|sum| *sum = sum.wrapping_add(h).unwrap())
-                        .or_insert(h.clone());
-                }
+            for (time, value) in series.iter() {
+                tmp.entry(*time)
+                    .and_modify(|sum| *sum = sum.wrapping_add(value).unwrap())
+                    .or_insert(value.clone());
             }
         }
 

@@ -20,7 +20,7 @@ mod heatmap;
 mod labels;
 mod timeseries;
 
-pub use collection::{Collection, Counters, Gauges};
+pub use collection::{Counters, Gauges, Histograms};
 pub use heatmap::Heatmap;
 pub use labels::Labels;
 pub use timeseries::Timeseries;
@@ -39,7 +39,7 @@ pub enum Value {
 pub struct Tsdb {
     counters: HashMap<String, Counters>,
     gauges: HashMap<String, Gauges>,
-    inner: HashMap<String, Collection>,
+    histograms: HashMap<String, Histograms>,
 }
 
 impl Tsdb {
@@ -147,7 +147,7 @@ impl Tsdb {
                     }
                     DataType::List(field_type) => {
                         if field_type.data_type() == &DataType::UInt64 {
-                            let collection = data.inner.entry(name.to_string()).or_default();
+                            let collection = data.histograms.entry(name.to_string()).or_default();
                             let series = collection.entry(labels).or_default();
 
                             let list_array = column
@@ -182,7 +182,7 @@ impl Tsdb {
                                             max_value_power,
                                             buckets,
                                         ) {
-                                            series.inner.insert(*ts, Value::Histogram(h));
+                                            series.insert(*ts, h);
                                         }
                                     }
                                 }
@@ -195,20 +195,6 @@ impl Tsdb {
         }
 
         Ok(data)
-    }
-
-    pub fn get(&self, name: &str, labels: &Labels) -> Option<Collection> {
-        if let Some(collection) = self.inner.get(name) {
-            let collection = collection.filter(labels);
-
-            if collection.is_empty() {
-                None
-            } else {
-                Some(collection)
-            }
-        } else {
-            None
-        }
     }
 
     pub fn counters(&self, name: &str, labels: impl Into<Labels>) -> Option<Counters> {
@@ -239,13 +225,22 @@ impl Tsdb {
         }
     }
 
-    // pub fn sum(&self, metric: &str, labels: impl Into<Labels>) -> Option<Timeseries> {
-    //     self.get(metric, &labels.into())
-    //         .map(|collection| collection.sum())
-    // }
+    pub fn histograms(&self, name: &str, labels: impl Into<Labels>) -> Option<Histograms> {
+        if let Some(histograms) = self.histograms.get(name) {
+            let histograms = histograms.filter(&labels.into());
+
+            if histograms.is_empty() {
+                None
+            } else {
+                Some(histograms)
+            }
+        } else {
+            None
+        }
+    }
 
     pub fn percentiles(&self, metric: &str, labels: impl Into<Labels>) -> Option<Vec<Vec<f64>>> {
-        self.get(metric, &labels.into())
+        self.histograms(metric, labels)
             .map(|collection| collection.percentiles())
     }
 
