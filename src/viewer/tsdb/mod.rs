@@ -229,7 +229,11 @@ impl Tsdb {
         }
     }
 
-    pub fn percentiles(&self, metric: &str, labels: impl Into<Labels>) -> Option<Vec<UntypedSeries>> {
+    pub fn percentiles(
+        &self,
+        metric: &str,
+        labels: impl Into<Labels>,
+    ) -> Option<Vec<UntypedSeries>> {
         if let Some(collection) = self.histograms(metric, labels) {
             collection.sum().percentiles()
         } else {
@@ -291,7 +295,11 @@ impl NamedSeries {
         result
     }
 
-    pub fn bottom_n(&self, n: usize, rank: fn(&UntypedSeries) -> f64) -> Vec<(String, UntypedSeries)> {
+    pub fn bottom_n(
+        &self,
+        n: usize,
+        rank: fn(&UntypedSeries) -> f64,
+    ) -> Vec<(String, UntypedSeries)> {
         let mut scores = Vec::new();
 
         for (name, series) in self.inner.iter() {

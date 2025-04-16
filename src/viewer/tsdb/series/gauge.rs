@@ -16,6 +16,8 @@ impl GaugeSeries {
     }
 
     pub fn untyped(&self) -> UntypedSeries {
-        UntypedSeries { inner: self.inner.iter().map(|(k, v)| (*k, *v as f64)).collect() }
+        UntypedSeries {
+            inner: self.inner.iter().map(|(k, v)| (*k, *v as f64)).collect(),
+        }
     }
 }

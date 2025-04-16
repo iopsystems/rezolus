@@ -246,7 +246,8 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
           shadowColor: 'rgba(0, 0, 0, 0.5)'
         }
       },
-      progressive: 2000,
+      progressive: 1000,
+      progressiveThreshold: 3000,
       animation: false
     }]
   };
