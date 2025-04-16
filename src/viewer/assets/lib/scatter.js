@@ -1,5 +1,4 @@
 // scatter.js - Scatter chart configuration with fixed time axis handling
-// Improved to handle sparse timeseries data properly
 
 import {
   createAxisLabelFormatter,
@@ -13,7 +12,6 @@ import {
 
 /**
  * Creates a scatter chart configuration for ECharts with reliable time axis
- * Enhanced to properly handle sparse timeseries data
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -73,42 +71,26 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
     const percentileValues = data[i];
 
     // Create data points in the format [time, value, original_index]
-    // Only include valid data points and skip nulls/undefined/NaN
     for (let j = 0; j < timeData.length; j++) {
-      if (percentileValues[j] !== undefined && 
-          percentileValues[j] !== null && 
-          !isNaN(percentileValues[j])) {
+      if (percentileValues[j] !== undefined && !isNaN(percentileValues[j])) {
         percentileData.push([formattedTimeData[j], percentileValues[j], j]); // Store original index
       }
     }
 
-    // Only add the series if it has valid data points
-    if (percentileData.length > 0) {
-      // Add a series for this percentile
-      series.push({
-        name: percentileLabels[i - 1] || `Percentile ${i}`,
-        type: 'scatter',
-        data: percentileData,
-        symbolSize: 6,
-        // Improved to handle sparse data by drawing trend lines
-        markLine: {
-          silent: true,
-          lineStyle: {
-            width: 1,
-            opacity: 0.3,
-            type: 'solid'
-          },
-          data: []
-        },
-        emphasis: {
-          focus: 'series',
-          itemStyle: {
-            shadowBlur: 10,
-            shadowColor: 'rgba(255, 255, 255, 0.5)'
-          }
+    // Add a series for this percentile
+    series.push({
+      name: percentileLabels[i - 1] || `Percentile ${i}`,
+      type: 'scatter',
+      data: percentileData,
+      symbolSize: 6,
+      emphasis: {
+        focus: 'series',
+        itemStyle: {
+          shadowBlur: 10,
+          shadowColor: 'rgba(255, 255, 255, 0.5)'
         }
-      });
-    }
+      }
+    });
   }
 
   // Access format properties using snake_case naming to match Rust serialization
@@ -127,17 +109,9 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
       formatter: function(params) {
         if (!Array.isArray(params)) params = [params];
 
-        // Filter out invalid params (could happen with sparse data)
-        const validParams = params.filter(param => 
-          param.data && param.data.length >= 3 && 
-          param.data[1] !== null && param.data[1] !== undefined && !isNaN(param.data[1])
-        );
-        
-        if (validParams.length === 0) return '';
-
         // Get the original timestamp using the stored index
         // This is the key improvement for reliable time display during zoom/pan
-        const originalIndex = validParams[0].data[2]; // Third value in data array
+        const originalIndex = params[0].data[2]; // Third value in data array
         const fullTimestamp = (originalIndex >= 0 && originalIndex < originalTimeData.length) ?
           formatDateTime(originalTimeData[originalIndex], 'full') :
           formatDateTime(Date.now() / 1000, 'full');
@@ -146,7 +120,7 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
         let result = `<div>${fullTimestamp}</div>`;
 
         // Add each series with right-justified values using flexbox
-        validParams.forEach(param => {
+        params.forEach(param => {
           // Get the value (second value in data array for scatter plots)
           const value = param.data[1];
 
@@ -226,7 +200,7 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
   if (minValue !== undefined) yAxis.min = minValue;
   if (maxValue !== undefined) yAxis.max = maxValue;
 
-  // Use a more reliable time axis configuration that preserves the relationship
+  // THE FIX: Use a more reliable time axis configuration that preserves the relationship
   // between data indices and their corresponding timestamps during zoom operations
   const xAxis = {
     type: 'category',
@@ -273,24 +247,6 @@ export function createScatterChartOption(baseOption, plotSpec, state) {
       }
     }
   };
-
-  // Handle empty datasets - show a message if there's no valid data
-  if (series.length === 0) {
-    return {
-      ...baseOption,
-      grid: updatedGrid,
-      xAxis: xAxis,
-      yAxis: yAxis,
-      series: [],
-      title: {
-        ...baseOption.title,
-        subtext: 'No data available',
-        subtextStyle: {
-          color: '#888'
-        }
-      }
-    };
-  }
 
   // Return scatter chart configuration with reliable time axis
   return {

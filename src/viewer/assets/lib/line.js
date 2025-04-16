@@ -7,13 +7,11 @@ import {
 import {
   calculateHumanFriendlyTicks,
   formatTimeAxisLabel,
-  formatDateTime,
-  interpolateValue
+  formatDateTime
 } from './utils.js';
 
 /**
  * Creates a line chart configuration for ECharts with reliable time axis
- * Enhanced to properly handle sparse timeseries data
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -41,19 +39,7 @@ export function createLineChartOption(baseOption, plotSpec, state) {
     formatDateTime(timestamp, 'time')
   );
 
-  // Process value data to properly handle missing points
-  const rawValueData = data[1];
-  const valueData = [];
-
-  // Create a clean array with null values for missing data points
-  for (let i = 0; i < rawValueData.length; i++) {
-    if (rawValueData[i] !== undefined && rawValueData[i] !== null && !isNaN(rawValueData[i])) {
-      valueData.push(rawValueData[i]);
-    } else {
-      // Use null to represent missing data points
-      valueData.push(null);
-    }
-  }
+  const valueData = data[1];
 
   // Calculate human-friendly ticks
   let ticks;
@@ -94,7 +80,6 @@ export function createLineChartOption(baseOption, plotSpec, state) {
 
         // Get the timestamp from the original data, not the formatted string
         const index = params[0].dataIndex;
-        
         // Use the original timestamp to ensure correct time display
         const fullTimestamp = (index >= 0 && index < originalTimeData.length) ?
           formatDateTime(originalTimeData[index], 'full') :
@@ -105,34 +90,23 @@ export function createLineChartOption(baseOption, plotSpec, state) {
 
         // Add each series with right-justified values using flexbox
         params.forEach(param => {
-          // Check if the value is valid
-          if (param.value !== null && param.value !== undefined && !isNaN(param.value)) {
-            // Format the value according to unit system
-            let formattedValue = createAxisLabelFormatter(unitSystem)(param.value);
-
-            // Create a flex container with the series on the left and value on the right
-            result +=
-              `<div style="display:flex;justify-content:space-between;align-items:center;margin:3px 0;">
-                <div>
-                  <span style="display:inline-block;margin-right:5px;border-radius:50%;width:10px;height:10px;background-color:${param.color};"></span> 
-                  ${param.seriesName}
-                </div>
-                <div style="margin-left:15px;"><strong>${formattedValue}</strong></div>
-              </div>`;
+          // Format the value according to unit system
+          let formattedValue;
+          if (param.value !== undefined && param.value !== null) {
+            formattedValue = createAxisLabelFormatter(unitSystem)(param.value);
           } else {
-            // If the value is invalid (null/undefined/NaN), optionally show a placeholder
-            // or simply skip showing this series in the tooltip
-            /* 
-            result +=
-              `<div style="display:flex;justify-content:space-between;align-items:center;margin:3px 0;opacity:0.5;">
-                <div>
-                  <span style="display:inline-block;margin-right:5px;border-radius:50%;width:10px;height:10px;background-color:${param.color};"></span> 
-                  ${param.seriesName}
-                </div>
-                <div style="margin-left:15px;"><strong>N/A</strong></div>
-              </div>`;
-            */
+            formattedValue = "N/A";
           }
+
+          // Create a flex container with the series on the left and value on the right
+          result +=
+            `<div style="display:flex;justify-content:space-between;align-items:center;margin:3px 0;">
+              <div>
+                <span style="display:inline-block;margin-right:5px;border-radius:50%;width:10px;height:10px;background-color:${param.color};"></span> 
+                ${param.seriesName}
+              </div>
+              <div style="margin-left:15px;"><strong>${formattedValue}</strong></div>
+            </div>`;
         });
 
         return result;
@@ -231,7 +205,7 @@ export function createLineChartOption(baseOption, plotSpec, state) {
     }
   };
 
-  // Return line chart configuration with reliable time axis and null handling
+  // Return line chart configuration with reliable time axis
   return {
     ...baseOption,
     grid: updatedGrid,
@@ -245,21 +219,13 @@ export function createLineChartOption(baseOption, plotSpec, state) {
       type: 'line',
       name: opts.title,
       showSymbol: false,
-      // Add connectNulls to handle sparse data by drawing lines across gaps
-      connectNulls: true,
-      // Sampling for large datasets
-      sampling: 'average',
       emphasis: {
         focus: 'series'
       },
       lineStyle: {
         width: 2
       },
-      // Turn off animation for better performance with sparse data
-      animation: false,
-      // Large dataset optimization
-      large: true,
-      largeThreshold: 1000
+      animationDuration: 0
     }]
   };
 }

@@ -1,5 +1,4 @@
 // multi.js - Multi-series chart configuration with deterministic cgroup colors
-// Improved to handle sparse timeseries data properly
 
 import {
   createAxisLabelFormatter,
@@ -8,15 +7,13 @@ import {
 import {
   calculateHumanFriendlyTicks,
   formatTimeAxisLabel,
-  formatDateTime,
-  interpolateValue
+  formatDateTime
 } from './utils.js';
 import globalColorMapper from './colormap.js';
 
 /**
  * Creates a multi-series line chart configuration for ECharts with reliable time axis
  * and consistent cgroup colors across charts and page refreshes
- * Enhanced to properly handle sparse timeseries data
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -34,7 +31,7 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
     return baseOption;
   }
 
-  // For multi-series charts, the first row contains timestamps
+  // For multi-series charts, the first row contains timestamps, subsequent rows are series data
   const timeData = data[0];
 
   // Store original timestamps for calculations - critical for reliable zooming
@@ -84,7 +81,6 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
 
         // Get the timestamp from the original data, not the formatted string
         const index = params[0].dataIndex;
-        
         // Use the original timestamp to ensure correct time display
         const fullTimestamp = (index >= 0 && index < originalTimeData.length) ?
           formatDateTime(originalTimeData[index], 'full') :
@@ -95,26 +91,23 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
 
         // Add each series with right-justified values using flexbox
         params.forEach(param => {
-          // Only show series that have values at this timestamp
-          if (param.value !== null && param.value !== undefined && !isNaN(param.value)) {
-            // Format the value according to unit system
-            let formattedValue;
-            if (param.value !== undefined && param.value !== null) {
-              formattedValue = createAxisLabelFormatter(unitSystem)(param.value);
-            } else {
-              formattedValue = "N/A";
-            }
-
-            // Create a flex container with the series on the left and value on the right
-            result +=
-              `<div style="display:flex;justify-content:space-between;align-items:center;margin:3px 0;">
-                <div>
-                  <span style="display:inline-block;margin-right:5px;border-radius:50%;width:10px;height:10px;background-color:${param.color};"></span> 
-                  ${param.seriesName}
-                </div>
-                <div style="margin-left:15px;"><strong>${formattedValue}</strong></div>
-              </div>`;
+          // Format the value according to unit system
+          let formattedValue;
+          if (param.value !== undefined && param.value !== null) {
+            formattedValue = createAxisLabelFormatter(unitSystem)(param.value);
+          } else {
+            formattedValue = "N/A";
           }
+
+          // Create a flex container with the series on the left and value on the right
+          result +=
+            `<div style="display:flex;justify-content:space-between;align-items:center;margin:3px 0;">
+              <div>
+                <span style="display:inline-block;margin-right:5px;border-radius:50%;width:10px;height:10px;background-color:${param.color};"></span> 
+                ${param.seriesName}
+              </div>
+              <div style="margin-left:15px;"><strong>${formattedValue}</strong></div>
+            </div>`;
         });
 
         return result;
@@ -224,25 +217,10 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
     // Get the series name (use provided name or default to "Series N")
     const name = (i <= names.length && names[i-1]) ? names[i-1] : `Series ${i}`;
     
-    // Handle missing data points properly - create a sparse array with nulls
-    // where values are missing instead of just removing points
-    const seriesData = [];
-    const values = data[i];
-    
-    for (let j = 0; j < timeData.length; j++) {
-      if (values[j] !== undefined && values[j] !== null && !isNaN(values[j])) {
-        seriesData.push(values[j]);
-      } else {
-        // Use null to represent missing data points
-        // This allows ECharts to skip these points when drawing lines
-        seriesData.push(null);
-      }
-    }
-    
     series.push({
       name: name,
       type: 'line',
-      data: seriesData,
+      data: data[i],
       // Use deterministic color from our global mapper instead of the default color
       itemStyle: {
         color: (i <= cgroupColors.length) ? cgroupColors[i-1] : undefined
@@ -252,16 +230,10 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
         width: 2
       },
       showSymbol: false,
-      // Enable connectNulls to properly handle sparse data
-      connectNulls: true,
       emphasis: {
         focus: 'series'
       },
-      // Turn off animation for performance with sparse data
-      animation: false,
-      // Large dataset optimization
-      large: true,
-      largeThreshold: 1000
+      animationDuration: 0
     });
   }
 
