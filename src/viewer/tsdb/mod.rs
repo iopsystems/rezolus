@@ -20,16 +20,16 @@ mod heatmap;
 mod labels;
 mod series;
 
-pub use collection::{Counters, Gauges, Histograms};
+pub use collection::*;
 pub use heatmap::Heatmap;
 pub use labels::Labels;
-pub use series::UntypedSeries;
+pub use series::*;
 
 #[derive(Default)]
 pub struct Tsdb {
-    counters: HashMap<String, Counters>,
-    gauges: HashMap<String, Gauges>,
-    histograms: HashMap<String, Histograms>,
+    counters: HashMap<String, CounterCollection>,
+    gauges: HashMap<String, GaugeCollection>,
+    histograms: HashMap<String, HistogramCollection>,
 }
 
 impl Tsdb {
@@ -187,7 +187,7 @@ impl Tsdb {
         Ok(data)
     }
 
-    pub fn counters(&self, name: &str, labels: impl Into<Labels>) -> Option<Counters> {
+    pub fn counters(&self, name: &str, labels: impl Into<Labels>) -> Option<CounterCollection> {
         if let Some(counters) = self.counters.get(name) {
             let counters = counters.filter(&labels.into());
 
@@ -201,7 +201,7 @@ impl Tsdb {
         }
     }
 
-    pub fn gauges(&self, name: &str, labels: impl Into<Labels>) -> Option<Gauges> {
+    pub fn gauges(&self, name: &str, labels: impl Into<Labels>) -> Option<GaugeCollection> {
         if let Some(gauges) = self.gauges.get(name) {
             let gauges = gauges.filter(&labels.into());
 
@@ -215,7 +215,7 @@ impl Tsdb {
         }
     }
 
-    pub fn histograms(&self, name: &str, labels: impl Into<Labels>) -> Option<Histograms> {
+    pub fn histograms(&self, name: &str, labels: impl Into<Labels>) -> Option<HistogramCollection> {
         if let Some(histograms) = self.histograms.get(name) {
             let histograms = histograms.filter(&labels.into());
 
