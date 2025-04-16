@@ -20,7 +20,7 @@ mod heatmap;
 mod labels;
 mod timeseries;
 
-pub use collection::Collection;
+pub use collection::{Collection, Counters, Gauges};
 pub use heatmap::Heatmap;
 pub use labels::Labels;
 pub use timeseries::Timeseries;
@@ -32,13 +32,13 @@ pub struct RawTimeseries {
 
 #[derive(Clone)]
 pub enum Value {
-    Counter(u64),
-    Gauge(i64),
     Histogram(Histogram),
 }
 
 #[derive(Default)]
 pub struct Tsdb {
+    counters: HashMap<String, Counters>,
+    gauges: HashMap<String, Gauges>,
     inner: HashMap<String, Collection>,
 }
 
@@ -108,13 +108,13 @@ impl Tsdb {
                     labels.inner.insert(k.to_string(), v.to_string());
                 }
 
-                let collection = data.inner.entry(name.to_string()).or_default();
-                let series = collection.entry(labels).or_default();
-
                 let column = batch.column(id);
 
                 match column.data_type() {
                     DataType::UInt64 => {
+                        let counters = data.counters.entry(name.to_string()).or_default();
+                        let series = counters.entry(labels).or_default();
+
                         let values = column
                             .as_any()
                             .downcast_ref::<UInt64Array>()
@@ -123,12 +123,15 @@ impl Tsdb {
                         for (id, value) in values.iter().enumerate() {
                             if let Some(v) = value {
                                 if let Some(ts) = timestamps.get(&id) {
-                                    series.inner.insert(*ts, Value::Counter(v));
+                                    series.insert(*ts, v);
                                 }
                             }
                         }
                     }
                     DataType::Int64 => {
+                        let collection = data.gauges.entry(name.to_string()).or_default();
+                        let series = collection.entry(labels).or_default();
+
                         let values = column
                             .as_any()
                             .downcast_ref::<Int64Array>()
@@ -137,13 +140,16 @@ impl Tsdb {
                         for (id, value) in values.iter().enumerate() {
                             if let Some(v) = value {
                                 if let Some(ts) = timestamps.get(&id) {
-                                    series.inner.insert(*ts, Value::Gauge(v));
+                                    series.insert(*ts, v);
                                 }
                             }
                         }
                     }
                     DataType::List(field_type) => {
                         if field_type.data_type() == &DataType::UInt64 {
+                            let collection = data.inner.entry(name.to_string()).or_default();
+                            let series = collection.entry(labels).or_default();
+
                             let list_array = column
                                 .as_any()
                                 .downcast_ref::<ListArray>()
@@ -205,10 +211,38 @@ impl Tsdb {
         }
     }
 
-    pub fn sum(&self, metric: &str, labels: impl Into<Labels>) -> Option<Timeseries> {
-        self.get(metric, &labels.into())
-            .map(|collection| collection.sum())
+    pub fn counters(&self, name: &str, labels: impl Into<Labels>) -> Option<Counters> {
+        if let Some(counters) = self.counters.get(name) {
+            let counters = counters.filter(&labels.into());
+
+            if counters.is_empty() {
+                None
+            } else {
+                Some(counters)
+            }
+        } else {
+            None
+        }
     }
+
+    pub fn gauges(&self, name: &str, labels: impl Into<Labels>) -> Option<Gauges> {
+        if let Some(gauges) = self.gauges.get(name) {
+            let gauges = gauges.filter(&labels.into());
+
+            if gauges.is_empty() {
+                None
+            } else {
+                Some(gauges)
+            }
+        } else {
+            None
+        }
+    }
+
+    // pub fn sum(&self, metric: &str, labels: impl Into<Labels>) -> Option<Timeseries> {
+    //     self.get(metric, &labels.into())
+    //         .map(|collection| collection.sum())
+    // }
 
     pub fn percentiles(&self, metric: &str, labels: impl Into<Labels>) -> Option<Vec<Vec<f64>>> {
         self.get(metric, &labels.into())
@@ -216,8 +250,8 @@ impl Tsdb {
     }
 
     pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<Timeseries> {
-        if let Some(cores) = self.sum("cpu_cores", Labels::default()) {
-            if let Some(collection) = self.get(metric, &labels.into()) {
+        if let Some(cores) = self.gauges("cpu_cores", ()).map(|v| v.sum()) {
+            if let Some(collection) = self.counters(metric, labels) {
                 return Some(collection.sum() / cores);
             }
         }
@@ -228,8 +262,8 @@ impl Tsdb {
     pub fn cpu_heatmap(&self, metric: &str, labels: impl Into<Labels>) -> Option<Heatmap> {
         let mut heatmap = Heatmap::default();
 
-        if let Some(collection) = self.get(metric, &labels.into()) {
-            for (id, series) in collection.sum_by_cpu().drain(..).enumerate() {
+        if let Some(collection) = self.counters(metric, labels) {
+            for (id, series) in collection.by_cpu().drain(..).enumerate() {
                 heatmap.insert(id, series);
             }
         }
@@ -240,27 +274,44 @@ impl Tsdb {
             Some(heatmap)
         }
     }
-
-    pub fn cgroup(&self, metric: &str, labels: impl Into<Labels>) -> Option<CgroupCollection> {
-        self.get(metric, &labels.into()).map(|v| v.by_group())
-    }
 }
 
 #[derive(Default)]
-pub struct CgroupCollection {
-    inner: HashMap<String, Collection>,
+pub struct CgroupCounters {
+    inner: HashMap<String, Counters>,
 }
 
-impl CgroupCollection {
-    pub fn insert(&mut self, name: String, collection: Collection) {
-        self.inner.insert(name, collection);
+impl CgroupCounters {
+    pub fn insert(&mut self, name: String, counters: Counters) {
+        self.inner.insert(name, counters);
     }
 
     pub fn sum(&self) -> CgroupTimeseries {
         let mut result = CgroupTimeseries::default();
 
-        for (name, collection) in self.inner.iter() {
-            result.inner.insert(name.to_string(), collection.sum());
+        for (name, counters) in self.inner.iter() {
+            result.inner.insert(name.to_string(), counters.sum());
+        }
+
+        result
+    }
+}
+
+#[derive(Default)]
+pub struct CgroupGauges {
+    inner: HashMap<String, Gauges>,
+}
+
+impl CgroupGauges {
+    pub fn insert(&mut self, name: String, gauges: Gauges) {
+        self.inner.insert(name, gauges);
+    }
+
+    pub fn sum(&self) -> CgroupTimeseries {
+        let mut result = CgroupTimeseries::default();
+
+        for (name, gauges) in self.inner.iter() {
+            result.inner.insert(name.to_string(), gauges.sum());
         }
 
         result

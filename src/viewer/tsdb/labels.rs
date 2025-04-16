@@ -32,6 +32,12 @@ impl From<&[(&str, &str)]> for Labels {
     }
 }
 
+impl From<()> for Labels {
+    fn from(_other: ()) -> Self {
+        Labels::default()
+    }
+}
+
 impl<const N: usize> From<[(&str, &str); N]> for Labels {
     fn from(other: [(&str, &str); N]) -> Self {
         Labels {
