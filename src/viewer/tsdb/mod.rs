@@ -229,9 +229,12 @@ impl Tsdb {
         }
     }
 
-    pub fn percentiles(&self, metric: &str, labels: impl Into<Labels>) -> Option<Vec<Vec<f64>>> {
-        self.histograms(metric, labels)
-            .map(|collection| collection.percentiles())
+    pub fn percentiles(&self, metric: &str, labels: impl Into<Labels>) -> Option<Vec<UntypedSeries>> {
+        if let Some(collection) = self.histograms(metric, labels) {
+            collection.sum().percentiles()
+        } else {
+            None
+        }
     }
 
     pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<UntypedSeries> {

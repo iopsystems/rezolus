@@ -820,21 +820,6 @@ impl Group {
         }
     }
 
-    pub fn heatmap(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
-        if let Some(data) = series.map(|v| v.as_data()) {
-            if data.len() > 1 {
-                self.plots.push(Plot {
-                    opts,
-                    data,
-                    min_value: None,
-                    max_value: None,
-                    time_data: None,
-                    series_names: None,
-                })
-            }
-        }
-    }
-
     // New method to use the ECharts optimized heatmap data format
     pub fn heatmap_echarts(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
         if let Some(heatmap) = series {
@@ -853,32 +838,23 @@ impl Group {
         }
     }
 
-    pub fn scatter(&mut self, opts: PlotOpts, data: Option<Vec<Vec<f64>>>) {
+    pub fn scatter(&mut self, opts: PlotOpts, data: Option<Vec<UntypedSeries>>) {
         if data.is_none() {
             return;
         }
 
-        let data = data.unwrap();
+        let d = data.unwrap();
 
-        if data.len() < 2 {
-            return;
-        }
+        let mut data = Vec::new();
 
-        for series in &data {
-            if series.is_empty() {
-                return;
+        for series in &d {
+            let d = series.as_data();
+
+            if data.is_empty() {
+                data.push(d[0].clone());
             }
-        }
 
-        // Check if ANY data series has valid non-zero values
-        let has_meaningful_data = data.iter().skip(1).any(|series| {
-            series
-                .iter()
-                .any(|&value| value.is_finite() && !value.is_nan() && value > 0.0001)
-        });
-
-        if !has_meaningful_data {
-            return;
+            data.push(d[1].clone());
         }
 
         self.plots.push(Plot {
