@@ -27,37 +27,34 @@ impl Counters {
         result
     }
 
-    pub fn sum(&self) -> Timeseries {
-        let mut result = Timeseries::default();
+    pub fn rate(&self) -> Untyped {
+        let mut result = Untyped::default();
 
-        for series in self.inner.values() {
-            let mut prev_v = 0;
-            let mut prev_ts = 0;
+        for (labels, series) in self.inner.iter() {
+            let mut rates = Timeseries::default();
 
-            for (time, value) in series.iter() {
-                if prev_ts != 0 {
-                    let t_delta = (time - prev_ts) as f64 / 1000000000.0;
-                    let v_delta = value.wrapping_sub(prev_v);
+            let mut prev: Option<(u64, u64)> = None;
 
-                    let rate = if v_delta < 1 << 63 {
-                        v_delta as f64 / t_delta
-                    } else {
-                        0.0
-                    };
+            for (ts, value) in series.iter() {
+                if let Some((prev_ts, prev_v)) = prev {
+                    let delta = value.wrapping_sub(prev_v);
 
-                    if !result.inner.contains_key(time) {
-                        result.inner.insert(*time, rate);
-                    } else {
-                        *result.inner.get_mut(time).unwrap() += rate;
-                    }
-                }
+                    if delta < 1<<63 {
+                        let duration = ts.wrapping_sub(prev_ts);
 
-                prev_ts = *time;
-                prev_v = *value;
-            }
-        }
+                        let rate = delta as f64 / (duration as f64 / 1000000000.0);
 
-        result
+                        rates.inner.insert(*ts, rate);
+                     }
+                 }
+
+                prev = Some((*ts, *value));
+             }
+
+            result.inner.insert(labels.clone(), rates);
+         }
+
+         result
     }
 
     pub fn by_cpu(&self) -> Vec<Timeseries> {
@@ -70,7 +67,7 @@ impl Counters {
                 .filter(&Labels {
                     inner: [("id".to_string(), format!("{id}"))].into(),
                 })
-                .sum();
+                .rate().sum();
 
             if !series.inner.is_empty() {
                 max_cpu = id;
@@ -268,6 +265,41 @@ impl Histograms {
             }
 
             prev = curr.clone();
+        }
+
+        result
+    }
+}
+
+#[derive(Default)]
+pub struct Untyped {
+    inner: HashMap<Labels, Timeseries>,
+}
+
+impl Untyped {
+    pub fn filter(&self, labels: &Labels) -> Self {
+        let mut result = Self::default();
+
+        for (k, v) in self.inner.iter() {
+            if k.matches(labels) {
+                result.inner.insert(k.clone(), v.clone());
+            }
+        }
+
+        result
+    }
+
+    pub fn sum(&self) -> Timeseries {
+        let mut result = Timeseries::default();
+
+        for series in self.inner.values() {
+            for (time, value) in series.inner.iter() {
+                if !result.inner.contains_key(time) {
+                    result.inner.insert(*time, *value);
+                } else {
+                    *result.inner.get_mut(time).unwrap() += value;
+                }
+            }
         }
 
         result

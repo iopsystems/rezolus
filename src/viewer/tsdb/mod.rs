@@ -247,7 +247,7 @@ impl Tsdb {
     pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<Timeseries> {
         if let Some(cores) = self.gauges("cpu_cores", ()).map(|v| v.sum()) {
             if let Some(collection) = self.counters(metric, labels) {
-                return Some(collection.sum() / cores);
+                return Some(collection.rate().sum() / cores);
             }
         }
 
@@ -285,7 +285,7 @@ impl CgroupCounters {
         let mut result = CgroupTimeseries::default();
 
         for (name, counters) in self.inner.iter() {
-            result.inner.insert(name.to_string(), counters.sum());
+            result.inner.insert(name.to_string(), counters.rate().sum());
         }
 
         result

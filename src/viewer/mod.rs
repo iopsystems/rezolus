@@ -252,8 +252,8 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count);
     if let (Some(cycles), Some(instructions)) = (
-        data.counters("cpu_cycles", Labels::default()).map(|v| v.sum()),
-        data.counters("cpu_instructions", ()).map(|v| v.sum()),
+        data.counters("cpu_cycles", Labels::default()).map(|v| v.rate().sum()),
+        data.counters("cpu_instructions", ()).map(|v| v.rate().sum()),
     ) {
         let ipc = instructions / cycles;
         performance.plot(opts, Some(ipc));
@@ -270,11 +270,11 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count);
     if let (Some(cycles), Some(instructions), Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
-        data.counters("cpu_cycles", ()).map(|v| v.sum()),
-        data.counters("cpu_instructions", ()).map(|v| v.sum()),
-        data.counters("cpu_aperf", ()).map(|v| v.sum()),
-        data.counters("cpu_mperf", ()).map(|v| v.sum()),
-        data.counters("cpu_tsc", ()).map(|v| v.sum()),
+        data.counters("cpu_cycles", ()).map(|v| v.rate().sum()),
+        data.counters("cpu_instructions", ()).map(|v| v.rate().sum()),
+        data.counters("cpu_aperf", ()).map(|v| v.rate().sum()),
+        data.counters("cpu_mperf", ()).map(|v| v.rate().sum()),
+        data.counters("cpu_tsc", ()).map(|v| v.rate().sum()),
         data.gauges("cpu_cores", ()).map(|v| v.sum()),
     ) {
         let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
@@ -299,9 +299,9 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::line("Frequency", "frequency", Unit::Frequency);
     if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
-        data.counters("cpu_aperf", ()).map(|v| v.sum()),
-        data.counters("cpu_mperf", ()).map(|v| v.sum()),
-        data.counters("cpu_tsc", ()).map(|v| v.sum()),
+        data.counters("cpu_aperf", ()).map(|v| v.rate().sum()),
+        data.counters("cpu_mperf", ()).map(|v| v.rate().sum()),
+        data.counters("cpu_tsc", ()).map(|v| v.rate().sum()),
         data.gauges("cpu_cores", ()).map(|v| v.sum()),
     ) {
         let frequency = tsc * aperf / mperf / cores;
@@ -326,7 +326,7 @@ pub fn run(config: Config) {
     let mut tlb = Group::new("TLB", "tlb");
 
     let opts = PlotOpts::line("Total", "tlb-total", Unit::Rate);
-    tlb.plot(opts, data.counters("cpu_tlb_flush", ()).map(|v| v.sum()));
+    tlb.plot(opts, data.counters("cpu_tlb_flush", ()).map(|v| v.rate().sum()));
 
     let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap", Unit::Rate);
     tlb.heatmap_echarts(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
@@ -355,7 +355,7 @@ pub fn run(config: Config) {
         let opts = PlotOpts::line(*label, &id, Unit::Rate);
         tlb.plot(
             opts,
-            data.counters("cpu_tlb_flush", [("reason", reason.clone())]).map(|v| v.sum()),
+            data.counters("cpu_tlb_flush", [("reason", reason.clone())]).map(|v| v.rate().sum()),
         );
 
         let opts = PlotOpts::heatmap(*label, format!("{id}-heatmap"), Unit::Rate);
@@ -376,7 +376,7 @@ pub fn run(config: Config) {
         .with_unit_system("bitrate");
     let series = data
         .counters("network_bytes", [("direction", "transmit")])
-        .map(|v| v.sum())
+        .map(|v| v.rate().sum())
         .map(|v| v * 8.0);
 
     network_overview.plot(opts.clone(), series.clone());
@@ -386,20 +386,20 @@ pub fn run(config: Config) {
         .with_unit_system("bitrate");
     let series = data
         .counters("network_bytes", [("direction", "receive")])
-        .map(|v| v.sum())
+        .map(|v| v.rate().sum())
         .map(|v| v * 8.0);
 
     network_overview.plot(opts.clone(), series.clone());
     traffic.plot(opts, series);
 
     let opts = PlotOpts::line("Packets Transmit", "packets-tx", Unit::Rate);
-    let series = data.counters("network_packets", [("direction", "transmit")]).map(|v| v.sum());
+    let series = data.counters("network_packets", [("direction", "transmit")]).map(|v| v.rate().sum());
 
     network_overview.plot(opts.clone(), series.clone());
     traffic.plot(opts, series);
 
     let opts = PlotOpts::line("Packets Receive", "packets-rx", Unit::Rate);
-    let series = data.counters("network_packets", [("direction", "receive")]).map(|v| v.sum());
+    let series = data.counters("network_packets", [("direction", "receive")]).map(|v| v.rate().sum());
 
     network_overview.plot(opts.clone(), series.clone());
     traffic.plot(opts, series);
@@ -445,7 +445,7 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::line("Total", "syscall-total", Unit::Rate);
 
-    let series = data.counters("syscall", Labels::default()).map(|v| v.sum());
+    let series = data.counters("syscall", Labels::default()).map(|v| v.rate().sum());
     syscall_overview.plot(opts.clone(), series.clone());
     syscall_group.plot(opts, series);
 
@@ -458,7 +458,7 @@ pub fn run(config: Config) {
     for op in &[
         "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
     ] {
-        let series = data.counters("syscall", [("op", op.to_lowercase())]).map(|v| v.sum());
+        let series = data.counters("syscall", [("op", op.to_lowercase())]).map(|v| v.rate().sum());
         syscall_group.plot(
             PlotOpts::line(*op, format!("syscall-{op}"), Unit::Rate),
             series,
@@ -480,7 +480,7 @@ pub fn run(config: Config) {
     let mut softirq_total = Group::new("Total", "total");
 
     let opts = PlotOpts::line("Rate", "softirq-total-rate", Unit::Rate);
-    let series = data.counters("softirq", ()).map(|v| v.sum());
+    let series = data.counters("softirq", ()).map(|v| v.rate().sum());
     softirq_overview.plot(opts.clone(), series.clone());
     softirq_total.plot(opts.clone(), series.clone());
 
@@ -519,7 +519,7 @@ pub fn run(config: Config) {
         let mut group = Group::new(label, format!("softirq-{kind}"));
 
         let opts = PlotOpts::line("Rate", format!("softirq-{kind}-rate"), Unit::Rate);
-        let series = data.counters("softirq", [("kind", kind)]).map(|v| v.sum());
+        let series = data.counters("softirq", [("kind", kind)]).map(|v| v.rate().sum());
         group.plot(opts, series);
 
         let opts = PlotOpts::heatmap("Rate", format!("softirq-{kind}-rate-heatmap"), Unit::Rate);
@@ -554,20 +554,20 @@ pub fn run(config: Config) {
     let mut blockio_size = Group::new("Size", "size");
 
     let opts = PlotOpts::line("Read Throughput", "blockio-throughput-read", Unit::Datarate);
-    blockio_overview.plot(opts, data.counters("blockio_bytes", [("op", "read")]).map(|v| v.sum()));
+    blockio_overview.plot(opts, data.counters("blockio_bytes", [("op", "read")]).map(|v| v.rate().sum()));
 
     let opts = PlotOpts::line(
         "Write Throughput",
         "blockio-throughput-write",
         Unit::Datarate,
     );
-    blockio_overview.plot(opts, data.counters("blockio_bytes", [("op", "write")]).map(|v| v.sum()));
+    blockio_overview.plot(opts, data.counters("blockio_bytes", [("op", "write")]).map(|v| v.rate().sum()));
 
     let opts = PlotOpts::line("Read IOPS", "blockio-iops-read", Unit::Count);
-    blockio_overview.plot(opts, data.counters("blockio_operations", [("op", "read")]).map(|v| v.sum()));
+    blockio_overview.plot(opts, data.counters("blockio_operations", [("op", "read")]).map(|v| v.rate().sum()));
 
     let opts = PlotOpts::line("Write IOPS", "blockio-iops-write", Unit::Count);
-    blockio_overview.plot(opts, data.counters("blockio_operations", [("op", "write")]).map(|v| v.sum()));
+    blockio_overview.plot(opts, data.counters("blockio_operations", [("op", "write")]).map(|v| v.rate().sum()));
 
     overview.groups.push(blockio_overview);
 
@@ -577,12 +577,12 @@ pub fn run(config: Config) {
             format!("throughput-{}", op.to_lowercase()),
             Unit::Datarate,
         );
-        blockio_throughput.plot(opts, data.counters("blockio_bytes", [("op", op.to_lowercase())]).map(|v| v.sum()));
+        blockio_throughput.plot(opts, data.counters("blockio_bytes", [("op", op.to_lowercase())]).map(|v| v.rate().sum()));
 
         let opts = PlotOpts::line(*op, format!("iops-{}", op.to_lowercase()), Unit::Count);
         blockio_iops.plot(
             opts,
-            data.counters("blockio_operations", [("op", op.to_lowercase())]).map(|v| v.sum()),
+            data.counters("blockio_operations", [("op", op.to_lowercase())]).map(|v| v.rate().sum()),
         );
 
         let opts = PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time);
