@@ -95,6 +95,13 @@ export function setupChartSync(charts, state) {
             state.globalZoom.start = startPercent;
             state.globalZoom.end = endPercent;
             state.globalZoom.isZoomed = true;
+            
+            // NEW: Update the tracked zoom state
+            state.sharedAxisConfig.lastZoomState = `${startPercent}-${endPercent}`;
+
+            // Force recalculation of ticks with new zoom level
+            state.sharedAxisConfig.visibleTicks = [];
+            state.sharedAxisConfig.lastUpdate = 0;
 
             // Apply zoom only to visible charts, mark others for lazy update
             state.initializedCharts.forEach((chart, chartId) => {
@@ -145,6 +152,9 @@ export function setupChartSync(charts, state) {
         state.globalZoom.start = 0;
         state.globalZoom.end = 100;
         state.globalZoom.isZoomed = false;
+        
+        // NEW: Update the tracked zoom state
+        state.sharedAxisConfig.lastZoomState = "0-100";
 
         // Clear the charts needing update set
         state.chartsNeedingZoomUpdate.clear();
@@ -212,6 +222,9 @@ export function setupChartSync(charts, state) {
           state.globalZoom.start = start;
           state.globalZoom.end = end;
           state.globalZoom.isZoomed = start !== 0 || end !== 100;
+          
+          // NEW: Update the tracked zoom state
+          state.sharedAxisConfig.lastZoomState = `${start}-${end}`;
 
           // Update all charts with new zoom level and tick settings
           updateChartsAfterZoom(start, end, state);
@@ -323,7 +336,7 @@ function isTimeAligned(date, intervalSeconds) {
 
 /**
  * Calculate tick positions at human-friendly time intervals
- * IMPROVED: Ensures ticks during extreme zoom & only shows aligned ticks
+ * IMPROVED: Ensures better distribution of ticks after zooming in and out
  * @param {Array} timeData - Array of timestamps
  * @param {number} startPercent - Start of zoom range (percentage)
  * @param {number} endPercent - End of zoom range (percentage)
@@ -341,8 +354,12 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
   const endTime = timeData[endIdx];
   const timeSpanSeconds = endTime - startTime;
 
-  // IMPROVEMENT: Ensure we show at least 2 ticks even during extreme zoom
-  // If the zoom range is very small, use a smaller interval
+  // IMPROVEMENT: Calculate maximum number of ticks based on visible range
+  // The wider the range, the fewer ticks we want to show
+  const visibleRange = endIdx - startIdx + 1;
+  const maxTicks = Math.min(12, Math.max(4, Math.ceil(visibleRange / 20)));
+
+  // ADAPTIVE INTERVAL: Choose appropriate interval based on timespan
   let intervalSeconds;
 
   if (timeSpanSeconds <= 1) {
@@ -353,24 +370,35 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
   } else if (timeSpanSeconds <= 5) {
     intervalSeconds = 1; // 1 second intervals
   } else if (timeSpanSeconds <= 10) {
-    intervalSeconds = 2; // 2 second intervals for spans up to 10 seconds
+    intervalSeconds = 2; // 2 second intervals
   } else if (timeSpanSeconds <= 30) {
-    intervalSeconds = 5; // 5 second intervals for spans up to 30 seconds
+    intervalSeconds = 5; // 5 second intervals
   } else if (timeSpanSeconds <= 60) {
-    intervalSeconds = 10; // 10 second intervals for spans up to 1 minute
+    intervalSeconds = 10; // 10 second intervals
   } else if (timeSpanSeconds <= 300) {
-    intervalSeconds = 30; // 30 second intervals for spans up to 5 minutes
+    intervalSeconds = 30; // 30 second intervals
   } else if (timeSpanSeconds <= 900) {
-    intervalSeconds = 60; // 1 minute intervals for spans up to 15 minutes
+    intervalSeconds = 60; // 1 minute intervals
   } else if (timeSpanSeconds <= 3600) {
-    intervalSeconds = 300; // 5 minute intervals for spans up to 1 hour
+    intervalSeconds = 300; // 5 minute intervals
   } else if (timeSpanSeconds <= 14400) {
-    intervalSeconds = 900; // 15 minute intervals for spans up to 4 hours
+    intervalSeconds = 900; // 15 minute intervals
   } else if (timeSpanSeconds <= 86400) {
-    intervalSeconds = 3600; // 1 hour intervals for spans up to 1 day
+    intervalSeconds = 3600; // 1 hour intervals
   } else {
-    intervalSeconds = 21600; // 6 hour intervals for spans > 1 day
+    intervalSeconds = 21600; // 6 hour intervals
   }
+
+  // ADAPTIVE ADJUSTMENT: If we still have too many ticks, increase the interval
+  let adjustedInterval = intervalSeconds;
+  let estimatedTicks = Math.ceil(timeSpanSeconds / intervalSeconds);
+  
+  while (estimatedTicks > maxTicks) {
+    adjustedInterval *= 2;
+    estimatedTicks = Math.ceil(timeSpanSeconds / adjustedInterval);
+  }
+  
+  intervalSeconds = adjustedInterval;
 
   // Find aligned time boundaries
   const startDate = new Date(startTime * 1000);
@@ -422,79 +450,30 @@ export function calculateHumanFriendlyTicks(timeData, startPercent, endPercent) 
 
   // Generate ticks from the first aligned time boundary
   const ticks = [];
+  const ticksMap = new Set(); // Use Set to avoid duplicate indices
 
-  // FIX: Check if the first data point is time-aligned instead of always including it
-  // Only add the first data point if it aligns with the time boundaries
-  const firstPointDate = new Date(startTime * 1000);
-  if (isTimeAligned(firstPointDate, intervalSeconds)) {
-    ticks.push(startIdx);
-  } else {
-    // Add the first data point only if it's substantially different from our first aligned tick
-    // and we don't have a better aligned alternative
-    const firstTickTime = firstTickDate.getTime() / 1000;
-    if (Math.abs(firstTickTime - startTime) > intervalSeconds * 0.5) {
-      // Find the closest data point to this boundary time
-      const closestIdx = findClosestTimeIndex(timeData, firstTickTime, startIdx, endIdx);
-      if (closestIdx !== startIdx) {
-        // Only add if we found a better aligned point
-        ticks.push(closestIdx);
-      }
-    }
-  }
+  // Always include the first and last data points
+  ticksMap.add(startIdx);
+  ticksMap.add(endIdx);
 
   // Generate aligned time ticks
   let currentTickTime = firstTickDate.getTime() / 1000;
-  let tickCount = 0;
-  const MAX_TICKS = 20; // Safety limit
-
-  while (currentTickTime <= endTime && tickCount < MAX_TICKS) {
+  
+  // IMPROVED: Limit the number of ticks we'll generate to prevent bunching
+  while (currentTickTime <= endTime && ticksMap.size < maxTicks) {
     // Find the closest data point to this time
     const closestIdx = findClosestTimeIndex(timeData, currentTickTime, startIdx, endIdx);
 
-    if (closestIdx >= startIdx && closestIdx <= endIdx && !ticks.includes(closestIdx)) {
-      ticks.push(closestIdx);
-      tickCount++;
+    if (closestIdx >= startIdx && closestIdx <= endIdx && !ticksMap.has(closestIdx)) {
+      ticksMap.add(closestIdx);
     }
 
     // Move to next interval
     currentTickTime += intervalSeconds;
   }
 
-  // Always include the last data point if not already in the ticks
-  // But only if we have room for it
-  if ((ticks.length === 0 || ticks[ticks.length - 1] !== endIdx) && ticks.length < MAX_TICKS) {
-    // Check if the end point is time-aligned before adding
-    const endPointDate = new Date(endTime * 1000);
-    if (isTimeAligned(endPointDate, intervalSeconds) || ticks.length === 0) {
-      ticks.push(endIdx);
-    }
-  }
-
-  // IMPROVEMENT: Ensure we always have at least 2 ticks if possible
-  if (ticks.length === 0) {
-    // Emergency fallback - show start and end
-    ticks.push(startIdx);
-    if (startIdx !== endIdx) ticks.push(endIdx);
-  } else if (ticks.length === 1 && startIdx !== endIdx) {
-    // If we only have one tick but there are multiple data points,
-    // ensure we show both ends of the range
-    if (ticks[0] === startIdx) {
-      ticks.push(endIdx);
-    } else if (ticks[0] === endIdx) {
-      ticks.unshift(startIdx);
-    } else {
-      // We have a middle tick, add the end points
-      if (ticks[0] - startIdx > endIdx - ticks[0]) {
-        // Closer to end, so add start
-        ticks.unshift(startIdx);
-      } else {
-        // Closer to start, so add end
-        ticks.push(endIdx);
-      }
-    }
-  }
-
-  return ticks;
+  // Convert the Set back to a sorted array
+  return Array.from(ticksMap).sort((a, b) => a - b);
 }
 
 /**
@@ -559,6 +538,9 @@ export function updateChartsAfterZoom(start, end, state) {
   // Clear existing tick configuration to force recalculation
   state.sharedAxisConfig.visibleTicks = [];
   state.sharedAxisConfig.lastUpdate = 0;
+  
+  // Update the tracked zoom state
+  state.sharedAxisConfig.lastZoomState = `${start}-${end}`;
 
   // Find the first chart with original time data
   let referenceTimeData = null;

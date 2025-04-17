@@ -20,7 +20,8 @@ import {
   formatDateTime,
   isChartVisible,
   updateChartsAfterZoom,
-  setupChartSync
+  setupChartSync,
+  calculateHumanFriendlyTicks
 } from './utils.js';
 // Import the global color mapper for consistent cgroup colors
 import globalColorMapper from './colormap.js';
@@ -322,7 +323,9 @@ const state = {
     // Track visible tick indices for consistent tick spacing
     visibleTicks: [],
     // Store last update timestamp to avoid too frequent recalculations
-    lastUpdate: 0
+    lastUpdate: 0,
+    // NEW: Track the last zoom state to detect changes and force recalculation
+    lastZoomState: "0-100"
   },
   // Make the color mapper available in the state for potential future use
   colorMapper: globalColorMapper
@@ -348,6 +351,13 @@ m.route(document.body, "/overview", {
           end: 100,
           isZoomed: false
         };
+
+        // Reset zoom state tracking
+        state.sharedAxisConfig.lastZoomState = "0-100";
+        
+        // Clear tick configuration to force recalculation
+        state.sharedAxisConfig.visibleTicks = [];
+        state.sharedAxisConfig.lastUpdate = 0;
 
         // Clear the charts needing update set
         state.chartsNeedingZoomUpdate.clear();
