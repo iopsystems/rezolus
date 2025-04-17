@@ -4,7 +4,7 @@
 //!
 //! And produces these stats:
 //! * `cgroup_cpu_throttled_time`
-//! * `cgroup_cpu_throttled_count`
+//! * `cgroup_cpu_throttled`
 //!
 //! These stats can be used to understand when and for how long cgroups are being
 //! throttled by the CPU controller.
@@ -71,7 +71,7 @@ fn handle_event(data: &[u8]) -> i32 {
 fn set_name(id: usize, name: String) {
     if !name.is_empty() {
         CGROUP_CPU_THROTTLED_TIME.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_THROTTLED_COUNT.insert_metadata(id, "name".to_string(), name);
+        CGROUP_CPU_THROTTLED.insert_metadata(id, "name".to_string(), name);
     }
 }
 
@@ -85,7 +85,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .packed_counters("throttled_time", &CGROUP_CPU_THROTTLED_TIME)
-        .packed_counters("throttled_count", &CGROUP_CPU_THROTTLED_COUNT)
+        .packed_counters("throttled_count", &CGROUP_CPU_THROTTLED)
         .ringbuf_handler("cgroup_info", handle_event)
         .build()?;
 

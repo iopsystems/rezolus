@@ -10,8 +10,8 @@ use crate::agent::*;
 pub static CGROUP_CPU_THROTTLED_TIME: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
-    name = "cgroup_cpu_throttled_count",
+    name = "cgroup_cpu_throttled",
     description = "The number of times a cgroup has been throttled by the CPU controller",
     metadata = { unit = "events" }
 )]
-pub static CGROUP_CPU_THROTTLED_COUNT: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+pub static CGROUP_CPU_THROTTLED: CounterGroup = CounterGroup::new(MAX_CGROUPS);
