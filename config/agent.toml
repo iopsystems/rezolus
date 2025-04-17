@@ -29,6 +29,10 @@ enabled = true
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 [samplers.cpu_perf]
 
+# BPF sampler that instruments cgroup CPU throttling to measure throttled time
+# and throttling events
+[samplers.cpu_throttled]
+
 # Instruments CPU usage by state with BPF on linux. On macos
 # host_processor_info() is used
 [samplers.cpu_usage]
