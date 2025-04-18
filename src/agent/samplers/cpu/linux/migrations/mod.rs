@@ -6,7 +6,7 @@
 //! * `cpu_migrations_per_cpu`
 //! * `cgroup_cpu_migrations`
 //!
-//! These stats can be used to understand process scheduling behavior and 
+//! These stats can be used to understand process scheduling behavior and
 //! identify potential performance issues due to excessive CPU migrations.
 
 const NAME: &str = "cpu_migrations";
