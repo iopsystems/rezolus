@@ -14,6 +14,7 @@ This guide walks you through all the available metrics, organized by category.
   - [cpu_cores](#cpu_cores)
   - [cpu_frequency](#cpu_frequency)
   - [cpu_l3](#cpu_l3)
+  - [cpu_migrations](#cpu_migrations)
   - [cpu_perf](#cpu_perf)
   - [cpu_throttled](#cpu_throttled)
   - [cpu_tlb_flush](#cpu_tlb_flush)
@@ -107,6 +108,17 @@ memory access patterns or programs competing for cache space.
 |--------|-------------|----------|
 | `cpu_l3_access` | The number of L3 cache access | |
 | `cpu_l3_miss` | The number of L3 cache miss | |
+
+### cpu_migrations
+
+Tracks when tasks move from one CPU to another. This is measured per-CPU with
+conditionality to track system dynamics and per-cgroup to understand which
+containers might be experiencing high rates of CPU migration.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `cpu_migration` | The number of CPU migrations | `direction={from,to}` |
+| `cgroup_cpu_migration` | The number of CPU migrations on a per-cgroup basis | `name`: the name of the cgroup |
 
 ### cpu_perf
 
