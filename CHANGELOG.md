@@ -23,6 +23,8 @@
 - Softnet sampler for understanding kernel packet processing. (#480)
 - Additional syscall groups. (#482)
 - CPU CFS throttling metrics for cgroups. (#488)
+- CPU L3 Cache Hit/Access (AMD Zen only). (#487)
+- CPU Migrations. (#491)
 
 ## [4.1.2] - 2024-11-25
 
