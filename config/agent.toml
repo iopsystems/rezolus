@@ -26,6 +26,9 @@ enabled = true
 # the number of bytes by request type, and the size distribution.
 [samplers.block_io_requests]
 
+# Instruments CPU migrations.
+[samplers.cpu_migrations]
+
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 [samplers.cpu_perf]
 
