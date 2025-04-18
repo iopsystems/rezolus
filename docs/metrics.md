@@ -123,8 +123,8 @@ IPC = Instructions / Cycles
 |--------|-------------|----------|
 | `cpu_cycles` | The number of elapsed CPU cycles | |
 | `cpu_instructions` | The number of instructions retired | |
-| `cgroup_cpu_cycles` | The number of elapsed CPU cycles on a per-cgroup basis | |
-| `cgroup_cpu_instructions` | The number of elapsed CPU cycles on a per-cgroup basis | |
+| `cgroup_cpu_cycles` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
+| `cgroup_cpu_instructions` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
 
 ### cpu_throttled
 
@@ -132,8 +132,8 @@ Instruments CPU throttling in container environments (cgroups).
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `cgroup_cpu_throttled_time` | The total time a cgroup has been throttled by the CPU controller | |
-| `cgroup_cpu_throttled` | The number of times a cgroup has been throttled by the CPU controller | |
+| `cgroup_cpu_throttled_time` | The total time a cgroup has been throttled by the CPU controller | `name`: the name of the cgroup |
+| `cgroup_cpu_throttled` | The number of times a cgroup has been throttled by the CPU controller |  `name`: the name of the cgroup |
 
 ### cpu_tlb_flush
 
@@ -144,7 +144,7 @@ performance.
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `cpu_tlb_flush` | The number of tlb_flush events | `reason={task_switch,remote_shootdown,local_shootdown,local_mm_shootdown,remote_send_ipi}` |
-| `cgroup_cpu_tlb_flush` | The number of tlb_flush events on a per-cgroup basis | `reason={task_switch,remote_shootdown,local_shootdown,local_mm_shootdown,remote_send_ipi}` |
+| `cgroup_cpu_tlb_flush` | The number of tlb_flush events on a per-cgroup basis | `reason={task_switch,remote_shootdown,local_shootdown,local_mm_shootdown,remote_send_ipi}`, `name`: the name of the cgroup |
 
 ### cpu_usage
 
@@ -157,7 +157,7 @@ optimizing workloads.
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `cpu_usage` | The amount of CPU time spent in different CPU states | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}` |
-| `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}` |
+| `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}`, `name`: the name of the cgroup |
 | `softirq` | The count of softirqs | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `softirq_time` | The time spent in softirq handlers | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 
@@ -306,7 +306,7 @@ excessive system calls or unexpected patterns of system call usage.
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `syscall` | The number of syscalls by operation type | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}` |
-| `cgroup_syscall` | The number of syscalls by operation type on a per-cgroup basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}` |
+| `cgroup_syscall` | The number of syscalls by operation type on a per-cgroup basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}`, `name`: the name of the cgroup | |
 
 ### syscall_latency
 
