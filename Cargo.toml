@@ -46,11 +46,13 @@ walkdir = "2.5.0"
 plain = "0.2.3"
 core_affinity = "0.8.1"
 chrono = "0.4.39"
+archspec = "0.1.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.24.8" }
 libbpf-sys = { version = "1.5.0" }
 perf-event2 = "0.7.4"
+perf-event-open-sys2 = "5.0.6"
 nvml-wrapper = "0.10.0"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
