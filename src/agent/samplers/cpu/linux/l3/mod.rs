@@ -1,8 +1,8 @@
-/// This sampler is used to measure CPU L3 cache access and misses. It does this
-/// by using two uncore PMUs for each L3 cache domain.
-///
-/// This requires that we identify each L3 cache domain but also identify the
-/// correct raw perf events to use which are processor dependent.
+//! This sampler is used to measure CPU L3 cache access and misses. It does this
+//! by using two uncore PMUs for each L3 cache domain.
+//!
+//! This requires that we identify each L3 cache domain but also identify the
+//! correct raw perf events to use which are processor dependent.
 
 const NAME: &str = "cpu_l3";
 
@@ -178,8 +178,7 @@ fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
                     let index_path = entry.path();
                     index_path
                         .file_name()
-                        .and_then(|n| n.to_str())
-                        .map_or(false, |name| {
+                        .and_then(|n| n.to_str()).is_some_and(|name| {
                             name.starts_with("index")
                                 && index_path.join("level").exists()
                                 && std::fs::read_to_string(index_path.join("level"))
