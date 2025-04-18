@@ -178,7 +178,8 @@ fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
                     let index_path = entry.path();
                     index_path
                         .file_name()
-                        .and_then(|n| n.to_str()).is_some_and(|name| {
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|name| {
                             name.starts_with("index")
                                 && index_path.join("level").exists()
                                 && std::fs::read_to_string(index_path.join("level"))
