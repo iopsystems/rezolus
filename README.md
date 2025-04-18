@@ -18,7 +18,8 @@ multiple domains:
 - **Container-level**: Quantify container-level performance dynamics
 
 By using eBPF, Rezolus provides high-resolution, low-overhead instrumentation
-that reveals detailed system behavior.
+that reveals detailed system behavior. See out [metrics][metrics] documentation
+to see what metrics Rezolus supports.
 
 ## Operating Modes
 
@@ -198,11 +199,12 @@ Once you're ready to contribute some changes, the workflow is:
 * open a [new pull request][new pull request]
 
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT
-[create a fork]: https://github.com/iopsystems/rpc-perf/fork
+[create a fork]: https://github.com/iopsystems/rezolus/fork
 [discord]: https://discord.gg/YC5GDsH4dG
 [latest release]: https://github.com/iopsystems/rezolus/releases/latest
 [license apache]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-APACHE
 [license mit]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-MIT
+[metrics]: https://github.com/iopsystems/rezolus/blob/main/docs/metrics.md
 [new issue]: https://github.com/iopsystems/rezolus/issues/new
-[new pull request]: https://github.com/iopsystems/rpc-perf/compare
+[new pull request]: https://github.com/iopsystems/rezolus/compare
 [rust-lang.org]: https://www.rust-lang.org/
