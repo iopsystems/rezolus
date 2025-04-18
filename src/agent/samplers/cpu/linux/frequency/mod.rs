@@ -205,7 +205,7 @@ fn logical_cores() -> Result<Vec<usize>, std::io::Error> {
         }
     }
 
-    Ok(cores.iter().map(|v| *v).collect())
+    Ok(cores.iter().copied().collect())
 }
 
 fn get_cores() -> Result<Vec<Core>, std::io::Error> {
