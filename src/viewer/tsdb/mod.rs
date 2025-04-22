@@ -279,20 +279,58 @@ impl NamedSeries {
 
         for (name, series) in self.inner.iter() {
             let score = rank(series);
-
             scores.push((name, score));
         }
 
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scores.truncate(n);
 
-        let mut result = Vec::new();
+        // If we have more than n series, calculate the "other" category
+        if scores.len() > n {
+            let mut result = Vec::new();
+            let mut other_series = UntypedSeries::default();
 
-        for (name, _) in scores.drain(..) {
-            result.push((name.clone(), self.inner.get(name).unwrap().clone()));
+            // Add top n series to result
+            for (name, _score) in &scores[0..n] {
+                result.push((
+                    name.to_string(),
+                    self.inner.get(name.as_str()).unwrap().clone(),
+                ));
+            }
+
+            // Sum all remaining series into "other"
+            for (name, _score) in &scores[n..] {
+                if let Some(series) = self.inner.get(name.as_str()) {
+                    if other_series.inner.is_empty() {
+                        other_series = series.clone();
+                    } else {
+                        // Add each remaining series to the "other" category
+                        for (time, value) in series.inner.iter() {
+                            if other_series.inner.contains_key(time) {
+                                *other_series.inner.get_mut(time).unwrap() += value;
+                            } else {
+                                other_series.inner.insert(*time, *value);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add "other" to the result if it's not empty
+            if !other_series.inner.is_empty() {
+                result.push(("Other".to_string(), other_series));
+            }
+
+            result
+        } else {
+            // If we have n or fewer series, just return them all
+            let mut result = Vec::new();
+
+            for (name, _) in scores.drain(..) {
+                result.push((name.clone(), self.inner.get(name.as_str()).unwrap().clone()));
+            }
+
+            result
         }
-
-        result
     }
 
     pub fn bottom_n(
@@ -304,21 +342,58 @@ impl NamedSeries {
 
         for (name, series) in self.inner.iter() {
             let score = rank(series);
-
             scores.push((name, score));
         }
 
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scores.reverse();
-        scores.truncate(n);
+        scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let mut result = Vec::new();
+        // If we have more than n series, calculate the "other" category
+        if scores.len() > n {
+            let mut result = Vec::new();
+            let mut other_series = UntypedSeries::default();
 
-        for (name, _) in scores.drain(..) {
-            result.push((name.clone(), self.inner.get(name).unwrap().clone()));
+            // Add bottom n series to result
+            for (name, _score) in &scores[0..n] {
+                result.push((
+                    name.to_string(),
+                    self.inner.get(name.as_str()).unwrap().clone(),
+                ));
+            }
+
+            // Sum all remaining series into "other"
+            for (name, _score) in &scores[n..] {
+                if let Some(series) = self.inner.get(name.as_str()) {
+                    if other_series.inner.is_empty() {
+                        other_series = series.clone();
+                    } else {
+                        // Add each remaining series to the "other" category
+                        for (time, value) in series.inner.iter() {
+                            if other_series.inner.contains_key(time) {
+                                *other_series.inner.get_mut(time).unwrap() += value;
+                            } else {
+                                other_series.inner.insert(*time, *value);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add "other" to the result if it's not empty
+            if !other_series.inner.is_empty() {
+                result.push(("Other".to_string(), other_series));
+            }
+
+            result
+        } else {
+            // If we have n or fewer series, just return them all
+            let mut result = Vec::new();
+
+            for (name, _) in scores.drain(..) {
+                result.push((name.clone(), self.inner.get(name.as_str()).unwrap().clone()));
+            }
+
+            result
         }
-
-        result
     }
 }
 

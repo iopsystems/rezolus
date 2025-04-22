@@ -3,6 +3,7 @@
 /**
  * ColorMapper provides consistent color assignment for cgroups across all charts and page refreshes
  * Uses a deterministic hash function to assign colors based on cgroup names
+ * Special handling for the "Other" category used to represent summed cgroups
  */
 export class ColorMapper {
   constructor() {
@@ -17,6 +18,9 @@ export class ColorMapper {
       '#9467bd', '#a05195', '#d45087', '#f95d6a', '#ff7c43',
       '#ffa600'
     ];
+    
+    // Special color for "Other" category - consistent across all charts
+    this.otherColor = '#888888'; // Medium gray
   }
   
   /**
@@ -38,10 +42,16 @@ export class ColorMapper {
   
   /**
    * Get the color for a specific cgroup, using a deterministic mapping
+   * Special case for "Other" category
    * @param {string} cgroupName - The name of the cgroup
    * @returns {string} The color code for this cgroup
    */
   getColor(cgroupName) {
+    // Special case for "Other" category
+    if (cgroupName === "Other") {
+      return this.otherColor;
+    }
+    
     // If we already have a color for this cgroup, return it
     if (this.colorMap.has(cgroupName)) {
       return this.colorMap.get(cgroupName);
@@ -65,6 +75,14 @@ export class ColorMapper {
    */
   getColors(cgroupNames) {
     return cgroupNames.map(name => this.getColor(name));
+  }
+  
+  /**
+   * Get color for the "Other" category
+   * @returns {string} The color for the "Other" category
+   */
+  getOtherColor() {
+    return this.otherColor;
   }
   
   /**

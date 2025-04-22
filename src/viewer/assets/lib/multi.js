@@ -14,6 +14,7 @@ import globalColorMapper from './colormap.js';
 /**
  * Creates a multi-series line chart configuration for ECharts with reliable time axis
  * and consistent cgroup colors across charts and page refreshes
+ * Enhanced to support an "Other" category that sums all cgroups not in top/bottom N
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
@@ -213,28 +214,63 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
   // Get deterministic colors for all cgroups in this chart
   const cgroupColors = globalColorMapper.getColors(names);
   
+  // Special "Other" category styling - always make it a gray line for consistency
+  const otherLineStyle = {
+    width: 2,
+    color: '#888888'  // medium gray
+  };
+  
   for (let i = 1; i < data.length; i++) {
     // Get the series name (use provided name or default to "Series N")
     const name = (i <= names.length && names[i-1]) ? names[i-1] : `Series ${i}`;
+    
+    // Check if this is the "Other" category
+    const isOtherCategory = name === "Other";
+    
+    // Determine line style and color
+    let lineStyle, itemColor;
+    
+    if (isOtherCategory) {
+      // Use special styling for "Other" category
+      lineStyle = otherLineStyle;
+      itemColor = otherLineStyle.color;
+    } else {
+      // Use deterministic color from our global mapper for normal cgroups
+      const color = (i <= cgroupColors.length) ? cgroupColors[i-1] : undefined;
+      lineStyle = {
+        color: color,
+        width: 2
+      };
+      itemColor = color;
+    }
     
     series.push({
       name: name,
       type: 'line',
       data: data[i],
-      // Use deterministic color from our global mapper instead of the default color
+      // Apply appropriate styling
       itemStyle: {
-        color: (i <= cgroupColors.length) ? cgroupColors[i-1] : undefined
+        color: itemColor
       },
-      lineStyle: {
-        color: (i <= cgroupColors.length) ? cgroupColors[i-1] : undefined,
-        width: 2
-      },
-      showSymbol: false,
+      lineStyle: lineStyle,
+      // Add symbol for "Other" category to make it more distinguishable
+      showSymbol: isOtherCategory,
+      symbolSize: isOtherCategory ? 4 : 0,
+      // Ensure "Other" appears behind other lines
+      z: isOtherCategory ? 1 : 2,
       emphasis: {
         focus: 'series'
       },
       animationDuration: 0
     });
+  }
+
+  // Always ensure "Other" category is the last in the series array
+  // This ensures it appears in the legend last and gets rendered first (behind other lines)
+  const otherIndex = series.findIndex(s => s.name === "Other");
+  if (otherIndex !== -1 && otherIndex !== series.length - 1) {
+    const otherSeries = series.splice(otherIndex, 1)[0];
+    series.push(otherSeries);
   }
 
   // Return the complete chart configuration
@@ -247,8 +283,7 @@ export function createMultiSeriesChartOption(baseOption, plotSpec, state) {
     xAxis: xAxis,
     yAxis: yAxis,
     series: series,
-    // Don't use the default color palette - we're setting colors explicitly
-    // for consistent mapping across charts
+    // Don't use the default color palette for normal cgroups
     color: cgroupColors,
   };
 }
