@@ -60,8 +60,6 @@ impl FrequencyInner {
     pub fn new() -> Result<Self, std::io::Error> {
         let cores = get_cores()?;
 
-        println!("initialized frequency counters for: {} cores", cores.len());
-
         Ok(Self { cores })
     }
 
