@@ -1,33 +1,33 @@
-//! Collects CPU throttle stats using BPF and traces:
+//! Collects CPU CFS bandwidth control and throttling stats using BPF and traces:
+//! * `tg_set_cfs_bandwidth`
 //! * `throttle_cfs_rq`
 //! * `unthrottle_cfs_rq`
 //!
 //! And produces these stats:
+//! * `cgroup_cpu_bandwidth_quota`
+//! * `cgroup_cpu_bandwidth_period`
 //! * `cgroup_cpu_throttled_time`
 //! * `cgroup_cpu_throttled`
-//!
-//! These stats can be used to understand when and for how long cgroups are being
-//! throttled by the CPU controller.
 
-const NAME: &str = "cpu_throttled";
+const NAME: &str = "cpu_bandwidth";
 
 mod bpf {
-    include!(concat!(env!("OUT_DIR"), "/cpu_throttled.bpf.rs"));
+    include!(concat!(env!("OUT_DIR"), "/cpu_bandwidth.bpf.rs"));
 }
 
+mod stats;
+
 use bpf::*;
+use stats::*;
 
 use crate::agent::*;
 
 use std::sync::Arc;
 
-mod stats;
-
-use stats::*;
-
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
+unsafe impl plain::Plain for bpf::types::bandwidth_info {}
 
-fn handle_event(data: &[u8]) -> i32 {
+fn handle_cgroup_info(data: &[u8]) -> i32 {
     let mut cgroup_info = bpf::types::cgroup_info::default();
 
     if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
@@ -62,16 +62,38 @@ fn handle_event(data: &[u8]) -> i32 {
 
         let id = cgroup_info.id;
 
-        set_name(id as usize, name)
+        set_cgroup_name(id as usize, name)
     }
 
     0
 }
 
-fn set_name(id: usize, name: String) {
+fn handle_bandwidth_info(data: &[u8]) -> i32 {
+    let mut bandwidth_info = bpf::types::bandwidth_info::default();
+
+    if plain::copy_from_bytes(&mut bandwidth_info, data).is_ok() {
+        let id = bandwidth_info.id;
+        let quota = bandwidth_info.quota;
+        let period = bandwidth_info.period;
+
+        if id < MAX_CGROUPS as u32 {
+            let _ = CGROUP_CPU_BANDWIDTH_QUOTA.set(id as usize, quota as i64);
+            let _ = CGROUP_CPU_BANDWIDTH_PERIOD.set(id as usize, period as i64);
+        }
+    }
+
+    0
+}
+
+fn set_cgroup_name(id: usize, name: String) {
     if !name.is_empty() {
-        CGROUP_CPU_THROTTLED_TIME.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_THROTTLED.insert_metadata(id, "name".to_string(), name);
+        for m in &[&CGROUP_CPU_BANDWIDTH_QUOTA, &CGROUP_CPU_BANDWIDTH_PERIOD] {
+            m.insert_metadata(id, "name".to_string(), name.clone());
+        }
+
+        for m in &[&CGROUP_CPU_THROTTLED_TIME, &CGROUP_CPU_THROTTLED] {
+            m.insert_metadata(id, "name".to_string(), name.clone());
+        }
     }
 }
 
@@ -81,12 +103,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    set_name(1, "/".to_string());
+    set_cgroup_name(1, "/".to_string());
 
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .packed_counters("throttled_time", &CGROUP_CPU_THROTTLED_TIME)
         .packed_counters("throttled_count", &CGROUP_CPU_THROTTLED)
-        .ringbuf_handler("cgroup_info", handle_event)
+        .ringbuf_handler("cgroup_info", handle_cgroup_info)
+        .ringbuf_handler("bandwidth_info", handle_bandwidth_info)
         .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -96,6 +119,7 @@ impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
             "cgroup_info" => &self.maps.cgroup_info,
+            "bandwidth_info" => &self.maps.bandwidth_info,
             "throttled_time" => &self.maps.throttled_time,
             "throttled_count" => &self.maps.throttled_count,
             _ => unimplemented!(),
@@ -105,6 +129,10 @@ impl SkelExt for ModSkel<'_> {
 
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
+        debug!(
+            "{NAME} tg_set_cfs_bandwidth() BPF instruction count: {}",
+            self.progs.tg_set_cfs_bandwidth.insn_cnt()
+        );
         debug!(
             "{NAME} throttle_cfs_rq() BPF instruction count: {}",
             self.progs.throttle_cfs_rq.insn_cnt()
