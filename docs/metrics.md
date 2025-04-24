@@ -11,12 +11,12 @@ This guide walks you through all the available metrics, organized by category.
   - [blockio_latency](#blockio_latency)
   - [blockio_requests](#blockio_requests)
 - [CPU](#cpu)
+  - [cpu_bandwidth](#cpu_bandwidth)
   - [cpu_cores](#cpu_cores)
   - [cpu_frequency](#cpu_frequency)
   - [cpu_l3](#cpu_l3)
   - [cpu_migrations](#cpu_migrations)
   - [cpu_perf](#cpu_perf)
-  - [cpu_throttled](#cpu_throttled)
   - [cpu_tlb_flush](#cpu_tlb_flush)
   - [cpu_usage](#cpu_usage)
 - [GPU](#gpu)
@@ -73,6 +73,18 @@ optimization, and capacity planning.
 
 Metrics related to CPU performance and usage. These metrics provide insight for
 understanding CPU utilization and identifying performance issues.
+
+### cpu_bandwidth
+
+Instruments CPU bandwidth quotas and throttling in container environments
+(cgroups).
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `cgroup_cpu_bandwidth_period` | The duration of the CFS bandwidth period in nanoseconds | `name`: the name of the cgroup |
+| `cgroup_cpu_bandwidth_quota` | The CPU bandwidth quota assigned to the cgroup in nanoseconds | `name`: the name of the cgroup |
+| `cgroup_cpu_throttled_time` | The total time a cgroup has been throttled by the CPU controller | `name`: the name of the cgroup |
+| `cgroup_cpu_throttled` | The number of times a cgroup has been throttled by the CPU controller |  `name`: the name of the cgroup |
 
 ### cpu_cores
 
@@ -137,15 +149,6 @@ IPC = Instructions / Cycles
 | `cpu_instructions` | The number of instructions retired | |
 | `cgroup_cpu_cycles` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
 | `cgroup_cpu_instructions` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
-
-### cpu_throttled
-
-Instruments CPU throttling in container environments (cgroups).
-
-| Metric | Description | Metadata |
-|--------|-------------|----------|
-| `cgroup_cpu_throttled_time` | The total time a cgroup has been throttled by the CPU controller | `name`: the name of the cgroup |
-| `cgroup_cpu_throttled` | The number of times a cgroup has been throttled by the CPU controller |  `name`: the name of the cgroup |
 
 ### cpu_tlb_flush
 
