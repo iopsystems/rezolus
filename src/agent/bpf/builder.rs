@@ -74,14 +74,12 @@ impl PerfCounters {
 
 enum Event {
     Hardware(perf_event::events::Hardware),
-    Msr(perf_event::events::x86::Msr),
 }
 
 impl Event {
     fn builder(&self) -> perf_event::Builder {
         match self {
             Self::Hardware(e) => perf_event::Builder::new(*e),
-            Self::Msr(m) => perf_event::Builder::new(*m),
         }
     }
 }
@@ -97,14 +95,6 @@ impl PerfEvent {
         Self {
             inner: Event::Hardware(perf_event::events::Hardware::INSTRUCTIONS),
         }
-    }
-
-    pub fn msr(msr_id: perf_event::events::x86::MsrId) -> Result<Self, std::io::Error> {
-        let msr = perf_event::events::x86::Msr::new(msr_id)?;
-
-        Ok(Self {
-            inner: Event::Msr(msr),
-        })
     }
 }
 

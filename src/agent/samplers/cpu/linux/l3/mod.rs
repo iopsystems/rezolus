@@ -246,8 +246,6 @@ fn parse_cpu_list(list: &str) -> Vec<usize> {
 
 fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
     if let Ok(uarch) = archspec::cpu::host().map(|u| u.name().to_owned()) {
-        println!("detected uarch: {uarch}");
-
         let events = match uarch.as_str() {
             "zen" | "zen2" | "zen3" | "zen4" | "zen5" => (
                 LowLevelEvent::new(0xb, 0xFF04),
