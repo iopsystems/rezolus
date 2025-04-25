@@ -2,6 +2,9 @@
 # Specify the sampling interval
 interval = "1s"
 
+# Specify the lookback period
+duration = "15m"
+
 # Specify the address of the Rezolus Agent
 source = "127.0.0.1:4241"
 

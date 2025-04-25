@@ -162,7 +162,7 @@ pub fn run(config: Config) {
     let snapshot_len = (1 + snap_len as u64 * 4 / 4096) * 4096;
 
     // the total number of snapshots
-    let snapshot_count = (1 + config.general().interval().as_micros()
+    let snapshot_count = (1 + config.general().duration().as_micros()
         / config.general().interval().as_micros()) as u64;
 
     // expand the temporary file to hold enough room for all the snapshots
