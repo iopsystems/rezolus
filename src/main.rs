@@ -33,6 +33,7 @@ static CAPTURING: usize = 1;
 static TERMINATING: usize = 2;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum Format {
     Parquet,
     Raw,
