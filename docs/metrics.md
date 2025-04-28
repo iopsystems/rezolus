@@ -26,7 +26,6 @@ This guide walks you through all the available metrics, organized by category.
   - [memory_vmstat](#memory_vmstat)
 - [Network](#network)
   - [network_interfaces](#network_interfaces)
-  - [network_softnet](#network_softnet)
   - [network_traffic](#network_traffic)
 - [Scheduler](#scheduler)
   - [scheduler_runqueue](#scheduler_runqueue)
@@ -256,21 +255,6 @@ These metrics can help monitor network interface health.
 | `network_receive_dropped` | The number of packets received but not processed. Usually due to lack of resources or unsupported protocol. Does not include hardware interface buffer exhaustion. | |
 | `network_receive_errors_missed` | The number of packets missed due to buffer exhaustion | |
 | `network_transmit_dropped` | The number of packets dropped on the transmit path. Usually due to lack of resources. | |
-
-### network_softnet
-
-Produces softnet (network softirq processing) metrics such as time_squeezed.
-These metrics provide visibility into the Linux kernel's network packet
-processing subsystem, which operates in softirq context. Issues like time
-squeezes or budget exhaustion may lead to packet drops and degraded network
-performance even when network hardware is functioning properly.
-
-| Metric | Description | Metadata |
-|--------|-------------|----------|
-| `softnet_time_squeezed` | Number of times net_rx_action() exits due to time constraints (time squeeze) | |
-| `softnet_budget_exhausted` | Number of times net_rx_action() exits due to budget exhaustion | |
-| `softnet_processed` | Number of packets processed during net_rx_action() | |
-| `softnet_poll` | Number of NAPI poll function calls made during packet processing | |
 
 ### network_traffic
 
