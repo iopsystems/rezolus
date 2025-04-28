@@ -51,9 +51,6 @@ enabled = true
 # Produces network interface statistics from /sys/class/net for TX/RX errors
 [samplers.network_interfaces]
 
-# Produces softnet (network softirq processing) metrics such as time_squeezed
-[samplers.network_softnet]
-
 # Produces network traffic statistics using BPF
 [samplers.network_traffic]
 
