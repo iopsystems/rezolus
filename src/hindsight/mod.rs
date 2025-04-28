@@ -87,14 +87,7 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    let mut url = config.general().url();
-
-    if url.path() != "/" {
-        eprintln!("URL should not have an non-root path: {}", url);
-        std::process::exit(1);
-    }
-
-    url.set_path("/metrics/binary");
+    let url = config.general().url();
 
     // our http client
     let client = match Client::builder().http1_only().build() {
@@ -169,7 +162,7 @@ pub fn run(config: Config) {
     let snapshot_len = (1 + snap_len as u64 * 4 / 4096) * 4096;
 
     // the total number of snapshots
-    let snapshot_count = (1 + config.general().interval().as_micros()
+    let snapshot_count = (1 + config.general().duration().as_micros()
         / config.general().interval().as_micros()) as u64;
 
     // expand the temporary file to hold enough room for all the snapshots

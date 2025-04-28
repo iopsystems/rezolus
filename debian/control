@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: IOP Systems <team@iop.systems>
 Standards-Version: 4.6.2
 Build-Depends: 
-    debhelper (>= 10),
+    debhelper (>= 11),
     pkg-config,
     libelf-dev,
     libelf-dev:native,

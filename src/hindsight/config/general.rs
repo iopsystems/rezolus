@@ -7,6 +7,10 @@ pub struct General {
     #[serde(default = "interval")]
     interval: String,
 
+    // duration for the ringbuffer
+    #[serde(default = "duration")]
+    duration: String,
+
     // the address of the Rezolus agent
     #[serde(default = "source")]
     source: String,
@@ -23,6 +27,7 @@ impl Default for General {
     fn default() -> Self {
         Self {
             interval: interval(),
+            duration: duration(),
             source: source(),
             output: output(),
             format: parquet(),
@@ -48,6 +53,10 @@ impl General {
 
     pub fn interval(&self) -> humantime::Duration {
         self.interval.parse().unwrap()
+    }
+
+    pub fn duration(&self) -> humantime::Duration {
+        self.duration.parse().unwrap()
     }
 
     pub fn source(&self) -> SocketAddr {
