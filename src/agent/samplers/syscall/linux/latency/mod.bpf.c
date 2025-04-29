@@ -104,6 +104,62 @@ struct {
 	__uint(max_entries, HISTOGRAM_BUCKETS);
 } yield_latency SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} filesystem_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} memory_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} process_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} query_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} ipc_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} timer_latency SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, HISTOGRAM_BUCKETS);
+} event_latency SEC(".maps");
+
 // provides a lookup table from syscall id to a counter index offset
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -190,6 +246,27 @@ int sys_exit(struct trace_event_raw_sys_exit *args)
 			break;
 		case 8:
 			array_incr(&yield_latency, idx);
+			break;
+		case 9:
+			array_incr(&filesystem_latency, idx);
+			break;
+		case 10:
+			array_incr(&memory_latency, idx);
+			break;
+		case 11:
+			array_incr(&process_latency, idx);
+			break;
+		case 12:
+			array_incr(&query_latency, idx);
+			break;
+		case 13:
+			array_incr(&ipc_latency, idx);
+			break;
+		case 14:
+			array_incr(&timer_latency, idx);
+			break;
+		case 15:
+			array_incr(&event_latency, idx);
 			break;
 		default:
 			array_incr(&other_latency, idx);
