@@ -44,7 +44,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .histogram("ipc_latency", &SYSCALL_IPC_LATENCY)
         .histogram("timer_latency", &SYSCALL_TIMER_LATENCY)
         .histogram("event_latency", &SYSCALL_EVENT_LATENCY)
-
         .map("syscall_lut", syscall_lut())
         .build()?;
 
@@ -71,7 +70,6 @@ impl SkelExt for ModSkel<'_> {
             "timer_latency" => &self.maps.timer_latency,
             "event_latency" => &self.maps.event_latency,
             "syscall_lut" => &self.maps.syscall_lut,
-
             _ => unimplemented!(),
         }
     }
