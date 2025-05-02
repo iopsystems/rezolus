@@ -4,6 +4,7 @@
 #include <vmlinux.h>
 #include "../../../agent/bpf/cgroup_info.h"
 #include "../../../agent/bpf/helpers.h"
+#include "../../../agent/bpf/task_info.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -11,7 +12,10 @@
 #define CPU_USAGE_GROUP_WIDTH 8
 #define MAX_CPUS 1024
 #define MAX_CGROUPS 4096
-#define RINGBUF_CAPACITY 262144
+#define MAX_PID 4194304
+#define CGROUP_RINGBUF_CAPACITY 262144
+// TODO(brian): calculate a proper value
+#define TASK_RINGBUF_CAPACITY 524288
 #define SOFTIRQ_GROUP_WIDTH 16
 
 // cpu usage stat index (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
@@ -50,13 +54,31 @@
 
 // dummy instance for skeleton to generate definition
 struct cgroup_info _cgroup_info = {};
+struct task_info _task_info = {};
+
+// ringbuf to pass task info
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(key_size, 0);
+	__uint(value_size, 0);
+	__uint(max_entries, PID_RINGBUF_CAPACITY);
+} task_info SEC(".maps");
+
+// holds known task start times to determine new or changed tasks
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_PID);
+} task_start SEC(".maps");
 
 // ringbuf to pass cgroup info
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(key_size, 0);
 	__uint(value_size, 0);
-	__uint(max_entries, RINGBUF_CAPACITY);
+	__uint(max_entries, CGROUP_RINGBUF_CAPACITY);
 } cgroup_info SEC(".maps");
 
 // holds known cgroup serial numbers to help determine new or changed groups
@@ -130,6 +152,15 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, MAX_CPUS * CPU_USAGE_GROUP_WIDTH);
 } cpu_usage SEC(".maps");
+
+// per-task (process) cpu usage (total)
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_PID);
+} task_usage SEC(".maps");
 
 // per-cgroup user
 struct {
@@ -243,9 +274,69 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 	idx = CPU_USAGE_GROUP_WIDTH * bpf_get_smp_processor_id() + offset;
 	array_add(&cpu_usage, idx, delta);
 
-	// additional accounting on a per-cgroup basis follows
-
 	struct task_struct *current = bpf_get_current_task_btf();
+
+	// accounting on a per-task (process) basis
+
+	u64 id = bpf_get_current_pid_tgid();
+	u32 pid = id;
+	u32 tid = id >> 32;
+
+	// only do pre-process acounting for pid != 0
+	if (pid) {
+		u64 start = BPF_CORE_READ(current, start_time);
+		elem = bpf_map_lookup_elem(&task_start, &pid);
+
+		if (elem && *elem != start) {
+			// we have a new task
+
+			// zero the counters, they will not be exported until they are non-zero
+			u64 zero = 0;
+			bpf_map_update_elem(&task_usage, &pid, &zero, BPF_ANY);
+
+			int cgroup_id = current->sched_task_group->css.id;
+
+			if (cgroup_id) {
+				struct task_info tinfo = {
+					.pid = pid,
+					.tgid = tgid,
+					.cglevel = current->sched_task_group->css.cgroup->level,
+				};
+
+				bpf_get_current_comm(&tinfo.name, TASK_COMM_LEN);
+
+				// read the cgroup name
+				bpf_probe_read_kernel_str(&tinfo.cg_name, CGROUP_NAME_LEN, current->sched_task_group->css.cgroup->kn->name);
+
+				// read the cgroup parent name
+				bpf_probe_read_kernel_str(&tinfo.cg_pname, CGROUP_NAME_LEN, current->sched_task_group->css.cgroup->kn->parent->name);
+
+				// read the cgroup grandparent name
+				bpf_probe_read_kernel_str(&tinfo.cg_gpname, CGROUP_NAME_LEN, current->sched_task_group->css.cgroup->kn->parent->parent->name);
+
+				// push the task info into the ringbuf
+				bpf_ringbuf_output(&task_info, &tinfo, sizeof(tinfo), 0);
+			} else {
+				struct task_info tinfo = {
+					.pid = pid,
+					.tgid = tgid,
+					.cglevel = 0,
+				};
+
+				bpf_get_current_comm(&tinfo.name, TASK_COMM_LEN);
+
+				// push the task info into the ringbuf
+				bpf_ringbuf_output(&task_info, &tinfo, sizeof(tinfo), 0);
+			}
+
+			// update the start time in the local map
+			bpf_map_update_elem(&task_start, &pid, &start, BPF_ANY);
+		}
+
+		array_add(&task_usage, pid, delta);
+	}
+
+	// additional accounting on a per-cgroup basis follows
 
 	if (bpf_core_field_exists(current->sched_task_group)) {
 		int cgroup_id = current->sched_task_group->css.id;

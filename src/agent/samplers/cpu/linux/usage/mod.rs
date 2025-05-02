@@ -30,8 +30,9 @@ mod stats;
 use stats::*;
 
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
+unsafe impl plain::Plain for bpf::types::task_info {}
 
-fn handle_event(data: &[u8]) -> i32 {
+fn handle_cgroup_info(data: &[u8]) -> i32 {
     let mut cgroup_info = bpf::types::cgroup_info::default();
 
     if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
@@ -66,13 +67,13 @@ fn handle_event(data: &[u8]) -> i32 {
 
         let id = cgroup_info.id;
 
-        set_name(id as usize, name)
+        set_cgroup_name(id as usize, name)
     }
 
     0
 }
 
-fn set_name(id: usize, name: String) {
+fn set_cgroup_name(id: usize, name: String) {
     if !name.is_empty() {
         CGROUP_CPU_USAGE_USER.insert_metadata(id, "name".to_string(), name.clone());
         CGROUP_CPU_USAGE_NICE.insert_metadata(id, "name".to_string(), name.clone());
@@ -85,13 +86,68 @@ fn set_name(id: usize, name: String) {
     }
 }
 
+fn handle_pid_info(data: &[u8]) -> i32 {
+    let mut info = bpf::types::pid_info::default();
+
+    if plain::copy_from_bytes(&mut info, data).is_ok() {
+        let name = std::str::from_utf8(&info.name)
+            .unwrap()
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let cg_name = std::str::from_utf8(&info.cg_name)
+            .unwrap()
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let cg_pname = std::str::from_utf8(&info.cg_pname)
+            .unwrap()
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let cg_gpname = std::str::from_utf8(&info.cg_gpname)
+            .unwrap()
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let cg_name = if !cg_gpname.is_empty() {
+            if info.cglevel > 3 {
+                format!(".../{cg_gpname}/{cg_pname}/{cg_name}")
+            } else {
+                format!("/{cg_gpname}/{cg_pname}/{cg_name}")
+            }
+        } else if !cg_pname.is_empty() {
+            format!("/{cg_pname}/{cg_name}")
+        } else if !cg_name.is_empty() {
+            format!("/{cg_name}")
+        } else {
+            "".to_string()
+        };
+
+        set_pid_name(info.pid as usize, info.tgid as usize, name, cg_name);
+    }
+
+    0
+}
+
+fn set_task_name(id: usize, tgid: usize, name: String, cgroup: String) {
+    if !name.is_empty() {
+        TASK_CPU_USAGE.insert_metadata(id, "tgid".to_string(), format!("{tgid}"));
+        TASK_CPU_USAGE.insert_metadata(id, "name".to_string(), name.clone());
+
+        if !cgroup.is_empty() {
+            TASK_CPU_USAGE.insert_metadata(id, "cgroup".to_string(), cgroup.clone());
+        }
+    }
+}
+
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
 
-    set_name(1, "/".to_string());
+    set_cgroup_name(1, "/".to_string());
 
     let cpu_usage = vec![
         &CPU_USAGE_USER,
@@ -142,7 +198,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .packed_counters("cgroup_steal", &CGROUP_CPU_USAGE_STEAL)
         .packed_counters("cgroup_guest", &CGROUP_CPU_USAGE_GUEST)
         .packed_counters("cgroup_guest_nice", &CGROUP_CPU_USAGE_GUEST_NICE)
-        .ringbuf_handler("cgroup_info", handle_event)
+        .packed_counters("task_usage", &TASK_CPU_USAGE)
+        .ringbuf_handler("cgroup_info", handle_cgroup_info)
+        .ringbuf_handler("task_info", handle_task_info)
         .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -161,6 +219,8 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_guest" => &self.maps.cgroup_guest,
             "cgroup_guest_nice" => &self.maps.cgroup_guest_nice,
             "cpu_usage" => &self.maps.cpu_usage,
+            "task_info" => &self.maps.task_info,
+            "task_usage" => &self.maps.task_usage,
             "softirq" => &self.maps.softirq,
             "softirq_time" => &self.maps.softirq_time,
             _ => unimplemented!(),
