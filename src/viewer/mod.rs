@@ -746,8 +746,15 @@ async fn serve(config: Arc<Config>, state: AppState) {
     let livereload = LiveReloadLayer::new();
     let reloader = livereload.reloader();
 
-    let mut watcher = notify::recommended_watcher(move |_| reloader.reload())
-        .expect("failed to initialize watcher");
+    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
+        if let Ok(event) = res {
+            // Reload, unless it's just a read.
+            if !matches!(event.kind, notify::EventKind::Access(_)) {
+                reloader.reload();
+            }
+        }
+    })
+    .expect("failed to initialize watcher");
     watcher
         .watch(
             Path::new("src/viewer/assets"),
