@@ -1,100 +1,105 @@
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
 
 :root {
-  --bg: #111;
-  --bg-secondary: #1E1E1E;
-  --fg: #E0E0E0;
-  --fg-secondary: #ABABAB;
-  --width: 90%;
-  --sidebar-width: 125px
+    --bg: #111;
+    --bg-secondary: #1E1E1E;
+    --fg: #E0E0E0;
+    --fg-secondary: #ABABAB;
+    --width: 90%;
+    --sidebar-width: 125px
 }
 
 body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: system-ui, sans-serif;
-  font-size: 16px;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, sans-serif;
+    font-size: 16px;
 }
 
 header {
-  max-width: var(--width);
-  margin: 2em auto;
-  padding-left: var(--sidebar-width);
-  font-size: 1rem;
+    max-width: var(--width);
+    margin: 2em auto;
+    padding-left: var(--sidebar-width);
+    font-size: 1rem;
 }
 
 header .div {
-  opacity: 0.5;
-  font-weight: normal;
-  padding: 0 0.1em;
+    opacity: 0.5;
+    font-weight: normal;
+    padding: 0 0.1em;
 }
 
 main {
-  max-width: var(--width);
-  margin: 0 auto;
-  display: flex;
+    max-width: var(--width);
+    margin: 0 auto;
+    display: flex;
 }
 
 #sidebar {
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-  text-align: right;
-  width: var(--sidebar-width);
-  position: sticky;
-  align-self: flex-start;
-  top: 2em;
-  padding-right: 2em;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5em;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    text-align: right;
+    width: var(--sidebar-width);
+    position: sticky;
+    align-self: flex-start;
+    top: 2em;
+    padding-right: 2em;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
 }
 
 #sidebar a {
-  color: var(--fg);
-  text-decoration: underline;
-  color: #aaa;
+    color: var(--fg);
+    text-decoration: underline;
+    color: #aaa;
 }
 
 #sidebar a.selected {
-  color: #fff;
-  font-weight: bold;
-  text-decoration: none;
+    color: #fff;
+    font-weight: bold;
+    text-decoration: none;
 }
 
 #groups {
-  flex: 1;
+    flex: 1;
 }
 
 #groups h2 {
-  margin-bottom: 0.25em;
-  padding-bottom: 0.25em;
-  border-bottom: 1px solid #fff6;
+    margin-bottom: 0.25em;
+    padding-bottom: 0.25em;
+    border-bottom: 1px solid #fff6;
 }
 
 .group .plots {
-  display: flex;
-  flex-wrap: wrap;
+    display: flex;
+    flex-wrap: wrap;
 }
 
 .plot {
-  max-width: 50%;
-  width: 50%;
-  height: 400px;
-  margin-bottom: 50px; /* Reduced from 150px since ECharts handles legends differently */
+    max-width: 50%;
+    width: 50%;
+    height: 400px;
+    margin-bottom: 50px;
+    /* Reduced from 150px since ECharts handles legends differently */
 }
 
 /* ECharts tooltip styling */
 .echarts-tooltip {
-  background: rgba(50, 50, 50, 0.9) !important;
-  border-color: rgba(70, 70, 70, 0.9) !important;
-  border-radius: 4px;
-  color: #E0E0E0 !important;
-  line-height: 1.5;
-  padding: 10px;
-  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.4);
+    background: rgba(50, 50, 50, 0.9) !important;
+    border-color: rgba(70, 70, 70, 0.9) !important;
+    border-radius: 4px;
+    color: #E0E0E0 !important;
+    line-height: 1.5;
+    padding: 10px;
+    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.4);
 }
 
 /* Zoom rectangle styling */
 .echarts-tooltip-selected-region {
-  background-color: rgba(255, 255, 255, 0.3) !important;
-  border: 1px solid rgba(255, 255, 255, 0.5) !important;
+    background-color: rgba(255, 255, 255, 0.3) !important;
+    border: 1px solid rgba(255, 255, 255, 0.5) !important;
 }
