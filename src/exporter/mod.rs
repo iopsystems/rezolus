@@ -118,8 +118,8 @@ pub fn run(config: Config) {
             let start = Instant::now();
 
             // sample rezolus
-            if let Ok(response) = client.get(url.clone()).send() {
-                if let Ok(body) = response.bytes() {
+            if let Ok(response) = client.get(url.clone()).send().await {
+                if let Ok(body) = response.bytes().await {
                     let latency = start.elapsed();
 
                     debug!("sampling latency: {} us", latency.as_micros());
@@ -190,8 +190,8 @@ async fn root() -> String {
 
 // for convenience, this proxies the msgpack from Rezolus Agent
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
-    if let Ok(response) = state.client.get(state.url.clone()).send() {
-        if let Ok(body) = response.bytes() {
+    if let Ok(response) = state.client.get(state.url.clone()).send().await {
+        if let Ok(body) = response.bytes().await {
             return body.to_vec();
         }
     }

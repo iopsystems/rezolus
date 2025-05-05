@@ -218,8 +218,8 @@ pub fn run(config: Config) {
             let start = Instant::now();
 
             // sample rezolus
-            if let Ok(response) = client.get(url.clone()).send() {
-                if let Ok(body) = response.bytes() {
+            if let Ok(response) = client.get(url.clone()).send().await {
+                if let Ok(body) = response.bytes().await {
                     let latency = start.elapsed();
 
                     debug!("sampling latency: {} us", latency.as_micros());
