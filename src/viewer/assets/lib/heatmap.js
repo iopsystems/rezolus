@@ -105,8 +105,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
 
     // Configure tooltip with unit formatting if specified
     let tooltipFormatter = function (params) {
-        const value = params.data[2];
-        const timeIndex = params.data[0];
+        const [timeIndex, cpu, value] = params.data;
 
         // Use original timestamp for reliable display even during zoom/pan
         const fullTime = timeIndex >= 0 && timeIndex < originalTimeData.length ?
@@ -114,7 +113,6 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
             Date.now() / 1000;
 
         const formattedTime = formatDateTime(fullTime, 'full'); // Use full format for tooltip
-        const cpu = params.data[1];
 
         if (unitSystem) {
             const formatter = createAxisLabelFormatter(unitSystem);
@@ -195,6 +193,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     return {
         ...baseOption,
         tooltip: {
+            className: 'echarts-tooltip',
             position: 'top',
             formatter: tooltipFormatter
         },

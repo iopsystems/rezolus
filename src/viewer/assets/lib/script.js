@@ -244,6 +244,7 @@ function createChartOption(plotSpec) {
             containLabel: true
         },
         tooltip: {
+            className: 'echarts-tooltip',
             trigger: 'axis',
             axisPointer: {
                 type: 'cross',

@@ -40,7 +40,6 @@ main {
 }
 
 #sidebar {
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
     text-align: right;
     width: var(--sidebar-width);
     position: sticky;
@@ -77,28 +76,32 @@ main {
 .group .plots {
     display: flex;
     flex-wrap: wrap;
+    margin-top: 20px;
+    row-gap: 20px;
+    margin-bottom: 50px;
 }
 
 .plot {
+    /* TODO: should not shrink indefinitely, and maybe 2-per-row is not inherent to plots? */
     max-width: 50%;
     width: 50%;
     height: 400px;
-    margin-bottom: 50px;
-    /* Reduced from 150px since ECharts handles legends differently */
 }
 
 /* ECharts tooltip styling */
-.echarts-tooltip {
-    background: rgba(50, 50, 50, 0.9) !important;
-    border-color: rgba(70, 70, 70, 0.9) !important;
-    border-radius: 4px;
+.echarts-tooltip:not(:empty) {
+    /* 
+     * Styling the tooltip element like this is a bit of a hack.
+     * Only apply style if not empty, because tooltip's initial
+     * state is a VISIBLE empty div below the chart!
+     */
+    background: rgba(50, 50, 50, 0.8) !important;
+    border: 1px solid rgba(70, 70, 70, 0.8) !important;
     color: #E0E0E0 !important;
-    line-height: 1.5;
-    padding: 10px;
-    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.4);
 }
 
 /* Zoom rectangle styling */
+/* Not in use */
 .echarts-tooltip-selected-region {
     background-color: rgba(255, 255, 255, 0.3) !important;
     border: 1px solid rgba(255, 255, 255, 0.5) !important;
