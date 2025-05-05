@@ -142,7 +142,8 @@ jobs:
       - name: smoketest
         shell: bash
         run: |
-          timeout --preserve-status --signal 2 10 cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- config.toml || if [[ $? -eq 130 ]]; then true; fi
+          cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- config.toml; echo $! > agent.pid
+          cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- recorder 127.0.0.1:4241 rezolus.parquet
 
   check-success:
     name: verify all tests pass
