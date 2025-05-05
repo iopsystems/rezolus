@@ -143,7 +143,7 @@ jobs:
         shell: bash
         run: |
           cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- config/agent.toml; echo $! > agent.pid
-          cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- recorder 127.0.0.1:4241 rezolus.parquet
+          cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- recorder --duration 60s 127.0.0.1:4241 rezolus.parquet
 
   check-success:
     name: verify all tests pass
