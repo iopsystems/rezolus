@@ -2,11 +2,8 @@
 
 import {
     createAxisLabelFormatter,
-    createTooltipFormatter
 } from './units.js';
 import {
-    calculateHumanFriendlyTicks,
-    formatTimeAxisLabel,
     formatDateTime
 } from './utils.js';
 
@@ -40,26 +37,6 @@ export function createLineChartOption(baseOption, plotSpec, state) {
     );
 
     const valueData = data[1];
-
-    // Calculate human-friendly ticks
-    let ticks;
-    if (state.sharedAxisConfig.visibleTicks.length === 0 ||
-        Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
-
-        // Calculate ticks based on zoom state
-        ticks = calculateHumanFriendlyTicks(
-            originalTimeData,
-            state.globalZoom.start,
-            state.globalZoom.end
-        );
-
-        // Store in shared config for chart synchronization
-        state.sharedAxisConfig.visibleTicks = ticks;
-        state.sharedAxisConfig.lastUpdate = Date.now();
-    } else {
-        // Use existing ticks from shared config
-        ticks = state.sharedAxisConfig.visibleTicks;
-    }
 
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
@@ -169,39 +146,6 @@ export function createLineChartOption(baseOption, plotSpec, state) {
         },
         axisLabel: {
             color: '#ABABAB',
-            // The critical part: use actual timestamps instead of index-based formatting
-            formatter: function (value, index) {
-                // Use the original timestamp data for consistent time display
-                // This ensures time labels remain accurate during zoom/pan operations
-                if (index >= 0 && index < originalTimeData.length) {
-                    const timestamp = originalTimeData[index];
-                    const date = new Date(timestamp * 1000);
-
-                    const seconds = date.getSeconds();
-                    const minutes = date.getMinutes();
-                    const hours = date.getHours();
-
-                    // Format based on time boundaries for better readability
-                    if (seconds === 0 && minutes === 0) {
-                        return `${String(hours).padStart(2, '0')}:00`;
-                    } else if (seconds === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-                    } else if (seconds % 30 === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                    } else if (seconds % 15 === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                    } else if (seconds % 5 === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                    }
-                    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                }
-                // Fallback to the provided value if we can't find the timestamp
-                return value;
-            },
-            // Use human-friendly tick intervals as calculated
-            interval: function (index) {
-                return ticks.includes(index);
-            }
         }
     };
 

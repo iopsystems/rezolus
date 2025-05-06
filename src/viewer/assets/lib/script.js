@@ -17,11 +17,7 @@ import {
     createMultiSeriesChartOption
 } from './multi.js';
 import {
-    formatDateTime,
-    isChartVisible,
-    updateChartsAfterZoom,
     setupChartSync,
-    calculateHumanFriendlyTicks
 } from './utils.js';
 // Import the global color mapper for consistent cgroup colors
 import globalColorMapper from './colormap.js';
@@ -130,8 +126,11 @@ const Plot = {
                         // Enable brush select for zooming
                         chart.dispatchAction({
                             type: 'takeGlobalCursor',
-                            key: 'dataZoomSelect',
-                            dataZoomSelectActive: true
+                            key: 'brush',
+                            brushOption: {
+                                brushType: 'lineX',
+                                brushMode: 'multiple'
+                            }
                         });
 
                         // Add this chart to the chart sync system
@@ -386,48 +385,8 @@ m.route(document.body, "/overview", {
                         });
                     },
                     oncreate(vnode) {
-                        // Set up scroll handler to check for charts needing updates
-                        const scrollHandler = () => {
-                            if (state.chartsNeedingZoomUpdate.size > 0 && !state.isZoomSyncing) {
-                                // Get all chart IDs that need updates
-                                const chartIdsToUpdate = [...state.chartsNeedingZoomUpdate];
-
-                                // Check each chart if it's now visible
-                                for (const chartId of chartIdsToUpdate) {
-                                    const chart = state.initializedCharts.get(chartId);
-                                    if (chart && isChartVisible(chart.getDom())) {
-                                        // Chart is now visible, apply zoom update
-                                        try {
-                                            state.isZoomSyncing = true;
-                                            chart.dispatchAction({
-                                                type: 'dataZoom',
-                                                start: state.globalZoom.start,
-                                                end: state.globalZoom.end
-                                            });
-
-                                            // Remove from update list
-                                            state.chartsNeedingZoomUpdate.delete(chartId);
-                                        } finally {
-                                            setTimeout(() => {
-                                                state.isZoomSyncing = false;
-                                            }, 0);
-                                        }
-                                    }
-                                }
-                            }
-                        };
-
-                        // Attach scroll listener
-                        window.addEventListener('scroll', scrollHandler, {
-                            passive: true
-                        });
-                        vnode.state.scrollHandler = scrollHandler;
                     },
                     onremove(vnode) {
-                        // Clean up scroll handler
-                        if (vnode.state.scrollHandler) {
-                            window.removeEventListener('scroll', vnode.state.scrollHandler);
-                        }
                     }
                 });
             });

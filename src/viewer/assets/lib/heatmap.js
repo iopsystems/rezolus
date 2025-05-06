@@ -4,7 +4,6 @@ import {
     createAxisLabelFormatter
 } from './units.js';
 import {
-    calculateHumanFriendlyTicks,
     formatDateTime
 } from './utils.js';
 
@@ -65,31 +64,6 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
             minValue = Math.min(minValue, value);
             maxValue = Math.max(maxValue, value);
         });
-    }
-
-    // IMPROVED TICK CALCULATION: Force recalculation of ticks when zoom state changes
-    let ticks;
-    const zoomState = `${state.globalZoom.start}-${state.globalZoom.end}`;
-
-    // Check if we need to recalculate ticks (zoom changed or ticks are empty)
-    if (state.sharedAxisConfig.lastZoomState !== zoomState ||
-        state.sharedAxisConfig.visibleTicks.length === 0 ||
-        Date.now() - state.sharedAxisConfig.lastUpdate > 1000) {
-
-        // Calculate ticks based on zoom state
-        ticks = calculateHumanFriendlyTicks(
-            originalTimeData,
-            state.globalZoom.start,
-            state.globalZoom.end
-        );
-
-        // Store in shared config for chart synchronization
-        state.sharedAxisConfig.visibleTicks = ticks;
-        state.sharedAxisConfig.lastUpdate = Date.now();
-        state.sharedAxisConfig.lastZoomState = zoomState;
-    } else {
-        // Use existing ticks from shared config
-        ticks = state.sharedAxisConfig.visibleTicks;
     }
 
     // Ensure maxValue is always at least slightly higher than minValue for visualization
@@ -183,10 +157,6 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
                 }
                 return value;
             },
-            // IMPROVED INTERVAL: Use more precisely calculated tick intervals
-            interval: function (index) {
-                return ticks.includes(index);
-            }
         }
     };
 
