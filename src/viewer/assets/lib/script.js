@@ -2,9 +2,6 @@
 
 // Import our modular components
 import {
-    PlotOpts
-} from './plot.js';
-import {
     createLineChartOption
 } from './line.js';
 import {
@@ -16,9 +13,6 @@ import {
 import {
     createMultiSeriesChartOption
 } from './multi.js';
-import {
-    setupChartSync,
-} from './utils.js';
 // Import the global color mapper for consistent cgroup colors
 import globalColorMapper from './colormap.js';
 
@@ -115,15 +109,6 @@ const Plot = {
                         chart.setOption(option);
                         chart.group = 'connected_charts';
 
-                        // Apply global zoom state if it exists
-                        if (state.globalZoom.isZoomed) {
-                            chart.dispatchAction({
-                                type: 'dataZoom',
-                                start: state.globalZoom.start,
-                                end: state.globalZoom.end
-                            });
-                        }
-
                         // Enable brush select for zooming
                         chart.dispatchAction({
                             type: 'takeGlobalCursor',
@@ -134,26 +119,11 @@ const Plot = {
                             }
                         });
 
-                        // Add this chart to the chart sync system
-                        setupChartSync([chart], state);
-
                         // Store chart in vnode state for updates and cleanup
                         vnode.state.chart = chart;
                     } else {
                         // Chart was already initialized, just reference it
                         vnode.state.chart = state.initializedCharts.get(chartId);
-
-                        // Check if this chart needs a zoom update
-                        if (state.chartsNeedingZoomUpdate.has(chartId)) {
-                            vnode.state.chart.dispatchAction({
-                                type: 'dataZoom',
-                                start: state.globalZoom.start,
-                                end: state.globalZoom.end
-                            });
-
-                            // Remove from charts needing update
-                            state.chartsNeedingZoomUpdate.delete(chartId);
-                        }
                     }
 
                     // Once initialized, we can stop observing
@@ -178,35 +148,6 @@ const Plot = {
         window.addEventListener('resize', resizeHandler);
         vnode.state.resizeHandler = resizeHandler;
         vnode.state.observer = observer;
-    },
-
-    onupdate: function (vnode) {
-        // Update chart if data changed and chart is initialized
-        if (vnode.state.chart) {
-            // Update original time data if needed
-            if (vnode.attrs.data && vnode.attrs.data.length > 0 && vnode.attrs.data[0]) {
-                vnode.state.chart.originalTimeData = vnode.attrs.data[0];
-            } else if (vnode.attrs.time_data) {
-                vnode.state.chart.originalTimeData = vnode.attrs.time_data;
-            }
-
-            // Update the chart
-            const option = createChartOption(vnode.attrs);
-            vnode.state.chart.setOption(option);
-
-            // Check if this chart needs a zoom update
-            const chartId = vnode.attrs.opts.id;
-            if (state.chartsNeedingZoomUpdate.has(chartId)) {
-                vnode.state.chart.dispatchAction({
-                    type: 'dataZoom',
-                    start: state.globalZoom.start,
-                    end: state.globalZoom.end
-                });
-
-                // Remove from charts needing update
-                state.chartsNeedingZoomUpdate.delete(chartId);
-            }
-        }
     },
 
     onremove: function (vnode) {
@@ -303,27 +244,6 @@ const state = {
     current: null,
     // Store initialized charts to prevent re-rendering
     initializedCharts: new Map(),
-    // Global zoom state to apply to all charts
-    globalZoom: {
-        start: 0,
-        end: 100,
-        isZoomed: false
-    },
-    // Flag to prevent recursive synchronization
-    isZoomSyncing: false,
-    // Flag to prevent recursive cursor updates
-    isCursorSyncing: false,
-    // Track which charts need zoom update (for lazy updating)
-    chartsNeedingZoomUpdate: new Set(),
-    // Store shared axis tick settings for consistency across charts
-    sharedAxisConfig: {
-        // Track visible tick indices for consistent tick spacing
-        visibleTicks: [],
-        // Store last update timestamp to avoid too frequent recalculations
-        lastUpdate: 0,
-        // NEW: Track the last zoom state to detect changes and force recalculation
-        lastZoomState: "0-100"
-    },
     // Make the color mapper available in the state for potential future use
     colorMapper: globalColorMapper
 };
@@ -343,28 +263,6 @@ m.route(document.body, "/overview", {
             // Clear initialized charts when changing sections
             if (requestedPath !== m.route.get()) {
                 state.initializedCharts.clear();
-
-                // Reset global zoom state when changing sections
-                state.globalZoom = {
-                    start: 0,
-                    end: 100,
-                    isZoomed: false
-                };
-
-                // Reset zoom state tracking
-                state.sharedAxisConfig.lastZoomState = "0-100";
-
-                // Clear tick configuration to force recalculation
-                state.sharedAxisConfig.visibleTicks = [];
-                state.sharedAxisConfig.lastUpdate = 0;
-
-                // Clear the charts needing update set
-                state.chartsNeedingZoomUpdate.clear();
-
-                // IMPORTANT: DO NOT clear the color mapper when changing sections
-                // This ensures consistent colors for cgroups across ALL views
-                // The deterministic hash-based mapping will ensure colors remain consistent
-                // even with page refreshes
             }
 
             const url = `/data/${params.section}.json`;
