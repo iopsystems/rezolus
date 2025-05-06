@@ -110,67 +110,6 @@ export function setupChartSync(charts, state) {
                 }, 0);
             }
         });
-
-        // Sync cursor across charts
-        mainChart.on('updateAxisPointer', function (event) {
-            // Prevent infinite recursion
-            if (state.isCursorSyncing) return;
-
-            try {
-                // Set synchronization flag
-                state.isCursorSyncing = true;
-
-                // Update all other charts when this chart's cursor moves
-                state.initializedCharts.forEach(chart => {
-                    if (chart !== mainChart) {
-                        chart.dispatchAction({
-                            type: 'updateAxisPointer',
-                            currTrigger: 'mousemove',
-                            x: event.topX,
-                            y: event.topY
-                        });
-                    }
-                });
-            } finally {
-                // Reset flag after a short delay
-                setTimeout(() => {
-                    state.isCursorSyncing = false;
-                }, 0);
-            }
-        });
-
-        // Sync zooming across charts and update global state
-        mainChart.on('dataZoom', function (event) {
-            // Prevent infinite recursion by using a flag
-            if (state.isZoomSyncing) return;
-
-            // Only sync zooming actions initiated by user interaction
-            if (event.batch) {
-                try {
-                    // Set synchronization flag to prevent recursion
-                    state.isZoomSyncing = true;
-
-                    // Get zoom range from the event
-                    const {
-                        start,
-                        end
-                    } = event.batch[0];
-
-                    // Update global zoom state
-                    state.globalZoom.start = start;
-                    state.globalZoom.end = end;
-                    state.globalZoom.isZoomed = start !== 0 || end !== 100;
-
-                    // NEW: Update the tracked zoom state
-                    state.sharedAxisConfig.lastZoomState = `${start}-${end}`;
-                } finally {
-                    // Always reset the synchronization flag to allow future events
-                    setTimeout(() => {
-                        state.isZoomSyncing = false;
-                    }, 0);
-                }
-            }
-        });
     });
 }
 
