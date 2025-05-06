@@ -1,21 +1,15 @@
-// line.js - Line chart configuration and rendering with fixed time axis handling
-
 import {
     createAxisLabelFormatter,
 } from './units.js';
-import {
-    formatDateTime
-} from './utils.js';
 
 /**
- * Creates a line chart configuration for ECharts with reliable time axis
+ * Creates a line chart configuration for ECharts
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
- * @param {Object} state - Global state object for synchronization
  * @returns {Object} ECharts configuration object
  */
-export function createLineChartOption(baseOption, plotSpec, state) {
+export function createLineChartOption(baseOption, plotSpec) {
     const {
         data,
         opts
@@ -25,86 +19,25 @@ export function createLineChartOption(baseOption, plotSpec, state) {
         return baseOption;
     }
 
-    // For line charts, we expect the classic 2-row format: [times, values]
-    const timeData = data[0];
+    const [timeData, valueData] = data;
 
-    // Store original timestamps for calculations - critical for reliable zooming
-    const originalTimeData = timeData.slice();
-
-    // Format timestamps for display
-    const formattedTimeData = originalTimeData.map(timestamp =>
-        formatDateTime(timestamp, 'time')
-    );
-
-    const valueData = data[1];
+    const zippedData = timeData.map((t, i) => [t * 1000, valueData[i]]);
 
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
-    const yAxisLabel = format.y_axis_label || format.axis_label;
-    const valueLabel = format.value_label;
+    // const yAxisLabel = format.y_axis_label || format.axis_label;
+    // const valueLabel = format.value_label;
     const logScale = format.log_scale;
     const minValue = format.min;
     const maxValue = format.max;
 
-    // Configure tooltip with unit formatting if specified
-    let tooltipFormatter;
-    if (unitSystem) {
-        tooltipFormatter = {
-            formatter: function (params) {
-                // Handle both array of params and single param
-                if (!Array.isArray(params)) params = [params];
-
-                // Get the timestamp from the original data, not the formatted string
-                const index = params[0].dataIndex;
-                // Use the original timestamp to ensure correct time display
-                const fullTimestamp = (index >= 0 && index < originalTimeData.length) ?
-                    formatDateTime(originalTimeData[index], 'full') :
-                    formatDateTime(Date.now() / 1000, 'full');
-
-                // Start with the timestamp
-                let result = `<div>${fullTimestamp}</div>`;
-
-                // Add each series with right-justified values using flexbox
-                params.forEach(param => {
-                    // Format the value according to unit system
-                    let formattedValue;
-                    if (param.value !== undefined && param.value !== null) {
-                        formattedValue = createAxisLabelFormatter(unitSystem)(param.value);
-                    } else {
-                        formattedValue = "N/A";
-                    }
-
-                    // Create a flex container with the series on the left and value on the right
-                    result +=
-                        `<div style="display:flex;justify-content:space-between;align-items:center;margin:3px 0;">
-              <div>
-                <span style="display:inline-block;margin-right:5px;border-radius:50%;width:10px;height:10px;background-color:${param.color};"></span> 
-                ${param.seriesName}
-              </div>
-              <div style="margin-left:15px;"><strong>${formattedValue}</strong></div>
-            </div>`;
-                });
-
-                return result;
-            }
-        };
-    }
-
-    // Standardized grid with consistent spacing for all charts
-    const updatedGrid = {
-        left: '14%', // Fixed generous margin for all charts
-        right: '5%',
-        top: '40',
-        bottom: '40',
-        containLabel: false
-    };
-
-    // Create Y-axis configuration with label and unit formatting
     const yAxis = {
         type: logScale ? 'log' : 'value',
         logBase: 10,
         scale: true,
+        min: minValue,
+        max: maxValue,
         axisLine: {
             lineStyle: {
                 color: '#ABABAB'
@@ -130,15 +63,10 @@ export function createLineChartOption(baseOption, plotSpec, state) {
         }
     };
 
-    // Set min/max if specified
-    if (minValue !== undefined) yAxis.min = minValue;
-    if (maxValue !== undefined) yAxis.max = maxValue;
-
-    // THE FIX: Use a more reliable time axis configuration that preserves the relationship
-    // between data indices and their corresponding timestamps during zoom operations
     const xAxis = {
-        type: 'category',
-        data: formattedTimeData,
+        type: 'time',
+        min: 'dataMin',
+        max: 'dataMax',
         axisLine: {
             lineStyle: {
                 color: '#ABABAB'
@@ -146,21 +74,16 @@ export function createLineChartOption(baseOption, plotSpec, state) {
         },
         axisLabel: {
             color: '#ABABAB',
-        }
+            formatter: '{hh}:{mm}:{ss}',
+        },
     };
 
-    // Return line chart configuration with reliable time axis
     return {
         ...baseOption,
-        grid: updatedGrid,
-        tooltip: tooltipFormatter ? {
-            ...baseOption.tooltip,
-            ...tooltipFormatter
-        } : baseOption.tooltip,
-        xAxis: xAxis,
-        yAxis: yAxis,
+        xAxis,
+        yAxis,
         series: [{
-            data: valueData,
+            data: zippedData,
             type: 'line',
             name: opts.title,
             showSymbol: false,
@@ -170,7 +93,7 @@ export function createLineChartOption(baseOption, plotSpec, state) {
             lineStyle: {
                 width: 2
             },
-            animationDuration: 0
+            animationDuration: 0, // Don't animate the line in
         }]
     };
 }

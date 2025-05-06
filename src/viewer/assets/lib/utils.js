@@ -103,9 +103,6 @@ export function setupChartSync(charts, state) {
                 // Reset shared tick configuration to force recalculation
                 state.sharedAxisConfig.visibleTicks = [];
                 state.sharedAxisConfig.lastUpdate = 0;
-
-                // Use the dedicated function to update all charts with reset zoom
-                updateChartsAfterZoom(0, 100, state);
             } finally {
                 // Reset flag after a short delay
                 setTimeout(() => {
@@ -166,9 +163,6 @@ export function setupChartSync(charts, state) {
 
                     // NEW: Update the tracked zoom state
                     state.sharedAxisConfig.lastZoomState = `${start}-${end}`;
-
-                    // Update all charts with new zoom level and tick settings
-                    updateChartsAfterZoom(start, end, state);
                 } finally {
                     // Always reset the synchronization flag to allow future events
                     setTimeout(() => {

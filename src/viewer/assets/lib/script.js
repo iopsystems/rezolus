@@ -113,6 +113,7 @@ const Plot = {
                         // Configure and render the chart based on plot style
                         const option = createChartOption(attrs);
                         chart.setOption(option);
+                        chart.group = 'connected_charts';
 
                         // Apply global zoom state if it exists
                         if (state.globalZoom.isZoomed) {
@@ -236,11 +237,11 @@ function createChartOption(plotSpec) {
     // Basic option template
     const baseOption = {
         grid: {
-            left: '10%', // Default left margin, specific chart types will override as needed
+            left: '14%',
             right: '5%',
             top: '40',
             bottom: '40',
-            containLabel: true
+            containLabel: false,
         },
         tooltip: {
             className: 'echarts-tooltip',
@@ -266,17 +267,9 @@ function createChartOption(plotSpec) {
             filterMode: 'none', // Don't filter data points outside zoom range
             xAxisIndex: 0,
             yAxisIndex: 'none',
-            start: state.globalZoom.start,
-            end: state.globalZoom.end,
+            start: 0,
+            end: 100,
             zoomLock: false
-        }, {
-            // Brush select zoom
-            type: 'slider',
-            show: false,
-            xAxisIndex: 0,
-            filterMode: 'none',
-            start: state.globalZoom.start,
-            end: state.globalZoom.end
         }],
         textStyle: {
             color: '#E0E0E0'
@@ -330,6 +323,8 @@ const state = {
     // Make the color mapper available in the state for potential future use
     colorMapper: globalColorMapper
 };
+
+echarts.connect('connected_charts');
 
 // Main application entry point
 m.route.prefix = ""; // use regular paths for navigation, eg. /overview
