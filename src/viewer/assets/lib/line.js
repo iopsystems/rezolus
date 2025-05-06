@@ -86,7 +86,7 @@ export function createLineChartOption(baseOption, plotSpec) {
             ...baseOption.tooltip,
             valueFormatter: unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
-                undefined
+                undefined,
         },
         series: [{
             data: zippedData,

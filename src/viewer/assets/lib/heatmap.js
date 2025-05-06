@@ -163,9 +163,13 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
     return {
         ...baseOption,
         tooltip: {
-            className: 'echarts-tooltip',
             position: 'top',
-            formatter: tooltipFormatter
+            formatter: tooltipFormatter,
+            textStyle: {
+                color: '#E0E0E0'
+            },
+            backgroundColor: 'rgba(50, 50, 50, 0.8)',
+            borderColor: 'rgba(70, 70, 70, 0.8)',
         },
         grid: updatedGrid,
         xAxis: xAxis,

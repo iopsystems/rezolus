@@ -88,18 +88,6 @@ main {
     height: 400px;
 }
 
-/* ECharts tooltip styling */
-.echarts-tooltip:not(:empty) {
-    /* 
-     * Styling the tooltip element like this is a bit of a hack.
-     * Only apply style if not empty, because tooltip's initial
-     * state is a VISIBLE empty div below the chart!
-     */
-    background: rgba(50, 50, 50, 0.8) !important;
-    border: 1px solid rgba(70, 70, 70, 0.8) !important;
-    color: #E0E0E0 !important;
-}
-
 /* Zoom rectangle styling */
 /* Not in use */
 .echarts-tooltip-selected-region {

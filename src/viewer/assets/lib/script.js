@@ -244,7 +244,6 @@ function createChartOption(plotSpec) {
             containLabel: false,
         },
         tooltip: {
-            className: 'echarts-tooltip',
             trigger: 'axis',
             axisPointer: {
                 type: 'cross',
@@ -252,7 +251,12 @@ function createChartOption(plotSpec) {
                 label: {
                     backgroundColor: '#505765'
                 }
-            }
+            },
+            textStyle: {
+                color: '#E0E0E0'
+            },
+            backgroundColor: 'rgba(50, 50, 50, 0.8)',
+            borderColor: 'rgba(70, 70, 70, 0.8)',
         },
         title: {
             text: opts.title,
