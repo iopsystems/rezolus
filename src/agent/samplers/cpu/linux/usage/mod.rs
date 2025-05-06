@@ -76,18 +76,12 @@ fn handle_cgroup_info(data: &[u8]) -> i32 {
 fn set_cgroup_name(id: usize, name: String) {
     if !name.is_empty() {
         CGROUP_CPU_USAGE_USER.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_USAGE_NICE.insert_metadata(id, "name".to_string(), name.clone());
         CGROUP_CPU_USAGE_SYSTEM.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_USAGE_SOFTIRQ.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_USAGE_IRQ.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_USAGE_STEAL.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_USAGE_GUEST.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_USAGE_GUEST_NICE.insert_metadata(id, "name".to_string(), name);
     }
 }
 
-fn handle_pid_info(data: &[u8]) -> i32 {
-    let mut info = bpf::types::pid_info::default();
+fn handle_task_info(data: &[u8]) -> i32 {
+    let mut info = bpf::types::task_info::default();
 
     if plain::copy_from_bytes(&mut info, data).is_ok() {
         let name = std::str::from_utf8(&info.name)
@@ -124,7 +118,7 @@ fn handle_pid_info(data: &[u8]) -> i32 {
             "".to_string()
         };
 
-        set_pid_name(info.pid as usize, info.tgid as usize, name, cg_name);
+        set_task_name(info.pid as usize, info.tgid as usize, name, cg_name);
     }
 
     0
@@ -151,13 +145,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     let cpu_usage = vec![
         &CPU_USAGE_USER,
-        &CPU_USAGE_NICE,
         &CPU_USAGE_SYSTEM,
         &CPU_USAGE_SOFTIRQ,
         &CPU_USAGE_IRQ,
-        &CPU_USAGE_STEAL,
-        &CPU_USAGE_GUEST,
-        &CPU_USAGE_GUEST_NICE,
     ];
 
     let softirq = vec![
@@ -191,13 +181,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .cpu_counters("softirq", softirq)
         .cpu_counters("softirq_time", softirq_time)
         .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
-        .packed_counters("cgroup_nice", &CGROUP_CPU_USAGE_NICE)
         .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
-        .packed_counters("cgroup_softirq", &CGROUP_CPU_USAGE_SOFTIRQ)
-        .packed_counters("cgroup_irq", &CGROUP_CPU_USAGE_IRQ)
-        .packed_counters("cgroup_steal", &CGROUP_CPU_USAGE_STEAL)
-        .packed_counters("cgroup_guest", &CGROUP_CPU_USAGE_GUEST)
-        .packed_counters("cgroup_guest_nice", &CGROUP_CPU_USAGE_GUEST_NICE)
         .packed_counters("task_usage", &TASK_CPU_USAGE)
         .ringbuf_handler("cgroup_info", handle_cgroup_info)
         .ringbuf_handler("task_info", handle_task_info)
@@ -211,13 +195,7 @@ impl SkelExt for ModSkel<'_> {
         match name {
             "cgroup_info" => &self.maps.cgroup_info,
             "cgroup_user" => &self.maps.cgroup_user,
-            "cgroup_nice" => &self.maps.cgroup_nice,
             "cgroup_system" => &self.maps.cgroup_system,
-            "cgroup_softirq" => &self.maps.cgroup_softirq,
-            "cgroup_irq" => &self.maps.cgroup_irq,
-            "cgroup_steal" => &self.maps.cgroup_steal,
-            "cgroup_guest" => &self.maps.cgroup_guest,
-            "cgroup_guest_nice" => &self.maps.cgroup_guest_nice,
             "cpu_usage" => &self.maps.cpu_usage,
             "task_info" => &self.maps.task_info,
             "task_usage" => &self.maps.task_usage,
@@ -231,8 +209,28 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} cpuacct_account_field() BPF instruction count: {}",
-            self.progs.cpuacct_account_field_kprobe.insn_cnt()
+            "{NAME} handle__sched_switch() BPF instruction count: {}",
+            self.progs.handle__sched_switch.insn_cnt()
+        );
+
+        debug!(
+            "{NAME} sys_enter() BPF instruction count: {}",
+            self.progs.sys_enter.insn_cnt()
+        );
+
+        debug!(
+            "{NAME} sys_exit() BPF instruction count: {}",
+            self.progs.sys_exit.insn_cnt()
+        );
+
+        debug!(
+            "{NAME} softirq_enter() BPF instruction count: {}",
+            self.progs.softirq_enter.insn_cnt()
+        );
+
+        debug!(
+            "{NAME} softirq_exit() BPF instruction count: {}",
+            self.progs.softirq_exit.insn_cnt()
         );
     }
 }
