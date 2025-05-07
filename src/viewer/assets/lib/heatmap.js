@@ -1,5 +1,3 @@
-// heatmap.js - Heatmap chart configuration with fixed time axis handling
-
 import {
     createAxisLabelFormatter
 } from './units.js';
@@ -8,19 +6,18 @@ import {
 } from './utils.js';
 
 /**
- * Creates a heatmap chart configuration for ECharts with reliable time axis
+ * Creates a heatmap chart configuration for ECharts
  * 
  * @param {Object} baseOption - Base chart options
  * @param {Object} plotSpec - Plot specification with data and options
- * @param {Object} state - Global state object for synchronization
  * @returns {Object} ECharts configuration object
  */
-export function createHeatmapOption(baseOption, plotSpec, state) {
+export function createHeatmapOption(baseOption, plotSpec) {
     const {
-        time_data,
+        time_data: timeData,
         data,
-        min_value,
-        max_value,
+        min_value: minValue,
+        max_value: maxValue,
         opts
     } = plotSpec;
 
@@ -28,20 +25,17 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
         return baseOption;
     }
 
-    // Store original timestamps for calculations - critical for reliable zooming
-    const originalTimeData = time_data.slice();
+    const processedData = [];
+    for (let i = 0; i < data.length; i++) {
+        const [timeIndex, y, value] = data[i];
+        if (timeIndex >= 0 && timeIndex < timeData.length) {
+            processedData.push([timeData[timeIndex] * 1000, y, value]);
+        }
+    }
 
-    // Format timestamps for display
-    const formattedTimeData = originalTimeData.map(timestamp =>
-        formatDateTime(timestamp, 'time')
-    );
-
-    // Extract all unique CPU IDs and timestamp indices
-    const xIndices = new Set();
+    // Extract all unique CPU IDs
     const yIndices = new Set();
-
     data.forEach(item => {
-        xIndices.add(item[0]); // timestamp index
         yIndices.add(item[1]); // CPU ID
     });
 
@@ -54,23 +48,6 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
         length: maxCpuId + 1
     }, (_, i) => i);
 
-    // Calculate min/max values if not provided by backend
-    let minValue = min_value !== undefined ? min_value : Infinity;
-    let maxValue = max_value !== undefined ? max_value : -Infinity;
-
-    if (minValue === Infinity || maxValue === -Infinity) {
-        data.forEach(item => {
-            const value = item[2];
-            minValue = Math.min(minValue, value);
-            maxValue = Math.max(maxValue, value);
-        });
-    }
-
-    // Ensure maxValue is always at least slightly higher than minValue for visualization
-    if (maxValue === minValue) {
-        maxValue = minValue + 0.001;
-    }
-
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
@@ -79,90 +56,68 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
 
     // Configure tooltip with unit formatting if specified
     let tooltipFormatter = function (params) {
-        const [timeIndex, cpu, value] = params.data;
+        const [time, cpu, value] = params.data;
 
-        // Use original timestamp for reliable display even during zoom/pan
-        const fullTime = timeIndex >= 0 && timeIndex < originalTimeData.length ?
-            originalTimeData[timeIndex] :
-            Date.now() / 1000;
-
-        const formattedTime = formatDateTime(fullTime, 'full'); // Use full format for tooltip
+        const formattedTime = formatDateTime(time / 1000, 'full');
 
         if (unitSystem) {
             const formatter = createAxisLabelFormatter(unitSystem);
             const labelName = valueLabel || 'Value';
-            return `Time: ${formattedTime}<br>CPU: ${cpu}<br>${labelName}: ${formatter(value)}`;
+            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${labelName}: ${formatter(value)}`;
         } else {
-            return `Time: ${formattedTime}<br>CPU: ${cpu}<br>Value: ${value.toFixed(6)}`;
+            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${value.toFixed(6)}`;
         }
     };
 
-    // Create formatted labels for visualMap if unit system is specified
-    let visualMapFormatter;
-    let visualMapText = ['High', 'Low'];
-
-    if (unitSystem) {
-        visualMapFormatter = createAxisLabelFormatter(unitSystem);
-
-        // Create descriptive labels for the color scale
-        if (valueLabel) {
-            visualMapText = [`High ${valueLabel}`, `Low ${valueLabel}`];
-        } else if (yAxisLabel) {
-            visualMapText = [`High ${yAxisLabel}`, `Low ${yAxisLabel}`];
-        }
-    }
-
-    // Standardized grid with consistent spacing for all charts
-    const updatedGrid = {
-        left: '14%', // Fixed generous margin for all charts
-        right: '5%',
-        top: '40',
-        bottom: '40',
-        containLabel: false
-    };
-
-    // IMPROVED TIME AXIS: Use a more reliable axis configuration
     const xAxis = {
-        type: 'category',
-        data: formattedTimeData,
+        type: 'time',
+        min: 'dataMin',
+        max: 'dataMax',
         splitArea: {
             show: true
         },
         axisLabel: {
             color: '#ABABAB',
-            // The critical part: use actual timestamps instead of index-based formatting
-            formatter: function (value, index) {
-                // Use the original timestamp data for consistent time display
-                if (index >= 0 && index < originalTimeData.length) {
-                    const timestamp = originalTimeData[index];
-                    const date = new Date(timestamp * 1000);
+            formatter: '{hh}:{mm}:{ss}',
+        },
+    };
 
-                    const seconds = date.getSeconds();
-                    const minutes = date.getMinutes();
-                    const hours = date.getHours();
-
-                    // Format based on time boundaries for better readability
-                    if (seconds === 0 && minutes === 0) {
-                        return `${String(hours).padStart(2, '0')}:00`;
-                    } else if (seconds === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-                    } else if (seconds % 30 === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                    } else if (seconds % 15 === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                    } else if (seconds % 5 === 0) {
-                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                    }
-                    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                }
-                return value;
-            },
+    const yAxis = {
+        type: 'category',
+        name: yAxisLabel || 'CPU',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: {
+            color: '#E0E0E0',
+            fontSize: 14,
+            padding: [0, 0, 0, 20]
+        },
+        data: continuousCpuIds,
+        splitArea: {
+            show: true
+        },
+        axisLabel: {
+            color: '#ABABAB'
         }
     };
 
     return {
         ...baseOption,
+        xAxis,
+        yAxis,
         tooltip: {
+            ...baseOption.tooltip,
+            trigger: 'item',
+            axisPointer: {
+                type: 'line',
+                animation: false,
+                lineStyle: {
+                    color: '#E0E0E0',
+                },
+                label: {
+                    backgroundColor: '#505765'
+                }
+            },
             position: 'top',
             formatter: tooltipFormatter,
             textStyle: {
@@ -171,39 +126,12 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
             backgroundColor: 'rgba(50, 50, 50, 0.8)',
             borderColor: 'rgba(70, 70, 70, 0.8)',
         },
-        grid: updatedGrid,
-        xAxis: xAxis,
-        yAxis: {
-            type: 'category',
-            name: yAxisLabel || 'CPU',
-            nameLocation: 'middle',
-            nameGap: 40,
-            nameTextStyle: {
-                color: '#E0E0E0',
-                fontSize: 14,
-                padding: [0, 0, 0, 20]
-            },
-            data: continuousCpuIds, // Use the continuous range of CPU IDs
-            splitArea: {
-                show: true
-            },
-            axisLabel: {
-                color: '#ABABAB'
-            }
-        },
         visualMap: {
+            type: 'continuous',
             min: minValue,
             max: maxValue,
             calculable: false,
             show: false, // Show the color scale
-            orient: 'horizontal',
-            left: 'center',
-            bottom: '0%',
-            textStyle: {
-                color: '#E0E0E0'
-            },
-            formatter: visualMapFormatter,
-            text: visualMapText,
             inRange: {
                 color: [
                     '#440154', '#481a6c', '#472f7d', '#414487', '#39568c',
@@ -215,7 +143,7 @@ export function createHeatmapOption(baseOption, plotSpec, state) {
         series: [{
             name: plotSpec.opts.title,
             type: 'heatmap',
-            data: data,
+            data: processedData,
             emphasis: {
                 itemStyle: {
                     shadowBlur: 10,
