@@ -19,3 +19,17 @@ static __always_inline void histogram_incr(void *array, u8 grouping_power, u64 v
     u32 idx = value_to_index(value, grouping_power);
     array_add(array, idx, 1);
 }
+
+static __always_inline void array_sub(void *array, u32 idx, u64 value) {
+    u64 *elem;
+
+    elem = bpf_map_lookup_elem(array, &idx);
+
+    if (elem) {
+        __atomic_fetch_sub(elem, value, __ATOMIC_RELAXED);
+    }
+}
+
+static __always_inline void array_decr(void *array, u32 idx) {
+    array_sub(array, idx, 1);
+}
