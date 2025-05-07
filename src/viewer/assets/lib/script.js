@@ -107,17 +107,28 @@ const Plot = {
                         // Configure and render the chart based on plot style
                         const option = createChartOption(attrs);
                         chart.setOption(option);
+
+                        // Sync all charts on the page.
                         chart.group = 'connected_charts';
 
-                        // Enable brush select for zooming
+                        // Enable drag-to-zoom
+                        // This requires the toolbox to be enabled. See the comment there for more details.
                         chart.dispatchAction({
                             type: 'takeGlobalCursor',
-                            key: 'brush',
-                            brushOption: {
-                                brushType: 'lineX',
-                                brushMode: 'multiple'
-                            }
+                            key: 'dataZoomSelect',
+                            dataZoomSelectActive: true,
                         });
+
+                        // Double click on a chart -> reset zoom level
+                        // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
+                        // TODO: Add a visible interface element to reset zoom, too.
+                        chart.getZr().on('dblclick', function () {
+                            chart.dispatchAction({
+                                type: 'dataZoom',
+                                start: 0,
+                                end: 100,
+                            })
+                        })
 
                         // Store chart in vnode state for updates and cleanup
                         vnode.state.chart = chart;
@@ -199,6 +210,24 @@ function createChartOption(plotSpec) {
             backgroundColor: 'rgba(50, 50, 50, 0.8)',
             borderColor: 'rgba(70, 70, 70, 0.8)',
         },
+        // This invisible toolbox is a workaround to have drag-to-zoom as the default behavior.
+        // We programmatically activate the zoom tool and hide the interface.
+        // https://github.com/apache/echarts/issues/13397#issuecomment-814864873
+        toolbox: {
+            orient: 'vertical',
+            itemSize: 13,
+            top: 15,
+            right: -6,
+            feature: {
+                dataZoom: {
+                    yAxisIndex: 'none',
+                    icon: {
+                        zoom: 'path://', // hack to remove zoom button
+                        back: 'path://', // hack to remove restore button
+                    },
+                },
+            },
+        },
         title: {
             text: opts.title,
             left: 'center',
@@ -206,16 +235,6 @@ function createChartOption(plotSpec) {
                 color: '#E0E0E0'
             }
         },
-        dataZoom: [{
-            // Inside zoom (mouse wheel and pinch zoom)
-            type: 'inside',
-            filterMode: 'none', // Don't filter data points outside zoom range
-            xAxisIndex: 0,
-            yAxisIndex: 'none',
-            start: 0,
-            end: 100,
-            zoomLock: false
-        }],
         textStyle: {
             color: '#E0E0E0'
         },
