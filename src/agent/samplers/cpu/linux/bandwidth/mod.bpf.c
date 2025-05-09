@@ -209,7 +209,6 @@ int throttle_cfs_rq(struct pt_regs *ctx)
 
     // record throttle start time
     u64 now = bpf_ktime_get_ns();
-    u32 cgroup_idx = (u32)cgroup_id;
     bpf_map_update_elem(&throttle_start, &cgroup_idx, &now, BPF_ANY);
 
     return 0;
