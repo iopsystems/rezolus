@@ -198,13 +198,19 @@ int throttle_cfs_rq(struct pt_regs *ctx)
         bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
     }
 
+    // increment the throttle count
+    array_incr(&throttled_count, cgroup_id);
+
+    // lookup start time, don't update it if currently non-zero
+    u32 cgroup_idx = (u32)cgroup_id;
+    u64 *start_ts = bpf_map_lookup_elem(&throttle_start, &cgroup_idx);
+    if (!start_ts || *start_ts != 0)
+        return 0;
+
     // record throttle start time
     u64 now = bpf_ktime_get_ns();
     u32 cgroup_idx = (u32)cgroup_id;
     bpf_map_update_elem(&throttle_start, &cgroup_idx, &now, BPF_ANY);
-
-    // increment the throttle count
-    array_incr(&throttled_count, cgroup_id);
 
     return 0;
 }
