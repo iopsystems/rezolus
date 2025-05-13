@@ -55,12 +55,15 @@ main {
     color: var(--fg);
     text-decoration: underline;
     color: #aaa;
+    cursor: pointer;
+    z-index: 2;
 }
 
 #sidebar a.selected {
     color: #fff;
     font-weight: bold;
     text-decoration: none;
+    cursor: default;
 }
 
 #groups {
