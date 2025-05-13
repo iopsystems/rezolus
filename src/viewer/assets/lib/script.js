@@ -77,9 +77,6 @@ const Plot = {
         } = vnode;
         const chartDom = vnode.dom;
 
-        // Store the attributes for later reference
-        chartDom._attrs = attrs;
-
         // Set up the Intersection Observer to lazy load the chart
         const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
@@ -303,6 +300,10 @@ m.route(document.body, "/overview", {
 
             // Clear initialized charts when changing sections
             if (requestedPath !== m.route.get()) {
+                state.firstChart = null;
+                state.initializedCharts.forEach((chart) => {
+                    chart.dispose();
+                });
                 state.initializedCharts.clear();
             }
 
