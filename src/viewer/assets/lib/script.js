@@ -105,28 +105,48 @@ const Plot = {
                         const option = createChartOption(attrs);
                         chart.setOption(option);
 
-                        // Match zoom state of existing chart group.
-                        if (state.firstChart === null) {
-                            state.firstChart = chart;
-                            console.log("First chart: ", state.firstChart);
-                        } else {
-                            // Get zoom state from existing chart
-                            const dataZoomOption = state.firstChart.getModel().getComponent('dataZoom').option;
+                        // Match existing zoom state.
+                        if (state.zoomState !== null) {
 
-                            if (dataZoomOption && dataZoomOption.start !== 0 && dataZoomOption.end !== 100) {
+                            if (state.zoomState.start !== 0 || state.zoomState.end !== 100) {
                                 // Apply the zoom state to the new chart
                                 chart.dispatchAction({
                                     type: 'dataZoom',
-                                    start: dataZoomOption.start,
-                                    end: dataZoomOption.end,
-                                    startValue: dataZoomOption.startValue,
-                                    endValue: dataZoomOption.endValue,
+                                    start: state.zoomState.start,
+                                    end: state.zoomState.end,
+                                    startValue: state.zoomState.startValue,
+                                    endValue: state.zoomState.endValue,
                                 });
                             }
                         }
 
-                        // Sync all charts on the page.
-                        chart.group = 'connected_charts';
+                        chart.on('datazoom', function (event) {
+                            // 'datazoom' events triggered by the user vs dispatched by us have different formats:
+                            // User-triggered events have a batch property with the details under it.
+                            // (We don't want to trigger on our own dispatched zoom actions, so this is convenient.)
+                            if (!event.batch) {
+                                return;
+                            }
+
+                            const details = event.batch[0];
+
+                            const { start, end, startValue, endValue } = details;
+                            state.zoomState = {
+                                start,
+                                end,
+                                startValue,
+                                endValue,
+                            };
+                            state.initializedCharts.forEach(chart => {
+                                chart.dispatchAction({
+                                    type: 'dataZoom',
+                                    start,
+                                    end,
+                                    startValue,
+                                    endValue,
+                                });
+                            });
+                        });
 
                         // Enable drag-to-zoom
                         // This requires the toolbox to be enabled. See the comment there for more details.
@@ -140,11 +160,17 @@ const Plot = {
                         // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
                         // TODO: Add a visible interface element to reset zoom, too.
                         chart.getZr().on('dblclick', function () {
-                            chart.dispatchAction({
-                                type: 'dataZoom',
+                            state.zoomState = {
                                 start: 0,
                                 end: 100,
-                            })
+                            };
+                            state.initializedCharts.forEach(chart => {
+                                chart.dispatchAction({
+                                    type: 'dataZoom',
+                                    start: 0,
+                                    end: 100,
+                                });
+                            });
                         })
 
                         // Store chart in vnode state for updates and cleanup
@@ -277,14 +303,14 @@ function createChartOption(plotSpec) {
 
 // Application state management
 const state = {
-    // newly added charts can copy this one's zoom state
-    firstChart: null,
+    // track zoom state for synchronization across charts
+    zoomState: null,
     // for tracking current visualization state
     current: null,
     // Store initialized charts to prevent re-rendering
     initializedCharts: new Map(),
     // Make the color mapper available in the state for potential future use
-    colorMapper: globalColorMapper
+    colorMapper: globalColorMapper,
 };
 
 echarts.connect('connected_charts');
@@ -301,7 +327,7 @@ m.route(document.body, "/overview", {
 
             // Clear initialized charts when changing sections
             if (requestedPath !== m.route.get()) {
-                state.firstChart = null;
+                state.zoomState = null;
                 state.initializedCharts.forEach((chart) => {
                     chart.dispose();
                 });
