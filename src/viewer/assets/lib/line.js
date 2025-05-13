@@ -63,24 +63,8 @@ export function createLineChartOption(baseOption, plotSpec) {
         }
     };
 
-    const xAxis = {
-        type: 'time',
-        min: 'dataMin',
-        max: 'dataMax',
-        axisLine: {
-            lineStyle: {
-                color: '#ABABAB'
-            }
-        },
-        axisLabel: {
-            color: '#ABABAB',
-            formatter: '{hh}:{mm}:{ss}',
-        },
-    };
-
     return {
         ...baseOption,
-        xAxis,
         yAxis,
         tooltip: {
             ...baseOption.tooltip,

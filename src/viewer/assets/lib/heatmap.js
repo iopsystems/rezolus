@@ -99,19 +99,6 @@ export function createHeatmapOption(baseOption, plotSpec) {
         );
     }
 
-    const xAxis = {
-        type: 'time',
-        min: 'dataMin',
-        max: 'dataMax',
-        splitArea: {
-            show: true
-        },
-        axisLabel: {
-            color: '#ABABAB',
-            formatter: '{hh}:{mm}:{ss}',
-        },
-    };
-
     const yAxis = {
         type: 'category',
         name: yAxisLabel || 'CPU',
@@ -133,7 +120,6 @@ export function createHeatmapOption(baseOption, plotSpec) {
 
     return {
         ...baseOption,
-        xAxis,
         yAxis,
         tooltip: {
             ...baseOption.tooltip,

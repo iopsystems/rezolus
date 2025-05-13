@@ -238,6 +238,19 @@ function createChartOption(plotSpec) {
             bottom: '40',
             containLabel: false,
         },
+        xAxis: {
+            type: 'time',
+            min: 'dataMin',
+            max: 'dataMax',
+            axisLine: {
+                lineStyle: {
+                    color: '#ABABAB'
+                }
+            },
+            axisLabel: {
+                color: '#ABABAB',
+            },
+        },
         tooltip: {
             trigger: 'axis',
             axisPointer: {

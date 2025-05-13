@@ -108,26 +108,10 @@ export function createScatterChartOption(baseOption, plotSpec) {
         }
     };
 
-    const xAxis = {
-        type: 'time',
-        min: 'dataMin',
-        max: 'dataMax',
-        axisLine: {
-            lineStyle: {
-                color: '#ABABAB'
-            }
-        },
-        axisLabel: {
-            color: '#ABABAB',
-            formatter: '{hh}:{mm}:{ss}',
-        }
-    };
-
     // Return scatter chart configuration with reliable time axis
     return {
         ...baseOption,
-        xAxis: xAxis,
-        yAxis: yAxis,
+        yAxis,
         tooltip: {
             ...baseOption.tooltip,
             valueFormatter: unitSystem ?

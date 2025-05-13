@@ -74,21 +74,6 @@ export function createMultiSeriesChartOption(baseOption, plotSpec) {
         }
     };
 
-    const xAxis = {
-        type: 'time',
-        min: 'dataMin',
-        max: 'dataMax',
-        axisLine: {
-            lineStyle: {
-                color: '#ABABAB'
-            }
-        },
-        axisLabel: {
-            color: '#ABABAB',
-            formatter: '{hh}:{mm}:{ss}',
-        }
-    };
-
     // Create series configurations for each data series
     const series = [];
 
@@ -134,8 +119,7 @@ export function createMultiSeriesChartOption(baseOption, plotSpec) {
 
     return {
         ...baseOption,
-        xAxis: xAxis,
-        yAxis: yAxis,
+        yAxis,
         tooltip: {
             ...baseOption.tooltip,
             valueFormatter: unitSystem ?
