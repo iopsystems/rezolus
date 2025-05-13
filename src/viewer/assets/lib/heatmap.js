@@ -110,9 +110,6 @@ export function createHeatmapOption(baseOption, plotSpec) {
             padding: [0, 0, 0, 20]
         },
         data: continuousCpuIds,
-        splitArea: {
-            show: true
-        },
         axisLabel: {
             color: '#ABABAB'
         }
