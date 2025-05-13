@@ -69,6 +69,36 @@ export function createHeatmapOption(baseOption, plotSpec) {
         }
     };
 
+    const renderItem = function (params, api) {
+        var x = api.value(0);
+        var y = api.value(1);
+        var start = api.coord([x, y]);
+        var end = api.coord([x + 1000, y]);
+        var height = api.size([0, 1])[1];
+        var rectShape = echarts.graphic.clipRectByRect(
+            {
+                x: start[0],
+                y: start[1] - height / 2,
+                width: end[0] - start[0],
+                height: height
+            },
+            {
+                x: params.coordSys.x,
+                y: params.coordSys.y,
+                width: params.coordSys.width,
+                height: params.coordSys.height
+            }
+        );
+        return (
+            rectShape && {
+                type: 'rect',
+                transition: ['shape'],
+                shape: rectShape,
+                style: api.style()
+            }
+        );
+    }
+
     const xAxis = {
         type: 'time',
         min: 'dataMin',
@@ -142,7 +172,8 @@ export function createHeatmapOption(baseOption, plotSpec) {
         },
         series: [{
             name: plotSpec.opts.title,
-            type: 'heatmap',
+            type: 'custom',
+            renderItem,
             data: processedData,
             emphasis: {
                 itemStyle: {
