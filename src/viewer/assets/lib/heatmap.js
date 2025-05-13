@@ -62,8 +62,8 @@ export function createHeatmapOption(baseOption, plotSpec) {
 
         if (unitSystem) {
             const formatter = createAxisLabelFormatter(unitSystem);
-            const labelName = valueLabel || 'Value';
-            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${labelName}: ${formatter(value)}`;
+            const label = valueLabel ? `${valueLabel}: ` : '';
+            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${label}<span style="font-weight: bold; float: right;">${formatter(value)}</span>`;
         } else {
             return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${value.toFixed(6)}`;
         }
