@@ -242,6 +242,15 @@ function createChartOption(plotSpec) {
             type: 'time',
             min: 'dataMin',
             max: 'dataMax',
+            // splitNumber appears to control the MINIMUM number of ticks. The max number is much higher.
+            // This value is lowered from the default of 5 in order to reduce the max number of ticks,
+            // which cause visual overlap of labels. It feels like this shouldn't be necessary.
+            // Testing showed that their "automatic" determination of how many ticks fit is independent
+            // of the size of the chart. So this value is trying to be empirically correct for charts of
+            // a reasonable size (which is dependent on the size of the window).
+            // TODO: should we adjust split number based on the size of the window? Or take x axis labels
+            // into our own hands?
+            splitNumber: 4,
             axisLine: {
                 lineStyle: {
                     color: '#ABABAB'
