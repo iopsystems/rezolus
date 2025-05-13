@@ -215,7 +215,8 @@ function createChartOption(plotSpec) {
         tooltip: {
             trigger: 'axis',
             axisPointer: {
-                type: 'cross',
+                type: 'line',
+                snap: true,
                 animation: false,
                 label: {
                     backgroundColor: '#505765'
