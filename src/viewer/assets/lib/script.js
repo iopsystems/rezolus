@@ -108,6 +108,26 @@ const Plot = {
                         const option = createChartOption(attrs);
                         chart.setOption(option);
 
+                        // Match zoom state of existing chart group.
+                        if (state.firstChart === null) {
+                            state.firstChart = chart;
+                            console.log("First chart: ", state.firstChart);
+                        } else {
+                            // Get zoom state from existing chart
+                            const dataZoomOption = state.firstChart.getModel().getComponent('dataZoom').option;
+
+                            if (dataZoomOption && dataZoomOption.start !== 0 && dataZoomOption.end !== 100) {
+                                // Apply the zoom state to the new chart
+                                chart.dispatchAction({
+                                    type: 'dataZoom',
+                                    start: dataZoomOption.start,
+                                    end: dataZoomOption.end,
+                                    startValue: dataZoomOption.startValue,
+                                    endValue: dataZoomOption.endValue,
+                                });
+                            }
+                        }
+
                         // Sync all charts on the page.
                         chart.group = 'connected_charts';
 
@@ -259,6 +279,8 @@ function createChartOption(plotSpec) {
 
 // Application state management
 const state = {
+    // newly added charts can copy this one's zoom state
+    firstChart: null,
     // for tracking current visualization state
     current: null,
     // Store initialized charts to prevent re-rendering
