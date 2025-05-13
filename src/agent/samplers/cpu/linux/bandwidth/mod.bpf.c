@@ -145,6 +145,7 @@ int throttle_cfs_rq(struct pt_regs *ctx)
 {
     struct cfs_rq *cfs_rq = (struct cfs_rq *)PT_REGS_PARM1(ctx);
     int cpu = BPF_CORE_READ(cfs_rq, rq, cpu);
+
     // get the cgroup id and serial number
 
     struct task_group *tg = BPF_CORE_READ(cfs_rq, tg);
