@@ -279,10 +279,10 @@ impl NamedSeries {
 
         for (name, series) in self.inner.iter() {
             let score = rank(series);
-            scores.push((name, score));
+            scores.push((name, (score * 1_000_000_000.0) as u64));
         }
 
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scores.sort_by(|a, b| b.1.cmp(&a.1));
 
         // If we have more than n series, calculate the "other" category
         if scores.len() > n {
@@ -342,10 +342,10 @@ impl NamedSeries {
 
         for (name, series) in self.inner.iter() {
             let score = rank(series);
-            scores.push((name, score));
+            scores.push((name, (score * 1_000_000_000.0) as u64));
         }
 
-        scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        scores.sort_by(|a, b| a.1.cmp(&b.1));
 
         // If we have more than n series, calculate the "other" category
         if scores.len() > n {

@@ -137,12 +137,15 @@ pub fn run(config: Config) {
     // code to load data from parquet will go here
     let mut state = AppState::new(config.clone());
 
+    info!("Loading data from parquet file...");
     let data = Tsdb::load(&config.input)
         .map_err(|e| {
             eprintln!("failed to load data from parquet: {e}");
             std::process::exit(1);
         })
         .unwrap();
+
+    info!("Generating dashboards...");
 
     // define our sections
     let sections = vec![
@@ -735,6 +738,18 @@ pub fn run(config: Config) {
         serde_json::to_string(&cgroups).unwrap(),
     );
 
+    // open in browser
+    let c = config.clone();
+    rt.spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        if open::that(format!("http://{}", c.listen)).is_err() {
+            info!("Use your browser to view: http://{}", c.listen);
+        } else {
+            info!("Launched browser to view: http://{}", c.listen);
+        }
+    });
+
     // launch the HTTP listener
     let c = config.clone();
     rt.block_on(async move { serve(c, state).await });
@@ -771,6 +786,8 @@ async fn serve(config: Arc<Config>, state: AppState) {
     axum::serve(listener, app)
         .await
         .expect("failed to run http server");
+
+
 }
 
 struct AppState {
