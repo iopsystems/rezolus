@@ -109,6 +109,18 @@ export function createHeatmapOption(baseOption, plotSpec) {
     return {
         ...baseOption,
         yAxis,
+        // Echarts has two render modes for hover effects. When number of chart elements is
+        // below this threshold, it just draws the hover effect onto the same canvas.
+        // When above this threshold, it draws them onto a separate canvas element (zrender's
+        // "hoverLayer", which has data-zr-dom-id="zr_100000").
+        // Echarts has a bug that when you zoom in and thereby transition from one mode to the other,
+        // the hover effect on the hoverLayer is not erased. It sticks around as a weird
+        // graphical artifact.
+        // Setting the hoverLayerThreshold to 0 means that it won't switch between modes. Drawing
+        // onto the separate layer apparently has some drawbacks according to echarts, but I don't
+        // see any detriment for us. https://echarts.apache.org/en/option.html#hoverLayerThreshold
+        // (I haven't seen any artifacts on our other chart types, so only adding it to heatmaps.)
+        hoverLayerThreshold: 0,
         tooltip: {
             ...baseOption.tooltip,
             trigger: 'item',
