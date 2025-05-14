@@ -113,8 +113,7 @@ const UNIT_SYSTEMS = {
             suffix: '%',
             divisor: 1,
             multiplier: 100
-        } // Added multiplier for percentage
-        ]
+        }]
     },
 
     // Frequency (Hz to GHz)
@@ -161,7 +160,7 @@ const UNIT_SYSTEMS = {
         }]
     },
 
-    // Rate (no units, just numbers with K/s, M/s, B/s suffixes)
+    // Rate (no units other than /s, just numbers with K/s, M/s, B/s suffixes)
     rate: {
         base: '',
         scales: [{
@@ -202,6 +201,7 @@ function formatWithUnit(value, unitSystem, precision = 2) {
     const absValue = Math.abs(value);
 
     // Normalize unit system name - handle both 'time' and 'time_ns'
+    // 5/14/2025: I don't know if this is needed.
     const normalizedUnitSystem = unitSystem === 'time_ns' ? 'time' : unitSystem;
 
     // Get the unit system configuration
@@ -257,35 +257,9 @@ function createAxisLabelFormatter(unitSystem, precision = 2) {
     };
 }
 
-
-/**
- * Creates a tooltip formatter with appropriate unit scaling
- * 
- * @param {string} unitSystem - The unit system to use
- * @param {number} precision - Number of decimal places (default: 2)
- * @return {Function} Formatter function for tooltip values
- */
-function createTooltipFormatter(unitSystem, precision = 2) {
-    return function (params) {
-        // The params object includes the value to format
-        if (Array.isArray(params.value)) {
-            // Handle scatter plots with [x, y] values
-            // params.value[0] is the timestamp (already formatted)
-            // params.value[1] is the actual value that needs unit formatting
-            const formatted = formatWithUnit(params.value[1], unitSystem, precision);
-            return `${formatted.value} ${formatted.unit}`;
-        } else {
-            // Handle normal line plots where params.value is the numeric value
-            const formatted = formatWithUnit(params.value, unitSystem, precision);
-            return `${formatted.value} ${formatted.unit}`;
-        }
-    };
-}
-
 // Export the utility functions
 export {
     UNIT_SYSTEMS,
     formatWithUnit,
     createAxisLabelFormatter,
-    createTooltipFormatter
 };

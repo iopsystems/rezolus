@@ -58,7 +58,7 @@ export function createHeatmapOption(baseOption, plotSpec) {
     let tooltipFormatter = function (params) {
         const [time, cpu, value] = params.data;
 
-        const formattedTime = formatDateTime(time / 1000, 'full');
+        const formattedTime = formatDateTime(time);
 
         if (unitSystem) {
             const formatter = createAxisLabelFormatter(unitSystem);

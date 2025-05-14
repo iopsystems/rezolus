@@ -1,6 +1,4 @@
-// Refactored script.js - Main application logic with modular chart components and consistent cgroup colors
 
-// Import our modular components
 import {
     createLineChartOption
 } from './line.js';
@@ -13,7 +11,6 @@ import {
 import {
     createMultiSeriesChartOption
 } from './multi.js';
-// Import the global color mapper for consistent cgroup colors
 import globalColorMapper from './colormap.js';
 
 // Sidebar component
@@ -69,7 +66,7 @@ const Group = {
     }
 };
 
-// Plot component that renders ECharts visualizations with proper time axis
+// Plot component - renders an echarts chart
 const Plot = {
     oncreate: function (vnode) {
         const {
@@ -223,7 +220,6 @@ const Plot = {
     }
 };
 
-// Create ECharts options based on plot type with human-friendly time axis
 function createChartOption(plotSpec) {
     const {
         opts
@@ -325,17 +321,13 @@ function createChartOption(plotSpec) {
 
 // Application state management
 const state = {
-    // track zoom state for synchronization across charts
+    // Zoom state - for synchronization across charts
     zoomState: null,
-    // for tracking current visualization state
-    current: null,
-    // Store initialized charts to prevent re-rendering
+    // Initialized charts - to prevent re-rendering
     initializedCharts: new Map(),
-    // Make the color mapper available in the state for potential future use
+    // Global color mapper - for consistent cgroup colors
     colorMapper: globalColorMapper,
 };
-
-echarts.connect('connected_charts');
 
 // Main application entry point
 m.route.prefix = ""; // use regular paths for navigation, eg. /overview
