@@ -202,7 +202,7 @@ int throttle_cfs_rq(struct pt_regs *ctx)
 
     // record throttle start time
     u64 now = bpf_ktime_get_ns();
-    u32 cgroup_runqueue_idx = (u32)cgroup_id * MAX_CPUS + cpu;
+    u32 cgroup_runqueue_idx = cpu * MAX_CGROUPS + (u32)cgroup_id;
     bpf_map_update_elem(&throttle_start, &cgroup_runqueue_idx, &now, BPF_ANY);
 
     // increment the throttle count
@@ -238,7 +238,7 @@ int unthrottle_cfs_rq(struct pt_regs *ctx)
         return 0;
 
     // lookup start time
-    u32 cgroup_runqueue_idx = (u32)cgroup_id * MAX_CPUS + cpu;
+    u32 cgroup_runqueue_idx = cpu * MAX_CGROUPS + (u32)cgroup_id;
     u64 *start_ts = bpf_map_lookup_elem(&throttle_start, &cgroup_runqueue_idx);
     if (!start_ts || *start_ts == 0)
         return 0;
