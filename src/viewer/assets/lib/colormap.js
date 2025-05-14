@@ -10,17 +10,76 @@ export class ColorMapper {
         // Store color assignments for cgroups
         this.colorMap = new Map();
 
-        // Color palette for assignment - using ECharts default colors plus additional colors
-        this.colorPalette = [
-            '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de',
-            '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#8d98b3',
-            '#e5cf0d', '#97b552', '#95706d', '#dc69aa', '#07a2a4',
-            '#9467bd', '#a05195', '#d45087', '#f95d6a', '#ff7c43',
-            '#ffa600'
-        ];
+        /*
+            import colorsys
 
-        // Special color for "Other" category - consistent across all charts
-        this.otherColor = '#888888'; // Medium gray
+            count = 45
+            for i in range(count):
+                h = i / count
+                if i % 3 == 0:
+                    l = .5
+                    s = .5
+                elif i % 3 == 1:
+                    l = .6
+                    s = .6
+                else:
+                    l = .4
+                    s = .7
+                    
+                (r, g, b) = colorsys.hls_to_rgb(h, l, s)
+                x = ''.join('{:02X}'.format(round(a * 255)) for a in [r, g, b])
+                print("'#" + x + "',")
+        */
+        this.colorPalette = [
+            '#BF4040',
+            '#D66C5C',
+            '#AD451F',
+            '#BF7340',
+            '#D69D5C',
+            '#AD7E1F',
+            '#BFA640',
+            '#D6CE5C',
+            '#A4AD1F',
+            '#A6BF40',
+            '#ADD65C',
+            '#6BAD1F',
+            '#73BF40',
+            '#7CD65C',
+            '#32AD1F',
+            '#40BF40',
+            '#5CD66C',
+            '#1FAD45',
+            '#40BF73',
+            '#5CD69D',
+            '#1FAD7E',
+            '#40BFA6',
+            '#5CD6CE',
+            '#1FA4AD',
+            '#40A6BF',
+            '#5CADD6',
+            '#1F6BAD',
+            '#4073BF',
+            '#5C7CD6',
+            '#1F32AD',
+            '#4040BF',
+            '#6C5CD6',
+            '#451FAD',
+            '#7340BF',
+            '#9D5CD6',
+            '#7E1FAD',
+            '#A640BF',
+            '#CE5CD6',
+            '#AD1FA4',
+            '#BF40A6',
+            '#D65CAD',
+            '#AD1F6B',
+            '#BF4073',
+            '#D65C7C',
+            '#AD1F32',
+        ]
+
+        // Always use gray for "Other" category - consistent across all charts
+        this.otherColor = '#666666';
     }
 
     /**
