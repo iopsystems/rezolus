@@ -203,6 +203,33 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_guest_nice SEC(".maps");
 
+// per-cgroup periods
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_periods SEC(".maps");
+
+// per-cgroup throttled periods
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_throttled_periods SEC(".maps");
+
+// per-cgroup throttled time
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} cgroup_throttled_time SEC(".maps");
+
 SEC("kprobe/cpuacct_account_field")
 int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 {
@@ -250,6 +277,9 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 	if (bpf_core_field_exists(current->sched_task_group)) {
 		int cgroup_id = current->sched_task_group->css.id;
 		u64	serial_nr = current->sched_task_group->css.serial_nr;
+    int nr_periods = BPF_CORE_READ(current, sched_task_group, cfs_bandwidth.nr_periods);
+    int nr_throttled = BPF_CORE_READ(current, sched_task_group, cfs_bandwidth.nr_throttled);
+    u64 throttled_time = BPF_CORE_READ(current, sched_task_group, cfs_bandwidth.throttled_time);
 
 		if (cgroup_id && cgroup_id < MAX_CGROUPS) {
 
@@ -268,6 +298,9 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 				bpf_map_update_elem(&cgroup_steal, &cgroup_id, &zero, BPF_ANY);
 				bpf_map_update_elem(&cgroup_guest, &cgroup_id, &zero, BPF_ANY);
 				bpf_map_update_elem(&cgroup_guest_nice, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&cgroup_periods, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&cgroup_throttled_periods, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&cgroup_throttled_time, &cgroup_id, &zero, BPF_ANY);
 
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
@@ -290,6 +323,10 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 				// update the serial number in the local map
 				bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
 			}
+
+      array_set_if_larger(&cgroup_periods, cgroup_id, (u64) nr_periods);
+      array_set_if_larger(&cgroup_throttled_periods, cgroup_id, (u64) nr_throttled);
+      array_set_if_larger(&cgroup_throttled_time, cgroup_id, throttled_time);
 
 			switch (index) {
 				case USER:

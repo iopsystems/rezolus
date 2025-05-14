@@ -122,6 +122,27 @@ pub static CGROUP_CPU_USAGE_GUEST: CounterGroup = CounterGroup::new(MAX_CGROUPS)
 )]
 pub static CGROUP_CPU_USAGE_GUEST_NICE: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
+#[metric(
+    name = "cgroup_cpu_bandwidth",
+    description = "The amount of cgroup cpu bandwidth periods",
+    metadata = { state = "periods", unit = "events" }
+)]
+pub static CGROUP_BANDWIDTH_PERIODS: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_cpu_bandwidth",
+    description = "The amount of cgroup cpu bandwidth throttled periods",
+    metadata = { state = "throttled_periods", unit = "events" }
+)]
+pub static CGROUP_BANDWIDTH_THROTTLED_PERIODS: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_cpu_bandwidth",
+    description = "The amount of cgroup cpu bandwidth throttled time",
+    metadata = { state = "throttled_time", unit = "nanoseconds" }
+)]
+pub static CGROUP_BANDWIDTH_THROTTLED_TIME: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
 /*
  * softirq metrics
  */

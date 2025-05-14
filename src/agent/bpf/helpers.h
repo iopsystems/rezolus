@@ -19,3 +19,13 @@ static __always_inline void histogram_incr(void *array, u8 grouping_power, u64 v
     u32 idx = value_to_index(value, grouping_power);
     array_add(array, idx, 1);
 }
+
+static __always_inline void array_set_if_larger(void *array, u32 idx, u64 value) {
+    u64 *elem;
+
+    elem = bpf_map_lookup_elem(array, &idx);
+
+    if (elem && value > *elem) {
+      bpf_map_update_elem(array, &idx, &value, BPF_ANY);
+    }
+}

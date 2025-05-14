@@ -81,7 +81,10 @@ fn set_name(id: usize, name: String) {
         CGROUP_CPU_USAGE_IRQ.insert_metadata(id, "name".to_string(), name.clone());
         CGROUP_CPU_USAGE_STEAL.insert_metadata(id, "name".to_string(), name.clone());
         CGROUP_CPU_USAGE_GUEST.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_CPU_USAGE_GUEST_NICE.insert_metadata(id, "name".to_string(), name);
+        CGROUP_CPU_USAGE_GUEST_NICE.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_BANDWIDTH_PERIODS.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_BANDWIDTH_THROTTLED_PERIODS.insert_metadata(id, "name".to_string(), name.clone());
+        CGROUP_BANDWIDTH_THROTTLED_TIME.insert_metadata(id, "name".to_string(), name);
     }
 }
 
@@ -142,6 +145,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .packed_counters("cgroup_steal", &CGROUP_CPU_USAGE_STEAL)
         .packed_counters("cgroup_guest", &CGROUP_CPU_USAGE_GUEST)
         .packed_counters("cgroup_guest_nice", &CGROUP_CPU_USAGE_GUEST_NICE)
+        .packed_counters("cgroup_bandwidth_periods", &CGROUP_BANDWIDTH_PERIODS)
+        .packed_counters("cgroup_bandwidth_throttled_periods", &CGROUP_BANDWIDTH_THROTTLED_PERIODS)
+        .packed_counters("cgroup_bandwidth_throttled_time", &CGROUP_BANDWIDTH_THROTTLED_TIME)
         .ringbuf_handler("cgroup_info", handle_event)
         .build()?;
 
@@ -160,6 +166,9 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_steal" => &self.maps.cgroup_steal,
             "cgroup_guest" => &self.maps.cgroup_guest,
             "cgroup_guest_nice" => &self.maps.cgroup_guest_nice,
+            "cgroup_bandwidth_periods" => &self.maps.cgroup_periods,
+            "cgroup_bandwidth_throttled_periods" => &self.maps.cgroup_throttled_periods,
+            "cgroup_bandwidth_throttled_time" => &self.maps.cgroup_throttled_time,
             "cpu_usage" => &self.maps.cpu_usage,
             "softirq" => &self.maps.softirq,
             "softirq_time" => &self.maps.softirq_time,
