@@ -347,13 +347,16 @@ m.route(document.body, "/overview", {
                 return new Promise(function () { });
             }
 
-            // Clear initialized charts when changing sections
             if (requestedPath !== m.route.get()) {
+                // Clear initialized charts and zoom state.
                 state.zoomState = null;
                 state.initializedCharts.forEach((chart) => {
                     chart.dispose();
                 });
                 state.initializedCharts.clear();
+
+                // Reset scroll position.
+                window.scrollTo(0, 0);
             }
 
             const url = `/data/${params.section}.json`;
