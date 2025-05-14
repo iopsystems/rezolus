@@ -79,7 +79,7 @@ export function createHeatmapOption(baseOption, plotSpec) {
             {
                 x: start[0],
                 y: start[1] - height / 2,
-                width: end[0] - start[0],
+                width: end[0] - start[0] + .5, // The .5 pixel extra helps avoid hairline cracks.
                 height: height
             },
             {
