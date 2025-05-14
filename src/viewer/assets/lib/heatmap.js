@@ -48,6 +48,19 @@ export function createHeatmapOption(baseOption, plotSpec) {
         length: maxCpuId + 1
     }, (_, i) => i);
 
+    // Y axis labels: if more than Y_MAX_LABELS, show every 2nd, 4th, 8th, 16th, or etc.
+    const Y_MAX_LABELS = 8;
+    const yCount = continuousCpuIds.length;
+    // What's the smallest power of 2 that's greater than or equal to yCount / Y_MAX_LABELS?
+    const yLabelMultiple = Math.pow(2, Math.ceil(Math.log2(Math.ceil(yCount / Y_MAX_LABELS))));
+    // This tells echarts how many labels to skip. E.g. show 1, skip 7, show 1, skip 7, etc.
+    const yAxisLabelInterval = yLabelMultiple - 1;
+    // We have space to show more ticks than labels.
+    const Y_MAX_TICKS_PER_LABEL = 4;
+    const yTickMultiple = Math.ceil(yLabelMultiple / Y_MAX_TICKS_PER_LABEL);
+    const yAxisTickInterval = yTickMultiple - 1;
+
+
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
@@ -102,7 +115,11 @@ export function createHeatmapOption(baseOption, plotSpec) {
         },
         data: continuousCpuIds,
         axisLabel: {
+            interval: yAxisLabelInterval,
             color: '#ABABAB'
+        },
+        axisTick: {
+            interval: yAxisTickInterval,
         }
     };
 
