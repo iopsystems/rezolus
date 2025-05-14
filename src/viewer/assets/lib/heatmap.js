@@ -75,25 +75,16 @@ export function createHeatmapOption(baseOption, plotSpec) {
         var start = api.coord([x, y]);
         var end = api.coord([x + 1000, y]);
         var height = api.size([0, 1])[1];
-        var rectShape = echarts.graphic.clipRectByRect(
-            {
-                x: start[0],
-                y: start[1] - height / 2,
-                width: end[0] - start[0] + .5, // The .5 pixel extra helps avoid hairline cracks.
-                height: height
-            },
-            {
-                x: params.coordSys.x,
-                y: params.coordSys.y,
-                width: params.coordSys.width,
-                height: params.coordSys.height
-            }
-        );
         return (
-            rectShape && {
+            {
                 type: 'rect',
-                transition: ['shape'],
-                shape: rectShape,
+                transition: [],
+                shape: {
+                    x: start[0],
+                    y: start[1] - height / 2,
+                    width: end[0] - start[0] + .5, // The .5 pixel extra helps avoid hairline cracks.
+                    height: height
+                },
                 style: api.style()
             }
         );
@@ -157,6 +148,7 @@ export function createHeatmapOption(baseOption, plotSpec) {
             name: plotSpec.opts.title,
             type: 'custom',
             renderItem,
+            clip: true,
             data: processedData,
             emphasis: {
                 itemStyle: {
