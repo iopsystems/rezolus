@@ -146,8 +146,14 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .packed_counters("cgroup_guest", &CGROUP_CPU_USAGE_GUEST)
         .packed_counters("cgroup_guest_nice", &CGROUP_CPU_USAGE_GUEST_NICE)
         .packed_counters("cgroup_bandwidth_periods", &CGROUP_BANDWIDTH_PERIODS)
-        .packed_counters("cgroup_bandwidth_throttled_periods", &CGROUP_BANDWIDTH_THROTTLED_PERIODS)
-        .packed_counters("cgroup_bandwidth_throttled_time", &CGROUP_BANDWIDTH_THROTTLED_TIME)
+        .packed_counters(
+            "cgroup_bandwidth_throttled_periods",
+            &CGROUP_BANDWIDTH_THROTTLED_PERIODS,
+        )
+        .packed_counters(
+            "cgroup_bandwidth_throttled_time",
+            &CGROUP_BANDWIDTH_THROTTLED_TIME,
+        )
         .ringbuf_handler("cgroup_info", handle_event)
         .build()?;
 
