@@ -11,6 +11,7 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
+#define MAX_CPUS 1024
 #define MAX_CGROUPS 4096
 #define RINGBUF_CAPACITY 262144
 
@@ -50,13 +51,13 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_serial_numbers SEC(".maps");
 
-// track throttle start times
+// track throttle start time of per-cpu cgroup runqueues
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * MAX_CPUS);
 } throttle_start SEC(".maps");
 
 // counters
@@ -143,6 +144,7 @@ SEC("kprobe/throttle_cfs_rq")
 int throttle_cfs_rq(struct pt_regs *ctx)
 {
     struct cfs_rq *cfs_rq = (struct cfs_rq *)PT_REGS_PARM1(ctx);
+    int cpu = BPF_CORE_READ(cfs_rq, rq, cpu);
 
     // get the cgroup id and serial number
 
@@ -200,8 +202,8 @@ int throttle_cfs_rq(struct pt_regs *ctx)
 
     // record throttle start time
     u64 now = bpf_ktime_get_ns();
-    u32 cgroup_idx = (u32)cgroup_id;
-    bpf_map_update_elem(&throttle_start, &cgroup_idx, &now, BPF_ANY);
+    u32 cgroup_runqueue_idx = cpu * MAX_CGROUPS + (u32)cgroup_id;
+    bpf_map_update_elem(&throttle_start, &cgroup_runqueue_idx, &now, BPF_ANY);
 
     // increment the throttle count
     array_incr(&throttled_count, cgroup_id);
@@ -213,6 +215,7 @@ SEC("kprobe/unthrottle_cfs_rq")
 int unthrottle_cfs_rq(struct pt_regs *ctx)
 {
     struct cfs_rq *cfs_rq = (struct cfs_rq *)PT_REGS_PARM1(ctx);
+    int cpu = BPF_CORE_READ(cfs_rq, rq, cpu);
 
     // get the cgroup id
 
@@ -235,8 +238,8 @@ int unthrottle_cfs_rq(struct pt_regs *ctx)
         return 0;
 
     // lookup start time
-    u32 cgroup_idx = (u32)cgroup_id;
-    u64 *start_ts = bpf_map_lookup_elem(&throttle_start, &cgroup_idx);
+    u32 cgroup_runqueue_idx = cpu * MAX_CGROUPS + (u32)cgroup_id;
+    u64 *start_ts = bpf_map_lookup_elem(&throttle_start, &cgroup_runqueue_idx);
     if (!start_ts || *start_ts == 0)
         return 0;
 
@@ -247,7 +250,7 @@ int unthrottle_cfs_rq(struct pt_regs *ctx)
 
     // clear the throttle start time
     u64 zero = 0;
-    bpf_map_update_elem(&throttle_start, &cgroup_idx, &zero, BPF_ANY);
+    bpf_map_update_elem(&throttle_start, &cgroup_runqueue_idx, &zero, BPF_ANY);
 
     return 0;
 }
