@@ -60,7 +60,10 @@ pub fn aligned_interval(interval: Duration) -> tokio::time::Interval {
     // get an aligned start time
     let start = now - Duration::from_nanos(utc.nanosecond() as u64) + interval;
 
-    tokio::time::interval_at(start.into(), interval)
+    let mut interval = tokio::time::interval_at(start.into(), interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    interval
 }
 
 pub fn utc_instant() -> (DateTime<Utc>, Instant) {
