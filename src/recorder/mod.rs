@@ -234,9 +234,9 @@ pub fn run(config: Config) {
         let (_prefix, data, _suffix) = unsafe { mmap.align_to::<u64>() };
         let expected_len = mmap_len / std::mem::size_of::<u64>();
 
-        if data.len() != expected_len {
-            error!("mmap region not aligned or width doesn't match");
-            panic!();
+        if data.len() != 1920 {
+            eprintln!("mmap region not aligned or width doesn't match");
+            std::process::exit(1);
         }
 
         mmap
