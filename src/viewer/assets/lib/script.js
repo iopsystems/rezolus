@@ -83,6 +83,11 @@ const Plot = {
                     if (!state.initializedCharts.has(chartId)) {
                         // Initialize the chart
                         const chart = echarts.init(chartDom);
+                        const startTime = new Date();
+                        chart.on('finished', function () {
+                            chart.off('finished');
+                            console.log(`Chart ${chartId} rendered in ${new Date() - startTime}ms`);
+                        })
 
                         // Store original time data for human-friendly tick calculation
                         if (attrs.data && attrs.data.length > 0) {

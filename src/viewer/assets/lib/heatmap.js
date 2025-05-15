@@ -98,7 +98,10 @@ export function createHeatmapOption(baseOption, plotSpec) {
                     width: end[0] - start[0] + .5, // The .5 pixel extra helps avoid hairline cracks.
                     height: height
                 },
-                style: api.style()
+                // Do not use all of api.style() - this causes big performance issues.
+                style: {
+                    fill: api.style().fill
+                }
             }
         );
     }
