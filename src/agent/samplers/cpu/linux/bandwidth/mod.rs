@@ -78,7 +78,7 @@ fn handle_bandwidth_info(data: &[u8]) -> i32 {
 
         if id < MAX_CGROUPS as u32 {
             let _ = CGROUP_CPU_BANDWIDTH_QUOTA.set(id as usize, quota as i64);
-            let _ = CGROUP_CPU_BANDWIDTH_PERIOD.set(id as usize, period as i64);
+            let _ = CGROUP_CPU_BANDWIDTH_PERIOD_DURATION.set(id as usize, period as i64);
         }
     }
 
@@ -87,11 +87,20 @@ fn handle_bandwidth_info(data: &[u8]) -> i32 {
 
 fn set_cgroup_name(id: usize, name: String) {
     if !name.is_empty() {
-        for m in &[&CGROUP_CPU_BANDWIDTH_QUOTA, &CGROUP_CPU_BANDWIDTH_PERIOD] {
+        for m in &[
+            &CGROUP_CPU_BANDWIDTH_QUOTA,
+            &CGROUP_CPU_BANDWIDTH_PERIOD_DURATION,
+        ] {
             m.insert_metadata(id, "name".to_string(), name.clone());
         }
 
-        for m in &[&CGROUP_CPU_THROTTLED_TIME, &CGROUP_CPU_THROTTLED] {
+        for m in &[
+            &CGROUP_CPU_THROTTLED_TIME,
+            &CGROUP_CPU_THROTTLED,
+            &CGROUP_CPU_BANDWIDTH_PERIODS,
+            &CGROUP_CPU_BANDWIDTH_THROTTLED_PERIODS,
+            &CGROUP_CPU_BANDWIDTH_THROTTLED_TIME,
+        ] {
             m.insert_metadata(id, "name".to_string(), name.clone());
         }
     }
@@ -108,6 +117,15 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let bpf = BpfBuilder::new(ModSkelBuilder::default)
         .packed_counters("throttled_time", &CGROUP_CPU_THROTTLED_TIME)
         .packed_counters("throttled_count", &CGROUP_CPU_THROTTLED)
+        .packed_counters("bandwidth_periods", &CGROUP_CPU_BANDWIDTH_PERIODS)
+        .packed_counters(
+            "bandwidth_throttled_periods",
+            &CGROUP_CPU_BANDWIDTH_THROTTLED_PERIODS,
+        )
+        .packed_counters(
+            "bandwidth_throttled_time",
+            &CGROUP_CPU_BANDWIDTH_THROTTLED_TIME,
+        )
         .ringbuf_handler("cgroup_info", handle_cgroup_info)
         .ringbuf_handler("bandwidth_info", handle_bandwidth_info)
         .build()?;
@@ -122,6 +140,9 @@ impl SkelExt for ModSkel<'_> {
             "bandwidth_info" => &self.maps.bandwidth_info,
             "throttled_time" => &self.maps.throttled_time,
             "throttled_count" => &self.maps.throttled_count,
+            "bandwidth_periods" => &self.maps.bandwidth_periods,
+            "bandwidth_throttled_periods" => &self.maps.bandwidth_throttled_periods,
+            "bandwidth_throttled_time" => &self.maps.bandwidth_throttled_time,
             _ => unimplemented!(),
         }
     }
