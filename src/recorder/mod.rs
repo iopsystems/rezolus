@@ -34,7 +34,7 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<Format>("FORMAT")
                 .copied()
                 .unwrap_or(Format::Parquet),
-            mmap: args.get_one::<PathBuf>("MMAP").map(|v| v.to_path_buf())
+            mmap: args.get_one::<PathBuf>("MMAP").map(|v| v.to_path_buf()),
         })
     }
 }
@@ -97,7 +97,7 @@ pub fn command() -> Command {
                 .short('m')
                 .help("Also record metrics from the memory mapped file")
                 .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(PathBuf))
+                .value_parser(value_parser!(PathBuf)),
         )
 }
 
@@ -209,18 +209,26 @@ pub fn run(config: Config) {
     };
 
     let mmap = config.mmap.map(|path| {
-        let file = std::fs::File::open(&path).map_err(|e| {
-            eprintln!("failed to open specified memory mapped file: {:?}\n{e}", path);
-            std::process::exit(1);
-        }).unwrap();
+        let file = std::fs::File::open(&path)
+            .map_err(|e| {
+                eprintln!(
+                    "failed to open specified memory mapped file: {:?}\n{e}",
+                    path
+                );
+                std::process::exit(1);
+            })
+            .unwrap();
 
         // hardcoded for a histogram with grouping power of 5 and max value power of 64
         let mmap_len = whole_pages::<u64>(1920) * PAGE_SIZE;
 
-        let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| {
-            eprintln!("failed to mmap the file: {:?}\n{e}", path);
-            std::process::exit(1);
-        })}.unwrap();
+        let mmap = unsafe {
+            MmapOptions::new().map(&file).map_err(|e| {
+                eprintln!("failed to mmap the file: {:?}\n{e}", path);
+                std::process::exit(1);
+            })
+        }
+        .unwrap();
 
         // check the alignment
         let (_prefix, data, _suffix) = unsafe { mmap.align_to::<u64>() };
