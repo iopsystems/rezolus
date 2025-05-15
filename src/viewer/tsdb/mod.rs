@@ -1,3 +1,5 @@
+use parquet::file::reader::FileReader;
+use parquet::file::serialized_reader::SerializedFileReader;
 use crate::viewer::PERCENTILES;
 use arrow::array::Int64Array;
 use arrow::array::ListArray;
@@ -27,6 +29,9 @@ pub use series::*;
 
 #[derive(Default)]
 pub struct Tsdb {
+    sampling_interval_ms: u64,
+    source: String,
+    version: String,
     counters: HashMap<String, CounterCollection>,
     gauges: HashMap<String, GaugeCollection>,
     histograms: HashMap<String, HistogramCollection>,
@@ -35,6 +40,30 @@ pub struct Tsdb {
 impl Tsdb {
     pub fn load(path: &Path) -> Result<Self, Box<dyn Error>> {
         let mut data = Tsdb::default();
+
+        let file = File::open(path)?;
+        let reader = SerializedFileReader::new(file).unwrap();
+        let parquet_metadata = reader.metadata();
+        let key_value_metadata = parquet_metadata.file_metadata().key_value_metadata().unwrap();
+
+        let mut metadata = HashMap::new();
+
+        for kv in key_value_metadata {
+            metadata.insert(kv.key.clone(), kv.value.clone().unwrap_or("".to_string()));
+        }
+
+        let interval = metadata.get("sampling_interval_ms").map(|v| v.parse::<u64>().expect("bad interval")).unwrap_or(1000);
+        data.sampling_interval_ms = interval;
+
+        data.source = match metadata.get("source").map(|v| v.as_str()) {
+            Some("rezolus") => "Rezolus".to_string(),
+            _ => "unknown".to_string(),
+        };
+
+        data.version = match metadata.get("version").map(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            _ => "unknown".to_string(),
+        };
 
         let file = File::open(path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -265,6 +294,21 @@ impl Tsdb {
         } else {
             Some(heatmap)
         }
+    }
+
+    // sampling interval in seconds
+    pub fn interval(&self) -> f64 {
+        self.sampling_interval_ms as f64 / 1000.0
+    }
+
+    // data source
+    pub fn source(&self) -> String {
+        self.source.clone()
+    }
+
+    // data source version
+    pub fn version(&self) -> String {
+        self.version.clone()
     }
 }
 

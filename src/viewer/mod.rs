@@ -184,14 +184,14 @@ pub fn run(config: Config) {
     ];
 
     // define views for each section
-    let mut overview = View::new(sections.clone());
-    let mut cpu = View::new(sections.clone());
-    let mut network = View::new(sections.clone());
-    let mut scheduler = View::new(sections.clone());
-    let mut syscall = View::new(sections.clone());
-    let mut softirq = View::new(sections.clone());
-    let mut blockio = View::new(sections.clone());
-    let mut cgroups = View::new(sections.clone());
+    let mut overview = View::new(&data, sections.clone());
+    let mut cpu = View::new(&data, sections.clone());
+    let mut network = View::new(&data, sections.clone());
+    let mut scheduler = View::new(&data, sections.clone());
+    let mut syscall = View::new(&data, sections.clone());
+    let mut softirq = View::new(&data, sections.clone());
+    let mut blockio = View::new(&data, sections.clone());
+    let mut cgroups = View::new(&data, sections.clone());
 
     // CPU
 
@@ -849,13 +849,24 @@ async fn data(
 
 #[derive(Default, Serialize)]
 pub struct View {
+    // interval between consecutive datapoints as fractional seconds
+    interval: f64,
+    source: String,
+    version: String,
     groups: Vec<Group>,
     sections: Vec<Section>,
 }
 
 impl View {
-    pub fn new(sections: Vec<Section>) -> Self {
+    pub fn new(data: &Tsdb, sections: Vec<Section>) -> Self {
+        let interval = data.interval();
+        let source = data.source();
+        let version = data.version();
+
         Self {
+            interval,
+            source,
+            version,
             groups: Vec::new(),
             sections,
         }
