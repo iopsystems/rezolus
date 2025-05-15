@@ -21,10 +21,14 @@
 - SoftIRQ time tracked by IRQ kind. (#462)
 - Sampler for TLB flush events. (#467)
 - Softnet sampler for understanding kernel packet processing. (#480)
-- Additional syscall groups. (#482)
+- Additional syscall groups. (#482 #503)
 - CPU CFS throttling metrics for cgroups. (#488)
 - CPU L3 Cache Hit/Access (AMD Zen only). (#487)
 - CPU Migrations. (#491)
+
+### Fixed
+- Set open file limit for agent sufficiently high for large systems. (#511)
+- Changed recorder missed tick behavior from burst to skip. (#513)
 
 ## [4.1.2] - 2024-11-25
 
