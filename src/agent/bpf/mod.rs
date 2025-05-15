@@ -20,7 +20,6 @@ pub trait SkelExt {
 }
 
 const CACHELINE_SIZE: usize = 64;
-const PAGE_SIZE: usize = 4096;
 
 // This is the maximum number of CPUs we track with BPF counters.
 pub const MAX_CPUS: usize = 1024;
@@ -33,10 +32,6 @@ const COUNTERS_PER_CACHELINE: usize = CACHELINE_SIZE / COUNTER_SIZE;
 
 fn whole_cachelines<T>(count: usize) -> usize {
     (count * std::mem::size_of::<T>()).div_ceil(CACHELINE_SIZE)
-}
-
-pub fn whole_pages<T>(count: usize) -> usize {
-    (count * std::mem::size_of::<T>()).div_ceil(PAGE_SIZE)
 }
 
 use counters::{Counters, CpuCounters, PackedCounters};
