@@ -88,7 +88,8 @@ main {
     /* TODO: should not shrink indefinitely, and maybe 2-per-row is not inherent to plots? */
     max-width: 50%;
     width: 50%;
-    height: 400px;
+    /* In combination with the internal margins of the grid, this gives 384px height for the chart itself. */
+    height: 454px;
 }
 
 /* Zoom rectangle styling */

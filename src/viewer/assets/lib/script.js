@@ -230,8 +230,9 @@ function createChartOption(plotSpec) {
         grid: {
             left: '14%',
             right: '5%',
-            top: '40',
-            bottom: '40',
+            // Subtracting from the element height, these give 384px height for the chart itself.
+            top: '35',
+            bottom: '35',
             containLabel: false,
         },
         xAxis: {
