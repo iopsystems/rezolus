@@ -188,7 +188,12 @@ export function createHeatmapOption(baseOption, plotSpec) {
                     shadowColor: 'rgba(0, 0, 0, 0.5)'
                 }
             },
-            progressive: 1000,
+            // https://echarts.apache.org/en/option.html#series-heatmap.progressive
+            // Bigger numbers mean more data is rendered at once.
+            // Rendering smaller pieces at a time has a bigger perf impact than you
+            // might think as every progressive render also requires reevaluating the
+            // existing rendered stuff, so it's a quadratic cost to some extent.
+            progressive: 8000,
             progressiveThreshold: 3000,
             animation: false
         }]
