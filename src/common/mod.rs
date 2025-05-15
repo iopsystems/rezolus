@@ -10,6 +10,8 @@ pub const NANOSECONDS: u64 = 1;
 pub const KIBIBYTES: u64 = 1024 * BYTES;
 pub const BYTES: u64 = 1;
 
+pub const PAGE_SIZE: usize = 4096;
+
 // Max attempts to get an 'aligned' UTC and monotonic clock time
 const ALIGN_RETRIES: usize = 5;
 const MAX_ALIGN_ERROR: Duration = Duration::from_millis(1);
@@ -79,4 +81,8 @@ pub fn utc_instant() -> (DateTime<Utc>, Instant) {
 
     eprintln!("could not get a UTC time and Instant pair");
     std::process::exit(1);
+}
+
+pub fn whole_pages<T>(count: usize) -> usize {
+    (count * std::mem::size_of::<T>()).div_ceil(PAGE_SIZE)
 }

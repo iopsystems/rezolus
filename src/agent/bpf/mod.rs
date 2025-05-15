@@ -35,7 +35,7 @@ fn whole_cachelines<T>(count: usize) -> usize {
     (count * std::mem::size_of::<T>()).div_ceil(CACHELINE_SIZE)
 }
 
-fn whole_pages<T>(count: usize) -> usize {
+pub fn whole_pages<T>(count: usize) -> usize {
     (count * std::mem::size_of::<T>()).div_ceil(PAGE_SIZE)
 }
 

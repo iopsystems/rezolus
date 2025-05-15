@@ -1,5 +1,11 @@
 use super::*;
+
 use clap::ArgMatches;
+use histogram::Histogram;
+use memmap2::MmapOptions;
+use metriken_exposition::Snapshot;
+
+use std::collections::HashMap;
 
 pub struct Config {
     interval: humantime::Duration,
@@ -8,6 +14,7 @@ pub struct Config {
     verbose: u8,
     url: Url,
     output: PathBuf,
+    mmap: Option<PathBuf>,
 }
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
@@ -27,6 +34,7 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<Format>("FORMAT")
                 .copied()
                 .unwrap_or(Format::Parquet),
+            mmap: args.get_one::<PathBuf>("MMAP").map(|v| v.to_path_buf())
         })
     }
 }
@@ -83,6 +91,14 @@ pub fn command() -> Command {
                 .default_value("parquet")
                 .value_parser(value_parser!(Format)),
         )
+        .arg(
+            clap::Arg::new("MMAP")
+                .long("mmap")
+                .short('m')
+                .help("Also record metrics from the memory mapped file")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf))
+        )
 }
 
 /// Runs the Rezolus `recorder` which is a Rezolus client that pulls data from
@@ -138,10 +154,7 @@ pub fn run(config: Config) {
         let state = STATE.load(Ordering::SeqCst);
 
         if state == RUNNING {
-            info!("triggering ringbuffer capture");
-            STATE.store(CAPTURING, Ordering::SeqCst);
-        } else if state == CAPTURING {
-            info!("waiting for capture to complete before exiting");
+            info!("finalizing recording...");
             STATE.store(TERMINATING, Ordering::SeqCst);
         } else {
             info!("terminating immediately");
@@ -195,6 +208,32 @@ pub fn run(config: Config) {
         }
     };
 
+    let mmap = config.mmap.map(|path| {
+        let file = std::fs::File::open(&path).map_err(|e| {
+            eprintln!("failed to open specified memory mapped file: {:?}\n{e}", path);
+            std::process::exit(1);
+        }).unwrap();
+
+        // hardcoded for a histogram with grouping power of 5 and max value power of 64
+        let mmap_len = whole_pages::<u64>(1920) * PAGE_SIZE;
+
+        let mmap = unsafe { MmapOptions::new().map(&file).map_err(|e| {
+            eprintln!("failed to mmap the file: {:?}\n{e}", path);
+            std::process::exit(1);
+        })}.unwrap();
+
+        // check the alignment
+        let (_prefix, data, _suffix) = unsafe { mmap.align_to::<u64>() };
+        let expected_len = mmap_len / std::mem::size_of::<u64>();
+
+        if data.len() != expected_len {
+            error!("mmap region not aligned or width doesn't match");
+            panic!();
+        }
+
+        mmap
+    });
+
     rt.block_on(async move {
         // get the approximate time for the first sample
         let interval: Duration = config.interval.into();
@@ -217,6 +256,13 @@ pub fn run(config: Config) {
 
             let start = Instant::now();
 
+            let histogram = if let Some(ref mmap) = mmap {
+                let (_prefix, buckets, _suffix) = unsafe { mmap.align_to::<u64>() };
+                Some(Histogram::from_buckets(5, 64, buckets[0..1920].to_vec()).unwrap())
+            } else {
+                None
+            };
+
             // sample rezolus
             if let Ok(response) = client.get(url.clone()).send().await {
                 if let Ok(body) = response.bytes().await {
@@ -224,7 +270,43 @@ pub fn run(config: Config) {
 
                     debug!("sampling latency: {} us", latency.as_micros());
 
-                    if let Err(e) = writer.write_all(&body) {
+                    if let Some(histogram) = histogram {
+                        let histogram = metriken_exposition::Histogram {
+                            name: "frame_start_delay".to_string(),
+                            value: histogram,
+                            metadata: HashMap::new(),
+                        };
+
+                        let mut snapshot: Snapshot = match rmp_serde::from_slice(&body) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                error!("could not decode snapshot from msgpack: {e}");
+                                break;
+                            }
+                        };
+
+                        match snapshot {
+                            Snapshot::V1(ref mut s) => {
+                                s.histograms.push(histogram);
+                            }
+                            Snapshot::V2(ref mut s) => {
+                                s.histograms.push(histogram);
+                            }
+                        }
+
+                        match Snapshot::to_msgpack(&snapshot) {
+                            Ok(body) => {
+                                if let Err(e) = writer.write_all(&body) {
+                                    error!("error writing to temporary file: {e}");
+                                    std::process::exit(1);
+                                }
+                            }
+                            Err(e) => {
+                                error!("failed to serialize snapshot: {e}");
+                                break;
+                            }
+                        }
+                    } else if let Err(e) = writer.write_all(&body) {
                         error!("error writing to temporary file: {e}");
                         std::process::exit(1);
                     }
