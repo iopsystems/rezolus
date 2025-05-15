@@ -80,6 +80,7 @@ export function createLineChartOption(baseOption, plotSpec) {
             emphasis: {
                 focus: 'series'
             },
+            step: 'start',
             lineStyle: {
                 width: 2
             },
