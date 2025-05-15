@@ -13,10 +13,11 @@ mod bpf {
     const SOURCES: &[(&str, &str)] = &[
         ("blockio", "latency"),
         ("blockio", "requests"),
+        ("cpu", "bandwidth"),
+        ("cpu", "migrations"),
         ("cpu", "perf"),
         ("cpu", "tlb_flush"),
         ("cpu", "usage"),
-        ("network", "softnet"),
         ("network", "traffic"),
         ("scheduler", "runqueue"),
         ("syscall", "counts"),

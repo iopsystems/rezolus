@@ -37,6 +37,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .histogram("sleep_latency", &SYSCALL_SLEEP_LATENCY)
         .histogram("socket_latency", &SYSCALL_SOCKET_LATENCY)
         .histogram("yield_latency", &SYSCALL_YIELD_LATENCY)
+        .histogram("filesystem_latency", &SYSCALL_FILESYSTEM_LATENCY)
+        .histogram("memory_latency", &SYSCALL_MEMORY_LATENCY)
+        .histogram("process_latency", &SYSCALL_PROCESS_LATENCY)
+        .histogram("query_latency", &SYSCALL_QUERY_LATENCY)
+        .histogram("ipc_latency", &SYSCALL_IPC_LATENCY)
+        .histogram("timer_latency", &SYSCALL_TIMER_LATENCY)
+        .histogram("event_latency", &SYSCALL_EVENT_LATENCY)
         .map("syscall_lut", syscall_lut())
         .build()?;
 
@@ -55,6 +62,13 @@ impl SkelExt for ModSkel<'_> {
             "sleep_latency" => &self.maps.sleep_latency,
             "socket_latency" => &self.maps.socket_latency,
             "yield_latency" => &self.maps.yield_latency,
+            "filesystem_latency" => &self.maps.filesystem_latency,
+            "memory_latency" => &self.maps.memory_latency,
+            "process_latency" => &self.maps.process_latency,
+            "query_latency" => &self.maps.query_latency,
+            "ipc_latency" => &self.maps.ipc_latency,
+            "timer_latency" => &self.maps.timer_latency,
+            "event_latency" => &self.maps.event_latency,
             "syscall_lut" => &self.maps.syscall_lut,
             _ => unimplemented!(),
         }

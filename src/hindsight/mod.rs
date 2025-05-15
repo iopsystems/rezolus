@@ -87,17 +87,19 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    let mut url = config.general().url();
+    let url = config.general().url();
 
-    if url.path() != "/" {
-        eprintln!("URL should not have an non-root path: {}", url);
-        std::process::exit(1);
-    }
+    // our blocking http client
+    let blocking_client = match reqwest::blocking::Client::builder().http1_only().build() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("error connecting to Rezolus: {e}");
+            std::process::exit(1);
+        }
+    };
 
-    url.set_path("/metrics/binary");
-
-    // our http client
-    let client = match Client::builder().http1_only().build() {
+    // our async http client
+    let async_client = match reqwest::Client::builder().http1_only().build() {
         Ok(c) => c,
         Err(e) => {
             error!("error connecting to Rezolus: {e}");
@@ -136,7 +138,7 @@ pub fn run(config: Config) {
     // estimate the snapshot size and latency
     let start = Instant::now();
 
-    let (snap_len, latency) = if let Ok(response) = client.get(url.clone()).send() {
+    let (snap_len, latency) = if let Ok(response) = blocking_client.get(url.clone()).send() {
         if let Ok(body) = response.bytes() {
             let latency = start.elapsed();
 
@@ -169,7 +171,7 @@ pub fn run(config: Config) {
     let snapshot_len = (1 + snap_len as u64 * 4 / 4096) * 4096;
 
     // the total number of snapshots
-    let snapshot_count = (1 + config.general().interval().as_micros()
+    let snapshot_count = (1 + config.general().duration().as_micros()
         / config.general().interval().as_micros()) as u64;
 
     // expand the temporary file to hold enough room for all the snapshots
@@ -194,8 +196,8 @@ pub fn run(config: Config) {
                 let start = Instant::now();
 
                 // sample rezolus
-                if let Ok(response) = client.get(url.clone()).send() {
-                    if let Ok(body) = response.bytes() {
+                if let Ok(response) = async_client.get(url.clone()).send().await {
+                    if let Ok(body) = response.bytes().await {
                         let latency = start.elapsed();
 
                         debug!("sampling latency: {} us", latency.as_micros());

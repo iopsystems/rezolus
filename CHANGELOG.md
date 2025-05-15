@@ -1,5 +1,35 @@
 ## [Unreleased]
 
+### Changed
+
+- Many metrics have been renamed to use labels to track different categories
+  instead of encoding that in the metric name.
+- Removed any system-wide total metrics when summing across some metric would
+  give the same result.
+- BlockIO latency and size distributions split by operation. (#380 #381)
+- CPU performance (instructions, cycles) tracking changed to allow using the
+  same perf counters for tracking these per-cgroup. May result in slight skew
+  since these are no-longer a grouped read. (#383)
+- Removed TCP connection state sampler due to high CPU usage. (#456)
+- Prometheus exposition moved out into a separate service. (#470)
+
+### Added
+- Recorder extended with additional options. (#387 #389)
+- Hindsight recorder for always-on ringbuffer recording. (#409 #436 )
+- Per-cgroup syscalls. (#419)
+- Per-cgroup cpu usage. (#420 #425)
+- SoftIRQ time tracked by IRQ kind. (#462)
+- Sampler for TLB flush events. (#467)
+- Softnet sampler for understanding kernel packet processing. (#480)
+- Additional syscall groups. (#482 #503)
+- CPU CFS throttling metrics for cgroups. (#488)
+- CPU L3 Cache Hit/Access (AMD Zen only). (#487)
+- CPU Migrations. (#491)
+
+### Fixed
+- Set open file limit for agent sufficiently high for large systems. (#511)
+- Changed recorder missed tick behavior from burst to skip. (#513)
+
 ## [4.1.2] - 2024-11-25
 
 ### Fixed

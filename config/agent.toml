@@ -26,6 +26,12 @@ enabled = true
 # the number of bytes by request type, and the size distribution.
 [samplers.block_io_requests]
 
+# BPF sampler that collects CPU CFS bandwidth control and throttling stats
+[samplers.cpu_bandwidth]
+
+# Instruments CPU migrations.
+[samplers.cpu_migrations]
+
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 [samplers.cpu_perf]
 
@@ -44,9 +50,6 @@ enabled = true
 
 # Produces network interface statistics from /sys/class/net for TX/RX errors
 [samplers.network_interfaces]
-
-# Produces softnet (network softirq processing) metrics such as time_squeezed
-[samplers.network_softnet]
 
 # Produces network traffic statistics using BPF
 [samplers.network_traffic]

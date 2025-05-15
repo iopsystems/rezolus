@@ -21,6 +21,10 @@ fn interval() -> String {
     "1s".into()
 }
 
+fn duration() -> String {
+    "15m".into()
+}
+
 fn output() -> String {
     "/tmp/rezolus.parquet".into()
 }

@@ -29,7 +29,6 @@ pub const MAX_CPUS: usize = 1024;
 pub const MAX_CGROUPS: usize = 4096;
 
 const COUNTER_SIZE: usize = std::mem::size_of::<u64>();
-
 const COUNTERS_PER_CACHELINE: usize = CACHELINE_SIZE / COUNTER_SIZE;
 
 fn whole_cachelines<T>(count: usize) -> usize {

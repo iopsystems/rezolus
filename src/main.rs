@@ -3,8 +3,7 @@ use backtrace::Backtrace;
 use clap::{value_parser, Command, ValueEnum};
 use linkme::distributed_slice;
 use metriken_exposition::{MsgpackToParquet, ParquetOptions};
-use reqwest::blocking::Client;
-use reqwest::Url;
+use reqwest::{Client, Url};
 use ringlog::*;
 use serde::Deserialize;
 use tempfile::tempfile_in;
@@ -34,6 +33,7 @@ static CAPTURING: usize = 1;
 static TERMINATING: usize = 2;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum Format {
     Parquet,
     Raw,

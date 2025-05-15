@@ -36,3 +36,9 @@ override_dh_auto_build:
 override_dh_auto_install:
 	@mkdir -p debian/tmp/bin
 	cp -f "$(BINDIR)/rezolus" debian/tmp/bin/
+
+override_dh_installsystemd:
+	dh_installsystemd -p rezolus --name=rezolus
+	dh_installsystemd -p rezolus --name=rezolus-exporter
+	dh_installsystemd -p rezolus --name=rezolus-hindsight --no-enable
+	dh_installsystemd --remaining-packages
