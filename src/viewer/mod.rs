@@ -717,7 +717,7 @@ pub fn run(config: Config) {
         .with_axis_label("FSD")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("frame_start_delay:buckets", Labels::default());
+    let series = data.percentiles("frame_start_delay", Labels::default());
     service_overview.scatter(opts.clone(), series.clone());
 
     service.groups.push(service_overview);
