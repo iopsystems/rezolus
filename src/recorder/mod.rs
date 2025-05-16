@@ -220,7 +220,7 @@ pub fn run(config: Config) {
             .unwrap();
 
         // hardcoded for a histogram with grouping power of 5 and max value power of 64
-        let mmap_len = whole_pages::<u64>(1920) * PAGE_SIZE;
+        // let mmap_len = whole_pages::<u64>(1920) * PAGE_SIZE;
 
         let mmap = unsafe {
             MmapOptions::new().map(&file).map_err(|e| {
@@ -232,8 +232,9 @@ pub fn run(config: Config) {
 
         // check the alignment
         let (_prefix, data, _suffix) = unsafe { mmap.align_to::<u64>() };
-        let expected_len = mmap_len / std::mem::size_of::<u64>();
+        // let expected_len = mmap_len / std::mem::size_of::<u64>();
 
+        // hardcoded for a histogram with grouping power of 5 and max value power of 64
         if data.len() != 1920 {
             eprintln!("mmap region not aligned or width doesn't match");
             std::process::exit(1);
@@ -266,6 +267,8 @@ pub fn run(config: Config) {
 
             let histogram = if let Some(ref mmap) = mmap {
                 let (_prefix, buckets, _suffix) = unsafe { mmap.align_to::<u64>() };
+
+                // hardcoded for a histogram with grouping power of 5 and max value power of 64
                 Some(Histogram::from_buckets(5, 64, buckets[0..1920].to_vec()).unwrap())
             } else {
                 None
@@ -282,7 +285,7 @@ pub fn run(config: Config) {
                         let histogram = metriken_exposition::Histogram {
                             name: "frame_start_delay".to_string(),
                             value: histogram,
-                            metadata: HashMap::new(),
+                            metadata: [("metric".to_string(), "frame_start_delay".to_string()), ("grouping_power".to_string(), "5".to_string()), ("max_value_power".to_string(), "64".to_string())].into(),
                         };
 
                         let mut snapshot: Snapshot = match rmp_serde::from_slice(&body) {
