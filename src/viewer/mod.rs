@@ -808,8 +808,6 @@ async fn serve(config: Arc<Config>, state: AppState) {
     axum::serve(listener, app)
         .await
         .expect("failed to run http server");
-
-
 }
 
 struct AppState {

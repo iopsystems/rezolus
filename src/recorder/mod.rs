@@ -285,7 +285,12 @@ pub fn run(config: Config) {
                         let histogram = metriken_exposition::Histogram {
                             name: "frame_start_delay".to_string(),
                             value: histogram,
-                            metadata: [("metric".to_string(), "frame_start_delay".to_string()), ("grouping_power".to_string(), "5".to_string()), ("max_value_power".to_string(), "64".to_string())].into(),
+                            metadata: [
+                                ("metric".to_string(), "frame_start_delay".to_string()),
+                                ("grouping_power".to_string(), "5".to_string()),
+                                ("max_value_power".to_string(), "64".to_string()),
+                            ]
+                            .into(),
                         };
 
                         let mut snapshot: Snapshot = match rmp_serde::from_slice(&body) {
