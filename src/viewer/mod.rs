@@ -181,6 +181,10 @@ pub fn run(config: Config) {
             name: "cgroups".to_string(),
             route: "/cgroups".to_string(),
         },
+        Section {
+            name: "Service".to_string(),
+            route: "/service".to_string(),
+        },
     ];
 
     // define views for each section
@@ -192,6 +196,7 @@ pub fn run(config: Config) {
     let mut softirq = View::new(&data, sections.clone());
     let mut blockio = View::new(&data, sections.clone());
     let mut cgroups = View::new(&data, sections.clone());
+    let mut service = View::new(&data, sections.clone());
 
     // CPU
 
@@ -704,6 +709,19 @@ pub fn run(config: Config) {
     cgroups.groups.push(cgroup_performance);
     cgroups.groups.push(cgroup_syscalls);
 
+    // Service
+
+    let mut service_overview = Group::new("Service", "service");
+
+    let opts = PlotOpts::scatter("Frame Start Delay", "frame-start-delay", Unit::Time)
+        .with_axis_label("FSD")
+        .with_unit_system("time")
+        .with_log_scale(true);
+    let series = data.percentiles("frame_start_delay:buckets", Labels::default());
+    service_overview.scatter(opts.clone(), series.clone());
+
+    service.groups.push(service_overview);
+
     // Finalize
 
     state.sections.insert(
@@ -736,6 +754,10 @@ pub fn run(config: Config) {
     state.sections.insert(
         "cgroups.json".to_string(),
         serde_json::to_string(&cgroups).unwrap(),
+    );
+    state.sections.insert(
+        "service.json".to_string(),
+        serde_json::to_string(&service).unwrap(),
     );
 
     // open in browser
