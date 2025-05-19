@@ -25,14 +25,6 @@ export function createHeatmapOption(baseOption, plotSpec) {
         return baseOption;
     }
 
-    const processedData = [];
-    for (let i = 0; i < data.length; i++) {
-        const [timeIndex, y, value] = data[i];
-        if (timeIndex >= 0 && timeIndex < timeData.length) {
-            processedData.push([timeData[timeIndex] * 1000, y, value]);
-        }
-    }
-
     // Extract all unique CPU IDs
     const yIndices = new Set();
     data.forEach(item => {
@@ -48,9 +40,70 @@ export function createHeatmapOption(baseOption, plotSpec) {
         length: maxCpuId + 1
     }, (_, i) => i);
 
-    // Y axis labels: if more than Y_MAX_LABELS, show every 2nd, 4th, 8th, 16th, or etc.
-    const Y_MAX_LABELS = 8;
+    if (continuousCpuIds.length !== cpuIds.length) {
+        console.error('CPU IDs are not continuous', cpuIds);
+    }
+
+    // First, transform data into a simple 2d matrix of values.
+    // dataMatrix[cpuId][timeIndex] = value
+    const xCount = timeData.length;
     const yCount = continuousCpuIds.length;
+    const dataMatrix = new Array(yCount).fill(null).map(() => new Array(xCount).fill(null));
+    for (let i = 0; i < data.length; i++) {
+        const [timeIndex, y, value] = data[i];
+        dataMatrix[y][timeIndex] = value;
+    }
+
+    const MAX_DATA_POINT_DISPLAY = 1000000; // 60000;
+    let condensedDataMatrix = null;
+    let processedCondensedData = null;
+    let divisor = null;
+    let condensedXCount = null;
+    if (xCount * yCount > MAX_DATA_POINT_DISPLAY) {
+        // Create a condensed data matrix by averaging the values of the original data matrix over several consecutive time steps.
+        divisor = Math.ceil(xCount * yCount / MAX_DATA_POINT_DISPLAY);
+        condensedXCount = Math.ceil(xCount / divisor);
+        console.log("Condensing data of ", yCount, "CPUs from", xCount, "timesteps to", condensedXCount, "using a divisor of", divisor);
+        condensedDataMatrix = new Array(yCount).fill(null).map(() => new Array(condensedXCount).fill(null));
+        for (let y = 0; y < yCount; y++) {
+            for (let x = 0; x < condensedXCount; x++) {
+                let sum = 0;
+                let count = 0;
+                for (let origX = x * divisor; origX < (x + 1) * divisor && origX < xCount; origX++) {
+                    if (dataMatrix[y][origX] !== null) {
+                        sum += dataMatrix[y][origX];
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    condensedDataMatrix[y][x] = sum / count;
+                }
+            }
+        }
+    }
+
+    const processedData = [];
+    for (let i = 0; i < data.length; i++) {
+        const [timeIndex, y, value] = data[i];
+        if (timeIndex >= 0 && timeIndex < timeData.length) {
+            processedData.push([timeData[timeIndex] * 1000, y, timeIndex, value]);
+        }
+    }
+
+    if (condensedDataMatrix) {
+        processedCondensedData = [];
+        for (let y = 0; y < yCount; y++) {
+            for (let x = 0; x < condensedXCount; x++) {
+                const value = condensedDataMatrix[y][x];
+                if (value !== null) {
+                    processedCondensedData.push([timeData[x * divisor] * 1000, y, x * divisor, value]);
+                }
+            }
+        }
+    }
+
+    // Y axis labels: if more than Y_MAX_LABELS, show every 2nd, 4th, 8th, 16th, or etc.
+    const Y_MAX_LABELS = 16;
     // What's the smallest power of 2 that's greater than or equal to yCount / Y_MAX_LABELS?
     const yLabelMultiple = Math.pow(2, Math.ceil(Math.log2(Math.ceil(yCount / Y_MAX_LABELS))));
     // This tells echarts how many labels to skip. E.g. show 1, skip 7, show 1, skip 7, etc.
@@ -69,7 +122,7 @@ export function createHeatmapOption(baseOption, plotSpec) {
 
     // Configure tooltip with unit formatting if specified
     let tooltipFormatter = function (params) {
-        const [time, cpu, value] = params.data;
+        const [time, cpu, timeIndex, value] = params.data;
 
         const formattedTime = formatDateTime(time);
 
@@ -83,11 +136,17 @@ export function createHeatmapOption(baseOption, plotSpec) {
     };
 
     const renderItem = function (params, api) {
-        var x = api.value(0);
-        var y = api.value(1);
-        var start = api.coord([x, y]);
-        var end = api.coord([x + 1000, y]);
-        var height = api.size([0, 1])[1];
+        const x = api.value(0);
+        const y = api.value(1);
+        const timeIndex = api.value(2);
+        const nextX = timeData[timeIndex + (divisor ?? 1)] * 1000 || Number.MAX_VALUE;
+        const start = api.coord([x, y]);
+        const end = api.coord([nextX, y]);
+        const width = end[0] - start[0] + 1; // +1 pixel to avoid hairline cracks.
+        const height = api.size([0, 1])[1];
+        // if (x === timeData[0] * 1000) {
+        //     console.log("start", start[0], "end", end[0], "width", width, "height", height);
+        // }
         return (
             {
                 type: 'rect',
@@ -95,11 +154,12 @@ export function createHeatmapOption(baseOption, plotSpec) {
                 shape: {
                     x: start[0],
                     y: start[1] - height / 2,
-                    width: end[0] - start[0] + .5, // The .5 pixel extra helps avoid hairline cracks.
+                    width: width,
                     height: height
                 },
                 // Do not use all of api.style() - this causes big performance issues.
                 style: {
+                    // Use the appropriate fill color from the color scale.
                     fill: api.style().fill
                 }
             }
@@ -181,7 +241,7 @@ export function createHeatmapOption(baseOption, plotSpec) {
             type: 'custom',
             renderItem,
             clip: true,
-            data: processedData,
+            data: processedCondensedData || processedData,
             emphasis: {
                 itemStyle: {
                     shadowBlur: 10,
