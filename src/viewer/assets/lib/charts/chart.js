@@ -63,7 +63,7 @@ export class Chart {
             }
         }, {
             root: null, // Use viewport as root
-            rootMargin: '100px', // Load when within 100px of viewport
+            rootMargin: '1px', // Load when within 1px of viewport
             threshold: 0.01 // Trigger when at least 1% visible
         });
 
