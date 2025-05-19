@@ -15,16 +15,22 @@ import globalColorMapper from './colormap.js';
 
 
 export class ChartsState {
-    // Zoom state - for synchronization across charts
-    zoomState = null;
-    // Initialized charts - to prevent re-rendering
+    // Zoom state for synchronization across charts
+    // { 
+    //     start?: number, // 0-100
+    //     end?: number, // 0-100
+    //     startValue?: number, // raw x axis data value
+    //     endValue?: number,  // raw x axis data value
+    // }
+    zoomLevel = null;
+    // Initialized charts by id
     initializedCharts = new Map();
     // Global color mapper - for consistent cgroup colors
     colorMapper = globalColorMapper;
 
     // Resets state, disposing of all initialized charts.
     clear() {
-        this.zoomState = null;
+        this.zoomLevel = null;
         this.initializedCharts.forEach((chart) => {
             chart.dispose();
         });
@@ -33,17 +39,27 @@ export class ChartsState {
 }
 
 // Chart component - uses echarts to render a chart
-export const Chart = {
-    oncreate: function (vnode) {
-        const domNode = vnode.dom;
+export class Chart {
+    constructor(vnode) {
+        this.domNode = null; // not available until oncreate
+        this.chartId = vnode.attrs.spec.opts.id;
+        this.spec = vnode.attrs.spec;
+        this.chartsState = vnode.attrs.chartsState;
+        this.resizeHandler = null;
+        this.observer = null;
+        this.echart = null;
+    }
+
+    oncreate(vnode) {
+        this.domNode = vnode.dom;
 
         // Set up the Intersection Observer to lazy load the chart
         const observer = new IntersectionObserver((entries) => {
             const hasIntersection = entries.some(entry => entry.isIntersecting);
             if (hasIntersection) {
-                this.init(vnode);
+                this.initEchart();
                 // Once initialized, we can stop observing
-                observer.unobserve(domNode);
+                observer.unobserve(this.domNode);
             }
         }, {
             root: null, // Use viewport as root
@@ -52,90 +68,86 @@ export const Chart = {
         });
 
         // Start observing the chart element
-        observer.observe(domNode);
+        observer.observe(this.domNode);
 
         // Add window resize handler
         const resizeHandler = () => {
-            if (vnode.state.chart) {
-                vnode.state.chart.resize();
+            if (this.echart) {
+                this.echart.resize();
             }
         };
         window.addEventListener('resize', resizeHandler);
-        vnode.state.resizeHandler = resizeHandler;
-        vnode.state.observer = observer;
-    },
+        this.resizeHandler = resizeHandler;
+        this.observer = observer;
+    }
 
-    onremove: function (vnode) {
+    onremove() {
         // Clean up chart instance and event handlers
-        if (vnode.state.observer) {
-            vnode.state.observer.disconnect();
+        if (this.observer) {
+            this.observer.disconnect();
         }
 
-        if (vnode.state.chart) {
-            window.removeEventListener('resize', vnode.state.resizeHandler);
+        if (this.echart) {
+            window.removeEventListener('resize', this.resizeHandler);
             // Don't dispose the chart since it's stored in initializedCharts
             // Only remove our reference to it
-            vnode.state.chart = null;
+            this.echart = null;
         }
-    },
+    }
 
-    view: function () {
+    view() {
         return m('div.chart');
-    },
+    }
 
-    // Private methods
-    init: function (vnode) {
-        const domNode = vnode.dom;
-        const { spec, chartsState } = vnode.attrs;
-        const chartId = spec.opts.id;
-        if (chartsState.initializedCharts.has(chartId)) {
+    initEchart() {
+        if (this.chartsState.initializedCharts.has(this.chartId)) {
             // Chart was already initialized, just reference it
-            vnode.state.chart = chartsState.initializedCharts.get(chartId);
-            console.log(`Chart ${chartId} already initialized`);
+            this.echart = this.chartsState.initializedCharts.get(this.chartId);
+            console.log(`Chart ${this.chartId} already initialized`);
             return;
         }
 
         // Initialize the chart
-        const chart = echarts.init(domNode);
+        const chart = echarts.init(this.domNode);
         const startTime = new Date();
-        chart.on('finished', function () {
+        chart.on('finished', () => {
             chart.off('finished');
-            console.log(`Chart ${chartId} rendered in ${new Date() - startTime}ms`);
+            console.log(`Chart ${this.chartId} rendered in ${new Date() - startTime}ms`);
         })
 
         // Store original time data for human-friendly tick calculation
-        if (spec.data && spec.data.length > 0) {
-            if (spec.data[0] && Array.isArray(spec.data[0])) {
+        if (this.spec.data && this.spec.data.length > 0) {
+            if (this.spec.data[0] && Array.isArray(this.spec.data[0])) {
                 // For line and scatter charts, time is in the first row
-                chart.originalTimeData = spec.data[0];
+                chart.originalTimeData = this.spec.data[0];
             }
-        } else if (spec.time_data) {
+        } else if (this.spec.time_data) {
             // For heatmaps, time is in time_data property
-            chart.originalTimeData = spec.time_data;
+            chart.originalTimeData = this.spec.time_data;
         }
 
         // Store chart instance for cleanup and to prevent re-initialization
-        chartsState.initializedCharts.set(chartId, chart);
+        this.chartsState.initializedCharts.set(this.chartId, chart);
 
         // Configure the chart using the spec
-        const option = createChartOption(spec, chartsState);
+        const option = createChartOption(this.spec, this.chartsState);
         chart.setOption(option);
 
         // Match existing zoom state.
-        if (chartsState.zoomState !== null) {
-            if (chartsState.zoomState.start !== 0 || chartsState.zoomState.end !== 100) {
+        if (this.chartsState.zoomLevel !== null) {
+            if (this.chartsState.zoomLevel.start !== 0 || this.chartsState.zoomLevel.end !== 100) {
                 // Apply the zoom state to the new chart
                 chart.dispatchAction({
                     type: 'dataZoom',
-                    start: chartsState.zoomState.start,
-                    end: chartsState.zoomState.end,
-                    startValue: chartsState.zoomState.startValue,
-                    endValue: chartsState.zoomState.endValue,
+                    start: this.chartsState.zoomLevel.start,
+                    end: this.chartsState.zoomLevel.end,
+                    startValue: this.chartsState.zoomLevel.startValue,
+                    endValue: this.chartsState.zoomLevel.endValue,
                 });
             }
         }
 
-        chart.on('datazoom', function (event) {
+        chart.on('datazoom', (event) => {
             // 'datazoom' events triggered by the user vs dispatched by us have different formats:
             // User-triggered events have a batch property with the details under it.
             // (We don't want to trigger on our own dispatched zoom actions, so this is convenient.)
@@ -146,13 +158,13 @@ export const Chart = {
             const details = event.batch[0];
 
             const { start, end, startValue, endValue } = details;
-            chartsState.zoomState = {
+            this.chartsState.zoomLevel = {
                 start,
                 end,
                 startValue,
                 endValue,
             };
-            chartsState.initializedCharts.forEach(chart => {
+            this.chartsState.initializedCharts.forEach(chart => {
                 chart.dispatchAction({
                     type: 'dataZoom',
                     start,
@@ -174,12 +186,12 @@ export const Chart = {
         // Double click on a chart -> reset zoom level
         // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
         // TODO: Add a visible interface element to reset zoom, too.
-        chart.getZr().on('dblclick', function () {
-            chartsState.zoomState = {
+        chart.getZr().on('dblclick', () => {
+            this.chartsState.zoomLevel = {
                 start: 0,
                 end: 100,
             };
-            chartsState.initializedCharts.forEach(chart => {
+            this.chartsState.initializedCharts.forEach(chart => {
                 chart.dispatchAction({
                     type: 'dataZoom',
                     start: 0,
@@ -189,9 +201,9 @@ export const Chart = {
         })
 
         // Store chart in vnode state for updates and cleanup
-        vnode.state.chart = chart;
+        this.echart = chart;
     }
-};
+}
 
 function createChartOption(spec, chartsState) {
     const {
