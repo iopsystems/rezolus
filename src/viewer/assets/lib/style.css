@@ -76,7 +76,7 @@ main {
     border-bottom: 1px solid #fff6;
 }
 
-.group .plots {
+.group .charts {
     display: flex;
     flex-wrap: wrap;
     margin-top: 20px;
@@ -84,8 +84,8 @@ main {
     margin-bottom: 50px;
 }
 
-.plot {
-    /* TODO: should not shrink indefinitely, and maybe 2-per-row is not inherent to plots? */
+.chart {
+    /* TODO: should not shrink indefinitely, and maybe 2-per-row is not inherent to charts? */
     max-width: 50%;
     width: 50%;
     /* In combination with the internal margins of the grid, this gives 384px height for the chart itself. */
