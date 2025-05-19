@@ -101,7 +101,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-24.04, ubuntu-22.04 ]
+        os: [ ubuntu-24.04, ubuntu-22.04, macos-latest ]
         profile: [ release, debug ]
     steps:
       - uses: actions/checkout@v4
@@ -143,6 +143,7 @@ jobs:
         shell: bash
         run: |
           cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- config/agent.toml & echo $! > agent.pid
+          sleep 15
           cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- record --duration 60s http://127.0.0.1:4241 rezolus.parquet
 
   check-success:
