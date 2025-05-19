@@ -91,10 +91,3 @@ main {
     /* In combination with the internal margins of the grid, this gives 384px height for the chart itself. */
     height: 454px;
 }
-
-/* Zoom rectangle styling */
-/* Not in use */
-.echarts-tooltip-selected-region {
-    background-color: rgba(255, 255, 255, 0.3) !important;
-    border: 1px solid rgba(255, 255, 255, 0.5) !important;
-}

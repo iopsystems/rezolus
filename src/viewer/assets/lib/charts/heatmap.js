@@ -9,20 +9,19 @@ import {
 } from './base.js';
 
 /**
- * Creates a heatmap chart configuration for ECharts
- * 
- * @param {Object} baseOption - Base chart options
- * @param {Object} plotSpec - Plot specification with data and options
- * @returns {Object} ECharts configuration object
+ * Configures the Chart based on Chart.spec
+ * Responsible for calling setOption on the echart instance, and for setting up any
+ * chart-specific dynamic behavior.
+ * @param {import('./chart.js').Chart} chart - the chart to configure
  */
-export function createHeatmapOption(plotSpec) {
+export function configureHeatmap(chart) {
     const {
         time_data: timeData,
         data,
         min_value: minValue,
         max_value: maxValue,
         opts
-    } = plotSpec;
+    } = chart.spec;
 
     const baseOption = getBaseOption(opts.title);
 
@@ -191,7 +190,7 @@ export function createHeatmapOption(plotSpec) {
         }
     };
 
-    return {
+    const option = {
         ...baseOption,
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
@@ -242,7 +241,7 @@ export function createHeatmapOption(plotSpec) {
             }
         },
         series: [{
-            name: plotSpec.opts.title,
+            name: chart.spec.opts.title,
             type: 'custom',
             renderItem,
             clip: true,
@@ -263,4 +262,6 @@ export function createHeatmapOption(plotSpec) {
             animation: false
         }]
     };
+
+    chart.echart.setOption(option);
 }

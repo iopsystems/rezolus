@@ -7,17 +7,16 @@ import {
 } from './base.js';
 
 /**
- * Creates a line chart configuration for ECharts
- * 
- * @param {Object} baseOption - Base chart options
- * @param {Object} plotSpec - Plot specification with data and options
- * @returns {Object} ECharts configuration object
+ * Configures the Chart based on Chart.spec
+ * Responsible for calling setOption on the echart instance, and for setting up any
+ * chart-specific dynamic behavior.
+ * @param {import('./chart.js').Chart} chart - the chart to configure
  */
-export function createLineChartOption(plotSpec) {
+export function configureLineChart(chart) {
     const {
         data,
         opts
-    } = plotSpec;
+    } = chart.spec;
 
     const baseOption = getBaseOption(opts.title);
 
@@ -38,7 +37,7 @@ export function createLineChartOption(plotSpec) {
     const minValue = format.min;
     const maxValue = format.max;
 
-    return {
+    const option = {
         ...baseOption,
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
@@ -62,4 +61,6 @@ export function createLineChartOption(plotSpec) {
             animationDuration: 0, // Don't animate the line in
         }]
     };
+
+    chart.echart.setOption(option);
 }

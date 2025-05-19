@@ -9,17 +9,16 @@ import {
 } from './base.js';
 
 /**
- * Creates a scatter chart configuration for ECharts
- * 
- * @param {Object} baseOption - Base chart options
- * @param {Object} plotSpec - Plot specification with data and options
- * @returns {Object} ECharts configuration object
+ * Configures the Chart based on Chart.spec
+ * Responsible for calling setOption on the echart instance, and for setting up any
+ * chart-specific dynamic behavior.
+ * @param {import('./chart.js').Chart} chart - the chart to configure
  */
-export function createScatterChartOption(plotSpec) {
+export function configureScatterChart(chart) {
     const {
         data,
         opts
-    } = plotSpec;
+    } = chart.spec;
 
     const baseOption = getBaseOption(opts.title);
 
@@ -75,12 +74,12 @@ export function createScatterChartOption(plotSpec) {
 
     // Detect if this is a scheduler or time-based chart by looking at title or unit
     const isSchedulerChart =
-        (plotSpec.opts.title && (plotSpec.opts.title.includes('Latency') || plotSpec.opts.title.includes('Time'))) ||
+        (chart.spec.opts.title && (chart.spec.opts.title.includes('Latency') || chart.spec.opts.title.includes('Time'))) ||
         unitSystem === 'time';
     // TODO: remove the above second-guessing and just use the unit system.
 
     // Return scatter chart configuration with reliable time axis
-    return {
+    const option = {
         ...baseOption,
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
@@ -91,4 +90,6 @@ export function createScatterChartOption(plotSpec) {
         },
         series: series
     };
+
+    chart.echart.setOption(option);
 }

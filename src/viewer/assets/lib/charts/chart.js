@@ -1,15 +1,15 @@
 
 import {
-    createLineChartOption
+    configureLineChart
 } from './line.js';
 import {
-    createScatterChartOption
+    configureScatterChart
 } from './scatter.js';
 import {
-    createHeatmapOption
+    configureHeatmap
 } from './heatmap.js';
 import {
-    createMultiSeriesChartOption
+    configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper from './util/colormap.js';
 
@@ -108,10 +108,10 @@ export class Chart {
         }
 
         // Initialize the chart
-        const chart = echarts.init(this.domNode);
+        this.echart = echarts.init(this.domNode);
         const startTime = new Date();
-        chart.on('finished', () => {
-            chart.off('finished');
+        this.echart.on('finished', () => {
+            this.echart.off('finished');
             console.log(`Chart ${this.chartId} rendered in ${new Date() - startTime}ms`);
         })
 
@@ -119,25 +119,24 @@ export class Chart {
         if (this.spec.data && this.spec.data.length > 0) {
             if (this.spec.data[0] && Array.isArray(this.spec.data[0])) {
                 // For line and scatter charts, time is in the first row
-                chart.originalTimeData = this.spec.data[0];
+                this.echart.originalTimeData = this.spec.data[0];
             }
         } else if (this.spec.time_data) {
             // For heatmaps, time is in time_data property
-            chart.originalTimeData = this.spec.time_data;
+            this.echart.originalTimeData = this.spec.time_data;
         }
 
         // Store chart instance for cleanup and to prevent re-initialization
-        this.chartsState.initializedCharts.set(this.chartId, chart);
+        this.chartsState.initializedCharts.set(this.chartId, this.echart);
 
-        // Configure the chart using the spec
-        const option = this.createChartOption();
-        chart.setOption(option);
+        // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
+        this.configureChartByType();
 
         // Match existing zoom state.
         if (this.chartsState.zoomLevel !== null) {
             if (this.chartsState.zoomLevel.start !== 0 || this.chartsState.zoomLevel.end !== 100) {
                 // Apply the zoom state to the new chart
-                chart.dispatchAction({
+                this.echart.dispatchAction({
                     type: 'dataZoom',
                     start: this.chartsState.zoomLevel.start,
                     end: this.chartsState.zoomLevel.end,
@@ -147,7 +146,7 @@ export class Chart {
             }
         }
 
-        chart.on('datazoom', (event) => {
+        this.echart.on('datazoom', (event) => {
             // 'datazoom' events triggered by the user vs dispatched by us have different formats:
             // User-triggered events have a batch property with the details under it.
             // (We don't want to trigger on our own dispatched zoom actions, so this is convenient.)
@@ -176,8 +175,8 @@ export class Chart {
         });
 
         // Enable drag-to-zoom
-        // This requires the toolbox to be enabled. See the comment there for more details.
-        chart.dispatchAction({
+        // This requires the toolbox to be enabled. See the comment for the toolbox configuration in base.js for more details.
+        this.echart.dispatchAction({
             type: 'takeGlobalCursor',
             key: 'dataZoomSelect',
             dataZoomSelectActive: true,
@@ -186,7 +185,7 @@ export class Chart {
         // Double click on a chart -> reset zoom level
         // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
         // TODO: Add a visible interface element to reset zoom, too.
-        chart.getZr().on('dblclick', () => {
+        this.echart.getZr().on('dblclick', () => {
             this.chartsState.zoomLevel = {
                 start: 0,
                 end: 100,
@@ -199,28 +198,24 @@ export class Chart {
                 });
             });
         })
-
-        // Store chart in vnode state for updates and cleanup
-        this.echart = chart;
     }
 
-    createChartOption() {
+    configureChartByType() {
         const {
             opts
         } = this.spec;
 
         // Handle different chart types by delegating to specialized modules
         if (opts.style === 'line') {
-            return createLineChartOption(this.spec, this.chartsState);
+            configureLineChart(this, this.spec, this.chartsState);
         } else if (opts.style === 'heatmap') {
-            return createHeatmapOption(this.spec, this.chartsState);
+            configureHeatmap(this, this.spec, this.chartsState);
         } else if (opts.style === 'scatter') {
-            return createScatterChartOption(this.spec, this.chartsState);
+            configureScatterChart(this, this.spec, this.chartsState);
         } else if (opts.style === 'multi') {
-            // Multi-series chart type with consistent cgroup colors
-            return createMultiSeriesChartOption(this.spec, this.chartsState);
+            configureMultiSeriesChart(this, this.spec, this.chartsState);
+        } else {
+            throw new Error(`Unknown chart style: ${opts.style}`);
         }
-
-        return baseOption;
     }
 }
