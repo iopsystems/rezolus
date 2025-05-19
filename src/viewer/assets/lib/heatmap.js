@@ -4,6 +4,9 @@ import {
 import {
     formatDateTime
 } from './utils.js';
+import {
+    getBaseOption,
+} from './charts/base.js';
 
 /**
  * Creates a heatmap chart configuration for ECharts
@@ -12,7 +15,7 @@ import {
  * @param {Object} plotSpec - Plot specification with data and options
  * @returns {Object} ECharts configuration object
  */
-export function createHeatmapOption(baseOption, plotSpec) {
+export function createHeatmapOption(plotSpec) {
     const {
         time_data: timeData,
         data,
@@ -20,6 +23,8 @@ export function createHeatmapOption(baseOption, plotSpec) {
         max_value: maxValue,
         opts
     } = plotSpec;
+
+    const baseOption = getBaseOption(opts.title);
 
     if (!data || data.length < 1) {
         return baseOption;

@@ -3,6 +3,10 @@
 import {
     createAxisLabelFormatter,
 } from './units.js';
+import {
+    getBaseOption,
+    getBaseYAxisOption,
+} from './charts/base.js';
 import globalColorMapper from './colormap.js';
 
 /**
@@ -14,15 +18,18 @@ import globalColorMapper from './colormap.js';
  * @param {Object} plotSpec - Plot specification with data and options
  * @returns {Object} ECharts configuration object
  */
-export function createMultiSeriesChartOption(baseOption, plotSpec) {
+export function createMultiSeriesChartOption(plotSpec) {
     const {
         data,
         opts,
     } = plotSpec;
 
+    const baseOption = getBaseOption(opts.title);
+
     if (!data || data.length < 2) {
         return baseOption;
     }
+
 
     // For multi-series charts, the first row contains timestamps, subsequent rows are series data
     const timeData = data[0];
@@ -42,37 +49,6 @@ export function createMultiSeriesChartOption(baseOption, plotSpec) {
     const logScale = format.log_scale;
     const minValue = format.min;
     const maxValue = format.max;
-
-    const yAxis = {
-        type: logScale ? 'log' : 'value',
-        logBase: 10,
-        scale: true,
-        min: minValue,
-        max: maxValue,
-        axisLine: {
-            lineStyle: {
-                color: '#ABABAB'
-            }
-        },
-        axisLabel: {
-            color: '#ABABAB',
-            margin: 16, // Fixed consistent margin for all charts
-            formatter: unitSystem ?
-                createAxisLabelFormatter(unitSystem) :
-                function (value) {
-                    // Use scientific notation for large/small numbers
-                    if (Math.abs(value) > 10000 || (Math.abs(value) > 0 && Math.abs(value) < 0.01)) {
-                        return value.toExponential(1);
-                    }
-                    return value;
-                }
-        },
-        splitLine: {
-            lineStyle: {
-                color: 'rgba(171, 171, 171, 0.2)'
-            }
-        }
-    };
 
     // Create series configurations for each data series
     const series = [];
@@ -119,7 +95,7 @@ export function createMultiSeriesChartOption(baseOption, plotSpec) {
 
     return {
         ...baseOption,
-        yAxis,
+        yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
             valueFormatter: unitSystem ?

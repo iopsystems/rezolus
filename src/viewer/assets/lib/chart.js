@@ -130,7 +130,7 @@ export class Chart {
         this.chartsState.initializedCharts.set(this.chartId, chart);
 
         // Configure the chart using the spec
-        const option = createChartOption(this.spec, this.chartsState);
+        const option = this.createChartOption();
         chart.setOption(option);
 
         // Match existing zoom state.
@@ -203,104 +203,24 @@ export class Chart {
         // Store chart in vnode state for updates and cleanup
         this.echart = chart;
     }
-}
 
-function createChartOption(spec, chartsState) {
-    const {
-        opts
-    } = spec;
+    createChartOption() {
+        const {
+            opts
+        } = this.spec;
 
-    // Basic option template
-    const baseOption = {
-        grid: {
-            left: '14%',
-            right: '5%',
-            // Subtracting from the element height, these give 384px height for the chart itself.
-            top: '35',
-            bottom: '35',
-            containLabel: false,
-        },
-        xAxis: {
-            type: 'time',
-            min: 'dataMin',
-            max: 'dataMax',
-            // splitNumber appears to control the MINIMUM number of ticks. The max number is much higher.
-            // This value is lowered from the default of 5 in order to reduce the max number of ticks,
-            // which cause visual overlap of labels. It feels like this shouldn't be necessary.
-            // Testing showed that their "automatic" determination of how many ticks fit is independent
-            // of the size of the chart. So this value is trying to be empirically correct for charts of
-            // a reasonable size (which is dependent on the size of the window).
-            // TODO: should we adjust split number based on the size of the window? Or take x axis labels
-            // into our own hands?
-            splitNumber: 4,
-            axisLine: {
-                lineStyle: {
-                    color: '#ABABAB'
-                }
-            },
-            axisLabel: {
-                color: '#ABABAB',
-            },
-        },
-        tooltip: {
-            trigger: 'axis',
-            axisPointer: {
-                type: 'line',
-                snap: true,
-                animation: false,
-                label: {
-                    backgroundColor: '#505765'
-                }
-            },
-            textStyle: {
-                color: '#E0E0E0'
-            },
-            backgroundColor: 'rgba(50, 50, 50, 0.8)',
-            borderColor: 'rgba(70, 70, 70, 0.8)',
-        },
-        // This invisible toolbox is a workaround to have drag-to-zoom as the default behavior.
-        // We programmatically activate the zoom tool and hide the interface.
-        // https://github.com/apache/echarts/issues/13397#issuecomment-814864873
-        toolbox: {
-            orient: 'vertical',
-            itemSize: 13,
-            top: 15,
-            right: -6,
-            feature: {
-                dataZoom: {
-                    yAxisIndex: 'none',
-                    icon: {
-                        zoom: 'path://', // hack to remove zoom button
-                        back: 'path://', // hack to remove restore button
-                    },
-                },
-            },
-        },
-        title: {
-            text: opts.title,
-            left: 'center',
-            textStyle: {
-                color: '#E0E0E0'
-            }
-        },
-        textStyle: {
-            color: '#E0E0E0'
-        },
-        darkMode: true,
-        backgroundColor: 'transparent'
-    };
+        // Handle different chart types by delegating to specialized modules
+        if (opts.style === 'line') {
+            return createLineChartOption(this.spec, this.chartsState);
+        } else if (opts.style === 'heatmap') {
+            return createHeatmapOption(this.spec, this.chartsState);
+        } else if (opts.style === 'scatter') {
+            return createScatterChartOption(this.spec, this.chartsState);
+        } else if (opts.style === 'multi') {
+            // Multi-series chart type with consistent cgroup colors
+            return createMultiSeriesChartOption(this.spec, this.chartsState);
+        }
 
-    // Handle different chart types by delegating to specialized modules
-    if (opts.style === 'line') {
-        return createLineChartOption(baseOption, spec, chartsState);
-    } else if (opts.style === 'heatmap') {
-        return createHeatmapOption(baseOption, spec, chartsState);
-    } else if (opts.style === 'scatter') {
-        return createScatterChartOption(baseOption, spec, chartsState);
-    } else if (opts.style === 'multi') {
-        // Multi-series chart type with consistent cgroup colors
-        return createMultiSeriesChartOption(baseOption, spec, chartsState);
+        return baseOption;
     }
-
-    return baseOption;
 }
