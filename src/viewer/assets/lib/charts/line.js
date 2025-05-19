@@ -1,10 +1,10 @@
 import {
     createAxisLabelFormatter,
-} from './units.js';
+} from './util/units.js';
 import {
     getBaseOption,
     getBaseYAxisOption,
-} from './charts/base.js';
+} from './base.js';
 
 /**
  * Creates a line chart configuration for ECharts

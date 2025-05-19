@@ -1,6 +1,6 @@
 import {
     createAxisLabelFormatter,
-} from '../units.js';
+} from './util/units.js';
 
 export function getBaseOption(title) {
     return {

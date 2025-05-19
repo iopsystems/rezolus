@@ -2,11 +2,11 @@
 
 import {
     createAxisLabelFormatter,
-} from './units.js';
+} from './util/units.js';
 import {
     getBaseOption,
     getBaseYAxisOption,
-} from './charts/base.js';
+} from './base.js';
 
 /**
  * Creates a scatter chart configuration for ECharts

@@ -2,12 +2,12 @@
 
 import {
     createAxisLabelFormatter,
-} from './units.js';
+} from './util/units.js';
 import {
     getBaseOption,
     getBaseYAxisOption,
-} from './charts/base.js';
-import globalColorMapper from './colormap.js';
+} from './base.js';
+import globalColorMapper from './util/colormap.js';
 
 /**
  * Creates a multi-series line chart configuration for ECharts

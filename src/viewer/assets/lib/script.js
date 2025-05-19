@@ -1,6 +1,6 @@
 import {
     ChartsState, Chart
-} from './chart.js';
+} from './charts/chart.js';
 
 // Sidebar component
 const Sidebar = {

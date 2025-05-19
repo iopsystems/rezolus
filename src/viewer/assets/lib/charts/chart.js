@@ -11,7 +11,7 @@ import {
 import {
     createMultiSeriesChartOption
 } from './multi.js';
-import globalColorMapper from './colormap.js';
+import globalColorMapper from './util/colormap.js';
 
 
 export class ChartsState {

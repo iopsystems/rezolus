@@ -1,12 +1,12 @@
 import {
     createAxisLabelFormatter
-} from './units.js';
+} from './util/units.js';
 import {
     formatDateTime
-} from './utils.js';
+} from './util/utils.js';
 import {
     getBaseOption,
-} from './charts/base.js';
+} from './base.js';
 
 /**
  * Creates a heatmap chart configuration for ECharts
