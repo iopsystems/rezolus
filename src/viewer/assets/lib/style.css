@@ -25,6 +25,8 @@ header {
     margin: 2em auto;
     padding-left: var(--sidebar-width);
     font-size: 1rem;
+    display: flex;
+    justify-content: space-between;
 }
 
 header .div {

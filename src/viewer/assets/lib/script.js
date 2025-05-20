@@ -22,12 +22,15 @@ const Main = {
         attrs: {
             activeSection,
             groups,
-            sections
+            sections,
+            source,
+            version
         }
     }) {
         return m("div",
             m("header", [
                 m('h1', 'Rezolus', m('span.div', ' » '), activeSection.name),
+                m('span.version', `Source: ${source} • Version: ${version}`)
             ]),
             m("main", [
                 m(Sidebar, {
