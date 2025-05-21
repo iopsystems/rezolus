@@ -2,33 +2,37 @@
 
 import {
     createAxisLabelFormatter,
-} from './units.js';
-import globalColorMapper from './colormap.js';
+} from './util/units.js';
+import {
+    getBaseOption,
+    getBaseYAxisOption,
+} from './base.js';
+import globalColorMapper from './util/colormap.js';
 
 /**
- * Creates a multi-series line chart configuration for ECharts
- * and consistent cgroup colors across charts and page refreshes
- * Enhanced to support an "Other" category that sums all cgroups not in top/bottom N
- * 
- * @param {Object} baseOption - Base chart options
- * @param {Object} plotSpec - Plot specification with data and options
- * @returns {Object} ECharts configuration object
+ * Configures the Chart based on Chart.spec
+ * Responsible for calling setOption on the echart instance, and for setting up any
+ * chart-specific dynamic behavior.
+ * @param {import('./chart.js').Chart} chart - the chart to configure
  */
-export function createMultiSeriesChartOption(baseOption, plotSpec) {
+export function configureMultiSeriesChart(chart) {
     const {
         data,
         opts,
-    } = plotSpec;
+    } = chart.spec;
+
+    const baseOption = getBaseOption(opts.title);
 
     if (!data || data.length < 2) {
         return baseOption;
     }
 
+
     // For multi-series charts, the first row contains timestamps, subsequent rows are series data
     const timeData = data[0];
     const lineCount = data.length - 1;
 
-    let seriesNames = plotSpec.series_names;
+    let seriesNames = chart.spec.series_names;
     if (!seriesNames || seriesNames.length !== lineCount) {
         console.log("series_names is missing or wrong length", seriesNames);
         seriesNames = Array.from(Array(lineCount).keys()).map(i => `Series ${i + 1}`);
@@ -42,37 +46,6 @@ export function createMultiSeriesChartOption(baseOption, plotSpec) {
     const logScale = format.log_scale;
     const minValue = format.min;
     const maxValue = format.max;
-
-    const yAxis = {
-        type: logScale ? 'log' : 'value',
-        logBase: 10,
-        scale: true,
-        min: minValue,
-        max: maxValue,
-        axisLine: {
-            lineStyle: {
-                color: '#ABABAB'
-            }
-        },
-        axisLabel: {
-            color: '#ABABAB',
-            margin: 16, // Fixed consistent margin for all charts
-            formatter: unitSystem ?
-                createAxisLabelFormatter(unitSystem) :
-                function (value) {
-                    // Use scientific notation for large/small numbers
-                    if (Math.abs(value) > 10000 || (Math.abs(value) > 0 && Math.abs(value) < 0.01)) {
-                        return value.toExponential(1);
-                    }
-                    return value;
-                }
-        },
-        splitLine: {
-            lineStyle: {
-                color: 'rgba(171, 171, 171, 0.2)'
-            }
-        }
-    };
 
     // Create series configurations for each data series
     const series = [];
@@ -117,9 +90,9 @@ export function createMultiSeriesChartOption(baseOption, plotSpec) {
         series.push(otherSeries);
     }
 
-    return {
+    const option = {
         ...baseOption,
-        yAxis,
+        yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
             valueFormatter: unitSystem ?
@@ -130,4 +103,6 @@ export function createMultiSeriesChartOption(baseOption, plotSpec) {
         // Don't use the default color palette for normal cgroups
         color: cgroupColors,
     };
+
+    chart.echart.setOption(option);
 }

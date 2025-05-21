@@ -2,20 +2,25 @@
 
 import {
     createAxisLabelFormatter,
-} from './units.js';
+} from './util/units.js';
+import {
+    getBaseOption,
+    getBaseYAxisOption,
+} from './base.js';
 
 /**
- * Creates a scatter chart configuration for ECharts
- * 
- * @param {Object} baseOption - Base chart options
- * @param {Object} plotSpec - Plot specification with data and options
- * @returns {Object} ECharts configuration object
+ * Configures the Chart based on Chart.spec
+ * Responsible for calling setOption on the echart instance, and for setting up any
+ * chart-specific dynamic behavior.
+ * @param {import('./chart.js').Chart} chart - the chart to configure
  */
-export function createScatterChartOption(baseOption, plotSpec) {
+export function configureScatterChart(chart) {
     const {
         data,
         opts
-    } = plotSpec;
+    } = chart.spec;
+
+    const baseOption = getBaseOption(opts.title);
 
     if (!data || data.length < 2) {
         return baseOption;
@@ -69,49 +74,14 @@ export function createScatterChartOption(baseOption, plotSpec) {
 
     // Detect if this is a scheduler or time-based chart by looking at title or unit
     const isSchedulerChart =
-        (plotSpec.opts.title && (plotSpec.opts.title.includes('Latency') || plotSpec.opts.title.includes('Time'))) ||
+        (chart.spec.opts.title && (chart.spec.opts.title.includes('Latency') || chart.spec.opts.title.includes('Time'))) ||
         unitSystem === 'time';
     // TODO: remove the above second-guessing and just use the unit system.
 
-    const yAxis = {
-        type: logScale ? 'log' : 'value',
-        logBase: 10,
-        scale: true,
-        min: minValue,
-        max: maxValue,
-        axisLine: {
-            lineStyle: {
-                color: '#ABABAB'
-            }
-        },
-        axisLabel: {
-            color: '#ABABAB',
-            margin: 12, // Fixed consistent margin for all charts
-            formatter: unitSystem ?
-                createAxisLabelFormatter(unitSystem) :
-                function (value) {
-                    // Format log scale labels more compactly if needed
-                    if (logScale && Math.abs(value) >= 1000) {
-                        return value.toExponential(0);
-                    }
-                    // Use scientific notation for large/small numbers
-                    if (Math.abs(value) > 10000 || (Math.abs(value) > 0 && Math.abs(value) < 0.01)) {
-                        return value.toExponential(1);
-                    }
-                    return value;
-                }
-        },
-        splitLine: {
-            lineStyle: {
-                color: 'rgba(171, 171, 171, 0.2)'
-            }
-        }
-    };
-
     // Return scatter chart configuration with reliable time axis
-    return {
+    const option = {
         ...baseOption,
-        yAxis,
+        yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
             valueFormatter: unitSystem ?
@@ -120,4 +90,6 @@ export function createScatterChartOption(baseOption, plotSpec) {
         },
         series: series
     };
+
+    chart.echart.setOption(option);
 }
