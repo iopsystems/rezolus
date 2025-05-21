@@ -122,13 +122,29 @@ export function configureHeatmap(chart) {
 
         const formattedTime = formatDateTime(time);
 
+        let label, formattedValue;
         if (unitSystem) {
             const formatter = createAxisLabelFormatter(unitSystem);
-            const label = valueLabel ? `${valueLabel}: ` : '';
-            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${label}<span style="font-weight: bold; float: right;">${formatter(value)}</span>`;
+            label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
+            formattedValue = formatter(value);
         } else {
-            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${value.toFixed(6)}`;
+            label = '';
+            formattedValue = value.toFixed(6);
         }
+        return `<div>
+                    <div>
+                        ${formattedTime}
+                    </div>
+                    <div style="margin-top: 5px;">
+                        <span style="background-color: #aaaaff33; padding: 2px 5px; border-radius: 4px; font-size: .85em;">
+                            CPU: ${cpu}
+                        </span>
+                        ${label}
+                        <span style="font-weight: bold; float: right; margin-left: 20px;">
+                            ${formattedValue}
+                        </span>
+                    </div>
+                </div>`;
     };
 
     const yAxis = {

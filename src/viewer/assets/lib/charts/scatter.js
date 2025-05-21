@@ -6,6 +6,7 @@ import {
 import {
     getBaseOption,
     getBaseYAxisOption,
+    getTooltipFormatter,
 } from './base.js';
 
 /**
@@ -82,9 +83,9 @@ export function configureScatterChart(chart) {
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
-            valueFormatter: unitSystem ?
+            formatter: getTooltipFormatter(unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
-                undefined,
+                val => val),
         },
         series: series
     };

@@ -1,6 +1,36 @@
 import {
     createAxisLabelFormatter,
 } from './util/units.js';
+import { formatDateTime } from './util/utils.js';
+
+/**
+ * Approximates echarts' built-in tooltip formatter, but with our own x axis formatting
+ * (using formatDateTime) and our own value formatting (using valueFormatter).
+ * @param {function} valueFormatter - A function from raw value to formatted value.
+ */
+export function getTooltipFormatter(valueFormatter) {
+    return (paramsArray) => {
+        const result =
+            `<div>
+                <div>
+                    ${formatDateTime(paramsArray[0].value[0])}
+                </div>
+                <div style="margin-top: 5px;">
+                    ${paramsArray.map(p => `<div>
+                        ${p.marker}
+                        <span style="margin-left: 2px;">
+                            ${p.seriesName}
+                        </span>
+                        <span style="float: right; margin-left: 20px; font-weight: bold;">
+                            ${valueFormatter(p.value[1])}
+                        </span>
+                    </div>`).join('')}
+                </div>
+            </div>`;
+
+        return result;
+    }
+}
 
 export function getBaseOption(title) {
     return {
