@@ -26,15 +26,22 @@ export function configureScatterChart(chart) {
         return baseOption;
     }
 
+    // Access format properties using snake_case naming to match Rust serialization
+    const format = opts.format || {};
+    const unitSystem = format.unit_system;
+    // const yAxisLabel = format.y_axis_label || format.axis_label;
+    // const valueLabel = format.value_label;
+    const logScale = format.log_scale;
+    const minValue = format.min;
+    const maxValue = format.max;
+
     // For percentile data, the format is [times, percentile1Values, percentile2Values, ...]
     const timeData = data[0];
 
     // Create series for each percentile
     const series = [];
 
-    // Determine percentiles based on the data structure
-    // Assuming data format: [timestamps, p50values, p99values, ...]
-    const percentileLabels = ['p50', 'p90', 'p99', 'p99.9', 'p99.99']; // Default labels, can be customized
+    const percentileLabels = format.percentile_labels || ['p50', 'p90', 'p99', 'p99.9', 'p99.99'];
 
     for (let i = 1; i < data.length; i++) {
         const percentileValues = data[i];
@@ -62,15 +69,6 @@ export function configureScatterChart(chart) {
             }
         });
     }
-
-    // Access format properties using snake_case naming to match Rust serialization
-    const format = opts.format || {};
-    const unitSystem = format.unit_system;
-    // const yAxisLabel = format.y_axis_label || format.axis_label;
-    // const valueLabel = format.value_label;
-    const logScale = format.log_scale;
-    const minValue = format.min;
-    const maxValue = format.max;
 
     // Detect if this is a scheduler or time-based chart by looking at title or unit
     const isSchedulerChart =
