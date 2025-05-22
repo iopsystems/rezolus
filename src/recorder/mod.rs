@@ -1,3 +1,12 @@
+use std::collections::VecDeque;
+use notify::EventKind;
+use notify::Watcher;
+use notify::RecursiveMode;
+use notify::Event;
+use std::sync::mpsc::Receiver;
+use notify::RecommendedWatcher;
+use std::path::Path;
+use memmap2::Mmap;
 use super::*;
 
 use clap::ArgMatches;
@@ -208,40 +217,39 @@ pub fn run(config: Config) {
         }
     };
 
-    let mmap = config.mmap.map(|path| {
-        let file = std::fs::File::open(&path)
-            .map_err(|e| {
-                eprintln!(
-                    "failed to open specified memory mapped file: {:?}\n{e}",
-                    path
-                );
-                std::process::exit(1);
-            })
-            .unwrap();
-
-        // hardcoded for a histogram with grouping power of 5 and max value power of 64
-        // let mmap_len = whole_pages::<u64>(1920) * PAGE_SIZE;
-
-        let mmap = unsafe {
-            MmapOptions::new().map(&file).map_err(|e| {
-                eprintln!("failed to mmap the file: {:?}\n{e}", path);
-                std::process::exit(1);
-            })
-        }
-        .unwrap();
-
-        // check the alignment
-        let (_prefix, data, _suffix) = unsafe { mmap.align_to::<u64>() };
-        // let expected_len = mmap_len / std::mem::size_of::<u64>();
-
-        // hardcoded for a histogram with grouping power of 5 and max value power of 64
-        if data.len() != 1920 {
-            eprintln!("mmap region not aligned or width doesn't match");
+    let mut memmap_source = if let Some(path) = config.mmap {
+        if path.is_file() {
+            match MemmapFile::new(path.clone()) {
+                Ok(f) => Some(MemmapSource::File(f)),
+                Err(e) => {
+                    eprintln!(
+                        "failed to open specified memory mapped file: {:?}\n{e}",
+                        path
+                    );
+                    std::process::exit(1);
+                }
+            }
+        } else if path.is_dir() {
+            match MemmapWatcher::new(&path) {
+                Ok(f) => Some(MemmapSource::Directory(f)),
+                Err(e) => {
+                    eprintln!(
+                        "failed to open watcher for memory mapped files: {:?}\n{e}",
+                        path
+                    );
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            eprintln!(
+                "mmap argument was not a directory or file: {:?}\n",
+                path
+            );
             std::process::exit(1);
         }
-
-        mmap
-    });
+    } else {
+        None
+    };
 
     rt.block_on(async move {
         // get the approximate time for the first sample
@@ -265,14 +273,41 @@ pub fn run(config: Config) {
 
             let start = Instant::now();
 
-            let histogram = if let Some(ref mmap) = mmap {
-                let (_prefix, buckets, _suffix) = unsafe { mmap.align_to::<u64>() };
+            let mut histograms = Vec::new();
 
-                // hardcoded for a histogram with grouping power of 5 and max value power of 64
-                Some(Histogram::from_buckets(5, 64, buckets[0..1920].to_vec()).unwrap())
-            } else {
-                None
-            };
+            match memmap_source {
+                Some(MemmapSource::File(ref f)) => {
+                    let (_prefix, buckets, _suffix) = unsafe { f.mmap.align_to::<u64>() };
+
+                    // hardcoded for a histogram with grouping power of 5 and max value power of 64
+                    let histogram = Histogram::from_buckets(5, 64, buckets[0..1920].to_vec()).unwrap();
+
+                    let histogram = metriken_exposition::Histogram {
+                        name: "frame_start_delay".to_string(),
+                        value: histogram,
+                        metadata: [("metric".to_string(), "frame_start_delay".to_string()), ("grouping_power".to_string(), "5".to_string()), ("max_value_power".to_string(), "64".to_string()), ("name".to_string(), f.name.clone())].into(),
+                    };
+
+                    histograms.push(histogram);
+                }
+                Some(MemmapSource::Directory(ref mut w)) => {
+                    for f in w.mapped_files.values() {
+                        let (_prefix, buckets, _suffix) = unsafe { f.mmap.align_to::<u64>() };
+
+                        // hardcoded for a histogram with grouping power of 5 and max value power of 64
+                        let histogram = Histogram::from_buckets(5, 64, buckets[0..1920].to_vec()).unwrap();
+
+                        let histogram = metriken_exposition::Histogram {
+                            name: "frame_start_delay".to_string(),
+                            value: histogram,
+                            metadata: [("metric".to_string(), "frame_start_delay".to_string()), ("grouping_power".to_string(), "5".to_string()), ("max_value_power".to_string(), "64".to_string()), ("name".to_string(), f.name.clone())].into(),
+                        };
+
+                        histograms.push(histogram);
+                    }
+                }
+                _ => {}
+            }
 
             // sample rezolus
             if let Ok(response) = client.get(url.clone()).send().await {
@@ -281,18 +316,12 @@ pub fn run(config: Config) {
 
                     debug!("sampling latency: {} us", latency.as_micros());
 
-                    if let Some(histogram) = histogram {
-                        let histogram = metriken_exposition::Histogram {
-                            name: "frame_start_delay".to_string(),
-                            value: histogram,
-                            metadata: [
-                                ("metric".to_string(), "frame_start_delay".to_string()),
-                                ("grouping_power".to_string(), "5".to_string()),
-                                ("max_value_power".to_string(), "64".to_string()),
-                            ]
-                            .into(),
-                        };
-
+                    if histograms.is_empty() {
+                        if let Err(e) = writer.write_all(&body) {
+                            error!("error writing to temporary file: {e}");
+                            std::process::exit(1);
+                        }
+                    } else {
                         let mut snapshot: Snapshot = match rmp_serde::from_slice(&body) {
                             Ok(s) => s,
                             Err(e) => {
@@ -303,10 +332,14 @@ pub fn run(config: Config) {
 
                         match snapshot {
                             Snapshot::V1(ref mut s) => {
-                                s.histograms.push(histogram);
+                                for histogram in histograms.drain(..) {
+                                    s.histograms.push(histogram);
+                                }
                             }
                             Snapshot::V2(ref mut s) => {
-                                s.histograms.push(histogram);
+                                for histogram in histograms.drain(..) {
+                                    s.histograms.push(histogram);
+                                }
                             }
                         }
 
@@ -322,9 +355,6 @@ pub fn run(config: Config) {
                                 break;
                             }
                         }
-                    } else if let Err(e) = writer.write_all(&body) {
-                        error!("error writing to temporary file: {e}");
-                        std::process::exit(1);
                     }
                 } else {
                     error!("failed read response. terminating early");
@@ -333,6 +363,11 @@ pub fn run(config: Config) {
             } else {
                 error!("failed to get metrics. terminating early");
                 break;
+            }
+
+            // update the mmap directory after sampling to avoid introducing skew
+            if let Some(MemmapSource::Directory(ref mut w)) = memmap_source {
+                w.process_events();
             }
         }
 
@@ -361,4 +396,184 @@ pub fn run(config: Config) {
             }
         }
     })
+}
+
+enum MemmapSource {
+    File(MemmapFile),
+    Directory(MemmapWatcher),
+}
+
+#[derive(Debug)]
+struct MemmapFile {
+    // pub path: PathBuf,
+    name: String,
+    mmap: Mmap,
+}
+
+impl MemmapFile {
+    fn new(path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+        let file = std::fs::File::open(&path)?;
+
+        let mmap = unsafe {
+            MmapOptions::new().map(&file).map_err(|e| {
+                eprintln!("failed to mmap the file: {:?}\n{e}", path);
+                e
+            })?
+        };
+
+        // Check the alignment
+        let (_prefix, data, _suffix) = unsafe { mmap.align_to::<u64>() };
+
+        // Hardcoded for a histogram with grouping power of 5 and max value power of 64
+        if data.len() != 1920 {
+            return Err(format!(
+                "mmap region not aligned or width doesn't match. Expected 1920, got {}",
+                data.len()
+            ).into());
+        }
+
+        println!("Successfully mapped file: {} ({} u64 values)", path.display(), data.len());
+
+        Ok(Self {
+            name: path.file_stem().unwrap().to_string_lossy().to_string(),
+            mmap,
+        })
+    }
+}
+
+struct MemmapWatcher {
+    watch_path: PathBuf,
+    mapped_files: HashMap<PathBuf, MemmapFile>,
+    _watcher: RecommendedWatcher, // Keep watcher alive
+    event_receiver: Receiver<Event>,
+    backlog: VecDeque<PathBuf>,
+}
+
+impl MemmapWatcher {
+    fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let watch_path = path.as_ref().to_path_buf();
+
+        println!("Initializing watcher for directory: {}", watch_path.display());
+
+        // Set up file system watcher
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let watcher = RecommendedWatcher::new(
+            move |result: Result<Event, notify::Error>| {
+                match result {
+                    Ok(event) => {
+                        if let Err(e) = tx.send(event) {
+                            println!("Error sending event: {}", e);
+                        }
+                    }
+                    Err(e) => println!("Watch error: {}", e),
+                }
+            },
+            Default::default(),
+        )?;
+
+        let mut directory_watcher = Self {
+            watch_path: watch_path.clone(),
+            mapped_files: HashMap::new(),
+            _watcher: watcher,
+            event_receiver: rx,
+            backlog: Default::default(),
+        };
+
+        // Process existing files
+        directory_watcher.process_existing_files()?;
+
+        // Start watching the directory
+        directory_watcher._watcher.watch(&watch_path, RecursiveMode::NonRecursive)?;
+
+        println!("Directory watcher initialized with {} files", directory_watcher.mapped_files.len());
+
+        Ok(directory_watcher)
+    }
+
+    fn process_existing_files(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Processing existing files...");
+
+        let entries = std::fs::read_dir(&self.watch_path)?;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() {
+                self.try_add_file(path);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn try_add_file(&mut self, path: PathBuf) {
+        // Skip if already mapped
+        if self.mapped_files.contains_key(&path) {
+            return;
+        }
+
+        match MemmapFile::new(path.clone()) {
+            Ok(mapped_file) => {
+                println!("Added file: {}", path.display());
+                self.mapped_files.insert(path, mapped_file);
+            }
+            Err(e) => {
+                println!("Failed to map file {}: {}", path.display(), e);
+            }
+        }
+    }
+
+    fn remove_file(&mut self, path: &Path) {
+        if self.mapped_files.remove(path).is_some() {
+            println!("Removed file: {}", path.display());
+        }
+    }
+
+    pub fn process_events(&mut self) {
+        while let Ok(event) = self.event_receiver.try_recv() {
+            self.handle_file_event(event);
+        }
+
+        for _ in 0..self.backlog.len() {
+            if let Some(path) = self.backlog.pop_front() {
+                if path.is_file() && path.exists() {
+                    if self.is_file_ready(&path) {
+                        self.try_add_file(path);
+                    } else {
+                        self.backlog.push_back(path);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_file_event(&mut self, event: Event) {
+        match event.kind {
+            EventKind::Create(_) | EventKind::Modify(_) => {
+                for path in event.paths {
+                    if path.is_file() && path.exists() {
+                        if self.is_file_ready(&path) {
+                            self.try_add_file(path);
+                        } else {
+                            self.backlog.push_back(path);
+                        }
+                    }
+                }
+            }
+            EventKind::Remove(_) => {
+                for path in event.paths {
+                    self.remove_file(&path);
+                }
+            }
+            _ => {
+                // Handle other events if needed
+            }
+        }
+    }
+
+    fn is_file_ready(&self, path: &Path) -> bool {
+        std::fs::File::open(path).is_ok()
+    }
 }
