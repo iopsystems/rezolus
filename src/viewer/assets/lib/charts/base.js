@@ -62,6 +62,16 @@ export function getBaseOption(title) {
             },
             axisLabel: {
                 color: '#ABABAB',
+                formatter: {
+                    year: '{yyyy}',
+                    month: '{MMM}',
+                    day: '{d}',
+                    hour: '{HH}:{mm}',
+                    minute: '{HH}:{mm}',
+                    second: '{HH}:{mm}:{ss}',
+                    millisecond: '{hh}:{mm}:{ss}.{SSS}',
+                    none: '{hh}:{mm}:{ss}.{SSS}'
+                }
             },
         },
         tooltip: {
