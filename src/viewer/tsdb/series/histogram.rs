@@ -15,19 +15,19 @@ impl HistogramSeries {
         self.inner.insert(timestamp, value);
     }
 
-    pub fn percentiles(&self) -> Option<Vec<UntypedSeries>> {
+    pub fn percentiles(&self, percentiles: &[f64]) -> Option<Vec<UntypedSeries>> {
         if self.is_empty() {
             return None;
         }
 
         let (_, mut prev) = self.inner.first_key_value().unwrap();
 
-        let mut result = vec![UntypedSeries::default(); PERCENTILES.len()];
+        let mut result = vec![UntypedSeries::default(); percentiles.len()];
 
         for (time, curr) in self.inner.iter().skip(1) {
             let delta = curr.wrapping_sub(prev).unwrap();
 
-            if let Ok(Some(percentiles)) = delta.percentiles(PERCENTILES) {
+            if let Ok(Some(percentiles)) = delta.percentiles(percentiles) {
                 for (id, (_, bucket)) in percentiles.iter().enumerate() {
                     result[id].inner.insert(*time, bucket.end() as f64);
                 }

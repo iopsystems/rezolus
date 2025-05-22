@@ -37,10 +37,44 @@ const Main = {
                     activeSection,
                     sections
                 }),
-                m('div#groups',
-                    groups.map((group) => m(Group, group))
-                )
+                m(SectionContent, {
+                    section: activeSection,
+                    groups
+                })
             ]));
+    }
+};
+
+const SectionContent = {
+    view({
+        attrs
+    }) {
+        return m("div#section-content", [
+            attrs.section.name === "cgroups" ? m(CgroupsControls) : undefined,
+            m("div#groups",
+                attrs.groups.map((group) => m(Group, group))
+            )
+        ]);
+    }
+};
+
+const CgroupsControls = {
+    view({
+        attrs
+    }) {
+        return m("div#cgroups-controls", [
+            m("label.checkbox", [
+                m("input[type=checkbox]", {
+                    checked: chartsState.colorMapper.getUseConsistentCgroupColors(),
+                    onchange: (e) => {
+                        chartsState.colorMapper.setUseConsistentCgroupColors(e.target.checked);
+                        // All cgroups section charts need to be reinitialized
+                        chartsState.charts.forEach(chart => chart.isInitialized() && chart.reinitialize());
+                    }
+                }),
+                "Keep cgroup colors consistent across charts"
+            ])
+        ]);
     }
 };
 

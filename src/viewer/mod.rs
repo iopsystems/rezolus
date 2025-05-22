@@ -429,7 +429,7 @@ pub fn run(config: Config) {
         .with_axis_label("Latency")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("scheduler_runqueue_latency", Labels::default());
+    let series = data.percentiles("scheduler_runqueue_latency", Labels::default(), PERCENTILES);
     scheduler_overview.scatter(opts.clone(), series.clone());
     scheduler_group.scatter(opts, series);
 
@@ -437,7 +437,7 @@ pub fn run(config: Config) {
         .with_axis_label("Time")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("scheduler_offcpu", Labels::default());
+    let series = data.percentiles("scheduler_offcpu", Labels::default(), PERCENTILES);
     scheduler_overview.scatter(opts.clone(), series.clone());
     scheduler_group.scatter(opts, series);
 
@@ -445,7 +445,7 @@ pub fn run(config: Config) {
         .with_axis_label("Time")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("scheduler_running", Labels::default());
+    let series = data.percentiles("scheduler_running", Labels::default(), PERCENTILES);
     scheduler_group.scatter(opts, series);
 
     overview.groups.push(scheduler_overview);
@@ -464,7 +464,7 @@ pub fn run(config: Config) {
     syscall_overview.plot(opts.clone(), series.clone());
     syscall_group.plot(opts, series);
 
-    let percentiles = data.percentiles("syscall_latency", Labels::default());
+    let percentiles = data.percentiles("syscall_latency", Labels::default(), PERCENTILES);
     syscall_group.scatter(
         PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time),
         percentiles,
@@ -481,7 +481,7 @@ pub fn run(config: Config) {
             series,
         );
 
-        let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())]);
+        let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())], PERCENTILES);
         syscall_group.scatter(
             PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time),
             percentiles,
@@ -628,13 +628,13 @@ pub fn run(config: Config) {
         let opts = PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time);
         blockio_latency.scatter(
             opts,
-            data.percentiles("blockio_latency", [("op", op.to_lowercase())]),
+            data.percentiles("blockio_latency", [("op", op.to_lowercase())], PERCENTILES),
         );
 
         let opts = PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()), Unit::Bytes);
         blockio_size.scatter(
             opts,
-            data.percentiles("blockio_size", [("op", op.to_lowercase())]),
+            data.percentiles("blockio_size", [("op", op.to_lowercase())], PERCENTILES),
         );
     }
 

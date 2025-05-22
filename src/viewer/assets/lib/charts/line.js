@@ -4,6 +4,7 @@ import {
 import {
     getBaseOption,
     getBaseYAxisOption,
+    getTooltipFormatter,
 } from './base.js';
 
 /**
@@ -18,7 +19,7 @@ export function configureLineChart(chart) {
         opts
     } = chart.spec;
 
-    const baseOption = getBaseOption(opts.title);
+    const baseOption = getBaseOption(opts.title, (val) => val);
 
     if (!data || data.length < 2) {
         return baseOption;
@@ -42,9 +43,9 @@ export function configureLineChart(chart) {
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
-            valueFormatter: unitSystem ?
+            formatter: getTooltipFormatter(unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
-                undefined,
+                val => val),
         },
         series: [{
             data: zippedData,

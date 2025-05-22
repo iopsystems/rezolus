@@ -10,7 +10,7 @@
     --fg: #E0E0E0;
     --fg-secondary: #ABABAB;
     --width: 90%;
-    --sidebar-width: 125px
+    --sidebar-width: 100px
 }
 
 body {
@@ -68,6 +68,12 @@ main {
     cursor: default;
 }
 
+#section-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
 #groups {
     flex: 1;
 }
@@ -92,4 +98,14 @@ main {
     width: 50%;
     /* In combination with the internal margins of the grid, this gives 384px height for the chart itself. */
     height: 454px;
+}
+
+#cgroups-controls {
+    background: var(--bg-secondary);
+    margin-bottom: 1em;
+    padding: 1em;
+
+    input[type="checkbox"] {
+        margin-right: 0.75em;
+    }
 }

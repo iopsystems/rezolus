@@ -67,7 +67,7 @@ export function configureHeatmap(chart) {
     for (let i = 0; i < data.length; i++) {
         const [timeIndex, y, value] = data[i];
         if (timeIndex >= 0 && timeIndex < timeData.length) {
-            processedData.push([timeData[timeIndex] * 1000, y, timeIndex, value]);
+            processedData.push([timeData[timeIndex] * 1000, y, timeIndex, null, value]);
         }
     }
 
@@ -86,9 +86,9 @@ export function configureHeatmap(chart) {
         const processedDownsampledData = [];
         for (let y = 0; y < yCount; y++) {
             for (let x = 0; x < downsampledXCount; x++) {
-                const value = downsampledData[y][x];
-                if (value !== null) {
-                    processedDownsampledData.push([timeData[x * factor] * 1000, y, x * factor, value]);
+                const minAndMax = downsampledData[y][x];
+                if (minAndMax !== null) {
+                    processedDownsampledData.push([timeData[x * factor] * 1000, y, x * factor, minAndMax[0], minAndMax[1]]);
                 }
             }
         }
@@ -118,17 +118,38 @@ export function configureHeatmap(chart) {
         if (params.data === undefined) {
             return '';
         }
-        const [time, cpu, timeIndex, value] = params.data;
+        // If this is a downsampled data point, `value` is the max value.
+        // Otherwise, it's just the value, with `minValue` being null.
+        const [time, cpu, timeIndex, minValue, value] = params.data;
 
         const formattedTime = formatDateTime(time);
 
+        let label, formattedValue, formattedMinValue;
         if (unitSystem) {
             const formatter = createAxisLabelFormatter(unitSystem);
-            const label = valueLabel ? `${valueLabel}: ` : '';
-            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${label}<span style="font-weight: bold; float: right;">${formatter(value)}</span>`;
+            label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
+            formattedValue = formatter(value);
+            formattedMinValue = minValue === null ? '' : formatter(minValue);
         } else {
-            return `${formattedTime}<br>CPU: ${cpu}&nbsp;&nbsp;&nbsp; ${value.toFixed(6)}`;
+            label = '';
+            formattedValue = value.toFixed(6);
+            formattedMinValue = minValue === null ? '' : minValue.toFixed(6);
         }
+        const valueString = minValue === null ? formattedValue : `${formattedMinValue} - ${formattedValue}`;
+        return `<div>
+                    <div>
+                        ${formattedTime}
+                    </div>
+                    <div style="margin-top: 5px;">
+                        <span style="background-color: #aaaaff33; padding: 2px 5px; border-radius: 4px; font-size: .85em;">
+                            CPU: ${cpu}
+                        </span>
+                        ${label}
+                        <span style="font-weight: bold; float: right; margin-left: 20px;">
+                            ${valueString}
+                        </span>
+                    </div>
+                </div>`;
     };
 
     const yAxis = {
@@ -254,7 +275,7 @@ export function configureHeatmap(chart) {
 
 /**
  * Create a downsampled version of the data matrix.
- * Averages every `factor` data points along the x axis.
+ * Combines every `factor` data points along the x axis into a single data point with a min and max value.
  * @param {Array<Array<number>>} dataMatrix 
  * @param {number} factor 
  * @returns {Array<Array<number>>}
@@ -266,16 +287,21 @@ const downsample = (dataMatrix, factor) => {
     const downsampledDataMatrix = new Array(yCount).fill(null).map(() => new Array(downsampledXCount).fill(null));
     for (let y = 0; y < yCount; y++) {
         for (let x = 0; x < Math.ceil(xCount / factor); x++) {
-            let sum = 0;
-            let count = 0;
+            let max = null;
+            let min = null;
             for (let origX = x * factor; origX < (x + 1) * factor && origX < xCount; origX++) {
                 if (dataMatrix[y][origX] !== null) {
-                    sum += dataMatrix[y][origX];
-                    count++;
+                    if (max === null) {
+                        max = dataMatrix[y][origX];
+                        min = dataMatrix[y][origX];
+                    } else {
+                        max = Math.max(max, dataMatrix[y][origX]);
+                        min = Math.min(min, dataMatrix[y][origX]);
+                    }
                 }
             }
-            if (count > 0) {
-                downsampledDataMatrix[y][x] = sum / count;
+            if (max !== null) {
+                downsampledDataMatrix[y][x] = [min, max];
             }
         }
     }

@@ -23,18 +23,16 @@ export class ChartsState {
     //     endValue?: number,  // raw x axis data value
     // }
     zoomLevel = null;
-    // Initialized charts by id
-    initializedCharts = new Map();
+    // All `Chart` instances, mapped by id
+    charts = new Map();
     // Global color mapper - for consistent cgroup colors
     colorMapper = globalColorMapper;
 
-    // Resets state, disposing of all initialized charts.
+    // Resets charts state. It's assumed that each individual chart
+    // will be disposed of when it is removed from the DOM.
     clear() {
         this.zoomLevel = null;
-        this.initializedCharts.forEach((chart) => {
-            chart.dispose();
-        });
-        this.initializedCharts.clear();
+        this.charts.clear();
     }
 }
 
@@ -89,8 +87,7 @@ export class Chart {
 
         if (this.echart) {
             window.removeEventListener('resize', this.resizeHandler);
-            // Don't dispose the chart since it's stored in initializedCharts
-            // Only remove our reference to it
+            this.echart.dispose();
             this.echart = null;
         }
     }
@@ -99,11 +96,32 @@ export class Chart {
         return m('div.chart');
     }
 
+    isInitialized() {
+        return this.echart !== null;
+    }
+
+    /**
+     * Dispatch an action to the echart instance if it is initialized.
+     */
+    dispatchAction(action) {
+        if (this.echart) {
+            this.echart.dispatchAction(action);
+        }
+    }
+
+    /**
+     * If the echart instance is already initialized, dispose and reinitialize it.
+     */
+    reinitialize() {
+        if (this.isInitialized()) {
+            this.echart.dispose();
+            this.echart = null;
+            this.initEchart();
+        }
+    }
+
     initEchart() {
-        if (this.chartsState.initializedCharts.has(this.chartId)) {
-            // Chart was already initialized, just reference it
-            this.echart = this.chartsState.initializedCharts.get(this.chartId);
-            console.log(`Chart ${this.chartId} already initialized`);
+        if (this.echart) {
             return;
         }
 
@@ -127,7 +145,7 @@ export class Chart {
         }
 
         // Store chart instance for cleanup and to prevent re-initialization
-        this.chartsState.initializedCharts.set(this.chartId, this.echart);
+        this.chartsState.charts.set(this.chartId, this);
 
         // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
         this.configureChartByType();
@@ -163,7 +181,7 @@ export class Chart {
                 startValue,
                 endValue,
             };
-            this.chartsState.initializedCharts.forEach(chart => {
+            this.chartsState.charts.forEach(chart => {
                 chart.dispatchAction({
                     type: 'dataZoom',
                     start,
@@ -190,7 +208,7 @@ export class Chart {
                 start: 0,
                 end: 100,
             };
-            this.chartsState.initializedCharts.forEach(chart => {
+            this.chartsState.charts.forEach(chart => {
                 chart.dispatchAction({
                     type: 'dataZoom',
                     start: 0,

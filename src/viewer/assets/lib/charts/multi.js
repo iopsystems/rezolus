@@ -6,6 +6,7 @@ import {
 import {
     getBaseOption,
     getBaseYAxisOption,
+    getTooltipFormatter,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
 
@@ -95,9 +96,9 @@ export function configureMultiSeriesChart(chart) {
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
-            valueFormatter: unitSystem ?
+            formatter: getTooltipFormatter(unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
-                undefined,
+                val => val),
         },
         series: series,
         // Don't use the default color palette for normal cgroups

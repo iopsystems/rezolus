@@ -1,14 +1,18 @@
-// colormap.js - Global color mapping for consistent cgroup colors across charts
-
 /**
  * ColorMapper provides consistent color assignment for cgroups across all charts and page refreshes
- * Uses a deterministic hash function to assign colors based on cgroup names
- * Special handling for the "Other" category used to represent summed cgroups
+ * using a deterministic hash function to assign colors based on cgroup names.
+ * 
+ * Can also be configured (useConsistentCgroupColors == false) to use a more distinguishable (but inconsistent)
+ * color palette. This assigns colors to each series based on its index rather than its name.
+ * 
+ * In all cases, the "Other" category is always gray.
  */
 export class ColorMapper {
     constructor() {
         // Store color assignments for cgroups
         this.colorMap = new Map();
+        // Default mode: consistent cgroup colors
+        this.useConsistentCgroupColors = true;
 
         /*
             import colorsys
@@ -100,12 +104,12 @@ export class ColorMapper {
     }
 
     /**
-     * Get the color for a specific cgroup, using a deterministic mapping
+     * Get the color for a specific cgroup, using a deterministic mapping based on the cgroup name.
      * Special case for "Other" category
      * @param {string} cgroupName - The name of the cgroup
      * @returns {string} The color code for this cgroup
      */
-    getColor(cgroupName) {
+    getColorByName(cgroupName) {
         // Special case for "Other" category
         if (cgroupName === "Other") {
             return this.otherColor;
@@ -128,12 +132,25 @@ export class ColorMapper {
     }
 
     /**
+     * Get the nth color in the fixed color palette.
+     * 
+     * @param {number} index - The index to get a color for
+     * @returns {string} The color code for this index
+     */
+    getColorByIndex(index) {
+        // This results in a 15-color palette (only the most saturated of the original 45 colors) in a reasonable order.
+        const STARTING_INDEX = 2;
+        const JUMP_DISTANCE = 12;
+        return this.colorPalette[(STARTING_INDEX + index * JUMP_DISTANCE) % this.colorPalette.length];
+    }
+
+    /**
      * Get colors for an array of cgroup names
      * @param {string[]} cgroupNames - Array of cgroup names
      * @returns {string[]} Array of color codes in the same order
      */
     getColors(cgroupNames) {
-        return cgroupNames.map(name => this.getColor(name));
+        return cgroupNames.map((name, index) => this.useConsistentCgroupColors || name === "Other" ? this.getColorByName(name) : this.getColorByIndex(index));
     }
 
     /**
@@ -149,6 +166,14 @@ export class ColorMapper {
      */
     clear() {
         this.colorMap.clear();
+    }
+
+    setUseConsistentCgroupColors(useConsistentCgroupColors) {
+        this.useConsistentCgroupColors = useConsistentCgroupColors;
+    }
+
+    getUseConsistentCgroupColors() {
+        return this.useConsistentCgroupColors;
     }
 }
 

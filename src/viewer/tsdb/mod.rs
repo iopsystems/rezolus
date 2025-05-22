@@ -1,6 +1,5 @@
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
-use crate::viewer::PERCENTILES;
 use arrow::array::Int64Array;
 use arrow::array::ListArray;
 use arrow::array::UInt64Array;
@@ -262,9 +261,10 @@ impl Tsdb {
         &self,
         metric: &str,
         labels: impl Into<Labels>,
+        percentiles: &[f64],
     ) -> Option<Vec<UntypedSeries>> {
         if let Some(collection) = self.histograms(metric, labels) {
-            collection.sum().percentiles()
+            collection.sum().percentiles(percentiles)
         } else {
             None
         }
