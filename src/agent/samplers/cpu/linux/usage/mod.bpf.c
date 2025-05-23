@@ -29,13 +29,7 @@
 
 // the offsets to use in the `counters` group
 #define USER_OFFSET 0
-#define NICE_OFFSET 1
-#define SYSTEM_OFFSET 2
-#define SOFTIRQ_OFFSET 3
-#define IRQ_OFFSET 4
-#define STEAL_OFFSET 5
-#define GUEST_OFFSET 6
-#define GUEST_NICE_OFFSET 7
+#define SYSTEM_OFFSET 1
 
 // the offsets to use in the `softirqs` group
 #define HI 0
@@ -117,13 +111,8 @@ struct {
 
 // per-cpu cpu usage tracking in nanoseconds by category
 // 0 - USER
-// 1 - NICE
-// 2 - SYSTEM
-// 3 - SOFTIRQ
-// 4 - IRQ
-// 5 - STEAL
-// 6 - GUEST
-// 7 - GUEST_NICE
+// 1 - SYSTEM
+// 3 - IRQ
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -159,15 +148,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_user SEC(".maps");
 
-// per-cgroup nice
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_nice SEC(".maps");
-
 // per-cgroup system
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -176,51 +156,6 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_system SEC(".maps");
-
-// per-cgroup softirq
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_softirq SEC(".maps");
-
-// per-cgroup irq
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_irq SEC(".maps");
-
-// per-cgroup steal
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_steal SEC(".maps");
-
-// per-cgroup guest
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_guest SEC(".maps");
-
-// per-cgroup guest nice
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_guest_nice SEC(".maps");
 
 static void account_cpu_usage(struct task_struct *task, u32 index)
 {
@@ -279,13 +214,7 @@ static void account_cpu_usage(struct task_struct *task, u32 index)
 				// zero the counters, they will not be exported until they are non-zero
 				u64 zero = 0;
 				bpf_map_update_elem(&cgroup_user, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_nice, &cgroup_id, &zero, BPF_ANY);
 				bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_softirq, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_irq, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_steal, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_guest, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_guest_nice, &cgroup_id, &zero, BPF_ANY);
 
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
@@ -368,10 +297,6 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 
 	// calculate the duration
 	dur = bpf_ktime_get_ns() - *start_ts;
-
-	// update the cpu usage
-	idx = CPU_USAGE_GROUP_WIDTH * cpu + SOFTIRQ_OFFSET;
-	array_add(&cpu_usage, idx, dur);
 
 	// update the softirq time
 	idx = SOFTIRQ_GROUP_WIDTH * cpu + args->vec;
