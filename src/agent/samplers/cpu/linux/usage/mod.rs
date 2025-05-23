@@ -87,10 +87,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     set_name(1, "/".to_string());
 
-    let cpu_usage = vec![
-        &CPU_USAGE_USER,
-        &CPU_USAGE_SYSTEM,
-    ];
+    let cpu_usage = vec![&CPU_USAGE_USER, &CPU_USAGE_SYSTEM];
 
     let softirq = vec![
         &SOFTIRQ_HI,
