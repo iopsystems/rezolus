@@ -10,6 +10,7 @@
 
 #define CPU_USAGE_GROUP_WIDTH 8
 #define MAX_CPUS 1024
+#define MAX_PID 4194304
 #define MAX_CGROUPS 4096
 #define RINGBUF_CAPACITY 262144
 #define SOFTIRQ_GROUP_WIDTH 16
@@ -28,13 +29,7 @@
 
 // the offsets to use in the `counters` group
 #define USER_OFFSET 0
-#define NICE_OFFSET 1
-#define SYSTEM_OFFSET 2
-#define SOFTIRQ_OFFSET 3
-#define IRQ_OFFSET 4
-#define STEAL_OFFSET 5
-#define GUEST_OFFSET 6
-#define GUEST_NICE_OFFSET 7
+#define SYSTEM_OFFSET 1
 
 // the offsets to use in the `softirqs` group
 #define HI 0
@@ -116,13 +111,7 @@ struct {
 
 // per-cpu cpu usage tracking in nanoseconds by category
 // 0 - USER
-// 1 - NICE
-// 2 - SYSTEM
-// 3 - SOFTIRQ
-// 4 - IRQ
-// 5 - STEAL
-// 6 - GUEST
-// 7 - GUEST_NICE
+// 1 - SYSTEM
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
@@ -130,6 +119,24 @@ struct {
 	__type(value, u64);
 	__uint(max_entries, MAX_CPUS * CPU_USAGE_GROUP_WIDTH);
 } cpu_usage SEC(".maps");
+
+// tracking per-task user time
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(map_flags, BPF_F_MMAPABLE);
+  __type(key, u32);
+  __type(value, u64);
+  __uint(max_entries, MAX_PID);
+} task_utime SEC(".maps");
+
+// tracking per-task system time
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(map_flags, BPF_F_MMAPABLE);
+  __type(key, u32);
+  __type(value, u64);
+  __uint(max_entries, MAX_PID);
+} task_stime SEC(".maps");
 
 // per-cgroup user
 struct {
@@ -140,15 +147,6 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_user SEC(".maps");
 
-// per-cgroup nice
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_nice SEC(".maps");
-
 // per-cgroup system
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -158,98 +156,52 @@ struct {
 	__uint(max_entries, MAX_CGROUPS);
 } cgroup_system SEC(".maps");
 
-// per-cgroup softirq
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_softirq SEC(".maps");
-
-// per-cgroup irq
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_irq SEC(".maps");
-
-// per-cgroup steal
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_steal SEC(".maps");
-
-// per-cgroup guest
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_guest SEC(".maps");
-
-// per-cgroup guest nice
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
-} cgroup_guest_nice SEC(".maps");
-
-SEC("kprobe/cpuacct_account_field")
-int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
+static void account_cpu_usage(struct task_struct *task, u32 index)
 {
 	u32 idx, offset;
 	u64 *elem;
-
-	// softirq is tracked with separate tracepoints for better accuracy
-	//
-	// ignore both the idle and the iowait counting since both count the idle time
-    // https://elixir.bootlin.com/linux/v6.9-rc4/source/kernel/sched/cputime.c#L227
+  void *task_time;
+  u64 curr_time;
+  u64 *last_time;
+  u32 pid = BPF_CORE_READ(task, pid);
+  if (pid == 0 || pid >= MAX_PID)
+    return;
 	switch (index) {
 		case USER:
 			offset = USER_OFFSET;
-			break;
-		case NICE:
-			offset = NICE_OFFSET;
+      task_time = &task_utime;
+      curr_time = BPF_CORE_READ(task, utime);
 			break;
 		case SYSTEM:
 			offset = SYSTEM_OFFSET;
-			break;
-		case IRQ:
-			offset = IRQ_OFFSET;
-			break;
-		case STEAL:
-			offset = STEAL_OFFSET;
-			break;
-		case GUEST:
-			offset = GUEST_OFFSET;
-			break;
-		case GUEST_NICE:
-			offset = NICE_OFFSET;
+      task_time = &task_stime;
+      curr_time = BPF_CORE_READ(task, stime);
 			break;
 		default:
-			return 0;
+			return;
 	}
-
+  last_time = bpf_map_lookup_elem(task_time, &pid);
+  if (last_time == NULL)
+    return;
+  // nothing needs to update
+  if (*last_time == curr_time)
+    return;
+  // first time counting this task
+  if (*last_time == 0) {
+    *last_time = curr_time;
+    return;
+  }
 	// calculate the counter index and increment the counter
+  u64 delta = curr_time - *last_time;
+  *last_time = curr_time;
 	idx = CPU_USAGE_GROUP_WIDTH * bpf_get_smp_processor_id() + offset;
 	array_add(&cpu_usage, idx, delta);
 
 	// additional accounting on a per-cgroup basis follows
-
-	struct task_struct *current = bpf_get_current_task_btf();
-
-	if (bpf_core_field_exists(current->sched_task_group)) {
-		int cgroup_id = current->sched_task_group->css.id;
-		u64	serial_nr = current->sched_task_group->css.serial_nr;
+  if (bpf_core_field_exists(task->sched_task_group)) {
+		// int cgroup_id = task->sched_task_group->css.id;
+    int cgroup_id = BPF_CORE_READ(task, sched_task_group, css.id);
+		u64	serial_nr = BPF_CORE_READ(task, sched_task_group, css.serial_nr);
 
 		if (cgroup_id && cgroup_id < MAX_CGROUPS) {
 
@@ -261,28 +213,22 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 				// zero the counters, they will not be exported until they are non-zero
 				u64 zero = 0;
 				bpf_map_update_elem(&cgroup_user, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_nice, &cgroup_id, &zero, BPF_ANY);
 				bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_softirq, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_irq, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_steal, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_guest, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_guest_nice, &cgroup_id, &zero, BPF_ANY);
 
 				// initialize the cgroup info
 				struct cgroup_info cginfo = {
 					.id = cgroup_id,
-					.level = current->sched_task_group->css.cgroup->level,
+					.level = BPF_CORE_READ(task, sched_task_group, css.cgroup, level)
 				};
 
 				// read the cgroup name
-				bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN, current->sched_task_group->css.cgroup->kn->name);
+				bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN, BPF_CORE_READ(task, sched_task_group, css.cgroup, kn, name));
 
 				// read the cgroup parent name
-				bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN, current->sched_task_group->css.cgroup->kn->parent->name);
+				bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN, BPF_CORE_READ(task, sched_task_group, css.cgroup, kn, parent, name));
 
 				// read the cgroup grandparent name
-				bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN, current->sched_task_group->css.cgroup->kn->parent->parent->name);
+				bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN, BPF_CORE_READ(task, sched_task_group, css.cgroup, kn, parent, parent, name));
 
 				// push the cgroup info into the ringbuf
 				bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
@@ -295,28 +241,26 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, void *task, u32 index, u64 delta)
 				case USER:
 					array_add(&cgroup_user, cgroup_id, delta);
 					break;
-				case NICE:
-					array_add(&cgroup_nice, cgroup_id, delta);
-					break;
 				case SYSTEM:
 					array_add(&cgroup_system, cgroup_id, delta);
-					break;
-				case STEAL:
-					array_add(&cgroup_steal, cgroup_id, delta);
-					break;
-				case GUEST:
-					array_add(&cgroup_guest, cgroup_id, delta);
-					break;
-				case GUEST_NICE:
-					array_add(&cgroup_guest_nice, cgroup_id, delta);
 					break;
 				default:
 					break;
 			}
 		}
 	}
+}
 
-	return 0;
+// The kprobe handler is not always invoked, so using the delta to count the CPU usage could cause undercounting.
+// Kernel increases the task utime/stime before invoking cpuacct_account_field. So we count the CPU usage by
+// tracking the per-task utime/stime. The user time includes both the CPUTIME_NICE and CPUTIME_USER.
+// The system time includes CPUTIME_SYSTEM, CPUTIME_SOFTIRQ and CPUTIME_IRQ.
+SEC("kprobe/cpuacct_account_field")
+int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct *task, u32 index, u64 delta)
+{
+  account_cpu_usage(task, SYSTEM);
+  account_cpu_usage(task, USER);
+  return 0;
 }
 
 SEC("tracepoint/irq/softirq_entry")
@@ -352,10 +296,6 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 
 	// calculate the duration
 	dur = bpf_ktime_get_ns() - *start_ts;
-
-	// update the cpu usage
-	idx = CPU_USAGE_GROUP_WIDTH * cpu + SOFTIRQ_OFFSET;
-	array_add(&cpu_usage, idx, dur);
 
 	// update the softirq time
 	idx = SOFTIRQ_GROUP_WIDTH * cpu + args->vec;
