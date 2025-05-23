@@ -414,7 +414,7 @@ impl MemmapFile {
 
         let mmap = unsafe {
             MmapOptions::new().map(&file).map_err(|e| {
-                eprintln!("failed to mmap the file: {:?}\n{e}", path);
+                error!("failed to mmap the file: {:?}\n{e}", path);
                 e
             })?
         };
@@ -429,8 +429,6 @@ impl MemmapFile {
                 data.len()
             ).into());
         }
-
-        println!("Successfully mapped file: {} ({} u64 values)", path.display(), data.len());
 
         Ok(Self {
             name: path.file_stem().unwrap().to_string_lossy().to_string(),
@@ -451,8 +449,6 @@ impl MemmapWatcher {
     fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
         let watch_path = path.as_ref().to_path_buf();
 
-        println!("Initializing watcher for directory: {}", watch_path.display());
-
         // Set up file system watcher
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -461,10 +457,10 @@ impl MemmapWatcher {
                 match result {
                     Ok(event) => {
                         if let Err(e) = tx.send(event) {
-                            println!("Error sending event: {}", e);
+                            error!("Error sending event: {}", e);
                         }
                     }
-                    Err(e) => println!("Watch error: {}", e),
+                    Err(e) => error!("Watch error: {}", e),
                 }
             },
             Default::default(),
@@ -484,14 +480,10 @@ impl MemmapWatcher {
         // Start watching the directory
         directory_watcher._watcher.watch(&watch_path, RecursiveMode::NonRecursive)?;
 
-        println!("Directory watcher initialized with {} files", directory_watcher.mapped_files.len());
-
         Ok(directory_watcher)
     }
 
     fn process_existing_files(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Processing existing files...");
-
         let entries = std::fs::read_dir(&self.watch_path)?;
 
         for entry in entries {
@@ -514,19 +506,16 @@ impl MemmapWatcher {
 
         match MemmapFile::new(path.clone()) {
             Ok(mapped_file) => {
-                println!("Added file: {}", path.display());
                 self.mapped_files.insert(path, mapped_file);
             }
             Err(e) => {
-                println!("Failed to map file {}: {}", path.display(), e);
+                error!("Failed to map file {}: {}", path.display(), e);
             }
         }
     }
 
     fn remove_file(&mut self, path: &Path) {
-        if self.mapped_files.remove(path).is_some() {
-            println!("Removed file: {}", path.display());
-        }
+        let _ = self.mapped_files.remove(path);
     }
 
     pub fn process_events(&mut self) {
