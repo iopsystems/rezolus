@@ -112,7 +112,6 @@ struct {
 // per-cpu cpu usage tracking in nanoseconds by category
 // 0 - USER
 // 1 - SYSTEM
-// 3 - IRQ
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(map_flags, BPF_F_MMAPABLE);
