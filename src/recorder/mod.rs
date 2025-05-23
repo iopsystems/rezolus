@@ -162,8 +162,10 @@ pub fn run(config: Config) {
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);
 
+        println!();
+
         if state == RUNNING {
-            info!("finalizing recording...");
+            info!("finalizing recording... ctrl+c to terminate early");
             STATE.store(TERMINATING, Ordering::SeqCst);
         } else {
             info!("terminating immediately");
@@ -186,7 +188,7 @@ pub fn run(config: Config) {
     let client = match Client::builder().http1_only().build() {
         Ok(c) => c,
         Err(e) => {
-            error!("error connecting to Rezolus: {e}");
+            eprintln!("error creating http client: {e}");
             std::process::exit(1);
         }
     };
@@ -194,7 +196,7 @@ pub fn run(config: Config) {
     // open our destination file
     let mut destination = std::fs::File::create(config.output.clone())
         .map_err(|e| {
-            error!("failed to open destination file: {e}");
+            eprintln!("failed to open destination file: {e}");
             std::process::exit(1);
         })
         .ok();
@@ -217,6 +219,7 @@ pub fn run(config: Config) {
         }
     };
 
+    // open any memory mapped sources
     let mut memmap_source = if let Some(path) = config.mmap {
         if path.is_file() {
             match MemmapFile::new(path.clone()) {
@@ -250,6 +253,49 @@ pub fn run(config: Config) {
     } else {
         None
     };
+
+    // test connectivity to the agent
+    {
+        let client = client.clone();
+        let url = url.clone();
+
+        rt.block_on(async move {
+            let start = Instant::now();
+
+            // sample rezolus to make sure:
+            // * we can reach it
+            // * we get a response
+            // * the sample interval is not too close to the sample latency
+            if let Ok(response) = client.get(url.clone()).send().await {
+                if let Ok(_body) = response.bytes().await {
+                    let latency = start.elapsed();
+
+                    if latency.as_nanos() >= config.interval.as_nanos() {
+                        let recommended = humantime::Duration::from(Duration::from_millis((latency * 2).as_nanos().div_ceil(1000000) as u64));
+
+                        eprintln!("sampling latency ({} us) exceeded the sample interval. Try setting the interval to: {}", latency.as_micros(), recommended);
+                        std::process::exit(1);
+                    } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
+                        warn!("sampling latency ({} us) is more that 75% of the sample interval. Consider increasing the interval", latency.as_micros());
+                    } else {
+                        debug!("sampling latency: {} us", latency.as_micros());
+                    }
+                } else {
+                    eprintln!("failed read response. Please check that the source address is correct");
+                    std::process::exit(1);
+                }
+            } else {
+                eprintln!("failed to connect. Please check that the agent is running and that the source address is correct");
+                std::process::exit(1);
+            }
+        });
+    }
+
+    if config.duration.is_some() {
+        info!("recording metrics... ctrl-c to terminate early");
+    } else {
+        info!("recording metrics... ctrl-c to end the recording");
+    }
 
     rt.block_on(async move {
         // get the approximate time for the first sample
@@ -314,11 +360,17 @@ pub fn run(config: Config) {
                 if let Ok(body) = response.bytes().await {
                     let latency = start.elapsed();
 
-                    debug!("sampling latency: {} us", latency.as_micros());
+                    if latency.as_nanos() >= config.interval.as_nanos() {
+                        error!("sampling latency ({} us) exceeded the sample interval. Samples will be missing", latency.as_micros());
+                   } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
+                        warn!("sampling latency ({} us) is more that 75% of the sample interval. Consider increasing the interval", latency.as_micros());
+                    } else {
+                        debug!("sampling latency: {} us", latency.as_micros());
+                    }
 
                     if histograms.is_empty() {
                         if let Err(e) = writer.write_all(&body) {
-                            error!("error writing to temporary file: {e}");
+                            eprintln!("error writing to temporary file: {e}");
                             std::process::exit(1);
                         }
                     } else {
@@ -357,11 +409,11 @@ pub fn run(config: Config) {
                         }
                     }
                 } else {
-                    error!("failed read response. terminating early");
+                    eprintln!("failed read response. terminating early");
                     break;
                 }
             } else {
-                error!("failed to get metrics. terminating early");
+                eprintln!("failed to get metrics. terminating early");
                 break;
             }
 

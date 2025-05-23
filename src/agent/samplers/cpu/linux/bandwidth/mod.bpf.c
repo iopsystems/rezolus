@@ -78,6 +78,33 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } throttled_count SEC(".maps");
 
+// per-cgroup periods
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} bandwidth_periods SEC(".maps");
+
+// per-cgroup throttled periods
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} bandwidth_throttled_periods SEC(".maps");
+
+// per-cgroup throttled time
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__type(key, u32);
+	__type(value, u64);
+	__uint(max_entries, MAX_CGROUPS);
+} bandwidth_throttled_time SEC(".maps");
+
 SEC("kprobe/tg_set_cfs_bandwidth")
 int tg_set_cfs_bandwidth(struct pt_regs *ctx)
 {
@@ -108,6 +135,9 @@ int tg_set_cfs_bandwidth(struct pt_regs *ctx)
         u64 zero = 0;
         bpf_map_update_elem(&throttled_time, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&throttled_count, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&bandwidth_periods, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&bandwidth_throttled_periods, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&bandwidth_throttled_time, &cgroup_id, &zero, BPF_ANY);
 
         // initialize the cgroup info
         struct cgroup_info cginfo = {
@@ -236,6 +266,14 @@ int unthrottle_cfs_rq(struct pt_regs *ctx)
     u64 *elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
     if (!elem || *elem != serial_nr)
         return 0;
+
+    // update bandwidth metrics
+    int nr_periods = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.nr_periods);
+    int nr_throttled = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.nr_throttled);
+    u64 cgroup_throttled_time = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.throttled_time);
+    array_set_if_larger(&bandwidth_periods, (u32)cgroup_id, (u64) nr_periods);
+    array_set_if_larger(&bandwidth_throttled_periods, (u32) cgroup_id, (u64) nr_throttled);
+    array_set_if_larger(&bandwidth_throttled_time, (u32) cgroup_id, cgroup_throttled_time);
 
     // lookup start time
     u32 cgroup_runqueue_idx = cpu * MAX_CGROUPS + (u32)cgroup_id;
