@@ -717,7 +717,21 @@ pub fn run(config: Config) {
         .with_axis_label("FSD")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("frame_start_delay", Labels::default());
+    let series = data.percentiles("frame_start_delay", Labels::default(), PERCENTILES);
+    service_overview.scatter(opts.clone(), series.clone());
+
+    let opts = PlotOpts::scatter("FSD - Test 1", "frame-start-delay", Unit::Time)
+        .with_axis_label("FSD")
+        .with_unit_system("time")
+        .with_log_scale(true);
+    let series = data.percentiles("frame_start_delay", [("name".to_string(), "test-1".to_string())], PERCENTILES);
+    service_overview.scatter(opts.clone(), series.clone());
+
+    let opts = PlotOpts::scatter("FSD - Test 2", "frame-start-delay", Unit::Time)
+        .with_axis_label("FSD")
+        .with_unit_system("time")
+        .with_log_scale(true);
+    let series = data.percentiles("frame_start_delay", [("name".to_string(), "test-2".to_string())], PERCENTILES);
     service_overview.scatter(opts.clone(), series.clone());
 
     service.groups.push(service_overview);
