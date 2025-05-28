@@ -31,6 +31,7 @@ pub struct Tsdb {
     sampling_interval_ms: u64,
     source: String,
     version: String,
+    filename: String,
     counters: HashMap<String, CounterCollection>,
     gauges: HashMap<String, GaugeCollection>,
     histograms: HashMap<String, HistogramCollection>,
@@ -69,6 +70,8 @@ impl Tsdb {
             Some(s) => s.to_string(),
             _ => "unknown".to_string(),
         };
+
+        data.filename = path.file_name().map(|v| v.to_str().unwrap_or("unknown")).unwrap_or("unknown").to_string();
 
         let file = File::open(path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -315,6 +318,10 @@ impl Tsdb {
     // data source version
     pub fn version(&self) -> String {
         self.version.clone()
+    }
+
+    pub fn filename(&self) -> String {
+        self.filename.clone()
     }
 }
 

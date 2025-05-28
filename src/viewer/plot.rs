@@ -15,11 +15,13 @@ impl View {
         let interval = data.interval();
         let source = data.source();
         let version = data.version();
+        let filename = data.filename();
 
         Self {
             interval,
             source,
             version,
+            filename,
             groups: Vec::new(),
             sections,
         }
