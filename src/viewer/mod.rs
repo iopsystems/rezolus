@@ -1,29 +1,32 @@
-use http::header;
-use axum::response::IntoResponse;
 use super::*;
-use axum::handler::Handler;
-use clap::ArgMatches;
-use http::StatusCode;
-use http::Uri;
-use notify::Watcher;
-use serde::Serialize;
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::path::Path;
-use tower_http::services::{ServeDir, ServeFile};
-use tower_livereload::LiveReloadLayer;
 
+use axum::handler::Handler;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
+use clap::ArgMatches;
+use http::{header, StatusCode, Uri};
+use serde::Serialize;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
+use tower_http::services::{ServeDir, ServeFile};
+use tower_livereload::LiveReloadLayer;
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::Path;
+
+#[cfg(feature = "developer-mode")]
+use notify::Watcher;
 
 const PERCENTILES: &[f64] = &[50.0, 90.0, 99.0, 99.9, 99.99];
 
+mod plot;
 mod tsdb;
 
+use plot::*;
 use tsdb::*;
 
 pub fn command() -> Command {
@@ -52,20 +55,12 @@ pub fn command() -> Command {
                 .required(true)
                 .index(2),
         )
-        .arg(
-            clap::Arg::new("TESTING")
-                .long("testing")
-                .short('t')
-                .help("Use testing data")
-                .action(clap::ArgAction::SetTrue),
-        )
 }
 
 pub struct Config {
     input: PathBuf,
     verbose: u8,
     listen: SocketAddr,
-    testing: bool,
 }
 
 impl TryFrom<ArgMatches> for Config {
@@ -78,7 +73,6 @@ impl TryFrom<ArgMatches> for Config {
             input: args.get_one::<PathBuf>("INPUT").unwrap().to_path_buf(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
             listen: *args.get_one::<SocketAddr>("LISTEN").unwrap(),
-            testing: *args.get_one::<bool>("TESTING").unwrap_or(&false),
         })
     }
 }
@@ -137,7 +131,7 @@ pub fn run(config: Config) {
     .expect("failed to set ctrl-c handler");
 
     // code to load data from parquet will go here
-    let mut state = AppState::new(config.clone());
+    let mut state = AppState::new();
 
     info!("Loading data from parquet file...");
     let data = Tsdb::load(&config.input)
@@ -242,8 +236,8 @@ pub fn run(config: Config) {
         utilization.push(plot);
     }
 
-    overview.groups.push(cpu_overview);
-    cpu.groups.push(utilization);
+    overview.group(cpu_overview);
+    cpu.group(utilization);
 
     // CPU Performance
 
@@ -321,7 +315,7 @@ pub fn run(config: Config) {
         performance.heatmap_echarts(opts, Some(frequency));
     }
 
-    cpu.groups.push(performance);
+    cpu.group(performance);
 
     // CPU TLB
 
@@ -371,7 +365,7 @@ pub fn run(config: Config) {
         );
     }
 
-    cpu.groups.push(tlb);
+    cpu.group(tlb);
 
     // Network overview
 
@@ -414,8 +408,8 @@ pub fn run(config: Config) {
     network_overview.plot(opts.clone(), series.clone());
     traffic.plot(opts, series);
 
-    overview.groups.push(network_overview);
-    network.groups.push(traffic);
+    overview.group(network_overview);
+    network.group(traffic);
 
     // Scheduler
 
@@ -445,8 +439,8 @@ pub fn run(config: Config) {
     let series = data.percentiles("scheduler_running", Labels::default(), PERCENTILES);
     scheduler_group.scatter(opts, series);
 
-    overview.groups.push(scheduler_overview);
-    scheduler.groups.push(scheduler_group);
+    overview.group(scheduler_overview);
+    scheduler.group(scheduler_group);
 
     // Syscall Overview
 
@@ -478,15 +472,16 @@ pub fn run(config: Config) {
             series,
         );
 
-        let percentiles = data.percentiles("syscall_latency", [("op", op.to_lowercase())], PERCENTILES);
+        let percentiles =
+            data.percentiles("syscall_latency", [("op", op.to_lowercase())], PERCENTILES);
         syscall_group.scatter(
             PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time),
             percentiles,
         );
     }
 
-    overview.groups.push(syscall_overview);
-    syscall.groups.push(syscall_group);
+    overview.group(syscall_overview);
+    syscall.group(syscall_group);
 
     // Softirq
 
@@ -515,8 +510,8 @@ pub fn run(config: Config) {
         .map(|v| v / 1000000000.0);
     softirq_total.heatmap_echarts(opts, series);
 
-    overview.groups.push(softirq_overview);
-    softirq.groups.push(softirq_total);
+    overview.group(softirq_overview);
+    softirq.group(softirq_total);
 
     for (label, kind) in [
         ("Hardware Interrupts", "hi"),
@@ -558,7 +553,7 @@ pub fn run(config: Config) {
             .map(|v| v / 1000000000.0);
         group.heatmap_echarts(opts, series);
 
-        softirq.groups.push(group);
+        softirq.group(group);
     }
 
     // BlockIO
@@ -601,7 +596,7 @@ pub fn run(config: Config) {
             .map(|v| v.rate().sum()),
     );
 
-    overview.groups.push(blockio_overview);
+    overview.group(blockio_overview);
 
     for op in &["Read", "Write", "Flush", "Discard"] {
         let opts = PlotOpts::line(
@@ -635,10 +630,10 @@ pub fn run(config: Config) {
         );
     }
 
-    blockio.groups.push(blockio_throughput);
-    blockio.groups.push(blockio_iops);
-    blockio.groups.push(blockio_latency);
-    blockio.groups.push(blockio_size);
+    blockio.group(blockio_throughput);
+    blockio.group(blockio_iops);
+    blockio.group(blockio_latency);
+    blockio.group(blockio_size);
 
     /*
      * cgroup section
@@ -702,9 +697,9 @@ pub fn run(config: Config) {
     }
 
     // Add all groups to the cgroups view
-    cgroups.groups.push(cgroup_cpu);
-    cgroups.groups.push(cgroup_performance);
-    cgroups.groups.push(cgroup_syscalls);
+    cgroups.group(cgroup_cpu);
+    cgroups.group(cgroup_performance);
+    cgroups.group(cgroup_syscalls);
 
     // Finalize
 
@@ -761,23 +756,28 @@ pub fn run(config: Config) {
 
 async fn serve(config: Arc<Config>, state: AppState) {
     let livereload = LiveReloadLayer::new();
-    let reloader = livereload.reloader();
 
-    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
-        if let Ok(event) = res {
-            // Reload, unless it's just a read.
-            if !matches!(event.kind, notify::EventKind::Access(_)) {
-                reloader.reload();
+    #[cfg(feature = "developer-mode")]
+    {
+        let reloader = livereload.reloader();
+
+        let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
+            if let Ok(event) = res {
+                // Reload, unless it's just a read.
+                if !matches!(event.kind, notify::EventKind::Access(_)) {
+                    reloader.reload();
+                }
             }
-        }
-    })
-    .expect("failed to initialize watcher");
-    watcher
-        .watch(
-            Path::new("src/viewer/assets"),
-            notify::RecursiveMode::Recursive,
-        )
-        .expect("failed to watch assets folder");
+        })
+        .expect("failed to initialize watcher");
+
+        watcher
+            .watch(
+                Path::new("src/viewer/assets"),
+                notify::RecursiveMode::Recursive,
+            )
+            .expect("failed to watch assets folder");
+    }
 
     let app = app(livereload, state);
 
@@ -788,19 +788,15 @@ async fn serve(config: Arc<Config>, state: AppState) {
     axum::serve(listener, app)
         .await
         .expect("failed to run http server");
-
-
 }
 
 struct AppState {
-    config: Arc<Config>,
     sections: HashMap<String, String>,
 }
 
 impl AppState {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new() -> Self {
         Self {
-            config,
             sections: Default::default(),
         }
     }
@@ -816,7 +812,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/about", get(about))
         .with_state(state.clone());
 
-    let router = if state.config.testing {
+    let router = if cfg!(feature = "developer-mode") {
         router.nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
     } else {
         router.nest_service("/lib", get(lib))
@@ -856,374 +852,87 @@ async fn data(
     )
 }
 
-async fn lib(
-    uri: Uri,
-) -> impl IntoResponse {
+async fn lib(uri: Uri) -> impl IntoResponse {
     let path = uri.path();
 
     match path {
-        "/charts/util/cgroup-utils.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/cgroup-utils.js").to_string()),
-        "/charts/util/colormap.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/colormap.js").to_string()),
-        "/charts/util/units.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/units.js").to_string()),
-        "/charts/util/utils.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/utils.js").to_string()),
-        "/charts/base.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/base.js").to_string()),
-        "/charts/chart.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/chart.js").to_string()),
-        "/charts/heatmap.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/heatmap.js").to_string()),
-        "/charts/line.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/line.js").to_string()),
-        "/charts/multi.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/multi.js").to_string()),
-        "/charts/scatter.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/scatter.js").to_string()),
-        "/mithril.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/mithril.js").to_string()),
-        "/script.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/script.js").to_string()),
-        "/style.css" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/plain")], include_str!("assets/lib/style.css").to_string()),
+        "/charts/util/cgroup-utils.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/util/cgroup-utils.js").to_string(),
+        ),
+        "/charts/util/colormap.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/util/colormap.js").to_string(),
+        ),
+        "/charts/util/units.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/util/units.js").to_string(),
+        ),
+        "/charts/util/utils.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/util/utils.js").to_string(),
+        ),
+        "/charts/base.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/base.js").to_string(),
+        ),
+        "/charts/chart.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/chart.js").to_string(),
+        ),
+        "/charts/echarts.min.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/echarts.min.js").to_string(),
+        ),
+        "/charts/heatmap.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/heatmap.js").to_string(),
+        ),
+        "/charts/line.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/line.js").to_string(),
+        ),
+        "/charts/multi.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/multi.js").to_string(),
+        ),
+        "/charts/scatter.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/charts/scatter.js").to_string(),
+        ),
+        "/mithril.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/mithril.js").to_string(),
+        ),
+        "/script.js" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/javascript")],
+            include_str!("assets/lib/script.js").to_string(),
+        ),
+        "/style.css" => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain")],
+            include_str!("assets/lib/style.css").to_string(),
+        ),
         other => {
             error!("path: {other} does not map to a static resource");
-            (StatusCode::from_u16(404).unwrap(), [(header::CONTENT_TYPE, "text/plain")], "404 Not Found".to_string())
+            (
+                StatusCode::from_u16(404).unwrap(),
+                [(header::CONTENT_TYPE, "text/plain")],
+                "404 Not Found".to_string(),
+            )
         }
-    }
-}
-
-
-#[derive(Default, Serialize)]
-pub struct View {
-    // interval between consecutive datapoints as fractional seconds
-    interval: f64,
-    source: String,
-    version: String,
-    groups: Vec<Group>,
-    sections: Vec<Section>,
-}
-
-impl View {
-    pub fn new(data: &Tsdb, sections: Vec<Section>) -> Self {
-        let interval = data.interval();
-        let source = data.source();
-        let version = data.version();
-
-        Self {
-            interval,
-            source,
-            version,
-            groups: Vec::new(),
-            sections,
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-pub struct Section {
-    name: String,
-    route: String,
-}
-
-#[derive(Serialize)]
-pub struct Group {
-    name: String,
-    id: String,
-    plots: Vec<Plot>,
-}
-
-impl Group {
-    pub fn new<T: Into<String>, U: Into<String>>(name: T, id: U) -> Self {
-        Self {
-            name: name.into(),
-            id: id.into(),
-            plots: Vec::new(),
-        }
-    }
-
-    pub fn push(&mut self, plot: Option<Plot>) {
-        if let Some(plot) = plot {
-            self.plots.push(plot);
-        }
-    }
-
-    pub fn plot(&mut self, opts: PlotOpts, series: Option<UntypedSeries>) {
-        if let Some(data) = series.map(|v| v.as_data()) {
-            self.plots.push(Plot {
-                opts,
-                data,
-                min_value: None,
-                max_value: None,
-                time_data: None,
-                formatted_time_data: None,
-                series_names: None,
-            })
-        }
-    }
-
-    // New method to use the ECharts optimized heatmap data format
-    pub fn heatmap_echarts(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
-        if let Some(heatmap) = series {
-            let echarts_data = heatmap.as_data();
-            // Only add if there's data
-            if !echarts_data.data.is_empty() {
-                self.plots.push(Plot {
-                    opts,
-                    data: echarts_data.data,
-                    min_value: Some(echarts_data.min_value),
-                    max_value: Some(echarts_data.max_value),
-                    time_data: Some(echarts_data.time),
-                    formatted_time_data: Some(echarts_data.formatted_time),
-                    series_names: None,
-                })
-            }
-        }
-    }
-
-    pub fn scatter(&mut self, opts: PlotOpts, data: Option<Vec<UntypedSeries>>) {
-        if data.is_none() {
-            return;
-        }
-
-        let d = data.unwrap();
-
-        let mut data = Vec::new();
-
-        for series in &d {
-            let d = series.as_data();
-
-            if data.is_empty() {
-                data.push(d[0].clone());
-            }
-
-            data.push(d[1].clone());
-        }
-
-        self.plots.push(Plot {
-            opts,
-            data,
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: None,
-        })
-    }
-
-    // New method to add a multi-series plot
-    pub fn multi(&mut self, opts: PlotOpts, cgroup_data: Option<Vec<(String, UntypedSeries)>>) {
-        if cgroup_data.is_none() {
-            return;
-        }
-
-        let mut cgroup_data = cgroup_data.unwrap();
-
-        let mut data = Vec::new();
-        let mut labels = Vec::new();
-
-        for (label, series) in cgroup_data.drain(..) {
-            labels.push(label);
-            let d = series.as_data();
-
-            if data.is_empty() {
-                data.push(d[0].clone());
-            }
-
-            data.push(d[1].clone());
-        }
-
-        self.plots.push(Plot {
-            opts,
-            data,
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: Some(labels),
-        });
-    }
-}
-
-#[derive(Serialize, Clone)]
-pub struct Plot {
-    data: Vec<Vec<f64>>,
-    opts: PlotOpts,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    min_value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    time_data: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    formatted_time_data: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    series_names: Option<Vec<String>>,
-}
-
-impl Plot {
-    pub fn line<T: Into<String>, U: Into<String>>(
-        title: T,
-        id: U,
-        unit: Unit,
-        series: Option<UntypedSeries>,
-    ) -> Option<Self> {
-        series.map(|series| Self {
-            data: series.as_data(),
-            opts: PlotOpts::line(title, id, unit),
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: None,
-        })
-    }
-
-    pub fn heatmap<T: Into<String>, U: Into<String>>(
-        title: T,
-        id: U,
-        unit: Unit,
-        series: Option<Heatmap>,
-    ) -> Option<Self> {
-        if let Some(heatmap) = series {
-            let echarts_data = heatmap.as_data();
-            if !echarts_data.data.is_empty() {
-                return Some(Plot {
-                    opts: PlotOpts::heatmap(title, id, unit),
-                    data: echarts_data.data,
-                    min_value: Some(echarts_data.min_value),
-                    max_value: Some(echarts_data.max_value),
-                    time_data: Some(echarts_data.time),
-                    formatted_time_data: Some(echarts_data.formatted_time),
-                    series_names: None,
-                });
-            }
-        }
-
-        None
-    }
-}
-
-#[derive(Serialize, Clone)]
-pub struct PlotOpts {
-    title: String,
-    id: String,
-    style: String,
-    // Unified configuration for value formatting, axis labels, etc.
-    format: Option<FormatConfig>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct FormatConfig {
-    // Axis labels
-    x_axis_label: Option<String>,
-    y_axis_label: Option<String>,
-
-    // Value formatting
-    unit_system: Option<String>, // e.g., "percentage", "time", "bitrate"
-    precision: Option<u8>,       // Number of decimal places
-
-    // Scale configuration
-    log_scale: Option<bool>, // Whether to use log scale for y-axis
-    min: Option<f64>,        // Min value for y-axis
-    max: Option<f64>,        // Max value for y-axis
-
-    // Additional customization
-    value_label: Option<String>, // Label used in tooltips for the value
-}
-
-impl PlotOpts {
-    // Basic constructors without formatting
-    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            style: "line".to_string(),
-            format: Some(FormatConfig::new(unit)),
-        }
-    }
-
-    pub fn multi<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            style: "multi".to_string(),
-            format: Some(FormatConfig::new(unit)),
-        }
-    }
-
-    pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            style: "scatter".to_string(),
-            format: Some(FormatConfig::new(unit)),
-        }
-    }
-
-    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            style: "heatmap".to_string(),
-            format: Some(FormatConfig::new(unit)),
-        }
-    }
-
-    // Convenience methods
-    pub fn with_unit_system<T: Into<String>>(mut self, unit_system: T) -> Self {
-        if let Some(ref mut format) = self.format {
-            format.unit_system = Some(unit_system.into());
-        }
-
-        self
-    }
-
-    pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
-        if let Some(ref mut format) = self.format {
-            format.y_axis_label = Some(y_label.into());
-        }
-
-        self
-    }
-
-    pub fn with_log_scale(mut self, log_scale: bool) -> Self {
-        if let Some(ref mut format) = self.format {
-            format.log_scale = Some(log_scale);
-        }
-
-        self
-    }
-}
-
-impl FormatConfig {
-    pub fn new(unit: Unit) -> Self {
-        Self {
-            x_axis_label: None,
-            y_axis_label: None,
-            unit_system: Some(unit.to_string()),
-            precision: Some(2),
-            log_scale: None,
-            min: None,
-            max: None,
-            value_label: None,
-        }
-    }
-}
-
-pub enum Unit {
-    Count,
-    Rate,
-    Time,
-    Bytes,
-    Datarate,
-    Bitrate,
-    Percentage,
-    Frequency,
-}
-
-impl std::fmt::Display for Unit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let s = match self {
-            Self::Count => "count",
-            Self::Rate => "rate",
-            Self::Time => "time",
-            Self::Bytes => "bytes",
-            Self::Datarate => "datarate",
-            Self::Bitrate => "bitrate",
-            Self::Percentage => "percentage",
-            Self::Frequency => "frequency",
-        };
-
-        write!(f, "{s}")
     }
 }

@@ -1,11 +1,11 @@
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
 use arrow::array::Int64Array;
 use arrow::array::ListArray;
 use arrow::array::UInt64Array;
 use arrow::datatypes::DataType;
 use histogram::Histogram;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::file::reader::FileReader;
+use parquet::file::serialized_reader::SerializedFileReader;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -43,7 +43,10 @@ impl Tsdb {
         let file = File::open(path)?;
         let reader = SerializedFileReader::new(file).unwrap();
         let parquet_metadata = reader.metadata();
-        let key_value_metadata = parquet_metadata.file_metadata().key_value_metadata().unwrap();
+        let key_value_metadata = parquet_metadata
+            .file_metadata()
+            .key_value_metadata()
+            .unwrap();
 
         let mut metadata = HashMap::new();
 
@@ -51,7 +54,10 @@ impl Tsdb {
             metadata.insert(kv.key.clone(), kv.value.clone().unwrap_or("".to_string()));
         }
 
-        let interval = metadata.get("sampling_interval_ms").map(|v| v.parse::<u64>().expect("bad interval")).unwrap_or(1000);
+        let interval = metadata
+            .get("sampling_interval_ms")
+            .map(|v| v.parse::<u64>().expect("bad interval"))
+            .unwrap_or(1000);
         data.sampling_interval_ms = interval;
 
         data.source = match metadata.get("source").map(|v| v.as_str()) {
