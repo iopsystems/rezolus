@@ -6,6 +6,7 @@ pub struct View {
     interval: f64,
     source: String,
     version: String,
+    filename: String,
     groups: Vec<Group>,
     sections: Vec<Section>,
 }
