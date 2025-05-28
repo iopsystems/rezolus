@@ -68,6 +68,7 @@ export function configureMultiSeriesChart(chart) {
             itemStyle: {
                 color,
             },
+            step: 'start',
             lineStyle: {
                 color,
                 width: 2,

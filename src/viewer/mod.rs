@@ -1,3 +1,5 @@
+use http::header;
+use axum::response::IntoResponse;
 use super::*;
 use axum::handler::Handler;
 use clap::ArgMatches;
@@ -809,11 +811,18 @@ impl AppState {
 fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
     let state = Arc::new(state);
 
-    Router::new()
+    let router = Router::new()
         .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
         .route("/about", get(about))
-        .with_state(state.clone())
-        .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
+        .with_state(state.clone());
+
+    let router = if state.config.testing {
+        router.nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
+    } else {
+        router.nest_service("/lib", get(lib))
+    };
+
+    router
         .nest_service("/data", data.with_state(state))
         .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
         .layer(
@@ -846,6 +855,33 @@ async fn data(
             .unwrap_or("{ }".to_string()),
     )
 }
+
+async fn lib(
+    uri: Uri,
+) -> impl IntoResponse {
+    let path = uri.path();
+
+    match path {
+        "/charts/util/cgroup-utils.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/cgroup-utils.js").to_string()),
+        "/charts/util/colormap.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/colormap.js").to_string()),
+        "/charts/util/units.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/units.js").to_string()),
+        "/charts/util/utils.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/util/utils.js").to_string()),
+        "/charts/base.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/base.js").to_string()),
+        "/charts/chart.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/chart.js").to_string()),
+        "/charts/heatmap.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/heatmap.js").to_string()),
+        "/charts/line.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/line.js").to_string()),
+        "/charts/multi.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/multi.js").to_string()),
+        "/charts/scatter.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/charts/scatter.js").to_string()),
+        "/mithril.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/mithril.js").to_string()),
+        "/script.js" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], include_str!("assets/lib/script.js").to_string()),
+        "/style.css" => (StatusCode::OK, [(header::CONTENT_TYPE, "text/plain")], include_str!("assets/lib/style.css").to_string()),
+        other => {
+            error!("path: {other} does not map to a static resource");
+            (StatusCode::from_u16(404).unwrap(), [(header::CONTENT_TYPE, "text/plain")], "404 Not Found".to_string())
+        }
+    }
+}
+
 
 #[derive(Default, Serialize)]
 pub struct View {
