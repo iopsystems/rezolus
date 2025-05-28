@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[derive(Default, Serialize)]
 pub struct View {
     // interval between consecutive datapoints as fractional seconds
