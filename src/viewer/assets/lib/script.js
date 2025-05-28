@@ -24,13 +24,17 @@ const Main = {
             groups,
             sections,
             source,
-            version
+            version,
+            filename
         }
     }) {
         return m("div",
             m("header", [
                 m('h1', 'Rezolus', m('span.div', ' » '), activeSection.name),
-                m('span.version', `Source: ${source} • Version: ${version}`)
+                m('div.metadata', [
+                    m('p.filename', `File: ${filename}`),
+                    m('p.version', `Source: ${source} • Version: ${version}`),
+                ]),
             ]),
             m("main", [
                 m(Sidebar, {
