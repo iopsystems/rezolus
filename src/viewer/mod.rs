@@ -293,6 +293,24 @@ pub fn run(config: Config) {
         performance.heatmap_echarts(opts, Some(ipns));
     }
 
+    let opts = PlotOpts::line("L3 Hit %", "ld-hit", Unit::Percentage);
+    if let (Some(access), Some(miss)) = (
+        data.counters("cpu_l3_access", ()).map(|v| v.rate().sum()),
+        data.counters("cpu_l3_miss", ()).map(|v| v.rate().sum()),
+    ) {
+        let hitrate = miss / access;
+        performance.plot(opts, Some(hitrate));
+    }
+
+    let opts = PlotOpts::heatmap("L3 Hit %", "l3-hit-heatmap", Unit::Percentage);
+    if let (Some(access), Some(miss)) = (
+        data.cpu_heatmap("cpu_l3_access", Labels::default()),
+        data.cpu_heatmap("cpu_l3_miss", Labels::default()),
+    ) {
+        let hitrate = miss / access;
+        performance.heatmap_echarts(opts, Some(hitrate));
+    }
+
     let opts = PlotOpts::line("Frequency", "frequency", Unit::Frequency);
     if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
         data.counters("cpu_aperf", ()).map(|v| v.rate().sum()),
@@ -462,7 +480,7 @@ pub fn run(config: Config) {
     );
 
     for op in &[
-        "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
+        "Read", "Write", "Poll", "Socket", "Lock", "Time", "Sleep",  "Yield", "Filesystem", "Memory", "Process", "Query", "IPC", "Timer", "Event", "Other",
     ] {
         let series = data
             .counters("syscall", [("op", op.to_lowercase())])
@@ -686,7 +704,7 @@ pub fn run(config: Config) {
     );
 
     for op in &[
-        "Read", "Write", "Lock", "Yield", "Poll", "Socket", "Time", "Sleep", "Other",
+        "Read", "Write", "Poll", "Socket", "Lock", "Time", "Sleep",  "Yield", "Filesystem", "Memory", "Process", "Query", "IPC", "Timer", "Event", "Other",
     ] {
         let opts = PlotOpts::multi(*op, format!("syscall-{op}"), Unit::Rate);
         cgroup_syscalls.multi(
