@@ -200,8 +200,7 @@ pub fn run(config: Config) {
         "Busy %",
         "busy-pct",
         Unit::Percentage,
-        data.cpu_avg("cpu_usage", Labels::default())
-            .map(|v| (v / 1000000000.0)),
+        data.cpu_avg("cpu_usage", ()).map(|v| (v / 1000000000.0)),
     );
     cpu_overview.push(plot.clone());
     utilization.push(plot);
@@ -210,8 +209,7 @@ pub fn run(config: Config) {
         "Busy %",
         "busy-pct-heatmap",
         Unit::Percentage,
-        data.cpu_heatmap("cpu_usage", Labels::default())
-            .map(|v| v / 1000000000.0),
+        data.cpu_heatmap("cpu_usage", ()).map(|v| v / 1000000000.0),
     );
     cpu_overview.push(plot.clone());
     utilization.push(plot);
@@ -245,8 +243,7 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count);
     if let (Some(cycles), Some(instructions)) = (
-        data.counters("cpu_cycles", Labels::default())
-            .map(|v| v.rate().sum()),
+        data.counters("cpu_cycles", ()).map(|v| v.rate().sum()),
         data.counters("cpu_instructions", ())
             .map(|v| v.rate().sum()),
     ) {
@@ -256,8 +253,8 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", Unit::Count);
     if let (Some(cycles), Some(instructions)) = (
-        data.cpu_heatmap("cpu_cycles", Labels::default()),
-        data.cpu_heatmap("cpu_instructions", Labels::default()),
+        data.cpu_heatmap("cpu_cycles", ()),
+        data.cpu_heatmap("cpu_instructions", ()),
     ) {
         let ipc = instructions / cycles;
         performance.heatmap_echarts(opts, Some(ipc));
@@ -283,11 +280,11 @@ pub fn run(config: Config) {
         Unit::Count,
     );
     if let (Some(cycles), Some(instructions), Some(aperf), Some(mperf), Some(tsc)) = (
-        data.cpu_heatmap("cpu_cycles", Labels::default()),
-        data.cpu_heatmap("cpu_instructions", Labels::default()),
-        data.cpu_heatmap("cpu_aperf", Labels::default()),
-        data.cpu_heatmap("cpu_mperf", Labels::default()),
-        data.cpu_heatmap("cpu_tsc", Labels::default()),
+        data.cpu_heatmap("cpu_cycles", ()),
+        data.cpu_heatmap("cpu_instructions", ()),
+        data.cpu_heatmap("cpu_aperf", ()),
+        data.cpu_heatmap("cpu_mperf", ()),
+        data.cpu_heatmap("cpu_tsc", ()),
     ) {
         let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0;
         performance.heatmap_echarts(opts, Some(ipns));
@@ -304,8 +301,8 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::heatmap("L3 Hit %", "l3-hit-heatmap", Unit::Percentage);
     if let (Some(access), Some(miss)) = (
-        data.cpu_heatmap("cpu_l3_access", Labels::default()),
-        data.cpu_heatmap("cpu_l3_miss", Labels::default()),
+        data.cpu_heatmap("cpu_l3_access", ()),
+        data.cpu_heatmap("cpu_l3_miss", ()),
     ) {
         let hitrate = miss / access;
         performance.heatmap_echarts(opts, Some(hitrate));
@@ -325,15 +322,51 @@ pub fn run(config: Config) {
     let opts = PlotOpts::heatmap("Frequency", "frequency-heatmap", Unit::Frequency)
         .with_unit_system("frequency");
     if let (Some(aperf), Some(mperf), Some(tsc)) = (
-        data.cpu_heatmap("cpu_aperf", Labels::default()),
-        data.cpu_heatmap("cpu_mperf", Labels::default()),
-        data.cpu_heatmap("cpu_tsc", Labels::default()),
+        data.cpu_heatmap("cpu_aperf", ()),
+        data.cpu_heatmap("cpu_mperf", ()),
+        data.cpu_heatmap("cpu_tsc", ()),
     ) {
         let frequency = tsc * aperf / mperf;
         performance.heatmap_echarts(opts, Some(frequency));
     }
 
     cpu.group(performance);
+
+    // CPU Migrations
+
+    let mut migrations = Group::new("Migrations", "migrations");
+
+    let opts = PlotOpts::line("To", "cpu-migrations-to", Unit::Rate);
+    migrations.plot(
+        opts,
+        data.counters("cpu_migrations", [("direction", "to")])
+            .map(|v| v.rate().sum()),
+    );
+
+    let plot = Plot::heatmap(
+        "To",
+        "cpu-migrations-to-heatmap",
+        Unit::Rate,
+        data.cpu_heatmap("cpu_migrations", [("direction", "to")]),
+    );
+    migrations.push(plot);
+
+    let opts = PlotOpts::line("From", "cpu-migrations-from", Unit::Rate);
+    migrations.plot(
+        opts,
+        data.counters("cpu_migrations", [("direction", "from")])
+            .map(|v| v.rate().sum()),
+    );
+
+    let plot = Plot::heatmap(
+        "From",
+        "cpu-migrations-from-heatmap",
+        Unit::Rate,
+        data.cpu_heatmap("cpu_migrations", [("direction", "from")]),
+    );
+    migrations.push(plot);
+
+    cpu.group(migrations);
 
     // CPU TLB
 
@@ -346,7 +379,7 @@ pub fn run(config: Config) {
     );
 
     let opts = PlotOpts::heatmap("Total", "tlb-total-heatmap", Unit::Rate);
-    tlb.heatmap_echarts(opts, data.cpu_heatmap("cpu_tlb_flush", Labels::default()));
+    tlb.heatmap_echarts(opts, data.cpu_heatmap("cpu_tlb_flush", ()));
 
     for reason in &[
         "Local MM Shootdown",
@@ -438,7 +471,7 @@ pub fn run(config: Config) {
         .with_axis_label("Latency")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("scheduler_runqueue_latency", Labels::default(), PERCENTILES);
+    let series = data.percentiles("scheduler_runqueue_latency", (), PERCENTILES);
     scheduler_overview.scatter(opts.clone(), series.clone());
     scheduler_group.scatter(opts, series);
 
@@ -446,7 +479,7 @@ pub fn run(config: Config) {
         .with_axis_label("Time")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("scheduler_offcpu", Labels::default(), PERCENTILES);
+    let series = data.percentiles("scheduler_offcpu", (), PERCENTILES);
     scheduler_overview.scatter(opts.clone(), series.clone());
     scheduler_group.scatter(opts, series);
 
@@ -454,7 +487,7 @@ pub fn run(config: Config) {
         .with_axis_label("Time")
         .with_unit_system("time")
         .with_log_scale(true);
-    let series = data.percentiles("scheduler_running", Labels::default(), PERCENTILES);
+    let series = data.percentiles("scheduler_running", (), PERCENTILES);
     scheduler_group.scatter(opts, series);
 
     overview.group(scheduler_overview);
@@ -467,20 +500,33 @@ pub fn run(config: Config) {
 
     let opts = PlotOpts::line("Total", "syscall-total", Unit::Rate);
 
-    let series = data
-        .counters("syscall", Labels::default())
-        .map(|v| v.rate().sum());
+    let series = data.counters("syscall", ()).map(|v| v.rate().sum());
     syscall_overview.plot(opts.clone(), series.clone());
     syscall_group.plot(opts, series);
 
-    let percentiles = data.percentiles("syscall_latency", Labels::default(), PERCENTILES);
+    let percentiles = data.percentiles("syscall_latency", (), PERCENTILES);
     syscall_group.scatter(
         PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time),
         percentiles,
     );
 
     for op in &[
-        "Read", "Write", "Poll", "Socket", "Lock", "Time", "Sleep",  "Yield", "Filesystem", "Memory", "Process", "Query", "IPC", "Timer", "Event", "Other",
+        "Read",
+        "Write",
+        "Poll",
+        "Socket",
+        "Lock",
+        "Time",
+        "Sleep",
+        "Yield",
+        "Filesystem",
+        "Memory",
+        "Process",
+        "Query",
+        "IPC",
+        "Timer",
+        "Event",
+        "Other",
     ] {
         let series = data
             .counters("syscall", [("op", op.to_lowercase())])
@@ -512,19 +558,17 @@ pub fn run(config: Config) {
     softirq_total.plot(opts.clone(), series.clone());
 
     let opts = PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap", Unit::Rate);
-    let series = data.cpu_heatmap("softirq", Labels::default());
+    let series = data.cpu_heatmap("softirq", ());
     softirq_overview.heatmap_echarts(opts.clone(), series.clone());
     softirq_total.heatmap_echarts(opts.clone(), series.clone());
 
     let opts = PlotOpts::line("CPU %", "softirq-total-time", Unit::Percentage);
-    let series = data
-        .cpu_avg("softirq_time", Labels::default())
-        .map(|v| v / 1000000000.0);
+    let series = data.cpu_avg("softirq_time", ()).map(|v| v / 1000000000.0);
     softirq_total.plot(opts, series);
 
     let opts = PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap", Unit::Percentage);
     let series = data
-        .cpu_heatmap("softirq_time", Labels::default())
+        .cpu_heatmap("softirq_time", ())
         .map(|v| v / 1000000000.0);
     softirq_total.heatmap_echarts(opts, series);
 
@@ -658,6 +702,7 @@ pub fn run(config: Config) {
      */
     let mut cgroup_cpu = Group::new("CPU", "cpu");
     let mut cgroup_performance = Group::new("Performance", "performance");
+    let mut cgroup_tlb = Group::new("TLB Flush", "tlb");
     let mut cgroup_syscalls = Group::new("Syscalls", "syscalls");
 
     // cpu usage
@@ -676,12 +721,26 @@ pub fn run(config: Config) {
             .map(|v| (v.rate().by_name() / 1000000000.0).top_n(5, average)),
     );
 
+    let opts = PlotOpts::multi("System Cores", "cgroup-system-cores", Unit::Count);
+    cgroup_cpu.multi(
+        opts,
+        data.counters("cgroup_cpu_usage", [("state", "system")])
+            .map(|v| (v.rate().by_name() / 1000000000.0).top_n(5, average)),
+    );
+
+    let opts = PlotOpts::multi("CPU Migrations", "cgroup-cpu-migrations", Unit::Rate);
+    cgroup_cpu.multi(
+        opts,
+        data.counters("cgroup_cpu_migrations", ())
+            .map(|v| (v.rate().by_name()).top_n(5, average)),
+    );
+
     // performance
 
     if let (Some(cycles), Some(instructions)) = (
-        data.counters("cgroup_cpu_cycles", Labels::default())
+        data.counters("cgroup_cpu_cycles", ())
             .map(|v| v.rate().by_name()),
-        data.counters("cgroup_cpu_instructions", Labels::default())
+        data.counters("cgroup_cpu_instructions", ())
             .map(|v| v.rate().by_name()),
     ) {
         let opts = PlotOpts::multi("Highest IPC", "cgroup-ipc-low", Unit::Count);
@@ -694,17 +753,41 @@ pub fn run(config: Config) {
         cgroup_performance.multi(opts, Some((cycles / instructions).bottom_n(5, average)));
     }
 
+    // TLB
+
+    let opts = PlotOpts::multi("Total", "cgroup-tlb-flush", Unit::Count);
+    cgroup_tlb.multi(
+        opts,
+        data.counters("cgroup_tlb_flush", ())
+            .map(|v| (v.rate().by_name()).top_n(5, average)),
+    );
+
     // syscalls
 
     let opts = PlotOpts::multi("Total", "cgroup-syscalls", Unit::Rate);
     cgroup_syscalls.multi(
         opts,
-        data.counters("cgroup_syscall", Labels::default())
+        data.counters("cgroup_syscall", ())
             .map(|v| (v.rate().by_name()).top_n(5, average)),
     );
 
     for op in &[
-        "Read", "Write", "Poll", "Socket", "Lock", "Time", "Sleep",  "Yield", "Filesystem", "Memory", "Process", "Query", "IPC", "Timer", "Event", "Other",
+        "Read",
+        "Write",
+        "Poll",
+        "Socket",
+        "Lock",
+        "Time",
+        "Sleep",
+        "Yield",
+        "Filesystem",
+        "Memory",
+        "Process",
+        "Query",
+        "IPC",
+        "Timer",
+        "Event",
+        "Other",
     ] {
         let opts = PlotOpts::multi(*op, format!("syscall-{op}"), Unit::Rate);
         cgroup_syscalls.multi(
@@ -717,6 +800,7 @@ pub fn run(config: Config) {
     // Add all groups to the cgroups view
     cgroups.group(cgroup_cpu);
     cgroups.group(cgroup_performance);
+    cgroups.group(cgroup_tlb);
     cgroups.group(cgroup_syscalls);
 
     // Finalize

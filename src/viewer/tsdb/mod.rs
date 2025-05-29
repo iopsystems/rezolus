@@ -71,7 +71,11 @@ impl Tsdb {
             _ => "unknown".to_string(),
         };
 
-        data.filename = path.file_name().map(|v| v.to_str().unwrap_or("unknown")).unwrap_or("unknown").to_string();
+        data.filename = path
+            .file_name()
+            .map(|v| v.to_str().unwrap_or("unknown"))
+            .unwrap_or("unknown")
+            .to_string();
 
         let file = File::open(path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
