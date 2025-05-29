@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt-get -y install libelf-dev
+          sudo apt-get -y install autopoint
       - name: cargo check
         run: |
           cargo check --all-targets
@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt-get -y install libelf-dev
+          sudo apt-get -y install autopoint
       - name: run clippy
         run: |
           cargo clippy --all-targets --all-features --message-format json \
@@ -124,7 +124,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt-get -y install libelf-dev
+          sudo apt-get -y install autopoint
 
       - name: build
         shell: bash

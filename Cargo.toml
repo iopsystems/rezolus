@@ -49,8 +49,8 @@ tower-http = { version = "0.5.2", features = ["compression-full", "decompression
 walkdir = "2.5.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libbpf-rs = { version = "0.24.8", features = ["vendored-libelf", "static-libelf"] }
-libbpf-sys = { version = "1.5.0" }
+libbpf-rs = { version = "0.24.8", features = ["vendored", "static"] }
+libbpf-sys = { version = "1.5.0", features = ["vendored", "static"] }
 perf-event2 = "0.7.4"
 perf-event-open-sys2 = "5.0.6"
 nvml-wrapper = "0.10.0"
