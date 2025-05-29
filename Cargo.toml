@@ -53,6 +53,8 @@ tower = { version = "0.5.0", features = ["tokio"] }
 tower-http = { version = "0.5.2", features = ["compression-full", "decompression-full", "fs"] }
 tower-livereload = "0.9.6"
 walkdir = "2.5.0"
+include_dir = "0.7"
+mime_guess = "2.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.24.8" }

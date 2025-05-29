@@ -14,6 +14,14 @@ use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_livereload::LiveReloadLayer;
 
+#[cfg(not(feature = "developer-mode"))]
+use include_dir::{include_dir, Dir};
+#[cfg(not(feature = "developer-mode"))]
+use mime_guess;
+
+#[cfg(not(feature = "developer-mode"))]
+static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/viewer/assets");
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -904,25 +912,37 @@ impl AppState {
     }
 }
 
-// NOTE: we're going to want to include the assets in the binary for release
-// builds. For now, we just serve from the assets folder
+// Serve the viewer web UI
+#[cfg(feature = "developer-mode")]
 fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
     let state = Arc::new(state);
 
-    let router = Router::new()
+    Router::new()
         .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
         .route("/about", get(about))
-        .with_state(state.clone());
-
-    let router = if cfg!(feature = "developer-mode") {
-        router.nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
-    } else {
-        router.nest_service("/lib", get(lib))
-    };
-
-    router
+        .with_state(state.clone())
+        .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
         .nest_service("/data", data.with_state(state))
         .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
+        .layer(
+            ServiceBuilder::new()
+                .layer(RequestDecompressionLayer::new())
+                .layer(CompressionLayer::new())
+                .layer(livereload),
+        )
+}
+
+#[cfg(not(feature = "developer-mode"))]
+fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
+    let state = Arc::new(state);
+
+    Router::new()
+        .route("/", get(index))
+        .route("/about", get(about))
+        .with_state(state.clone())
+        .nest_service("/lib", get(lib))
+        .nest_service("/data", data.with_state(state))
+        .fallback(get(index))
         .layer(
             ServiceBuilder::new()
                 .layer(RequestDecompressionLayer::new())
@@ -935,6 +955,20 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
 async fn about() -> String {
     let version = env!("CARGO_PKG_VERSION");
     format!("Rezolus {version} Viewer\nFor information, see: https://rezolus.com\n")
+}
+
+#[cfg(not(feature = "developer-mode"))]
+async fn index() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        ASSETS
+            .get_file("index.html")
+            .expect("index.html not found")
+            .contents_utf8()
+            .expect("index.html should be valid utf8")
+            .to_string(),
+    )
 }
 
 async fn data(
@@ -954,87 +988,23 @@ async fn data(
     )
 }
 
+#[cfg(not(feature = "developer-mode"))]
 async fn lib(uri: Uri) -> impl IntoResponse {
-    let path = uri.path();
-
-    match path {
-        "/charts/util/cgroup-utils.js" => (
+    let path = uri.path().trim_start_matches('/');
+    let file_path = format!("lib/{path}");
+    if let Some(file) = ASSETS.get_file(&file_path) {
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/cgroup-utils.js").to_string(),
-        ),
-        "/charts/util/colormap.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/colormap.js").to_string(),
-        ),
-        "/charts/util/units.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/units.js").to_string(),
-        ),
-        "/charts/util/utils.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/utils.js").to_string(),
-        ),
-        "/charts/base.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/base.js").to_string(),
-        ),
-        "/charts/chart.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/chart.js").to_string(),
-        ),
-        "/charts/echarts.min.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/echarts.min.js").to_string(),
-        ),
-        "/charts/heatmap.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/heatmap.js").to_string(),
-        ),
-        "/charts/line.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/line.js").to_string(),
-        ),
-        "/charts/multi.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/multi.js").to_string(),
-        ),
-        "/charts/scatter.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/scatter.js").to_string(),
-        ),
-        "/mithril.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/mithril.js").to_string(),
-        ),
-        "/script.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/script.js").to_string(),
-        ),
-        "/style.css" => (
-            StatusCode::OK,
+            [(header::CONTENT_TYPE, mime.as_ref())],
+            String::from_utf8_lossy(file.contents()).to_string(),
+        )
+    } else {
+        error!("path: {path} does not map to a static resource");
+        (
+            StatusCode::from_u16(404).unwrap(),
             [(header::CONTENT_TYPE, "text/plain")],
-            include_str!("assets/lib/style.css").to_string(),
-        ),
-        other => {
-            error!("path: {other} does not map to a static resource");
-            (
-                StatusCode::from_u16(404).unwrap(),
-                [(header::CONTENT_TYPE, "text/plain")],
-                "404 Not Found".to_string(),
-            )
-        }
+            "404 Not Found".to_string(),
+        )
     }
 }
