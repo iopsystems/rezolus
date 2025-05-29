@@ -143,7 +143,7 @@ options and their defaults.
 sudo editor /etc/rezolus/exporter.toml
 
 # restart the exporter to apply changes
-sudo systemsctl restart rezolus-exporter
+sudo systemctl restart rezolus-exporter
 ```
 
 #### Hindsight
