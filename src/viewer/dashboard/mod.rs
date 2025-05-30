@@ -9,7 +9,6 @@ mod scheduler;
 mod softirq;
 mod syscall;
 
-
 type Generator = fn(&Tsdb, Vec<Section>) -> View;
 
 static SECTION_META: &[(&str, &str, Generator)] = &[
