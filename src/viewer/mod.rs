@@ -6,6 +6,7 @@ use axum::routing::get;
 use axum::Router;
 use clap::ArgMatches;
 use http::{header, StatusCode, Uri};
+use include_dir::{include_dir, Dir};
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
@@ -20,6 +21,8 @@ use std::path::Path;
 
 #[cfg(feature = "developer-mode")]
 use notify::Watcher;
+
+static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
 const PERCENTILES: &[f64] = &[50.0, 90.0, 99.0, 99.9, 99.99];
 
@@ -957,84 +960,25 @@ async fn data(
 async fn lib(uri: Uri) -> impl IntoResponse {
     let path = uri.path();
 
-    match path {
-        "/charts/util/cgroup-utils.js" => (
+    if let Some(asset) = ASSETS.get_file(format!("lib{path}")) {
+        let body = asset.contents_utf8().unwrap();
+        let content_type = if path.ends_with(".js") {
+            "text/javascript"
+        } else {
+            "text/plain"
+        };
+
+        (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/cgroup-utils.js").to_string(),
-        ),
-        "/charts/util/colormap.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/colormap.js").to_string(),
-        ),
-        "/charts/util/units.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/units.js").to_string(),
-        ),
-        "/charts/util/utils.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/util/utils.js").to_string(),
-        ),
-        "/charts/base.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/base.js").to_string(),
-        ),
-        "/charts/chart.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/chart.js").to_string(),
-        ),
-        "/charts/echarts.min.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/echarts.min.js").to_string(),
-        ),
-        "/charts/heatmap.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/heatmap.js").to_string(),
-        ),
-        "/charts/line.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/line.js").to_string(),
-        ),
-        "/charts/multi.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/multi.js").to_string(),
-        ),
-        "/charts/scatter.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/charts/scatter.js").to_string(),
-        ),
-        "/mithril.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/mithril.js").to_string(),
-        ),
-        "/script.js" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/javascript")],
-            include_str!("assets/lib/script.js").to_string(),
-        ),
-        "/style.css" => (
-            StatusCode::OK,
+            [(header::CONTENT_TYPE, content_type)],
+            body.to_string(),
+        )
+    } else {
+        error!("path: {path} does not map to a static resource");
+        (
+            StatusCode::from_u16(404).unwrap(),
             [(header::CONTENT_TYPE, "text/plain")],
-            include_str!("assets/lib/style.css").to_string(),
-        ),
-        other => {
-            error!("path: {other} does not map to a static resource");
-            (
-                StatusCode::from_u16(404).unwrap(),
-                [(header::CONTENT_TYPE, "text/plain")],
-                "404 Not Found".to_string(),
-            )
-        }
+            "404 Not Found".to_string(),
+        )
     }
 }
