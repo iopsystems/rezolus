@@ -36,7 +36,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         );
 
         operations.plot(
-            PlotOpts::line(&format!("{op} IOPS"), format!("iops-{}", op.to_lowercase()), Unit::Count),
+            PlotOpts::line(
+                &format!("{op} IOPS"),
+                format!("iops-{}", op.to_lowercase()),
+                Unit::Count,
+            ),
             data.counters("blockio_operations", [("op", op.to_lowercase())])
                 .map(|v| v.rate().sum()),
         );

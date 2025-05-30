@@ -335,7 +335,12 @@ pub struct NamedSeries {
 }
 
 impl NamedSeries {
-    pub fn top_n(&self, n: usize, rank: fn(&UntypedSeries) -> f64) -> Vec<(String, UntypedSeries)> {
+    fn ranked_n(
+        &self,
+        n: usize,
+        rank: fn(&UntypedSeries) -> f64,
+        ascending: bool,
+    ) -> Vec<(String, UntypedSeries)> {
         let mut scores = Vec::new();
 
         for (name, series) in self.inner.iter() {
@@ -343,14 +348,16 @@ impl NamedSeries {
             scores.push((name, (score * 1_000_000_000.0) as u64));
         }
 
-        scores.sort_by(|a, b| b.1.cmp(&a.1));
+        if ascending {
+            scores.sort_by(|a, b| a.1.cmp(&b.1));
+        } else {
+            scores.sort_by(|a, b| b.1.cmp(&a.1));
+        }
 
-        // If we have more than n series, calculate the "other" category
         if scores.len() > n {
             let mut result = Vec::new();
             let mut other_series = UntypedSeries::default();
 
-            // Add top n series to result
             for (name, _score) in &scores[0..n] {
                 result.push((
                     name.to_string(),
@@ -358,13 +365,11 @@ impl NamedSeries {
                 ));
             }
 
-            // Sum all remaining series into "other"
             for (name, _score) in &scores[n..] {
                 if let Some(series) = self.inner.get(name.as_str()) {
                     if other_series.inner.is_empty() {
                         other_series = series.clone();
                     } else {
-                        // Add each remaining series to the "other" category
                         for (time, value) in series.inner.iter() {
                             if other_series.inner.contains_key(time) {
                                 *other_series.inner.get_mut(time).unwrap() += value;
@@ -376,14 +381,12 @@ impl NamedSeries {
                 }
             }
 
-            // Add "other" to the result if it's not empty
             if !other_series.inner.is_empty() {
                 result.push(("Other".to_string(), other_series));
             }
 
             result
         } else {
-            // If we have n or fewer series, just return them all
             let mut result = Vec::new();
 
             for (name, _) in scores.drain(..) {
@@ -394,67 +397,16 @@ impl NamedSeries {
         }
     }
 
+    pub fn top_n(&self, n: usize, rank: fn(&UntypedSeries) -> f64) -> Vec<(String, UntypedSeries)> {
+        self.ranked_n(n, rank, false)
+    }
+
     pub fn bottom_n(
         &self,
         n: usize,
         rank: fn(&UntypedSeries) -> f64,
     ) -> Vec<(String, UntypedSeries)> {
-        let mut scores = Vec::new();
-
-        for (name, series) in self.inner.iter() {
-            let score = rank(series);
-            scores.push((name, (score * 1_000_000_000.0) as u64));
-        }
-
-        scores.sort_by(|a, b| a.1.cmp(&b.1));
-
-        // If we have more than n series, calculate the "other" category
-        if scores.len() > n {
-            let mut result = Vec::new();
-            let mut other_series = UntypedSeries::default();
-
-            // Add bottom n series to result
-            for (name, _score) in &scores[0..n] {
-                result.push((
-                    name.to_string(),
-                    self.inner.get(name.as_str()).unwrap().clone(),
-                ));
-            }
-
-            // Sum all remaining series into "other"
-            for (name, _score) in &scores[n..] {
-                if let Some(series) = self.inner.get(name.as_str()) {
-                    if other_series.inner.is_empty() {
-                        other_series = series.clone();
-                    } else {
-                        // Add each remaining series to the "other" category
-                        for (time, value) in series.inner.iter() {
-                            if other_series.inner.contains_key(time) {
-                                *other_series.inner.get_mut(time).unwrap() += value;
-                            } else {
-                                other_series.inner.insert(*time, *value);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Add "other" to the result if it's not empty
-            if !other_series.inner.is_empty() {
-                result.push(("Other".to_string(), other_series));
-            }
-
-            result
-        } else {
-            // If we have n or fewer series, just return them all
-            let mut result = Vec::new();
-
-            for (name, _) in scores.drain(..) {
-                result.push((name.clone(), self.inner.get(name.as_str()).unwrap().clone()));
-            }
-
-            result
-        }
+        self.ranked_n(n, rank, true)
     }
 }
 
@@ -559,4 +511,46 @@ impl Div<f64> for IndexedSeries {
 
 pub fn average(series: &UntypedSeries) -> f64 {
     series.average()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_top_bottom_n() {
+        let mut named = NamedSeries::default();
+
+        let mut a = UntypedSeries::default();
+        a.inner.insert(1, 1.0);
+        a.inner.insert(2, 2.0); // avg 1.5
+
+        let mut b = UntypedSeries::default();
+        b.inner.insert(1, 2.0);
+        b.inner.insert(2, 4.0); // avg 3.0
+
+        let mut c = UntypedSeries::default();
+        c.inner.insert(1, 0.5);
+        c.inner.insert(2, 1.0); // avg 0.75
+
+        named.inner.insert("a".into(), a);
+        named.inner.insert("b".into(), b);
+        named.inner.insert("c".into(), c.clone());
+
+        let top = named.top_n(2, average);
+        assert_eq!(top.len(), 3);
+        assert_eq!(top[0].0, "b");
+        assert_eq!(top[1].0, "a");
+        assert_eq!(top[2].0, "Other");
+        assert_eq!(top[2].1.inner.get(&1).copied().unwrap(), 0.5);
+        assert_eq!(top[2].1.inner.get(&2).copied().unwrap(), 1.0);
+
+        let bottom = named.bottom_n(2, average);
+        assert_eq!(bottom.len(), 3);
+        assert_eq!(bottom[0].0, "c");
+        assert_eq!(bottom[1].0, "a");
+        assert_eq!(bottom[2].0, "Other");
+        assert_eq!(bottom[2].1.inner.get(&1).copied().unwrap(), 2.0);
+        assert_eq!(bottom[2].1.inner.get(&2).copied().unwrap(), 4.0);
+    }
 }
