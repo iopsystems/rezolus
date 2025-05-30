@@ -27,7 +27,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     for op in &["Read", "Write"] {
         operations.plot(
             PlotOpts::line(
-                &format!("{op} Throughput"),
+                format!("{op} Throughput"),
                 format!("throughput-{}", op.to_lowercase()),
                 Unit::Datarate,
             ),
@@ -37,7 +37,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         operations.plot(
             PlotOpts::line(
-                &format!("{op} IOPS"),
+                format!("{op} IOPS"),
                 format!("iops-{}", op.to_lowercase()),
                 Unit::Count,
             ),

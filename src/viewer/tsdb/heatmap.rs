@@ -69,7 +69,7 @@ impl Heatmap {
         // OPTIMIZATION: Organize data by CPU ID (y-axis value) first
         // This makes tooltip lookups much faster since ECharts can directly
         // access the relevant row where the mouse is hovering
-        let mut heatmap_data = Vec::with_capacity(timestamps.len() * (max_cpu_id as usize + 1));
+        let mut heatmap_data = Vec::with_capacity(timestamps.len() * (max_cpu_id + 1));
 
         // Sort by CPU ID (y-axis value) first, then by timestamp (x-axis value)
         // This organizes data points in rows which match how the heatmap is rendered
