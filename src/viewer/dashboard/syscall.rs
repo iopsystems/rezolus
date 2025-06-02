@@ -44,7 +44,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         );
 
         syscall.scatter(
-            PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time),
+            PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time)
+                .with_log_scale(true),
             data.percentiles("syscall_latency", [("op", op.to_lowercase())], PERCENTILES),
         );
     }
