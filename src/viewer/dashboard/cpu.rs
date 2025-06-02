@@ -66,7 +66,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         data.cpu_heatmap("cpu_instructions", ()),
     ) {
         let ipc = instructions / cycles;
-        performance.heatmap_echarts(
+        performance.heatmap(
             PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", Unit::Count),
             Some(ipc),
         );
@@ -96,7 +96,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         data.cpu_heatmap("cpu_tsc", ()),
     ) {
         let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0;
-        performance.heatmap_echarts(
+        performance.heatmap(
             PlotOpts::heatmap(
                 "Instructions per Nanosecond (IPNS)",
                 "ipns-heatmap",
@@ -122,7 +122,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         data.cpu_heatmap("cpu_l3_miss", ()),
     ) {
         let hitrate = miss / access;
-        performance.heatmap_echarts(
+        performance.heatmap(
             PlotOpts::heatmap("L3 Hit %", "l3-hit-heatmap", Unit::Percentage),
             Some(hitrate),
         );
@@ -147,7 +147,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         data.cpu_heatmap("cpu_tsc", ()),
     ) {
         let frequency = tsc * aperf / mperf;
-        performance.heatmap_echarts(
+        performance.heatmap(
             PlotOpts::heatmap("Frequency", "frequency-heatmap", Unit::Frequency)
                 .with_unit_system("frequency"),
             Some(frequency),
@@ -201,7 +201,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         data.counters("cpu_tlb_flush", ()).map(|v| v.rate().sum()),
     );
 
-    tlb.heatmap_echarts(
+    tlb.heatmap(
         PlotOpts::heatmap("Total", "tlb-total-heatmap", Unit::Rate),
         data.cpu_heatmap("cpu_tlb_flush", ()),
     );
@@ -233,7 +233,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
                 .map(|v| v.rate().sum()),
         );
 
-        tlb.heatmap_echarts(
+        tlb.heatmap(
             PlotOpts::heatmap(*label, format!("{id}-heatmap"), Unit::Rate),
             data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
         );

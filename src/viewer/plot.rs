@@ -76,11 +76,10 @@ impl Group {
         }
     }
 
-    // New method to use the ECharts optimized heatmap data format
-    pub fn heatmap_echarts(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
+    pub fn heatmap(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
         if let Some(heatmap) = series {
             let echarts_data = heatmap.as_data();
-            // Only add if there's data
+
             if !echarts_data.data.is_empty() {
                 self.plots.push(Plot {
                     opts,
