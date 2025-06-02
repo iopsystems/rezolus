@@ -7,10 +7,6 @@ pub struct CounterSeries {
 }
 
 impl CounterSeries {
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
     pub fn insert(&mut self, timestamp: u64, value: u64) {
         self.inner.insert(timestamp, value);
     }

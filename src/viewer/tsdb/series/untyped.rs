@@ -26,24 +26,6 @@ impl UntypedSeries {
         }
     }
 
-    fn stddev(&self) -> f64 {
-        if self.inner.is_empty() {
-            return 0.0;
-        }
-
-        let values: Vec<f64> = self.inner.values().cloned().collect();
-
-        if values.is_empty() {
-            return 0.0;
-        }
-
-        let mean = values.iter().sum::<f64>() / values.len() as f64;
-        let variance =
-            values.iter().map(|x| (*x - mean).powi(2)).sum::<f64>() / values.len() as f64;
-
-        variance.sqrt()
-    }
-
     fn divide_scalar(mut self, divisor: f64) -> Self {
         for value in self.inner.values_mut() {
             *value /= divisor;
