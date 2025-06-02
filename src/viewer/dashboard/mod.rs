@@ -9,77 +9,65 @@ mod scheduler;
 mod softirq;
 mod syscall;
 
+type Generator = fn(&Tsdb, Vec<Section>) -> View;
+
+static SECTION_META: &[(&str, &str, Generator)] = &[
+    ("Overview", "/overview", overview::generate),
+    ("CPU", "/cpu", cpu::generate),
+    ("Network", "/network", network::generate),
+    ("Scheduler", "/scheduler", scheduler::generate),
+    ("Syscall", "/syscall", syscall::generate),
+    ("Softirq", "/softirq", softirq::generate),
+    ("BlockIO", "/blockio", blockio::generate),
+    ("cgroups", "/cgroups", cgroups::generate),
+];
+
 pub fn generate(data: &Tsdb) -> AppState {
     let mut state = AppState::new();
 
-    // define our sections
-    let sections = vec![
-        Section {
-            name: "Overview".to_string(),
-            route: "/overview".to_string(),
-        },
-        Section {
-            name: "CPU".to_string(),
-            route: "/cpu".to_string(),
-        },
-        Section {
-            name: "Network".to_string(),
-            route: "/network".to_string(),
-        },
-        Section {
-            name: "Scheduler".to_string(),
-            route: "/scheduler".to_string(),
-        },
-        Section {
-            name: "Syscall".to_string(),
-            route: "/syscall".to_string(),
-        },
-        Section {
-            name: "Softirq".to_string(),
-            route: "/softirq".to_string(),
-        },
-        Section {
-            name: "BlockIO".to_string(),
-            route: "/blockio".to_string(),
-        },
-        Section {
-            name: "cgroups".to_string(),
-            route: "/cgroups".to_string(),
-        },
-    ];
+    let sections: Vec<Section> = SECTION_META
+        .iter()
+        .map(|(name, route, _)| Section {
+            name: (*name).to_string(),
+            route: (*route).to_string(),
+        })
+        .collect();
 
-    state.sections.insert(
-        "overview.json".to_string(),
-        serde_json::to_string(&overview::generate(data, sections.clone())).unwrap(),
-    );
-    state.sections.insert(
-        "cpu.json".to_string(),
-        serde_json::to_string(&cpu::generate(data, sections.clone())).unwrap(),
-    );
-    state.sections.insert(
-        "network.json".to_string(),
-        serde_json::to_string(&network::generate(data, sections.clone())).unwrap(),
-    );
-    state.sections.insert(
-        "scheduler.json".to_string(),
-        serde_json::to_string(&scheduler::generate(data, sections.clone())).unwrap(),
-    );
-    state.sections.insert(
-        "syscall.json".to_string(),
-        serde_json::to_string(&syscall::generate(data, sections.clone())).unwrap(),
-    );
-    state.sections.insert(
-        "softirq.json".to_string(),
-        serde_json::to_string(&softirq::generate(data, sections.clone())).unwrap(),
-    );
-    state.sections.insert(
-        "blockio.json".to_string(),
-        serde_json::to_string(&blockio::generate(data, sections.clone())).unwrap(),
-    );
-    state.sections.insert(
-        "cgroups.json".to_string(),
-        serde_json::to_string(&cgroups::generate(data, sections.clone())).unwrap(),
-    );
+    for (_, route, generator) in SECTION_META {
+        let key = format!("{}.json", &route[1..]);
+        let view = generator(data, sections.clone());
+        state
+            .sections
+            .insert(key, serde_json::to_string(&view).unwrap());
+    }
 
     state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_produces_expected_keys() {
+        let data = Tsdb::default();
+        let state = generate(&data);
+
+        let mut keys: Vec<_> = state.sections.keys().cloned().collect();
+        keys.sort();
+
+        assert_eq!(
+            keys,
+            vec![
+                "blockio.json",
+                "cgroups.json",
+                "cpu.json",
+                "network.json",
+                "overview.json",
+                "scheduler.json",
+                "softirq.json",
+                "syscall.json",
+            ]
+        );
+    }
 }
