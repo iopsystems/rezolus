@@ -56,7 +56,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     for op in &["Read", "Write"] {
         latency.scatter(
-            PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time),
+            PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time)
+                .with_log_scale(true),
             data.percentiles("blockio_latency", [("op", op.to_lowercase())], PERCENTILES),
         );
     }
@@ -71,7 +72,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     for op in &["Read", "Write"] {
         size.scatter(
-            PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()), Unit::Bytes),
+            PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()), Unit::Bytes)
+                .with_log_scale(true),
             data.percentiles("blockio_size", [("op", op.to_lowercase())], PERCENTILES),
         );
     }
