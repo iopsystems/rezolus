@@ -108,7 +108,7 @@ pub fn run(config: Config) {
         // previous snapshot
         let mut previous = None;
 
-        let url = config.general().url();
+        let url = config.general().mpk_url();
 
         // sample in a loop
         loop {
@@ -160,21 +160,25 @@ async fn serve(config: Arc<Config>) {
 
 struct AppState {
     client: Client,
-    url: Url,
+    mpk_url: Url,
+    json_url: Url,
 }
 
 fn app(config: Arc<Config>) -> Router {
-    let url = config.general().url();
+    let mpk_url = config.general().mpk_url();
+    let json_url = config.general().json_url();
 
     let state = Arc::new(AppState {
         client: Client::builder().http1_only().build().unwrap(),
-        url,
+        mpk_url,
+        json_url,
     });
 
     Router::new()
         .route("/", get(root))
         .route("/metrics", get(prometheus))
         .route("/metrics/binary", get(msgpack))
+        .route("/metrics/json", get(json))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
@@ -190,11 +194,23 @@ async fn root() -> String {
 
 // for convenience, this proxies the msgpack from Rezolus Agent
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
-    if let Ok(response) = state.client.get(state.url.clone()).send().await {
+    if let Ok(response) = state.client.get(state.mpk_url.clone()).send().await {
         if let Ok(body) = response.bytes().await {
             return body.to_vec();
         }
     }
 
     Vec::new()
+}
+
+async fn json(State(state): State<Arc<AppState>>) -> String {
+    if let Ok(response) = state.client.get(state.json_url.clone()).send().await {
+        if let Ok(body) = response.bytes().await {
+            if let Ok(s) = std::str::from_utf8(&body) {
+                return s.to_string();
+            }
+        }
+    }
+
+    String::new()
 }
