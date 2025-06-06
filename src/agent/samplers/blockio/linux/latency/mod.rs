@@ -27,7 +27,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(BpfProgStats { run_time: &BPF_RUN_TIME, run_count: &BPF_RUN_COUNT }, ModSkelBuilder::default)
         .histogram("read_latency", &BLOCKIO_READ_LATENCY)
         .histogram("write_latency", &BLOCKIO_WRITE_LATENCY)
         .histogram("flush_latency", &BLOCKIO_FLUSH_LATENCY)

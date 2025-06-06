@@ -26,7 +26,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(BpfProgStats { run_time: &BPF_RUN_TIME, run_count: &BPF_RUN_COUNT }, ModSkelBuilder::default)
         .histogram("srtt", &TCP_SRTT)
         .histogram("jitter", &TCP_JITTER)
         .build()?;

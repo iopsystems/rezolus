@@ -2,7 +2,27 @@ use metriken::*;
 
 use crate::agent::*;
 
-// per-CPU metrics
+/*
+ * bpf prog stats
+ */
+
+#[metric(
+    name = "rezolus_bpf_run_count",
+    description = "The number of times Rezolus BPF programs have been run",
+    metadata = { sampler = "cpu_tlb_flush"}
+)]
+pub static BPF_RUN_COUNT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "rezolus_bpf_run_time",
+    description = "The amount of time Rezolus BPF programs have been executing",
+    metadata = { unit = "nanoseconds", sampler = "cpu_tlb_flush"}
+)]
+pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
+
+/*
+ * per-cpu
+ */
 
 #[metric(
     name = "cpu_tlb_flush",
@@ -39,7 +59,9 @@ pub static TLB_FLUSH_LOCAL_MM_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CP
 )]
 pub static TLB_FLUSH_REMOTE_SEND_IPI: CounterGroup = CounterGroup::new(MAX_CPUS);
 
-// per-cgroup metrics
+/*
+ * per-cgroup
+ */
 
 #[metric(
     name = "cgroup_cpu_tlb_flush",

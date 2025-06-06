@@ -116,7 +116,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SYSCALL_EVENT,
     ];
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(BpfProgStats { run_time: &BPF_RUN_TIME, run_count: &BPF_RUN_COUNT }, ModSkelBuilder::default)
         .counters("counters", counters)
         .map("syscall_lut", syscall_lut())
         .packed_counters("cgroup_syscall_other", &CGROUP_SYSCALL_OTHER)

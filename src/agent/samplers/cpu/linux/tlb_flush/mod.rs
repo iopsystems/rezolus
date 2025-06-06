@@ -90,7 +90,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &TLB_FLUSH_REMOTE_SEND_IPI,
     ];
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(BpfProgStats { run_time: &BPF_RUN_TIME, run_count: &BPF_RUN_COUNT }, ModSkelBuilder::default)
         .cpu_counters("events", events)
         .packed_counters("cgroup_task_switch", &CGROUP_TLB_FLUSH_TASK_SWITCH)
         .packed_counters(
