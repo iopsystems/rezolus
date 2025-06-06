@@ -27,9 +27,15 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .histogram("latency", &TCP_PACKET_LATENCY)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .histogram("latency", &TCP_PACKET_LATENCY)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }

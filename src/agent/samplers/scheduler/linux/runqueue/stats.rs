@@ -1,6 +1,28 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::*;
 
+/*
+ * bpf prog stats
+ */
+
+#[metric(
+    name = "rezolus_bpf_run_count",
+    description = "The number of times Rezolus BPF programs have been run",
+    metadata = { sampler = "scheduler_runqueue"}
+)]
+pub static BPF_RUN_COUNT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "rezolus_bpf_run_time",
+    description = "The amount of time Rezolus BPF programs have been executing",
+    metadata = { unit = "nanoseconds", sampler = "scheduler_runqueue"}
+)]
+pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
+
+/*
+ * system-wide
+ */
+
 #[metric(
     name = "scheduler_runqueue_latency",
     description = "Distribution of the amount of time tasks were waiting in the runqueue",

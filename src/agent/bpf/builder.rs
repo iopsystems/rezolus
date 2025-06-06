@@ -14,6 +14,11 @@ use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub struct BpfProgStats {
+    pub run_time: &'static LazyCounter,
+    pub run_count: &'static LazyCounter,
+}
+
 pub struct PerfEvent {
     inner: Event,
 }
@@ -100,6 +105,7 @@ impl PerfEvent {
 
 pub struct Builder<T: 'static + SkelBuilder<'static>> {
     skel: fn() -> T,
+    prog_stats: BpfProgStats,
     counters: Vec<(&'static str, Vec<&'static LazyCounter>)>,
     histograms: Vec<(&'static str, &'static RwLockHistogram)>,
     maps: Vec<(&'static str, Vec<u64>)>,
@@ -115,9 +121,10 @@ where
     <<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output: OpenSkelExt,
     <<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output: SkelExt,
 {
-    pub fn new(skel: fn() -> T) -> Self {
+    pub fn new(prog_stats: BpfProgStats, skel: fn() -> T) -> Self {
         Self {
             skel,
+            prog_stats,
             counters: Vec::new(),
             histograms: Vec::new(),
             maps: Vec::new(),
@@ -382,6 +389,32 @@ where
 
                 for v in &mut packed_counters {
                     v.refresh();
+                }
+
+                let mut run_time: u64 = 0;
+                let mut run_count: u64 = 0;
+
+                for prog in skel.object().progs() {
+                    let mut info = libbpf_sys::bpf_prog_info::default();
+                    let mut len = std::mem::size_of::<libbpf_sys::bpf_prog_info>() as u32;
+
+                    let fd = prog.as_fd().as_raw_fd();
+
+                    let result =
+                        unsafe { libbpf_sys::bpf_prog_get_info_by_fd(fd, &mut info, &mut len) };
+
+                    if result == 0 {
+                        run_time = run_time.wrapping_add(info.run_time_ns);
+                        run_count = run_count.wrapping_add(info.run_cnt);
+                    }
+                }
+
+                if run_time > 0 {
+                    self.prog_stats.run_time.set(run_time);
+                }
+
+                if run_count > 0 {
+                    self.prog_stats.run_count.set(run_count);
                 }
 
                 // notify that we have finished running

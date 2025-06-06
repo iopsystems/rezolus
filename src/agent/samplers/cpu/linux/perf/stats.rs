@@ -2,7 +2,27 @@ use metriken::*;
 
 use crate::agent::*;
 
-// per-CPU metrics
+/*
+ * bpf prog stats
+ */
+
+#[metric(
+    name = "rezolus_bpf_run_count",
+    description = "The number of times Rezolus BPF programs have been run",
+    metadata = { sampler = "cpu_perf"}
+)]
+pub static BPF_RUN_COUNT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "rezolus_bpf_run_time",
+    description = "The amount of time Rezolus BPF programs have been executing",
+    metadata = { unit = "nanoseconds", sampler = "cpu_perf"}
+)]
+pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
+
+/*
+ * system-wide
+ */
 
 #[metric(
     name = "cpu_cycles",
@@ -18,7 +38,9 @@ pub static CPU_CYCLES: CounterGroup = CounterGroup::new(MAX_CPUS);
 )]
 pub static CPU_INSTRUCTIONS: CounterGroup = CounterGroup::new(MAX_CPUS);
 
-// per-cgroup metrics
+/*
+ * per-cgroup
+ */
 
 #[metric(
     name = "cgroup_cpu_cycles",

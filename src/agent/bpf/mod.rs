@@ -4,7 +4,7 @@ mod histogram;
 mod sync_primitive;
 
 pub use builder::Builder as BpfBuilder;
-pub use builder::PerfEvent;
+pub use builder::{BpfProgStats, PerfEvent};
 
 use crate::agent::samplers::Sampler;
 use crate::*;
