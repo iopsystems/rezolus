@@ -116,27 +116,33 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SYSCALL_EVENT,
     ];
 
-    let bpf = BpfBuilder::new(BpfProgStats { run_time: &BPF_RUN_TIME, run_count: &BPF_RUN_COUNT }, ModSkelBuilder::default)
-        .counters("counters", counters)
-        .map("syscall_lut", syscall_lut())
-        .packed_counters("cgroup_syscall_other", &CGROUP_SYSCALL_OTHER)
-        .packed_counters("cgroup_syscall_read", &CGROUP_SYSCALL_READ)
-        .packed_counters("cgroup_syscall_write", &CGROUP_SYSCALL_WRITE)
-        .packed_counters("cgroup_syscall_poll", &CGROUP_SYSCALL_POLL)
-        .packed_counters("cgroup_syscall_lock", &CGROUP_SYSCALL_LOCK)
-        .packed_counters("cgroup_syscall_time", &CGROUP_SYSCALL_TIME)
-        .packed_counters("cgroup_syscall_sleep", &CGROUP_SYSCALL_SLEEP)
-        .packed_counters("cgroup_syscall_socket", &CGROUP_SYSCALL_SOCKET)
-        .packed_counters("cgroup_syscall_yield", &CGROUP_SYSCALL_YIELD)
-        .packed_counters("cgroup_syscall_filesystem", &CGROUP_SYSCALL_FILESYSTEM)
-        .packed_counters("cgroup_syscall_memory", &CGROUP_SYSCALL_MEMORY)
-        .packed_counters("cgroup_syscall_process", &CGROUP_SYSCALL_PROCESS)
-        .packed_counters("cgroup_syscall_query", &CGROUP_SYSCALL_QUERY)
-        .packed_counters("cgroup_syscall_ipc", &CGROUP_SYSCALL_IPC)
-        .packed_counters("cgroup_syscall_timer", &CGROUP_SYSCALL_TIMER)
-        .packed_counters("cgroup_syscall_event", &CGROUP_SYSCALL_EVENT)
-        .ringbuf_handler("cgroup_info", handle_event)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .counters("counters", counters)
+    .map("syscall_lut", syscall_lut())
+    .packed_counters("cgroup_syscall_other", &CGROUP_SYSCALL_OTHER)
+    .packed_counters("cgroup_syscall_read", &CGROUP_SYSCALL_READ)
+    .packed_counters("cgroup_syscall_write", &CGROUP_SYSCALL_WRITE)
+    .packed_counters("cgroup_syscall_poll", &CGROUP_SYSCALL_POLL)
+    .packed_counters("cgroup_syscall_lock", &CGROUP_SYSCALL_LOCK)
+    .packed_counters("cgroup_syscall_time", &CGROUP_SYSCALL_TIME)
+    .packed_counters("cgroup_syscall_sleep", &CGROUP_SYSCALL_SLEEP)
+    .packed_counters("cgroup_syscall_socket", &CGROUP_SYSCALL_SOCKET)
+    .packed_counters("cgroup_syscall_yield", &CGROUP_SYSCALL_YIELD)
+    .packed_counters("cgroup_syscall_filesystem", &CGROUP_SYSCALL_FILESYSTEM)
+    .packed_counters("cgroup_syscall_memory", &CGROUP_SYSCALL_MEMORY)
+    .packed_counters("cgroup_syscall_process", &CGROUP_SYSCALL_PROCESS)
+    .packed_counters("cgroup_syscall_query", &CGROUP_SYSCALL_QUERY)
+    .packed_counters("cgroup_syscall_ipc", &CGROUP_SYSCALL_IPC)
+    .packed_counters("cgroup_syscall_timer", &CGROUP_SYSCALL_TIMER)
+    .packed_counters("cgroup_syscall_event", &CGROUP_SYSCALL_EVENT)
+    .ringbuf_handler("cgroup_info", handle_event)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }

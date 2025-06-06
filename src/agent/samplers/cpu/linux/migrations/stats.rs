@@ -6,7 +6,7 @@ use crate::agent::*;
  * bpf prog stats
  */
 
- #[metric(
+#[metric(
     name = "rezolus_bpf_run_count",
     description = "The number of times Rezolus BPF programs have been run",
     metadata = { sampler = "cpu_migrations"}

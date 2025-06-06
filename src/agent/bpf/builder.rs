@@ -400,9 +400,8 @@ where
 
                     let fd = prog.as_fd().as_raw_fd();
 
-                    let result = unsafe {
-                        libbpf_sys::bpf_prog_get_info_by_fd(fd, &mut info, &mut len)
-                    };
+                    let result =
+                        unsafe { libbpf_sys::bpf_prog_get_info_by_fd(fd, &mut info, &mut len) };
 
                     if result == 0 {
                         run_time = run_time.wrapping_add(info.run_time_ns);

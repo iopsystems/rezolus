@@ -32,12 +32,18 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     let counters = vec![&SCHEDULER_IVCSW];
 
-    let bpf = BpfBuilder::new(BpfProgStats { run_time: &BPF_RUN_TIME, run_count: &BPF_RUN_COUNT }, ModSkelBuilder::default)
-        .counters("counters", counters)
-        .histogram("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
-        .histogram("running", &SCHEDULER_RUNNING)
-        .histogram("offcpu", &SCHEDULER_OFFCPU)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .counters("counters", counters)
+    .histogram("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
+    .histogram("running", &SCHEDULER_RUNNING)
+    .histogram("offcpu", &SCHEDULER_OFFCPU)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }
