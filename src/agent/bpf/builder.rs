@@ -100,6 +100,7 @@ impl PerfEvent {
 
 pub struct Builder<T: 'static + SkelBuilder<'static>> {
     skel: fn() -> T,
+    name: &'static str,
     counters: Vec<(&'static str, Vec<&'static LazyCounter>)>,
     histograms: Vec<(&'static str, &'static RwLockHistogram)>,
     maps: Vec<(&'static str, Vec<u64>)>,
@@ -115,9 +116,10 @@ where
     <<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output: OpenSkelExt,
     <<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output: SkelExt,
 {
-    pub fn new(skel: fn() -> T) -> Self {
+    pub fn new(name: &'static str, skel: fn() -> T) -> Self {
         Self {
             skel,
+            name,
             counters: Vec::new(),
             histograms: Vec::new(),
             maps: Vec::new(),
@@ -180,7 +182,8 @@ where
                 .collect();
 
             debug!(
-                "initializing perf counters for: {} events",
+                "{} initializing perf counters for: {} events",
+                self.name,
                 self.perf_events.len()
             );
 
@@ -226,12 +229,13 @@ where
                 let pt_pending = Arc::new(AtomicUsize::new(perf_counters.inner.len()));
 
                 debug!(
-                    "launching {} threads to read perf counters",
+                    "{} launching {} threads to read perf counters",
+                    self.name,
                     pt_pending.load(Ordering::SeqCst)
                 );
 
                 for (cpu, mut counters) in perf_counters.inner.into_iter() {
-                    trace!("launching perf thread for cpu {}", cpu);
+                    trace!("{} launching perf thread for cpu {}", self.name, cpu);
 
                     let psync = SyncPrimitive::new();
                     let psync2 = psync.clone();
@@ -269,18 +273,19 @@ where
                         .expect("failed to send perf thread sync primitive");
                 }
 
-                debug!("waiting for perf threads to launch");
+                debug!("{} waiting for perf threads to launch", self.name);
 
                 while pt_pending.load(Ordering::Relaxed) > 0 {
                     std::thread::sleep(Duration::from_millis(50));
                 }
 
-                debug!("checking for unpinned perf threads");
+                debug!("{} checking for unpinned perf threads", self.name);
 
                 let mut unpinned: Vec<_> = unpinned_rx.try_iter().collect();
 
                 debug!(
-                    "there are {} perf threads which could not be pinned",
+                    "{} there are {} perf threads which could not be pinned",
+                    self.name,
                     unpinned.len()
                 );
 
@@ -308,7 +313,7 @@ where
                         .expect("failed to send perf thread sync primitive");
                 }
 
-                debug!("all perf threads launched");
+                debug!("{} all perf threads launched", self.name);
             }
 
             let ringbuffer: Option<RingBuffer> = if self.ringbuf_handler.is_empty() {
@@ -389,7 +394,7 @@ where
             }
         });
 
-        debug!("waiting for sampler thread to finish initialization");
+        debug!("{} waiting for sampler thread to finish initialization", self.name);
 
         // wait for the sampler thread to either error out or finish initializing
         loop {
@@ -407,16 +412,17 @@ where
             }
         }
 
-        debug!("gathering perf thread sync primitives and join handles");
+        debug!("{} gathering perf thread sync primitives and join handles", self.name);
 
         // gather perf thread sync primitives and join handles
         let perf_sync = perf_sync_rx.try_iter().collect();
         let perf_threads = perf_threads_rx.try_iter().collect();
 
-        debug!("completed BPF sampler initialization");
+        debug!("{} completed BPF sampler initialization", self.name);
 
         Ok(AsyncBpf {
             thread,
+            name,
             sync: sync2,
             perf_threads,
             perf_sync,

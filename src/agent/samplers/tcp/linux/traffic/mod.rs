@@ -38,7 +38,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &TCP_TX_PACKETS,
     ];
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(NAME, ModSkelBuilder::default)
         .counters("counters", counters)
         .histogram("rx_size", &TCP_RX_SIZE)
         .histogram("tx_size", &TCP_TX_SIZE)

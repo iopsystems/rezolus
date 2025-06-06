@@ -44,6 +44,7 @@ use histogram::Histogram;
 use sync_primitive::SyncPrimitive;
 
 pub struct AsyncBpf {
+    name: &'static str,
     thread: std::thread::JoinHandle<Result<(), libbpf_rs::Error>>,
     sync: SyncPrimitive,
     perf_threads: Vec<std::thread::JoinHandle<()>>,
@@ -53,9 +54,11 @@ pub struct AsyncBpf {
 #[async_trait]
 impl Sampler for AsyncBpf {
     async fn refresh(&self) {
+        let start = std::time::Instant::now();
+
         // check that the thread has not exited
         if self.thread.is_finished() {
-            panic!("thread exited early");
+            panic!("{} bpf thread exited early", self.name);
         }
 
         // notify the thread to start
@@ -67,7 +70,7 @@ impl Sampler for AsyncBpf {
         // check that no perf threads have exited
         for thread in self.perf_threads.iter() {
             if thread.is_finished() {
-                panic!("perf thread exited early");
+                panic!("{} perf thread exited early", self.name);
             }
         }
 
@@ -82,5 +85,8 @@ impl Sampler for AsyncBpf {
             .collect();
 
         futures::future::join_all(perf_futures.into_iter()).await;
+
+        let latency = start.elapsed().as_micros();
+        debug!("{} took {}us to sample", self.name, latency);
     }
 }

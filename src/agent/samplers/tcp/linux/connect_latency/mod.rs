@@ -28,7 +28,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(NAME, ModSkelBuilder::default)
         .histogram("latency", &TCP_CONNECT_LATENCY)
         .build()?;
 

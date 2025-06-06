@@ -81,7 +81,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     set_name(1, "/".to_string());
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
+    let bpf = BpfBuilder::new(NAME, ModSkelBuilder::default)
         .packed_counters("cpu_migrations_from", &CPU_MIGRATIONS_FROM)
         .packed_counters("cpu_migrations_to", &CPU_MIGRATIONS_TO)
         .packed_counters("cgroup_cpu_migrations", &CGROUP_CPU_MIGRATIONS)
