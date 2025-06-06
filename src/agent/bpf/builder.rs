@@ -394,7 +394,10 @@ where
             }
         });
 
-        debug!("{} waiting for sampler thread to finish initialization", self.name);
+        debug!(
+            "{} waiting for sampler thread to finish initialization",
+            self.name
+        );
 
         // wait for the sampler thread to either error out or finish initializing
         loop {
@@ -412,7 +415,10 @@ where
             }
         }
 
-        debug!("{} gathering perf thread sync primitives and join handles", self.name);
+        debug!(
+            "{} gathering perf thread sync primitives and join handles",
+            self.name
+        );
 
         // gather perf thread sync primitives and join handles
         let perf_sync = perf_sync_rx.try_iter().collect();
