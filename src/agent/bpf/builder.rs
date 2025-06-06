@@ -422,7 +422,7 @@ where
 
         Ok(AsyncBpf {
             thread,
-            name,
+            name: self.name,
             sync: sync2,
             perf_threads,
             perf_sync,
