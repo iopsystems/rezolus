@@ -58,8 +58,6 @@ impl Sampler for AsyncBpf {
     }
 
     async fn refresh(&self) {
-        let start = std::time::Instant::now();
-
         // check that the thread has not exited
         if self.thread.is_finished() {
             panic!("{} bpf thread exited early", self.name);
@@ -89,8 +87,5 @@ impl Sampler for AsyncBpf {
             .collect();
 
         futures::future::join_all(perf_futures.into_iter()).await;
-
-        let latency = start.elapsed().as_micros();
-        debug!("{} took {}us to sample", self.name, latency);
     }
 }
