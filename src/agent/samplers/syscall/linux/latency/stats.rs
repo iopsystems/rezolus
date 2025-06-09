@@ -5,6 +5,28 @@ use metriken::*;
 // use 2^64-1 as the max value
 static LATENCY_HISTOGRAM_MAX: u8 = 64;
 
+/*
+ * bpf prog stats
+ */
+
+#[metric(
+    name = "rezolus_bpf_run_count",
+    description = "The number of times Rezolus BPF programs have been run",
+    metadata = { sampler = "syscall_latency"}
+)]
+pub static BPF_RUN_COUNT: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "rezolus_bpf_run_time",
+    description = "The amount of time Rezolus BPF programs have been executing",
+    metadata = { unit = "nanoseconds", sampler = "syscall_latency"}
+)]
+pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
+
+/*
+ * system-wide
+ */
+
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
