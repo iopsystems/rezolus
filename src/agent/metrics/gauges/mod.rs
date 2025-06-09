@@ -79,7 +79,9 @@ impl GaugeGroup {
 
     pub fn clear_metadata(&self, idx: usize) {
         if let Some(metadata) = self.metadata.get() {
-            let _ = metadata.write().get(idx).cloned();
+            if let Some(m) = metadata.write().get_mut(idx) {
+                m.clear();
+            }
         }
     }
 

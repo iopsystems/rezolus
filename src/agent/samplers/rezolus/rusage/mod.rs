@@ -19,6 +19,10 @@ pub struct Rusage {}
 
 #[async_trait]
 impl Sampler for Rusage {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
     async fn refresh(&self) {
         let mut rusage = libc::rusage {
             ru_utime: libc::timeval {

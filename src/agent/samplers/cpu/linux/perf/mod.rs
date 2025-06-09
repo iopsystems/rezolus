@@ -86,13 +86,20 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     set_name(1, "/".to_string());
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .perf_event("cycles", PerfEvent::cpu_cycles(), &CPU_CYCLES)
-        .perf_event("instructions", PerfEvent::instructions(), &CPU_INSTRUCTIONS)
-        .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES)
-        .packed_counters("cgroup_instructions", &CGROUP_CPU_INSTRUCTIONS)
-        .ringbuf_handler("cgroup_info", handle_event)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        NAME,
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .perf_event("cycles", PerfEvent::cpu_cycles(), &CPU_CYCLES)
+    .perf_event("instructions", PerfEvent::instructions(), &CPU_INSTRUCTIONS)
+    .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES)
+    .packed_counters("cgroup_instructions", &CGROUP_CPU_INSTRUCTIONS)
+    .ringbuf_handler("cgroup_info", handle_event)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }

@@ -87,7 +87,7 @@ pub fn command() -> Command {
             clap::Arg::new("DURATION")
                 .long("duration")
                 .short('d')
-                .help("Sets the collection interval")
+                .help("Sets the collection duration")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(humantime::Duration)),
         )

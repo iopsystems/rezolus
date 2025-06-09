@@ -70,8 +70,13 @@ impl General {
             .unwrap()
     }
 
-    pub fn url(&self) -> Url {
+    pub fn mpk_url(&self) -> Url {
         let target = self.target();
         Url::try_from(format!("http://{target}/metrics/binary").as_str()).unwrap()
+    }
+
+    pub fn json_url(&self) -> Url {
+        let target = self.target();
+        Url::try_from(format!("http://{target}/metrics/json").as_str()).unwrap()
     }
 }

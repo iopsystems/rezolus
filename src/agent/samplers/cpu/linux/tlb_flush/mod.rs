@@ -90,21 +90,28 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &TLB_FLUSH_REMOTE_SEND_IPI,
     ];
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .cpu_counters("events", events)
-        .packed_counters("cgroup_task_switch", &CGROUP_TLB_FLUSH_TASK_SWITCH)
-        .packed_counters(
-            "cgroup_remote_shootdown",
-            &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
-        )
-        .packed_counters("cgroup_local_shootdown", &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN)
-        .packed_counters(
-            "cgroup_local_mm_shootdown",
-            &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
-        )
-        .packed_counters("cgroup_remote_send_ipi", &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI)
-        .ringbuf_handler("cgroup_info", handle_event)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        NAME,
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .cpu_counters("events", events)
+    .packed_counters("cgroup_task_switch", &CGROUP_TLB_FLUSH_TASK_SWITCH)
+    .packed_counters(
+        "cgroup_remote_shootdown",
+        &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
+    )
+    .packed_counters("cgroup_local_shootdown", &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN)
+    .packed_counters(
+        "cgroup_local_mm_shootdown",
+        &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
+    )
+    .packed_counters("cgroup_remote_send_ipi", &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI)
+    .ringbuf_handler("cgroup_info", handle_event)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }

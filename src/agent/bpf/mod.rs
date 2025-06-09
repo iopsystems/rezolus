@@ -4,7 +4,7 @@ mod histogram;
 mod sync_primitive;
 
 pub use builder::Builder as BpfBuilder;
-pub use builder::PerfEvent;
+pub use builder::{BpfProgStats, PerfEvent};
 
 use crate::agent::samplers::Sampler;
 use crate::*;
@@ -39,6 +39,7 @@ use histogram::Histogram;
 use sync_primitive::SyncPrimitive;
 
 pub struct AsyncBpf {
+    name: &'static str,
     thread: std::thread::JoinHandle<Result<(), libbpf_rs::Error>>,
     sync: SyncPrimitive,
     perf_threads: Vec<std::thread::JoinHandle<()>>,
@@ -47,10 +48,14 @@ pub struct AsyncBpf {
 
 #[async_trait]
 impl Sampler for AsyncBpf {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
     async fn refresh(&self) {
         // check that the thread has not exited
         if self.thread.is_finished() {
-            panic!("thread exited early");
+            panic!("{} bpf thread exited early", self.name);
         }
 
         // notify the thread to start
@@ -62,7 +67,7 @@ impl Sampler for AsyncBpf {
         // check that no perf threads have exited
         for thread in self.perf_threads.iter() {
             if thread.is_finished() {
-                panic!("perf thread exited early");
+                panic!("{} perf thread exited early", self.name);
             }
         }
 

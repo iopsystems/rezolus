@@ -29,6 +29,10 @@ pub struct Cores {
 
 #[async_trait]
 impl Sampler for Cores {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
     async fn refresh(&self) {
         let mut file = self.file.lock().await;
 

@@ -3,6 +3,7 @@ use crate::agent::*;
 use axum::extract::State;
 use axum::routing::get;
 use axum::Router;
+use metriken_exposition::Snapshot;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
@@ -17,7 +18,11 @@ struct AppState {
 
 impl AppState {
     async fn refresh(&self) {
-        let s: Vec<_> = self.samplers.iter().map(|s| s.refresh()).collect();
+        let s: Vec<_> = self
+            .samplers
+            .iter()
+            .map(|s| s.refresh_with_logging())
+            .collect();
 
         let start = Instant::now();
         futures::future::join_all(s).await;
@@ -44,6 +49,7 @@ fn app(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/metrics/binary", get(msgpack))
+        .route("/metrics/json", get(json))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
@@ -52,15 +58,23 @@ fn app(state: Arc<AppState>) -> Router {
         )
 }
 
-async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
+async fn take_snapshot(state: Arc<AppState>) -> Snapshot {
     let timestamp = SystemTime::now();
     let start = Instant::now();
 
     state.refresh().await;
 
-    let snapshot = snapshot::create(timestamp, start.elapsed());
+    snapshot::create(timestamp, start.elapsed())
+}
 
+async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
+    let snapshot = take_snapshot(state).await;
     rmp_serde::encode::to_vec(&snapshot).expect("failed to serialize snapshot")
+}
+
+async fn json(State(state): State<Arc<AppState>>) -> String {
+    let snapshot = take_snapshot(state).await;
+    serde_json::to_string(&snapshot).expect("failed to serialize snapshot")
 }
 
 async fn root() -> String {

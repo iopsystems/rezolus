@@ -81,12 +81,19 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     set_name(1, "/".to_string());
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .packed_counters("cpu_migrations_from", &CPU_MIGRATIONS_FROM)
-        .packed_counters("cpu_migrations_to", &CPU_MIGRATIONS_TO)
-        .packed_counters("cgroup_cpu_migrations", &CGROUP_CPU_MIGRATIONS)
-        .ringbuf_handler("cgroup_info", handle_event)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        NAME,
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .packed_counters("cpu_migrations_from", &CPU_MIGRATIONS_FROM)
+    .packed_counters("cpu_migrations_to", &CPU_MIGRATIONS_TO)
+    .packed_counters("cgroup_cpu_migrations", &CGROUP_CPU_MIGRATIONS)
+    .ringbuf_handler("cgroup_info", handle_event)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }

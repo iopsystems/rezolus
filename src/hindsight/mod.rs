@@ -249,8 +249,8 @@ pub fn run(config: Config) {
                         let mut i = idx + offset;
 
                         // handle wrap-around in the ring-buffer
-                        if i >= snapshot_len {
-                            i -= snapshot_len;
+                        if i >= snapshot_count {
+                            i -= snapshot_count;
                         }
 
                         // seek to the start of the snapshot slot

@@ -32,6 +32,10 @@ struct Meminfo {
 
 #[async_trait]
 impl Sampler for Meminfo {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
     async fn refresh(&self) {
         let mut inner = self.inner.lock().await;
 

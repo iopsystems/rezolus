@@ -45,6 +45,10 @@ struct Frequency {
 
 #[async_trait]
 impl Sampler for Frequency {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
     async fn refresh(&self) {
         let mut inner = self.inner.lock().await;
 
