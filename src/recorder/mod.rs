@@ -1,13 +1,13 @@
-use std::collections::VecDeque;
-use notify::EventKind;
-use notify::Watcher;
-use notify::RecursiveMode;
-use notify::Event;
-use std::sync::mpsc::Receiver;
-use notify::RecommendedWatcher;
-use std::path::Path;
-use memmap2::Mmap;
 use super::*;
+use memmap2::Mmap;
+use notify::Event;
+use notify::EventKind;
+use notify::RecommendedWatcher;
+use notify::RecursiveMode;
+use notify::Watcher;
+use std::collections::VecDeque;
+use std::path::Path;
+use std::sync::mpsc::Receiver;
 
 use clap::ArgMatches;
 use histogram::Histogram;
@@ -244,10 +244,7 @@ pub fn run(config: Config) {
                 }
             }
         } else {
-            eprintln!(
-                "mmap argument was not a directory or file: {:?}\n",
-                path
-            );
+            eprintln!("mmap argument was not a directory or file: {:?}\n", path);
             std::process::exit(1);
         }
     } else {
@@ -481,7 +478,8 @@ impl MemmapFile {
             return Err(format!(
                 "mmap region not aligned or width doesn't match. Expected 1920, got {}",
                 data.len()
-            ).into());
+            )
+            .into());
         }
 
         Ok(Self {
@@ -507,15 +505,13 @@ impl MemmapWatcher {
         let (tx, rx) = std::sync::mpsc::channel();
 
         let watcher = RecommendedWatcher::new(
-            move |result: Result<Event, notify::Error>| {
-                match result {
-                    Ok(event) => {
-                        if let Err(e) = tx.send(event) {
-                            error!("Error sending event: {}", e);
-                        }
+            move |result: Result<Event, notify::Error>| match result {
+                Ok(event) => {
+                    if let Err(e) = tx.send(event) {
+                        error!("Error sending event: {}", e);
                     }
-                    Err(e) => error!("Watch error: {}", e),
                 }
+                Err(e) => error!("Watch error: {}", e),
             },
             Default::default(),
         )?;
@@ -532,7 +528,9 @@ impl MemmapWatcher {
         directory_watcher.process_existing_files()?;
 
         // Start watching the directory
-        directory_watcher._watcher.watch(&watch_path, RecursiveMode::NonRecursive)?;
+        directory_watcher
+            ._watcher
+            .watch(&watch_path, RecursiveMode::NonRecursive)?;
 
         Ok(directory_watcher)
     }
