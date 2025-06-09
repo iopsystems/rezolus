@@ -35,6 +35,10 @@ pub struct Nvidia {
 
 #[async_trait]
 impl Sampler for Nvidia {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
     async fn refresh(&self) {
         let inner = self.inner.clone();
 

@@ -53,6 +53,10 @@ pub struct AsyncBpf {
 
 #[async_trait]
 impl Sampler for AsyncBpf {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
     async fn refresh(&self) {
         let start = std::time::Instant::now();
 

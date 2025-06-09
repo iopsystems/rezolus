@@ -18,7 +18,11 @@ struct AppState {
 
 impl AppState {
     async fn refresh(&self) {
-        let s: Vec<_> = self.samplers.iter().map(|s| s.refresh()).collect();
+        let s: Vec<_> = self
+            .samplers
+            .iter()
+            .map(|s| s.refresh_with_logging())
+            .collect();
 
         let start = Instant::now();
         futures::future::join_all(s).await;
