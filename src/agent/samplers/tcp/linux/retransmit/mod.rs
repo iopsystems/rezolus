@@ -28,6 +28,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let counters = vec![&TCP_RETRANSMIT];
 
     let bpf = BpfBuilder::new(
+        NAME,
         BpfProgStats {
             run_time: &BPF_RUN_TIME,
             run_count: &BPF_RUN_COUNT,

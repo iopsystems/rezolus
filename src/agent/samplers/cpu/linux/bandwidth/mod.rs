@@ -115,6 +115,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     set_cgroup_name(1, "/".to_string());
 
     let bpf = BpfBuilder::new(
+        NAME,
         BpfProgStats {
             run_time: &BPF_RUN_TIME,
             run_count: &BPF_RUN_COUNT,
