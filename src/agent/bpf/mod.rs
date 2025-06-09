@@ -54,7 +54,7 @@ pub struct AsyncBpf {
 #[async_trait]
 impl Sampler for AsyncBpf {
     fn name(&self) -> &'static str {
-        NAME
+        self.name
     }
 
     async fn refresh(&self) {
