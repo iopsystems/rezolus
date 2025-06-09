@@ -14,6 +14,7 @@
 - Prometheus exposition moved out into a separate service. (#470)
 
 ### Added
+
 - Recorder extended with additional options. (#387 #389)
 - Hindsight recorder for always-on ringbuffer recording. (#409 #436 )
 - Per-cgroup syscalls. (#419)
@@ -25,6 +26,10 @@
 - CPU CFS throttling metrics for cgroups. (#488)
 - CPU L3 Cache Hit/Access (AMD Zen only). (#487)
 - CPU Migrations. (#491)
+- Rezolus Viewer for opening parquet files. (#530)
+- JSON endpoint for Rezolus Agent. (#532)
+- BPF program stats. (#533)
+- Per-sampler latency logging. (#535)
 
 ### Fixed
 - Set open file limit for agent sufficiently high for large systems. (#511)
