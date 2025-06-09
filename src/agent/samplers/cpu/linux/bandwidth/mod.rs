@@ -114,21 +114,27 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     set_cgroup_name(1, "/".to_string());
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .packed_counters("throttled_time", &CGROUP_CPU_THROTTLED_TIME)
-        .packed_counters("throttled_count", &CGROUP_CPU_THROTTLED)
-        .packed_counters("bandwidth_periods", &CGROUP_CPU_BANDWIDTH_PERIODS)
-        .packed_counters(
-            "bandwidth_throttled_periods",
-            &CGROUP_CPU_BANDWIDTH_THROTTLED_PERIODS,
-        )
-        .packed_counters(
-            "bandwidth_throttled_time",
-            &CGROUP_CPU_BANDWIDTH_THROTTLED_TIME,
-        )
-        .ringbuf_handler("cgroup_info", handle_cgroup_info)
-        .ringbuf_handler("bandwidth_info", handle_bandwidth_info)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .packed_counters("throttled_time", &CGROUP_CPU_THROTTLED_TIME)
+    .packed_counters("throttled_count", &CGROUP_CPU_THROTTLED)
+    .packed_counters("bandwidth_periods", &CGROUP_CPU_BANDWIDTH_PERIODS)
+    .packed_counters(
+        "bandwidth_throttled_periods",
+        &CGROUP_CPU_BANDWIDTH_THROTTLED_PERIODS,
+    )
+    .packed_counters(
+        "bandwidth_throttled_time",
+        &CGROUP_CPU_BANDWIDTH_THROTTLED_TIME,
+    )
+    .ringbuf_handler("cgroup_info", handle_cgroup_info)
+    .ringbuf_handler("bandwidth_info", handle_bandwidth_info)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }

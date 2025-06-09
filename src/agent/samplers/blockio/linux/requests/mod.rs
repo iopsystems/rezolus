@@ -38,13 +38,19 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &BLOCKIO_DISCARD_BYTES,
     ];
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .counters("counters", counters)
-        .histogram("read_size", &BLOCKIO_READ_SIZE)
-        .histogram("write_size", &BLOCKIO_WRITE_SIZE)
-        .histogram("flush_size", &BLOCKIO_FLUSH_SIZE)
-        .histogram("discard_size", &BLOCKIO_DISCARD_SIZE)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .counters("counters", counters)
+    .histogram("read_size", &BLOCKIO_READ_SIZE)
+    .histogram("write_size", &BLOCKIO_WRITE_SIZE)
+    .histogram("flush_size", &BLOCKIO_FLUSH_SIZE)
+    .histogram("discard_size", &BLOCKIO_DISCARD_SIZE)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }

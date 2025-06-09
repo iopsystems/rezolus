@@ -115,14 +115,20 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SOFTIRQ_TIME_RCU,
     ];
 
-    let bpf = BpfBuilder::new(ModSkelBuilder::default)
-        .cpu_counters("cpu_usage", cpu_usage)
-        .cpu_counters("softirq", softirq)
-        .cpu_counters("softirq_time", softirq_time)
-        .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
-        .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
-        .ringbuf_handler("cgroup_info", handle_event)
-        .build()?;
+    let bpf = BpfBuilder::new(
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .cpu_counters("cpu_usage", cpu_usage)
+    .cpu_counters("softirq", softirq)
+    .cpu_counters("softirq_time", softirq_time)
+    .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
+    .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
+    .ringbuf_handler("cgroup_info", handle_event)
+    .build()?;
 
     Ok(Some(Box::new(bpf)))
 }
