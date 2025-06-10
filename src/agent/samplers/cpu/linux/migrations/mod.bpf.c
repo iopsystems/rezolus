@@ -16,6 +16,9 @@
 #define MAX_PID 4194304
 #define RINGBUF_CAPACITY 262144
 
+#define FROM 0
+#define TO 1
+
 // dummy instance for skeleton to generate definition
 struct cgroup_info _cgroup_info = {};
 
@@ -36,23 +39,14 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_serial_numbers SEC(".maps");
 
-// per-CPU migration counts (migrations from this CPU)
+// per-CPU migration counts
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CPUS);
-} cpu_migrations_from SEC(".maps");
-
-// per-CPU migration counts (migrations to this CPU)
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(map_flags, BPF_F_MMAPABLE);
-    __type(key, u32);
-    __type(value, u64);
-    __uint(max_entries, MAX_CPUS);
-} cpu_migrations_to SEC(".maps");
+    __uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+} migrations SEC(".maps");
 
 // per-cgroup migration counts
 struct {
@@ -97,9 +91,12 @@ int handle__sched_switch(u64 *ctx)
 
         // check if this is a migration
         if (old_cpu != cpu) {
+            u32 from_idx = old_cpu * COUNTER_GROUP_WIDTH + FROM;
+            u32 to_idx = cpu * COUNTER_GROUP_WIDTH + TO;
+
             // increment counters
-            array_incr(&cpu_migrations_from, old_cpu);
-            array_incr(&cpu_migrations_to, cpu);
+            array_incr(&migrations, from_idx);
+            array_incr(&migrations, to_idx);
 
             // handle per-cgroup accounting
             if (bpf_core_field_exists(next->sched_task_group)) {

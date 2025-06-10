@@ -81,6 +81,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     set_name(1, "/".to_string());
 
+    let cpu_counters = vec![
+        &CPU_MIGRATIONS_FROM,
+        &CPU_MIGRATIONS_TO,
+    ];
+
     let bpf = BpfBuilder::new(
         NAME,
         BpfProgStats {
@@ -89,8 +94,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .packed_counters("cpu_migrations_from", &CPU_MIGRATIONS_FROM)
-    .packed_counters("cpu_migrations_to", &CPU_MIGRATIONS_TO)
+    .cpu_counters("migrations", migrations)
     .packed_counters("cgroup_cpu_migrations", &CGROUP_CPU_MIGRATIONS)
     .ringbuf_handler("cgroup_info", handle_event)
     .build()?;
@@ -101,8 +105,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map {
         match name {
-            "cpu_migrations_from" => &self.maps.cpu_migrations_from,
-            "cpu_migrations_to" => &self.maps.cpu_migrations_to,
+            "migrations" => &self.maps.migrations,
             "cgroup_cpu_migrations" => &self.maps.cgroup_cpu_migrations,
             "cgroup_info" => &self.maps.cgroup_info,
             _ => unimplemented!(),
