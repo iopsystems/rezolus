@@ -75,7 +75,9 @@ impl TryFrom<ArgMatches> for Config {
         Ok(Config {
             input: args.get_one::<PathBuf>("INPUT").unwrap().to_path_buf(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
-            listen: *args.get_one::<SocketAddr>("LISTEN").unwrap_or(&"127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap()),
+            listen: *args
+                .get_one::<SocketAddr>("LISTEN")
+                .unwrap_or(&"127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap()),
         })
     }
 }
