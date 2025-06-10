@@ -43,6 +43,11 @@ Provides after-the-fact artifacts for incident investigation:
 - Snapshot metrics during or after performance incidents
 - Capture detailed system state when unexpected events occur
 
+### Viewer
+Open a Parquet artifact in a web-based dashboard:
+- View your Rezolus Recorder and Hindsight artifacts
+- Interactive dashboard using a local web server
+
 ## Use Cases
 We believe that Rezolus is useful for:
 - Performance engineering
@@ -57,6 +62,11 @@ you may want to replicate in test environments.
 Simply run the following command to collect a secondly recording for 15 minutes:
 ```bash
 rezolus record --interval 1s --duration 15m http://localhost:4241 rezolus.parquet
+```
+
+To view your artifact:
+```bash
+rezolus view rezolus.parquet [listen address]
 ```
 
 ### DevOps and SRE Troubleshooting
