@@ -20,20 +20,33 @@ enabled = true
 
 # BPF sampler that instruments block_io request queue to measure the request
 # latency distribution.
-[samplers.block_io_latency]
+[samplers.blockio_latency]
 
 # BPF sampler that instruments block_io request queue to get counts of requests,
 # the number of bytes by request type, and the size distribution.
-[samplers.block_io_requests]
+[samplers.blockio_requests]
 
 # BPF sampler that collects CPU CFS bandwidth control and throttling stats
 [samplers.cpu_bandwidth]
+
+# Reads the number of currently online cores
+[samplers.cpu_cores]
+
+# Performance Counter based sampler that gathers APERF, MPERF, and TSC which can
+# be used to calculate CPU frequency
+[samplers.cpu_frequency]
+
+# Performance counter based sampler that gathers L3 cache accesses and misses.
+[samplers.cpu_l3]
 
 # Instruments CPU migrations.
 [samplers.cpu_migrations]
 
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 [samplers.cpu_perf]
+
+# BPF sampler that gathers TLB flush event counts by reason.
+[samplers.cpu_tlb_flush]
 
 # Instruments CPU usage by state with BPF on linux. On macos
 # host_processor_info() is used
@@ -67,6 +80,10 @@ enabled = true
 # BPF sampler that instruments syscall enter and exit to gather syscall latency
 # distributions.
 [samplers.syscall_latency]
+
+# BPF sampler that probes TCP connect (active open) to measure latency when
+# establishing connections.
+[samplers.tcp_connect_latency]
 
 # BPF sampler that probes TCP receive path to measure latency from a packet
 # being received until application reads from the socket.
