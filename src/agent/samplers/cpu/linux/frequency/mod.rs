@@ -57,7 +57,7 @@ impl Sampler for Frequency {
 }
 
 struct FrequencyInner {
-    cores: Vec<Core>,
+    cores: Vec<Mutex<Core>>,
 }
 
 impl FrequencyInner {
@@ -68,23 +68,29 @@ impl FrequencyInner {
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
-        for core in &mut self.cores {
-            if let Ok(group) = core.tsc.read_group() {
-                if let (Some(aperf), Some(mperf), Some(tsc)) = (
-                    group.get(&core.aperf),
-                    group.get(&core.mperf),
-                    group.get(&core.tsc),
-                ) {
-                    let aperf = aperf.value();
-                    let mperf = mperf.value();
-                    let tsc = tsc.value();
+        let s = for core in &mut self.cores {
+            tokio::spawn_blocking(|| {
+                let core = core.lock().await;
 
-                    let _ = CPU_APERF.set(core.id, aperf);
-                    let _ = CPU_MPERF.set(core.id, mperf);
-                    let _ = CPU_TSC.set(core.id, tsc);
+                if let Ok(group) = core.tsc.read_group() {
+                    if let (Some(aperf), Some(mperf), Some(tsc)) = (
+                        group.get(&core.aperf),
+                        group.get(&core.mperf),
+                        group.get(&core.tsc),
+                    ) {
+                        let aperf = aperf.value();
+                        let mperf = mperf.value();
+                        let tsc = tsc.value();
+
+                        let _ = CPU_APERF.set(core.id, aperf);
+                        let _ = CPU_MPERF.set(core.id, mperf);
+                        let _ = CPU_TSC.set(core.id, tsc);
+                    }
                 }
-            }
-        }
+            })
+        }.collect();
+
+        futures::future::join_all(s).await;
 
         Ok(())
     }
@@ -217,7 +223,7 @@ fn get_cores() -> Result<Vec<Core>, std::io::Error> {
 
     for core in logical_cores.drain(..) {
         if let Ok(core) = Core::new(core) {
-            cores.push(core);
+            cores.push(Mutex::new(core));
         }
     }
 
