@@ -66,7 +66,7 @@ struct {
 // track the start time of softirq
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, MAX_CPUS);
+	__uint(max_entries, MAX_CPUS * 8);
 	__type(key, u32);
 	__type(value, u64);
 } softirq_start SEC(".maps");
@@ -270,8 +270,9 @@ int softirq_enter(struct trace_event_raw_softirq *args)
 	u64 ts = bpf_ktime_get_ns();
 
 	u32 idx = cpu * SOFTIRQ_GROUP_WIDTH + args->vec;
+	u32 start_idx = cpu * 8;
 
-	bpf_map_update_elem(&softirq_start, &cpu, &ts, 0);
+	bpf_map_update_elem(&softirq_start, &start_idx, &ts, 0);
 	array_incr(&softirq, idx);
 
 	return 0;
@@ -285,9 +286,10 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 	u32 idx, group = 0;
 
 	u32 irq_id = 0;
+	u32 start_idx = cpu * 8;
 
 	// lookup the start time
-	start_ts = bpf_map_lookup_elem(&softirq_start, &cpu);
+	start_ts = bpf_map_lookup_elem(&softirq_start, &start_idx);
 
 	// possible we missed the start
 	if (!start_ts || *start_ts == 0) {
