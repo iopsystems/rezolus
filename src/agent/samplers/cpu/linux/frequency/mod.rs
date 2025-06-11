@@ -272,6 +272,8 @@ fn get_cores() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Err
             }));
 
             perf_sync.push(psync2);
+        } else {
+            pt_pending.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
