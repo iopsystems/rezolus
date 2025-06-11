@@ -16,7 +16,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_livereload::LiveReloadLayer;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 
 #[cfg(feature = "developer-mode")]
@@ -56,7 +56,6 @@ pub fn command() -> Command {
                 .help("Viewer listen address")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(SocketAddr))
-                .required(true)
                 .index(2),
         )
 }
@@ -76,7 +75,9 @@ impl TryFrom<ArgMatches> for Config {
         Ok(Config {
             input: args.get_one::<PathBuf>("INPUT").unwrap().to_path_buf(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
-            listen: *args.get_one::<SocketAddr>("LISTEN").unwrap(),
+            listen: *args
+                .get_one::<SocketAddr>("LISTEN")
+                .unwrap_or(&"127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap()),
         })
     }
 }
@@ -113,6 +114,7 @@ pub fn run(config: Config) {
         .default(debug_log)
         .build()
         .start();
+
     // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -145,26 +147,28 @@ pub fn run(config: Config) {
     info!("Generating dashboards...");
     let state = dashboard::generate(&data);
 
+    // open the tcp listener
+    let listener = std::net::TcpListener::bind(config.listen).expect("failed to listen");
+    let addr = listener.local_addr().expect("socket missing local addr");
+
     // open in browser
-    let c = config.clone();
     rt.spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        if open::that(format!("http://{}", c.listen)).is_err() {
-            info!("Use your browser to view: http://{}", c.listen);
+        if open::that(format!("http://{}", addr)).is_err() {
+            info!("Use your browser to view: http://{}", addr);
         } else {
-            info!("Launched browser to view: http://{}", c.listen);
+            info!("Launched browser to view: http://{}", addr);
         }
     });
 
     // launch the HTTP listener
-    let c = config.clone();
-    rt.block_on(async move { serve(c, state).await });
+    rt.block_on(async move { serve(listener, state).await });
 
     std::thread::sleep(Duration::from_millis(200));
 }
 
-async fn serve(config: Arc<Config>, state: AppState) {
+async fn serve(listener: std::net::TcpListener, state: AppState) {
     let livereload = LiveReloadLayer::new();
 
     #[cfg(feature = "developer-mode")]
@@ -191,9 +195,8 @@ async fn serve(config: Arc<Config>, state: AppState) {
 
     let app = app(livereload, state);
 
-    let listener = TcpListener::bind(config.listen)
-        .await
-        .expect("failed to listen");
+    listener.set_nonblocking(true).unwrap();
+    let listener = TcpListener::from_std(listener).unwrap();
 
     axum::serve(listener, app)
         .await
