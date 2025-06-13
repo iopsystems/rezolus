@@ -1,3 +1,9 @@
+## [5.0.1] - 2024-06-13
+
+### Fixed
+
+- Rezolus Viewer served a 404 instead of using embedded index html. (#550)
+
 ## [5.0.0] - 2025-06-11
 
 ### Changed
@@ -32,6 +38,7 @@
 - Per-sampler latency logging. (#535)
 
 ### Fixed
+
 - Set open file limit for agent sufficiently high for large systems. (#511)
 - Changed recorder missed tick behavior from burst to skip. (#513)
 
@@ -374,7 +381,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v4.1.2...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.0.1...HEAD
+[5.0.1]: https://github.com/iopsystems/rezolus/compare/v5.0.0...v5.0.1
+[5.0.0]: https://github.com/iopsystems/rezolus/compare/v4.1.2...v5.0.0
 [4.1.2]: https://github.com/iopsystems/rezolus/compare/v4.1.1...v4.1.2
 [4.1.1]: https://github.com/iopsystems/rezolus/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/iopsystems/rezolus/compare/v4.0.0...v4.1.0
