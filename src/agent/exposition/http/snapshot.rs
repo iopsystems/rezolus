@@ -7,31 +7,21 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 pub struct SnapshotBuilder {
-    last: Option<Instant>,
+    cached: Option<CachedSnapshot>,
     samplers: Arc<Box<[Box<dyn Sampler>]>>,
-    snapshot: Snapshot,
     ttl: Duration,
+}
+
+struct CachedSnapshot {
+    timestamp: Instant,
+    snapshot: Snapshot,
 }
 
 impl SnapshotBuilder {
     pub fn new(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) -> Self {
-        let snapshot = SnapshotV2 {
-            systemtime: SystemTime::UNIX_EPOCH,
-            duration: Duration::from_millis(0),
-            metadata: [
-                ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
-                ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-            ]
-            .into(),
-            counters: Vec::new(),
-            gauges: Vec::new(),
-            histograms: Vec::new(),
-        };
-
         Self {
-            last: None,
+            cached: None,
             samplers,
-            snapshot: Snapshot::V2(snapshot),
             ttl: config.general().ttl(),
         }
     }
@@ -56,22 +46,18 @@ impl SnapshotBuilder {
         debug!("sampling latency: {} us", duration.as_micros());
 
         // update the cached snapshot
-        self.snapshot = create(timestamp, duration);
-
-        // update the timestamp
-        self.last = Some(last);
+        self.cached = Some(CachedSnapshot {
+            snapshot: create(timestamp, duration),
+            timestamp: last,
+        });
     }
 
     pub async fn build(&mut self, now: Instant) -> &Snapshot {
-        if let Some(last) = self.last {
-            if now.duration_since(last) < self.ttl {
-                return &self.snapshot;
-            }
+        if self.cached.is_none() || now.duration_since(self.cached.as_ref().unwrap().timestamp) < self.ttl {
+            self.refresh().await;
         }
 
-        self.refresh().await;
-
-        &self.snapshot
+        &self.cached.as_ref().unwrap().snapshot
     }
 }
 
