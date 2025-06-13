@@ -5,6 +5,7 @@ mod cgroups;
 mod cpu;
 mod network;
 mod overview;
+mod rezolus;
 mod scheduler;
 mod softirq;
 mod syscall;
@@ -20,6 +21,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Softirq", "/softirq", softirq::generate),
     ("BlockIO", "/blockio", blockio::generate),
     ("cgroups", "/cgroups", cgroups::generate),
+    ("Rezolus", "/rezolus", rezolus::generate),
 ];
 
 pub fn generate(data: &Tsdb) -> AppState {
@@ -64,6 +66,7 @@ mod tests {
                 "cpu.json",
                 "network.json",
                 "overview.json",
+                "rezolus.json",
                 "scheduler.json",
                 "softirq.json",
                 "syscall.json",
