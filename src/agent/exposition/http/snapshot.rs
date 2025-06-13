@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 pub struct SnapshotBuilder {
+    last: Option<Instant>,
     samplers: Arc<Box<[Box<dyn Sampler>]>>,
     snapshot: Snapshot,
     ttl: Duration,
@@ -28,6 +29,7 @@ impl SnapshotBuilder {
         };
 
         Self {
+            last: None,
             samplers,
             snapshot: Snapshot::V2(snapshot),
             ttl: config.general().ttl(),
@@ -35,6 +37,8 @@ impl SnapshotBuilder {
     }
 
     async fn refresh(&mut self) {
+        let last = Instant::now();
+
         // get start timestamp
         let timestamp = SystemTime::now();
 
@@ -53,16 +57,14 @@ impl SnapshotBuilder {
 
         // update the cached snapshot
         self.snapshot = create(timestamp, duration);
+
+        // update the timestamp
+        self.last = Some(last);
     }
 
-    pub async fn build(&mut self) -> &Snapshot {
-        let previous = match &self.snapshot {
-            Snapshot::V1(s) => s.systemtime,
-            Snapshot::V2(s) => s.systemtime,
-        };
-
-        if let Ok(duration) = previous.elapsed() {
-            if duration < self.ttl {
+    pub async fn build(&mut self, now: Instant) -> &Snapshot {
+        if let Some(last) = self.last {
+            if now.duration_since(last) < self.ttl {
                 return &self.snapshot;
             }
         }
