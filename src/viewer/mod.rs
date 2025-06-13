@@ -12,15 +12,19 @@ use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::decompression::RequestDecompressionLayer;
-use tower_http::services::{ServeDir, ServeFile};
 use tower_livereload::LiveReloadLayer;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::Path;
 
 #[cfg(feature = "developer-mode")]
 use notify::Watcher;
+
+#[cfg(feature = "developer-mode")]
+use tower_http::services::{ServeDir, ServeFile};
+
+#[cfg(feature = "developer-mode")]
+use std::path::Path;
 
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
@@ -221,25 +225,33 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
     let state = Arc::new(state);
 
     let router = Router::new()
-        .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
         .route("/about", get(about))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .nest_service("/data", data.with_state(state));
 
-    let router = if cfg!(feature = "developer-mode") {
-        router.nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
-    } else {
-        router.nest_service("/lib", get(lib))
+    #[cfg(feature = "developer-mode")]
+    let router = {
+        warn!("running in developer mode. Rezolus Viewer must be run from within project folder");
+        router
+            .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
+            .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
+            .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
     };
 
-    router
-        .nest_service("/data", data.with_state(state))
-        .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
-        .layer(
-            ServiceBuilder::new()
-                .layer(RequestDecompressionLayer::new())
-                .layer(CompressionLayer::new())
-                .layer(livereload),
-        )
+    #[cfg(not(feature = "developer-mode"))]
+    let router = {
+        router
+            .route_service("/", get(index))
+            .nest_service("/lib", get(lib))
+            .fallback_service(get(index))
+    };
+
+    router.layer(
+        ServiceBuilder::new()
+            .layer(RequestDecompressionLayer::new())
+            .layer(CompressionLayer::new())
+            .layer(livereload),
+    )
 }
 
 // Basic /about page handler
@@ -263,6 +275,26 @@ async fn data(
             .map(|v| v.to_string())
             .unwrap_or("{ }".to_string()),
     )
+}
+
+async fn index() -> impl IntoResponse {
+    if let Some(asset) = ASSETS.get_file("index.html") {
+        let body = asset.contents_utf8().unwrap();
+        let content_type = "text/html";
+
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, content_type)],
+            body.to_string(),
+        )
+    } else {
+        error!("index.html missing from build");
+        (
+            StatusCode::from_u16(404).unwrap(),
+            [(header::CONTENT_TYPE, "text/plain")],
+            "404 Not Found".to_string(),
+        )
+    }
 }
 
 async fn lib(uri: Uri) -> impl IntoResponse {
