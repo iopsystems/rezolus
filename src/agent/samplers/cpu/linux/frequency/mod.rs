@@ -255,7 +255,9 @@ fn get_cores() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Err
 
             perf_threads.push(std::thread::spawn(move || {
                 if !core_affinity::set_for_current(core_affinity::CoreId { id: core.id }) {
-                    unpinned.send(core).expect("failed to send unpinned perf counters");
+                    unpinned
+                        .send(core)
+                        .expect("failed to send unpinned perf counters");
                     pt_pending.fetch_sub(1, Ordering::Relaxed);
                     return;
                 }
