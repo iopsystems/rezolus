@@ -6,7 +6,74 @@ use metriken_exposition::{Counter, Gauge, Histogram, Snapshot, SnapshotV2};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
-pub fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
+pub struct SnapshotBuilder {
+    samplers: Arc<Box<[Box<dyn Sampler>]>>,
+    snapshot: Snapshot,
+    ttl: Duration,
+}
+
+impl SnapshotBuilder {
+    pub fn new(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) -> Self {
+        let snapshot = SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH,
+            duration: Duration::from_millis(0),
+            metadata: [
+                ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
+                ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            ]
+            .into(),
+            counters: Vec::new(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+
+        Self {
+            samplers,
+            snapshot: Snapshot::V2(snapshot),
+            ttl: config.general().ttl(),
+        }
+    }
+
+    async fn refresh(&mut self) {
+        // get start timestamp
+        let timestamp = SystemTime::now();
+
+        // collect the sampler futures
+        let s: Vec<_> = self
+            .samplers
+            .iter()
+            .map(|s| s.refresh_with_logging())
+            .collect();
+
+        // refresh all samplers
+        let start = Instant::now();
+        futures::future::join_all(s).await;
+        let duration = start.elapsed();
+        debug!("sampling latency: {} us", duration.as_micros());
+
+        // update the cached snapshot
+        self.snapshot = create(timestamp, duration);
+    }
+
+    pub async fn build(&mut self) -> &Snapshot {
+        let previous = match &self.snapshot {
+            Snapshot::V1(s) => s.systemtime,
+            Snapshot::V2(s) => s.systemtime,
+        };
+
+        if let Ok(duration) = previous.elapsed() {
+            if duration < self.ttl {
+                return &self.snapshot;
+            }
+        }
+
+        self.refresh().await;
+
+        &self.snapshot
+    }
+}
+
+fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
     let mut s = SnapshotV2 {
         systemtime: timestamp,
         duration,
