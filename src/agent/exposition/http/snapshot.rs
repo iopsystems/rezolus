@@ -6,7 +6,64 @@ use metriken_exposition::{Counter, Gauge, Histogram, Snapshot, SnapshotV2};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
-pub fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
+pub struct SnapshotBuilder {
+    cached: Option<CachedSnapshot>,
+    samplers: Arc<Box<[Box<dyn Sampler>]>>,
+    ttl: Duration,
+}
+
+struct CachedSnapshot {
+    timestamp: Instant,
+    snapshot: Snapshot,
+}
+
+impl SnapshotBuilder {
+    pub fn new(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) -> Self {
+        Self {
+            cached: None,
+            samplers,
+            ttl: config.general().ttl(),
+        }
+    }
+
+    async fn refresh(&mut self) {
+        let last = Instant::now();
+
+        // get start timestamp
+        let timestamp = SystemTime::now();
+
+        // collect the sampler futures
+        let s: Vec<_> = self
+            .samplers
+            .iter()
+            .map(|s| s.refresh_with_logging())
+            .collect();
+
+        // refresh all samplers
+        let start = Instant::now();
+        futures::future::join_all(s).await;
+        let duration = start.elapsed();
+        debug!("sampling latency: {} us", duration.as_micros());
+
+        // update the cached snapshot
+        self.cached = Some(CachedSnapshot {
+            snapshot: create(timestamp, duration),
+            timestamp: last,
+        });
+    }
+
+    pub async fn build(&mut self, now: Instant) -> &Snapshot {
+        if self.cached.is_none()
+            || now.duration_since(self.cached.as_ref().unwrap().timestamp) < self.ttl
+        {
+            self.refresh().await;
+        }
+
+        &self.cached.as_ref().unwrap().snapshot
+    }
+}
+
+fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
     let mut s = SnapshotV2 {
         systemtime: timestamp,
         duration,

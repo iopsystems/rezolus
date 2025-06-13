@@ -23,6 +23,10 @@ fn listen() -> String {
     "0.0.0.0:4241".into()
 }
 
+fn ttl() -> String {
+    "10ms".into()
+}
+
 #[derive(Deserialize, Default)]
 pub struct Config {
     #[serde(default)]

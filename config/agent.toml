@@ -1,6 +1,10 @@
 [general]
 listen = "0.0.0.0:4241"
 
+# Metric snapshots are cached with the following TTL to prevent excessive
+# resource usage.
+ttl = "10ms"
+
 [log]
 # Controls the log level: "error", "warn", "info", "debug", "trace"
 level = "info"
