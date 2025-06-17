@@ -35,6 +35,10 @@ pub fn run(config: PathBuf) {
         }
     };
 
+    // configure scheduler
+    #[cfg(target_os = "linux")]
+    config.scheduler().apply();
+
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
 

@@ -10,10 +10,12 @@ use std::path::Path;
 mod general;
 mod log;
 mod sampler;
+mod scheduler;
 
 use general::General;
 use log::Log;
 use sampler::Sampler as SamplerConfig;
+use scheduler::Scheduler;
 
 fn enabled() -> bool {
     true
@@ -31,6 +33,8 @@ fn ttl() -> String {
 pub struct Config {
     #[serde(default)]
     general: General,
+    #[serde(default)]
+    scheduler: Scheduler,
     #[serde(default)]
     log: Log,
     #[serde(default)]
@@ -56,6 +60,7 @@ impl Config {
             .unwrap();
 
         config.general.check();
+        config.scheduler.check();
 
         config.defaults.check("default");
 
@@ -72,6 +77,11 @@ impl Config {
 
     pub fn general(&self) -> &General {
         &self.general
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn scheduler(&self) -> &Scheduler {
+        &self.scheduler
     }
 
     pub fn enabled(&self, name: &str) -> bool {

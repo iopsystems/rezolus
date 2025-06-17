@@ -5,6 +5,10 @@ listen = "0.0.0.0:4241"
 # resource usage.
 ttl = "10ms"
 
+[scheduler]
+policy = "round_robin"
+rt_priority = 15
+
 [log]
 # Controls the log level: "error", "warn", "info", "debug", "trace"
 level = "info"
