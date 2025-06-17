@@ -50,22 +50,14 @@ The header is exactly 16 bytes and contains:
 catalog, and syncing
 - **Bits 1-7**: Reserved, must be zero
 
-**Status Byte Examples:**
-```c
-// Check ready (bit 0)
-bool ready = (status_byte & 0x01) != 0;
-
-// Status byte values during initialization:
-// 0x00 - not ready (initial state)
-// 0x01 - ready
-```
-
 ## Metrics Catalog Section
 
 The catalog immediately follows the header and contains a sequential list of
-metric definitions. The catalog section must be followed by zero-padding to
-ensure the data section is 8-byte aligned. See the Memory Alignment section
-for more details.
+metric definitions.
+
+Note: The catalog section must be followed by zero-padding to ensure the data
+section is 8-byte aligned. This guarantees that reads from the data section have
+atomic semantics on x86_64 and aarch64.
 
 Each entry has the following structure:
 
@@ -139,18 +131,6 @@ To find a specific metric's data offset:
 - Metric 0 (Counter): offset = data_section_offset + 0
 - Metric 1 (Gauge): offset = data_section_offset + 8
 - Metric 2 (H2Histogram, 252 buckets): offset = data_section_offset + 16
-
-### Memory Alignment
-
-- **8-byte aligned** means the file offset is evenly divisible by 8 (i.e.,
-`offset % 8 == 0`)
-- The header is exactly 16 bytes (naturally 8-byte aligned)
-- The catalog section starts immediately after the header at offset 16
-- The data section MUST start at an 8-byte aligned file offset
-- Padding bytes (set to zero) are inserted after the catalog as needed to
-achieve alignment
-- All metric data within the data section starts at 8-byte aligned file offsets
-- After mmap(), memory addresses inherit the alignment from file offsets
 
 ## Concurrency Model
 
