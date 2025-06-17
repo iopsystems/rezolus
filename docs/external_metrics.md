@@ -4,11 +4,9 @@
 
 ## Overview
 
-This specification defines a custom binary file format for ingesting external
-metrics into Rezolus via memory-mapped files. The format is designed for
-high-performance, lock-free communication between a producer process (writing
-metrics) and a consumer process (Rezolus recorder) using `mmap()` on Linux
-systems.
+This specification defines a binary file format for ingesting external metrics
+into Rezolus via memory-mapped files. The format enables high-performance,
+lock-free communication between producer and consumer processes.
 
 ## Design Goals
 
@@ -133,59 +131,22 @@ To find a specific metric's data offset:
 - Metric 1 (Gauge): offset = data_section_offset + 8
 - Metric 2 (H2Histogram, 252 buckets): offset = data_section_offset + 16
 
-## Concurrency Model
-
-### Producer Responsibilities
-
-1. **Initialization**:
-   - Create file with appropriate size
-   - Write header with ready flag = 0
-   - Write complete catalog section
-   - Zero-initialize data section
-   - Issue memory barrier (`msync(MS_SYNC)` or `fdatasync()` - see note below)
-   - Set ready flag = 1
-
-**Memory Barrier Note**: The memory barrier ensures that catalog data is visible
-to consumers before the catalog ready flag is set. This is primarily needed when
-the catalog spans multiple memory pages. For optimization, producers may skip
-the barrier if the entire catalog fits within the first 4KB page:
-```c
-catalog_end_offset = 64 + catalog_size;
-if (catalog_end_offset > 4096) {
-    msync(mapped_addr, catalog_end_offset, MS_SYNC);
-}
-```
-
-2. **Runtime Updates**:
-   - Only modify values in data section
-   - All 64-bit writes are naturally atomic due to 8-byte alignment
-   - Never modify header or catalog after ready flag is set
-   - Optionally, use `msync(MS_SYNC)` or `fdatasync()` to ensure writes are
-     immediately visible to the consumer
-
-### Atomicity Guarantees
-
-On x86_64 and aarch64 platforms with 8-byte aligned data:
-- All 64-bit reads and writes are naturally atomic (no special instructions
-needed)
-- Individual histogram buckets are consistent during updates
-- Histogram may be transiently inconsistent across buckets during updates
-(acceptable)
-- Counter and gauge updates are always atomic
-- No memory ordering guarantees between different metrics
-
 ## File Lifecycle
 
-### Creation Process
+### Creation
+1. Calculates required file size
+2. Create file with full size (`fallocate()`)
+3. Map the file into memory using `MAP_SHARED`
+4. Write header with ready flag set to zero
+5. Write catalog section
+6. Initialize data section with zeros
+7. Set ready flag to one
 
-1. Producer calculates required file size
-2. Creates file with full size (using `fallocate()` or similar)
-3. Maps file into memory
-4. Writes header (ready flag = 0)
-5. Writes catalog section
-6. Initializes data section to zeros
-7. Issue a barrier to ensure catalog writes are visible to consumer.
-8. Sets ready flag = 1
+### Modification
+- Only modify values in data section
+
+### Destruction
+- Producer is responsible for removing old files
 
 ### File Management
 
@@ -213,24 +174,8 @@ Files are considered incomplete if:
 
 ## Performance Considerations
 
-### File Size Calculation
-
-```
-Header Size = 16 bytes
-Catalog Size = Σ(metric_entry_size) for all metrics
-Catalog Padding = (8 - (catalog_size % 8)) % 8
-Data Section Offset = 64 + catalog_size + catalog_padding
-Data Size = Σ(metric_data_size) for all metrics
-Total File Size = data_section_offset + data_size
-
-Where metric_entry_size includes:
-- 1 byte (type) + 1 byte (name_length) + name_length
-- 2 additional bytes for each histogram
-```
-
 ### Optimal Access Patterns
 
-- Consumers should read entire data section in sequential order
 - Avoid random access patterns within large histogram data
 - Consider using `madvise(MADV_SEQUENTIAL)` for large files
 
@@ -245,20 +190,5 @@ Where metric_entry_size includes:
 
 ### Implementation Notes
 
-- Use `MAP_SHARED` for producer, `MAP_PRIVATE` or `MAP_SHARED` for consumer
+- Use `MAP_SHARED`
 - Consider `MAP_POPULATE` to avoid page faults during time-critical reads
-- Producer should use `msync()` or `fdatasync()` if durability is required
-
-## Security Considerations
-
-- No authentication or encryption required per specification
-- File permissions should restrict access to appropriate users/groups
-- Consider using temporary directories with restricted access
-- Validate all input data to prevent buffer overflows
-
-## Compliance and Standards
-
-- All multi-byte integers use native endianness of the target platform
-- UTF-8 encoding for all text fields
-- Metric names should follow Prometheus conventions where applicable
-- Files may use any naming convention - filename becomes a metric attribute
