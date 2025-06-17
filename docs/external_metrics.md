@@ -123,6 +123,10 @@ To find a specific metric's data offset:
 
 ## File Lifecycle
 
+## Naming and Permissions
+- Files may use any naming convention (filename becomes metric attribute `name`)
+- Consumer only requires read access to files (maps with `PROT_READ`)
+
 ### Creation
 1. Calculates required file size
 2. Create file with full size (`fallocate()`)
@@ -137,30 +141,7 @@ To find a specific metric's data offset:
 
 ### Destruction
 - Producer is responsible for removing old files
-
-### File Management
-
-- Producer is responsible for removing old files
-- Producer should clean up partial files on creation failure
-- Consumer should handle graceful unmapping when files disappear
-- Files may use any naming convention (filename becomes metric attribute)
-- Consumer only requires read access to files (maps with `PROT_READ`)
-- Recommended file permissions: `0644` (owner read/write, group/other read)
-- Permissions may be more restrictive based on security requirements
-- Directory must be readable and executable by consumer process
-
-### Error Recovery
-
-**Producer responsibilities:**
-- Must clean up partial files on creation failure (or handle cleanup externally)
-- Retry behavior is implementation-specific
-- Failed file creation may result in missing observability data
-
-**Partial file detection:**
-Files are considered incomplete if:
-- Ready flag remains 0 after reasonable timeout
-- File size doesn't match header specifications
-- Validation errors during catalog parsing
+- Producer should clean up partial files if creation fails
 
 ## Performance Considerations
 
