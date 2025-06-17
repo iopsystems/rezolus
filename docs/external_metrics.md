@@ -120,6 +120,7 @@ To find a specific metric's data offset:
 - Metric 0 (Counter): offset = data_section_offset + 0
 - Metric 1 (Gauge): offset = data_section_offset + 8
 - Metric 2 (H2Histogram, 252 buckets): offset = data_section_offset + 16
+- Metric 3 (Counter): offset = data_section_offset + 2032
 
 ## File Lifecycle
 

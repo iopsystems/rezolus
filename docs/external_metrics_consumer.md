@@ -31,11 +31,10 @@ needed)
 
 ### Discovery Process
 
-1. Consumer monitors directory with inotify
-2. On new file detection, attempts to mmap()
-3. Validates magic number and major version compatibility
-4. Waits for ready flag = 1 (with timeout)
-5. Parses catalog and begins periodic reading
+1. On new file detection, attempts to mmap()
+2. Validates magic number and major version compatibility
+3. Waits for ready flag = 1 (with timeout)
+4. Parses catalog and begins periodic reading
 
 ### File Management
 
@@ -75,28 +74,3 @@ Consumers should reject files with:
 - Catalog parsing errors (skip malformed entries)
 - Histogram inconsistency during updates (acceptable - each bucket is
 individually consistent)
-
-## Performance Considerations
-
-### Optimal Access Patterns
-
-- Consumers should read entire data section in sequential order
-- Avoid random access patterns within large histogram data
-- Consider using `madvise(MADV_SEQUENTIAL)` for large files
-
-### Implementation Notes
-
-- Use `MAP_SHARED` for producer, `MAP_PRIVATE` or `MAP_SHARED` for consumer
-- Consider `MAP_POPULATE` to avoid page faults during time-critical reads
-- Producer should use `msync()` or `fdatasync()` if durability is required
-
-## Security Considerations
-
-- Validate all input data to prevent buffer overflows
-
-## Compliance and Standards
-
-- All multi-byte integers use native endianness of the target platform
-- UTF-8 encoding for all text fields
-- Metric names should follow Prometheus conventions where applicable
-- Files may use any naming convention - filename becomes a metric attribute
