@@ -98,9 +98,9 @@ data is stored sequentially with no padding between metrics.
 ### Data Layout
 
 ```
-Counter:      [8 bytes: u64 value]
-Gauge:        [8 bytes: i64 value]
-H2Histogram:  [8*N bytes: N u64 bucket counters stored as contiguous array]
+Counter: u64 (8 bytes)
+Gauge: i64 (8 bytes)
+H2Histogram: [u64; N] (8 * N bytes, where N is the number of buckets in the configurable histogram)
 ```
 
 **H2Histogram Storage Details:**
