@@ -283,7 +283,7 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 {
 	u32 cpu = bpf_get_smp_processor_id();
 	u64 *elem, *start_ts, dur = 0;
-	u32 idx, group = 0;
+	u32 idx, cpuusage_idx, group = 0;
 
 	u32 irq_id = 0;
 	u32 start_idx = cpu * 8;
@@ -296,12 +296,19 @@ int softirq_exit(struct trace_event_raw_softirq *args)
 		return 0;
 	}
 
+	struct task_struct *current = (struct task_struct *) bpf_get_current_task();
+	int pid = BPF_CORE_READ(current, pid);
+
 	// calculate the duration
 	dur = bpf_ktime_get_ns() - *start_ts;
 
 	// update the softirq time
 	idx = SOFTIRQ_GROUP_WIDTH * cpu + args->vec;
 	array_add(&softirq_time, idx, dur);
+	if (pid == 0) {
+	  cpuusage_idx = CPU_USAGE_GROUP_WIDTH * cpu + SYSTEM_OFFSET;
+	  array_add(&cpu_usage, cpuusage_idx, dur);
+	}
 
 	// clear the start timestamp
 	*start_ts = 0;
