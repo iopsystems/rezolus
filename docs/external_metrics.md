@@ -7,7 +7,8 @@
 This specification defines a custom binary file format for ingesting external
 metrics into Rezolus via memory-mapped files. The format is designed for
 high-performance, lock-free communication between a producer process (writing
-metrics) and a consumer process (Rezolus agent) using `mmap()` on Linux systems.
+metrics) and a consumer process (Rezolus recorder) using `mmap()` on Linux
+systems.
 
 ## Design Goals
 
@@ -159,15 +160,8 @@ if (catalog_end_offset > 4096) {
    - Only modify values in data section
    - All 64-bit writes are naturally atomic due to 8-byte alignment
    - Never modify header or catalog after ready flag is set
-
-### Consumer Responsibilities
-
-1. **Discovery**: Use inotify to detect new files
-2. **Validation**: Check magic number, major version compatibility, and ready
-flag
-3. **Catalog verification**: If checksum type != 0, validate catalog checksum
-4. **Mapping**: mmap() the entire file as read-only
-5. **Reading**: Poll data section periodically
+   - Optionally, use `msync(MS_SYNC)` or `fdatasync()` to ensure writes are
+     immediately visible to the consumer
 
 ### Atomicity Guarantees
 
@@ -190,15 +184,8 @@ needed)
 4. Writes header (ready flag = 0)
 5. Writes catalog section
 6. Initializes data section to zeros
-7. Sets ready flag = 1
-
-### Discovery Process
-
-1. Consumer monitors directory with inotify
-2. On new file detection, attempts to mmap()
-3. Validates magic number and major version compatibility
-4. Waits for ready flag = 1 (with timeout)
-5. Parses catalog and begins periodic reading
+7. Issue a barrier to ensure catalog writes are visible to consumer.
+8. Sets ready flag = 1
 
 ### File Management
 
@@ -218,36 +205,11 @@ needed)
 - Retry behavior is implementation-specific
 - Failed file creation may result in missing observability data
 
-**Consumer behavior:**
-- Ignores files where ready flag is not set
-- Should implement reasonable timeout for ready flag detection
-- Skips malformed or incomplete files without blocking operation
-
 **Partial file detection:**
 Files are considered incomplete if:
 - Ready flag remains 0 after reasonable timeout
 - File size doesn't match header specifications
 - Validation errors during catalog parsing
-
-## Error Handling
-
-### Invalid Files
-
-Consumers should reject files with:
-- Incorrect magic number
-- Unsupported major version
-- Invalid metric types
-- Invalid UTF-8 in metric names
-- More than 1024 metrics in catalog
-- File size doesn't match expected size
-
-### Runtime Errors
-
-- File disappearance during reading (handle SIGBUS)
-- Incomplete writes (ignore transient values)
-- Catalog parsing errors (skip malformed entries)
-- Histogram inconsistency during updates (acceptable - each bucket is
-individually consistent)
 
 ## Performance Considerations
 
