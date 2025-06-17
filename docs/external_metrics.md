@@ -6,14 +6,8 @@
 
 This specification defines a binary file format for ingesting external metrics
 into Rezolus via memory-mapped files. The format enables high-performance,
-lock-free communication between producer and consumer processes.
-
-## Design Goals
-
-- **Zero-copy access**: Direct memory mapping for maximum performance
-- **Lock-free reads**: Consumer can read without blocking producer
-- **Simple serialization**: No external dependencies required
-- **Static metric set**: Metrics defined at file creation, no runtime additions
+lock-free recording of external metrics using the Rezolus recorder. The file
+format is designed so that it does not require external dependencies.
 
 ## File Structure
 
