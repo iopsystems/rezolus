@@ -54,7 +54,7 @@ impl SnapshotBuilder {
 
     pub async fn build(&mut self, now: Instant) -> &Snapshot {
         if self.cached.is_none()
-            || now.duration_since(self.cached.as_ref().unwrap().timestamp) < self.ttl
+            || now.duration_since(self.cached.as_ref().unwrap().timestamp) > self.ttl
         {
             self.refresh().await;
         }
