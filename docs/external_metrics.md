@@ -14,7 +14,6 @@ metrics) and a consumer process (Rezolus agent) using `mmap()` on Linux systems.
 - **Zero-copy access**: Direct memory mapping for maximum performance
 - **Lock-free reads**: Consumer can read without blocking producer
 - **Simple serialization**: No external dependencies required
-- **Concurrent safety**: Safe for one writer, multiple readers
 - **Static metric set**: Metrics defined at file creation, no runtime additions
 
 ## File Structure
@@ -33,56 +32,42 @@ The file consists of three main sections:
 
 ## Header Section
 
-The header is exactly 64 bytes and contains:
+The header is exactly 16 bytes and contains:
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | Magic | Magic number: `0x52455A4C` ("REZL") |
 | 4 | 1 | Version Major | Major version number (current: 1) |
 | 5 | 1 | Version Minor | Minor version number (current: 0) |
-| 6 | 1 | Status | Control byte (bits 0-1: ready flags) |
+| 6 | 1 | Status | Control byte (bits 0: ready flag) |
 | 7 | 1 | Reserved | Must be zero |
 | 8 | 4 | Metric Count | Number of metrics in catalog (u32, max 1024) |
 | 12 | 4 | Catalog Size | Size of catalog section in bytes (u32) |
-| 16 | 1 | Checksum Type | Checksum algorithm (0=None, 1=CRC32-IEEE) |
-| 17 | 3 | Reserved | Must be zero |
-| 20 | 4 | Catalog Checksum | CRC32 of catalog section (0 if type=0) |
-| 24 | 8 | Data Offset | Offset to data section (u64) |
-| 32 | 8 | Data Size | Size of data section in bytes (u64) |
-| 40 | 8 | Timestamp | Unix timestamp of file creation (u64) |
-| 48 | 16 | Reserved | Must be zero |
 
 ### Status Byte Details
 
-- **Bit 0 (Catalog Ready)**: Set to 1 when catalog is complete and checksum
-valid
-- **Bit 1 (Data Ready)**: Set to 1 when data section is initialized and ready
-for consumption
-- **Bits 2-7**: Reserved, must be zero
-
-Both bits must be set for the file to be considered ready for consumption.
+- **Bit 0 (Ready)**: Set to 1 only after allocating entire file, populating
+catalog, and syncing
+- **Bits 1-7**: Reserved, must be zero
 
 **Status Byte Examples:**
 ```c
-// Check catalog ready (bit 0)
-bool catalog_ready = (status_byte & 0x01) != 0;
-
-// Check data ready (bit 1)  
-bool data_ready = (status_byte & 0x02) != 0;
-
-// Check both ready
-bool file_ready = (status_byte & 0x03) == 0x03;
+// Check ready (bit 0)
+bool ready = (status_byte & 0x01) != 0;
 
 // Status byte values during initialization:
-// 0x00 - neither ready (initial state)
-// 0x01 - catalog ready, data not ready
-// 0x03 - both ready (final state)
+// 0x00 - not ready (initial state)
+// 0x01 - ready
 ```
 
 ## Metrics Catalog Section
 
 The catalog immediately follows the header and contains a sequential list of
-metric definitions. Each entry has the following structure:
+metric definitions. The catalog section must be followed by zero-padding to
+ensure the data section is 8-byte aligned. See the Memory Alignment section
+for more details.
+
+Each entry has the following structure:
 
 ### Metric Entry Format
 
@@ -159,29 +144,13 @@ To find a specific metric's data offset:
 
 - **8-byte aligned** means the file offset is evenly divisible by 8 (i.e.,
 `offset % 8 == 0`)
-- The header is exactly 64 bytes (naturally 8-byte aligned)
-- The catalog section starts immediately after the header at offset 64
+- The header is exactly 16 bytes (naturally 8-byte aligned)
+- The catalog section starts immediately after the header at offset 16
 - The data section MUST start at an 8-byte aligned file offset
 - Padding bytes (set to zero) are inserted after the catalog as needed to
 achieve alignment
 - All metric data within the data section starts at 8-byte aligned file offsets
 - After mmap(), memory addresses inherit the alignment from file offsets
-
-### Data Section Offset Calculation
-
-The data section offset is calculated as:
-```
-data_section_offset = 64 + ((catalog_size + 7) / 8) * 8
-```
-
-This ensures the data section starts at an 8-byte aligned address.
-
-**Example:**
-- Header: 64 bytes (ends at offset 64)
-- Catalog: 250 bytes (ends at offset 314)
-- Padding needed: 8 - (250 % 8) = 6 bytes
-- Data section starts at: 64 + 250 + 6 = 320 (divisible by 8)
-- Padding bytes (314-319) are set to zero
 
 ## Concurrency Model
 
@@ -189,15 +158,11 @@ This ensures the data section starts at an 8-byte aligned address.
 
 1. **Initialization**:
    - Create file with appropriate size
-   - Write header with ready flags = 0
+   - Write header with ready flag = 0
    - Write complete catalog section
-   - Calculate checksum if checksum type != 0 (covers entire catalog region
-   including padding)
-   - Write checksum to header
-   - Issue memory barrier (`msync(MS_SYNC)` or `fdatasync()` - see note below)
-   - Set catalog ready flag = 1
    - Zero-initialize data section
-   - Set data ready flag = 1
+   - Issue memory barrier (`msync(MS_SYNC)` or `fdatasync()` - see note below)
+   - Set ready flag = 1
 
 **Memory Barrier Note**: The memory barrier ensures that catalog data is visible
 to consumers before the catalog ready flag is set. This is primarily needed when
@@ -210,29 +175,19 @@ if (catalog_end_offset > 4096) {
 }
 ```
 
-**Checksum Scope**: When checksum type is 1 (CRC32-IEEE), the checksum covers
-the entire catalog region from offset 64 to the start of the data section,
-including any padding bytes. Use the standard IEEE 802.3 CRC32 polynomial
-(0x04C11DB7). This ensures complete integrity of the catalog region:
-```c
-checksum_start = 64;
-checksum_length = data_section_offset - 64;
-crc32_value = crc32_ieee(mapped_addr + checksum_start, checksum_length);
-```
-
 2. **Runtime Updates**:
    - Only modify values in data section
    - All 64-bit writes are naturally atomic due to 8-byte alignment
-   - Never modify header or catalog after both ready flags are set
+   - Never modify header or catalog after ready flag is set
 
 ### Consumer Responsibilities
 
 1. **Discovery**: Use inotify to detect new files
-2. **Validation**: Check magic number, major version compatibility, and both
-ready flags
+2. **Validation**: Check magic number, major version compatibility, and ready
+flag
 3. **Catalog verification**: If checksum type != 0, validate catalog checksum
 4. **Mapping**: mmap() the entire file as read-only
-5. **Reading**: Poll data section periodically, ignore incomplete writes
+5. **Reading**: Poll data section periodically
 
 ### Atomicity Guarantees
 
@@ -262,9 +217,8 @@ needed)
 1. Consumer monitors directory with inotify
 2. On new file detection, attempts to mmap()
 3. Validates magic number and major version compatibility
-4. Waits for both ready flags = 1 (with timeout)
-5. Verifies catalog checksum (if checksum type != 0)
-6. Parses catalog and begins periodic reading
+4. Waits for ready flag = 1 (with timeout)
+5. Parses catalog and begins periodic reading
 
 ### File Management
 
@@ -285,14 +239,14 @@ needed)
 - Failed file creation may result in missing observability data
 
 **Consumer behavior:**
-- Ignores files where both ready flags are not set
+- Ignores files where ready flag is not set
 - Should implement reasonable timeout for ready flag detection
 - Skips malformed or incomplete files without blocking operation
 
 **Partial file detection:**
 Files are considered incomplete if:
-- Ready flags remain 0 after reasonable timeout
-- File size doesn't match header specifications  
+- Ready flag remains 0 after reasonable timeout
+- File size doesn't match header specifications
 - Validation errors during catalog parsing
 
 ## Error Handling
@@ -300,16 +254,12 @@ Files are considered incomplete if:
 ### Invalid Files
 
 Consumers should reject files with:
-- Incorrect magic number (including endianness mismatches)
+- Incorrect magic number
 - Unsupported major version
 - Invalid metric types
-- Catalog/data size mismatches
-- Names longer than 255 bytes
 - Invalid UTF-8 in metric names
 - More than 1024 metrics in catalog
-- Catalog checksum mismatch (if checksum type != 0)
-- Unsupported checksum type
-- File size doesn't match expected size from header calculations
+- File size doesn't match expected size
 
 ### Runtime Errors
 
@@ -324,7 +274,7 @@ individually consistent)
 ### File Size Calculation
 
 ```
-Header Size = 64 bytes
+Header Size = 16 bytes
 Catalog Size = Σ(metric_entry_size) for all metrics
 Catalog Padding = (8 - (catalog_size % 8)) % 8
 Data Section Offset = 64 + catalog_size + catalog_padding
@@ -332,7 +282,8 @@ Data Size = Σ(metric_data_size) for all metrics
 Total File Size = data_section_offset + data_size
 
 Where metric_entry_size includes:
-- 1 byte (type) + 0-2 bytes (config) + 1 byte (name_length) + name_length
+- 1 byte (type) + 1 byte (name_length) + name_length
+- 2 additional bytes for each histogram
 ```
 
 ### Optimal Access Patterns
@@ -340,36 +291,6 @@ Where metric_entry_size includes:
 - Consumers should read entire data section in sequential order
 - Avoid random access patterns within large histogram data
 - Consider using `madvise(MADV_SEQUENTIAL)` for large files
-
-## Versioning
-
-### Version 1.0 (Current)
-
-- Initial implementation as specified above
-- Magic number: `0x52455A4C`
-- Major version: 1, Minor version: 0
-
-### Version Compatibility Rules
-
-- **Major version changes**: Breaking changes that require consumer updates
-  - Changes to header structure
-  - Changes to catalog format
-  - Changes to data layout
-  - Removal of required fields
-
-- **Minor version changes**: Backward-compatible additions
-  - New optional fields in reserved space
-  - New metric types (with graceful degradation)
-  - New checksum algorithms
-  - Additional status flags
-
-### Consumer Version Handling
-
-- Consumers MUST support the exact major version they were built for
-- Consumers SHOULD accept any minor version >= their supported version
-- Consumers MUST reject files with unsupported major versions
-- Consumers MAY warn about unknown minor version features but continue
-processing
 
 ## Example Usage
 
@@ -397,24 +318,5 @@ processing
 
 - All multi-byte integers use native endianness of the target platform
 - UTF-8 encoding for all text fields
-- Unix timestamps in seconds since epoch
 - Metric names should follow Prometheus conventions where applicable
 - Files may use any naming convention - filename becomes a metric attribute
-
-### Byte Order Examples
-
-**Little-endian (x86_64) representation of u64 value 0x0123456789ABCDEF:**
-```
-Offset: 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07
-Bytes:  0xEF 0xCD 0xAB 0x89 0x67 0x45 0x23 0x01
-```
-
-**Big-endian (some aarch64) representation of the same value:**
-```
-Offset: 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07
-Bytes:  0x01 0x23 0x45 0x67 0x89 0xAB 0xCD 0xEF
-```
-
-Producers and consumers must use the same native byte order. Cross-platform
-compatibility requires matching endianness - mismatched endianness will cause
-the magic number to appear incorrect and the file will be rejected.
