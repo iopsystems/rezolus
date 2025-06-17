@@ -23,6 +23,9 @@ The file consists of three main sections:
 └─────────────────┘
 ```
 
+The file format is designed so the data section is 8-byte aligned to ensure that
+read and write operations are naturally atomic on x86_64 and aarch64.
+
 ## Header Section
 
 The header is exactly 16 bytes and contains:
@@ -49,8 +52,7 @@ The catalog immediately follows the header and contains a sequential list of
 metric definitions.
 
 Note: The catalog section must be followed by zero-padding to ensure the data
-section is 8-byte aligned. This guarantees that reads from the data section have
-atomic semantics on x86_64 and aarch64.
+section is 8-byte aligned.
 
 Each entry has the following structure:
 
@@ -78,7 +80,6 @@ Each entry has the following structure:
      - Byte 1: Grouping Power (must be < max_value_power)
      - Byte 2: Max Value Power (must be ≤ 64)
    - Data: Variable number of 8-byte buckets
-   - Bucket count: `(max_value_power - grouping_power + 1) * 2^grouping_power`
 
 ### Metric Name Requirements
 
@@ -92,8 +93,7 @@ https://prometheus.io/docs/concepts/data_model/#metric-names-and-labels
 The data section contains the actual metric values in the exact same order as
 defined in the catalog. Metrics MUST appear in the data section in the same
 sequence as their corresponding entries in the catalog section. Each metric's
-data is stored sequentially with no padding between metrics, since all metric
-types are naturally 8-byte aligned.
+data is stored sequentially with no padding between metrics.
 
 ### Data Layout
 
@@ -105,10 +105,6 @@ H2Histogram:  [8*N bytes: N u64 bucket counters stored as contiguous array]
 
 **H2Histogram Storage Details:**
 - All buckets for one histogram are stored as a contiguous array of u64 values
-- Bucket count N is calculated as:
-`(max_value_power - grouping_power + 1) * 2^grouping_power`
-- Bucket ordering and value-to-bucket mapping is defined by the h2histogram
-algorithm
 - For histogram implementation details, see: https://h2histogram.org and the
 reference implementation: https://docs.rs/histogram
 
