@@ -56,7 +56,6 @@ impl Scheduler {
                     std::process::exit(1);
                 }
             }
-            // Mismatched policy and parameters
             _ => {
                 eprintln!(
                     "scheduler policy {:?} is incompatible with the provided parameters",
@@ -72,8 +71,8 @@ impl Scheduler {
         self.set_scheduler();
 
         match self.parameters {
-            Parameters::Realtime { priority } => self.set_realtime_scheduler(priority),
-            Parameters::Normal { niceness } => self.set_normal_scheduler(niceness),
+            Parameters::Normal { niceness } => self.set_niceness(niceness),
+            _ => {}
         }
     }
 
