@@ -32,7 +32,7 @@ impl Scheduler {
     pub fn check(&self) {
         match self {
             Self::Normal { niceness } => {
-                 if !(-20..=19).contains(niceness) {
+                if !(-20..=19).contains(niceness) {
                     eprintln!("niceness must be in the range -20..=19, got {}", niceness);
                     std::process::exit(1);
                 }
@@ -52,7 +52,7 @@ impl Scheduler {
         self.set_scheduler();
 
         if let Self::Normal { niceness } = self {
-            let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, niceness) };
+            let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, *niceness) };
 
             if result == -1 {
                 let e = std::io::Error::last_os_error();
@@ -66,8 +66,8 @@ impl Scheduler {
     fn set_scheduler(&self) {
         let (policy, priority) = match self {
             Self::Normal { .. } => (SCHED_NORMAL, 0),
-            Self::Fifo { priority } => (SCHED_FIFO, priority),
-            Self::RoundRobin { priority } => (SCHED_RR, priority),
+            Self::Fifo { priority } => (SCHED_FIFO, *priority),
+            Self::RoundRobin { priority } => (SCHED_RR, *priority),
         } | SCHED_RESET_ON_FORK;
 
         let param = libc::sched_param {
@@ -78,10 +78,7 @@ impl Scheduler {
 
         if result == -1 {
             let e = std::io::Error::last_os_error();
-            eprintln!(
-                "could not set scheduler policy: {:?} error: {e}",
-                self.policy
-            );
+            eprintln!("could not set scheduler policy: {policy} error: {e}",);
             std::process::exit(1);
         }
     }
@@ -89,6 +86,8 @@ impl Scheduler {
 
 impl Default for Scheduler {
     fn default() -> Self {
-        Scheduler::RoundRobin { priority: priority() }
+        Scheduler::RoundRobin {
+            priority: priority(),
+        }
     }
 }
