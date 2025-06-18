@@ -11,19 +11,15 @@ fn niceness() -> i32 {
 #[cfg(target_os = "linux")]
 use libc::{SCHED_FIFO, SCHED_NORMAL, SCHED_RESET_ON_FORK, SCHED_RR};
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "policy", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum Scheduler {
     Normal {
-        #[serde(default = "niceness")]
         niceness: i32,
     },
     Fifo {
-        #[serde(default = "priority")]
         priority: i32,
     },
     RoundRobin {
-        #[serde(default = "priority")]
         priority: i32,
     },
 }
@@ -88,6 +84,40 @@ impl Default for Scheduler {
     fn default() -> Self {
         Scheduler::RoundRobin {
             priority: priority(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Scheduler {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SchedulerHelper {
+            policy: Option<String>,
+            niceness: Option<i32>,
+            priority: Option<i32>,
+        }
+
+        let helper = SchedulerHelper::deserialize(deserializer)?;
+
+        match helper.policy.as_deref() {
+            Some("normal") => Ok(Scheduler::Normal {
+                niceness: helper.niceness.unwrap_or_else(niceness)
+            }),
+            Some("fifo") => Ok(Scheduler::Fifo {
+                priority: helper.priority.unwrap_or_else(priority)
+            }),
+            Some("round_robin") => Ok(Scheduler::RoundRobin {
+                priority: helper.priority.unwrap_or_else(priority)
+            }),
+            None => Ok(Scheduler::RoundRobin {
+                priority: helper.priority.unwrap_or_else(priority)
+            }),
+            Some(unknown) => Err(serde::de::Error::custom(
+                format!("Unknown scheduler policy: {}", unknown)
+            )),
         }
     }
 }
