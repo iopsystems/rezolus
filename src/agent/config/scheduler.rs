@@ -103,18 +103,39 @@ impl<'de> Deserialize<'de> for Scheduler {
         let helper = SchedulerHelper::deserialize(deserializer)?;
 
         match helper.policy.as_deref() {
-            Some("normal") => Ok(Scheduler::Normal {
-                niceness: helper.niceness.unwrap_or_else(niceness)
-            }),
-            Some("fifo") => Ok(Scheduler::Fifo {
-                priority: helper.priority.unwrap_or_else(priority)
-            }),
-            Some("round_robin") => Ok(Scheduler::RoundRobin {
-                priority: helper.priority.unwrap_or_else(priority)
-            }),
-            None => Ok(Scheduler::RoundRobin {
-                priority: helper.priority.unwrap_or_else(priority)
-            }),
+            Some("normal") => {
+                if helper.priority.is_some() {
+                    Err(serde::de::Error::custom(
+                        "Cannot specify `priority` for scheduler policy: normal".to_string()
+                    ))
+                } else {
+                    Ok(Scheduler::Normal {
+                        niceness: helper.niceness.unwrap_or_else(niceness)
+                    })
+                }
+            }
+            Some("fifo") => {
+                if helper.niceness.is_some() {
+                    Err(serde::de::Error::custom(
+                        "Cannot specify `niceness` for scheduler policy: fifo".to_string()
+                    ))
+                } else {
+                    Ok(Scheduler::Fifo {
+                        priority: helper.priority.unwrap_or_else(priority)
+                    })
+                }
+            }
+            Some("round_robin") | None => {
+                if helper.niceness.is_some() {
+                    Err(serde::de::Error::custom(
+                        "Cannot specify `niceness` for scheduler policy: fifo".to_string()
+                    ))
+                } else {
+                    Ok(Scheduler::RoundRobin {
+                        priority: helper.priority.unwrap_or_else(priority)
+                    })
+                }
+            }
             Some(unknown) => Err(serde::de::Error::custom(
                 format!("Unknown scheduler policy: {}", unknown)
             )),
