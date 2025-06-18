@@ -82,7 +82,7 @@ jobs:
         run: cargo install cargo-audit
       - run: |
           cargo audit
-      
+
   rustfmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -129,7 +129,7 @@ jobs:
       - name: build
         shell: bash
         run: |
-          cargo build --workspace ${{ env.FEATURE_FLAGS }} --all-targets --locked ${{ env.FLAGS }} 
+          cargo build --workspace ${{ env.FEATURE_FLAGS }} --all-targets --locked ${{ env.FLAGS }}
       - name: test
         shell: bash
         run: |
@@ -140,11 +140,21 @@ jobs:
         run: |
           cargo test --workspace ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
       - name: smoketest
+        if: ${{ matrix.profile == 'release' }}
         shell: bash
         run: |
-          cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- config/agent.toml & echo $! > agent.pid
+          cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
+          sudo ./target/release/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
-          cargo run ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }} --bin rezolus -- record --duration 60s http://127.0.0.1:4241 rezolus.parquet
+          ./target/release/rezolus record --duration 30 http://127.0.0.1:4241 rezolus.parquet
+      - name: smoketest
+        if: ${{ matrix.profile == 'debug' }}
+        shell: bash
+        run: |
+          cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
+          sudo ./target/debug/rezolus config/agent.toml & echo $! > agent.pid
+          sleep 15
+          ./target/debug/rezolus record --duration 30 http://127.0.0.1:4241 rezolus.parquet
 
   check-success:
     name: verify all tests pass
