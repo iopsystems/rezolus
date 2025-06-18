@@ -104,8 +104,6 @@ impl Scheduler {
 
     #[cfg(target_os = "linux")]
     fn set_niceness(&self, niceness: i32) {
-        assert!(self.policy != Policy::Normal);
-
         let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0 as libc::id_t, niceness) };
 
         if result == -1 {
