@@ -69,6 +69,8 @@ impl Scheduler {
     /// Apply this scheduling configuration
     #[cfg(target_os = "linux")]
     pub fn apply(&self) {
+        self.set_scheduler();
+
         match self.parameters {
             Parameters::Realtime { priority } => self.set_realtime_scheduler(priority),
             Parameters::Normal { niceness } => self.set_normal_scheduler(niceness),
@@ -76,57 +78,37 @@ impl Scheduler {
     }
 
     #[cfg(target_os = "linux")]
-    fn set_realtime_scheduler(&self, priority: i32) {
+    fn set_scheduler(&self) {
         let policy = match self.policy {
             Policy::Fifo => SCHED_FIFO,
             Policy::RoundRobin => SCHED_RR,
-            _ => unreachable!(),
+            Policy::Normal => SCHED_NORMAL,
         } | SCHED_RESET_ON_FORK;
+
+        let priority = match self.parameters {
+            Parameters::Realtime { priority } => priority,
+            Parameters::Normal { .. } => 0,
+        };
 
         let param = libc::sched_param {
             sched_priority: priority,
         };
 
-        let result = unsafe { libc::sched_setscheduler(0 as libc::pid_t, policy, &param) };
+        let result = unsafe { libc::sched_setscheduler(0, policy, &param) };
 
         if result == -1 {
-            let errno = std::io::Error::last_os_error();
-            match errno.raw_os_error().unwrap_or(0) {
-                libc::EPERM => {
-                    eprintln!("could not set scheduler policy to realtime: permission denied");
-                    std::process::exit(1);
-                }
-                _ => {
-                    eprintln!(
-                        "could not set scheduler policy to realtime: {}",
-                        errno.to_string()
-                    );
-                    std::process::exit(1);
-                }
-            }
+            let e = std::io::Error::last_os_error();
+            eprintln!("could not set scheduler policy: {:?} error: {e}");
+            std::process::exit(1);
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn set_normal_scheduler(&self, niceness: i32) {
-        let policy = SCHED_NORMAL | SCHED_RESET_ON_FORK;
+    fn set_niceness(&self, niceness: i32) {
+        assert!(self.policy != Policy::Normal);
 
-        // normal policy uses priority of 0
-        let param = libc::sched_param { sched_priority: 0 };
-
-        let result = unsafe { libc::sched_setscheduler(0 as libc::pid_t, policy, &param) };
-
-        if result == -1 {
-            let errno = std::io::Error::last_os_error();
-            eprintln!(
-                "could not set scheduler policy to normal: {}",
-                errno.to_string()
-            );
-            std::process::exit(1);
-        }
-
-        // set the niceness
         let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0 as libc::id_t, niceness) };
+
         if result == -1 {
             let errno = std::io::Error::last_os_error();
             eprintln!("could not set niceness: {}", errno.to_string());
