@@ -66,9 +66,9 @@ impl Scheduler {
     fn set_scheduler(&self) {
         let (policy, priority) = match self {
             Self::Normal { .. } => (SCHED_NORMAL, 0),
-            Self::Fifo { priority } => (SCHED_FIFO, *priority),
-            Self::RoundRobin { priority } => (SCHED_RR, *priority),
-        } | SCHED_RESET_ON_FORK;
+            Self::Fifo { priority } => (SCHED_FIFO | SCHED_RESET_ON_FORK, *priority),
+            Self::RoundRobin { priority } => (SCHED_RR | SCHED_RESET_ON_FORK, *priority),
+        };
 
         let param = libc::sched_param {
             sched_priority: priority,
