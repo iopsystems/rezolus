@@ -146,7 +146,7 @@ jobs:
           cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
           sudo ./target/release/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
-          ./target/release/rezolus record --duration 30 http://127.0.0.1:4241 rezolus.parquet
+          ./target/release/rezolus record --duration 30s http://127.0.0.1:4241 rezolus.parquet
       - name: smoketest
         if: ${{ matrix.profile == 'debug' }}
         shell: bash
@@ -154,7 +154,7 @@ jobs:
           cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
           sudo ./target/debug/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
-          ./target/debug/rezolus record --duration 30 http://127.0.0.1:4241 rezolus.parquet
+          ./target/debug/rezolus record --duration 30s http://127.0.0.1:4241 rezolus.parquet
 
   check-success:
     name: verify all tests pass
