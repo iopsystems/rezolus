@@ -70,9 +70,14 @@ impl Scheduler {
     pub fn apply(&self) {
         self.set_scheduler();
 
-        match self.parameters {
-            Parameters::Normal { niceness } => self.set_niceness(niceness),
-            _ => {}
+        if let Parameters::Normal { niceness } = self.parameters {
+            let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, niceness) };
+
+            if result == -1 {
+                let errno = std::io::Error::last_os_error();
+                eprintln!("could not set niceness: {}", errno.to_string());
+                std::process::exit(1);
+            }
         }
     }
 
@@ -97,18 +102,10 @@ impl Scheduler {
 
         if result == -1 {
             let e = std::io::Error::last_os_error();
-            eprintln!("could not set scheduler policy: {:?} error: {e}", self.policy);
-            std::process::exit(1);
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn set_niceness(&self, niceness: i32) {
-        let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0 as libc::id_t, niceness) };
-
-        if result == -1 {
-            let errno = std::io::Error::last_os_error();
-            eprintln!("could not set niceness: {}", errno.to_string());
+            eprintln!(
+                "could not set scheduler policy: {:?} error: {e}",
+                self.policy
+            );
             std::process::exit(1);
         }
     }
