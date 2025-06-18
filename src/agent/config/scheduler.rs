@@ -97,7 +97,7 @@ impl Scheduler {
 
         if result == -1 {
             let e = std::io::Error::last_os_error();
-            eprintln!("could not set scheduler policy: {:?} error: {e}");
+            eprintln!("could not set scheduler policy: {:?} error: {e}", self.policy);
             std::process::exit(1);
         }
     }
