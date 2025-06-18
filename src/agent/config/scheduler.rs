@@ -13,15 +13,9 @@ use libc::{SCHED_FIFO, SCHED_NORMAL, SCHED_RESET_ON_FORK, SCHED_RR};
 
 #[derive(Debug, Clone)]
 pub enum Scheduler {
-    Normal {
-        niceness: i32,
-    },
-    Fifo {
-        priority: i32,
-    },
-    RoundRobin {
-        priority: i32,
-    },
+    Normal { niceness: i32 },
+    Fifo { priority: i32 },
+    RoundRobin { priority: i32 },
 }
 
 impl Scheduler {
@@ -106,39 +100,40 @@ impl<'de> Deserialize<'de> for Scheduler {
             Some("normal") => {
                 if helper.priority.is_some() {
                     Err(serde::de::Error::custom(
-                        "Cannot specify `priority` for scheduler policy: normal".to_string()
+                        "Cannot specify `priority` for scheduler policy: normal".to_string(),
                     ))
                 } else {
                     Ok(Scheduler::Normal {
-                        niceness: helper.niceness.unwrap_or_else(niceness)
+                        niceness: helper.niceness.unwrap_or_else(niceness),
                     })
                 }
             }
             Some("fifo") => {
                 if helper.niceness.is_some() {
                     Err(serde::de::Error::custom(
-                        "Cannot specify `niceness` for scheduler policy: fifo".to_string()
+                        "Cannot specify `niceness` for scheduler policy: fifo".to_string(),
                     ))
                 } else {
                     Ok(Scheduler::Fifo {
-                        priority: helper.priority.unwrap_or_else(priority)
+                        priority: helper.priority.unwrap_or_else(priority),
                     })
                 }
             }
             Some("round_robin") | None => {
                 if helper.niceness.is_some() {
                     Err(serde::de::Error::custom(
-                        "Cannot specify `niceness` for scheduler policy: fifo".to_string()
+                        "Cannot specify `niceness` for scheduler policy: fifo".to_string(),
                     ))
                 } else {
                     Ok(Scheduler::RoundRobin {
-                        priority: helper.priority.unwrap_or_else(priority)
+                        priority: helper.priority.unwrap_or_else(priority),
                     })
                 }
             }
-            Some(unknown) => Err(serde::de::Error::custom(
-                format!("Unknown scheduler policy: {}", unknown)
-            )),
+            Some(unknown) => Err(serde::de::Error::custom(format!(
+                "Unknown scheduler policy: {}",
+                unknown
+            ))),
         }
     }
 }
