@@ -74,8 +74,8 @@ impl Scheduler {
             let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, niceness) };
 
             if result == -1 {
-                let errno = std::io::Error::last_os_error();
-                eprintln!("could not set niceness: {}", errno.to_string());
+                let e = std::io::Error::last_os_error();
+                eprintln!("could not set niceness: {e}");
                 std::process::exit(1);
             }
         }
