@@ -5,6 +5,21 @@ listen = "0.0.0.0:4241"
 # resource usage.
 ttl = "10ms"
 
+[scheduler]
+# By default, Rezolus will use the SCHED_RR realtime scheduling policy to ensure
+# collection happens with minimal delay. Other policies are: `normal` and `fifo`
+# policy = "round_robin"
+
+# When using `round_robin` or `fifo` realtime policies, a priority may be set
+# in the range 1..=99. Larger numbers are higher priority. Rezolus uses a
+# default priority of 15 to balance between realtime responsiveness and safety.
+# priority = 15
+
+# When using `normal` scheduling policy, Rezolus defaults to the normal niceness
+# value of 0. The value may be in the range -20..=19 with lower values getting
+# higher priority.
+# niceness = 0
+
 [log]
 # Controls the log level: "error", "warn", "info", "debug", "trace"
 level = "info"
