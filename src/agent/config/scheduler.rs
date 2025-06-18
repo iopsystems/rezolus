@@ -12,55 +12,36 @@ fn niceness() -> i32 {
 use libc::{SCHED_FIFO, SCHED_NORMAL, SCHED_RESET_ON_FORK, SCHED_RR};
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct Scheduler {
-    pub policy: Policy,
-    #[serde(flatten)]
-    pub parameters: Parameters,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Policy {
-    Normal,
-    Fifo,
-    RoundRobin,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-#[allow(dead_code)]
-pub enum Parameters {
-    Realtime {
-        #[serde(default = "priority")]
-        priority: i32,
-    },
+#[serde(tag = "policy", rename_all = "snake_case")]
+pub enum Scheduler {
     Normal {
         #[serde(default = "niceness")]
         niceness: i32,
+    },
+    Fifo {
+        #[serde(default = "priority")]
+        priority: i32,
+    },
+    RoundRobin {
+        #[serde(default = "priority")]
+        priority: i32,
     },
 }
 
 impl Scheduler {
     pub fn check(&self) {
-        match (&self.policy, &self.parameters) {
-            (Policy::Fifo | Policy::RoundRobin, Parameters::Realtime { priority }) => {
-                if !(1..=99).contains(priority) {
-                    eprintln!("priority must be in the range 1..=99, got {}", priority);
-                    std::process::exit(1);
-                }
-            }
-            (Policy::Normal, Parameters::Normal { niceness }) => {
-                if !(-20..=19).contains(niceness) {
+        match self {
+            Self::Normal { niceness } => {
+                 if !(-20..=19).contains(niceness) {
                     eprintln!("niceness must be in the range -20..=19, got {}", niceness);
                     std::process::exit(1);
                 }
             }
-            _ => {
-                eprintln!(
-                    "scheduler policy {:?} is incompatible with the provided parameters",
-                    self.policy
-                );
+            Self::Fifo { priority } | Self::RoundRobin { priority } => {
+                if !(1..=99).contains(priority) {
+                    eprintln!("priority must be in the range 1..=99, got {}", priority);
+                    std::process::exit(1);
+                }
             }
         }
     }
@@ -70,7 +51,7 @@ impl Scheduler {
     pub fn apply(&self) {
         self.set_scheduler();
 
-        if let Parameters::Normal { niceness } = self.parameters {
+        if let Self::Normal { niceness } = self {
             let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, niceness) };
 
             if result == -1 {
@@ -83,16 +64,11 @@ impl Scheduler {
 
     #[cfg(target_os = "linux")]
     fn set_scheduler(&self) {
-        let policy = match self.policy {
-            Policy::Fifo => SCHED_FIFO,
-            Policy::RoundRobin => SCHED_RR,
-            Policy::Normal => SCHED_NORMAL,
+        let (policy, priority) = match self {
+            Self::Normal { .. } => (SCHED_NORMAL, 0),
+            Self::Fifo { priority } => (SCHED_FIFO, priority),
+            Self::RoundRobin { priority } => (SCHED_RR, priority),
         } | SCHED_RESET_ON_FORK;
-
-        let priority = match self.parameters {
-            Parameters::Realtime { priority } => priority,
-            Parameters::Normal { .. } => 0,
-        };
 
         let param = libc::sched_param {
             sched_priority: priority,
@@ -113,11 +89,6 @@ impl Scheduler {
 
 impl Default for Scheduler {
     fn default() -> Self {
-        Scheduler {
-            policy: Policy::RoundRobin,
-            parameters: Parameters::Realtime {
-                priority: priority(),
-            },
-        }
+        Scheduler::RoundRobin { priority: priority() }
     }
 }
