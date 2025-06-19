@@ -9,7 +9,7 @@ fn niceness() -> i32 {
 }
 
 #[cfg(target_os = "linux")]
-use libc::{SCHED_FIFO, SCHED_NORMAL, SCHED_RESET_ON_FORK, SCHED_RR};
+use libc::{SCHED_FIFO, SCHED_NORMAL, SCHED_RR};
 
 #[derive(Debug, Clone)]
 pub enum Scheduler {
@@ -56,8 +56,8 @@ impl Scheduler {
     fn set_scheduler(&self) {
         let (policy, priority) = match self {
             Self::Normal { .. } => (SCHED_NORMAL, 0),
-            Self::Fifo { priority } => (SCHED_FIFO | SCHED_RESET_ON_FORK, *priority),
-            Self::RoundRobin { priority } => (SCHED_RR | SCHED_RESET_ON_FORK, *priority),
+            Self::Fifo { priority } => (SCHED_FIFO, *priority),
+            Self::RoundRobin { priority } => (SCHED_RR, *priority),
         };
 
         let param = libc::sched_param {
