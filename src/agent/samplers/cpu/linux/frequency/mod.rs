@@ -259,7 +259,7 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
     let mut cores = Vec::new();
 
     for core in logical_cores.drain(..) {
-        if let Ok(mut core) = Core::new(core) {
+        if let Ok(core) = Core::new(core) {
             cores.push(core);
         }
     }
