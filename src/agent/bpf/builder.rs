@@ -85,8 +85,7 @@ impl PerfCounters {
             let pt_pending = Arc::new(AtomicUsize::new(perf_counters.inner.len()));
 
             debug!(
-                "{} launching {} threads to read perf counters",
-                self.name,
+                "launching {} threads to read perf counters",
                 pt_pending.load(Ordering::SeqCst)
             );
 
@@ -140,8 +139,7 @@ impl PerfCounters {
             let mut unpinned: Vec<_> = unpinned_rx.try_iter().collect();
 
             debug!(
-                "{} there are {} perf threads which could not be pinned",
-                self.name,
+                "there are {} perf threads which could not be pinned",
                 unpinned.len()
             );
 
@@ -169,7 +167,7 @@ impl PerfCounters {
                     .expect("failed to send perf thread sync primitive");
             }
 
-            debug!("{} all perf threads launched", self.name);
+            debug!("all perf threads launched");
         }
     }
 
