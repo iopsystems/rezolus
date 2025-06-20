@@ -65,7 +65,7 @@ struct FrequencyInner {
 
 impl FrequencyInner {
     pub fn new() -> Result<Self, std::io::Error> {
-        let (perf_threads, perf_sync) = get_cores()?;
+        let (perf_threads, perf_sync) = spawn_threads()?;
 
         Ok(Self {
             perf_threads,
@@ -235,7 +235,45 @@ fn logical_cores() -> Result<Vec<usize>, std::io::Error> {
     Ok(cores.iter().copied().collect())
 }
 
-fn get_cores() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    // on virtualized environments, it is typically better to use multiple
+    // threads to read the perf counters to get more consistent snapshot latency
+    if is_virt() {
+        spawn_threads_multi()
+    } else {
+        spawn_threads_single()
+    }
+}
+
+fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    debug!("using single-threaded perf counter collection");
+
+    let mut logical_cores = logical_cores()?;
+
+    let mut perf_threads = Vec::new();
+    let mut perf_sync = Vec::new();
+
+    let psync = SyncPrimitive::new();
+    let psync2 = psync.clone();
+
+    perf_threads.push(std::thread::spawn(move || loop {
+        psync.wait_trigger();
+
+        for core in unpinned.iter_mut() {
+            core.refresh();
+        }
+
+        psync.notify();
+    }));
+
+    perf_sync.push(psync2);
+
+    Ok((perf_threads, perf_sync))
+}
+
+fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    debug!("using multi-threaded perf counter collection");
+
     let mut logical_cores = logical_cores()?;
 
     let (unpinned_tx, unpinned_rx) = sync_channel(logical_cores.len());
