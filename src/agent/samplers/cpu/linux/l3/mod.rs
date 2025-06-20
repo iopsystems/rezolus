@@ -381,7 +381,7 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
 
     debug!("{} checking for unpinned perf threads", NAME);
 
-    let mut unpinned: Vec<Core> = unpinned_rx.try_iter().collect();
+    let mut unpinned: Vec<L3Cache> = unpinned_rx.try_iter().collect();
 
     debug!(
         "{} there are {} perf threads which could not be pinned",
