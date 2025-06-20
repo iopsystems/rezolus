@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 pub struct BpfProgStats {
@@ -82,15 +83,15 @@ impl PerfCounters {
 
             let (unpinned_tx, unpinned_rx) = sync_channel(cpus);
 
-            let pt_pending = Arc::new(AtomicUsize::new(perf_counters.inner.len()));
+            let pt_pending = Arc::new(AtomicUsize::new(self.inner.len()));
 
             debug!(
                 "launching {} threads to read perf counters",
                 pt_pending.load(Ordering::SeqCst)
             );
 
-            for (cpu, mut counters) in perf_counters.inner.into_iter() {
-                trace!("{} launching perf thread for cpu {}", self.name, cpu);
+            for (cpu, mut counters) in self.inner.into_iter() {
+                trace!("launching perf thread for cpu {}", cpu);
 
                 let psync = SyncPrimitive::new();
                 let psync2 = psync.clone();
@@ -128,13 +129,13 @@ impl PerfCounters {
                     .expect("failed to send perf thread sync primitive");
             }
 
-            debug!("{} waiting for perf threads to launch", self.name);
+            debug!("waiting for perf threads to launch");
 
             while pt_pending.load(Ordering::Relaxed) > 0 {
                 std::thread::sleep(Duration::from_millis(50));
             }
 
-            debug!("{} checking for unpinned perf threads", self.name);
+            debug!("checking for unpinned perf threads");
 
             let mut unpinned: Vec<_> = unpinned_rx.try_iter().collect();
 
@@ -175,7 +176,7 @@ impl PerfCounters {
         if !self.inner.is_empty() {
             debug!("using single-threaded perf counter collection");
 
-            let mut counters: Vec<_> = perf_counters.inner.values().collect();
+            let mut counters: Vec<_> = self.inner.values().collect();
 
             let psync = SyncPrimitive::new();
             let psync2 = psync.clone();
@@ -368,7 +369,7 @@ where
                 }
             }
 
-            perf_counters.spawn();
+            perf_counters.spawn(perf_threads_tx.clone(), perf_sync_tx.clone());
 
             let ringbuffer: Option<RingBuffer> = if self.ringbuf_handler.is_empty() {
                 None
