@@ -48,6 +48,36 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         .map(|v| v.rate().sum()),
     );
 
+    rezolus.plot(
+        PlotOpts::line("Total BPF Overhead", "bpf-overhead", Unit::Count),
+        data.counters(
+            "rezolus_bpf_run_time",
+            (),
+        )
+        .map(|v| v.rate().sum() / 1e9),
+    );
+
+    rezolus.multi(
+        PlotOpts::multi("BPF Per-Sampler Overhead", "bpf-sampler-overhead", Unit::Count),
+        data.counters(
+            "rezolus_bpf_run_time",
+            (),
+        )
+        .map(|v| v.rate().by_sampler() / 1e9).map(|v| v.top_n(20, average))
+    );
+
+    if let (Some(run_time), Some(run_count)) = (
+        data.counters("rezolus_bpf_run_time", ())
+            .map(|v| v.rate().by_sampler() / 1e9),
+         data.counters("rezolus_bpf_run_count", ())
+            .map(|v| v.rate().by_sampler() / 1e9),
+    ) {
+        rezolus.multi(
+            PlotOpts::multi("BPF Per-Sampler Execution Time", "bpf-execution-time", Unit::Time),
+            Some((run_time / run_count).top_n(20, average)),
+        );
+    }
+
     view.group(rezolus);
 
     view
