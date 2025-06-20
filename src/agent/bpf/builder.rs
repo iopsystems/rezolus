@@ -343,7 +343,9 @@ where
                             loop {
                                 psync.wait_trigger();
 
-                                counters.refresh();
+                                for c in counters.iter_mut() {
+                                    c.refresh();
+                                }
 
                                 psync.notify();
                             }
