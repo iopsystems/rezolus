@@ -41,7 +41,7 @@ fn whole_pages<T>(count: usize) -> usize {
 
 use counters::{Counters, CpuCounters, PackedCounters};
 use histogram::Histogram;
-use sync_primitive::SyncPrimitive;
+pub use sync_primitive::SyncPrimitive;
 
 pub struct AsyncBpf {
     name: &'static str,

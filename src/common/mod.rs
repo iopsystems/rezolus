@@ -80,3 +80,24 @@ pub fn utc_instant() -> (DateTime<Utc>, Instant) {
     eprintln!("could not get a UTC time and Instant pair");
     std::process::exit(1);
 }
+
+/// This function is best-effort detection of if the code is running inside of a
+/// virtual machine.
+pub fn is_virt() -> bool {
+    let sys_vendor = std::fs::read_to_string("/sys/class/dmi/id/sys_vendor")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    matches!(
+        sys_vendor.as_str(),
+        "Amazon EC2"
+            | "Google"
+            | "innotek GmbH"
+            | "Microsoft Corporation"
+            | "QEMU"
+            | "Red Hat"
+            | "VMware, Inc."
+            | "Xen"
+    )
+}
