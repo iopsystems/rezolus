@@ -259,7 +259,7 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
     perf_threads.push(std::thread::spawn(move || loop {
         psync.wait_trigger();
 
-        for core in unpinned.iter_mut() {
+        for core in logical_cores.iter_mut() {
             core.refresh();
         }
 
