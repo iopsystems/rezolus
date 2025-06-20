@@ -183,7 +183,7 @@ impl PerfCounters {
         if !self.inner.is_empty() {
             debug!("using single-threaded perf counter collection");
 
-            let mut counters: Vec<_> = self.inner.into_iter().map(|(_, v)| v).collect();
+            let mut counters: Vec<_> = self.inner.into_values().collect();
 
             let psync = SyncPrimitive::new();
             let psync2 = psync.clone();
@@ -259,6 +259,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     cpu_counters: Vec<(&'static str, Vec<&'static CounterGroup>)>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
+    #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
 }
 
