@@ -256,10 +256,18 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
     let psync = SyncPrimitive::new();
     let psync2 = psync.clone();
 
+    let mut cores = Vec::new();
+
+    for core in logical_cores.drain(..) {
+        if let Ok(mut core) = Core::new(core) {
+            cores.push(core);
+        }
+    }
+
     perf_threads.push(std::thread::spawn(move || loop {
         psync.wait_trigger();
 
-        for core in logical_cores.iter_mut() {
+        for core in cores.iter_mut() {
             core.refresh();
         }
 
