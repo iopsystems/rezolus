@@ -154,6 +154,22 @@ impl L3Cache {
 
         Err(())
     }
+
+    pub fn refresh(&mut self) {
+        if let Ok(group) = self.access.read_group() {
+            if let (Some(access), Some(miss)) =
+                (group.get(&self.access), group.get(&self.miss))
+            {
+                let access = access.value();
+                let miss = miss.value();
+
+                for cpu in &self.shared_cores {
+                    let _ = CPU_L3_ACCESS.set(*cpu, access);
+                    let _ = CPU_L3_MISS.set(*cpu, miss);
+                }
+            }
+        }
+    }
 }
 
 fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
@@ -264,4 +280,131 @@ fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
     } else {
         None
     }
+}
+
+
+fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    // on virtualized environments, it is typically better to use multiple
+    // threads to read the perf counters to get more consistent snapshot latency
+    if is_virt() {
+        spawn_threads_multi()
+    } else {
+        spawn_threads_single()
+    }
+}
+
+fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    debug!("using single-threaded perf counter collection");
+
+    let mut logical_cores = logical_cores()?;
+
+    let mut perf_threads = Vec::new();
+    let mut perf_sync = Vec::new();
+
+    let psync = SyncPrimitive::new();
+    let psync2 = psync.clone();
+
+    let mut cores = Vec::new();
+
+    for core in logical_cores.drain(..) {
+        if let Ok(core) = Core::new(core) {
+            cores.push(core);
+        }
+    }
+
+    perf_threads.push(std::thread::spawn(move || loop {
+        psync.wait_trigger();
+
+        for core in cores.iter_mut() {
+            core.refresh();
+        }
+
+        psync.notify();
+    }));
+
+    perf_sync.push(psync2);
+
+    Ok((perf_threads, perf_sync))
+}
+
+fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    debug!("using multi-threaded perf counter collection");
+
+    let mut logical_cores = logical_cores()?;
+
+    let (unpinned_tx, unpinned_rx) = sync_channel(logical_cores.len());
+
+    let pt_pending = Arc::new(AtomicUsize::new(logical_cores.len()));
+
+    let mut perf_threads = Vec::new();
+    let mut perf_sync = Vec::new();
+
+    for core in logical_cores.drain(..) {
+        if let Ok(mut core) = Core::new(core) {
+            let psync = SyncPrimitive::new();
+            let psync2 = psync.clone();
+
+            let unpinned = unpinned_tx.clone();
+            let pt_pending = pt_pending.clone();
+
+            perf_threads.push(std::thread::spawn(move || {
+                if !core_affinity::set_for_current(core_affinity::CoreId { id: core.id }) {
+                    unpinned
+                        .send(core)
+                        .expect("failed to send unpinned perf counters");
+                    pt_pending.fetch_sub(1, Ordering::Relaxed);
+                    return;
+                }
+
+                pt_pending.fetch_sub(1, Ordering::Relaxed);
+
+                loop {
+                    psync.wait_trigger();
+
+                    core.refresh();
+
+                    psync.notify();
+                }
+            }));
+
+            perf_sync.push(psync2);
+        } else {
+            pt_pending.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    debug!("{} waiting for perf threads to launch", NAME);
+
+    while pt_pending.load(Ordering::Relaxed) > 0 {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    debug!("{} checking for unpinned perf threads", NAME);
+
+    let mut unpinned: Vec<Core> = unpinned_rx.try_iter().collect();
+
+    debug!(
+        "{} there are {} perf threads which could not be pinned",
+        NAME,
+        unpinned.len()
+    );
+
+    if !unpinned.is_empty() {
+        let psync = SyncPrimitive::new();
+        let psync2 = psync.clone();
+
+        perf_threads.push(std::thread::spawn(move || loop {
+            psync.wait_trigger();
+
+            for core in unpinned.iter_mut() {
+                core.refresh();
+            }
+
+            psync.notify();
+        }));
+
+        perf_sync.push(psync2);
+    }
+
+    Ok((perf_threads, perf_sync))
 }
