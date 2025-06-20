@@ -166,9 +166,7 @@ impl L3Cache {
 
     pub fn refresh(&mut self) {
         if let Ok(group) = self.access.read_group() {
-            if let (Some(access), Some(miss)) =
-                (group.get(&self.access), group.get(&self.miss))
-            {
+            if let (Some(access), Some(miss)) = (group.get(&self.access), group.get(&self.miss)) {
                 let access = access.value();
                 let miss = miss.value();
 
@@ -291,7 +289,6 @@ fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
     }
 }
 
-
 fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
     // on virtualized environments, it is typically better to use multiple
     // threads to read the perf counters to get more consistent snapshot latency
@@ -348,7 +345,9 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
         let pt_pending = pt_pending.clone();
 
         perf_threads.push(std::thread::spawn(move || {
-            if !core_affinity::set_for_current(core_affinity::CoreId { id: cache.shared_cores[0] }) {
+            if !core_affinity::set_for_current(core_affinity::CoreId {
+                id: cache.shared_cores[0],
+            }) {
                 unpinned
                     .send(cache)
                     .expect("failed to send unpinned perf counters");
