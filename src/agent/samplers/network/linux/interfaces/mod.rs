@@ -1,13 +1,23 @@
+//! Collects Network Traffic stats using BPF and traces:
+//!
+//! And produces these stats:
+//!
+
 const NAME: &str = "network_interfaces";
 
-use super::sysfs::SysfsSampler;
-use crate::agent::*;
-
-use tokio::sync::Mutex;
+#[allow(clippy::module_inception)]
+mod bpf {
+    include!(concat!(env!("OUT_DIR"), "/network_interfaces.bpf.rs"));
+}
 
 mod stats;
 
+use bpf::*;
 use stats::*;
+
+use crate::agent::*;
+
+use std::sync::Arc;
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -15,34 +25,49 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let metrics = vec![
-        (&NETWORK_CARRIER_CHANGES, "../carrier_changes"),
-        (&NETWORK_RX_CRC_ERRORS, "rx_crc_errors"),
-        (&NETWORK_RX_DROPPED, "rx_dropped"),
-        (&NETWORK_RX_MISSED_ERRORS, "rx_missed_errors"),
-        (&NETWORK_TX_DROPPED, "tx_dropped"),
+    let counters = vec![
+        &NETWORK_TX_BUSY,
+        &NETWORK_TX_COMPLETE,
+        &NETWORK_TX_TIMEOUT,
+        &NETWORK_TX_ERROR,
     ];
 
-    let inner = SysfsSampler::new(metrics)?;
+    let bpf = BpfBuilder::new(
+        NAME,
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .counters("counters", counters)
+    .build()?;
 
-    Ok(Some(Box::new(Interfaces {
-        inner: Mutex::new(inner),
-    })))
+    Ok(Some(Box::new(bpf)))
 }
 
-struct Interfaces {
-    inner: Mutex<SysfsSampler>,
-}
-
-#[async_trait]
-impl Sampler for Interfaces {
-    fn name(&self) -> &'static str {
-        NAME
+impl SkelExt for ModSkel<'_> {
+    fn map(&self, name: &str) -> &libbpf_rs::Map {
+        match name {
+            "counters" => &self.maps.counters,
+            _ => unimplemented!(),
+        }
     }
+}
 
-    async fn refresh(&self) {
-        let mut inner = self.inner.lock().await;
-
-        inner.refresh().await;
+impl OpenSkelExt for ModSkel<'_> {
+    fn log_prog_instructions(&self) {
+        debug!(
+            "{NAME} skb_drop_counter() BPF instruction count: {}",
+            self.progs.skb_drop_counter.insn_cnt()
+        );
+        debug!(
+            "{NAME} net_dev_xmit() BPF instruction count: {}",
+            self.progs.net_dev_xmit.insn_cnt()
+        );
+        debug!(
+            "{NAME} virtio_tx_timeout() BPF instruction count: {}",
+            self.progs.virtio_tx_timeout.insn_cnt()
+        );
     }
 }
