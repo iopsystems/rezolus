@@ -77,7 +77,11 @@ impl PerfCounters {
         counters.push(counter, group);
     }
 
-    fn spawn_multi(self, perf_threads_tx: SyncSender<JoinHandle<()>>, perf_sync_tx: SyncSender<SyncPrimitive>) {
+    fn spawn_multi(
+        self,
+        perf_threads_tx: SyncSender<JoinHandle<()>>,
+        perf_sync_tx: SyncSender<SyncPrimitive>,
+    ) {
         if !self.inner.is_empty() {
             debug!("using multi-threaded perf counter collection");
 
@@ -179,7 +183,11 @@ impl PerfCounters {
         }
     }
 
-    fn spawn_single(self, perf_threads_tx: SyncSender<JoinHandle<()>>, perf_sync_tx: SyncSender<SyncPrimitive>) {
+    fn spawn_single(
+        self,
+        perf_threads_tx: SyncSender<JoinHandle<()>>,
+        perf_sync_tx: SyncSender<SyncPrimitive>,
+    ) {
         if !self.inner.is_empty() {
             debug!("using single-threaded perf counter collection");
 
@@ -209,7 +217,11 @@ impl PerfCounters {
         }
     }
 
-    pub fn spawn(self, perf_threads_tx: SyncSender<JoinHandle<()>>, perf_sync_tx: SyncSender<SyncPrimitive>) {
+    pub fn spawn(
+        self,
+        perf_threads_tx: SyncSender<JoinHandle<()>>,
+        perf_sync_tx: SyncSender<SyncPrimitive>,
+    ) {
         if !self.inner.is_empty() {
             // on virtualized environments, it is typically better to use
             // multiple threads to read the perf counters to get more
