@@ -14,6 +14,8 @@ use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
 use std::collections::HashSet;
+use std::sync::mpsc::sync_channel;
+use std::thread::JoinHandle;
 
 mod stats;
 
@@ -303,13 +305,13 @@ fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io:
 fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
     debug!("using single-threaded perf counter collection");
 
+    let mut caches = get_l3_caches()?;
+
     let mut perf_threads = Vec::new();
     let mut perf_sync = Vec::new();
 
     let psync = SyncPrimitive::new();
     let psync2 = psync.clone();
-
-    let mut caches = get_l3_caches()?;
 
     perf_threads.push(std::thread::spawn(move || loop {
         psync.wait_trigger();
@@ -329,14 +331,14 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
 fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
     debug!("using multi-threaded perf counter collection");
 
-    let (unpinned_tx, unpinned_rx) = sync_channel(logical_cores.len());
+    let mut caches = get_l3_caches()?;
 
-    let pt_pending = Arc::new(AtomicUsize::new(logical_cores.len()));
+    let (unpinned_tx, unpinned_rx) = sync_channel(caches.len());
+
+    let pt_pending = Arc::new(AtomicUsize::new(caches.len()));
 
     let mut perf_threads = Vec::new();
     let mut perf_sync = Vec::new();
-
-    let mut caches = get_l3_caches()?;
 
     for cache in caches.drain(..) {
         let psync = SyncPrimitive::new();
