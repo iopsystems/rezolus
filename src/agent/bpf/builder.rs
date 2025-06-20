@@ -81,6 +81,13 @@ impl PerfCounters {
         if !self.inner.is_empty() {
             debug!("using multi-threaded perf counter collection");
 
+            let cpus = match crate::common::cpus() {
+                Ok(cpus) => cpus.last().copied().unwrap_or(1023),
+                Err(_) => 1023,
+            };
+
+            let cpus = cpus + 1;
+
             let (unpinned_tx, unpinned_rx) = sync_channel(cpus);
 
             let pt_pending = Arc::new(AtomicUsize::new(self.inner.len()));
@@ -176,7 +183,7 @@ impl PerfCounters {
         if !self.inner.is_empty() {
             debug!("using single-threaded perf counter collection");
 
-            let mut counters: Vec<_> = self.inner.values().collect();
+            let mut counters: Vec<_> = self.inner.into_iter().map(|(_, v)| v).collect();
 
             let psync = SyncPrimitive::new();
             let psync2 = psync.clone();
