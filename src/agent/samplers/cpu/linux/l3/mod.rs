@@ -340,7 +340,7 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
     let mut perf_threads = Vec::new();
     let mut perf_sync = Vec::new();
 
-    for cache in caches.drain(..) {
+    for mut cache in caches.drain(..) {
         let psync = SyncPrimitive::new();
         let psync2 = psync.clone();
 
