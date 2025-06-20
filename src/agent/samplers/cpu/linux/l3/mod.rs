@@ -50,32 +50,39 @@ impl Sampler for CpuL3 {
 }
 
 struct CpuL3Inner {
-    caches: Vec<L3Cache>,
+    perf_threads: Vec<std::thread::JoinHandle<()>>,
+    perf_sync: Vec<SyncPrimitive>,
 }
 
 impl CpuL3Inner {
     pub fn new() -> Result<Self, std::io::Error> {
-        let caches = get_l3_caches()?;
+        let (perf_threads, perf_sync) = spawn_threads()?;
 
-        Ok(Self { caches })
+        Ok(Self {
+            perf_threads,
+            perf_sync,
+        })
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
-        for cache in &mut self.caches {
-            if let Ok(group) = cache.access.read_group() {
-                if let (Some(access), Some(miss)) =
-                    (group.get(&cache.access), group.get(&cache.miss))
-                {
-                    let access = access.value();
-                    let miss = miss.value();
-
-                    for cpu in &cache.shared_cores {
-                        let _ = CPU_L3_ACCESS.set(*cpu, access);
-                        let _ = CPU_L3_MISS.set(*cpu, miss);
-                    }
-                }
+        // check that no perf threads have exited
+        for thread in self.perf_threads.iter() {
+            if thread.is_finished() {
+                panic!("{} perf thread exited early", NAME);
             }
         }
+
+        // trigger and wait on all perf threads
+        let perf_futures: Vec<_> = self
+            .perf_sync
+            .iter()
+            .map(|s| {
+                s.trigger();
+                s.wait_notify()
+            })
+            .collect();
+
+        futures::future::join_all(perf_futures.into_iter()).await;
 
         Ok(())
     }
@@ -296,27 +303,19 @@ fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io:
 fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
     debug!("using single-threaded perf counter collection");
 
-    let mut logical_cores = logical_cores()?;
-
     let mut perf_threads = Vec::new();
     let mut perf_sync = Vec::new();
 
     let psync = SyncPrimitive::new();
     let psync2 = psync.clone();
 
-    let mut cores = Vec::new();
-
-    for core in logical_cores.drain(..) {
-        if let Ok(core) = Core::new(core) {
-            cores.push(core);
-        }
-    }
+    let mut caches = get_l3_caches()?;
 
     perf_threads.push(std::thread::spawn(move || loop {
         psync.wait_trigger();
 
-        for core in cores.iter_mut() {
-            core.refresh();
+        for cache in caches.iter_mut() {
+            cache.refresh();
         }
 
         psync.notify();
@@ -330,8 +329,6 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
 fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
     debug!("using multi-threaded perf counter collection");
 
-    let mut logical_cores = logical_cores()?;
-
     let (unpinned_tx, unpinned_rx) = sync_channel(logical_cores.len());
 
     let pt_pending = Arc::new(AtomicUsize::new(logical_cores.len()));
@@ -339,38 +336,36 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
     let mut perf_threads = Vec::new();
     let mut perf_sync = Vec::new();
 
-    for core in logical_cores.drain(..) {
-        if let Ok(mut core) = Core::new(core) {
-            let psync = SyncPrimitive::new();
-            let psync2 = psync.clone();
+    let mut caches = get_l3_caches()?;
 
-            let unpinned = unpinned_tx.clone();
-            let pt_pending = pt_pending.clone();
+    for cache in caches.drain(..) {
+        let psync = SyncPrimitive::new();
+        let psync2 = psync.clone();
 
-            perf_threads.push(std::thread::spawn(move || {
-                if !core_affinity::set_for_current(core_affinity::CoreId { id: core.id }) {
-                    unpinned
-                        .send(core)
-                        .expect("failed to send unpinned perf counters");
-                    pt_pending.fetch_sub(1, Ordering::Relaxed);
-                    return;
-                }
+        let unpinned = unpinned_tx.clone();
+        let pt_pending = pt_pending.clone();
 
+        perf_threads.push(std::thread::spawn(move || {
+            if !core_affinity::set_for_current(core_affinity::CoreId { id: cache.shared_cores[0] }) {
+                unpinned
+                    .send(cache)
+                    .expect("failed to send unpinned perf counters");
                 pt_pending.fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
 
-                loop {
-                    psync.wait_trigger();
-
-                    core.refresh();
-
-                    psync.notify();
-                }
-            }));
-
-            perf_sync.push(psync2);
-        } else {
             pt_pending.fetch_sub(1, Ordering::Relaxed);
-        }
+
+            loop {
+                psync.wait_trigger();
+
+                cache.refresh();
+
+                psync.notify();
+            }
+        }));
+
+        perf_sync.push(psync2);
     }
 
     debug!("{} waiting for perf threads to launch", NAME);
@@ -396,8 +391,8 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
         perf_threads.push(std::thread::spawn(move || loop {
             psync.wait_trigger();
 
-            for core in unpinned.iter_mut() {
-                core.refresh();
+            for cache in unpinned.iter_mut() {
+                cache.refresh();
             }
 
             psync.notify();
