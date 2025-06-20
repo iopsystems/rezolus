@@ -83,4 +83,27 @@ impl UntypedCollection {
 
         NamedSeries { inner: result }
     }
+
+    pub fn by_sampler(&self) -> NamedSeries {
+        let mut result = BTreeMap::default();
+        let mut names = BTreeSet::new();
+
+        for labels in self.inner.keys() {
+            if let Some(name) = labels.inner.get("sampler").cloned() {
+                names.insert(name);
+            }
+        }
+
+        for name in names {
+            let series = self
+                .filter(&Labels {
+                    inner: [("sampler".to_string(), name.to_string())].into(),
+                })
+                .sum();
+
+            result.insert(name, series);
+        }
+
+        NamedSeries { inner: result }
+    }
 }
