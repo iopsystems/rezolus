@@ -330,7 +330,7 @@ where
                 } else {
                     debug!("using single-threaded perf counter collection");
 
-                    let mut counters = perf_counters.inner.into_iter().map(|(_, v)| v).collect();
+                    let mut counters: Vec<_> = perf_counters.inner.into_iter().map(|(_, v)| v).collect();
 
                     let psync = SyncPrimitive::new();
                     let psync2 = psync.clone();
