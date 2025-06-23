@@ -86,7 +86,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     tlb.multi(
         PlotOpts::multi("Total", "cgroup-tlb-flush", Unit::Count),
-        data.counters("cgroup_tlb_flush", ())
+        data.counters("cgroup_cpu_tlb_flush", ())
             .map(|v| (v.rate().by_name()).top_n(5, average)),
     );
 
