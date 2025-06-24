@@ -34,7 +34,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     );
 
     cpu.multi(
-        PlotOpts::multi("CFS Throttled Time", "cgroup-cpu-migrations", Unit::Time),
+        PlotOpts::multi("CPU Throttled Time", "cgroup-cpu-migrations", Unit::Time),
         data.counters("cgroup_cpu_throttled_time", ())
             .map(|v| (v.rate().by_name()).top_n(5, average)),
     );
@@ -46,7 +46,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .map(|v| v.rate().by_name()),
     ) {
         cpu.multi(
-            PlotOpts::multi("CFS Throttle Latency", "cgroup-throttle-latency", Unit::Time),
+            PlotOpts::multi("CPU Throttle Latency", "cgroup-throttle-latency", Unit::Time),
             Some((cycles.clone() / instructions.clone()).top_n(5, average)),
         );
     }
