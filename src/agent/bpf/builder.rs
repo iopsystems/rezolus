@@ -85,13 +85,6 @@ impl PerfCounters {
         if !self.inner.is_empty() {
             debug!("using multi-threaded perf counter collection");
 
-            let cpus = match crate::common::cpus() {
-                Ok(cpus) => cpus.last().copied().unwrap_or(1023),
-                Err(_) => 1023,
-            };
-
-            let cpus = cpus + 1;
-
             let pt_pending = Arc::new(AtomicUsize::new(self.inner.len()));
 
             debug!(

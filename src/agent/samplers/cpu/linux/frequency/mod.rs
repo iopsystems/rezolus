@@ -21,7 +21,6 @@ use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
 use std::collections::BTreeSet;
-use std::sync::mpsc::sync_channel;
 use std::thread::JoinHandle;
 
 mod stats;
