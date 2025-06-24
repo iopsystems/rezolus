@@ -116,11 +116,7 @@ impl PerfCounters {
                 perf_threads
                     .send(std::thread::spawn(move || {
                         if !core_affinity::set_for_current(core_affinity::CoreId { id: cpu }) {
-                            unpinned
-                                .send(counters)
-                                .expect("failed to send unpinned perf counters");
-                            pt_pending.fetch_sub(1, Ordering::Relaxed);
-                            return;
+                            warn!("failed to pin perf thread for core: {}", cpu);
                         }
 
                         pt_pending.fetch_sub(1, Ordering::Relaxed);
@@ -144,39 +140,6 @@ impl PerfCounters {
 
             while pt_pending.load(Ordering::Relaxed) > 0 {
                 std::thread::sleep(Duration::from_millis(50));
-            }
-
-            debug!("checking for unpinned perf threads");
-
-            let mut unpinned: Vec<_> = unpinned_rx.try_iter().collect();
-
-            debug!(
-                "there are {} perf threads which could not be pinned",
-                unpinned.len()
-            );
-
-            if !unpinned.is_empty() {
-                let psync = SyncPrimitive::new();
-                let psync2 = psync.clone();
-
-                let perf_threads = perf_threads_tx.clone();
-                let perf_sync = perf_sync_tx.clone();
-
-                perf_threads
-                    .send(std::thread::spawn(move || loop {
-                        psync.wait_trigger();
-
-                        for counters in unpinned.iter_mut() {
-                            counters.refresh();
-                        }
-
-                        psync.notify();
-                    }))
-                    .expect("failed to send perf thread handle");
-
-                perf_sync
-                    .send(psync2)
-                    .expect("failed to send perf thread sync primitive");
             }
 
             debug!("all perf threads launched");
