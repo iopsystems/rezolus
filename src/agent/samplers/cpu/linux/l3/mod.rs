@@ -330,8 +330,6 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
 
     let mut caches = get_l3_caches()?;
 
-    let (unpinned_tx, unpinned_rx) = sync_channel(caches.len());
-
     let pt_pending = Arc::new(AtomicUsize::new(caches.len()));
 
     let mut perf_threads = Vec::new();
@@ -341,14 +339,16 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
         let psync = SyncPrimitive::new();
         let psync2 = psync.clone();
 
-        let unpinned = unpinned_tx.clone();
         let pt_pending = pt_pending.clone();
 
         perf_threads.push(std::thread::spawn(move || {
             if !core_affinity::set_for_current(core_affinity::CoreId {
                 id: cache.shared_cores[0],
             }) {
-                warn!("failed to pin perf thread for core: {}", cache.shared_cores[0]);
+                warn!(
+                    "failed to pin perf thread for core: {}",
+                    cache.shared_cores[0]
+                );
             }
 
             pt_pending.fetch_sub(1, Ordering::Relaxed);

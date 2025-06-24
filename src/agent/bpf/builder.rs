@@ -92,8 +92,6 @@ impl PerfCounters {
 
             let cpus = cpus + 1;
 
-            let (unpinned_tx, unpinned_rx) = sync_channel(cpus);
-
             let pt_pending = Arc::new(AtomicUsize::new(self.inner.len()));
 
             debug!(
@@ -107,7 +105,6 @@ impl PerfCounters {
                 let psync = SyncPrimitive::new();
                 let psync2 = psync.clone();
 
-                let unpinned = unpinned_tx.clone();
                 let perf_threads = perf_threads_tx.clone();
                 let perf_sync = perf_sync_tx.clone();
 

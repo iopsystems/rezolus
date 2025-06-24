@@ -284,8 +284,6 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
 
     let mut logical_cores = logical_cores()?;
 
-    let (unpinned_tx, unpinned_rx) = sync_channel(logical_cores.len());
-
     let pt_pending = Arc::new(AtomicUsize::new(logical_cores.len()));
 
     let mut perf_threads = Vec::new();
@@ -296,7 +294,6 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
             let psync = SyncPrimitive::new();
             let psync2 = psync.clone();
 
-            let unpinned = unpinned_tx.clone();
             let pt_pending = pt_pending.clone();
 
             perf_threads.push(std::thread::spawn(move || {
