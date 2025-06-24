@@ -278,7 +278,15 @@ where
             skel.log_prog_instructions();
 
             // attach the BPF program
-            skel.attach()?;
+            match skel.attach() {
+                Ok(_) => {}
+                Err(e) if e.kind() == libbpf_rs::ErrorKind::NotFound => {
+                    warn!(
+                        "attach() returned NotFound; assuming missing kprobe symbol and continuing"
+                    );
+                }
+                Err(e) => return Err(e),
+            }
 
             // convert our metrics into wrapped types that we can refresh
 

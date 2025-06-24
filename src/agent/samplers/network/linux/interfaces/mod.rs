@@ -26,10 +26,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     let counters = vec![
+        &NETWORK_DROP,
         &NETWORK_TX_BUSY,
         &NETWORK_TX_COMPLETE,
         &NETWORK_TX_TIMEOUT,
-        &NETWORK_TX_ERROR,
     ];
 
     let bpf = BpfBuilder::new(
@@ -58,16 +58,12 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} skb_drop_counter() BPF instruction count: {}",
-            self.progs.skb_drop_counter.insn_cnt()
+            "{NAME} kfree_skb() BPF instruction count: {}",
+            self.progs.kfree_skb.insn_cnt()
         );
         debug!(
             "{NAME} net_dev_xmit() BPF instruction count: {}",
             self.progs.net_dev_xmit.insn_cnt()
-        );
-        debug!(
-            "{NAME} virtio_tx_timeout() BPF instruction count: {}",
-            self.progs.virtio_tx_timeout.insn_cnt()
         );
     }
 }
