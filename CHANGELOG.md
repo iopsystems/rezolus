@@ -1,3 +1,24 @@
+## [Unreleased]
+
+## [5.1.0] - 2024-06-24
+
+### Changed
+
+- Replaced `network_interfaces` sampler with a BPF based sampler. Results in
+  changes to some network metrics. Improves sampling latency. (#565)
+
+### Added
+
+- Snapshot caching with TTL added to the agent. (#553)
+- Rezolus viewer has more charts. (#554 #561)
+- Realtime scheduling for the agent to improve sampling latency. (#559)
+- Virtualization aware optimization for perf counter collection. (#548)
+- Additional cgroup charts in Rezolus viewer. (#564)
+
+### Fixed
+
+- Softirq time added to system time when running in idle task context. (#556)
+
 ## [5.0.1] - 2024-06-13
 
 ### Fixed
@@ -381,7 +402,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.0.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.1.0...HEAD
+[5.1.0]: https://github.com/iopsystems/rezolus/compare/v5.0.1...v5.1.0
 [5.0.1]: https://github.com/iopsystems/rezolus/compare/v5.0.0...v5.0.1
 [5.0.0]: https://github.com/iopsystems/rezolus/compare/v4.1.2...v5.0.0
 [4.1.2]: https://github.com/iopsystems/rezolus/compare/v4.1.1...v4.1.2
