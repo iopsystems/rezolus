@@ -46,7 +46,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .map(|v| v.rate().by_name()),
     ) {
         cpu.multi(
-            PlotOpts::multi("CPU Throttle Latency", "cgroup-throttle-latency", Unit::Time),
+            PlotOpts::multi(
+                "CPU Throttle Latency",
+                "cgroup-throttle-latency",
+                Unit::Time,
+            ),
             Some((cycles.clone() / instructions.clone()).top_n(5, average)),
         );
     }
