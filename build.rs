@@ -18,6 +18,7 @@ mod bpf {
         ("cpu", "perf"),
         ("cpu", "tlb_flush"),
         ("cpu", "usage"),
+        ("network", "interfaces"),
         ("network", "traffic"),
         ("scheduler", "runqueue"),
         ("syscall", "counts"),

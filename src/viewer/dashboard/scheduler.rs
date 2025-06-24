@@ -33,6 +33,12 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         data.percentiles("scheduler_offcpu", (), PERCENTILES),
     );
 
+    scheduler.plot(
+        PlotOpts::line("Context Switch", "cswitch", Unit::Rate),
+        data.counters("scheduler_context_switch", ())
+            .map(|v| v.rate().sum()),
+    );
+
     view.group(scheduler);
 
     view
