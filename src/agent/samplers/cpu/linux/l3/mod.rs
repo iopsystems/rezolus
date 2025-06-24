@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
 use std::collections::HashSet;
+use std::thread::JoinHandle;
 
 mod stats;
 
@@ -50,32 +51,39 @@ impl Sampler for CpuL3 {
 }
 
 struct CpuL3Inner {
-    caches: Vec<L3Cache>,
+    perf_threads: Vec<std::thread::JoinHandle<()>>,
+    perf_sync: Vec<SyncPrimitive>,
 }
 
 impl CpuL3Inner {
     pub fn new() -> Result<Self, std::io::Error> {
-        let caches = get_l3_caches()?;
+        let (perf_threads, perf_sync) = spawn_threads()?;
 
-        Ok(Self { caches })
+        Ok(Self {
+            perf_threads,
+            perf_sync,
+        })
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
-        for cache in &mut self.caches {
-            if let Ok(group) = cache.access.read_group() {
-                if let (Some(access), Some(miss)) =
-                    (group.get(&cache.access), group.get(&cache.miss))
-                {
-                    let access = access.value();
-                    let miss = miss.value();
-
-                    for cpu in &cache.shared_cores {
-                        let _ = CPU_L3_ACCESS.set(*cpu, access);
-                        let _ = CPU_L3_MISS.set(*cpu, miss);
-                    }
-                }
+        // check that no perf threads have exited
+        for thread in self.perf_threads.iter() {
+            if thread.is_finished() {
+                panic!("{} perf thread exited early", NAME);
             }
         }
+
+        // trigger and wait on all perf threads
+        let perf_futures: Vec<_> = self
+            .perf_sync
+            .iter()
+            .map(|s| {
+                s.trigger();
+                s.wait_notify()
+            })
+            .collect();
+
+        futures::future::join_all(perf_futures.into_iter()).await;
 
         Ok(())
     }
@@ -153,6 +161,20 @@ impl L3Cache {
         }
 
         Err(())
+    }
+
+    pub fn refresh(&mut self) {
+        if let Ok(group) = self.access.read_group() {
+            if let (Some(access), Some(miss)) = (group.get(&self.access), group.get(&self.miss)) {
+                let access = access.value();
+                let miss = miss.value();
+
+                for cpu in &self.shared_cores {
+                    let _ = CPU_L3_ACCESS.set(*cpu, access);
+                    let _ = CPU_L3_MISS.set(*cpu, miss);
+                }
+            }
+        }
     }
 }
 
@@ -264,4 +286,91 @@ fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
     } else {
         None
     }
+}
+
+fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    // on virtualized environments, it is typically better to use multiple
+    // threads to read the perf counters to get more consistent snapshot latency
+    if is_virt() {
+        spawn_threads_multi()
+    } else {
+        spawn_threads_single()
+    }
+}
+
+fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    debug!("using single-threaded perf counter collection");
+
+    let mut caches = get_l3_caches()?;
+
+    let mut perf_threads = Vec::new();
+    let mut perf_sync = Vec::new();
+
+    let psync = SyncPrimitive::new();
+    let psync2 = psync.clone();
+
+    perf_threads.push(std::thread::spawn(move || loop {
+        psync.wait_trigger();
+
+        for cache in caches.iter_mut() {
+            cache.refresh();
+        }
+
+        psync.notify();
+    }));
+
+    perf_sync.push(psync2);
+
+    Ok((perf_threads, perf_sync))
+}
+
+fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+    debug!("using multi-threaded perf counter collection");
+
+    let mut caches = get_l3_caches()?;
+
+    let pt_pending = Arc::new(AtomicUsize::new(caches.len()));
+
+    let mut perf_threads = Vec::new();
+    let mut perf_sync = Vec::new();
+
+    for mut cache in caches.drain(..) {
+        let psync = SyncPrimitive::new();
+        let psync2 = psync.clone();
+
+        let pt_pending = pt_pending.clone();
+
+        perf_threads.push(std::thread::spawn(move || {
+            if !core_affinity::set_for_current(core_affinity::CoreId {
+                id: cache.shared_cores[0],
+            }) {
+                warn!(
+                    "failed to pin perf thread for core: {}",
+                    cache.shared_cores[0]
+                );
+            }
+
+            pt_pending.fetch_sub(1, Ordering::Relaxed);
+
+            loop {
+                psync.wait_trigger();
+
+                cache.refresh();
+
+                psync.notify();
+            }
+        }));
+
+        perf_sync.push(psync2);
+    }
+
+    debug!("{} waiting for perf threads to launch", NAME);
+
+    while pt_pending.load(Ordering::Relaxed) > 0 {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    debug!("all perf threads launched");
+
+    Ok((perf_threads, perf_sync))
 }
