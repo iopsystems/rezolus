@@ -75,7 +75,6 @@ fn set_name(id: usize, name: String) {
     }
 }
 
-
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
