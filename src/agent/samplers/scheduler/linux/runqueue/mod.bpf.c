@@ -289,8 +289,6 @@ int handle__sched_switch(u64 *ctx)
 
 			*tsp = 0;
 		}
-
-
 	}
 
 	// for all tasks: track when it went off-cpu
