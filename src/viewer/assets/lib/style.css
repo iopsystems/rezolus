@@ -113,3 +113,8 @@ div.metadata {
         margin-right: 0.75em;
     }
 }
+
+.echarts-tooltip-interactable {
+    user-select: text !important;
+    pointer-events: auto !important;
+}

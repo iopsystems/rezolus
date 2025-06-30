@@ -89,6 +89,8 @@ export function getBaseOption(title) {
             },
             backgroundColor: 'rgba(50, 50, 50, 0.8)',
             borderColor: 'rgba(70, 70, 70, 0.8)',
+            triggerOn: 'mousemove',
+            className: 'echarts-tooltip',
         },
         // This invisible toolbox is a workaround to have drag-to-zoom as the default behavior.
         // We programmatically activate the zoom tool and hide the interface.

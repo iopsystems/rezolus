@@ -216,6 +216,36 @@ export class Chart {
                 });
             });
         })
+
+        // Single click a chart -> freeze tooltip so user can select tooltip text for copying
+        // Note that this will not last past the mouse leaving the chart+tooltip collective bounds,
+        // as echarts hides the tooltip when that happens.
+        this.echart.getZr().on('click', (zrEvent) => {
+            const option = this.echart.getOption();
+            const tooltipElement = this.echart.getDom().querySelector('.echarts-tooltip');
+            const visibleTooltip = tooltipElement && tooltipElement.style.visibility !== 'hidden';
+            if (option.tooltip[0].triggerOn === 'click') {
+                // If tooltip is currently frozen, unfreeze it no matter what.
+                this.echart.setOption({ ...option, tooltip: [{ ...option.tooltip[0], triggerOn: 'mousemove', className: 'echarts-tooltip' }] });
+            } else if (zrEvent.event.detail > 1 || !visibleTooltip) {
+                // Don't freeze tooltip if this is a multi-click.
+                // Don't freeze tooltip if the user is clicking outside the main chart area (thus the tooltip is not visible).
+            } else {
+                // Otherwise: freeze tooltip.
+                // We use a class to make the tooltip interactable and make its text selectable.
+                // Note: echarts tooltip has an "enterable" option, but toggling it after the tooltip element is already there doesn't prompt echarts to
+                // update the tooltip element's style. So, we have to just do that directly.
+                this.echart.setOption({ ...option, tooltip: [{ ...option.tooltip[0], triggerOn: 'click', className: 'echarts-tooltip echarts-tooltip-interactable' }] });
+            }
+        });
+
+        // Mouse leaves the chart -> make sure tooltip behavior returns to normal (unfrozen).
+        this.echart.getZr().on('globalout', (zrEvent) => {
+            const option = this.echart.getOption();
+            if (option.tooltip[0].triggerOn === 'click') {
+                this.echart.setOption({ ...option, tooltip: [{ ...option.tooltip[0], triggerOn: 'mousemove', className: 'echarts-tooltip' }] });
+            }
+        });
     }
 
     configureChartByType() {
