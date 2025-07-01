@@ -1,3 +1,4 @@
 .cargo
+!.cargo/config.toml
 target
 **/*.rs.bk
