@@ -1,4 +1,4 @@
-// Helpers for converting values to histogram indices. 
+// Helpers for converting values to histogram indices.
 
 #define HISTOGRAM_BUCKETS_POW_2 252
 #define HISTOGRAM_BUCKETS_POW_3 496
@@ -9,7 +9,7 @@
 
 // Function to count leading zeros, since we cannot use the builtin CLZ from
 // within BPF. But since we also can't loop, this is implemented as a binary
-// search with a maximum of 6 branches. 
+// search with a maximum of 6 branches.
 static u32 clz(u64 value) {
     u32 count = 0;
 
@@ -146,7 +146,7 @@ static u32 clz(u64 value) {
                 return 42;
             } else {
                 return 43;
-            } 
+            }
         } else if (value & 0x00000000000C0000) {
             if (value & 0x0000000000080000) {
                 return 44;
