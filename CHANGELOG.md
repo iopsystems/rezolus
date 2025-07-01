@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [5.2.0] - 2024-07-01
+
+### Added
+
+- Adds per-cgroup context switch, runqueue wait, and off-cpu time. Adds runqueue
+  waiting time on a per-CPU basis. (#568)
+
+### Fixes
+
+- Fixes CPU usage accounting bug when PIDs are re-used. (#571)
+
 ## [5.1.0] - 2024-06-24
 
 ### Changed
@@ -402,7 +413,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.1.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.2.0...HEAD
+[5.2.0]: https://github.com/iopsystems/rezolus/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/iopsystems/rezolus/compare/v5.0.1...v5.1.0
 [5.0.1]: https://github.com/iopsystems/rezolus/compare/v5.0.0...v5.0.1
 [5.0.0]: https://github.com/iopsystems/rezolus/compare/v4.1.2...v5.0.0
