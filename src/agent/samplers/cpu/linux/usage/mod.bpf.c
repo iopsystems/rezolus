@@ -193,6 +193,13 @@ static void account_cpu_usage(struct task_struct *task, u32 index)
   }
 	// calculate the counter index and increment the counter
   u64 delta = curr_time - *last_time;
+
+  // check if we've had a counter reset, in which case this is pid re-use and
+  // we use the current time as the delta (since delta would be from zero)
+  if (delta > 1<<63) {
+      delta = curr_time;
+  }
+
   *last_time = curr_time;
 	idx = CPU_USAGE_GROUP_WIDTH * bpf_get_smp_processor_id() + offset;
 	array_add(&cpu_usage, idx, delta);
