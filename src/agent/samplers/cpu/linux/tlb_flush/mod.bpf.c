@@ -29,11 +29,11 @@
 // 4 - remote send ipi
 //
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CPUS* COUNTER_GROUP_WIDTH);
 } events SEC(".maps");
 
 /*
@@ -45,144 +45,149 @@ struct cgroup_info _cgroup_info = {};
 
 // ringbuf to pass cgroup info
 struct {
-	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(key_size, 0);
-	__uint(value_size, 0);
-	__uint(max_entries, RINGBUF_CAPACITY);
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(key_size, 0);
+    __uint(value_size, 0);
+    __uint(max_entries, RINGBUF_CAPACITY);
 } cgroup_info SEC(".maps");
 
 // holds known cgroup serial numbers to help determine new or changed groups
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_serial_numbers SEC(".maps");
 
 // counters for various events
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_task_switch SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_remote_shootdown SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_local_shootdown SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_local_mm_shootdown SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_remote_send_ipi SEC(".maps");
 
 SEC("raw_tp/tlb_flush")
-int BPF_PROG(tlb_flush, int reason, u64 pages)
-{
-	u32 offset, idx;
-	u64 *elem;
+int BPF_PROG(tlb_flush, int reason, u64 pages) {
+    u32 offset, idx;
+    u64* elem;
 
-	offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+    offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
-	idx = reason + offset;
+    idx = reason + offset;
 
-	array_incr(&events, idx);
+    array_incr(&events, idx);
 
-	struct task_struct *current = (struct task_struct *)bpf_get_current_task();
+    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
 
-	void *task_group = BPF_CORE_READ(current, sched_task_group);
-	if (task_group) {
-		int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
-		u64 serial_nr = BPF_CORE_READ(current, sched_task_group, css.serial_nr);
+    void* task_group = BPF_CORE_READ(current, sched_task_group);
+    if (task_group) {
+        int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
+        u64 serial_nr = BPF_CORE_READ(current, sched_task_group, css.serial_nr);
 
-		if (cgroup_id && cgroup_id < MAX_CGROUPS) {
+        if (cgroup_id && cgroup_id < MAX_CGROUPS) {
 
-			// we check to see if this is a new cgroup by checking the serial number
+            // we check to see if this is a new cgroup by checking the serial number
 
-			elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
+            elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
 
-			if (elem && *elem != serial_nr) {
-				// zero the counters, they will not be exported until they are non-zero
-				u64 zero = 0;
-				bpf_map_update_elem(&cgroup_task_switch, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_remote_shootdown, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_local_shootdown, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_local_mm_shootdown, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_remote_send_ipi, &cgroup_id, &zero, BPF_ANY);
+            if (elem && *elem != serial_nr) {
+                // zero the counters, they will not be exported until they are non-zero
+                u64 zero = 0;
+                bpf_map_update_elem(&cgroup_task_switch, &cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_remote_shootdown, &cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_local_shootdown, &cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_local_mm_shootdown, &cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_remote_send_ipi, &cgroup_id, &zero, BPF_ANY);
 
-				int level = BPF_CORE_READ(current, sched_task_group, css.serial_nr);
+                int level = BPF_CORE_READ(current, sched_task_group, css.serial_nr);
 
-				// initialize the cgroup info
-				struct cgroup_info cginfo = {
-					.id = cgroup_id,
-					.level = BPF_CORE_READ(current, sched_task_group, css.cgroup, level),
-				};
+                // initialize the cgroup info
+                struct cgroup_info cginfo = {
+                    .id = cgroup_id,
+                    .level = BPF_CORE_READ(current, sched_task_group, css.cgroup, level),
+                };
 
-				// read the cgroup name
-				bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN, BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, name));
+                // read the cgroup name
+                bpf_probe_read_kernel_str(
+                    &cginfo.name, CGROUP_NAME_LEN,
+                    BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, name));
 
-				// read the cgroup parent name
-				bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN, BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, parent, name));
+                // read the cgroup parent name
+                bpf_probe_read_kernel_str(
+                    &cginfo.pname, CGROUP_NAME_LEN,
+                    BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, parent, name));
 
-				// read the cgroup grandparent name
-				bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN, BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, parent, parent, name));
+                // read the cgroup grandparent name
+                bpf_probe_read_kernel_str(
+                    &cginfo.gpname, CGROUP_NAME_LEN,
+                    BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, parent, parent, name));
 
-				// push the cgroup info into the ringbuf
-				bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
+                // push the cgroup info into the ringbuf
+                bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
 
-				// update the serial number in the local map
-				bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
-			}
+                // update the serial number in the local map
+                bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
+            }
 
-			// update cgroup counter
+            // update cgroup counter
 
-			switch (reason) {
-				case REASON_TASK_SWITCH:
-					array_incr(&cgroup_task_switch, cgroup_id);
-					break;
-				case REASON_REMOTE_SHOOTDOWN:
-					array_incr(&cgroup_remote_shootdown, cgroup_id);
-					break;
-				case REASON_LOCAL_SHOOTDOWN:
-					array_incr(&cgroup_local_shootdown, cgroup_id);
-					break;
-				case REASON_LOCAL_MM_SHOOTDOWN:
-					array_incr(&cgroup_local_mm_shootdown, cgroup_id);
-					break;
-				case REASON_REMOTE_SEND_IPI:
-					array_incr(&cgroup_remote_send_ipi, cgroup_id);
-					break;
-			}
-		}
-	}
+            switch (reason) {
+            case REASON_TASK_SWITCH:
+                array_incr(&cgroup_task_switch, cgroup_id);
+                break;
+            case REASON_REMOTE_SHOOTDOWN:
+                array_incr(&cgroup_remote_shootdown, cgroup_id);
+                break;
+            case REASON_LOCAL_SHOOTDOWN:
+                array_incr(&cgroup_local_shootdown, cgroup_id);
+                break;
+            case REASON_LOCAL_MM_SHOOTDOWN:
+                array_incr(&cgroup_local_mm_shootdown, cgroup_id);
+                break;
+            case REASON_REMOTE_SEND_IPI:
+                array_incr(&cgroup_remote_send_ipi, cgroup_id);
+                break;
+            }
+        }
+    }
 
-	return 0;
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";

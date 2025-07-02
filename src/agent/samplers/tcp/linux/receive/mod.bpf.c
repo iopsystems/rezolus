@@ -20,47 +20,46 @@
 #define HISTOGRAM_POWER 3
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, HISTOGRAM_BUCKETS);
 } jitter SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, HISTOGRAM_BUCKETS);
 } srtt SEC(".maps");
 
 SEC("kprobe/tcp_rcv_established")
-int BPF_KPROBE(tcp_rcv_kprobe, struct sock *sk)
-{
-	const struct inet_sock *inet = (struct inet_sock *)(sk);
-	struct tcp_sock *ts;
-	u64 key, slot;
-	u32 idx, mdev_us, srtt_us;
-	u64 mdev_ns, srtt_ns;
+int BPF_KPROBE(tcp_rcv_kprobe, struct sock* sk) {
+    const struct inet_sock* inet = (struct inet_sock*)(sk);
+    struct tcp_sock* ts;
+    u64 key, slot;
+    u32 idx, mdev_us, srtt_us;
+    u64 mdev_ns, srtt_ns;
 
-	ts = (struct tcp_sock *)(sk);
-	bpf_probe_read_kernel(&srtt_us, sizeof(srtt_us), &ts->srtt_us);
-	bpf_probe_read_kernel(&mdev_us, sizeof(mdev_us), &ts->mdev_us);
+    ts = (struct tcp_sock*)(sk);
+    bpf_probe_read_kernel(&srtt_us, sizeof(srtt_us), &ts->srtt_us);
+    bpf_probe_read_kernel(&mdev_us, sizeof(mdev_us), &ts->mdev_us);
 
-	// NOTE: srtt is stored as 8x the value in microseconds but we want to
-	// record nanoseconds.
-	srtt_ns = 1000 * (u64) srtt_us >> 3;
+    // NOTE: srtt is stored as 8x the value in microseconds but we want to
+    // record nanoseconds.
+    srtt_ns = 1000 * (u64)srtt_us >> 3;
 
-	histogram_incr(&srtt, HISTOGRAM_POWER, srtt_ns);
+    histogram_incr(&srtt, HISTOGRAM_POWER, srtt_ns);
 
-	// NOTE: mdev is stored as 4x the value in microseconds but we want to
-	// record nanoseconds.
-	mdev_ns = 1000 * (u64) mdev_us >> 2;
+    // NOTE: mdev is stored as 4x the value in microseconds but we want to
+    // record nanoseconds.
+    mdev_ns = 1000 * (u64)mdev_us >> 2;
 
-	histogram_incr(&jitter, HISTOGRAM_POWER, mdev_ns);
+    histogram_incr(&jitter, HISTOGRAM_POWER, mdev_ns);
 
-	return 0;
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";
