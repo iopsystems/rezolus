@@ -228,8 +228,6 @@ int handle__sched_switch(u64* ctx) {
                 bpf_map_update_elem(&cgroup_runq_wait, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_offcpu, &cgroup_id, &zero, BPF_ANY);
 
-                int level = BPF_CORE_READ(prev, sched_task_group, css.serial_nr);
-
                 // initialize the cgroup info
                 struct cgroup_info cginfo = {
                     .id = cgroup_id,
@@ -324,8 +322,6 @@ int handle__sched_switch(u64* ctx) {
                 bpf_map_update_elem(&cgroup_runq_wait, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_offcpu, &cgroup_id, &zero, BPF_ANY);
 
-                int level = BPF_CORE_READ(next, sched_task_group, css.serial_nr);
-
                 // initialize the cgroup info
                 struct cgroup_info cginfo = {
                     .id = cgroup_id,
@@ -392,7 +388,7 @@ int handle__sched_switch(u64* ctx) {
 
                 // update the cgroup counter
                 if (cgroup_id && cgroup_id < MAX_CGROUPS) {
-                    array_add(&cgroup_offcpu, cgroup_id, delta_ns);
+                    array_add(&cgroup_offcpu, cgroup_id, offcpu_ns);
                 }
             }
 
