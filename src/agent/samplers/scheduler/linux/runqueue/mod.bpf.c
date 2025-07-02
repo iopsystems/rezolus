@@ -202,7 +202,8 @@ int handle__sched_switch(u64* ctx) {
     struct task_struct* prev = (struct task_struct*)ctx[1];
     struct task_struct* next = (struct task_struct*)ctx[2];
 
-    u32 pid, idx, cgroup_id;
+    u32 pid, idx;
+    u32 cgroup_id = 0;
     u64 *tsp, delta_ns, offcpu_ns, *elem;
 
     u32 processor_id = bpf_get_smp_processor_id();
@@ -272,7 +273,9 @@ int handle__sched_switch(u64* ctx) {
         array_incr(&counters, idx);
 
         // count cswitch for cgroup
-        array_incr(&cgroup_ivcsw, cgroup_id);
+        if (cgroup_id && cgroup_id < MAX_CGROUPS) {
+            array_incr(&cgroup_ivcsw, cgroup_id);
+        }
 
         pid = prev->pid;
 
@@ -369,7 +372,9 @@ int handle__sched_switch(u64* ctx) {
         array_add(&counters, idx, delta_ns);
 
         // update the cgroup counter
-        array_add(&cgroup_runq_wait, cgroup_id, delta_ns);
+        if (cgroup_id && cgroup_id < MAX_CGROUPS) {
+            array_add(&cgroup_runq_wait, cgroup_id, delta_ns);
+        }
 
         *tsp = 0;
 
@@ -386,7 +391,9 @@ int handle__sched_switch(u64* ctx) {
                 histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
 
                 // update the cgroup counter
-                array_add(&cgroup_offcpu, cgroup_id, delta_ns);
+                if (cgroup_id && cgroup_id < MAX_CGROUPS) {
+                    array_add(&cgroup_offcpu, cgroup_id, delta_ns);
+                }
             }
 
             *tsp = 0;
