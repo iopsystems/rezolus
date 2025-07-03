@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+## [5.2.1] - 2024-07-02
+
+### Fixes
+
+- Fixes scheduler runqueue sampler failing the BPF verifier on some systems
+  since 5.2.0 (#576)
+
 ## [5.2.0] - 2024-07-01
 
 ### Added
