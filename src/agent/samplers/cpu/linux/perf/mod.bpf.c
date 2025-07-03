@@ -25,55 +25,55 @@ struct cgroup_info _cgroup_info = {};
 
 // ringbuf to pass cgroup info
 struct {
-	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(key_size, 0);
-	__uint(value_size, 0);
-	__uint(max_entries, RINGBUF_CAPACITY);
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(key_size, 0);
+    __uint(value_size, 0);
+    __uint(max_entries, RINGBUF_CAPACITY);
 } cgroup_info SEC(".maps");
 
 // holds known cgroup serial numbers to help determine new or changed groups
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_serial_numbers SEC(".maps");
 
 // counters for various events
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_cycles SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_instructions SEC(".maps");
 
 // previous readings for various events
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cycles_prev SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CGROUPS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } instructions_prev SEC(".maps");
 
 /**
@@ -81,15 +81,15 @@ struct {
  */
 
 struct {
-	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-	__type(key, u32);
-	__type(value, u32);
+    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+    __type(key, u32);
+    __type(value, u32);
 } cycles SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-	__type(key, u32);
-	__type(value, u32);
+    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+    __type(key, u32);
+    __type(value, u32);
 } instructions SEC(".maps");
 
 /**
@@ -99,107 +99,109 @@ struct {
  *     https://github.com/torvalds/linux/commit/2f064a59a1
  */
 struct task_struct___o {
-	volatile long int state;
+    volatile long int state;
 } __attribute__((preserve_access_index));
 
 struct task_struct___x {
-	unsigned int __state;
+    unsigned int __state;
 } __attribute__((preserve_access_index));
 
-static __always_inline __s64 get_task_state(void *task)
-{
-	struct task_struct___x *t = task;
+static __always_inline __s64 get_task_state(void* task) {
+    struct task_struct___x* t = task;
 
-	if (bpf_core_field_exists(t->__state))
-		return BPF_CORE_READ(t, __state);
-	return BPF_CORE_READ((struct task_struct___o *)task, state);
+    if (bpf_core_field_exists(t->__state))
+        return BPF_CORE_READ(t, __state);
+    return BPF_CORE_READ((struct task_struct___o*)task, state);
 }
 
 // attach a tracepoint on sched_switch for per-cgroup accounting
 
 SEC("tp_btf/sched_switch")
-int handle__sched_switch(u64 *ctx)
-{
-	/* TP_PROTO(bool preempt, struct task_struct *prev,
-	 *      struct task_struct *next)
-	 */
-	struct task_struct *prev = (struct task_struct *)ctx[1];
-	struct task_struct *next = (struct task_struct *)ctx[2];
+int handle__sched_switch(u64* ctx) {
+    /* TP_PROTO(bool preempt, struct task_struct *prev,
+     *      struct task_struct *next)
+     */
+    struct task_struct* prev = (struct task_struct*)ctx[1];
+    struct task_struct* next = (struct task_struct*)ctx[2];
 
-	u32 idx;
-	u64 *elem, delta_c, delta_i;
+    u32 idx;
+    u64 *elem, delta_c, delta_i;
 
-	u32 processor_id = bpf_get_smp_processor_id();
+    u32 processor_id = bpf_get_smp_processor_id();
 
-	u64 c = bpf_perf_event_read(&cycles, BPF_F_CURRENT_CPU);
-	u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
+    u64 c = bpf_perf_event_read(&cycles, BPF_F_CURRENT_CPU);
+    u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
 
-	if (bpf_core_field_exists(prev->sched_task_group)) {
-		int cgroup_id = prev->sched_task_group->css.id;
-		u64	serial_nr = prev->sched_task_group->css.serial_nr;
+    if (bpf_core_field_exists(prev->sched_task_group)) {
+        int cgroup_id = prev->sched_task_group->css.id;
+        u64 serial_nr = prev->sched_task_group->css.serial_nr;
 
-		if (cgroup_id && cgroup_id < MAX_CGROUPS) {
+        if (cgroup_id && cgroup_id < MAX_CGROUPS) {
 
-			// we check to see if this is a new cgroup by checking the serial number
+            // we check to see if this is a new cgroup by checking the serial number
 
-			elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
+            elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
 
-			if (elem && *elem != serial_nr) {
-				// zero the counters, they will not be exported until they are non-zero
-				u64 zero = 0;
-				bpf_map_update_elem(&cgroup_cycles, &cgroup_id, &zero, BPF_ANY);
-				bpf_map_update_elem(&cgroup_instructions, &cgroup_id, &zero, BPF_ANY);
+            if (elem && *elem != serial_nr) {
+                // zero the counters, they will not be exported until they are non-zero
+                u64 zero = 0;
+                bpf_map_update_elem(&cgroup_cycles, &cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_instructions, &cgroup_id, &zero, BPF_ANY);
 
-				// initialize the cgroup info
-				struct cgroup_info cginfo = {
-					.id = cgroup_id,
-					.level = prev->sched_task_group->css.cgroup->level,
-				};
+                // initialize the cgroup info
+                struct cgroup_info cginfo = {
+                    .id = cgroup_id,
+                    .level = prev->sched_task_group->css.cgroup->level,
+                };
 
-				// read the cgroup name
-				bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN, prev->sched_task_group->css.cgroup->kn->name);
+                // read the cgroup name
+                bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN,
+                                          prev->sched_task_group->css.cgroup->kn->name);
 
-				// read the cgroup parent name
-				bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN, prev->sched_task_group->css.cgroup->kn->parent->name);
+                // read the cgroup parent name
+                bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN,
+                                          prev->sched_task_group->css.cgroup->kn->parent->name);
 
-				// read the cgroup grandparent name
-				bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN, prev->sched_task_group->css.cgroup->kn->parent->parent->name);
-				
-				// push the cgroup info into the ringbuf
-				bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
+                // read the cgroup grandparent name
+                bpf_probe_read_kernel_str(
+                    &cginfo.gpname, CGROUP_NAME_LEN,
+                    prev->sched_task_group->css.cgroup->kn->parent->parent->name);
 
-				// update the serial number in the local map
-				bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
-			}
-		
-			// update cgroup cycles
+                // push the cgroup info into the ringbuf
+                bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
 
-			elem = bpf_map_lookup_elem(&cycles_prev, &processor_id);
+                // update the serial number in the local map
+                bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
+            }
 
-			if (elem) {
-				delta_c = c - *elem;
+            // update cgroup cycles
 
-				array_add(&cgroup_cycles, cgroup_id, delta_c);
-			}
+            elem = bpf_map_lookup_elem(&cycles_prev, &processor_id);
 
-			// update cgroup instructions
+            if (elem) {
+                delta_c = c - *elem;
 
-			elem = bpf_map_lookup_elem(&instructions_prev, &processor_id);
+                array_add(&cgroup_cycles, cgroup_id, delta_c);
+            }
 
-			if (elem) {
-				delta_i = i - *elem;
+            // update cgroup instructions
 
-				array_add(&cgroup_instructions, cgroup_id, delta_i);
-			}
-		}
-	}
+            elem = bpf_map_lookup_elem(&instructions_prev, &processor_id);
 
-	// update the per-core counters
+            if (elem) {
+                delta_i = i - *elem;
 
-	bpf_map_update_elem(&cycles_prev, &processor_id, &c, BPF_ANY);
-	bpf_map_update_elem(&instructions_prev, &processor_id, &i, BPF_ANY);
+                array_add(&cgroup_instructions, cgroup_id, delta_i);
+            }
+        }
+    }
 
-	return 0;
+    // update the per-core counters
+
+    bpf_map_update_elem(&cycles_prev, &processor_id, &c, BPF_ANY);
+    bpf_map_update_elem(&instructions_prev, &processor_id, &i, BPF_ANY);
+
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";

@@ -15,20 +15,19 @@
 
 // counters
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CPUS* COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 SEC("kprobe/tcp_retransmit_skb")
-int BPF_KPROBE(tcp_retransmit_skb, struct sock *sk, struct sk_buff *skb, int segs)
-{
-	u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
-	array_incr(&counters, idx);
+int BPF_KPROBE(tcp_retransmit_skb, struct sock* sk, struct sk_buff* skb, int segs) {
+    u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+    array_incr(&counters, idx);
 
-	return 0;
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";

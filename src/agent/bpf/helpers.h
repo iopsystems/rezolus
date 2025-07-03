@@ -1,8 +1,8 @@
 #include <bpf/bpf_helpers.h>
 #include "histogram.h"
 
-static __always_inline void array_add(void *array, u32 idx, u64 value) {
-    u64 *elem;
+static __always_inline void array_add(void* array, u32 idx, u64 value) {
+    u64* elem;
 
     elem = bpf_map_lookup_elem(array, &idx);
 
@@ -11,21 +11,21 @@ static __always_inline void array_add(void *array, u32 idx, u64 value) {
     }
 }
 
-static __always_inline void array_incr(void *array, u32 idx) {
+static __always_inline void array_incr(void* array, u32 idx) {
     array_add(array, idx, 1);
 }
 
-static __always_inline void histogram_incr(void *array, u8 grouping_power, u64 value) {
+static __always_inline void histogram_incr(void* array, u8 grouping_power, u64 value) {
     u32 idx = value_to_index(value, grouping_power);
     array_add(array, idx, 1);
 }
 
-static __always_inline void array_set_if_larger(void *array, u32 idx, u64 value) {
-  u64 *elem;
+static __always_inline void array_set_if_larger(void* array, u32 idx, u64 value) {
+    u64* elem;
 
-  elem = bpf_map_lookup_elem(array, &idx);
+    elem = bpf_map_lookup_elem(array, &idx);
 
-  if (elem && value > *elem) {
-    *elem = value;
-  }
+    if (elem && value > *elem) {
+        *elem = value;
+    }
 }

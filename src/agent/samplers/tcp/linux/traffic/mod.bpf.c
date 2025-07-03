@@ -22,8 +22,8 @@
 #define MAX_CPUS 1024
 
 /* Taken from kernel include/linux/socket.h. */
-#define AF_INET		2	/* Internet IP Protocol 	*/
-#define AF_INET6	10	/* IP version 6			*/
+#define AF_INET 2   /* Internet IP Protocol 	*/
+#define AF_INET6 10 /* IP version 6			*/
 
 #define TCP_RX_BYTES 0
 #define TCP_TX_BYTES 1
@@ -32,70 +32,68 @@
 
 // counters
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CPUS* COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, HISTOGRAM_BUCKETS);
 } rx_size SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, HISTOGRAM_BUCKETS);
 } tx_size SEC(".maps");
 
-static int probe_ip(bool receiving, struct sock *sk, size_t size)
-{
-	u16 family;
-	u32 idx;
+static int probe_ip(bool receiving, struct sock* sk, size_t size) {
+    u16 family;
+    u32 idx;
 
-	family = BPF_CORE_READ(sk, __sk_common.skc_family);
+    family = BPF_CORE_READ(sk, __sk_common.skc_family);
 
-	/* drop */
-	if (family != AF_INET && family != AF_INET6) {
-		return 0;
-	}
+    /* drop */
+    if (family != AF_INET && family != AF_INET6) {
+        return 0;
+    }
 
-	u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+    u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
-	u64 sz = (u64) size;
+    u64 sz = (u64)size;
 
-	if (receiving) {
-		idx = offset + TCP_RX_BYTES;
-		array_add(&counters, idx, sz);
+    if (receiving) {
+        idx = offset + TCP_RX_BYTES;
+        array_add(&counters, idx, sz);
 
-		histogram_incr(&rx_size, HISTOGRAM_POWER, sz);
+        histogram_incr(&rx_size, HISTOGRAM_POWER, sz);
 
-		idx = offset + TCP_RX_PACKETS;
-		array_incr(&counters, idx);
-	} else {
-		idx = offset + TCP_TX_BYTES;
-		array_add(&counters, idx, sz);
+        idx = offset + TCP_RX_PACKETS;
+        array_incr(&counters, idx);
+    } else {
+        idx = offset + TCP_TX_BYTES;
+        array_add(&counters, idx, sz);
 
-		histogram_incr(&tx_size, HISTOGRAM_POWER, sz);
+        histogram_incr(&tx_size, HISTOGRAM_POWER, sz);
 
-		idx = offset + TCP_TX_PACKETS;
-		array_incr(&counters, idx);
-	}
+        idx = offset + TCP_TX_PACKETS;
+        array_incr(&counters, idx);
+    }
 
-	return 0;
+    return 0;
 }
 
 SEC("kprobe/tcp_sendmsg")
-int BPF_KPROBE(tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
-{
-	return probe_ip(false, sk, size);
+int BPF_KPROBE(tcp_sendmsg, struct sock* sk, struct msghdr* msg, size_t size) {
+    return probe_ip(false, sk, size);
 }
 
 /*
@@ -105,13 +103,12 @@ int BPF_KPROBE(tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
  * we'd much prefer tracepoints once they are available.
  */
 SEC("kprobe/tcp_cleanup_rbuf")
-int BPF_KPROBE(tcp_cleanup_rbuf, struct sock *sk, int copied)
-{
-	if (copied <= 0) {
-		return 0;
-	}
+int BPF_KPROBE(tcp_cleanup_rbuf, struct sock* sk, int copied) {
+    if (copied <= 0) {
+        return 0;
+    }
 
-	return probe_ip(true, sk, copied);
+    return probe_ip(true, sk, copied);
 }
 
 char LICENSE[] SEC("license") = "GPL";

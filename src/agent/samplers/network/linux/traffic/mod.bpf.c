@@ -22,52 +22,49 @@
 
 // counters
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__type(key, u32);
-	__type(value, u64);
-	__uint(max_entries, MAX_CPUS * COUNTER_GROUP_WIDTH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CPUS* COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 SEC("raw_tp/netif_receive_skb")
-int BPF_PROG(netif_receive_skb, struct sk_buff *skb)
-{
-	u64 len;
-	u64 *cnt;
-	u32 idx;
+int BPF_PROG(netif_receive_skb, struct sk_buff* skb) {
+    u64 len;
+    u64* cnt;
+    u32 idx;
 
-	len = BPF_CORE_READ(skb, len);
+    len = BPF_CORE_READ(skb, len);
 
-	u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+    u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
-	idx = offset + RX_PACKETS;
-	array_incr(&counters, idx);
+    idx = offset + RX_PACKETS;
+    array_incr(&counters, idx);
 
-	idx = offset + RX_BYTES;
-	array_add(&counters, idx, len);
+    idx = offset + RX_BYTES;
+    array_add(&counters, idx, len);
 
-	return 0;
+    return 0;
 }
 
-
 SEC("raw_tp/net_dev_start_xmit")
-int BPF_PROG(tcp_cleanup_rbuf, struct sk_buff *skb, struct net_device *dev, void *txq, bool more)
-{
-	u64 len;
-	u64 *cnt;
-	u32 idx;
+int BPF_PROG(tcp_cleanup_rbuf, struct sk_buff* skb, struct net_device* dev, void* txq, bool more) {
+    u64 len;
+    u64* cnt;
+    u32 idx;
 
-	len = BPF_CORE_READ(skb, len);
+    len = BPF_CORE_READ(skb, len);
 
-	u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+    u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
-	idx = offset + TX_PACKETS;
-	array_incr(&counters, idx);
+    idx = offset + TX_PACKETS;
+    array_incr(&counters, idx);
 
-	idx = offset + TX_BYTES;
-	array_add(&counters, idx, len);
+    idx = offset + TX_BYTES;
+    array_add(&counters, idx, len);
 
-	return 0;
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";
