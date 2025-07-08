@@ -40,11 +40,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    // Set metadata for root cgroup
-    for metric in CGROUP_METRICS {
-        metric.insert_metadata(1, "name".to_string(), "/".to_string());
-    }
-
     let migrations = vec![&CPU_MIGRATIONS_FROM, &CPU_MIGRATIONS_TO];
 
     let bpf = BpfBuilder::new(
@@ -59,6 +54,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .packed_counters("cgroup_cpu_migrations", &CGROUP_CPU_MIGRATIONS)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .build()?;
+
+    for metric in CGROUP_METRICS {
+        metric.insert_metadata(1, "name".to_string(), "/".to_string());
+    }
 
     Ok(Some(Box::new(bpf)))
 }

@@ -67,11 +67,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    // Set metadata for root cgroup
-    for metric in CGROUP_METRICS {
-        metric.insert_metadata(1, "name".to_string(), "/".to_string());
-    }
-
     let bpf = BpfBuilder::new(
         NAME,
         BpfProgStats {
@@ -94,6 +89,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("bandwidth_info", handle_bandwidth_info)
     .build()?;
+
+    for metric in CGROUP_METRICS {
+        metric.insert_metadata(1, "name".to_string(), "/".to_string());
+    }
 
     Ok(Some(Box::new(bpf)))
 }
