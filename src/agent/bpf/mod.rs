@@ -79,7 +79,6 @@ use counters::{Counters, CpuCounters, PackedCounters};
 use histogram::Histogram;
 pub use sync_primitive::SyncPrimitive;
 
-/// Generic function to process cgroup_info data and update metrics with cgroup name metadata
 pub fn process_cgroup_info<T>(data: &[u8], metrics: &[&dyn MetricGroup]) -> i32
 where
     T: CgroupInfo + plain::Plain + Default,
