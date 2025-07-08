@@ -29,7 +29,6 @@ unsafe impl plain::Plain for bpf::types::bandwidth_info {}
 
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-// Static slice of metrics that track cgroup-specific data
 static CGROUP_METRICS: &[&dyn MetricGroup] = &[
     &CGROUP_CPU_BANDWIDTH_QUOTA,
     &CGROUP_CPU_BANDWIDTH_PERIOD_DURATION,

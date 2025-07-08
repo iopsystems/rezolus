@@ -31,7 +31,6 @@ use stats::*;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-// Static slice of metrics that track cgroup-specific data
 static CGROUP_METRICS: &[&dyn MetricGroup] = &[&CGROUP_CPU_CYCLES, &CGROUP_CPU_INSTRUCTIONS];
 
 fn handle_event(data: &[u8]) -> i32 {
