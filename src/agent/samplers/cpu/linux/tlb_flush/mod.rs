@@ -24,56 +24,18 @@ mod stats;
 use stats::*;
 
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
+impl_cgroup_info!(bpf::types::cgroup_info);
 
-fn handle_event(data: &[u8]) -> i32 {
-    let mut cgroup_info = bpf::types::cgroup_info::default();
+static CGROUP_METRICS: &[&dyn MetricGroup] = &[
+    &CGROUP_TLB_FLUSH_TASK_SWITCH,
+    &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
+    &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN,
+    &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
+    &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI,
+];
 
-    if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
-        let name = std::str::from_utf8(&cgroup_info.name)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let pname = std::str::from_utf8(&cgroup_info.pname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let gpname = std::str::from_utf8(&cgroup_info.gpname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let name = if !gpname.is_empty() {
-            if cgroup_info.level > 3 {
-                format!(".../{gpname}/{pname}/{name}")
-            } else {
-                format!("/{gpname}/{pname}/{name}")
-            }
-        } else if !pname.is_empty() {
-            format!("/{pname}/{name}")
-        } else if !name.is_empty() {
-            format!("/{name}")
-        } else {
-            "".to_string()
-        };
-
-        let id = cgroup_info.id;
-
-        set_name(id as usize, name)
-    }
-
-    0
-}
-
-fn set_name(id: usize, name: String) {
-    if !name.is_empty() {
-        CGROUP_TLB_FLUSH_TASK_SWITCH.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_TLB_FLUSH_REMOTE_SEND_IPI.insert_metadata(id, "name".to_string(), name);
-    }
+fn handle_cgroup_info(data: &[u8]) -> i32 {
+    process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -110,8 +72,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
     )
     .packed_counters("cgroup_remote_send_ipi", &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI)
-    .ringbuf_handler("cgroup_info", handle_event)
+    .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .build()?;
+
+    // Set name metadata for root cgroup
+    for metric in CGROUP_METRICS {
+        metric.insert_metadata(0, "name".to_string(), "/".to_string());
+    }
 
     Ok(Some(Box::new(bpf)))
 }

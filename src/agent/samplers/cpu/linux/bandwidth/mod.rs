@@ -27,45 +27,21 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 unsafe impl plain::Plain for bpf::types::bandwidth_info {}
 
+impl_cgroup_info!(bpf::types::cgroup_info);
+
+// Static slice of metrics that track cgroup-specific data
+static CGROUP_METRICS: &[&dyn MetricGroup] = &[
+    &CGROUP_CPU_BANDWIDTH_QUOTA,
+    &CGROUP_CPU_BANDWIDTH_PERIOD_DURATION,
+    &CGROUP_CPU_THROTTLED_TIME,
+    &CGROUP_CPU_THROTTLED,
+    &CGROUP_CPU_BANDWIDTH_PERIODS,
+    &CGROUP_CPU_BANDWIDTH_THROTTLED_PERIODS,
+    &CGROUP_CPU_BANDWIDTH_THROTTLED_TIME,
+];
+
 fn handle_cgroup_info(data: &[u8]) -> i32 {
-    let mut cgroup_info = bpf::types::cgroup_info::default();
-
-    if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
-        let name = std::str::from_utf8(&cgroup_info.name)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let pname = std::str::from_utf8(&cgroup_info.pname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let gpname = std::str::from_utf8(&cgroup_info.gpname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let name = if !gpname.is_empty() {
-            if cgroup_info.level > 3 {
-                format!(".../{gpname}/{pname}/{name}")
-            } else {
-                format!("/{gpname}/{pname}/{name}")
-            }
-        } else if !pname.is_empty() {
-            format!("/{pname}/{name}")
-        } else if !name.is_empty() {
-            format!("/{name}")
-        } else {
-            "".to_string()
-        };
-
-        let id = cgroup_info.id;
-
-        set_cgroup_name(id as usize, name)
-    }
-
-    0
+    process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)
 }
 
 fn handle_bandwidth_info(data: &[u8]) -> i32 {
@@ -85,34 +61,16 @@ fn handle_bandwidth_info(data: &[u8]) -> i32 {
     0
 }
 
-fn set_cgroup_name(id: usize, name: String) {
-    if !name.is_empty() {
-        for m in &[
-            &CGROUP_CPU_BANDWIDTH_QUOTA,
-            &CGROUP_CPU_BANDWIDTH_PERIOD_DURATION,
-        ] {
-            m.insert_metadata(id, "name".to_string(), name.clone());
-        }
-
-        for m in &[
-            &CGROUP_CPU_THROTTLED_TIME,
-            &CGROUP_CPU_THROTTLED,
-            &CGROUP_CPU_BANDWIDTH_PERIODS,
-            &CGROUP_CPU_BANDWIDTH_THROTTLED_PERIODS,
-            &CGROUP_CPU_BANDWIDTH_THROTTLED_TIME,
-        ] {
-            m.insert_metadata(id, "name".to_string(), name.clone());
-        }
-    }
-}
-
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
 
-    set_cgroup_name(1, "/".to_string());
+    // Set metadata for root cgroup
+    for metric in CGROUP_METRICS {
+        metric.insert_metadata(1, "name".to_string(), "/".to_string());
+    }
 
     let bpf = BpfBuilder::new(
         NAME,
