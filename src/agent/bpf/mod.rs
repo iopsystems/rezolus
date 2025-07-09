@@ -7,6 +7,7 @@ pub use builder::Builder as BpfBuilder;
 pub use builder::{BpfProgStats, PerfEvent};
 
 use crate::agent::samplers::Sampler;
+use crate::agent::MetricGroup;
 use crate::*;
 
 pub trait OpenSkelExt {
@@ -17,6 +18,41 @@ pub trait OpenSkelExt {
 
 pub trait SkelExt {
     fn map(&self, name: &str) -> &libbpf_rs::Map;
+}
+
+pub trait CgroupInfo {
+    fn id(&self) -> i32;
+    fn level(&self) -> i32;
+    fn name(&self) -> &[u8];
+    fn pname(&self) -> &[u8];
+    fn gpname(&self) -> &[u8];
+}
+
+#[macro_export]
+macro_rules! impl_cgroup_info {
+    ($type:ty) => {
+        impl $crate::agent::bpf::CgroupInfo for $type {
+            fn id(&self) -> i32 {
+                self.id
+            }
+
+            fn level(&self) -> i32 {
+                self.level
+            }
+
+            fn name(&self) -> &[u8] {
+                &self.name
+            }
+
+            fn pname(&self) -> &[u8] {
+                &self.pname
+            }
+
+            fn gpname(&self) -> &[u8] {
+                &self.gpname
+            }
+        }
+    };
 }
 
 const CACHELINE_SIZE: usize = 64;
@@ -42,6 +78,56 @@ fn whole_pages<T>(count: usize) -> usize {
 use counters::{Counters, CpuCounters, PackedCounters};
 use histogram::Histogram;
 pub use sync_primitive::SyncPrimitive;
+
+pub fn process_cgroup_info<T>(data: &[u8], metrics: &[&dyn MetricGroup]) -> i32
+where
+    T: CgroupInfo + plain::Plain + Default,
+{
+    let mut cgroup_info = T::default();
+
+    if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
+        // Process name fields from bytes to strings
+        let name = std::str::from_utf8(cgroup_info.name())
+            .unwrap_or("")
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let pname = std::str::from_utf8(cgroup_info.pname())
+            .unwrap_or("")
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let gpname = std::str::from_utf8(cgroup_info.gpname())
+            .unwrap_or("")
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        // Construct hierarchical path based on level and available parent names
+        let path = if !gpname.is_empty() {
+            if cgroup_info.level() > 3 {
+                format!(".../{gpname}/{pname}/{name}")
+            } else {
+                format!("/{gpname}/{pname}/{name}")
+            }
+        } else if !pname.is_empty() {
+            format!("/{pname}/{name}")
+        } else if !name.is_empty() {
+            format!("/{name}")
+        } else {
+            "".to_string()
+        };
+
+        // Update metadata for all provided metrics
+        if !path.is_empty() {
+            let id = cgroup_info.id() as usize;
+            for metric in metrics {
+                metric.insert_metadata(id, "name".to_string(), path.clone());
+            }
+        }
+    }
+
+    0
+}
 
 pub struct AsyncBpf {
     name: &'static str,
