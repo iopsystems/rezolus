@@ -58,10 +58,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .ringbuf_handler("cgroup_info", handle_event)
     .build()?;
 
-    for metric in CGROUP_METRICS {
-        metric.insert_metadata(1, "name".to_string(), "/".to_string());
-    }
-
     Ok(Some(Box::new(bpf)))
 }
 

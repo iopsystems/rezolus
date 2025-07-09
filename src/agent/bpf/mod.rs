@@ -103,7 +103,10 @@ where
             .replace("\\x2d", "-");
 
         // Construct hierarchical path based on level and available parent names
-        let path = if !gpname.is_empty() {
+        let path = if name == "/" {
+            // Root cgroup - just use "/"
+            "/".to_string()
+        } else if !gpname.is_empty() {
             if cgroup_info.level() > 3 {
                 format!(".../{gpname}/{pname}/{name}")
             } else {
