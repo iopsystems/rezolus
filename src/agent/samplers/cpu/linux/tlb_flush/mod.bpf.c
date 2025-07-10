@@ -4,7 +4,7 @@
 // This BPF program tracks tlb_flush events
 
 #include <vmlinux.h>
-#include "../../../agent/bpf/cgroup_info.h"
+#include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
@@ -12,8 +12,6 @@
 
 #define COUNTER_GROUP_WIDTH 8
 #define MAX_CPUS 1024
-#define MAX_CGROUPS 4096
-#define RINGBUF_CAPACITY 262144
 
 #define REASON_TASK_SWITCH 0
 #define REASON_REMOTE_SHOOTDOWN 1
@@ -120,49 +118,18 @@ int BPF_PROG(tlb_flush, int reason, u64 pages) {
         int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
         u64 serial_nr = BPF_CORE_READ(current, sched_task_group, css.serial_nr);
 
-        if (cgroup_id && cgroup_id < MAX_CGROUPS) {
+        if (cgroup_id < MAX_CGROUPS) {
 
-            // we check to see if this is a new cgroup by checking the serial number
+            int ret = handle_new_cgroup(current, &cgroup_serial_numbers, &cgroup_info);
 
-            elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
-
-            if (elem && *elem != serial_nr) {
-                // zero the counters, they will not be exported until they are non-zero
+            if (ret == 0) {
+                // New cgroup detected, zero the counters
                 u64 zero = 0;
                 bpf_map_update_elem(&cgroup_task_switch, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_remote_shootdown, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_local_shootdown, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_local_mm_shootdown, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_remote_send_ipi, &cgroup_id, &zero, BPF_ANY);
-
-                int level = BPF_CORE_READ(current, sched_task_group, css.serial_nr);
-
-                // initialize the cgroup info
-                struct cgroup_info cginfo = {
-                    .id = cgroup_id,
-                    .level = BPF_CORE_READ(current, sched_task_group, css.cgroup, level),
-                };
-
-                // read the cgroup name
-                bpf_probe_read_kernel_str(
-                    &cginfo.name, CGROUP_NAME_LEN,
-                    BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, name));
-
-                // read the cgroup parent name
-                bpf_probe_read_kernel_str(
-                    &cginfo.pname, CGROUP_NAME_LEN,
-                    BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, parent, name));
-
-                // read the cgroup grandparent name
-                bpf_probe_read_kernel_str(
-                    &cginfo.gpname, CGROUP_NAME_LEN,
-                    BPF_CORE_READ(current, sched_task_group, css.cgroup, kn, parent, parent, name));
-
-                // push the cgroup info into the ringbuf
-                bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
-
-                // update the serial number in the local map
-                bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
             }
 
             // update cgroup counter
