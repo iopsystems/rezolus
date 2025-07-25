@@ -155,84 +155,6 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_system SEC(".maps");
 
-static void account_cpu_usage(struct task_struct* task, u32 index) {
-    u32 idx, offset;
-    u64* elem;
-    void* task_time;
-    u64 curr_time;
-    u64* last_time;
-    u32 pid = BPF_CORE_READ(task, pid);
-    if (pid == 0 || pid >= MAX_PID)
-        return;
-    switch (index) {
-    case USER:
-        offset = USER_OFFSET;
-        task_time = &task_utime;
-        curr_time = BPF_CORE_READ(task, utime);
-        break;
-    case SYSTEM:
-        offset = SYSTEM_OFFSET;
-        task_time = &task_stime;
-        curr_time = BPF_CORE_READ(task, stime);
-        break;
-    default:
-        return;
-    }
-    last_time = bpf_map_lookup_elem(task_time, &pid);
-    if (last_time == NULL)
-        return;
-    // nothing needs to update
-    if (*last_time == curr_time)
-        return;
-    // first time counting this task
-    if (*last_time == 0) {
-        *last_time = curr_time;
-        return;
-    }
-    // calculate the counter index and increment the counter
-    u64 delta = curr_time - *last_time;
-
-    // check if we've had a counter reset, in which case this is pid re-use and
-    // we use the current time as the delta (since delta would be from zero)
-    if (delta > 1 << 63) {
-        delta = curr_time;
-    }
-
-    *last_time = curr_time;
-    idx = CPU_USAGE_GROUP_WIDTH * bpf_get_smp_processor_id() + offset;
-    array_add(&cpu_usage, idx, delta);
-
-    // additional accounting on a per-cgroup basis follows
-    if (bpf_core_field_exists(task->sched_task_group)) {
-        // int cgroup_id = task->sched_task_group->css.id;
-        int cgroup_id = BPF_CORE_READ(task, sched_task_group, css.id);
-        u64 serial_nr = BPF_CORE_READ(task, sched_task_group, css.serial_nr);
-
-        if (cgroup_id < MAX_CGROUPS) {
-
-            int ret = handle_new_cgroup(task, &cgroup_serial_numbers, &cgroup_info);
-
-            if (ret == 0) {
-                // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_user, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
-            }
-
-            switch (index) {
-            case USER:
-                array_add(&cgroup_user, cgroup_id, delta);
-                break;
-            case SYSTEM:
-                array_add(&cgroup_system, cgroup_id, delta);
-                break;
-            default:
-                break;
-            }
-        }
-    }
-}
-
 // The kprobe handler is not always invoked, so using the delta to count the CPU usage could cause
 // undercounting. Kernel increases the task utime/stime before invoking cpuacct_account_field. So we
 // count the CPU usage by tracking the per-task utime/stime. The user time includes both the
@@ -240,8 +162,95 @@ static void account_cpu_usage(struct task_struct* task, u32 index) {
 // CPUTIME_IRQ.
 SEC("kprobe/cpuacct_account_field")
 int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index, u64 delta) {
-    account_cpu_usage(task, SYSTEM);
-    account_cpu_usage(task, USER);
+    u32 cpu, idx;
+    u64 curr_utime, curr_stime;
+    u64 *last_utime, *last_stime;
+    u32 pid;
+
+    if (!task)
+        return 0;
+
+    pid = BPF_CORE_READ(task, pid);
+    if (pid == 0 || pid >= MAX_PID)
+        return 0;
+
+    curr_utime = BPF_CORE_READ(task, utime);
+    curr_stime = BPF_CORE_READ(task, stime);
+
+    last_utime = bpf_map_lookup_elem(&task_utime, &pid);
+    last_stime = bpf_map_lookup_elem(&task_stime, &pid);
+
+    if (!last_utime || !last_stime)
+        return 0;
+
+    // Calculate deltas with overflow protection
+    u64 delta_utime = 0;
+    u64 delta_stime = 0;
+
+    // Only calculate delta if we have valid previous values
+    if (*last_utime != 0 && curr_utime >= *last_utime) {
+        delta_utime = curr_utime - *last_utime;
+    }
+
+    if (*last_stime != 0 && curr_stime >= *last_stime) {
+        delta_stime = curr_stime - *last_stime;
+    }
+
+    // Update last seen values
+    *last_utime = curr_utime;
+    *last_stime = curr_stime;
+
+    // Skip updating metrics if there's no change
+    if (delta_utime == 0 && delta_stime == 0)
+        return 0;
+
+    // Get CPU index
+    cpu = bpf_get_smp_processor_id();
+    if (cpu >= MAX_CPUS)
+        return 0;
+
+    // Update per-CPU user time
+    if (delta_utime > 0) {
+        idx = CPU_USAGE_GROUP_WIDTH * cpu + USER_OFFSET;
+        if (idx < MAX_CPUS * CPU_USAGE_GROUP_WIDTH) {
+            array_add(&cpu_usage, idx, delta_utime);
+        }
+    }
+
+    // Update per-CPU system time
+    if (delta_stime > 0) {
+        idx = CPU_USAGE_GROUP_WIDTH * cpu + SYSTEM_OFFSET;
+        if (idx < MAX_CPUS * CPU_USAGE_GROUP_WIDTH) {
+            array_add(&cpu_usage, idx, delta_stime);
+        }
+    }
+
+    // Additional accounting on a per-cgroup basis
+    struct task_group *tg = BPF_CORE_READ(task, sched_task_group);
+    if (!tg)
+        return 0;
+
+    int cgroup_id = BPF_CORE_READ(tg, css.id);
+    if (cgroup_id < 0 || cgroup_id >= MAX_CGROUPS)
+        return 0;
+
+    int ret = handle_new_cgroup(task, &cgroup_serial_numbers, &cgroup_info);
+    if (ret == 0) {
+        // New cgroup detected, zero the counters
+        u64 zero = 0;
+        bpf_map_update_elem(&cgroup_user, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
+    }
+
+    // Update per-cgroup counters
+    if (delta_utime > 0) {
+        array_add(&cgroup_user, cgroup_id, delta_utime);
+    }
+
+    if (delta_stime > 0) {
+        array_add(&cgroup_system, cgroup_id, delta_stime);
+    }
+
     return 0;
 }
 
