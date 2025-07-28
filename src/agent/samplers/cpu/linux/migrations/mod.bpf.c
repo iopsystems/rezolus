@@ -66,11 +66,9 @@ struct {
 SEC("tp_btf/sched_switch")
 int handle__sched_switch(u64* ctx) {
     /* TP_PROTO(bool preempt, struct task_struct *prev, struct task_struct *next) */
-    struct task_struct* prev = (struct task_struct*)ctx[1];
     struct task_struct* next = (struct task_struct*)ctx[2];
 
     u32 cpu = bpf_get_smp_processor_id();
-    u32 prev_pid = BPF_CORE_READ(prev, pid);
     u32 next_pid = BPF_CORE_READ(next, pid);
 
     // Skip kernel threads and idle task (pid 0)
@@ -98,7 +96,6 @@ int handle__sched_switch(u64* ctx) {
             // handle per-cgroup accounting
             if (bpf_core_field_exists(next->sched_task_group)) {
                 int cgroup_id = BPF_CORE_READ(next, sched_task_group, css.id);
-                u64 serial_nr = BPF_CORE_READ(next, sched_task_group, css.serial_nr);
 
                 if (cgroup_id < MAX_CGROUPS) {
                     int ret = handle_new_cgroup(next, &cgroup_serial_numbers, &cgroup_info);

@@ -74,7 +74,6 @@ struct {
 } discard_size SEC(".maps");
 
 static int handle_block_rq_complete(struct request* rq, int error, unsigned int nr_bytes) {
-    u64 delta, *tsp;
     u32 idx, op;
     unsigned int cmd_flags;
 

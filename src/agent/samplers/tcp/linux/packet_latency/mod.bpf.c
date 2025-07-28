@@ -43,7 +43,6 @@ static __always_inline __u64 get_sock_ident(struct sock* sk) {
 }
 
 static int handle_tcp_probe(struct sock* sk, struct sk_buff* skb) {
-    const struct inet_sock* inet = (struct inet_sock*)(sk);
     u64 sock_ident, ts, len, doff;
     const struct tcphdr* th;
 
@@ -61,14 +60,9 @@ static int handle_tcp_probe(struct sock* sk, struct sk_buff* skb) {
 }
 
 static int handle_tcp_rcv_space_adjust(void* ctx, struct sock* sk) {
-    const struct inet_sock* inet = (struct inet_sock*)(sk);
     u64 sock_ident = get_sock_ident(sk);
-    u64 id = bpf_get_current_pid_tgid(), *tsp;
-    u32 idx;
+    u64 *tsp;
     u64 now, delta_ns;
-    u32 pid = id >> 32, tid = id;
-    struct event* eventp;
-    u16 family;
 
     tsp = bpf_map_lookup_elem(&start, &sock_ident);
     if (!tsp) {

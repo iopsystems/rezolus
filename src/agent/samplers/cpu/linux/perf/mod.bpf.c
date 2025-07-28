@@ -104,14 +104,6 @@ struct task_struct___x {
     unsigned int __state;
 } __attribute__((preserve_access_index));
 
-static __always_inline __s64 get_task_state(void* task) {
-    struct task_struct___x* t = task;
-
-    if (bpf_core_field_exists(t->__state))
-        return BPF_CORE_READ(t, __state);
-    return BPF_CORE_READ((struct task_struct___o*)task, state);
-}
-
 // attach a tracepoint on sched_switch for per-cgroup accounting
 
 SEC("tp_btf/sched_switch")
@@ -120,9 +112,7 @@ int handle__sched_switch(u64* ctx) {
      *      struct task_struct *next)
      */
     struct task_struct* prev = (struct task_struct*)ctx[1];
-    struct task_struct* next = (struct task_struct*)ctx[2];
 
-    u32 idx;
     u64 *elem, delta_c, delta_i;
 
     u32 processor_id = bpf_get_smp_processor_id();
@@ -132,7 +122,6 @@ int handle__sched_switch(u64* ctx) {
 
     if (bpf_core_field_exists(prev->sched_task_group)) {
         int cgroup_id = prev->sched_task_group->css.id;
-        u64 serial_nr = prev->sched_task_group->css.serial_nr;
 
         if (cgroup_id < MAX_CGROUPS) {
 

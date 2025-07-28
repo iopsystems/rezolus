@@ -305,7 +305,6 @@ int handle__sched_switch(u64* ctx) {
     void* next_task_group = BPF_CORE_READ(next, sched_task_group);
     if (next_task_group) {
         cgroup_id = BPF_CORE_READ(next, sched_task_group, css.id);
-        u64 serial_nr = BPF_CORE_READ(next, sched_task_group, css.serial_nr);
 
         if (cgroup_id < MAX_CGROUPS) {
 

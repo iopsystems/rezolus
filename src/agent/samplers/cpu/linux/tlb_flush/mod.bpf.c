@@ -103,7 +103,6 @@ struct {
 SEC("raw_tp/tlb_flush")
 int BPF_PROG(tlb_flush, int reason, u64 pages) {
     u32 offset, idx;
-    u64* elem;
 
     offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
@@ -116,7 +115,6 @@ int BPF_PROG(tlb_flush, int reason, u64 pages) {
     void* task_group = BPF_CORE_READ(current, sched_task_group);
     if (task_group) {
         int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
-        u64 serial_nr = BPF_CORE_READ(current, sched_task_group, css.serial_nr);
 
         if (cgroup_id < MAX_CGROUPS) {
 
