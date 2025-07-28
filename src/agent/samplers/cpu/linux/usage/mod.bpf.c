@@ -273,8 +273,6 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
     u32 cpu = bpf_get_smp_processor_id();
     u64 *start_ts, dur = 0;
     u32 idx, cpuusage_idx;
-
-    u32 irq_id = 0;
     u32 start_idx = cpu * 8;
 
     // lookup the start time
