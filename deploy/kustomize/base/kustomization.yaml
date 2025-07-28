@@ -16,6 +16,12 @@ configMapGenerator:
     files:
       - configs/agent.toml
 images:
-  - name: samof76/rezolus
-    newName: samof76/rezolus
-    newTag: t1
+  - name: rezolus
+    newName: rezolus
+    newTag: v5.2.2
+
+commonLabels:
+  iopsystems.com/app: rezolus
+  iopsystems.com/name: rezolus
+  iopsystems.com/managed-by: kustomize
+  iopsystems.com/environment: base

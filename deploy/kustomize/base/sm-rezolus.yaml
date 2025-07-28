@@ -2,12 +2,9 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: rezolus-monitor
-  labels:
-    app: rezolus
 spec:
   selector:
-    matchLabels:
-      app: rezolus
+    matchLabels: {}
   endpoints:
     - port: metrics
       interval: 30s

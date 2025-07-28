@@ -2,17 +2,11 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: rezolus
-  labels:
-    app: rezolus
-    environment: base
 spec:
   selector:
-    matchLabels:
-      app: rezolus
+    matchLabels: {}
   template:
     metadata:
-      labels:
-        app: rezolus
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "4242"
@@ -22,7 +16,7 @@ spec:
       hostPID: true
       containers:
         - name: rezolus-agent
-          image: samof76/rezolus
+          image: rezolus
           args:
             - /config/agent.toml
           securityContext:
@@ -78,7 +72,7 @@ spec:
               memory: "512Mi"
               cpu: "200m"
         - name: rezolus-exporter
-          image: samof76/rezolus
+          image: rezolus
           command: ["/usr/local/bin/rezolus"]
           args:
             - exporter
