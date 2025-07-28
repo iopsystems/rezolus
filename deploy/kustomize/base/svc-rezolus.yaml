@@ -1,0 +1,16 @@
+# rezolus-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rezolus-service
+  labels:
+    app: rezolus
+spec:
+  selector:
+    app: rezolus
+  ports:
+    - name: metrics
+      port: 4242
+      targetPort: 4242
+      protocol: TCP
+  type: ClusterIP

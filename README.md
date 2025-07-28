@@ -194,6 +194,28 @@ target/release/rezolus record http://localhost:4241 rezolus.parquet
 target/release/rezolus hindsight config/hindsight.toml
 ```
 
+### Build with Docker
+
+You can build Docker images using the custom cargo command:
+
+```bash
+# Build for both linux/amd64 and linux/arm64 platforms (requires Docker buildx)
+cargo xtask docker
+
+# Build for a specific platform
+cargo xtask docker linux/amd64
+cargo xtask docker linux/arm64
+
+# Build with a custom tag
+cargo xtask docker both rezolus:v5.2.2
+cargo xtask docker linux/amd64 rezolus:dev
+
+# Or build directly with Docker
+docker build -t rezolus:latest .
+```
+
+The multi-platform build requires Docker buildx and will push to the registry. For local development, use single-platform builds.
+
 ## Contributing
 To contribute to Rezolus first check if there are any open pull requests or
 issues related to the bugfix or feature you wish to contribute. If there is not,

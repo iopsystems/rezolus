@@ -1,0 +1,120 @@
+[general]
+listen = "0.0.0.0:4241"
+
+# Metric snapshots are cached with the following TTL to prevent excessive
+# resource usage.
+ttl = "10ms"
+
+[scheduler]
+# By default, Rezolus will use the SCHED_RR realtime scheduling policy to ensure
+# collection happens with minimal delay. Other policies are: `normal` and `fifo`
+# policy = "round_robin"
+
+# When using `round_robin` or `fifo` realtime policies, a priority may be set
+# in the range 1..=99. Larger numbers are higher priority. Rezolus uses a
+# default priority of 15 to balance between realtime responsiveness and safety.
+# priority = 15
+
+# When using `normal` scheduling policy, Rezolus defaults to the normal niceness
+# value of 0. The value may be in the range -20..=19 with lower values getting
+# higher priority.
+# niceness = 0
+
+[log]
+# Controls the log level: "error", "warn", "info", "debug", "trace"
+level = "info"
+
+# The defaults are used for each sampler unless there's a sampler level
+# configuration present.
+
+[defaults]
+# Controls whether the samplers are enabled or not. Setting the default to
+# true means that individual sampler configs can be used to opt-out of
+# collection for that sampler. Setting the default to false requires that
+# individual sampler configs are used to opt-in to collection.
+enabled = true
+
+# Each sampler can then be individually configured to override the defaults. All
+# of the configuration options in the `[defaults]` section are allowed.
+
+# BPF sampler that instruments block_io request queue to measure the request
+# latency distribution.
+[samplers.blockio_latency]
+
+# BPF sampler that instruments block_io request queue to get counts of requests,
+# the number of bytes by request type, and the size distribution.
+[samplers.blockio_requests]
+
+# BPF sampler that collects CPU CFS bandwidth control and throttling stats
+[samplers.cpu_bandwidth]
+
+# Reads the number of currently online cores
+[samplers.cpu_cores]
+
+# Performance Counter based sampler that gathers APERF, MPERF, and TSC which can
+# be used to calculate CPU frequency
+[samplers.cpu_frequency]
+
+# Performance counter based sampler that gathers L3 cache accesses and misses.
+[samplers.cpu_l3]
+
+# Instruments CPU migrations.
+[samplers.cpu_migrations]
+
+# Instruments CPU frequency, instructions, and cycles using perf counters.
+[samplers.cpu_perf]
+
+# BPF sampler that gathers TLB flush event counts by reason.
+[samplers.cpu_tlb_flush]
+
+# Instruments CPU usage by state with BPF on linux. On macos
+# host_processor_info() is used
+[samplers.cpu_usage]
+
+# Produces various nVIDIA specific GPU metrics using NVML
+[samplers.gpu_nvidia]
+
+# Memory utilization from /proc/meminfo
+[samplers.memory_meminfo]
+
+# Memory NUMA metrics from /proc/vmstat
+[samplers.memory_vmstat]
+
+# Produces network interface statistics from /sys/class/net for TX/RX errors
+[samplers.network_interfaces]
+
+# Produces network traffic statistics using BPF
+[samplers.network_traffic]
+
+# Sample resource utilization for Rezolus itself
+[samplers.rezolus_rusage]
+
+# BPF sampler that instruments scheduler events and measures runqueue latency,
+# process running time, and context switch information.
+[samplers.scheduler_runqueue]
+
+# BPF sampler that instruments syscall enter to gather syscall counts.
+[samplers.syscall_counts]
+
+# BPF sampler that instruments syscall enter and exit to gather syscall latency
+# distributions.
+[samplers.syscall_latency]
+
+# BPF sampler that probes TCP connect (active open) to measure latency when
+# establishing connections.
+[samplers.tcp_connect_latency]
+
+# BPF sampler that probes TCP receive path to measure latency from a packet
+# being received until application reads from the socket.
+[samplers.tcp_packet_latency]
+
+# BPF sampler that probes TCP receive path to measure jitter and smoothed round
+# trip time.
+[samplers.tcp_receive]
+
+# BPF sampler that probes TCP retransmit path to measure retransmits.
+[samplers.tcp_retransmit]
+
+# Samples TCP traffic using a BPF sampler to get metrics for TX/RX bytes and
+# packets
+[samplers.tcp_traffic]

@@ -1,0 +1,21 @@
+resources:
+  - ds-rezolus.yaml
+  - cr-rezolus.yaml
+  - crb-rezolus.yaml
+  - sa-rezolus.yaml
+  - sm-rezolus.yaml
+  - svc-rezolus.yaml
+
+namespace: monitoring
+
+configMapGenerator:
+  - name: rez-exporter-config
+    files:
+      - configs/exporter.toml
+  - name: rez-agent-config
+    files:
+      - configs/agent.toml
+images:
+  - name: samof76/rezolus
+    newName: samof76/rezolus
+    newTag: t1
