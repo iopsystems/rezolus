@@ -2422,7 +2422,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.2.2-alpha.0"
+version = "5.2.2"
 dependencies = [
  "anyhow",
  "archspec",
