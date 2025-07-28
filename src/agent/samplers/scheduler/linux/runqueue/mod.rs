@@ -25,54 +25,16 @@ use crate::agent::*;
 use std::sync::Arc;
 
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
+impl_cgroup_info!(bpf::types::cgroup_info);
 
-fn handle_event(data: &[u8]) -> i32 {
-    let mut cgroup_info = bpf::types::cgroup_info::default();
+static CGROUP_METRICS: &[&dyn MetricGroup] = &[
+    &CGROUP_SCHEDULER_IVCSW,
+    &CGROUP_SCHEDULER_OFFCPU,
+    &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
+];
 
-    if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
-        let name = std::str::from_utf8(&cgroup_info.name)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let pname = std::str::from_utf8(&cgroup_info.pname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let gpname = std::str::from_utf8(&cgroup_info.gpname)
-            .unwrap()
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let name = if !gpname.is_empty() {
-            if cgroup_info.level > 3 {
-                format!(".../{gpname}/{pname}/{name}")
-            } else {
-                format!("/{gpname}/{pname}/{name}")
-            }
-        } else if !pname.is_empty() {
-            format!("/{pname}/{name}")
-        } else if !name.is_empty() {
-            format!("/{name}")
-        } else {
-            "".to_string()
-        };
-
-        let id = cgroup_info.id;
-
-        set_name(id as usize, name)
-    }
-
-    0
-}
-
-fn set_name(id: usize, name: String) {
-    if !name.is_empty() {
-        CGROUP_SCHEDULER_IVCSW.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_SCHEDULER_OFFCPU.insert_metadata(id, "name".to_string(), name.clone());
-        CGROUP_SCHEDULER_RUNQUEUE_WAIT.insert_metadata(id, "name".to_string(), name.clone());
-    }
+fn handle_cgroup_info(data: &[u8]) -> i32 {
+    process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -80,8 +42,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
-
-    set_name(1, "/".to_string());
 
     let counters = vec![&SCHEDULER_IVCSW, &SCHEDULER_RUNQUEUE_WAIT];
 
@@ -100,7 +60,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .packed_counters("cgroup_runq_wait", &CGROUP_SCHEDULER_RUNQUEUE_WAIT)
     .packed_counters("cgroup_offcpu", &CGROUP_SCHEDULER_OFFCPU)
     .packed_counters("cgroup_ivcsw", &CGROUP_SCHEDULER_IVCSW)
-    .ringbuf_handler("cgroup_info", handle_event)
+    .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .build()?;
 
     Ok(Some(Box::new(bpf)))

@@ -5,15 +5,13 @@
 // settings to capture metrics about throttling and cpu quota
 
 #include <vmlinux.h>
-#include "../../../agent/bpf/cgroup_info.h"
+#include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
 #define MAX_CPUS 1024
-#define MAX_CGROUPS 4096
-#define RINGBUF_CAPACITY 262144
 
 // struct to pass bandwidth info to userspace
 struct bandwidth_info {
@@ -120,43 +118,21 @@ int tg_set_cfs_bandwidth(struct pt_regs* ctx) {
         return 0;
 
     u32 cgroup_id = BPF_CORE_READ(css, id);
-    if (!cgroup_id || cgroup_id >= MAX_CGROUPS)
+    if (cgroup_id >= MAX_CGROUPS)
         return 0;
 
     u64 serial_nr = BPF_CORE_READ(css, serial_nr);
 
-    // check if this is a new cgroup by checking the serial number and id
+    int ret = handle_new_cgroup_from_css(css, &cgroup_serial_numbers, &cgroup_info);
 
-    u64* elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
-
-    if (elem && *elem != serial_nr) {
-        // zero the counters, they will not be exported until they are non-zero
+    if (ret == 0) {
+        // New cgroup detected, zero the counters
         u64 zero = 0;
         bpf_map_update_elem(&throttled_time, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&throttled_count, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&bandwidth_periods, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&bandwidth_throttled_periods, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&bandwidth_throttled_time, &cgroup_id, &zero, BPF_ANY);
-
-        // initialize the cgroup info
-        struct cgroup_info cginfo = {
-            .id = cgroup_id,
-            .level = BPF_CORE_READ(css, cgroup, level),
-        };
-
-        // assemble cgroup name
-        bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, name));
-        bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, parent, name));
-        bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, parent, parent, name));
-
-        // push the cgroup info into the ringbuf
-        bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
-
-        // update the serial number in the local map
-        bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
     }
 
     // get the bandwidth info and send to userspace
@@ -184,46 +160,24 @@ int throttle_cfs_rq(struct pt_regs* ctx) {
         return 0;
 
     u64 cgroup_id = BPF_CORE_READ(css, id);
-    if (!cgroup_id || cgroup_id >= MAX_CGROUPS)
+    if (cgroup_id >= MAX_CGROUPS)
         return 0;
 
     u64 serial_nr = BPF_CORE_READ(css, serial_nr);
 
-    // check if this is a new cgroup by checking the serial number and id
+    int ret = handle_new_cgroup_from_css(css, &cgroup_serial_numbers, &cgroup_info);
 
-    u64* elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
-
-    if (elem && *elem != serial_nr) {
-        // zero the counters, they will not be exported until they are non-zero
+    if (ret == 0) {
+        // New cgroup detected, zero the counters
         u64 zero = 0;
         bpf_map_update_elem(&throttled_time, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&throttled_count, &cgroup_id, &zero, BPF_ANY);
-
-        // initialize the cgroup info
-        struct cgroup_info cginfo = {
-            .id = cgroup_id,
-            .level = BPF_CORE_READ(css, cgroup, level),
-        };
-
-        // assemble cgroup name
-        bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, name));
-        bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, parent, name));
-        bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, parent, parent, name));
-
-        // push the cgroup info into the ringbuf
-        bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);
 
         // get the bandwidth info and send to userspace
         u64 quota = BPF_CORE_READ(tg, cfs_bandwidth.quota);
         u64 period = BPF_CORE_READ(tg, cfs_bandwidth.period);
         struct bandwidth_info bw_info = { .id = cgroup_id, .quota = quota, .period = period };
         bpf_ringbuf_output(&bandwidth_info, &bw_info, sizeof(bw_info), 0);
-
-        // update the serial number in the local map
-        bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
     }
 
     // record throttle start time
@@ -253,7 +207,7 @@ int unthrottle_cfs_rq(struct pt_regs* ctx) {
         return 0;
 
     u64 cgroup_id = BPF_CORE_READ(css, id);
-    if (!cgroup_id || cgroup_id >= MAX_CGROUPS)
+    if (cgroup_id >= MAX_CGROUPS)
         return 0;
 
     // skip accounting if the serial number doesn't match

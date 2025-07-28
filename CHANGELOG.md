@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [5.2.2] - 2024-07-28
+
+### Fixes
+
+- Fixes cpu usage sampler reporting incorrect values on Ubuntu 24 (noble)
+  when installed from our deb packages, or when built on systems with clang-18.
+  (#585)
+
 ## [5.2.1] - 2024-07-02
 
 ### Fixes
@@ -420,7 +428,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.2.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.2.2...HEAD
+[5.2.1]: https://github.com/iopsystems/rezolus/compare/v5.2.1...v5.2.2
+[5.2.1]: https://github.com/iopsystems/rezolus/compare/v5.2.0...v5.2.1
 [5.2.0]: https://github.com/iopsystems/rezolus/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/iopsystems/rezolus/compare/v5.0.1...v5.1.0
 [5.0.1]: https://github.com/iopsystems/rezolus/compare/v5.0.0...v5.0.1

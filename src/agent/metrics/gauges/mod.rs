@@ -1,3 +1,4 @@
+use crate::agent::metrics::MetricGroup;
 use metriken::Metric;
 use metriken::Value;
 use parking_lot::RwLock;
@@ -61,23 +62,30 @@ impl GaugeGroup {
         self.values.get().map(|v| v.read().clone())
     }
 
-    pub fn len(&self) -> usize {
-        self.entries
-    }
-
     fn get_or_init(&self) -> &RwLock<Vec<i64>> {
         self.values
             .get_or_init(|| vec![i64::MIN; self.entries].into())
     }
+}
 
-    pub fn load_metadata(&self, idx: usize) -> Option<HashMap<String, String>> {
+impl MetricGroup for GaugeGroup {
+    fn insert_metadata(&self, idx: usize, key: String, value: String) {
+        let metadata = self
+            .metadata
+            .get_or_init(|| vec![HashMap::new(); self.entries].into());
+        if let Some(metadata) = metadata.write().get_mut(idx) {
+            metadata.insert(key, value);
+        }
+    }
+
+    fn load_metadata(&self, idx: usize) -> Option<HashMap<String, String>> {
         match self.metadata.get() {
             Some(metadata) => metadata.read().get(idx).cloned(),
             None => None,
         }
     }
 
-    pub fn clear_metadata(&self, idx: usize) {
+    fn clear_metadata(&self, idx: usize) {
         if let Some(metadata) = self.metadata.get() {
             if let Some(m) = metadata.write().get_mut(idx) {
                 m.clear();
@@ -85,12 +93,7 @@ impl GaugeGroup {
         }
     }
 
-    pub fn insert_metadata(&self, idx: usize, key: String, value: String) {
-        let metadata = self
-            .metadata
-            .get_or_init(|| vec![HashMap::new(); self.entries].into());
-        if let Some(metadata) = metadata.write().get_mut(idx) {
-            metadata.insert(key, value);
-        }
+    fn len(&self) -> usize {
+        self.entries
     }
 }
