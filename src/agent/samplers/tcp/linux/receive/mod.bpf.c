@@ -37,10 +37,8 @@ struct {
 
 SEC("kprobe/tcp_rcv_established")
 int BPF_KPROBE(tcp_rcv_kprobe, struct sock* sk) {
-    const struct inet_sock* inet = (struct inet_sock*)(sk);
     struct tcp_sock* ts;
-    u64 key, slot;
-    u32 idx, mdev_us, srtt_us;
+    u32 mdev_us, srtt_us;
     u64 mdev_ns, srtt_ns;
 
     ts = (struct tcp_sock*)(sk);

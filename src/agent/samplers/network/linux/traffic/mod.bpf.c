@@ -32,7 +32,6 @@ struct {
 SEC("raw_tp/netif_receive_skb")
 int BPF_PROG(netif_receive_skb, struct sk_buff* skb) {
     u64 len;
-    u64* cnt;
     u32 idx;
 
     len = BPF_CORE_READ(skb, len);
@@ -51,7 +50,6 @@ int BPF_PROG(netif_receive_skb, struct sk_buff* skb) {
 SEC("raw_tp/net_dev_start_xmit")
 int BPF_PROG(tcp_cleanup_rbuf, struct sk_buff* skb, struct net_device* dev, void* txq, bool more) {
     u64 len;
-    u64* cnt;
     u32 idx;
 
     len = BPF_CORE_READ(skb, len);

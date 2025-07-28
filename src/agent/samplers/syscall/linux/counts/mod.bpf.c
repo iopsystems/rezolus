@@ -199,7 +199,6 @@ struct {
 SEC("tracepoint/raw_syscalls/sys_enter")
 int sys_enter(struct trace_event_raw_sys_enter* args) {
     u32 offset, idx, group = 0;
-    u64* elem;
 
     if (args->id < 0) {
         return 0;
@@ -226,7 +225,6 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
 
     if (bpf_core_field_exists(current->sched_task_group)) {
         int cgroup_id = current->sched_task_group->css.id;
-        u64 serial_nr = current->sched_task_group->css.serial_nr;
 
         if (cgroup_id < MAX_CGROUPS) {
 

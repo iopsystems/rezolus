@@ -45,6 +45,8 @@ mod bpf {
                         "-Isrc/agent/bpf/x86_64",
                         "-fno-unwind-tables",
                         "-D__TARGET_ARCH_x86",
+                        "-Wall",
+                        "-Werror",
                     ])
                     .build_and_generate(&tgt)
                     .unwrap();
@@ -55,6 +57,8 @@ mod bpf {
                         "-Isrc/agent/bpf/aarch64",
                         "-fno-unwind-tables",
                         "-D__TARGET_ARCH_arm64",
+                        "-Wall",
+                        "-Werror",
                     ])
                     .build_and_generate(&tgt)
                     .unwrap();

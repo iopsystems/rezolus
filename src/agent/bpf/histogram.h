@@ -11,8 +11,6 @@
 // within BPF. But since we also can't loop, this is implemented as a binary
 // search with a maximum of 6 branches.
 static u32 clz(u64 value) {
-    u32 count = 0;
-
     // binary search to find number of leading zeros
     if (value & 0xFFFFFFFF00000000) {
         if (value & 0xFFFF000000000000) {

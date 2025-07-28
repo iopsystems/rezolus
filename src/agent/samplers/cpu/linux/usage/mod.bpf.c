@@ -271,8 +271,8 @@ int softirq_enter(struct trace_event_raw_softirq* args) {
 SEC("tracepoint/irq/softirq_exit")
 int softirq_exit(struct trace_event_raw_softirq* args) {
     u32 cpu = bpf_get_smp_processor_id();
-    u64 *elem, *start_ts, dur = 0;
-    u32 idx, cpuusage_idx, group = 0;
+    u64 *start_ts, dur = 0;
+    u32 idx, cpuusage_idx;
 
     u32 irq_id = 0;
     u32 start_idx = cpu * 8;

@@ -121,8 +121,6 @@ int tg_set_cfs_bandwidth(struct pt_regs* ctx) {
     if (cgroup_id >= MAX_CGROUPS)
         return 0;
 
-    u64 serial_nr = BPF_CORE_READ(css, serial_nr);
-
     int ret = handle_new_cgroup_from_css(css, &cgroup_serial_numbers, &cgroup_info);
 
     if (ret == 0) {
@@ -162,8 +160,6 @@ int throttle_cfs_rq(struct pt_regs* ctx) {
     u64 cgroup_id = BPF_CORE_READ(css, id);
     if (cgroup_id >= MAX_CGROUPS)
         return 0;
-
-    u64 serial_nr = BPF_CORE_READ(css, serial_nr);
 
     int ret = handle_new_cgroup_from_css(css, &cgroup_serial_numbers, &cgroup_info);
 

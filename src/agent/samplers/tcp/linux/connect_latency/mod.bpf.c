@@ -54,8 +54,7 @@ static int trace_connect(struct sock* sk) {
 }
 
 static int handle_tcp_rcv_state_process(void* ctx, struct sock* sk) {
-    u32 idx;
-    u64 sock_ident, now, delta_ns, *cnt, *tsp;
+    u64 sock_ident, now, delta_ns, *tsp;
 
     if (BPF_CORE_READ(sk, __sk_common.skc_state) != TCP_SYN_SENT)
         return 0;
@@ -99,7 +98,7 @@ int BPF_KPROBE(tcp_rcv_state_process, struct sock* sk) {
 
 SEC("tracepoint/tcp/tcp_destroy_sock")
 int tcp_destroy_sock(struct trace_event_raw_tcp_event_sk* ctx) {
-    struct sock* sk = ctx->skaddr;
+    struct sock* sk = (struct sock*)(ctx->skaddr);
 
     u64 sock_ident = get_sock_ident(sk);
     bpf_map_delete_elem(&start, &sock_ident);
