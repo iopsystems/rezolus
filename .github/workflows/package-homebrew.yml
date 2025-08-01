@@ -28,13 +28,13 @@ jobs:
       - name: Is this a dry run?
         id: dry-run
         run: |
-          echo dry-run=${{ github.event_name != 'release' && github.event_name != 'workflow_dispatch' }} >> "$GITHUB_OUTPUT
+          echo dry-run=${{ github.event_name != 'release' && github.event_name != 'workflow_dispatch' }} >> "$GITHUB_OUTPUT"
 
       - name: Set up Homebrew
         if: steps.dry-run.outputs.dry-run != 'true'
         uses: Homebrew/actions/setup-homebrew@master
         with:
-          token: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Homebrew
         if: steps.dry-run.outputs.dry-run == 'true'
@@ -45,7 +45,7 @@ jobs:
       - name: Set the API token
         if: steps.dry-run.outputs.dry-run != 'true'
         run: |
-          echo HOMEBREW_GITHUB_API_TOKEN=${{ secrets.HOMEBREW_GITHUB_API_TOKEN }} >> "$GITHUB_ENV"
+          echo GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }} >> "$GITHUB_ENV"
 
       - name: Set up git
         uses: Homebrew/actions/git-user-config@master
