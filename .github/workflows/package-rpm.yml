@@ -50,6 +50,12 @@ jobs:
           - { distro: amazonlinux, version: 2023, arch: arm64 }
       fail-fast: false
     steps:
+      - name: install basic dependencies
+        if: matrix.distro == 'amazonlinux'
+        shell: bash
+        run: |
+          yum install -y tar gzip
+
       - uses: actions/checkout@v4
 
       - name: install rust
