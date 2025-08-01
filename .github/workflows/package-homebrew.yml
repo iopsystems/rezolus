@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Is this a dry run?
         id: dry-run
