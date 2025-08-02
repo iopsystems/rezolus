@@ -165,7 +165,6 @@ jobs:
       - name: upload to rezolus registry (stable releases only)
         if: steps.check-release.outputs.is_stable == 'true'
         run: |
-          gcloud config set artifacts/repository rezolus
           gcloud config set artifacts/location us
 
           for artifact in target/debian/*/*; do
@@ -174,11 +173,13 @@ jobs:
             distro="$(echo "$directory" | cut -d _ -f 1)"
             release="$(echo "$directory" | cut -d _ -f 2)"
 
-            # Use debian-<release> naming pattern for rezolus registry
-            rezolus_repo="${distro}-${release}"
+            # Repository name is debian-<release> or ubuntu-<release>
+            repo_name="${distro}-${release}"
 
-            echo "::group::upload to rezolus $rezolus_repo $name"
-            gcloud artifacts apt upload "$rezolus_repo" --source "$artifact"
+            echo "::group::upload to $repo_name repository: $name"
+            gcloud artifacts apt upload "$repo_name" \
+              --source="$artifact" \
+              --quiet
             echo "::endgroup::"
           done
 
