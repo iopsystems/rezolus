@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [5.2.3] - 2024-08-04
+
+### Fixes
+
+- Fixes logging from libbpf so it is correctly directed to the debug log. (#597)
+
 ## [5.2.2] - 2024-07-28
 
 ### Fixes
@@ -428,8 +434,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.2.2...HEAD
-[5.2.1]: https://github.com/iopsystems/rezolus/compare/v5.2.1...v5.2.2
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.2.3...HEAD
+[5.2.3]: https://github.com/iopsystems/rezolus/compare/v5.2.2...v5.2.3
+[5.2.2]: https://github.com/iopsystems/rezolus/compare/v5.2.1...v5.2.2
 [5.2.1]: https://github.com/iopsystems/rezolus/compare/v5.2.0...v5.2.1
 [5.2.0]: https://github.com/iopsystems/rezolus/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/iopsystems/rezolus/compare/v5.0.1...v5.1.0
