@@ -3,6 +3,7 @@ use crate::agent::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
+use libbpf_rs::{PrintLevel, PrintCallback};
 use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
@@ -267,6 +268,12 @@ where
         let (perf_sync_tx, perf_sync_rx) = sync_channel(cpus);
 
         let thread = std::thread::spawn(move || {
+            // log all messages from libbpf at debug level
+            let print_fn: Box<PrintCallback> = Box::new(|_level, msg| {
+                debug!("libbpf: {}", msg.trim_end());
+            });
+            libbpf_rs::set_print(Some(print_fn));
+
             // storage for the BPF object file
             let open_object: &'static mut MaybeUninit<OpenObject> =
                 Box::leak(Box::new(MaybeUninit::uninit()));
@@ -281,9 +288,7 @@ where
             match skel.attach() {
                 Ok(_) => {}
                 Err(e) if e.kind() == libbpf_rs::ErrorKind::NotFound => {
-                    warn!(
-                        "attach() returned NotFound; assuming missing kprobe symbol and continuing"
-                    );
+                    debug!("Some BPF probes skipped due to missing kernel symbols");
                 }
                 Err(e) => return Err(e),
             }
