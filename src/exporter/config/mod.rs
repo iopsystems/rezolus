@@ -60,7 +60,7 @@ impl TryFrom<ArgMatches> for Config {
         match Config::load(&config) {
             Ok(c) => Ok(c),
             Err(error) => {
-                eprintln!("error loading config file: {:?}\n{error}", config);
+                eprintln!("error loading config file: {config:?}\n{error}");
                 std::process::exit(1);
             }
         }

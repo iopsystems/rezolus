@@ -187,7 +187,7 @@ pub fn run(config: Config) {
             match tempfile_in(path.clone()) {
                 Ok(t) => t,
                 Err(error) => {
-                    eprintln!("could not open temporary file in: {:?}\n{error}", path);
+                    eprintln!("could not open temporary file in: {path:?}\n{error}");
                     std::process::exit(1);
                 }
             }

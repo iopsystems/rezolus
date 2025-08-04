@@ -53,7 +53,7 @@ impl<T: SimplePrometheusMetric> PrometheusFormat for T {
         let name_with_metadata = if metadata.is_empty() {
             name.to_string()
         } else {
-            format!("{}{{{metadata}}}", name)
+            format!("{name}{{{metadata}}}")
         };
 
         let value = self.value();

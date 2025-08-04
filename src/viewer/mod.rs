@@ -159,10 +159,10 @@ pub fn run(config: Config) {
     rt.spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        if open::that(format!("http://{}", addr)).is_err() {
-            info!("Use your browser to view: http://{}", addr);
+        if open::that(format!("http://{addr}")).is_err() {
+            info!("Use your browser to view: http://{addr}");
         } else {
-            info!("Launched browser to view: http://{}", addr);
+            info!("Launched browser to view: http://{addr}");
         }
     });
 
