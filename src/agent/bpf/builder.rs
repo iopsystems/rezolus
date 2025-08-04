@@ -3,7 +3,7 @@ use crate::agent::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
-use libbpf_rs::{PrintCallback, PrintLevel};
+use libbpf_rs::PrintLevel;
 use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
@@ -269,10 +269,10 @@ where
 
         let thread = std::thread::spawn(move || {
             // log all messages from libbpf at debug level
-            let print_fn: Box<PrintCallback> = Box::new(|_level, msg| {
+            fn libbpf_print_fn(_level: PrintLevel, msg: String) {
                 debug!("libbpf: {}", msg.trim_end());
-            });
-            libbpf_rs::set_print(Some(print_fn));
+            }
+            libbpf_rs::set_print(Some((PrintLevel::Debug, libbpf_print_fn)));
 
             // storage for the BPF object file
             let open_object: &'static mut MaybeUninit<OpenObject> =
