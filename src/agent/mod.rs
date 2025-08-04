@@ -28,11 +28,11 @@ pub use bpf::{process_cgroup_info, CgroupInfo};
 pub fn run(config: PathBuf) {
     // load config from file
     let config: Arc<Config> = {
-        debug!("loading config: {:?}", config);
+        debug!("loading config: {config:?}");
         match Config::load(&config) {
             Ok(c) => c.into(),
             Err(error) => {
-                eprintln!("error loading config file: {:?}\n{error}", config);
+                eprintln!("error loading config file: {config:?}\n{error}");
                 std::process::exit(1);
             }
         }

@@ -3,7 +3,7 @@ use crate::agent::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
-use libbpf_rs::{PrintLevel, PrintCallback};
+use libbpf_rs::{PrintCallback, PrintLevel};
 use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 

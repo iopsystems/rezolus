@@ -115,7 +115,7 @@ fn format_timestamp(unix_seconds: f64) -> String {
     let hours = (ms / (1000 * 60 * 60)) % 24;
 
     // Format time as HH:MM:SS
-    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
 impl Div<Heatmap> for Heatmap {

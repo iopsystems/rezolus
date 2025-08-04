@@ -23,13 +23,13 @@ impl Scheduler {
         match self {
             Self::Normal { niceness } => {
                 if !(-20..=19).contains(niceness) {
-                    eprintln!("niceness must be in the range -20..=19, got {}", niceness);
+                    eprintln!("niceness must be in the range -20..=19, got {niceness}");
                     std::process::exit(1);
                 }
             }
             Self::Fifo { priority } | Self::RoundRobin { priority } => {
                 if !(1..=99).contains(priority) {
-                    eprintln!("priority must be in the range 1..=99, got {}", priority);
+                    eprintln!("priority must be in the range 1..=99, got {priority}");
                     std::process::exit(1);
                 }
             }
@@ -131,8 +131,7 @@ impl<'de> Deserialize<'de> for Scheduler {
                 }
             }
             Some(unknown) => Err(serde::de::Error::custom(format!(
-                "Unknown scheduler policy: {}",
-                unknown
+                "Unknown scheduler policy: {unknown}"
             ))),
         }
     }
