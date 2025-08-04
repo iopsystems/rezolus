@@ -110,30 +110,76 @@ jobs:
       - build-deb
     steps:
       - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v1
-        id: auth
-        with:
-          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
-      - uses: google-github-actions/setup-gcloud@v1
+      - name: check release type
+        id: check-release
+        run: |
+          TAG="${{ github.event.release.tag_name || 'manual' }}"
+
+          # Check if this is a stable release (no + or -)
+          if [[ "$TAG" == *"+"* ]] || [[ "$TAG" == *"-"* ]]; then
+            echo "is_stable=false" >> $GITHUB_OUTPUT
+            echo "Non-stable release detected: $TAG"
+          else
+            echo "is_stable=true" >> $GITHUB_OUTPUT
+            echo "Stable release detected: $TAG"
+          fi
+
       - uses: actions/download-artifact@v4.1.7
         with:
           path: target/debian/
 
-      - name: configure artifact registry
+      # Upload to systemslab registry (systemslab project)
+      - uses: google-github-actions/auth@v1
+        id: auth-systemslab
+        with:
+          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
+
+      - uses: google-github-actions/setup-gcloud@v1
+
+      - name: upload to systemslab registry (all releases)
         run: |
           gcloud config set artifacts/repository systemslab
           gcloud config set artifacts/location us
 
-      - name: upload package
-        run: |
           for artifact in target/debian/*/*; do
             name="$(basename "$artifact")"
             distro="$(echo "$artifact" | cut -d _ -f 1)"
             release="$(echo "$artifact" | cut -d _ -f 2)"
 
-            echo "::group::upload $release $name"
+            echo "::group::upload to systemslab $release $name"
             gcloud artifacts apt upload "$release" --source "$artifact"
             gcloud artifacts apt upload "$release-public" --source "$artifact"
+            echo "::endgroup::"
+          done
+
+      # Upload to rezolus registry (rezolus project) - stable releases only
+      - uses: google-github-actions/auth@v1
+        if: steps.check-release.outputs.is_stable == 'true'
+        id: auth-rezolus
+        with:
+          credentials_json: "${{ secrets.GCP_CREDENTIALS_REZOLUS }}"
+
+      - uses: google-github-actions/setup-gcloud@v1
+        if: steps.check-release.outputs.is_stable == 'true'
+
+      - name: upload to rezolus registry (stable releases only)
+        if: steps.check-release.outputs.is_stable == 'true'
+        run: |
+          gcloud config set artifacts/location us
+
+          for artifact in target/debian/*/*; do
+            name="$(basename "$artifact")"
+            directory="$(basename "$(dirname "$artifact")")"
+            distro="$(echo "$directory" | cut -d _ -f 1)"
+            release="$(echo "$directory" | cut -d _ -f 2)"
+
+            # Repository name is debian-<release> or ubuntu-<release>
+            repo_name="${distro}-${release}"
+
+            echo "::group::upload to $repo_name repository: $name"
+            gcloud artifacts apt upload "$repo_name" \
+              --source="$artifact" \
+              --quiet
             echo "::endgroup::"
           done
 
