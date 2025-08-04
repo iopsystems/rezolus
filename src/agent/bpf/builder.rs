@@ -2,8 +2,8 @@ use super::*;
 use crate::agent::*;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
 use libbpf_rs::PrintLevel;
+use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
 use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
