@@ -131,26 +131,26 @@ jobs:
         with:
           path: target/rpm/
 
-      # Upload to systemslab registry (systemslab project)
-      - uses: google-github-actions/auth@v1
-        id: auth-systemslab
-        with:
-          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
+      # # Upload to systemslab registry (systemslab project)
+      # - uses: google-github-actions/auth@v1
+      #   id: auth-systemslab
+      #   with:
+      #     credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
 
-      - uses: google-github-actions/setup-gcloud@v1
+      # - uses: google-github-actions/setup-gcloud@v1
 
-      - name: upload to systemslab registry (all releases)
-        run: |
-          gcloud config set artifacts/repository systemslab
-          gcloud config set artifacts/location us
+      # - name: upload to systemslab registry (all releases)
+      #   run: |
+      #     gcloud config set artifacts/repository systemslab
+      #     gcloud config set artifacts/location us
 
-          for artifact in target/rpm/*/*; do
-            name="$(basename "$artifact")"
+      #     for artifact in target/rpm/*/*; do
+      #       name="$(basename "$artifact")"
 
-            echo "::group::upload to systemslab $name"
-            gcloud artifacts yum upload generic-repo --source "$artifact"
-            echo "::endgroup::"
-          done
+      #       echo "::group::upload to systemslab $name"
+      #       gcloud artifacts yum upload generic-repo --source "$artifact"
+      #       echo "::endgroup::"
+      #     done
 
       # Upload to rezolus registry (rezolus project) - stable releases only
       - uses: google-github-actions/auth@v1
