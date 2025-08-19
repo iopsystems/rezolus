@@ -10,16 +10,8 @@ impl UntypedCollection {
         self.inner.insert(labels, series);
     }
 
-    pub fn filter(&self, labels: &Labels) -> Self {
-        let mut result = Self::default();
-
-        for (k, v) in self.inner.iter() {
-            if k.matches(labels) {
-                result.inner.insert(k.clone(), v.clone());
-            }
-        }
-
-        result
+    pub fn iter(&self) -> impl Iterator<Item = (&Labels, &UntypedSeries)> {
+        self.inner.iter()
     }
 
     pub fn sum(&self) -> UntypedSeries {
@@ -38,72 +30,35 @@ impl UntypedCollection {
         result
     }
 
-    pub fn by_id(&self) -> IndexedSeries {
-        let mut result = BTreeMap::new();
-        let mut ids = BTreeSet::new();
+    /// Group by the specified labels, returning a map of label values to summed series
+    pub fn group_by(&self, group_labels: &[String]) -> Vec<(Vec<(String, String)>, UntypedSeries)> {
+        let mut groups: HashMap<Vec<(String, String)>, UntypedSeries> = HashMap::new();
 
-        for labels in self.inner.keys() {
-            if let Some(Ok(id)) = labels.inner.get("id").cloned().map(|v| v.parse::<usize>()) {
-                ids.insert(id);
+        for (labels, series) in self.inner.iter() {
+            // Extract the values for the grouping labels
+            let mut group_key = Vec::new();
+            for label_name in group_labels {
+                if let Some(label_value) = labels.inner.get(label_name) {
+                    group_key.push((label_name.clone(), label_value.clone()));
+                }
+            }
+
+            // Add this series to the appropriate group
+            if let Some(group_series) = groups.get_mut(&group_key) {
+                // Add to existing group
+                for (time, value) in series.inner.iter() {
+                    if !group_series.inner.contains_key(time) {
+                        group_series.inner.insert(*time, *value);
+                    } else {
+                        *group_series.inner.get_mut(time).unwrap() += value;
+                    }
+                }
+            } else {
+                // Create new group with this series
+                groups.insert(group_key, series.clone());
             }
         }
 
-        for id in ids {
-            let series = self
-                .filter(&Labels {
-                    inner: [("id".to_string(), id.to_string())].into(),
-                })
-                .sum();
-
-            result.insert(id, series);
-        }
-
-        IndexedSeries { inner: result }
-    }
-
-    pub fn by_name(&self) -> NamedSeries {
-        let mut result = BTreeMap::default();
-        let mut names = BTreeSet::new();
-
-        for labels in self.inner.keys() {
-            if let Some(name) = labels.inner.get("name").cloned() {
-                names.insert(name);
-            }
-        }
-
-        for name in names {
-            let series = self
-                .filter(&Labels {
-                    inner: [("name".to_string(), name.to_string())].into(),
-                })
-                .sum();
-
-            result.insert(name, series);
-        }
-
-        NamedSeries { inner: result }
-    }
-
-    pub fn by_sampler(&self) -> NamedSeries {
-        let mut result = BTreeMap::default();
-        let mut names = BTreeSet::new();
-
-        for labels in self.inner.keys() {
-            if let Some(name) = labels.inner.get("sampler").cloned() {
-                names.insert(name);
-            }
-        }
-
-        for name in names {
-            let series = self
-                .filter(&Labels {
-                    inner: [("sampler".to_string(), name.to_string())].into(),
-                })
-                .sum();
-
-            result.insert(name, series);
-        }
-
-        NamedSeries { inner: result }
+        groups.into_iter().collect()
     }
 }

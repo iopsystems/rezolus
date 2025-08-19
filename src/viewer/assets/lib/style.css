@@ -7,8 +7,10 @@
 :root {
     --bg: #111;
     --bg-secondary: #1E1E1E;
+    --bg-tertiary: #2A2A2A;
     --fg: #E0E0E0;
     --fg-secondary: #ABABAB;
+    --accent: #4CAF50;
     --width: 90%;
     --sidebar-width: 100px
 }
@@ -67,6 +69,22 @@ main {
     text-decoration: none;
     cursor: default;
 }
+#sidebar .sidebar-separator {
+    margin: 1em 0;
+    border-top: 1px solid #333;
+}
+#sidebar .query-explorer-link {
+    color: #5cacee;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+#sidebar .query-explorer-link .arrow {
+    margin-right: 0.3em;
+}
+#sidebar .query-explorer-link.selected {
+    color: #87ceeb;
+}
 
 #section-content {
     display: flex;
@@ -112,4 +130,305 @@ div.metadata {
     input[type="checkbox"] {
         margin-right: 0.75em;
     }
+}
+
+/* Query Explorer Styles */
+.query-explorer {
+    padding: 1em;
+    max-width: 100%;
+}
+
+.query-input-section {
+    margin-bottom: 2em;
+}
+
+.query-input-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+    margin-top: 1em;
+}
+
+.query-input {
+    width: 100%;
+    min-height: 100px;
+    padding: 1em;
+    background: var(--bg-secondary);
+    color: var(--fg);
+    border: 1px solid #333;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    resize: vertical;
+}
+
+.query-input:focus {
+    outline: none;
+    border-color: #4CAF50;
+}
+
+.execute-btn {
+    padding: 0.75em 1.5em;
+    background: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    align-self: flex-start;
+}
+
+.execute-btn:hover:not(:disabled) {
+    background: #45a049;
+}
+
+.execute-btn:disabled {
+    background: #666;
+    cursor: not-allowed;
+}
+
+.query-history {
+    margin-top: 1.5em;
+}
+
+.query-history h3 {
+    margin-bottom: 0.5em;
+    color: var(--fg-secondary);
+}
+
+.history-select {
+    width: 100%;
+    padding: 0.5em;
+    background: var(--bg-secondary);
+    color: var(--fg);
+    border: 1px solid #333;
+    border-radius: 4px;
+}
+
+.error-message {
+    background: #f44336;
+    color: white;
+    padding: 1em;
+    border-radius: 4px;
+    margin: 1em 0;
+}
+
+.query-result {
+    margin-top: 2em;
+}
+
+.query-result h3 {
+    margin-bottom: 1em;
+}
+
+.result-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-secondary);
+}
+
+.result-table th,
+.result-table td {
+    padding: 0.75em;
+    text-align: left;
+    border: 1px solid #333;
+}
+
+.result-table th {
+    background: #333;
+    font-weight: bold;
+}
+
+.result-table tr:hover {
+    background: #2a2a2a;
+}
+
+.example-queries {
+    margin-top: 2em;
+    padding: 1em;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
+
+.example-queries h3 {
+    margin-bottom: 1em;
+    color: var(--fg-secondary);
+}
+
+.example-queries ul {
+    list-style: none;
+    padding-left: 0;
+}
+
+.example-queries li {
+    margin: 0.5em 0;
+}
+
+.example-queries code {
+    display: inline-block;
+    padding: 0.5em 1em;
+    background: #333;
+    color: #4CAF50;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'Courier New', monospace;
+    transition: background 0.2s;
+}
+
+.example-queries code:hover {
+    background: #444;
+}
+
+/* Cgroups Section Styles */
+.cgroups-section {
+    width: 100%;
+}
+
+.cgroup-selector {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1.5em;
+    margin-bottom: 2em;
+}
+
+.cgroup-selector h3 {
+    margin-bottom: 1em;
+    color: var(--fg);
+}
+
+.cgroup-selector .error-message {
+    background: rgba(255, 100, 100, 0.1);
+    border: 1px solid rgba(255, 100, 100, 0.3);
+    color: #ff9999;
+    padding: 0.5em 1em;
+    border-radius: 4px;
+    margin-bottom: 1em;
+}
+
+.cgroup-list .loading,
+.cgroup-list .empty {
+    padding: 1em;
+    text-align: center;
+    color: var(--fg-secondary);
+}
+
+.selector-container {
+    display: flex;
+    gap: 1em;
+    margin-bottom: 1em;
+}
+
+.selector-column {
+    flex: 1;
+    min-height: 300px;
+}
+
+.selector-column h4 {
+    margin-bottom: 0.5em;
+    color: var(--fg-secondary);
+    font-size: 0.9em;
+    text-transform: uppercase;
+}
+
+.cgroup-select {
+    width: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 4px;
+    padding: 0.5em;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.cgroup-select option {
+    padding: 0.25em;
+}
+
+.cgroup-select option:hover {
+    background: var(--bg-tertiary);
+}
+
+.cgroup-select option:checked,
+.cgroup-select option:selected {
+    background: var(--accent);
+    color: var(--bg);
+}
+
+.cgroup-select option[disabled] {
+    color: var(--fg-secondary);
+    font-style: italic;
+}
+
+.selector-controls {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.25em;
+    padding: 0 0.5em;
+}
+
+.selector-controls button {
+    padding: 0.4em 0.8em;
+    background: var(--bg-tertiary);
+    color: var(--fg);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    font-size: 1.1em;
+    min-width: 40px;
+}
+
+.selector-controls button:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--bg);
+    transform: scale(1.05);
+}
+
+.selector-controls button:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.selector-info {
+    margin-top: 0.5em;
+    text-align: center;
+    color: var(--fg-secondary);
+    font-size: 0.85em;
+}
+
+.cgroups-layout {
+    display: flex;
+    gap: 2em;
+}
+
+.cgroups-left,
+.cgroups-right {
+    flex: 1;
+}
+
+.cgroups-left .group,
+.cgroups-right .group {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1em;
+    margin-bottom: 1em;
+}
+
+.cgroups-left h2,
+.cgroups-right h2 {
+    font-size: 1.2em;
+    margin-bottom: 1em;
+    padding-bottom: 0.5em;
+    border-bottom: 1px solid var(--bg-tertiary);
+}
+
+/* Override chart width for cgroups section to maintain two-column layout */
+.cgroups-left .chart,
+.cgroups-right .chart {
+    max-width: 100%;
+    width: 100%;
 }

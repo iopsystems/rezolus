@@ -11,8 +11,10 @@ export class ColorMapper {
     constructor() {
         // Store color assignments for cgroups
         this.colorMap = new Map();
-        // Default mode: consistent cgroup colors
-        this.useConsistentCgroupColors = true;
+        // Track which cgroups are selected (and thus need colors)
+        this.selectedCgroups = new Set();
+        // Track the order colors were assigned
+        this.colorAssignmentOrder = [];
 
         /*
             import colorsys
@@ -150,7 +152,7 @@ export class ColorMapper {
      * @returns {string[]} Array of color codes in the same order
      */
     getColors(cgroupNames) {
-        return cgroupNames.map((name, index) => this.useConsistentCgroupColors || name === "Other" ? this.getColorByName(name) : this.getColorByIndex(index));
+        return cgroupNames.map((name) => this.getColorByName(name));
     }
 
     /**
@@ -166,14 +168,79 @@ export class ColorMapper {
      */
     clear() {
         this.colorMap.clear();
+        this.selectedCgroups.clear();
+        this.colorAssignmentOrder = [];
     }
 
-    setUseConsistentCgroupColors(useConsistentCgroupColors) {
-        this.useConsistentCgroupColors = useConsistentCgroupColors;
+    /**
+     * Add a cgroup to the selected set and assign it a color
+     * @param {string} cgroupName - The name of the cgroup to select
+     */
+    selectCgroup(cgroupName) {
+        if (!this.selectedCgroups.has(cgroupName) && cgroupName !== 'Other') {
+            this.selectedCgroups.add(cgroupName);
+
+            // Assign a color based on the order of selection
+            if (!this.colorMap.has(cgroupName)) {
+                const nextIndex = this.colorAssignmentOrder.length;
+                // Use a more distinguishable color assignment based on selection order
+                const color = this.getColorByIndex(nextIndex);
+                this.colorMap.set(cgroupName, color);
+                this.colorAssignmentOrder.push(cgroupName);
+            }
+        }
     }
 
-    getUseConsistentCgroupColors() {
-        return this.useConsistentCgroupColors;
+    /**
+     * Remove a cgroup from the selected set and free its color
+     * @param {string} cgroupName - The name of the cgroup to deselect
+     */
+    deselectCgroup(cgroupName) {
+        if (this.selectedCgroups.has(cgroupName)) {
+            this.selectedCgroups.delete(cgroupName);
+
+            // Remove from color assignment order
+            const index = this.colorAssignmentOrder.indexOf(cgroupName);
+            if (index > -1) {
+                this.colorAssignmentOrder.splice(index, 1);
+            }
+
+            // Remove color mapping
+            this.colorMap.delete(cgroupName);
+
+            // Reassign colors to remaining selected cgroups to maintain order
+            this.reassignColors();
+        }
+    }
+
+    /**
+     * Reassign colors to all selected cgroups based on their order
+     */
+    reassignColors() {
+        this.colorMap.clear();
+        this.colorAssignmentOrder.forEach((cgroupName, index) => {
+            const color = this.getColorByIndex(index);
+            this.colorMap.set(cgroupName, color);
+        });
+    }
+
+    /**
+     * Get the color for a selected cgroup
+     * @param {string} cgroupName - The name of the cgroup
+     * @returns {string|null} The color code for this cgroup, or null if not selected
+     */
+    getSelectedCgroupColor(cgroupName) {
+        // Special case for "Other" category
+        if (cgroupName === 'Other') {
+            return this.otherColor;
+        }
+
+        // Only return a color if this cgroup is selected
+        if (this.selectedCgroups.has(cgroupName)) {
+            return this.colorMap.get(cgroupName) || null;
+        }
+
+        return null;
     }
 }
 

@@ -6,6 +6,7 @@ import {
 } from './util/utils.js';
 import {
     getBaseOption,
+    getNoDataOption,
 } from './base.js';
 
 /**
@@ -28,11 +29,12 @@ export function configureHeatmap(chart) {
         opts
     } = chart.spec;
 
-    const baseOption = getBaseOption(opts.title);
-
-    if (!data || data.length < 1) {
-        return baseOption;
+    if (!data || data.length < 1 || !timeData || timeData.length === 0) {
+        chart.echart.setOption(getNoDataOption(opts.title));
+        return;
     }
+
+    const baseOption = getBaseOption(opts.title);
 
     // Extract all unique CPU IDs
     const yIndices = new Set();

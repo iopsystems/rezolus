@@ -5,6 +5,7 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
+    getNoDataOption,
 } from './base.js';
 
 /**
@@ -19,11 +20,18 @@ export function configureLineChart(chart) {
         opts
     } = chart.spec;
 
-    const baseOption = getBaseOption(opts.title, (val) => val);
-
-    if (!data || data.length < 2) {
-        return baseOption;
+    if (
+        !data ||
+        data.length < 2 ||
+        !data[0] ||
+        !data[1] ||
+        data[0].length === 0
+    ) {
+        chart.echart.setOption(getNoDataOption(opts.title));
+        return;
     }
+
+    const baseOption = getBaseOption(opts.title, (val) => val);
 
     const [timeData, valueData] = data;
 
