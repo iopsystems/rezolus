@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     /*
@@ -9,25 +9,28 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut softirq = Group::new("Softirq", "softirq");
 
-    softirq.plot(
+    // Total softirq rate
+    softirq.plot_promql(
         PlotOpts::line("Rate", "softirq-total-rate", Unit::Rate),
-        data.counters("softirq", ()).map(|v| v.rate().sum()),
+        "sum(irate(softirq[5m]))".to_string(),
     );
 
-    softirq.heatmap(
+    // Per-CPU softirq rate heatmap
+    softirq.plot_promql(
         PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap", Unit::Rate),
-        data.cpu_heatmap("softirq", ()),
+        "sum by (id) (irate(softirq[5m]))".to_string(),
     );
 
-    softirq.plot(
+    // Average CPU % spent in softirq
+    softirq.plot_promql(
         PlotOpts::line("CPU %", "softirq-total-time", Unit::Percentage),
-        data.cpu_avg("softirq_time", ()).map(|v| v / 1000000000.0),
+        "irate(softirq_time[5m]) / cpu_cores / 1000000000".to_string(),
     );
 
-    softirq.heatmap(
+    // Per-CPU % spent in softirq heatmap
+    softirq.plot_promql(
         PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap", Unit::Percentage),
-        data.cpu_heatmap("softirq_time", ())
-            .map(|v| v / 1000000000.0),
+        "sum by (id) (irate(softirq_time[5m])) / 1000000000".to_string(),
     );
 
     view.group(softirq);
@@ -50,31 +53,32 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     ] {
         let mut group = Group::new(label, format!("softirq-{kind}"));
 
-        group.plot(
+        // Rate for this softirq kind
+        group.plot_promql(
             PlotOpts::line("Rate", format!("softirq-{kind}-rate"), Unit::Rate),
-            data.counters("softirq", [("kind", kind)])
-                .map(|v| v.rate().sum()),
+            format!("sum(irate(softirq{{kind=\"{kind}\"}}[5m]))"),
         );
 
-        group.heatmap(
+        // Per-CPU rate heatmap for this softirq kind
+        group.plot_promql(
             PlotOpts::heatmap("Rate", format!("softirq-{kind}-rate-heatmap"), Unit::Rate),
-            data.cpu_heatmap("softirq", [("kind", kind)]),
+            format!("sum by (id) (irate(softirq{{kind=\"{kind}\"}}[5m]))"),
         );
 
-        group.plot(
+        // Average CPU % for this softirq kind
+        group.plot_promql(
             PlotOpts::line("CPU %", format!("softirq-{kind}-time"), Unit::Percentage),
-            data.cpu_avg("softirq_time", [("kind", kind)])
-                .map(|v| v / 1000000000.0),
+            format!("irate(softirq_time{{kind=\"{kind}\"}}[5m]) / cpu_cores / 1000000000"),
         );
 
-        group.heatmap(
+        // Per-CPU % heatmap for this softirq kind
+        group.plot_promql(
             PlotOpts::heatmap(
                 "CPU %",
                 format!("softirq-{kind}-time-heatmap"),
                 Unit::Percentage,
             ),
-            data.cpu_heatmap("softirq_time", [("kind", kind)])
-                .map(|v| v / 1000000000.0),
+            format!("sum by (id) (irate(softirq_time{{kind=\"{kind}\"}}[5m])) / 1000000000"),
         );
 
         view.group(group);

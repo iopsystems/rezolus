@@ -1,19 +1,22 @@
 use super::*;
+use std::sync::Arc;
 
 mod blockio;
 mod cgroups;
 mod cpu;
 mod network;
 mod overview;
+mod query_explorer;
 mod rezolus;
 mod scheduler;
 mod softirq;
 mod syscall;
 
-type Generator = fn(&Tsdb, Vec<Section>) -> View;
+type Generator = fn(&Arc<Tsdb>, Vec<Section>) -> View;
 
 static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Overview", "/overview", overview::generate),
+    ("Query Explorer", "/query", query_explorer::generate),
     ("CPU", "/cpu", cpu::generate),
     ("Network", "/network", network::generate),
     ("Scheduler", "/scheduler", scheduler::generate),
@@ -24,8 +27,8 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Rezolus", "/rezolus", rezolus::generate),
 ];
 
-pub fn generate(data: &Tsdb) -> AppState {
-    let mut state = AppState::new();
+pub fn generate(data: Arc<Tsdb>) -> AppState {
+    let mut state = AppState::new(data.clone());
 
     let sections: Vec<Section> = SECTION_META
         .iter()
@@ -37,7 +40,7 @@ pub fn generate(data: &Tsdb) -> AppState {
 
     for (_, route, generator) in SECTION_META {
         let key = format!("{}.json", &route[1..]);
-        let view = generator(data, sections.clone());
+        let view = generator(&data, sections.clone());
         state
             .sections
             .insert(key, serde_json::to_string(&view).unwrap());
@@ -52,8 +55,8 @@ mod tests {
 
     #[test]
     fn generate_produces_expected_keys() {
-        let data = Tsdb::default();
-        let state = generate(&data);
+        let data = Arc::new(Tsdb::default());
+        let state = generate(data);
 
         let mut keys: Vec<_> = state.sections.keys().cloned().collect();
         keys.sort();
@@ -66,6 +69,7 @@ mod tests {
                 "cpu.json",
                 "network.json",
                 "overview.json",
+                "query.json",
                 "rezolus.json",
                 "scheduler.json",
                 "softirq.json",

@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     /*
@@ -9,77 +9,56 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut rezolus = Group::new("Rezolus", "rezolus");
 
-    rezolus.plot(
+    // Rezolus CPU usage percentage
+    rezolus.plot_promql(
         PlotOpts::line("CPU %", "cpu", Unit::Percentage),
-        data.counters("rezolus_cpu_usage", ())
-            .map(|v| v.rate().sum() / 1e9),
+        "sum(irate(rezolus_cpu_usage[5m])) / 1000000000".to_string(),
     );
 
-    rezolus.plot(
+    // Rezolus memory usage (RSS)
+    rezolus.plot_promql(
         PlotOpts::line("Memory (RSS)", "memory", Unit::Bytes),
-        data.gauges("rezolus_memory_usage_resident_set_size", ())
-            .map(|v| v.sum()),
+        "sum(rezolus_memory_usage_resident_set_size)".to_string(),
     );
 
-    if let (Some(instructions), Some(cycles)) = (
-        data.counters(
-            "cgroup_cpu_instructions",
-            [("name", "/system.slice/rezolus.service")],
-        )
-        .map(|v| v.rate().sum()),
-        data.counters(
-            "cgroup_cpu_cycles",
-            [("name", "/system.slice/rezolus.service")],
-        )
-        .map(|v| v.rate().sum()),
-    ) {
-        rezolus.plot(
-            PlotOpts::line("IPC", "ipc", Unit::Count),
-            Some(instructions / cycles),
-        );
-    }
+    // IPC for rezolus.service cgroup
+    rezolus.plot_promql(
+        PlotOpts::line("IPC", "ipc", Unit::Count),
+        "sum(irate(cgroup_cpu_instructions{name=\"/system.slice/rezolus.service\"}[5m])) / sum(irate(cgroup_cpu_cycles{name=\"/system.slice/rezolus.service\"}[5m]))".to_string(),
+    );
 
-    rezolus.plot(
+    // Syscalls for rezolus.service cgroup
+    rezolus.plot_promql(
         PlotOpts::line("Syscalls", "syscalls", Unit::Rate),
-        data.counters(
-            "cgroup_syscall",
-            [("name", "/system.slice/rezolus.service")],
-        )
-        .map(|v| v.rate().sum()),
+        "sum(irate(cgroup_syscall{name=\"/system.slice/rezolus.service\"}[5m]))".to_string(),
     );
 
-    rezolus.plot(
+    // Total BPF overhead
+    rezolus.plot_promql(
         PlotOpts::line("Total BPF Overhead", "bpf-overhead", Unit::Count),
-        data.counters("rezolus_bpf_run_time", ())
-            .map(|v| v.rate().sum() / 1e9),
+        "sum(irate(rezolus_bpf_run_time[5m])) / 1000000000".to_string(),
     );
 
-    rezolus.multi(
+    // BPF Per-Sampler Overhead
+    // Using sum by (sampler) to group by sampler, then we get multiple series
+    rezolus.plot_promql(
         PlotOpts::multi(
             "BPF Per-Sampler Overhead",
             "bpf-sampler-overhead",
             Unit::Count,
         ),
-        data.counters("rezolus_bpf_run_time", ())
-            .map(|v| v.rate().by_sampler() / 1e9)
-            .map(|v| v.top_n(20, average)),
+        "sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / 1000000000".to_string(),
     );
 
-    if let (Some(run_time), Some(run_count)) = (
-        data.counters("rezolus_bpf_run_time", ())
-            .map(|v| v.rate().by_sampler() / 1e9),
-        data.counters("rezolus_bpf_run_count", ())
-            .map(|v| v.rate().by_sampler() / 1e9),
-    ) {
-        rezolus.multi(
-            PlotOpts::multi(
-                "BPF Per-Sampler Execution Time",
-                "bpf-execution-time",
-                Unit::Time,
-            ),
-            Some((run_time / run_count).top_n(20, average)),
-        );
-    }
+    // BPF Per-Sampler Execution Time (run_time / run_count per sampler)
+    rezolus.plot_promql(
+        PlotOpts::multi(
+            "BPF Per-Sampler Execution Time",
+            "bpf-execution-time",
+            Unit::Time,
+        ),
+        "(sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / sum by (sampler) (irate(rezolus_bpf_run_count[5m]))) / 1000000000".to_string(),
+    );
 
     view.group(rezolus);
 

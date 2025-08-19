@@ -6,26 +6,6 @@ pub struct UntypedSeries {
 }
 
 impl UntypedSeries {
-    pub fn average(&self) -> f64 {
-        if self.inner.is_empty() {
-            return 0.0;
-        }
-
-        let mut sum = 0.0;
-        let mut count = 0;
-
-        for value in self.inner.values() {
-            sum += *value;
-            count += 1;
-        }
-
-        if count > 0 {
-            sum / count as f64
-        } else {
-            0.0
-        }
-    }
-
     fn divide_scalar(mut self, divisor: f64) -> Self {
         for value in self.inner.values_mut() {
             *value /= divisor;

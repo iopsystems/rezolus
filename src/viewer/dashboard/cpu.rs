@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     /*
@@ -9,36 +9,42 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut utilization = Group::new("Utilization", "utilization");
 
-    utilization.push(Plot::line(
-        "Busy %",
-        "busy-pct",
-        Unit::Percentage,
-        data.cpu_avg("cpu_usage", ()).map(|v| (v / 1000000000.0)),
-    ));
+    // Average CPU busy percentage across all cores
+    utilization.plot_promql(
+        PlotOpts::line("Busy %", "busy-pct", Unit::Percentage),
+        "irate(cpu_usage[5m]) / cpu_cores / 1000000000".to_string(),
+    );
 
-    utilization.push(Plot::heatmap(
-        "Busy %",
-        "busy-pct-heatmap",
-        Unit::Percentage,
-        data.cpu_heatmap("cpu_usage", ()).map(|v| v / 1000000000.0),
-    ));
+    // Per-CPU busy percentage heatmap
+    // cpu_heatmap("cpu_usage", ()) becomes: sum by (id) (irate(cpu_usage[5m])) / 1e9
+    utilization.plot_promql(
+        PlotOpts::heatmap("Busy % (Per-CPU)", "busy-pct-per-cpu", Unit::Percentage),
+        "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
+    );
 
-    for state in &["User", "System"] {
-        utilization.push(Plot::line(
-            format!("{state} %"),
-            format!("{}-pct", state.to_lowercase()),
-            Unit::Percentage,
-            data.cpu_avg("cpu_usage", [("state", state.to_lowercase())])
-                .map(|v| (v / 1000000000.0)),
-        ));
+    // User and System CPU usage
+    for state in &["user", "system"] {
+        let capitalized = if *state == "user" { "User" } else { "System" };
 
-        utilization.push(Plot::heatmap(
-            format!("{state} %"),
-            format!("{}-pct-heatmap", state.to_lowercase()),
-            Unit::Percentage,
-            data.cpu_heatmap("cpu_usage", [("state", state.to_lowercase())])
-                .map(|v| (v / 1000000000.0)),
-        ));
+        // Average across all cores for this state
+        utilization.plot_promql(
+            PlotOpts::line(
+                format!("{capitalized} %"),
+                format!("{state}-pct"),
+                Unit::Percentage,
+            ),
+            format!("irate(cpu_usage{{state=\"{state}\"}}[5m]) / cpu_cores / 1000000000"),
+        );
+
+        // Per-CPU for this state
+        utilization.plot_promql(
+            PlotOpts::heatmap(
+                format!("{capitalized} % (Per-CPU)"),
+                format!("{state}-pct-per-cpu"),
+                Unit::Percentage,
+            ),
+            format!("sum by (id) (irate(cpu_usage{{state=\"{state}\"}}[5m])) / 1000000000"),
+        );
     }
 
     view.group(utilization);
@@ -49,110 +55,56 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut performance = Group::new("Performance", "performance");
 
-    if let (Some(cycles), Some(instructions)) = (
-        data.counters("cpu_cycles", ()).map(|v| v.rate().sum()),
-        data.counters("cpu_instructions", ())
-            .map(|v| v.rate().sum()),
-    ) {
-        let ipc = instructions / cycles;
-        performance.plot(
-            PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count),
-            Some(ipc),
-        );
-    }
+    // IPC (Instructions per Cycle)
+    performance.plot_promql(
+        PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count),
+        "irate(cpu_instructions[5m]) / irate(cpu_cycles[5m])".to_string(),
+    );
 
-    if let (Some(cycles), Some(instructions)) = (
-        data.cpu_heatmap("cpu_cycles", ()),
-        data.cpu_heatmap("cpu_instructions", ()),
-    ) {
-        let ipc = instructions / cycles;
-        performance.heatmap(
-            PlotOpts::heatmap("Instructions per Cycle (IPC)", "ipc-heatmap", Unit::Count),
-            Some(ipc),
-        );
-    }
+    // Per-CPU IPC
+    performance.plot_promql(
+        PlotOpts::heatmap("IPC (Per-CPU)", "ipc-per-cpu", Unit::Count),
+        "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m]))"
+            .to_string(),
+    );
 
-    if let (Some(cycles), Some(instructions), Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
-        data.counters("cpu_cycles", ()).map(|v| v.rate().sum()),
-        data.counters("cpu_instructions", ())
-            .map(|v| v.rate().sum()),
-        data.counters("cpu_aperf", ()).map(|v| v.rate().sum()),
-        data.counters("cpu_mperf", ()).map(|v| v.rate().sum()),
-        data.counters("cpu_tsc", ()).map(|v| v.rate().sum()),
-        data.gauges("cpu_cores", ()).map(|v| v.sum()),
-    ) {
-        let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0 / cores;
-        performance.plot(
-            PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count),
-            Some(ipns),
-        );
-    }
+    // IPNS (Instructions per Nanosecond)
+    // Complex calculation: instructions / cycles * tsc * aperf / mperf / 1e9 / cores
+    performance.plot_promql(
+        PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count),
+        "irate(cpu_instructions[5m]) / irate(cpu_cycles[5m]) * irate(cpu_tsc[5m]) * irate(cpu_aperf[5m]) / irate(cpu_mperf[5m]) / 1000000000 / cpu_cores".to_string(),
+    );
 
-    if let (Some(cycles), Some(instructions), Some(aperf), Some(mperf), Some(tsc)) = (
-        data.cpu_heatmap("cpu_cycles", ()),
-        data.cpu_heatmap("cpu_instructions", ()),
-        data.cpu_heatmap("cpu_aperf", ()),
-        data.cpu_heatmap("cpu_mperf", ()),
-        data.cpu_heatmap("cpu_tsc", ()),
-    ) {
-        let ipns = instructions / cycles * tsc * aperf / mperf / 1000000000.0;
-        performance.heatmap(
-            PlotOpts::heatmap(
-                "Instructions per Nanosecond (IPNS)",
-                "ipns-heatmap",
-                Unit::Count,
-            ),
-            Some(ipns),
-        );
-    }
+    // Per-CPU IPNS
+    performance.plot_promql(
+        PlotOpts::heatmap("IPNS (Per-CPU)", "ipns-per-cpu", Unit::Count),
+        "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000".to_string(),
+    );
 
-    if let (Some(access), Some(miss)) = (
-        data.counters("cpu_l3_access", ()).map(|v| v.rate().sum()),
-        data.counters("cpu_l3_miss", ()).map(|v| v.rate().sum()),
-    ) {
-        let hitrate = miss / access;
-        performance.plot(
-            PlotOpts::line("L3 Hit %", "ld-hit", Unit::Percentage),
-            Some(hitrate),
-        );
-    }
+    // L3 Cache Hit Rate
+    performance.plot_promql(
+        PlotOpts::line("L3 Hit %", "l3-hit", Unit::Percentage),
+        "(1 - irate(cpu_l3_miss[5m]) / irate(cpu_l3_access[5m])) * 100".to_string(),
+    );
 
-    if let (Some(access), Some(miss)) = (
-        data.cpu_heatmap("cpu_l3_access", ()),
-        data.cpu_heatmap("cpu_l3_miss", ()),
-    ) {
-        let hitrate = miss / access;
-        performance.heatmap(
-            PlotOpts::heatmap("L3 Hit %", "l3-hit-heatmap", Unit::Percentage),
-            Some(hitrate),
-        );
-    }
+    // Per-CPU L3 Hit Rate
+    performance.plot_promql(
+        PlotOpts::heatmap("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage),
+        "(1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))) * 100"
+            .to_string(),
+    );
 
-    if let (Some(aperf), Some(mperf), Some(tsc), Some(cores)) = (
-        data.counters("cpu_aperf", ()).map(|v| v.rate().sum()),
-        data.counters("cpu_mperf", ()).map(|v| v.rate().sum()),
-        data.counters("cpu_tsc", ()).map(|v| v.rate().sum()),
-        data.gauges("cpu_cores", ()).map(|v| v.sum()),
-    ) {
-        let frequency = tsc * aperf / mperf / cores;
-        performance.plot(
-            PlotOpts::line("Frequency", "frequency", Unit::Frequency),
-            Some(frequency),
-        );
-    }
+    // CPU Frequency
+    performance.plot_promql(
+        PlotOpts::line("Frequency", "frequency", Unit::Frequency),
+        "irate(cpu_tsc[5m]) * irate(cpu_aperf[5m]) / irate(cpu_mperf[5m]) / cpu_cores".to_string(),
+    );
 
-    if let (Some(aperf), Some(mperf), Some(tsc)) = (
-        data.cpu_heatmap("cpu_aperf", ()),
-        data.cpu_heatmap("cpu_mperf", ()),
-        data.cpu_heatmap("cpu_tsc", ()),
-    ) {
-        let frequency = tsc * aperf / mperf;
-        performance.heatmap(
-            PlotOpts::heatmap("Frequency", "frequency-heatmap", Unit::Frequency)
-                .with_unit_system("frequency"),
-            Some(frequency),
-        );
-    }
+    // Per-CPU Frequency
+    performance.plot_promql(
+        PlotOpts::heatmap("Frequency (Per-CPU)", "frequency-per-cpu", Unit::Frequency),
+        "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))".to_string(),
+    );
 
     view.group(performance);
 
@@ -162,31 +114,29 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut migrations = Group::new("Migrations", "migrations");
 
-    migrations.plot(
+    // Migrations To
+    migrations.plot_promql(
         PlotOpts::line("To", "cpu-migrations-to", Unit::Rate),
-        data.counters("cpu_migrations", [("direction", "to")])
-            .map(|v| v.rate().sum()),
+        "irate(cpu_migrations{direction=\"to\"}[5m])".to_string(),
     );
 
-    migrations.push(Plot::heatmap(
-        "To",
-        "cpu-migrations-to-heatmap",
-        Unit::Rate,
-        data.cpu_heatmap("cpu_migrations", [("direction", "to")]),
-    ));
+    // Per-CPU Migrations To
+    migrations.plot_promql(
+        PlotOpts::heatmap("To (Per-CPU)", "cpu-migrations-to-per-cpu", Unit::Rate),
+        "sum by (id) (irate(cpu_migrations{direction=\"to\"}[5m]))".to_string(),
+    );
 
-    migrations.plot(
+    // Migrations From
+    migrations.plot_promql(
         PlotOpts::line("From", "cpu-migrations-from", Unit::Rate),
-        data.counters("cpu_migrations", [("direction", "from")])
-            .map(|v| v.rate().sum()),
+        "irate(cpu_migrations{direction=\"from\"}[5m])".to_string(),
     );
 
-    migrations.push(Plot::heatmap(
-        "From",
-        "cpu-migrations-from-heatmap",
-        Unit::Rate,
-        data.cpu_heatmap("cpu_migrations", [("direction", "from")]),
-    ));
+    // Per-CPU Migrations From
+    migrations.plot_promql(
+        PlotOpts::heatmap("From (Per-CPU)", "cpu-migrations-from-per-cpu", Unit::Rate),
+        "sum by (id) (irate(cpu_migrations{direction=\"from\"}[5m]))".to_string(),
+    );
 
     view.group(migrations);
 
@@ -196,46 +146,40 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut tlb = Group::new("TLB Flush", "tlb-flush");
 
-    tlb.plot(
+    // Total TLB Flushes
+    tlb.plot_promql(
         PlotOpts::line("Total", "tlb-total", Unit::Rate),
-        data.counters("cpu_tlb_flush", ()).map(|v| v.rate().sum()),
+        "irate(cpu_tlb_flush[5m])".to_string(),
     );
 
-    tlb.heatmap(
-        PlotOpts::heatmap("Total", "tlb-total-heatmap", Unit::Rate),
-        data.cpu_heatmap("cpu_tlb_flush", ()),
+    // Per-CPU TLB Flushes
+    tlb.plot_promql(
+        PlotOpts::heatmap("Total (Per-CPU)", "tlb-total-per-cpu", Unit::Rate),
+        "sum by (id) (irate(cpu_tlb_flush[5m]))".to_string(),
     );
 
+    // TLB Flushes by reason
     for reason in &[
-        "Local MM Shootdown",
-        "Remote Send IPI",
-        "Remote Shootdown",
-        "Task Switch",
+        ("local_mm_shootdown", "Local MM Shootdown"),
+        ("remote_send_ipi", "Remote Send IPI"),
+        ("remote_shootdown", "Remote Shootdown"),
+        ("task_switch", "Task Switch"),
     ] {
-        let label = reason;
-        let id = format!(
-            "tlb-{}",
-            reason
-                .to_lowercase()
-                .split(' ')
-                .collect::<Vec<&str>>()
-                .join("-")
-        );
-        let reason = reason
-            .to_lowercase()
-            .split(' ')
-            .collect::<Vec<&str>>()
-            .join("_");
+        let (reason_value, label) = reason;
+        let id = format!("tlb-{}", reason_value.replace('_', "-"));
 
-        tlb.plot(
+        tlb.plot_promql(
             PlotOpts::line(*label, &id, Unit::Rate),
-            data.counters("cpu_tlb_flush", [("reason", reason.clone())])
-                .map(|v| v.rate().sum()),
+            format!("irate(cpu_tlb_flush{{reason=\"{reason_value}\"}}[5m])"),
         );
 
-        tlb.heatmap(
-            PlotOpts::heatmap(*label, format!("{id}-heatmap"), Unit::Rate),
-            data.cpu_heatmap("cpu_tlb_flush", [("reason", reason)]),
+        tlb.plot_promql(
+            PlotOpts::heatmap(
+                format!("{label} (Per-CPU)"),
+                format!("{id}-per-cpu"),
+                Unit::Rate,
+            ),
+            format!("sum by (id) (irate(cpu_tlb_flush{{reason=\"{reason_value}\"}}[5m]))"),
         );
     }
 

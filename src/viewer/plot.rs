@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 #[derive(Default, Serialize)]
 pub struct View {
@@ -9,14 +10,17 @@ pub struct View {
     filename: String,
     groups: Vec<Group>,
     sections: Vec<Section>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    #[serde(default)]
+    pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl View {
-    pub fn new(data: &Tsdb, sections: Vec<Section>) -> Self {
+    pub fn new(data: &Arc<Tsdb>, sections: Vec<Section>) -> Self {
         let interval = data.interval();
-        let source = data.source();
-        let version = data.version();
-        let filename = data.filename();
+        let source = data.source().to_string();
+        let version = data.version().to_string();
+        let filename = data.filename().to_string();
 
         Self {
             interval,
@@ -25,6 +29,7 @@ impl View {
             filename,
             groups: Vec::new(),
             sections,
+            metadata: std::collections::HashMap::new(),
         }
     }
 
@@ -45,6 +50,9 @@ pub struct Group {
     name: String,
     id: String,
     plots: Vec<Plot>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    #[serde(default)]
+    pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl Group {
@@ -53,15 +61,18 @@ impl Group {
             name: name.into(),
             id: id.into(),
             plots: Vec::new(),
+            metadata: std::collections::HashMap::new(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn push(&mut self, plot: Option<Plot>) {
         if let Some(plot) = plot {
             self.plots.push(plot);
         }
     }
 
+    #[allow(dead_code)]
     pub fn plot(&mut self, opts: PlotOpts, series: Option<UntypedSeries>) {
         if let Some(data) = series.map(|v| v.as_data()) {
             self.plots.push(Plot {
@@ -72,10 +83,12 @@ impl Group {
                 time_data: None,
                 formatted_time_data: None,
                 series_names: None,
+                promql_query: None,
             })
         }
     }
 
+    #[allow(dead_code)]
     pub fn heatmap(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
         if let Some(heatmap) = series {
             let echarts_data = heatmap.as_data();
@@ -89,11 +102,13 @@ impl Group {
                     time_data: Some(echarts_data.time),
                     formatted_time_data: Some(echarts_data.formatted_time),
                     series_names: None,
+                    promql_query: None,
                 })
             }
         }
     }
 
+    #[allow(dead_code)]
     pub fn scatter(&mut self, opts: PlotOpts, data: Option<Vec<UntypedSeries>>) {
         if data.is_none() {
             return;
@@ -121,10 +136,12 @@ impl Group {
             time_data: None,
             formatted_time_data: None,
             series_names: None,
+            promql_query: None,
         })
     }
 
     // New method to add a multi-series plot
+    #[allow(dead_code)]
     pub fn multi(&mut self, opts: PlotOpts, cgroup_data: Option<Vec<(String, UntypedSeries)>>) {
         if cgroup_data.is_none() {
             return;
@@ -154,6 +171,20 @@ impl Group {
             time_data: None,
             formatted_time_data: None,
             series_names: Some(labels),
+            promql_query: None,
+        });
+    }
+
+    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
+        self.plots.push(Plot {
+            opts,
+            data: Vec::new(), // Will be populated by frontend
+            min_value: None,
+            max_value: None,
+            time_data: None,
+            formatted_time_data: None,
+            series_names: None,
+            promql_query: Some(promql_query),
         });
     }
 }
@@ -172,50 +203,11 @@ pub struct Plot {
     formatted_time_data: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     series_names: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    promql_query: Option<String>,
 }
 
-impl Plot {
-    pub fn line<T: Into<String>, U: Into<String>>(
-        title: T,
-        id: U,
-        unit: Unit,
-        series: Option<UntypedSeries>,
-    ) -> Option<Self> {
-        series.map(|series| Self {
-            data: series.as_data(),
-            opts: PlotOpts::line(title, id, unit),
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: None,
-        })
-    }
-
-    pub fn heatmap<T: Into<String>, U: Into<String>>(
-        title: T,
-        id: U,
-        unit: Unit,
-        series: Option<Heatmap>,
-    ) -> Option<Self> {
-        if let Some(heatmap) = series {
-            let echarts_data = heatmap.as_data();
-            if !echarts_data.data.is_empty() {
-                return Some(Plot {
-                    opts: PlotOpts::heatmap(title, id, unit),
-                    data: echarts_data.data,
-                    min_value: Some(echarts_data.min_value),
-                    max_value: Some(echarts_data.max_value),
-                    time_data: Some(echarts_data.time),
-                    formatted_time_data: Some(echarts_data.formatted_time),
-                    series_names: None,
-                });
-            }
-        }
-
-        None
-    }
-}
+impl Plot {}
 
 #[derive(Serialize, Clone)]
 pub struct PlotOpts {
