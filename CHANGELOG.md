@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [5.3.0] - 2024-08-20
+
+### Added
+
+- Improved cgroup exploration and a query explorer for Rezolus Viewer. (#604)
+
 ## [5.2.3] - 2024-08-04
 
 ### Fixes
@@ -434,7 +440,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.2.3...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.3.0...HEAD
+[5.3.0]: https://github.com/iopsystems/rezolus/compare/v5.2.3...v5.3.0
 [5.2.3]: https://github.com/iopsystems/rezolus/compare/v5.2.2...v5.2.3
 [5.2.2]: https://github.com/iopsystems/rezolus/compare/v5.2.1...v5.2.2
 [5.2.1]: https://github.com/iopsystems/rezolus/compare/v5.2.0...v5.2.1
