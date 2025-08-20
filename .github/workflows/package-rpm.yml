@@ -99,7 +99,76 @@ jobs:
       - name: package
         shell: bash
         run: |
+          # Build with cargo-generate-rpm
           cargo generate-rpm --payload-compress gzip
+
+          # Install rpm-build for rebuilding with proper headers
+          yum install -y rpm-build
+
+          # Fix each RPM using rpmbuild to add ARCHIVESIZE
+          for rpm in target/generate-rpm/*.rpm; do
+            echo "Fixing $(basename $rpm) for GCP Artifact Registry..."
+
+            # Extract metadata from the existing RPM
+            FULL_VERSION=$(rpm -qp --qf "%{VERSION}" "$rpm")
+            RPM_ARCH=$(rpm -qp --qf "%{ARCH}" "$rpm")
+
+            # Parse version and determine release format
+            if [[ "$FULL_VERSION" == *"-alpha"* ]]; then
+              RPM_VERSION=$(echo "$FULL_VERSION" | cut -d'-' -f1)
+              ALPHA_VERSION=$(echo "$FULL_VERSION" | sed 's/.*-alpha\.//')
+              # Use 0.X.alpha.Y format for pre-releases
+              RPM_RELEASE="0.1.alpha.${ALPHA_VERSION}"
+            elif [[ "$FULL_VERSION" == *"-beta"* ]]; then
+              RPM_VERSION=$(echo "$FULL_VERSION" | cut -d'-' -f1)
+              BETA_VERSION=$(echo "$FULL_VERSION" | sed 's/.*-beta\.//')
+              RPM_RELEASE="0.2.beta.${BETA_VERSION}"
+            elif [[ "$FULL_VERSION" == *"-rc"* ]]; then
+              RPM_VERSION=$(echo "$FULL_VERSION" | cut -d'-' -f1)
+              RC_VERSION=$(echo "$FULL_VERSION" | sed 's/.*-rc\.//')
+              RPM_RELEASE="0.3.rc.${RC_VERSION}"
+            else
+              # Stable release
+              RPM_VERSION="$FULL_VERSION"
+              RPM_RELEASE="1"
+            fi
+
+            echo "  Version: $RPM_VERSION"
+            echo "  Release: $RPM_RELEASE"
+
+            # Setup rpmbuild directory
+            mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+            # Create spec from template
+            sed -e "s/@NAME@/rezolus/g" \
+                -e "s/@VERSION@/${RPM_VERSION}/g" \
+                -e "s/@RELEASE@/${RPM_RELEASE}/g" \
+                -e "s/@ARCH@/${RPM_ARCH}/g" \
+                rpm/rezolus.spec.template > ~/rpmbuild/SPECS/rezolus.spec
+
+            # Rebuild the RPM with proper headers
+            rpmbuild -bb \
+              --define "_topdir $HOME/rpmbuild" \
+              --define "_sourcedir $GITHUB_WORKSPACE" \
+              --define "_binary_payload w9.gzdio" \
+              ~/rpmbuild/SPECS/rezolus.spec
+
+            # Replace the original RPM with the fixed one
+            mv ~/rpmbuild/RPMS/*/*.rpm "$rpm"
+
+            # Cleanup for next iteration
+            rm -rf ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+            echo "  Created: $(basename ~/rpmbuild/RPMS/*/*.rpm)"
+          done
+
+          # Final verification
+          echo ""
+          echo "Verifying ARCHIVESIZE headers:"
+          for rpm in target/generate-rpm/*.rpm; do
+            echo "$(basename $rpm):"
+            rpm -qp --qf "  VERSION: %{VERSION}\n  RELEASE: %{RELEASE}\n  ARCHIVESIZE: %{ARCHIVESIZE}\n" "$rpm"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
