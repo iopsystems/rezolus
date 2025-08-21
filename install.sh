@@ -58,26 +58,47 @@ if [[ "$OS_TYPE" == "Linux" ]]; then
     echo "This installer requires sudo access to configure package repositories and install Rezolus"
     echo "You may be prompted for your password"
     echo ""
-    
+
     # Test sudo access - this will prompt for password if needed
     if ! sudo -v; then
         echo "Error: This installer requires sudo access" >&2
         exit 1
     fi
-    
+
     # Keep sudo alive for the duration of the script
     while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
 fi
 
 if [[ "$OS_TYPE" == "Darwin" ]]; then
-    echo "Error: This installer is for Linux systems only" >&2
-    echo "" >&2
-    echo "For macOS, please use:" >&2
-    echo "  brew install iopsystems/iop/rezolus" >&2
-    echo "" >&2
-    echo "Or install via Cargo:" >&2
-    echo "  cargo install rezolus" >&2
-    exit 1
+    echo "Detected macOS"
+    echo ""
+
+    # Check if Homebrew is installed
+    if command -v brew &> /dev/null; then
+        echo "Installing Rezolus via Homebrew..."
+        brew install iopsystems/iop/rezolus
+        echo ""
+        echo "Installation completed successfully"
+        echo "Run 'rezolus --help' for usage information"
+        exit 0
+    elif command -v cargo &> /dev/null; then
+        echo "Homebrew not found, but Cargo is available"
+        echo "Installing Rezolus via Cargo..."
+        cargo install rezolus
+        echo ""
+        echo "Installation completed successfully"
+        echo "Run 'rezolus --help' for usage information"
+        exit 0
+    else
+        echo "Error: Neither Homebrew nor Cargo found" >&2
+        echo "" >&2
+        echo "Please install Homebrew first:" >&2
+        echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"" >&2
+        echo "" >&2
+        echo "Or install Rust to use Cargo:" >&2
+        echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" >&2
+        exit 1
+    fi
 fi
 
 if [[ "$OS_TYPE" != "Linux" ]]; then
@@ -141,7 +162,7 @@ elif command -v dnf &> /dev/null || command -v yum &> /dev/null; then
     else
         PACKAGE_MANAGER="yum"
     fi
-    
+
     case "$DISTRO" in
         rocky)
             MAJOR_VERSION="${VERSION_ID%%.*}"
@@ -193,7 +214,7 @@ if command -v rezolus &> /dev/null; then
             echo "Use -y flag to skip this confirmation" >&2
             exit 1
         fi
-        
+
         if [[ ! "$continue_install" =~ ^[Yy]$ ]]; then
             echo "Installation cancelled"
             exit 0
@@ -203,7 +224,7 @@ fi
 
 # If DISABLE_SERVICES wasn't set via CLI and we're not skipping confirmation, prompt
 if [[ -z "$DISABLE_SERVICES" ]] && [[ "$SKIP_CONFIRM" == "false" ]]; then
-    
+
     # Handle both interactive and piped installations
     if [[ -t 0 ]]; then
         # Interactive mode - stdin is available
@@ -245,17 +266,17 @@ case "$PACKAGE_MANAGER" in
             echo "Error: Failed to add GPG signing key" >&2
             exit 1
         fi
-        
+
         echo "Adding Rezolus APT repository..."
         echo "deb [arch=amd64] https://us-apt.pkg.dev/projects/rezolus ${REPO_NAME} main" | sudo tee /etc/apt/sources.list.d/rezolus.list > /dev/null
-        
+
         echo "Updating package list..."
         sudo apt update
-        
+
         echo "Installing Rezolus..."
         sudo apt install -y rezolus
         ;;
-        
+
     dnf|yum)
         echo "Adding Rezolus YUM repository..."
         sudo tee /etc/yum.repos.d/rezolus.repo > /dev/null <<EOF
@@ -266,7 +287,7 @@ enabled=1
 gpgcheck=1
 gpgkey=https://us-yum.pkg.dev/doc/repo-signing-key.gpg
 EOF
-        
+
         echo "Installing Rezolus..."
         sudo $PACKAGE_MANAGER install -y rezolus
         ;;
@@ -293,22 +314,22 @@ if [[ "$DISABLE_SERVICES" == "true" ]]; then
 else
     echo ""
     echo "Enabling and starting services..."
-    
+
     # Enable services in case they were previously disabled
     sudo systemctl enable rezolus.service rezolus-exporter.service
-    
+
     # Start services if they're not already running
     sudo systemctl start rezolus.service rezolus-exporter.service
-    
+
     # Give services a moment to start
     sleep 2
-    
+
     echo "Checking service status..."
-    
+
     # Check if services are running
     REZOLUS_STATUS=$(sudo systemctl is-active rezolus.service 2>/dev/null || echo "inactive")
     EXPORTER_STATUS=$(sudo systemctl is-active rezolus-exporter.service 2>/dev/null || echo "inactive")
-    
+
     if [[ "$REZOLUS_STATUS" == "active" ]] && [[ "$EXPORTER_STATUS" == "active" ]]; then
         echo "Services are running successfully:"
         echo "  rezolus.service: active"

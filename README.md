@@ -105,15 +105,12 @@ Detailed licensing information can be found in the [COPYRIGHT][copyright] file.
 
 For detailed installation instructions, see the [Installation Guide](docs/installation.md).
 
-**Quick Install (Linux):**
+**Quick Install:**
 ```bash
 curl -fsSL https://install.rezolus.com | bash
 ```
 
-**macOS:**
-```bash
-brew install iopsystems/iop/rezolus
-```
+The quick install script works on both Linux and macOS. On macOS, it will use Homebrew if available, or fall back to Cargo.
 
 By default the `rezolus` service will be running as the agent and the
 `rezolus-exporter` service will be running so there is Prometheus exposition. By
