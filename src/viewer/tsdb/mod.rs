@@ -270,6 +270,7 @@ impl Tsdb {
         }
     }
 
+    #[allow(dead_code)]
     pub fn percentiles(
         &self,
         metric: &str,
@@ -283,49 +284,23 @@ impl Tsdb {
         }
     }
 
-    pub fn cpu_avg(&self, metric: &str, labels: impl Into<Labels>) -> Option<UntypedSeries> {
-        if let Some(cores) = self.gauges("cpu_cores", ()).map(|v| v.sum()) {
-            if let Some(collection) = self.counters(metric, labels) {
-                return Some(collection.rate().sum() / cores);
-            }
-        }
-
-        None
-    }
-
-    pub fn cpu_heatmap(&self, metric: &str, labels: impl Into<Labels>) -> Option<Heatmap> {
-        let mut heatmap = Heatmap::default();
-
-        if let Some(collection) = self.counters(metric, labels) {
-            for (id, series) in collection.rate().by_id().inner.iter() {
-                heatmap.insert(*id, series.clone());
-            }
-        }
-
-        if heatmap.is_empty() {
-            None
-        } else {
-            Some(heatmap)
-        }
-    }
-
     // sampling interval in seconds
     pub fn interval(&self) -> f64 {
         self.sampling_interval_ms as f64 / 1000.0
     }
 
     // data source
-    pub fn source(&self) -> String {
-        self.source.clone()
+    pub fn source(&self) -> &str {
+        &self.source
     }
 
     // data source version
-    pub fn version(&self) -> String {
-        self.version.clone()
+    pub fn version(&self) -> &str {
+        &self.version
     }
 
-    pub fn filename(&self) -> String {
-        self.filename.clone()
+    pub fn filename(&self) -> &str {
+        &self.filename
     }
 }
 
@@ -334,90 +309,14 @@ pub struct NamedSeries {
     inner: BTreeMap<String, UntypedSeries>,
 }
 
-impl NamedSeries {
-    fn ranked_n(
-        &self,
-        n: usize,
-        rank: fn(&UntypedSeries) -> f64,
-        ascending: bool,
-    ) -> Vec<(String, UntypedSeries)> {
-        let mut scores = Vec::new();
-
-        for (name, series) in self.inner.iter() {
-            let score = rank(series);
-            scores.push((name, (score * 1_000_000_000.0) as u64));
-        }
-
-        if ascending {
-            scores.sort_by(|a, b| a.1.cmp(&b.1));
-        } else {
-            scores.sort_by(|a, b| b.1.cmp(&a.1));
-        }
-
-        if scores.len() > n {
-            let mut result = Vec::new();
-            let mut other_series = UntypedSeries::default();
-
-            for (name, _score) in &scores[0..n] {
-                result.push((
-                    name.to_string(),
-                    self.inner.get(name.as_str()).unwrap().clone(),
-                ));
-            }
-
-            for (name, _score) in &scores[n..] {
-                if let Some(series) = self.inner.get(name.as_str()) {
-                    if other_series.inner.is_empty() {
-                        other_series = series.clone();
-                    } else {
-                        for (time, value) in series.inner.iter() {
-                            if other_series.inner.contains_key(time) {
-                                *other_series.inner.get_mut(time).unwrap() += value;
-                            } else {
-                                other_series.inner.insert(*time, *value);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !other_series.inner.is_empty() {
-                result.push(("Other".to_string(), other_series));
-            }
-
-            result
-        } else {
-            let mut result = Vec::new();
-
-            for (name, _) in scores.drain(..) {
-                result.push((name.clone(), self.inner.get(name.as_str()).unwrap().clone()));
-            }
-
-            result
-        }
-    }
-
-    pub fn top_n(&self, n: usize, rank: fn(&UntypedSeries) -> f64) -> Vec<(String, UntypedSeries)> {
-        self.ranked_n(n, rank, false)
-    }
-
-    pub fn bottom_n(
-        &self,
-        n: usize,
-        rank: fn(&UntypedSeries) -> f64,
-    ) -> Vec<(String, UntypedSeries)> {
-        self.ranked_n(n, rank, true)
-    }
-}
+impl NamedSeries {}
 
 impl Div<NamedSeries> for NamedSeries {
     type Output = NamedSeries;
-    fn div(self, other: NamedSeries) -> <Self as Div<NamedSeries>>::Output {
+    fn div(mut self, other: NamedSeries) -> <Self as Div<NamedSeries>>::Output {
         let mut result = NamedSeries::default();
 
-        let mut this = self.inner.clone();
-
-        while let Some((name, series)) = this.pop_first() {
+        while let Some((name, series)) = self.inner.pop_first() {
             if let Some(other) = other.inner.get(&name) {
                 result.inner.insert(name, series / other);
             }
@@ -429,12 +328,10 @@ impl Div<NamedSeries> for NamedSeries {
 
 impl Div<UntypedSeries> for NamedSeries {
     type Output = NamedSeries;
-    fn div(self, other: UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
+    fn div(mut self, other: UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
         let mut result = NamedSeries::default();
 
-        let mut this = self.inner.clone();
-
-        while let Some((name, series)) = this.pop_first() {
+        while let Some((name, series)) = self.inner.pop_first() {
             result.inner.insert(name, series / other.clone());
         }
 
@@ -444,12 +341,10 @@ impl Div<UntypedSeries> for NamedSeries {
 
 impl Div<f64> for NamedSeries {
     type Output = NamedSeries;
-    fn div(self, other: f64) -> <Self as Div<UntypedSeries>>::Output {
+    fn div(mut self, other: f64) -> <Self as Div<UntypedSeries>>::Output {
         let mut result = NamedSeries::default();
 
-        let mut this = self.inner.clone();
-
-        while let Some((name, series)) = this.pop_first() {
+        while let Some((name, series)) = self.inner.pop_first() {
             result.inner.insert(name, series / other);
         }
 
@@ -464,12 +359,10 @@ pub struct IndexedSeries {
 
 impl Div<IndexedSeries> for IndexedSeries {
     type Output = IndexedSeries;
-    fn div(self, other: IndexedSeries) -> <Self as Div<IndexedSeries>>::Output {
+    fn div(mut self, other: IndexedSeries) -> <Self as Div<IndexedSeries>>::Output {
         let mut result = IndexedSeries::default();
 
-        let mut this = self.inner.clone();
-
-        while let Some((id, series)) = this.pop_first() {
+        while let Some((id, series)) = self.inner.pop_first() {
             if let Some(other) = other.inner.get(&id) {
                 result.inner.insert(id, series / other);
             }
@@ -481,12 +374,10 @@ impl Div<IndexedSeries> for IndexedSeries {
 
 impl Div<UntypedSeries> for IndexedSeries {
     type Output = IndexedSeries;
-    fn div(self, other: UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
+    fn div(mut self, other: UntypedSeries) -> <Self as Div<UntypedSeries>>::Output {
         let mut result = IndexedSeries::default();
 
-        let mut this = self.inner.clone();
-
-        while let Some((id, series)) = this.pop_first() {
+        while let Some((id, series)) = self.inner.pop_first() {
             result.inner.insert(id, series / other.clone());
         }
 
@@ -496,61 +387,13 @@ impl Div<UntypedSeries> for IndexedSeries {
 
 impl Div<f64> for IndexedSeries {
     type Output = IndexedSeries;
-    fn div(self, other: f64) -> <Self as Div<UntypedSeries>>::Output {
+    fn div(mut self, other: f64) -> <Self as Div<UntypedSeries>>::Output {
         let mut result = IndexedSeries::default();
 
-        let mut this = self.inner.clone();
-
-        while let Some((id, series)) = this.pop_first() {
+        while let Some((id, series)) = self.inner.pop_first() {
             result.inner.insert(id, series / other);
         }
 
         result
-    }
-}
-
-pub fn average(series: &UntypedSeries) -> f64 {
-    series.average()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_top_bottom_n() {
-        let mut named = NamedSeries::default();
-
-        let mut a = UntypedSeries::default();
-        a.inner.insert(1, 1.0);
-        a.inner.insert(2, 2.0); // avg 1.5
-
-        let mut b = UntypedSeries::default();
-        b.inner.insert(1, 2.0);
-        b.inner.insert(2, 4.0); // avg 3.0
-
-        let mut c = UntypedSeries::default();
-        c.inner.insert(1, 0.5);
-        c.inner.insert(2, 1.0); // avg 0.75
-
-        named.inner.insert("a".into(), a);
-        named.inner.insert("b".into(), b);
-        named.inner.insert("c".into(), c.clone());
-
-        let top = named.top_n(2, average);
-        assert_eq!(top.len(), 3);
-        assert_eq!(top[0].0, "b");
-        assert_eq!(top[1].0, "a");
-        assert_eq!(top[2].0, "Other");
-        assert_eq!(top[2].1.inner.get(&1).copied().unwrap(), 0.5);
-        assert_eq!(top[2].1.inner.get(&2).copied().unwrap(), 1.0);
-
-        let bottom = named.bottom_n(2, average);
-        assert_eq!(bottom.len(), 3);
-        assert_eq!(bottom[0].0, "c");
-        assert_eq!(bottom[1].0, "a");
-        assert_eq!(bottom[2].0, "Other");
-        assert_eq!(bottom[2].1.inner.get(&1).copied().unwrap(), 2.0);
-        assert_eq!(bottom[2].1.inner.get(&2).copied().unwrap(), 4.0);
     }
 }

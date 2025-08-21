@@ -15,14 +15,6 @@ pub struct HeatmapData {
 }
 
 impl Heatmap {
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn insert(&mut self, id: usize, series: UntypedSeries) {
-        self.inner.insert(id, series);
-    }
-
     pub fn as_data(&self) -> HeatmapData {
         let mut timestamps = BTreeSet::new();
         let mut min_value = f64::MAX;

@@ -7,6 +7,7 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
+    getNoDataOption,
 } from './base.js';
 
 /**
@@ -21,11 +22,12 @@ export function configureScatterChart(chart) {
         opts
     } = chart.spec;
 
-    const baseOption = getBaseOption(opts.title);
-
-    if (!data || data.length < 2) {
-        return baseOption;
+    if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
+        chart.echart.setOption(getNoDataOption(opts.title));
+        return;
     }
+
+    const baseOption = getBaseOption(opts.title);
 
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};

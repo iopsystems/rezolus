@@ -7,6 +7,7 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
+    getNoDataOption,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
 
@@ -22,12 +23,12 @@ export function configureMultiSeriesChart(chart) {
         opts,
     } = chart.spec;
 
-    const baseOption = getBaseOption(opts.title);
-
-    if (!data || data.length < 2) {
-        return baseOption;
+    if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
+        chart.echart.setOption(getNoDataOption(opts.title));
+        return;
     }
 
+    const baseOption = getBaseOption(opts.title);
 
     // For multi-series charts, the first row contains timestamps, subsequent rows are series data
     const timeData = data[0];
@@ -51,13 +52,20 @@ export function configureMultiSeriesChart(chart) {
     // Create series configurations for each data series
     const series = [];
 
-    // Get deterministic colors for all cgroups in this chart
-    const cgroupColors = globalColorMapper.getColors(seriesNames);
+    // Get colors only for selected cgroups (not for aggregate "Other")
+    const cgroupColors = seriesNames.map((name) => {
+        const color = globalColorMapper.getSelectedCgroupColor(name);
+        // If no color assigned (shouldn't happen for selected cgroups), fall back to index-based color
+        return (
+            color ||
+            globalColorMapper.getColorByIndex(seriesNames.indexOf(name))
+        );
+    });
 
     for (let i = 1; i < data.length; i++) {
         const name = seriesNames[i - 1];
         const isOtherCategory = name === "Other";
-        const color = (i <= cgroupColors.length) ? cgroupColors[i - 1] : undefined;
+        const color = cgroupColors[i - 1];
 
         const zippedData = timeData.map((t, j) => [t * 1000, data[i][j]]);
 

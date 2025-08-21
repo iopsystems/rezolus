@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     /*
@@ -9,40 +9,44 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut operations = Group::new("Operations", "operations");
 
-    operations.plot(
+    // Total throughput (bytes/sec)
+    operations.plot_promql(
         PlotOpts::line(
             "Total Throughput",
             "blockio-throughput-total",
             Unit::Datarate,
         ),
-        data.counters("blockio_bytes", ()).map(|v| v.rate().sum()),
+        "sum(irate(blockio_bytes[5m]))".to_string(),
     );
 
-    operations.plot(
+    // Total IOPS
+    operations.plot_promql(
         PlotOpts::line("Total IOPS", "blockio-iops-total", Unit::Count),
-        data.counters("blockio_operations", ())
-            .map(|v| v.rate().sum()),
+        "sum(irate(blockio_operations[5m]))".to_string(),
     );
 
+    // Per-operation metrics (Read/Write)
     for op in &["Read", "Write"] {
-        operations.plot(
+        let op_lower = op.to_lowercase();
+
+        // Throughput for this operation
+        operations.plot_promql(
             PlotOpts::line(
                 format!("{op} Throughput"),
-                format!("throughput-{}", op.to_lowercase()),
+                format!("throughput-{op_lower}"),
                 Unit::Datarate,
             ),
-            data.counters("blockio_bytes", [("op", op.to_lowercase())])
-                .map(|v| v.rate().sum()),
+            format!("sum(irate(blockio_bytes{{op=\"{op_lower}\"}}[5m]))"),
         );
 
-        operations.plot(
+        // IOPS for this operation
+        operations.plot_promql(
             PlotOpts::line(
                 format!("{op} IOPS"),
-                format!("iops-{}", op.to_lowercase()),
+                format!("iops-{op_lower}"),
                 Unit::Count,
             ),
-            data.counters("blockio_operations", [("op", op.to_lowercase())])
-                .map(|v| v.rate().sum()),
+            format!("sum(irate(blockio_operations{{op=\"{op_lower}\"}}[5m]))"),
         );
     }
 
@@ -54,11 +58,14 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut latency = Group::new("Latency", "latency");
 
+    // Latency percentiles for Read and Write operations
     for op in &["Read", "Write"] {
-        latency.scatter(
-            PlotOpts::scatter(*op, format!("latency-{}", op.to_lowercase()), Unit::Time)
+        let op_lower = op.to_lowercase();
+
+        latency.plot_promql(
+            PlotOpts::scatter(*op, format!("latency-{op_lower}"), Unit::Time)
                 .with_log_scale(true),
-            data.percentiles("blockio_latency", [("op", op.to_lowercase())], PERCENTILES),
+            format!("histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{{op=\"{op_lower}\"}})"),
         );
     }
 
@@ -70,11 +77,15 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut size = Group::new("Size", "size");
 
+    // IO size percentiles for Read and Write operations
     for op in &["Read", "Write"] {
-        size.scatter(
-            PlotOpts::scatter(*op, format!("size-{}", op.to_lowercase()), Unit::Bytes)
-                .with_log_scale(true),
-            data.percentiles("blockio_size", [("op", op.to_lowercase())], PERCENTILES),
+        let op_lower = op.to_lowercase();
+
+        size.plot_promql(
+            PlotOpts::scatter(*op, format!("size-{op_lower}"), Unit::Bytes).with_log_scale(true),
+            format!(
+                "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{{op=\"{op_lower}\"}})"
+            ),
         );
     }
 

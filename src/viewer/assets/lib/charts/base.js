@@ -4,6 +4,49 @@ import {
 import { formatDateTime } from './util/utils.js';
 
 /**
+ * Creates a placeholder option for charts with no data
+ * @param {string} title - The title of the chart
+ * @returns {Object} ECharts option object for no-data placeholder
+ */
+export function getNoDataOption(title) {
+    return {
+        title: {
+            text: title,
+            left: 'center',
+            top: '10',
+            textStyle: {
+                color: '#E0E0E0',
+                fontSize: 16,
+                fontWeight: 'normal',
+            },
+        },
+        graphic: {
+            type: 'text',
+            left: 'center',
+            top: 'middle',
+            style: {
+                text: 'No data',
+                fontSize: 14,
+                fill: '#999',
+                font: 'normal 14px sans-serif',
+            },
+        },
+        xAxis: {
+            show: false,
+        },
+        yAxis: {
+            show: false,
+        },
+        grid: {
+            left: '14%',
+            right: '5%',
+            top: '35',
+            bottom: '35',
+        },
+    };
+}
+
+/**
  * Approximates echarts' built-in tooltip formatter, but with our own x axis formatting
  * (using formatDateTime) and our own value formatting (using valueFormatter).
  * @param {function} valueFormatter - A function from raw value to formatted value.

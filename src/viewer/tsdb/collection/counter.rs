@@ -15,6 +15,7 @@ impl CounterCollection {
         self.inner.entry(labels)
     }
 
+    /// Old filter method that clones - kept for compatibility but should be avoided
     pub fn filter(&self, labels: &Labels) -> Self {
         let mut result = Self::default();
 
@@ -27,11 +28,26 @@ impl CounterCollection {
         result
     }
 
+    /// Efficiently compute rate for all series
     pub fn rate(&self) -> UntypedCollection {
         let mut result = UntypedCollection::default();
 
         for (labels, series) in self.inner.iter() {
             result.insert(labels.clone(), series.rate());
+        }
+
+        result
+    }
+
+    /// Efficiently compute rate only for series matching the filter
+    /// This avoids cloning the time series data
+    pub fn filtered_rate(&self, filter: &Labels) -> UntypedCollection {
+        let mut result = UntypedCollection::default();
+
+        for (labels, series) in self.inner.iter() {
+            if labels.matches(filter) {
+                result.insert(labels.clone(), series.rate());
+            }
         }
 
         result

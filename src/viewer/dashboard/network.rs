@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     /*
@@ -9,32 +9,30 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut traffic = Group::new("Traffic", "traffic");
 
-    traffic.plot(
+    // Bandwidth Transmit (convert bytes/sec to bits/sec)
+    traffic.plot_promql(
         PlotOpts::line("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
             .with_unit_system("bitrate"),
-        data.counters("network_bytes", [("direction", "transmit")])
-            .map(|v| v.rate().sum())
-            .map(|v| v * 8.0),
+        "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
     );
 
-    traffic.plot(
+    // Bandwidth Receive (convert bytes/sec to bits/sec)
+    traffic.plot_promql(
         PlotOpts::line("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
             .with_unit_system("bitrate"),
-        data.counters("network_bytes", [("direction", "receive")])
-            .map(|v| v.rate().sum())
-            .map(|v| v * 8.0),
+        "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
     );
 
-    traffic.plot(
+    // Packets Transmit
+    traffic.plot_promql(
         PlotOpts::line("Packets Transmit", "packets-tx", Unit::Rate),
-        data.counters("network_packets", [("direction", "transmit")])
-            .map(|v| v.rate().sum()),
+        "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
     );
 
-    traffic.plot(
+    // Packets Receive
+    traffic.plot_promql(
         PlotOpts::line("Packets Receive", "packets-rx", Unit::Rate),
-        data.counters("network_packets", [("direction", "receive")])
-            .map(|v| v.rate().sum()),
+        "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
     );
 
     view.group(traffic);
@@ -45,12 +43,15 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut tcp = Group::new("TCP", "tcp");
 
-    tcp.scatter(
-        PlotOpts::scatter("Packet Latency", "tcp-packet-latency", Unit::Time)
+    // TCP Packet Latency percentiles - p50, p90, p99, p99.9
+    // Use the efficient histogram_percentiles() function to compute all percentiles in one pass
+    // Note: histogram_percentiles works directly on histogram data, not on irate() results
+    tcp.plot_promql(
+        PlotOpts::scatter("TCP Packet Latency", "tcp-packet-latency", Unit::Time)
             .with_axis_label("Latency")
             .with_unit_system("time")
             .with_log_scale(true),
-        data.percentiles("tcp_packet_latency", (), PERCENTILES),
+        "histogram_percentiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)".to_string(),
     );
 
     view.group(tcp);

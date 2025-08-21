@@ -1,6 +1,5 @@
 use super::*;
 
-use axum::handler::Handler;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
@@ -28,13 +27,13 @@ use std::path::Path;
 
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
-const PERCENTILES: &[f64] = &[50.0, 90.0, 99.0, 99.9, 99.99];
-
 mod dashboard;
 mod plot;
+mod promql;
 mod tsdb;
 
 use plot::*;
+use promql::QueryEngine;
 use tsdb::*;
 
 pub fn command() -> Command {
@@ -149,7 +148,8 @@ pub fn run(config: Config) {
         .unwrap();
 
     info!("Generating dashboards...");
-    let state = dashboard::generate(&data);
+    let data_arc = Arc::new(data);
+    let state = dashboard::generate(data_arc);
 
     // open the tcp listener
     let listener = std::net::TcpListener::bind(config.listen).expect("failed to listen");
@@ -209,12 +209,14 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
 
 struct AppState {
     sections: HashMap<String, String>,
+    query_engine: Arc<QueryEngine>,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(tsdb: Arc<Tsdb>) -> Self {
         Self {
             sections: Default::default(),
+            query_engine: Arc::new(QueryEngine::new(tsdb)),
         }
     }
 }
@@ -226,8 +228,9 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
 
     let router = Router::new()
         .route("/about", get(about))
+        .route("/data/{path}", get(data))
         .with_state(state.clone())
-        .nest_service("/data", data.with_state(state));
+        .merge(promql::routes(state.query_engine.clone()));
 
     #[cfg(feature = "developer-mode")]
     let router = {
@@ -262,16 +265,13 @@ async fn about() -> String {
 
 async fn data(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    uri: Uri,
+    axum::extract::Path(path): axum::extract::Path<String>,
 ) -> (StatusCode, String) {
-    let path = uri.path();
-    let parts: Vec<&str> = path.split('/').collect();
-
     (
         StatusCode::OK,
         state
             .sections
-            .get(parts[1])
+            .get(&path)
             .map(|v| v.to_string())
             .unwrap_or("{ }".to_string()),
     )
