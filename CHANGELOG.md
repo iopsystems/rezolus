@@ -1,18 +1,24 @@
 ## [Unreleased]
 
-## [5.3.0] - 2024-08-20
+## [5.3.1] - 2025-08-21
+
+### Fixed
+
+- Fixed RPM packaging to enable publishing to GCP Artifact Registry. (#609)
+
+## [5.3.0] - 2025-08-20
 
 ### Added
 
 - Improved cgroup exploration and a query explorer for Rezolus Viewer. (#604)
 
-## [5.2.3] - 2024-08-04
+## [5.2.3] - 2025-08-04
 
 ### Fixes
 
 - Fixes logging from libbpf so it is correctly directed to the debug log. (#597)
 
-## [5.2.2] - 2024-07-28
+## [5.2.2] - 2025-07-28
 
 ### Fixes
 
@@ -20,14 +26,14 @@
   when installed from our deb packages, or when built on systems with clang-18.
   (#585)
 
-## [5.2.1] - 2024-07-02
+## [5.2.1] - 2025-07-02
 
 ### Fixes
 
 - Fixes scheduler runqueue sampler failing the BPF verifier on some systems
   since 5.2.0 (#576)
 
-## [5.2.0] - 2024-07-01
+## [5.2.0] - 2025-07-01
 
 ### Added
 
@@ -38,7 +44,7 @@
 
 - Fixes CPU usage accounting bug when PIDs are re-used. (#571)
 
-## [5.1.0] - 2024-06-24
+## [5.1.0] - 2025-06-24
 
 ### Changed
 
@@ -57,7 +63,7 @@
 
 - Softirq time added to system time when running in idle task context. (#556)
 
-## [5.0.1] - 2024-06-13
+## [5.0.1] - 2025-06-13
 
 ### Fixed
 
@@ -440,7 +446,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.3.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.3.1...HEAD
+[5.3.1]: https://github.com/iopsystems/rezolus/compare/v5.3.0...v5.3.1
 [5.3.0]: https://github.com/iopsystems/rezolus/compare/v5.2.3...v5.3.0
 [5.2.3]: https://github.com/iopsystems/rezolus/compare/v5.2.2...v5.2.3
 [5.2.2]: https://github.com/iopsystems/rezolus/compare/v5.2.1...v5.2.2
