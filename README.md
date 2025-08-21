@@ -102,8 +102,15 @@ Detailed licensing information can be found in the [COPYRIGHT][copyright] file.
 - Linux kernel 5.8+
 
 ### Install
-Find an appropriate package for your OS for our [latest release][latest release]
-and install it using your package manager.
+
+For detailed installation instructions, see the [Installation Guide](docs/installation.md).
+
+**Quick Install:**
+```bash
+curl -fsSL https://install.rezolus.com | bash
+```
+
+The quick install script works on both Linux and macOS. On macOS, it will use Homebrew if available, or fall back to Cargo.
 
 By default the `rezolus` service will be running as the agent and the
 `rezolus-exporter` service will be running so there is Prometheus exposition. By
@@ -111,7 +118,7 @@ default, the config assumes secondly collection. Please review the config and
 adjust as necessary for your environment.
 
 The `rezolus-hindsight` service is disabled by default. Please review the config
-before enabling.
+before enabling:
 
 ```bash
 # enable and start the service
