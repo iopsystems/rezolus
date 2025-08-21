@@ -106,12 +106,12 @@ if command -v apt &> /dev/null; then
     case "$DISTRO" in
         debian)
             case "$CODENAME" in
-                bookworm|bullseye)
+                trixie|bookworm|bullseye)
                     REPO_NAME="debian-${CODENAME}"
                     ;;
                 *)
                     echo "Error: Unsupported Debian release: $CODENAME" >&2
-                    echo "Supported releases: bookworm, bullseye" >&2
+                    echo "Supported releases: trixie, bookworm, bullseye" >&2
                     exit 1
                     ;;
             esac
