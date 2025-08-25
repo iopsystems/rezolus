@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 mod agent;
 mod exporter;
 mod hindsight;
+mod mcp;
 mod recorder;
 mod viewer;
 
@@ -62,6 +63,7 @@ fn main() {
         )
         .subcommand(exporter::command())
         .subcommand(hindsight::command())
+        .subcommand(mcp::command())
         .subcommand(recorder::command())
         .subcommand(viewer::command())
         .get_matches();
@@ -81,6 +83,11 @@ fn main() {
             let config = hindsight::Config::try_from(args.clone()).expect("failed to configure");
 
             hindsight::run(config)
+        }
+        Some(("mcp", args)) => {
+            let config = mcp::Config::try_from(args.clone()).expect("failed to configure");
+
+            mcp::run(config)
         }
         Some(("record", args)) => {
             let config = recorder::Config::try_from(args.clone()).expect("failed to configure");
