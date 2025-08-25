@@ -2,6 +2,7 @@ use crate::*;
 
 use clap::{ArgMatches, Command};
 
+mod correlation;
 mod server;
 
 /// Run the MCP server
