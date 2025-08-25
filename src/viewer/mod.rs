@@ -29,8 +29,8 @@ static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
 mod dashboard;
 mod plot;
-mod promql;
-mod tsdb;
+pub mod promql;
+pub mod tsdb;
 
 use plot::*;
 use promql::QueryEngine;

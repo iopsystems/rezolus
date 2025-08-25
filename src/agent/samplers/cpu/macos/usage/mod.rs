@@ -2,6 +2,7 @@ const NAME: &str = "cpu_usage";
 
 use crate::agent::*;
 
+#[allow(deprecated)]
 use libc::mach_host_self;
 use libc::mach_port_t;
 use tokio::sync::Mutex;
@@ -55,6 +56,7 @@ impl UsageInner {
         let nanos_per_tick = 1_000_000_000 / (sc_clk_tck as u64);
 
         Ok(Self {
+            #[allow(deprecated)]
             port: unsafe { mach_host_self() },
             nanos_per_tick,
         })
