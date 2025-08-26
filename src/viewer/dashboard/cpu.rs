@@ -12,7 +12,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // Average CPU busy percentage across all cores
     utilization.plot_promql(
         PlotOpts::line("Busy %", "busy-pct", Unit::Percentage),
-        "irate(cpu_usage[5m]) / cpu_cores / 1000000000".to_string(),
+        "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU busy percentage heatmap
@@ -33,7 +33,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
                 format!("{state}-pct"),
                 Unit::Percentage,
             ),
-            format!("irate(cpu_usage{{state=\"{state}\"}}[5m]) / cpu_cores / 1000000000"),
+            format!("sum(irate(cpu_usage{{state=\"{state}\"}}[5m])) / cpu_cores / 1000000000"),
         );
 
         // Per-CPU for this state
@@ -58,7 +58,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // IPC (Instructions per Cycle)
     performance.plot_promql(
         PlotOpts::line("Instructions per Cycle (IPC)", "ipc", Unit::Count),
-        "irate(cpu_instructions[5m]) / irate(cpu_cycles[5m])".to_string(),
+        "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))".to_string(),
     );
 
     // Per-CPU IPC
@@ -72,7 +72,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // Complex calculation: instructions / cycles * tsc * aperf / mperf / 1e9 / cores
     performance.plot_promql(
         PlotOpts::line("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count),
-        "irate(cpu_instructions[5m]) / irate(cpu_cycles[5m]) * irate(cpu_tsc[5m]) * irate(cpu_aperf[5m]) / irate(cpu_mperf[5m]) / 1000000000 / cpu_cores".to_string(),
+        "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores".to_string(),
     );
 
     // Per-CPU IPNS
@@ -84,7 +84,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // L3 Cache Hit Rate
     performance.plot_promql(
         PlotOpts::line("L3 Hit %", "l3-hit", Unit::Percentage),
-        "(1 - irate(cpu_l3_miss[5m]) / irate(cpu_l3_access[5m])) * 100".to_string(),
+        "(1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))) * 100".to_string(),
     );
 
     // Per-CPU L3 Hit Rate
@@ -97,7 +97,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // CPU Frequency
     performance.plot_promql(
         PlotOpts::line("Frequency", "frequency", Unit::Frequency),
-        "irate(cpu_tsc[5m]) * irate(cpu_aperf[5m]) / irate(cpu_mperf[5m]) / cpu_cores".to_string(),
+        "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores".to_string(),
     );
 
     // Per-CPU Frequency
@@ -117,7 +117,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // Migrations To
     migrations.plot_promql(
         PlotOpts::line("To", "cpu-migrations-to", Unit::Rate),
-        "irate(cpu_migrations{direction=\"to\"}[5m])".to_string(),
+        "sum(irate(cpu_migrations{direction=\"to\"}[5m]))".to_string(),
     );
 
     // Per-CPU Migrations To
@@ -129,7 +129,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // Migrations From
     migrations.plot_promql(
         PlotOpts::line("From", "cpu-migrations-from", Unit::Rate),
-        "irate(cpu_migrations{direction=\"from\"}[5m])".to_string(),
+        "sum(irate(cpu_migrations{direction=\"from\"}[5m]))".to_string(),
     );
 
     // Per-CPU Migrations From
@@ -149,7 +149,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // Total TLB Flushes
     tlb.plot_promql(
         PlotOpts::line("Total", "tlb-total", Unit::Rate),
-        "irate(cpu_tlb_flush[5m])".to_string(),
+        "sum(irate(cpu_tlb_flush[5m]))".to_string(),
     );
 
     // Per-CPU TLB Flushes
@@ -170,7 +170,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
 
         tlb.plot_promql(
             PlotOpts::line(*label, &id, Unit::Rate),
-            format!("irate(cpu_tlb_flush{{reason=\"{reason_value}\"}}[5m])"),
+            format!("sum(irate(cpu_tlb_flush{{reason=\"{reason_value}\"}}[5m]))"),
         );
 
         tlb.plot_promql(

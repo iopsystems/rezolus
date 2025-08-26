@@ -24,7 +24,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // Average CPU % spent in softirq
     softirq.plot_promql(
         PlotOpts::line("CPU %", "softirq-total-time", Unit::Percentage),
-        "irate(softirq_time[5m]) / cpu_cores / 1000000000".to_string(),
+        "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU % spent in softirq heatmap
@@ -68,7 +68,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
         // Average CPU % for this softirq kind
         group.plot_promql(
             PlotOpts::line("CPU %", format!("softirq-{kind}-time"), Unit::Percentage),
-            format!("irate(softirq_time{{kind=\"{kind}\"}}[5m]) / cpu_cores / 1000000000"),
+            format!("sum(irate(softirq_time{{kind=\"{kind}\"}}[5m])) / cpu_cores / 1000000000"),
         );
 
         // Per-CPU % heatmap for this softirq kind

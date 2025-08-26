@@ -144,17 +144,57 @@ impl QueryEngine {
             if let Some(collection) = self.tsdb.counters(&metric_name, labels.clone()) {
                 let rate_collection = collection.filtered_rate(&labels);
 
-                let sum_series = rate_collection.sum();
-                if let Some((timestamp, value)) = self.get_value_at_time(&sum_series.inner, time) {
-                    let mut metric_labels = HashMap::new();
-                    metric_labels.insert("__name__".to_string(), metric_name.to_string());
+                // If no specific labels were provided, return all series separately
+                // Otherwise, sum matching series
+                if labels.inner.is_empty() {
+                    // Return all series separately
+                    let mut result_samples = Vec::new();
 
-                    return Ok(QueryResult::Vector {
-                        result: vec![Sample {
-                            metric: metric_labels,
-                            value: (timestamp, value),
-                        }],
-                    });
+                    for (series_labels, series) in rate_collection.iter() {
+                        if let Some((timestamp, value)) =
+                            self.get_value_at_time(&series.inner, time)
+                        {
+                            let mut metric_labels = HashMap::new();
+                            metric_labels.insert("__name__".to_string(), metric_name.to_string());
+
+                            // Add all labels from this series
+                            for (key, value) in series_labels.inner.iter() {
+                                metric_labels.insert(key.clone(), value.clone());
+                            }
+
+                            result_samples.push(Sample {
+                                metric: metric_labels,
+                                value: (timestamp, value),
+                            });
+                        }
+                    }
+
+                    if !result_samples.is_empty() {
+                        return Ok(QueryResult::Vector {
+                            result: result_samples,
+                        });
+                    }
+                } else {
+                    // Labels specified, sum matching series
+                    let sum_series = rate_collection.sum();
+                    if let Some((timestamp, value)) =
+                        self.get_value_at_time(&sum_series.inner, time)
+                    {
+                        let mut metric_labels = HashMap::new();
+                        metric_labels.insert("__name__".to_string(), metric_name.to_string());
+
+                        // Add the labels from the query to the result
+                        for (key, value) in labels.inner.iter() {
+                            metric_labels.insert(key.clone(), value.clone());
+                        }
+
+                        return Ok(QueryResult::Vector {
+                            result: vec![Sample {
+                                metric: metric_labels,
+                                value: (timestamp, value),
+                            }],
+                        });
+                    }
                 }
             }
         }
@@ -168,7 +208,43 @@ impl QueryEngine {
     fn handle_sum_rate(&self, query: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
         // Extract the irate() part
         let rate_part = &query[4..query.len() - 1]; // Remove "sum(" and ")"
-        self.handle_simple_rate(rate_part, time)
+
+        // First get the rate results
+        let rate_result = self.handle_simple_rate(rate_part, time)?;
+
+        // Sum all the series together
+        if let QueryResult::Vector { result: samples } = rate_result {
+            if samples.is_empty() {
+                return Err(QueryError::MetricNotFound(
+                    "No data found for sum(irate()) query".to_string(),
+                ));
+            }
+
+            // For instant queries, sum all values at the same timestamp
+            let timestamp = samples[0].value.0;
+            let summed_value: f64 = samples.iter().map(|s| s.value.1).sum();
+
+            // Extract metric name from the first sample
+            let metric_name = samples[0]
+                .metric
+                .get("__name__")
+                .cloned()
+                .unwrap_or_else(|| "sum".to_string());
+
+            let mut metric_labels = HashMap::new();
+            metric_labels.insert("__name__".to_string(), metric_name);
+
+            return Ok(QueryResult::Vector {
+                result: vec![Sample {
+                    metric: metric_labels,
+                    value: (timestamp, summed_value),
+                }],
+            });
+        }
+
+        Err(QueryError::MetricNotFound(format!(
+            "Could not process sum(irate()) query: {query}"
+        )))
     }
 
     /// Handle simple metric queries like cpu_cores or cpu_cores{cpu="0"}
@@ -875,27 +951,72 @@ impl QueryEngine {
 
             if let Some(collection) = self.tsdb.counters(&metric_name, labels.clone()) {
                 let rate_collection = collection.filtered_rate(&labels);
-                let sum_series = rate_collection.sum();
 
-                let start_ns = (start * 1e9) as u64;
-                let end_ns = (end * 1e9) as u64;
+                // If no specific labels were provided, return all series separately
+                // Otherwise, sum matching series
+                if labels.inner.is_empty() {
+                    // Return all series separately
+                    let mut result_samples = Vec::new();
+                    let start_ns = (start * 1e9) as u64;
+                    let end_ns = (end * 1e9) as u64;
 
-                let values: Vec<(f64, f64)> = sum_series
-                    .inner
-                    .range(start_ns..=end_ns)
-                    .map(|(ts, val)| (*ts as f64 / 1e9, *val))
-                    .collect();
+                    for (series_labels, series) in rate_collection.iter() {
+                        let values: Vec<(f64, f64)> = series
+                            .inner
+                            .range(start_ns..=end_ns)
+                            .map(|(ts, val)| (*ts as f64 / 1e9, *val))
+                            .collect();
 
-                if !values.is_empty() {
-                    let mut metric_labels = HashMap::new();
-                    metric_labels.insert("__name__".to_string(), metric_name.to_string());
+                        if !values.is_empty() {
+                            let mut metric_labels = HashMap::new();
+                            metric_labels.insert("__name__".to_string(), metric_name.to_string());
 
-                    return Ok(QueryResult::Matrix {
-                        result: vec![MatrixSample {
-                            metric: metric_labels,
-                            values,
-                        }],
-                    });
+                            // Add all labels from this series
+                            for (key, value) in series_labels.inner.iter() {
+                                metric_labels.insert(key.clone(), value.clone());
+                            }
+
+                            result_samples.push(MatrixSample {
+                                metric: metric_labels,
+                                values,
+                            });
+                        }
+                    }
+
+                    if !result_samples.is_empty() {
+                        return Ok(QueryResult::Matrix {
+                            result: result_samples,
+                        });
+                    }
+                } else {
+                    // Labels specified, sum matching series
+                    let sum_series = rate_collection.sum();
+
+                    let start_ns = (start * 1e9) as u64;
+                    let end_ns = (end * 1e9) as u64;
+
+                    let values: Vec<(f64, f64)> = sum_series
+                        .inner
+                        .range(start_ns..=end_ns)
+                        .map(|(ts, val)| (*ts as f64 / 1e9, *val))
+                        .collect();
+
+                    if !values.is_empty() {
+                        let mut metric_labels = HashMap::new();
+                        metric_labels.insert("__name__".to_string(), metric_name.to_string());
+
+                        // Add the labels from the query to the result
+                        for (key, value) in labels.inner.iter() {
+                            metric_labels.insert(key.clone(), value.clone());
+                        }
+
+                        return Ok(QueryResult::Matrix {
+                            result: vec![MatrixSample {
+                                metric: metric_labels,
+                                values,
+                            }],
+                        });
+                    }
                 }
             }
         }
@@ -915,7 +1036,58 @@ impl QueryEngine {
         // Extract the irate() part
         if query.starts_with("sum(irate(") && query.ends_with("))") {
             let rate_part = &query[4..query.len() - 1]; // Remove "sum(" and ")"
-            self.handle_rate_range(rate_part, start, end)
+
+            // First get the rate results
+            let rate_result = self.handle_rate_range(rate_part, start, end)?;
+
+            // Sum all the series together
+            if let QueryResult::Matrix { result: samples } = rate_result {
+                if samples.is_empty() {
+                    return Err(QueryError::MetricNotFound(
+                        "No data found for sum(irate()) query".to_string(),
+                    ));
+                }
+
+                // Create a map to sum values at each timestamp across all series
+                let mut summed_values: std::collections::BTreeMap<u64, f64> =
+                    std::collections::BTreeMap::new();
+
+                for sample in &samples {
+                    for (timestamp, value) in &sample.values {
+                        let ts_ns = (*timestamp * 1e9) as u64;
+                        *summed_values.entry(ts_ns).or_insert(0.0) += value;
+                    }
+                }
+
+                // Convert back to vector of (timestamp, value) pairs
+                let final_values: Vec<(f64, f64)> = summed_values
+                    .into_iter()
+                    .map(|(ts_ns, val)| (ts_ns as f64 / 1e9, val))
+                    .collect();
+
+                if !final_values.is_empty() {
+                    // Extract metric name from the first sample
+                    let metric_name = samples[0]
+                        .metric
+                        .get("__name__")
+                        .cloned()
+                        .unwrap_or_else(|| "sum".to_string());
+
+                    let mut metric_labels = HashMap::new();
+                    metric_labels.insert("__name__".to_string(), metric_name);
+
+                    return Ok(QueryResult::Matrix {
+                        result: vec![MatrixSample {
+                            metric: metric_labels,
+                            values: final_values,
+                        }],
+                    });
+                }
+            }
+
+            Err(QueryError::MetricNotFound(format!(
+                "Could not process sum(irate()) query: {query}"
+            )))
         } else {
             Err(QueryError::ParseError(format!(
                 "Invalid sum(irate()) query: {query}"

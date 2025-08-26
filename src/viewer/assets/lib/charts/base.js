@@ -53,13 +53,38 @@ export function getNoDataOption(title) {
  */
 export function getTooltipFormatter(valueFormatter) {
     return (paramsArray) => {
+        // Sort the params array alphabetically by series name
+        // Special handling: 'id' should come first in the sort if present
+        const sortedParams = [...paramsArray].sort((a, b) => {
+            const aName = a.seriesName;
+            const bName = b.seriesName;
+
+            // Extract id values if present (format is like "id=0, state=user")
+            const aHasId = aName.startsWith('id=');
+            const bHasId = bName.startsWith('id=');
+
+            if (aHasId && bHasId) {
+                // Both have ids, compare the full string naturally
+                return aName.localeCompare(bName, undefined, { numeric: true });
+            } else if (aHasId) {
+                // a has id, b doesn't - a comes first
+                return -1;
+            } else if (bHasId) {
+                // b has id, a doesn't - b comes first
+                return 1;
+            } else {
+                // Neither has id, normal alphabetical sort
+                return aName.localeCompare(bName, undefined, { numeric: true });
+            }
+        });
+
         const result =
             `<div>
                 <div>
                     ${formatDateTime(paramsArray[0].value[0])}
                 </div>
                 <div style="margin-top: 5px;">
-                    ${paramsArray.map(p => `<div>
+                    ${sortedParams.map(p => `<div>
                         ${p.marker}
                         <span style="margin-left: 2px;">
                             ${p.seriesName}

@@ -82,6 +82,9 @@ const QueryExplorer = {
         vnode.state.queryHistory = JSON.parse(
             localStorage.getItem('promql_history') || '[]',
         );
+        // Create a separate ChartsState for query explorer to prevent flickering
+        // when other sections load in the background
+        vnode.state.queryChartsState = new ChartsState();
 
         // Format a PromQL value (handle both instant and range values)
         vnode.state.formatValue = (value) => {
@@ -164,6 +167,13 @@ const QueryExplorer = {
 
             m.redraw();
         };
+    },
+
+    onremove(vnode) {
+        // Clean up the query explorer's chart state when component is removed
+        if (vnode.state.queryChartsState) {
+            vnode.state.queryChartsState.clear();
+        }
     },
 
     view(vnode) {
@@ -269,20 +279,27 @@ const QueryExplorer = {
                                                                 'Series ' +
                                                                 (idx + 1);
                                                             if (item.metric) {
-                                                                // Find first non-__name__ label
-                                                                for (const [
-                                                                    key,
-                                                                    value,
-                                                                ] of Object.entries(
-                                                                    item.metric,
-                                                                )) {
-                                                                    if (
-                                                                        key !==
-                                                                        '__name__'
-                                                                    ) {
-                                                                        seriesName = `${key}=${value}`;
-                                                                        break;
-                                                                    }
+                                                                // Get all labels except __name__, sorted properly
+                                                                const labels = [];
+                                                                let hasId = false;
+
+                                                                // First check if 'id' label exists
+                                                                if (item.metric.id !== undefined) {
+                                                                    labels.push(`id=${item.metric.id}`);
+                                                                    hasId = true;
+                                                                }
+
+                                                                // Then add all other labels (except __name__, id, and metadata labels), sorted alphabetically
+                                                                const excludedLabels = ['__name__', 'id', 'metric', 'metric_type', 'unit'];
+                                                                const otherLabels = Object.entries(item.metric)
+                                                                    .filter(([key, _]) => !excludedLabels.includes(key))
+                                                                    .sort((a, b) => a[0].localeCompare(b[0]))
+                                                                    .map(([key, value]) => `${key}=${value}`);
+
+                                                                labels.push(...otherLabels);
+
+                                                                if (labels.length > 0) {
+                                                                    seriesName = labels.join(', ');
                                                                 }
                                                             }
                                                             seriesNames.push(
@@ -323,13 +340,12 @@ const QueryExplorer = {
                                                 );
 
                                                 if (allData.length > 1) {
-                                                    const chartKey = `${vnode.state.query}-${Date.now()}`;
+                                                    // Use a stable chart key based on the query to prevent recreating
+                                                    const chartKey = `query-chart-multi-${vnode.state.query}`;
 
                                                     const chartSpec = {
                                                         opts: {
-                                                            id:
-                                                                'query-result-chart-' +
-                                                                Date.now(),
+                                                            id: chartKey,
                                                             title: 'Query Result',
                                                             style: 'multi',
                                                         },
@@ -344,7 +360,7 @@ const QueryExplorer = {
                                                         [
                                                             m(Chart, {
                                                                 spec: chartSpec,
-                                                                chartsState,
+                                                                chartsState: vnode.state.queryChartsState,
                                                             }),
                                                         ],
                                                     );
@@ -405,13 +421,12 @@ const QueryExplorer = {
                                                         timestamps,
                                                         values,
                                                     ];
-                                                    const chartKey = `${vnode.state.query}-${Date.now()}`;
+                                                    // Use a stable chart key based on the query to prevent recreating
+                                                    const chartKey = `query-chart-line-${vnode.state.query}`;
 
                                                     const chartSpec = {
                                                         opts: {
-                                                            id:
-                                                                'query-result-chart-' +
-                                                                Date.now(),
+                                                            id: chartKey,
                                                             title: 'Query Result',
                                                             style: 'line',
                                                         },
@@ -424,7 +439,7 @@ const QueryExplorer = {
                                                         [
                                                             m(Chart, {
                                                                 spec: chartSpec,
-                                                                chartsState,
+                                                                chartsState: vnode.state.queryChartsState,
                                                             }),
                                                         ],
                                                     );
@@ -467,11 +482,11 @@ const QueryExplorer = {
                             {
                                 onclick: () => {
                                     vnode.state.query =
-                                        'irate(cpu_usage[5m]) / 1e9 / cpu_cores';
+                                        'sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores';
                                     vnode.state.executeQuery();
                                 },
                             },
-                            'irate(cpu_usage[5m]) / 1e9 / cpu_cores',
+                            'sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores',
                         ),
                         ' - Average CPU utilization (0-1)',
                     ),
@@ -497,11 +512,11 @@ const QueryExplorer = {
                             {
                                 onclick: () => {
                                     vnode.state.query =
-                                        'irate(cpu_instructions[5m]) / irate(cpu_cycles[5m])';
+                                        'sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))';
                                     vnode.state.executeQuery();
                                 },
                             },
-                            'irate(cpu_instructions[5m]) / irate(cpu_cycles[5m])',
+                            'sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))',
                         ),
                         ' - IPC (Instructions per Cycle)',
                     ),
