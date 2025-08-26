@@ -1,9 +1,11 @@
 use super::*;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 
 /// MCP protocol methods
@@ -38,6 +40,7 @@ impl From<&str> for McpMethod {
 #[derive(Debug)]
 enum McpTool {
     DescribeRecording,
+    AnalyzeCorrelation,
     Unknown(String),
 }
 
@@ -45,17 +48,24 @@ impl From<&str> for McpTool {
     fn from(s: &str) -> Self {
         match s {
             "describe_recording" => McpTool::DescribeRecording,
+            "analyze_correlation" => McpTool::AnalyzeCorrelation,
             other => McpTool::Unknown(other.to_string()),
         }
     }
 }
 
 /// MCP server state
-pub struct Server {}
+pub struct Server {
+    tsdb_cache: Arc<RwLock<HashMap<String, Arc<Tsdb>>>>,
+    query_engine_cache: Arc<RwLock<HashMap<String, Arc<QueryEngine>>>>,
+}
 
 impl Server {
-    pub fn new(_config: Arc<Config>) -> Self {
-        Self {}
+    pub fn new() -> Self {
+        Self {
+            tsdb_cache: Arc::new(RwLock::new(HashMap::new())),
+            query_engine_cache: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     /// Run the MCP server using stdio
@@ -74,7 +84,7 @@ impl Server {
                         debug!("Received empty line, continuing");
                         continue;
                     }
-                    debug!("Received message: {}", line);
+                    debug!("Received message: {line}");
                     line
                 }
                 None => {
@@ -87,7 +97,7 @@ impl Server {
             let message: Value = match serde_json::from_str(&line) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    warn!("Failed to parse JSON: {}", e);
+                    warn!("Failed to parse JSON: {e}");
                     continue;
                 }
             };
@@ -95,7 +105,7 @@ impl Server {
             // Handle the message and get response
             if let Some(response) = self.handle_message(message).await? {
                 let response_str = serde_json::to_string(&response)?;
-                debug!("Sending response: {}", response_str);
+                debug!("Sending response: {response_str}");
                 stdout.write_all(response_str.as_bytes()).await?;
                 stdout.write_all(b"\n").await?;
                 stdout.flush().await?;
@@ -156,6 +166,28 @@ impl Server {
                                     },
                                     "required": ["parquet_file"]
                                 }
+                            },
+                            {
+                                "name": "analyze_correlation",
+                                "description": "Analyze correlation between two metrics using PromQL",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "parquet_file": {
+                                            "type": "string",
+                                            "description": "Path to the parquet file"
+                                        },
+                                        "metric1": {
+                                            "type": "string",
+                                            "description": "First metric PromQL expression"
+                                        },
+                                        "metric2": {
+                                            "type": "string",
+                                            "description": "Second metric PromQL expression"
+                                        }
+                                    },
+                                    "required": ["parquet_file", "metric1", "metric2"]
+                                }
                             }
                         ]
                     }
@@ -212,7 +244,7 @@ impl Server {
                 Ok(None) // Notifications don't get responses
             }
             Some(McpMethod::Unknown(method_name)) => {
-                debug!("Unknown method: {}", method_name);
+                debug!("Unknown method: {method_name}");
                 // Only send error response if this is a request (has id), not a notification
                 if id.is_some() {
                     Ok(Some(json!({
@@ -282,6 +314,28 @@ impl Server {
                     }
                 }))),
             },
+            McpTool::AnalyzeCorrelation => match self.analyze_correlation(arguments).await {
+                Ok(result) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": result
+                            }
+                        ]
+                    }
+                }))),
+                Err(e) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": format!("Correlation error: {}", e)
+                    }
+                }))),
+            },
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -305,61 +359,102 @@ impl Server {
 
         let path = Path::new(parquet_file);
         if !path.exists() {
-            return Err(format!("Parquet file not found: {}", parquet_file).into());
+            return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        // Load the TSDB to get basic info
+        // Load the TSDB
         let tsdb = Arc::new(Tsdb::load(path)?);
 
-        // Get time range to calculate duration
+        // Create query engine
         use crate::viewer::promql::QueryEngine;
         let engine = QueryEngine::new(Arc::clone(&tsdb));
-        let (start_time, end_time) = engine.get_time_range();
-        let duration_seconds = end_time - start_time;
 
-        // Format duration nicely
-        let hours = (duration_seconds / 3600.0) as u64;
-        let minutes = ((duration_seconds % 3600.0) / 60.0) as u64;
-        let seconds = (duration_seconds % 60.0) as u64;
-
-        let duration_str = if hours > 0 {
-            format!("{}h {}m {}s", hours, minutes, seconds)
-        } else if minutes > 0 {
-            format!("{}m {}s", minutes, seconds)
-        } else {
-            format!("{}s", seconds)
-        };
-
-        // Convert Unix timestamps to UTC datetime strings
-        use chrono::{DateTime, Utc};
-        let start_datetime = DateTime::from_timestamp(start_time as i64, 0)
-            .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", start_time));
-
-        let end_datetime = DateTime::from_timestamp(end_time as i64, 0)
-            .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", end_time));
-
-        let output = format!(
-            "Recording Information\n\
-             =====================\n\
-             File: {}\n\
-             Rezolus Version: {}\n\
-             Source: {}\n\
-             Recording Duration: {} ({:.1} seconds)\n\
-             Start Time: {} (epoch: {:.0})\n\
-             End Time: {} (epoch: {:.0})\n",
-            parquet_file,
-            tsdb.version(),
-            tsdb.source(),
-            duration_str,
-            duration_seconds,
-            start_datetime,
-            start_time,
-            end_datetime,
-            end_time
-        );
-
+        // Use the shared formatting function
+        let output = super::format_recording_info(parquet_file, &tsdb, &engine);
         Ok(output)
+    }
+
+    /// Load or get cached TSDB
+    async fn get_tsdb(&self, parquet_file: &str) -> Result<Arc<Tsdb>, Box<dyn std::error::Error>> {
+        // Check cache first
+        {
+            let cache = self.tsdb_cache.read().unwrap();
+            if let Some(tsdb) = cache.get(parquet_file) {
+                return Ok(Arc::clone(tsdb));
+            }
+        }
+
+        // Load TSDB
+        let path = Path::new(parquet_file);
+        if !path.exists() {
+            return Err(format!("Parquet file not found: {parquet_file}").into());
+        }
+
+        let tsdb = Arc::new(Tsdb::load(path)?);
+
+        // Cache it
+        {
+            let mut cache = self.tsdb_cache.write().unwrap();
+            cache.insert(parquet_file.to_string(), Arc::clone(&tsdb));
+        }
+
+        Ok(tsdb)
+    }
+
+    /// Load or get cached QueryEngine
+    async fn get_query_engine(
+        &self,
+        parquet_file: &str,
+    ) -> Result<Arc<QueryEngine>, Box<dyn std::error::Error>> {
+        // Check cache first
+        {
+            let cache = self.query_engine_cache.read().unwrap();
+            if let Some(engine) = cache.get(parquet_file) {
+                return Ok(Arc::clone(engine));
+            }
+        }
+
+        // Get or load TSDB
+        let tsdb = self.get_tsdb(parquet_file).await?;
+        let engine = Arc::new(QueryEngine::new(tsdb));
+
+        // Cache the engine
+        {
+            let mut cache = self.query_engine_cache.write().unwrap();
+            cache.insert(parquet_file.to_string(), Arc::clone(&engine));
+        }
+
+        Ok(engine)
+    }
+
+    /// Analyze correlation between two metrics
+    async fn analyze_correlation(
+        &self,
+        arguments: &Value,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+
+        let metric1 = arguments
+            .get("metric1")
+            .and_then(|m| m.as_str())
+            .ok_or("Missing metric1")?;
+
+        let metric2 = arguments
+            .get("metric2")
+            .and_then(|m| m.as_str())
+            .ok_or("Missing metric2")?;
+
+        // Get cached or load TSDB and engine
+        let tsdb = self.get_tsdb(parquet_file).await?;
+        let engine = self.get_query_engine(parquet_file).await?;
+
+        // Use the shared correlation module
+        use crate::mcp::correlation::{calculate_correlation, format_correlation_result};
+
+        let result = calculate_correlation(&engine, &tsdb, metric1, metric2)?;
+        Ok(format_correlation_result(&result))
     }
 }
