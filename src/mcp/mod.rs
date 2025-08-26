@@ -11,19 +11,15 @@ use crate::viewer::tsdb::Tsdb;
 use chrono::{DateTime, Utc};
 
 /// Format recording information for display
-pub fn format_recording_info(
-    file_path: &str,
-    tsdb: &Arc<Tsdb>,
-    engine: &QueryEngine,
-) -> String {
+pub fn format_recording_info(file_path: &str, tsdb: &Arc<Tsdb>, engine: &QueryEngine) -> String {
     let (start_time, end_time) = engine.get_time_range();
     let duration_seconds = end_time - start_time;
-    
+
     // Format duration nicely
     let hours = (duration_seconds / 3600.0) as u64;
     let minutes = ((duration_seconds % 3600.0) / 60.0) as u64;
     let seconds = (duration_seconds % 60.0) as u64;
-    
+
     let duration_str = if hours > 0 {
         format!("{}h {}m {}s", hours, minutes, seconds)
     } else if minutes > 0 {
@@ -31,16 +27,16 @@ pub fn format_recording_info(
     } else {
         format!("{}s", seconds)
     };
-    
+
     // Convert Unix timestamps to UTC datetime strings
     let start_datetime = DateTime::from_timestamp(start_time as i64, 0)
         .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", start_time));
-    
+
     let end_datetime = DateTime::from_timestamp(end_time as i64, 0)
         .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", end_time));
-    
+
     format!(
         "Recording Information\n\
          =====================\n\
@@ -136,7 +132,7 @@ fn run_server(config: Config) {
 fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
     use crate::viewer::promql::QueryEngine;
     use crate::viewer::tsdb::Tsdb;
-    
+
     // Load the parquet file
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
@@ -179,7 +175,7 @@ fn run_describe_recording(file: PathBuf) {
 
     // Create query engine
     let engine = QueryEngine::new(tsdb.clone());
-    
+
     // Use the shared formatting function
     let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &tsdb, &engine);
     println!("{}", output);
@@ -209,7 +205,7 @@ impl TryFrom<ArgMatches> for Config {
 
     fn try_from(args: ArgMatches) -> Result<Self, String> {
         let verbose = args.get_count("VERBOSE");
-        
+
         let mode = match args.subcommand() {
             Some(("analyze-correlation", sub_args)) => {
                 let file = sub_args
@@ -224,7 +220,7 @@ impl TryFrom<ArgMatches> for Config {
                     .get_one::<String>("QUERY2")
                     .ok_or("Query2 argument is required")?
                     .clone();
-                
+
                 Mode::AnalyzeCorrelation {
                     file,
                     query1,
@@ -240,7 +236,7 @@ impl TryFrom<ArgMatches> for Config {
             }
             _ => Mode::Server,
         };
-        
+
         Ok(Config { verbose, mode })
     }
 }

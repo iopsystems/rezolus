@@ -316,30 +316,28 @@ impl Server {
                     }
                 }))),
             },
-            McpTool::AnalyzeCorrelation => {
-                match self.analyze_correlation(arguments).await {
-                    Ok(result) => Ok(Some(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": result
-                                }
-                            ]
-                        }
-                    }))),
-                    Err(e) => Ok(Some(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "error": {
-                            "code": -32000,
-                            "message": format!("Correlation error: {}", e)
-                        }
-                    })))
-                }
-            }
+            McpTool::AnalyzeCorrelation => match self.analyze_correlation(arguments).await {
+                Ok(result) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": result
+                            }
+                        ]
+                    }
+                }))),
+                Err(e) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": format!("Correlation error: {}", e)
+                    }
+                }))),
+            },
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -368,21 +366,18 @@ impl Server {
 
         // Load the TSDB
         let tsdb = Arc::new(Tsdb::load(path)?);
-        
+
         // Create query engine
         use crate::viewer::promql::QueryEngine;
         let engine = QueryEngine::new(Arc::clone(&tsdb));
-        
+
         // Use the shared formatting function
         let output = super::format_recording_info(parquet_file, &tsdb, &engine);
         Ok(output)
     }
 
     /// Load or get cached TSDB
-    async fn get_tsdb(
-        &self,
-        parquet_file: &str,
-    ) -> Result<Arc<Tsdb>, Box<dyn std::error::Error>> {
+    async fn get_tsdb(&self, parquet_file: &str) -> Result<Arc<Tsdb>, Box<dyn std::error::Error>> {
         // Check cache first
         {
             let cache = self.tsdb_cache.read().unwrap();
@@ -398,7 +393,7 @@ impl Server {
         }
 
         let tsdb = Arc::new(Tsdb::load(path)?);
-        
+
         // Cache it
         {
             let mut cache = self.tsdb_cache.write().unwrap();
@@ -460,13 +455,13 @@ impl Server {
 
         // Get time range
         let (start, end) = engine.get_time_range();
-        
+
         // Use the TSDB's native sampling interval
         let step = tsdb.interval();
 
         // Use the shared correlation module
         use crate::mcp::correlation::{calculate_correlation, format_correlation_result};
-        
+
         let result = calculate_correlation(&engine, metric1, metric2, start, end, step)?;
         Ok(format_correlation_result(&result))
     }
