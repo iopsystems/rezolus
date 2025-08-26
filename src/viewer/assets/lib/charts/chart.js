@@ -79,6 +79,18 @@ export class Chart {
         this.observer = observer;
     }
 
+    onupdate(vnode) {
+        // Update the spec reference
+        const oldSpec = this.spec;
+        this.spec = vnode.attrs.spec;
+
+        // If the chart is already initialized and data has changed, update it
+        if (this.echart && oldSpec.data !== this.spec.data) {
+            // Instead of reinitializing, just update the chart configuration
+            this.configureChartByType();
+        }
+    }
+
     onremove() {
         // Clean up chart instance and event handlers
         if (this.observer) {
@@ -127,11 +139,14 @@ export class Chart {
 
         // Initialize the chart
         this.echart = echarts.init(this.domNode);
-        const startTime = new Date();
-        this.echart.on('finished', () => {
-            this.echart.off('finished');
-            console.log(`Chart ${this.chartId} rendered in ${new Date() - startTime}ms`);
-        })
+        // Only log initial chart creation in debug mode
+        if (window.location.search.includes('debug')) {
+            const startTime = new Date();
+            this.echart.on('finished', () => {
+                this.echart.off('finished');
+                console.log(`Chart ${this.chartId} rendered in ${new Date() - startTime}ms`);
+            });
+        }
 
         // Store original time data for human-friendly tick calculation
         if (this.spec.data && this.spec.data.length > 0) {
