@@ -1,12 +1,81 @@
 use crate::*;
 
 use clap::{ArgMatches, Command};
+use std::path::PathBuf;
 
-mod correlation;
+pub mod correlation;
 mod server;
 
-/// Run the MCP server
+use crate::viewer::promql::QueryEngine;
+use crate::viewer::tsdb::Tsdb;
+use chrono::{DateTime, Utc};
+
+/// Format recording information for display
+pub fn format_recording_info(
+    file_path: &str,
+    tsdb: &Arc<Tsdb>,
+    engine: &QueryEngine,
+) -> String {
+    let (start_time, end_time) = engine.get_time_range();
+    let duration_seconds = end_time - start_time;
+    
+    // Format duration nicely
+    let hours = (duration_seconds / 3600.0) as u64;
+    let minutes = ((duration_seconds % 3600.0) / 60.0) as u64;
+    let seconds = (duration_seconds % 60.0) as u64;
+    
+    let duration_str = if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    };
+    
+    // Convert Unix timestamps to UTC datetime strings
+    let start_datetime = DateTime::from_timestamp(start_time as i64, 0)
+        .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", start_time));
+    
+    let end_datetime = DateTime::from_timestamp(end_time as i64, 0)
+        .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", end_time));
+    
+    format!(
+        "Recording Information\n\
+         =====================\n\
+         File: {}\n\
+         Rezolus Version: {}\n\
+         Source: {}\n\
+         Recording Duration: {} ({:.1} seconds)\n\
+         Start Time: {} (epoch: {:.0})\n\
+         End Time: {} (epoch: {:.0})",
+        file_path,
+        tsdb.version(),
+        tsdb.source(),
+        duration_str,
+        duration_seconds,
+        start_datetime,
+        start_time,
+        end_datetime,
+        end_time
+    )
+}
+
+/// Run the MCP server or execute MCP commands
 pub fn run(config: Config) {
+    match config.mode {
+        Mode::Server => run_server(config),
+        Mode::AnalyzeCorrelation {
+            file,
+            query1,
+            query2,
+        } => run_analyze_correlation(file, query1, query2),
+        Mode::DescribeRecording { file } => run_describe_recording(file),
+    }
+}
+
+fn run_server(config: Config) {
     // load config from file
     let config: Arc<Config> = config.into();
 
@@ -64,30 +133,161 @@ pub fn run(config: Config) {
     });
 }
 
+fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
+    use crate::viewer::promql::QueryEngine;
+    use crate::viewer::tsdb::Tsdb;
+    
+    // Load the parquet file
+    let tsdb = match Tsdb::load(&file) {
+        Ok(tsdb) => Arc::new(tsdb),
+        Err(e) => {
+            eprintln!("Failed to load parquet file: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Create query engine
+    let engine = Arc::new(QueryEngine::new(tsdb.clone()));
+
+    // Get time range from the QueryEngine
+    let (start, end) = engine.get_time_range();
+
+    // Use the TSDB's native sampling interval
+    let step = tsdb.interval();
+
+    // Run correlation analysis
+    match correlation::calculate_correlation(&engine, &query1, &query2, start, end, step) {
+        Ok(result) => {
+            println!("{}", correlation::format_correlation_result(&result));
+        }
+        Err(e) => {
+            eprintln!("Correlation analysis failed: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_describe_recording(file: PathBuf) {
+    // Load the parquet file
+    let tsdb = match Tsdb::load(&file) {
+        Ok(tsdb) => Arc::new(tsdb),
+        Err(e) => {
+            eprintln!("Failed to load parquet file: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Create query engine
+    let engine = QueryEngine::new(tsdb.clone());
+    
+    // Use the shared formatting function
+    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &tsdb, &engine);
+    println!("{}", output);
+}
+
+/// MCP operation mode
+pub enum Mode {
+    Server,
+    AnalyzeCorrelation {
+        file: PathBuf,
+        query1: String,
+        query2: String,
+    },
+    DescribeRecording {
+        file: PathBuf,
+    },
+}
+
 /// MCP server configuration
 pub struct Config {
     pub verbose: u8,
+    pub mode: Mode,
 }
 
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
 
     fn try_from(args: ArgMatches) -> Result<Self, String> {
-        Ok(Config {
-            verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
-        })
+        let verbose = args.get_count("VERBOSE");
+        
+        let mode = match args.subcommand() {
+            Some(("analyze-correlation", sub_args)) => {
+                let file = sub_args
+                    .get_one::<PathBuf>("FILE")
+                    .ok_or("File argument is required")?
+                    .clone();
+                let query1 = sub_args
+                    .get_one::<String>("QUERY1")
+                    .ok_or("Query1 argument is required")?
+                    .clone();
+                let query2 = sub_args
+                    .get_one::<String>("QUERY2")
+                    .ok_or("Query2 argument is required")?
+                    .clone();
+                
+                Mode::AnalyzeCorrelation {
+                    file,
+                    query1,
+                    query2,
+                }
+            }
+            Some(("describe-recording", sub_args)) => {
+                let file = sub_args
+                    .get_one::<PathBuf>("FILE")
+                    .ok_or("File argument is required")?
+                    .clone();
+                Mode::DescribeRecording { file }
+            }
+            _ => Mode::Server,
+        };
+        
+        Ok(Config { verbose, mode })
     }
 }
 
 /// Create the MCP subcommand
 pub fn command() -> Command {
     Command::new("mcp")
-        .about("Run Rezolus MCP server for AI analysis")
+        .about("Run Rezolus MCP server for AI analysis or execute analysis commands")
         .arg(
             clap::Arg::new("VERBOSE")
                 .long("verbose")
                 .short('v')
                 .help("Increase verbosity")
                 .action(clap::ArgAction::Count),
+        )
+        .subcommand(
+            Command::new("analyze-correlation")
+                .about("Analyze correlation between two metrics using the full recording")
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("Parquet file to analyze")
+                        .value_parser(clap::value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    clap::Arg::new("QUERY1")
+                        .help("First PromQL query (e.g., 'irate(cgroup_cpu_usage[1m])')")
+                        .required(true)
+                        .index(2),
+                )
+                .arg(
+                    clap::Arg::new("QUERY2")
+                        .help("Second PromQL query (e.g., 'cgroup_memory_used')")
+                        .required(true)
+                        .index(3),
+                ),
+        )
+        .subcommand(
+            Command::new("describe-recording")
+                .about("Describe the contents of a recording file")
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("Parquet file to describe")
+                        .value_parser(clap::value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                ),
         )
 }

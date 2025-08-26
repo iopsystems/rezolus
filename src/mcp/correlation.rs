@@ -50,6 +50,7 @@ pub struct SeriesCorrelation {
 /// - Simple metrics: `cpu_usage` vs `memory_used`
 /// - Rate queries: `irate(cpu_cycles[5m])` vs `irate(instructions[5m])`
 /// - Aggregations: `sum by (name) (irate(cgroup_cpu_usage[5m]))` vs `sum by (id) (irate(cpu_usage[5m]))`
+/// - Complex expressions: `cpu_usage / cpu_total` vs `memory_used / memory_total`
 /// 
 /// It also detects lag relationships - for example, if memory pressure leads to
 /// increased CPU usage due to garbage collection after a delay.
@@ -61,7 +62,8 @@ pub fn calculate_correlation(
     end: f64,
     step: f64,
 ) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
-    calculate_correlation_with_names(engine, expr1, expr2, None, None, start, end, step)
+    // For complex expressions, use the expression itself as the "name"
+    calculate_correlation_with_names(engine, expr1, expr2, Some(expr1), Some(expr2), start, end, step)
 }
 
 /// Calculate cross-correlation with optional human-readable names
@@ -535,6 +537,22 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
     // Always show series details to identify which specific series correlated
     if !result.series_pairs.is_empty() {
+        // Check if we have complex expressions
+        let expr1_is_complex = result.metric1.contains('/') || result.metric1.contains('*') 
+            || result.metric1.contains('+') || result.metric1.contains('-');
+        let expr2_is_complex = result.metric2.contains('/') || result.metric2.contains('*') 
+            || result.metric2.contains('+') || result.metric2.contains('-');
+        
+        if expr1_is_complex || expr2_is_complex {
+            output.push_str("\nNote: Complex expressions used in correlation\n");
+            if expr1_is_complex {
+                output.push_str(&format!("  Expression 1: {}\n", result.metric1));
+            }
+            if expr2_is_complex {
+                output.push_str(&format!("  Expression 2: {}\n", result.metric2));
+            }
+        }
+        
         output.push_str(&format!(
             "\nSeries-level correlations ({} pair{}):\n",
             result.series_pairs.len(),
@@ -543,48 +561,69 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
         // Show top correlations (or the single correlation if only one)
         let show_count = 10.min(result.series_pairs.len()); // Show up to 10 for better visibility
+        
         for (i, pair) in result.series_pairs.iter().take(show_count).enumerate() {
             output.push_str(&format!(
-                "{}. r={:.4} at lag={}s (n={}) ",
+                "\n{}. r={:.4} at lag={}s (n={})",
                 i + 1,
                 pair.max_correlation,
                 pair.optimal_lag,
                 pair.sample_count
             ));
 
-            // Format labels compactly, showing the most important labels first
+            // Format labels compactly with deterministic ordering
             let format_labels = |labels: &HashMap<String, String>| -> String {
-                if labels.is_empty() {
-                    return String::from("{}");
-                }
+                // Get the metric name first
+                let metric_name = labels.get("metric")
+                    .or_else(|| labels.get("__name__"))
+                    .map(|s| s.as_str());
                 
-                // Prioritize showing important labels like name, id, container, instance
-                let priority_keys = ["name", "id", "container", "instance", "cpu", "device", "interface"];
+                // Labels to omit from the label selector
+                let omit_labels = ["metric", "metric_type", "unit", "__name__"];
+                
                 let mut label_parts = Vec::new();
                 
-                // Add priority labels first
-                for key in &priority_keys {
-                    if let Some(value) = labels.get(*key) {
-                        label_parts.push(format!("{}={}", key, value));
-                    }
+                // First add 'id' if present
+                if let Some(id_value) = labels.get("id") {
+                    label_parts.push(format!("id=\"{}\"", id_value));
                 }
                 
-                // Add any remaining labels (excluding __name__)
-                for (k, v) in labels.iter() {
-                    if k != "__name__" && !priority_keys.contains(&k.as_str()) {
-                        label_parts.push(format!("{}={}", k, v));
-                    }
+                // Collect and sort remaining labels alphabetically
+                let mut remaining_labels: Vec<(String, String)> = labels
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "id" && !omit_labels.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                remaining_labels.sort_by(|a, b| a.0.cmp(&b.0));
+                
+                // Add sorted labels with proper quoting for PromQL
+                for (k, v) in remaining_labels {
+                    label_parts.push(format!("{}=\"{}\"", k, v));
                 }
                 
-                if label_parts.is_empty() {
-                    String::from("{}")
-                } else {
-                    format!("{{{}}}", label_parts.join(","))
+                // Format based on whether we have a metric name
+                match metric_name {
+                    Some(name) if !name.is_empty() && name != "division_result" && name != "multiplication_result" => {
+                        // Normal metric with a proper name
+                        if label_parts.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{}{{{}}}", name, label_parts.join(","))
+                        }
+                    }
+                    _ => {
+                        // Complex expression or unknown metric - just show labels
+                        if label_parts.is_empty() {
+                            "{}".to_string()
+                        } else {
+                            format!("{{{}}}", label_parts.join(","))
+                        }
+                    }
                 }
             };
             
             output.push_str(&format!(
-                "\n    {} vs {}",
+                "\n   {} vs {}",
                 format_labels(&pair.labels1),
                 format_labels(&pair.labels2)
             ));
@@ -592,7 +631,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
         if result.series_pairs.len() > show_count {
             output.push_str(&format!(
-                "... and {} more pairs\n",
+                "\n... and {} more pairs",
                 result.series_pairs.len() - show_count
             ));
         }

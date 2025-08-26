@@ -366,62 +366,49 @@ impl Server {
             return Err(format!("Parquet file not found: {}", parquet_file).into());
         }
 
-        // Load the TSDB to get basic info
+        // Load the TSDB
         let tsdb = Arc::new(Tsdb::load(path)?);
-
-        // Get time range to calculate duration
+        
+        // Create query engine
         use crate::viewer::promql::QueryEngine;
         let engine = QueryEngine::new(Arc::clone(&tsdb));
-        let (start_time, end_time) = engine.get_time_range();
-        let duration_seconds = end_time - start_time;
-
-        // Format duration nicely
-        let hours = (duration_seconds / 3600.0) as u64;
-        let minutes = ((duration_seconds % 3600.0) / 60.0) as u64;
-        let seconds = (duration_seconds % 60.0) as u64;
-
-        let duration_str = if hours > 0 {
-            format!("{}h {}m {}s", hours, minutes, seconds)
-        } else if minutes > 0 {
-            format!("{}m {}s", minutes, seconds)
-        } else {
-            format!("{}s", seconds)
-        };
-
-        // Convert Unix timestamps to UTC datetime strings
-        use chrono::{DateTime, Utc};
-        let start_datetime = DateTime::from_timestamp(start_time as i64, 0)
-            .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", start_time));
-
-        let end_datetime = DateTime::from_timestamp(end_time as i64, 0)
-            .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", end_time));
-
-        let output = format!(
-            "Recording Information\n\
-             =====================\n\
-             File: {}\n\
-             Rezolus Version: {}\n\
-             Source: {}\n\
-             Recording Duration: {} ({:.1} seconds)\n\
-             Start Time: {} (epoch: {:.0})\n\
-             End Time: {} (epoch: {:.0})\n",
-            parquet_file,
-            tsdb.version(),
-            tsdb.source(),
-            duration_str,
-            duration_seconds,
-            start_datetime,
-            start_time,
-            end_datetime,
-            end_time
-        );
-
+        
+        // Use the shared formatting function
+        let output = super::format_recording_info(parquet_file, &tsdb, &engine);
         Ok(output)
     }
 
-    /// Load or get cached TSDB and QueryEngine
+    /// Load or get cached TSDB
+    async fn get_tsdb(
+        &self,
+        parquet_file: &str,
+    ) -> Result<Arc<Tsdb>, Box<dyn std::error::Error>> {
+        // Check cache first
+        {
+            let cache = self.tsdb_cache.read().unwrap();
+            if let Some(tsdb) = cache.get(parquet_file) {
+                return Ok(Arc::clone(tsdb));
+            }
+        }
+
+        // Load TSDB
+        let path = Path::new(parquet_file);
+        if !path.exists() {
+            return Err(format!("Parquet file not found: {}", parquet_file).into());
+        }
+
+        let tsdb = Arc::new(Tsdb::load(path)?);
+        
+        // Cache it
+        {
+            let mut cache = self.tsdb_cache.write().unwrap();
+            cache.insert(parquet_file.to_string(), Arc::clone(&tsdb));
+        }
+
+        Ok(tsdb)
+    }
+
+    /// Load or get cached QueryEngine
     async fn get_query_engine(
         &self,
         parquet_file: &str,
@@ -434,22 +421,14 @@ impl Server {
             }
         }
 
-        // Load TSDB
-        let path = Path::new(parquet_file);
-        if !path.exists() {
-            return Err(format!("Parquet file not found: {}", parquet_file).into());
-        }
+        // Get or load TSDB
+        let tsdb = self.get_tsdb(parquet_file).await?;
+        let engine = Arc::new(QueryEngine::new(tsdb));
 
-        let tsdb = Arc::new(Tsdb::load(path)?);
-        let engine = Arc::new(QueryEngine::new(Arc::clone(&tsdb)));
-
-        // Cache both
+        // Cache the engine
         {
-            let mut tsdb_cache = self.tsdb_cache.write().unwrap();
-            tsdb_cache.insert(parquet_file.to_string(), tsdb);
-
-            let mut engine_cache = self.query_engine_cache.write().unwrap();
-            engine_cache.insert(parquet_file.to_string(), Arc::clone(&engine));
+            let mut cache = self.query_engine_cache.write().unwrap();
+            cache.insert(parquet_file.to_string(), Arc::clone(&engine));
         }
 
         Ok(engine)
@@ -475,11 +454,15 @@ impl Server {
             .and_then(|m| m.as_str())
             .ok_or("Missing metric2")?;
 
+        // Get cached or load TSDB and engine
+        let tsdb = self.get_tsdb(parquet_file).await?;
         let engine = self.get_query_engine(parquet_file).await?;
 
         // Get time range
         let (start, end) = engine.get_time_range();
-        let step = 60.0; // 1 minute step
+        
+        // Use the TSDB's native sampling interval
+        let step = tsdb.interval();
 
         // Use the shared correlation module
         use crate::mcp::correlation::{calculate_correlation, format_correlation_result};
