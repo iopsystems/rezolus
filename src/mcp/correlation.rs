@@ -423,7 +423,9 @@ fn calculate_lag_correlations(
     lag_samples.dedup();
 
     // Calculate all correlations in parallel
-    let correlations = lag_samples
+    
+
+    lag_samples
         .into_par_iter()
         .filter_map(|lag| {
             calculate_correlation_at_lag(&data1, &data2, lag).map(|(corr, _)| LagCorrelation {
@@ -431,9 +433,7 @@ fn calculate_lag_correlations(
                 correlation: corr,
             })
         })
-        .collect();
-
-    correlations
+        .collect()
 }
 
 /// Extract matrix samples from a query result
@@ -473,8 +473,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
     output.push_str(&format!(
         "Cross-Correlation Analysis\n\
          ==========================\n\
-         Metric 1: {}\n",
-        display1
+         Metric 1: {display1}\n"
     ));
 
     // If we have a name, also show the query
@@ -482,7 +481,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
         output.push_str(&format!("  Query: {}\n", result.metric1));
     }
 
-    output.push_str(&format!("Metric 2: {}\n", display2));
+    output.push_str(&format!("Metric 2: {display2}\n"));
 
     if result.metric2_name.is_some() {
         output.push_str(&format!("  Query: {}\n", result.metric2));
@@ -590,7 +589,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
                 // First add 'id' if present
                 if let Some(id_value) = labels.get("id") {
-                    label_parts.push(format!("id=\"{}\"", id_value));
+                    label_parts.push(format!("id=\"{id_value}\""));
                 }
 
                 // Collect and sort remaining labels alphabetically
@@ -603,7 +602,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
                 // Add sorted labels with proper quoting for PromQL
                 for (k, v) in remaining_labels {
-                    label_parts.push(format!("{}=\"{}\"", k, v));
+                    label_parts.push(format!("{k}=\"{v}\""));
                 }
 
                 // Format based on whether we have a metric name

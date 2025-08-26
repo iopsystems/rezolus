@@ -86,7 +86,7 @@ impl Server {
                         debug!("Received empty line, continuing");
                         continue;
                     }
-                    debug!("Received message: {}", line);
+                    debug!("Received message: {line}");
                     line
                 }
                 None => {
@@ -99,7 +99,7 @@ impl Server {
             let message: Value = match serde_json::from_str(&line) {
                 Ok(msg) => msg,
                 Err(e) => {
-                    warn!("Failed to parse JSON: {}", e);
+                    warn!("Failed to parse JSON: {e}");
                     continue;
                 }
             };
@@ -107,7 +107,7 @@ impl Server {
             // Handle the message and get response
             if let Some(response) = self.handle_message(message).await? {
                 let response_str = serde_json::to_string(&response)?;
-                debug!("Sending response: {}", response_str);
+                debug!("Sending response: {response_str}");
                 stdout.write_all(response_str.as_bytes()).await?;
                 stdout.write_all(b"\n").await?;
                 stdout.flush().await?;
@@ -246,7 +246,7 @@ impl Server {
                 Ok(None) // Notifications don't get responses
             }
             Some(McpMethod::Unknown(method_name)) => {
-                debug!("Unknown method: {}", method_name);
+                debug!("Unknown method: {method_name}");
                 // Only send error response if this is a request (has id), not a notification
                 if id.is_some() {
                     Ok(Some(json!({
@@ -361,7 +361,7 @@ impl Server {
 
         let path = Path::new(parquet_file);
         if !path.exists() {
-            return Err(format!("Parquet file not found: {}", parquet_file).into());
+            return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
         // Load the TSDB
@@ -389,7 +389,7 @@ impl Server {
         // Load TSDB
         let path = Path::new(parquet_file);
         if !path.exists() {
-            return Err(format!("Parquet file not found: {}", parquet_file).into());
+            return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
         let tsdb = Arc::new(Tsdb::load(path)?);

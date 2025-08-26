@@ -21,21 +21,21 @@ pub fn format_recording_info(file_path: &str, tsdb: &Arc<Tsdb>, engine: &QueryEn
     let seconds = (duration_seconds % 60.0) as u64;
 
     let duration_str = if hours > 0 {
-        format!("{}h {}m {}s", hours, minutes, seconds)
+        format!("{hours}h {minutes}m {seconds}s")
     } else if minutes > 0 {
-        format!("{}m {}s", minutes, seconds)
+        format!("{minutes}m {seconds}s")
     } else {
-        format!("{}s", seconds)
+        format!("{seconds}s")
     };
 
     // Convert Unix timestamps to UTC datetime strings
     let start_datetime = DateTime::from_timestamp(start_time as i64, 0)
         .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", start_time));
+        .unwrap_or_else(|| format!("{start_time:.0} (invalid timestamp)"));
 
     let end_datetime = DateTime::from_timestamp(end_time as i64, 0)
         .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("{:.0} (invalid timestamp)", end_time));
+        .unwrap_or_else(|| format!("{end_time:.0} (invalid timestamp)"));
 
     format!(
         "Recording Information\n\
@@ -123,7 +123,7 @@ fn run_server(config: Config) {
     rt.block_on(async {
         let mut server = server::Server::new(config);
         if let Err(e) = server.run_stdio().await {
-            eprintln!("MCP server error: {}", e);
+            eprintln!("MCP server error: {e}");
             std::process::exit(1);
         }
     });
@@ -137,7 +137,7 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
-            eprintln!("Failed to load parquet file: {}", e);
+            eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
         }
     };
@@ -157,7 +157,7 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
             println!("{}", correlation::format_correlation_result(&result));
         }
         Err(e) => {
-            eprintln!("Correlation analysis failed: {}", e);
+            eprintln!("Correlation analysis failed: {e}");
             std::process::exit(1);
         }
     }
@@ -168,7 +168,7 @@ fn run_describe_recording(file: PathBuf) {
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
-            eprintln!("Failed to load parquet file: {}", e);
+            eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
         }
     };
@@ -178,7 +178,7 @@ fn run_describe_recording(file: PathBuf) {
 
     // Use the shared formatting function
     let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &tsdb, &engine);
-    println!("{}", output);
+    println!("{output}");
 }
 
 /// MCP operation mode
