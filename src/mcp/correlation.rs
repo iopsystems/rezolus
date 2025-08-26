@@ -1,4 +1,5 @@
 use crate::viewer::promql::{MatrixSample, QueryEngine, QueryResult};
+use crate::viewer::tsdb::Tsdb;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,38 +52,18 @@ pub struct SeriesCorrelation {
 ///
 /// It also detects lag relationships - for example, if memory pressure leads to
 /// increased CPU usage due to garbage collection after a delay.
+///
+/// The time range and step are determined automatically from the underlying TSDB.
 pub fn calculate_correlation(
     engine: &Arc<QueryEngine>,
+    tsdb: &Arc<Tsdb>,
     expr1: &str,
     expr2: &str,
-    start: f64,
-    end: f64,
-    step: f64,
 ) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
-    // For complex expressions, use the expression itself as the "name"
-    calculate_correlation_with_names(
-        engine,
-        expr1,
-        expr2,
-        Some(expr1),
-        Some(expr2),
-        start,
-        end,
-        step,
-    )
-}
+    // Get time range and step from the TSDB
+    let (start, end) = engine.get_time_range();
+    let step = tsdb.interval();
 
-/// Calculate cross-correlation with optional human-readable names
-pub fn calculate_correlation_with_names(
-    engine: &Arc<QueryEngine>,
-    expr1: &str,
-    expr2: &str,
-    name1: Option<&str>,
-    name2: Option<&str>,
-    start: f64,
-    end: f64,
-    step: f64,
-) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
     // Query both expressions
     let result1 = engine.query_range(expr1, start, end, step)?;
     let result2 = engine.query_range(expr2, start, end, step)?;
@@ -162,8 +143,8 @@ pub fn calculate_correlation_with_names(
     Ok(CorrelationResult {
         metric1: expr1.to_string(),
         metric2: expr2.to_string(),
-        metric1_name: name1.map(|s| s.to_string()),
-        metric2_name: name2.map(|s| s.to_string()),
+        metric1_name: Some(expr1.to_string()),
+        metric2_name: Some(expr2.to_string()),
         max_correlation,
         optimal_lag,
         sample_count: total_samples,
@@ -423,7 +404,6 @@ fn calculate_lag_correlations(
     lag_samples.dedup();
 
     // Calculate all correlations in parallel
-    
 
     lag_samples
         .into_par_iter()

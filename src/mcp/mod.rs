@@ -72,9 +72,6 @@ pub fn run(config: Config) {
 }
 
 fn run_server(config: Config) {
-    // load config from file
-    let config: Arc<Config> = config.into();
-
     // configure debug log
     let debug_output: Box<dyn Output> = Box::new(Stderr::new());
 
@@ -121,7 +118,7 @@ fn run_server(config: Config) {
 
     // launch the server
     rt.block_on(async {
-        let mut server = server::Server::new(config);
+        let mut server = server::Server::new();
         if let Err(e) = server.run_stdio().await {
             eprintln!("MCP server error: {e}");
             std::process::exit(1);
@@ -145,14 +142,8 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
     // Create query engine
     let engine = Arc::new(QueryEngine::new(tsdb.clone()));
 
-    // Get time range from the QueryEngine
-    let (start, end) = engine.get_time_range();
-
-    // Use the TSDB's native sampling interval
-    let step = tsdb.interval();
-
     // Run correlation analysis
-    match correlation::calculate_correlation(&engine, &query1, &query2, start, end, step) {
+    match correlation::calculate_correlation(&engine, &tsdb, &query1, &query2) {
         Ok(result) => {
             println!("{}", correlation::format_correlation_result(&result));
         }

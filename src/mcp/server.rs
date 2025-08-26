@@ -56,15 +56,13 @@ impl From<&str> for McpTool {
 
 /// MCP server state
 pub struct Server {
-    config: Arc<Config>,
     tsdb_cache: Arc<RwLock<HashMap<String, Arc<Tsdb>>>>,
     query_engine_cache: Arc<RwLock<HashMap<String, Arc<QueryEngine>>>>,
 }
 
 impl Server {
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new() -> Self {
         Self {
-            config,
             tsdb_cache: Arc::new(RwLock::new(HashMap::new())),
             query_engine_cache: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -453,16 +451,10 @@ impl Server {
         let tsdb = self.get_tsdb(parquet_file).await?;
         let engine = self.get_query_engine(parquet_file).await?;
 
-        // Get time range
-        let (start, end) = engine.get_time_range();
-
-        // Use the TSDB's native sampling interval
-        let step = tsdb.interval();
-
         // Use the shared correlation module
         use crate::mcp::correlation::{calculate_correlation, format_correlation_result};
 
-        let result = calculate_correlation(&engine, metric1, metric2, start, end, step)?;
+        let result = calculate_correlation(&engine, &tsdb, metric1, metric2)?;
         Ok(format_correlation_result(&result))
     }
 }
