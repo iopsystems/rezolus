@@ -50,6 +50,7 @@ impl General {
         *self.ttl.parse::<humantime::Duration>().unwrap()
     }
 
+    #[allow(dead_code)]
     pub fn btf_path(&self) -> Option<&str> {
         self.btf_path.as_deref()
     }

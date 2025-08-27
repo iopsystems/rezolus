@@ -5,6 +5,15 @@ listen = "0.0.0.0:4241"
 # resource usage.
 ttl = "10ms"
 
+# External BTF (BPF Type Format) file path (optional)
+# This is useful for systems where the kernel doesn't have BTF information
+# built-in at /sys/kernel/btf/vmlinux. You can obtain BTF files from:
+# - https://github.com/aquasecurity/btfhub (pre-built BTF files for many kernels)
+# - Extract from kernel packages (vmlinux or System.map)
+# - Generate using pahole from kernel debug symbols
+# Example:
+# btf_path = "/path/to/vmlinux-5.15.0-generic.btf"
+
 [scheduler]
 # By default, Rezolus will use the SCHED_RR realtime scheduling policy to ensure
 # collection happens with minimal delay. Other policies are: `normal` and `fifo`
