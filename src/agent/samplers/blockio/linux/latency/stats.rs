@@ -25,7 +25,7 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_latency",
-    description = "Distribution of blockio read operation latency in nanoseconds",
+    description = "Distribution of blockio operation latency in nanoseconds",
     metadata = { op = "read", unit = "nanoseconds" }
 )]
 pub static BLOCKIO_READ_LATENCY: RwLockHistogram =
@@ -33,7 +33,7 @@ pub static BLOCKIO_READ_LATENCY: RwLockHistogram =
 
 #[metric(
     name = "blockio_latency",
-    description = "Distribution of blockio write operation latency in nanoseconds",
+    description = "Distribution of blockio operation latency in nanoseconds",
     metadata = { op = "write", unit = "nanoseconds" }
 )]
 pub static BLOCKIO_WRITE_LATENCY: RwLockHistogram =
@@ -41,7 +41,7 @@ pub static BLOCKIO_WRITE_LATENCY: RwLockHistogram =
 
 #[metric(
     name = "blockio_latency",
-    description = "Distribution of blockio flush operation latency in nanoseconds",
+    description = "Distribution of blockio operation latency in nanoseconds",
     metadata = { op = "flush", unit = "nanoseconds" }
 )]
 pub static BLOCKIO_FLUSH_LATENCY: RwLockHistogram =
@@ -49,7 +49,7 @@ pub static BLOCKIO_FLUSH_LATENCY: RwLockHistogram =
 
 #[metric(
     name = "blockio_latency",
-    description = "Distribution of blockio discard operation latency in nanoseconds",
+    description = "Distribution of blockio operation latency in nanoseconds",
     metadata = { op = "discard", unit = "nanoseconds" }
 )]
 pub static BLOCKIO_DISCARD_LATENCY: RwLockHistogram =

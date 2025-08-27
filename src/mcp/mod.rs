@@ -4,6 +4,7 @@ use clap::{ArgMatches, Command};
 use std::path::PathBuf;
 
 pub mod correlation;
+mod describe_metrics;
 mod server;
 
 use crate::viewer::promql::QueryEngine;
@@ -68,6 +69,7 @@ pub fn run(config: Config) {
             query2,
         } => run_analyze_correlation(file, query1, query2),
         Mode::DescribeRecording { file } => run_describe_recording(file),
+        Mode::DescribeMetrics { file } => run_describe_metrics(file),
     }
 }
 
@@ -172,6 +174,22 @@ fn run_describe_recording(file: PathBuf) {
     println!("{output}");
 }
 
+fn run_describe_metrics(file: PathBuf) {
+    // Load the parquet file
+    let tsdb = match Tsdb::load(&file) {
+        Ok(tsdb) => Arc::new(tsdb),
+        Err(e) => {
+            eprintln!("Failed to load parquet file: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Format and print the metrics list
+    let output = describe_metrics::format_metrics_description(&tsdb);
+    println!("{output}");
+}
+
+
 /// MCP operation mode
 pub enum Mode {
     Server,
@@ -181,6 +199,9 @@ pub enum Mode {
         query2: String,
     },
     DescribeRecording {
+        file: PathBuf,
+    },
+    DescribeMetrics {
         file: PathBuf,
     },
 }
@@ -224,6 +245,13 @@ impl TryFrom<ArgMatches> for Config {
                     .ok_or("File argument is required")?
                     .clone();
                 Mode::DescribeRecording { file }
+            }
+            Some(("describe-metrics", sub_args)) => {
+                let file = sub_args
+                    .get_one::<PathBuf>("FILE")
+                    .ok_or("File argument is required")?
+                    .clone();
+                Mode::DescribeMetrics { file }
             }
             _ => Mode::Server,
         };
@@ -272,6 +300,17 @@ pub fn command() -> Command {
                 .arg(
                     clap::Arg::new("FILE")
                         .help("Parquet file to describe")
+                        .value_parser(clap::value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                ),
+        )
+        .subcommand(
+            Command::new("describe-metrics")
+                .about("List and describe all metrics available in a recording")
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("Parquet file to analyze")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
