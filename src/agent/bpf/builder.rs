@@ -1,9 +1,10 @@
 use super::*;
 use crate::agent::*;
+use crate::error;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
-use libbpf_rs::PrintLevel;
 use libbpf_rs::{MapCore, MapFlags, OpenObject, RingBuffer, RingBufferBuilder};
+use libbpf_rs::{Object, PrintLevel};
 use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
@@ -227,6 +228,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
+    btf_path: Option<String>,
 }
 
 impl<T: 'static> Builder<T>
@@ -235,7 +237,12 @@ where
     <<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output: OpenSkelExt,
     <<T as SkelBuilder<'static>>::Output as OpenSkel<'static>>::Output: SkelExt,
 {
-    pub fn new(name: &'static str, prog_stats: BpfProgStats, skel: fn() -> T) -> Self {
+    pub fn new(
+        config: &crate::agent::Config,
+        name: &'static str,
+        prog_stats: BpfProgStats,
+        skel: fn() -> T,
+    ) -> Self {
         Self {
             name,
             skel,
@@ -247,6 +254,7 @@ where
             perf_events: Vec::new(),
             packed_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
+            btf_path: config.general().btf_path().map(|s| s.to_string()),
         }
     }
 
@@ -278,8 +286,51 @@ where
             let open_object: &'static mut MaybeUninit<OpenObject> =
                 Box::leak(Box::new(MaybeUninit::uninit()));
 
-            // open and load the BPF program
-            let mut skel = (self.skel)().open(open_object)?.load()?;
+            // open the BPF program
+            let mut open_skel = (self.skel)().open(open_object)?;
+
+            // set external BTF if provided
+            if let Some(ref btf_path) = self.btf_path {
+                debug!("Loading external BTF from: {}", btf_path);
+
+                // Use libbpf to set the BTF path on the open object
+                // This allows BPF programs to work on systems without /sys/kernel/btf/vmlinux
+                let path_cstr = std::ffi::CString::new(btf_path.as_str())
+                    .map_err(|_| libbpf_rs::Error::from_raw_os_error(libc::EINVAL))?;
+
+                unsafe {
+                    let obj = open_skel.object_mut();
+                    let obj_ptr = obj.as_mut_ptr();
+
+                    // Set the custom BTF path using libbpf_sys
+                    let ret = libbpf_sys::bpf_object__set_kversion(obj_ptr, 0);
+                    if ret != 0 {
+                        debug!("Failed to set kernel version to 0 for BTF override");
+                    }
+
+                    // Load BTF from file
+                    let btf = libbpf_sys::btf__parse(path_cstr.as_ptr(), std::ptr::null_mut());
+                    if btf.is_null() {
+                        let err = std::io::Error::last_os_error();
+                        error!("Failed to parse BTF file {}: {}", btf_path, err);
+                        return Err(libbpf_rs::Error::from(err));
+                    }
+
+                    // Set the BTF on the object
+                    let ret = libbpf_sys::bpf_object__set_core_btf(obj_ptr, btf);
+                    if ret != 0 {
+                        libbpf_sys::btf__free(btf);
+                        let err = std::io::Error::from_raw_os_error(-ret);
+                        error!("Failed to set BTF on BPF object: {}", err);
+                        return Err(libbpf_rs::Error::from(err));
+                    }
+
+                    debug!("Successfully loaded external BTF from {}", btf_path);
+                }
+            }
+
+            // load the BPF program
+            let mut skel = open_skel.load()?;
 
             // log the number of instructions for each probe in the program
             skel.log_prog_instructions();

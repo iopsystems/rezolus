@@ -38,6 +38,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     ];
 
     let bpf = BpfBuilder::new(
+        &config,
         NAME,
         BpfProgStats {
             run_time: &BPF_RUN_TIME,

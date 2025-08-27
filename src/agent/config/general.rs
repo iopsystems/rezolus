@@ -9,6 +9,10 @@ pub struct General {
     // excessive resource utilization
     #[serde(default = "ttl")]
     ttl: String,
+
+    // path to external BTF file for BPF programs (optional)
+    #[serde(default)]
+    btf_path: Option<String>,
 }
 
 impl General {
@@ -16,6 +20,13 @@ impl General {
         if let Err(e) = self.ttl.parse::<humantime::Duration>() {
             eprintln!("ttl couldn't be parsed: {e}");
             std::process::exit(1);
+        }
+
+        if let Some(ref btf_path) = self.btf_path {
+            if !std::path::Path::new(btf_path).exists() {
+                eprintln!("BTF file not found: {btf_path}");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -37,5 +48,9 @@ impl General {
 
     pub fn ttl(&self) -> std::time::Duration {
         *self.ttl.parse::<humantime::Duration>().unwrap()
+    }
+
+    pub fn btf_path(&self) -> Option<&str> {
+        self.btf_path.as_deref()
     }
 }

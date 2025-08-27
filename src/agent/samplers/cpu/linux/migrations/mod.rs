@@ -42,6 +42,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let migrations = vec![&CPU_MIGRATIONS_FROM, &CPU_MIGRATIONS_TO];
 
     let bpf = BpfBuilder::new(
+        &config,
         NAME,
         BpfProgStats {
             run_time: &BPF_RUN_TIME,
