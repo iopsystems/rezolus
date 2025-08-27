@@ -6,11 +6,14 @@ listen = "0.0.0.0:4241"
 ttl = "10ms"
 
 # External BTF (BPF Type Format) file path (optional)
-# This is useful for systems where the kernel doesn't have BTF information
-# built-in at /sys/kernel/btf/vmlinux. You can obtain BTF files from:
+# This allows Rezolus to run on systems where the kernel doesn't have BTF 
+# information built-in at /sys/kernel/btf/vmlinux. 
+#
+# You can obtain BTF files from:
 # - https://github.com/aquasecurity/btfhub (pre-built BTF files for many kernels)
 # - Extract from kernel packages (vmlinux or System.map)
 # - Generate using pahole from kernel debug symbols
+#
 # Example:
 # btf_path = "/path/to/vmlinux-5.15.0-generic.btf"
 

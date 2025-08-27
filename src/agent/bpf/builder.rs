@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent::*;
-use crate::error;
+use crate::{error, warn};
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
@@ -285,48 +285,38 @@ where
             let open_object: &'static mut MaybeUninit<OpenObject> =
                 Box::leak(Box::new(MaybeUninit::uninit()));
 
-            // open the BPF program
-            let mut open_skel = (self.skel)().open(open_object)?;
+            // Open the BPF program with optional custom BTF path
+            let open_skel = if let Some(ref btf_path) = self.btf_path {
+                debug!("Loading BPF program with external BTF from: {}", btf_path);
 
-            // set external BTF if provided
-            if let Some(ref btf_path) = self.btf_path {
-                debug!("Loading external BTF from: {}", btf_path);
-
-                // Use libbpf to set the BTF path on the open object
-                // This allows BPF programs to work on systems without /sys/kernel/btf/vmlinux
-                let path_cstr = std::ffi::CString::new(btf_path.as_str())
+                // Create C string for the BTF path
+                let btf_path_cstr = std::ffi::CString::new(btf_path.as_str())
                     .map_err(|_| libbpf_rs::Error::from_raw_os_error(libc::EINVAL))?;
 
-                unsafe {
-                    let obj = open_skel.object_mut();
-                    let obj_ptr = obj.as_mut_ptr();
+                // Create open options with custom BTF path
+                let open_opts = unsafe {
+                    let mut opts: libbpf_sys::bpf_object_open_opts = std::mem::zeroed();
+                    opts.sz = std::mem::size_of::<libbpf_sys::bpf_object_open_opts>()
+                        as libbpf_sys::size_t;
+                    opts.btf_custom_path = btf_path_cstr.as_ptr();
+                    opts
+                };
 
-                    // Set the custom BTF path using libbpf_sys
-                    let ret = libbpf_sys::bpf_object__set_kversion(obj_ptr, 0);
-                    if ret != 0 {
-                        debug!("Failed to set kernel version to 0 for BTF override");
+                // Open with custom BTF path using open_opts
+                match (self.skel)().open_opts(open_opts, open_object) {
+                    Ok(skel) => {
+                        debug!("Successfully loaded external BTF from: {}", btf_path);
+                        skel
                     }
-
-                    // Load BTF from file
-                    let btf = libbpf_sys::btf__parse(path_cstr.as_ptr(), std::ptr::null_mut());
-                    if btf.is_null() {
-                        let err = std::io::Error::last_os_error();
-                        error!("Failed to parse BTF file {}: {}", btf_path, err);
-                        return Err(libbpf_rs::Error::from(err));
+                    Err(e) => {
+                        error!("Failed to load external BTF from {}: {}", btf_path, e);
+                        return Err(e);
                     }
-
-                    // Set the BTF on the object
-                    let ret = libbpf_sys::bpf_object__set_core_btf(obj_ptr, btf);
-                    if ret != 0 {
-                        libbpf_sys::btf__free(btf);
-                        let err = std::io::Error::from_raw_os_error(-ret);
-                        error!("Failed to set BTF on BPF object: {}", err);
-                        return Err(libbpf_rs::Error::from(err));
-                    }
-
-                    debug!("Successfully loaded external BTF from {}", btf_path);
                 }
-            }
+            } else {
+                // Open normally without custom BTF
+                (self.skel)().open(open_object)?
+            };
 
             // load the BPF program
             let mut skel = open_skel.load()?;
