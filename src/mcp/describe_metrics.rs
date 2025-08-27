@@ -1,18 +1,18 @@
+use crate::viewer::tsdb::Tsdb;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::viewer::tsdb::Tsdb;
 
 /// Get a hashmap of metric names to their descriptions by querying metriken metrics
 fn get_metric_descriptions() -> HashMap<String, String> {
     let mut descriptions = HashMap::new();
-    
+
     // Iterate through all registered metrics and extract their descriptions
     for metric in metriken::metrics().iter() {
         if let Some(description) = metric.description() {
             descriptions.insert(metric.name().to_string(), description.to_string());
         }
     }
-    
+
     descriptions
 }
 
@@ -136,7 +136,10 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
     output.push_str(&format!("  Counters: {total_counters}\n"));
     output.push_str(&format!("  Gauges: {total_gauges}\n"));
     output.push_str(&format!("  Histograms: {total_histograms}\n"));
-    output.push_str(&format!("\nSampling interval: {}ms\n", tsdb.interval() * 1000.0));
+    output.push_str(&format!(
+        "\nSampling interval: {}ms\n",
+        tsdb.interval() * 1000.0
+    ));
 
     output
 }

@@ -321,21 +321,30 @@ impl Tsdb {
     // Get labels for a specific counter metric
     pub fn counter_labels(&self, name: &str) -> Option<Vec<Labels>> {
         self.counters.get(name).map(|collection| {
-            collection.iter().map(|(labels, _)| labels.clone()).collect()
+            collection
+                .iter()
+                .map(|(labels, _)| labels.clone())
+                .collect()
         })
     }
 
     // Get labels for a specific gauge metric
     pub fn gauge_labels(&self, name: &str) -> Option<Vec<Labels>> {
         self.gauges.get(name).map(|collection| {
-            collection.iter().map(|(labels, _)| labels.clone()).collect()
+            collection
+                .iter()
+                .map(|(labels, _)| labels.clone())
+                .collect()
         })
     }
 
     // Get labels for a specific histogram metric
     pub fn histogram_labels(&self, name: &str) -> Option<Vec<Labels>> {
         self.histograms.get(name).map(|collection| {
-            collection.iter().map(|(labels, _)| labels.clone()).collect()
+            collection
+                .iter()
+                .map(|(labels, _)| labels.clone())
+                .collect()
         })
     }
 }

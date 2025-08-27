@@ -189,7 +189,6 @@ fn run_describe_metrics(file: PathBuf) {
     println!("{output}");
 }
 
-
 /// MCP operation mode
 pub enum Mode {
     Server,

@@ -6,7 +6,7 @@ mod macos;
 
 #[cfg(not(target_os = "linux"))]
 pub mod stats {
-	mod cores {
+    mod cores {
         include!("./linux/cores/stats.rs");
     }
 
