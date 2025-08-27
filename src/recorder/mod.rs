@@ -295,7 +295,7 @@ pub fn run(config: Config) {
                 debug!("finished");
             }
             Format::Parquet => {
-                debug!("converting temp file to parquet");
+                info!("converting the recording to parquet... please wait");
 
                 let _ = writer.rewind();
 
