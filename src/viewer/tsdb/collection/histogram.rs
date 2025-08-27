@@ -15,6 +15,10 @@ impl HistogramCollection {
         self.inner.entry(labels)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&Labels, &HistogramSeries)> {
+        self.inner.iter()
+    }
+
     pub fn filter(&self, labels: &Labels) -> Self {
         let mut result = Self::default();
 

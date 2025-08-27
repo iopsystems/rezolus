@@ -41,6 +41,7 @@ impl From<&str> for McpMethod {
 enum McpTool {
     DescribeRecording,
     AnalyzeCorrelation,
+    DescribeMetrics,
     Unknown(String),
 }
 
@@ -49,6 +50,7 @@ impl From<&str> for McpTool {
         match s {
             "describe_recording" => McpTool::DescribeRecording,
             "analyze_correlation" => McpTool::AnalyzeCorrelation,
+            "describe_metrics" => McpTool::DescribeMetrics,
             other => McpTool::Unknown(other.to_string()),
         }
     }
@@ -187,6 +189,20 @@ impl Server {
                                         }
                                     },
                                     "required": ["parquet_file", "metric1", "metric2"]
+                                }
+                            },
+                            {
+                                "name": "describe_metrics",
+                                "description": "List and describe all metrics available in a Rezolus recording, organized by type",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "parquet_file": {
+                                            "type": "string",
+                                            "description": "Path to the parquet file"
+                                        }
+                                    },
+                                    "required": ["parquet_file"]
                                 }
                             }
                         ]
@@ -336,6 +352,28 @@ impl Server {
                     }
                 }))),
             },
+            McpTool::DescribeMetrics => match self.describe_metrics(arguments).await {
+                Ok(result) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": result
+                            }
+                        ]
+                    }
+                }))),
+                Err(e) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": format!("Error describing metrics: {}", e)
+                    }
+                }))),
+            },
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -456,5 +494,23 @@ impl Server {
 
         let result = calculate_correlation(&engine, &tsdb, metric1, metric2)?;
         Ok(format_correlation_result(&result))
+    }
+
+    /// Describe all metrics available in a parquet file
+    async fn describe_metrics(
+        &self,
+        arguments: &Value,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+
+        // Load the TSDB
+        let tsdb = self.get_tsdb(parquet_file).await?;
+
+        // Use the shared formatting function
+        use crate::mcp::describe_metrics::format_metrics_description;
+        Ok(format_metrics_description(&tsdb))
     }
 }

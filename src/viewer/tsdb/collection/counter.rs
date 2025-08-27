@@ -15,6 +15,10 @@ impl CounterCollection {
         self.inner.entry(labels)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&Labels, &CounterSeries)> {
+        self.inner.iter()
+    }
+
     /// Old filter method that clones - kept for compatibility but should be avoided
     pub fn filter(&self, labels: &Labels) -> Self {
         let mut result = Self::default();

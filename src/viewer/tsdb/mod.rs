@@ -302,6 +302,51 @@ impl Tsdb {
     pub fn filename(&self) -> &str {
         &self.filename
     }
+
+    // Get all counter metric names
+    pub fn counter_names(&self) -> Vec<&str> {
+        self.counters.keys().map(|s| s.as_str()).collect()
+    }
+
+    // Get all gauge metric names
+    pub fn gauge_names(&self) -> Vec<&str> {
+        self.gauges.keys().map(|s| s.as_str()).collect()
+    }
+
+    // Get all histogram metric names
+    pub fn histogram_names(&self) -> Vec<&str> {
+        self.histograms.keys().map(|s| s.as_str()).collect()
+    }
+
+    // Get labels for a specific counter metric
+    pub fn counter_labels(&self, name: &str) -> Option<Vec<Labels>> {
+        self.counters.get(name).map(|collection| {
+            collection
+                .iter()
+                .map(|(labels, _)| labels.clone())
+                .collect()
+        })
+    }
+
+    // Get labels for a specific gauge metric
+    pub fn gauge_labels(&self, name: &str) -> Option<Vec<Labels>> {
+        self.gauges.get(name).map(|collection| {
+            collection
+                .iter()
+                .map(|(labels, _)| labels.clone())
+                .collect()
+        })
+    }
+
+    // Get labels for a specific histogram metric
+    pub fn histogram_labels(&self, name: &str) -> Option<Vec<Labels>> {
+        self.histograms.get(name).map(|collection| {
+            collection
+                .iter()
+                .map(|(labels, _)| labels.clone())
+                .collect()
+        })
+    }
 }
 
 #[derive(Default, Clone)]

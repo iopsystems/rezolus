@@ -101,14 +101,11 @@ impl UsageInner {
                     );
                 }
 
-                let busy = user.wrapping_add(system.wrapping_add(nice));
-
                 CPU_CORES.set(num_cpu as i64);
 
                 CPU_USAGE_USER.set(user);
                 CPU_USAGE_SYSTEM.set(system);
                 CPU_USAGE_NICE.set(nice);
-                CPU_USAGE_BUSY.set(busy);
             }
         }
     }
