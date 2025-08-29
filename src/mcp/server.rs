@@ -42,6 +42,7 @@ enum McpTool {
     DescribeRecording,
     AnalyzeCorrelation,
     DescribeMetrics,
+    DetectAnomalies,
     Unknown(String),
 }
 
@@ -51,6 +52,7 @@ impl From<&str> for McpTool {
             "describe_recording" => McpTool::DescribeRecording,
             "analyze_correlation" => McpTool::AnalyzeCorrelation,
             "describe_metrics" => McpTool::DescribeMetrics,
+            "detect_anomalies" => McpTool::DetectAnomalies,
             other => McpTool::Unknown(other.to_string()),
         }
     }
@@ -203,6 +205,24 @@ impl Server {
                                         }
                                     },
                                     "required": ["parquet_file"]
+                                }
+                            },
+                            {
+                                "name": "detect_anomalies",
+                                "description": "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "parquet_file": {
+                                            "type": "string",
+                                            "description": "Path to the parquet file"
+                                        },
+                                        "query": {
+                                            "type": "string",
+                                            "description": "PromQL query to analyze for anomalies"
+                                        }
+                                    },
+                                    "required": ["parquet_file", "query"]
                                 }
                             }
                         ]
@@ -374,6 +394,28 @@ impl Server {
                     }
                 }))),
             },
+            McpTool::DetectAnomalies => match self.detect_anomalies(arguments).await {
+                Ok(result) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": result
+                            }
+                        ]
+                    }
+                }))),
+                Err(e) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": format!("Anomaly detection error: {}", e)
+                    }
+                }))),
+            },
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -512,5 +554,31 @@ impl Server {
         // Use the shared formatting function
         use crate::mcp::describe_metrics::format_metrics_description;
         Ok(format_metrics_description(&tsdb))
+    }
+
+    /// Detect anomalies in time series data
+    async fn detect_anomalies(
+        &self,
+        arguments: &Value,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+
+        let query = arguments
+            .get("query")
+            .and_then(|q| q.as_str())
+            .ok_or("Missing query")?;
+
+        // Get cached or load TSDB and engine
+        let tsdb = self.get_tsdb(parquet_file).await?;
+        let engine = self.get_query_engine(parquet_file).await?;
+
+        // Use the anomaly detection module
+        use crate::mcp::anomaly_detection::{detect_anomalies, format_anomaly_detection_result};
+
+        let result = detect_anomalies(&engine, &tsdb, query)?;
+        Ok(format_anomaly_detection_result(&result))
     }
 }
