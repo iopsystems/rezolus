@@ -326,13 +326,13 @@ fn perform_fft_analysis(
     let half_n = n / 2;
     let mut freq_magnitudes: Vec<(f64, f64)> = Vec::new();
 
-    for i in 1..half_n {
+    for (i, v) in buffer.iter().enumerate().take(half_n).skip(1) {
         // Skip DC component at index 0
         let frequency = i as f64 * freq_resolution;
 
         // Only include frequencies within valid range
         if frequency >= min_frequency && frequency <= max_frequency {
-            let magnitude = buffer[i].norm();
+            let magnitude = v.norm();
             freq_magnitudes.push((frequency, magnitude));
         }
     }
@@ -533,7 +533,7 @@ fn format_timestamp(timestamp: f64) -> String {
     let datetime = DateTime::from_timestamp(timestamp as i64, 0)
         .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| "invalid".to_string());
-    format!("{} (epoch: {:.0})", datetime, timestamp)
+    format!("{datetime} (epoch: {timestamp:.0})")
 }
 
 /// Format anomaly detection results for display
@@ -579,7 +579,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
             }
         }
     }
-    output.push_str("\n");
+    output.push('\n');
 
     // CUSUM Analysis
     output.push_str("CUSUM (Cumulative Sum) Analysis\n");
@@ -620,7 +620,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
             }
         }
     }
-    output.push_str("\n");
+    output.push('\n');
 
     // FFT Analysis
     output.push_str("FFT (Fast Fourier Transform) Analysis\n");
@@ -639,9 +639,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         let max_detectable_period = recording_duration / 2.0;
 
         output.push_str(&format!(
-            "Analysis Constraints:\n  Min Period: {:.2}s (Nyquist limit)\n  Max Period: {:.2}s (half recording length)\n\n",
-            min_detectable_period,
-            max_detectable_period
+            "Analysis Constraints:\n  Min Period: {min_detectable_period:.2}s (Nyquist limit)\n  Max Period: {max_detectable_period:.2}s (half recording length)\n\n"
         ));
     }
 
@@ -651,7 +649,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
             result.fft_analysis.periodicity_strength * 100.0
         ));
         if let Some(period) = result.fft_analysis.period_seconds {
-            output.push_str(&format!("Primary Period: {:.2} seconds\n", period));
+            output.push_str(&format!("Primary Period: {period:.2} seconds\n"));
         }
     } else {
         output.push_str("Periodic Pattern: No significant periodicity detected\n");
@@ -675,7 +673,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
             ));
         }
     }
-    output.push_str("\n");
+    output.push('\n');
 
     // Detected Anomalies
     if !result.anomalies.is_empty() {
@@ -745,7 +743,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     }
 
     // Summary
-    output.push_str("\n");
+    output.push('\n');
     output.push_str("Summary\n");
     output.push_str("-------\n");
     if result.anomalies.is_empty() {
@@ -764,13 +762,11 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
 
         if critical_count > 0 {
             output.push_str(&format!(
-                "ATTENTION: {} critical anomalies detected requiring immediate investigation.\n",
-                critical_count
+                "ATTENTION: {critical_count} critical anomalies detected requiring immediate investigation.\n"
             ));
         } else if high_count > 0 {
             output.push_str(&format!(
-                "Found {} high-severity anomalies that warrant investigation.\n",
-                high_count
+                "Found {high_count} high-severity anomalies that warrant investigation.\n"
             ));
         } else {
             output.push_str(
