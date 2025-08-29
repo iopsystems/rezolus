@@ -3,6 +3,7 @@ use crate::*;
 use clap::{ArgMatches, Command};
 use std::path::PathBuf;
 
+pub mod anomaly_detection;
 pub mod correlation;
 mod describe_metrics;
 mod server;
@@ -70,6 +71,7 @@ pub fn run(config: Config) {
         } => run_analyze_correlation(file, query1, query2),
         Mode::DescribeRecording { file } => run_describe_recording(file),
         Mode::DescribeMetrics { file } => run_describe_metrics(file),
+        Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query),
     }
 }
 
@@ -189,6 +191,34 @@ fn run_describe_metrics(file: PathBuf) {
     println!("{output}");
 }
 
+fn run_detect_anomalies(file: PathBuf, query: String) {
+    // Load the parquet file
+    let tsdb = match Tsdb::load(&file) {
+        Ok(tsdb) => Arc::new(tsdb),
+        Err(e) => {
+            eprintln!("Failed to load parquet file: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Create query engine
+    let engine = Arc::new(QueryEngine::new(tsdb.clone()));
+
+    // Run anomaly detection
+    match anomaly_detection::detect_anomalies(&engine, &tsdb, &query) {
+        Ok(result) => {
+            println!(
+                "{}",
+                anomaly_detection::format_anomaly_detection_result(&result)
+            );
+        }
+        Err(e) => {
+            eprintln!("Anomaly detection failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// MCP operation mode
 pub enum Mode {
     Server,
@@ -202,6 +232,10 @@ pub enum Mode {
     },
     DescribeMetrics {
         file: PathBuf,
+    },
+    DetectAnomalies {
+        file: PathBuf,
+        query: String,
     },
 }
 
@@ -251,6 +285,17 @@ impl TryFrom<ArgMatches> for Config {
                     .ok_or("File argument is required")?
                     .clone();
                 Mode::DescribeMetrics { file }
+            }
+            Some(("detect-anomalies", sub_args)) => {
+                let file = sub_args
+                    .get_one::<PathBuf>("FILE")
+                    .ok_or("File argument is required")?
+                    .clone();
+                let query = sub_args
+                    .get_one::<String>("QUERY")
+                    .ok_or("Query argument is required")?
+                    .clone();
+                Mode::DetectAnomalies { file, query }
             }
             _ => Mode::Server,
         };
@@ -313,6 +358,25 @@ pub fn command() -> Command {
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
+                ),
+        )
+        .subcommand(
+            Command::new("detect-anomalies")
+                .about("Detect anomalies in time series data using MAD, CUSUM, and FFT analysis")
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("Parquet file to analyze")
+                        .value_parser(clap::value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    clap::Arg::new("QUERY")
+                        .help(
+                            "PromQL query to analyze for anomalies (e.g., 'irate(cpu_cycles[1m])')",
+                        )
+                        .required(true)
+                        .index(2),
                 ),
         )
 }
