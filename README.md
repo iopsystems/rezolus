@@ -59,7 +59,7 @@ on-demand captures during tests run in lab environments or to capture production
 performance data to help characterize workload and understand what conditions
 you may want to replicate in test environments.
 
-Simply run the following command to collect a secondly recording for 15 minutes:
+Simply run the following command to collect a per-second recording for 15 minutes:
 ```bash
 rezolus record --interval 1s --duration 15m http://localhost:4241 rezolus.parquet
 ```
@@ -76,7 +76,7 @@ deeper insights into production behaviors. The Exporter is designed to allow
 summarization of histograms to just a few percentiles, which greatly reduces the
 storage requirements to get insights around distributions.
 
-Unfortunately, sometimes it is too expensive to collect telemetry on a secondly
+Unfortunately, sometimes it is too expensive to collect telemetry on a per second
 basis. And some problems are very difficult to understand without fine-grained
 metrics. This is exactly what the Rezolus Hindsight is designed for. By keeping
 a high-resolution ring buffer on disk, you can record a snapshot to disk after a
@@ -114,7 +114,7 @@ The quick install script works on both Linux and macOS. On macOS, it will use Ho
 
 By default the `rezolus` service will be running as the agent and the
 `rezolus-exporter` service will be running so there is Prometheus exposition. By
-default, the config assumes secondly collection. Please review the config and
+default, the config assumes per-second collection. Please review the config and
 adjust as necessary for your environment.
 
 The `rezolus-hindsight` service is disabled by default. Please review the config
