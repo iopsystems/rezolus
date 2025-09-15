@@ -215,9 +215,12 @@ Once you're ready to contribute some changes, the workflow is:
 * push your feature branch to your fork
 * open a [new pull request][new pull request]
 
+[agent.toml]: https://github.com/iopsystems/rezolus/blob/main/config/agent.toml
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT
 [create a fork]: https://github.com/iopsystems/rezolus/fork
 [discord]: https://discord.gg/YC5GDsH4dG
+[exporter.toml]: https://github.com/iopsystems/rezolus/blob/main/config/exporter.toml
+[hindsight.toml]: https://github.com/iopsystems/rezolus/blob/main/config/hindsight.toml
 [latest release]: https://github.com/iopsystems/rezolus/releases/latest
 [license apache]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-APACHE
 [license mit]: https://github.com/iopsystems/rezolus/blob/main/LICENSE-MIT
