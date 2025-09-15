@@ -18,7 +18,7 @@ multiple domains:
 - **Container-level**: Quantify container-level performance dynamics
 
 By using eBPF, Rezolus provides high-resolution, low-overhead instrumentation
-that reveals detailed system behavior. See out [metrics][metrics] documentation
+that reveals detailed system behavior. See the [metrics][metrics] documentation
 to see what metrics Rezolus supports.
 
 ## Operating Modes
