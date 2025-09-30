@@ -385,23 +385,16 @@ impl QueryEngine {
 
                             let start_ns = (start * 1e9) as u64;
                             let end_ns = (end * 1e9) as u64;
-                            let step_ns = (step * 1e9) as u64;
 
                             let mut result_samples = Vec::new();
 
                             // Iterate through all individual series (already filtered)
                             for (labels, series) in rate_collection.iter() {
-                                let mut values = Vec::new();
-                                let mut current = start_ns;
-
-                                while current <= end_ns {
-                                    if let Some((ts, val)) =
-                                        series.inner.range(current..=current + step_ns).next()
-                                    {
-                                        values.push((*ts as f64 / 1e9, *val));
-                                    }
-                                    current += step_ns;
-                                }
+                                let values: Vec<(f64, f64)> = series
+                                    .inner
+                                    .range(start_ns..=end_ns)
+                                    .map(|(ts, val)| (*ts as f64 / 1e9, *val))
+                                    .collect();
 
                                 if !values.is_empty() {
                                     // Build metric labels including the series labels
@@ -917,7 +910,6 @@ impl QueryEngine {
 
                     let start_ns = (start * 1e9) as u64;
                     let end_ns = (end * 1e9) as u64;
-                    let step_ns = (step * 1e9) as u64;
 
                     let mut result_samples = Vec::new();
 
@@ -928,17 +920,11 @@ impl QueryEngine {
                             continue;
                         }
                         let untyped = series.untyped();
-                        let mut values = Vec::new();
-                        let mut current = start_ns;
-
-                        while current <= end_ns {
-                            if let Some((ts, val)) =
-                                untyped.inner.range(current..=current + step_ns).next()
-                            {
-                                values.push((*ts as f64 / 1e9, *val as f64));
-                            }
-                            current += step_ns;
-                        }
+                        let values: Vec<(f64, f64)> = untyped
+                            .inner
+                            .range(start_ns..=end_ns)
+                            .map(|(ts, val)| (*ts as f64 / 1e9, *val as f64))
+                            .collect();
 
                         if !values.is_empty() {
                             let mut metric_labels = HashMap::new();
