@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./target/debug/rezolus:*)",
+      "Bash(cargo:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.rs)",
+      "Bash(rustc:*)",
+      "Bash(/tmp/test_allan:*)",
+      "Bash(find:*)",
+      "Read(//Users/brian/.cargo/git/checkouts/allan-fde0a13fa5e40a92/483b6b6/src/**)",
+      "Bash(/tmp/test_cliff:*)",
+      "Read(//Users/brian/.cargo/bin/**)",
+      "Bash(/Users/brian/.cargo/bin/rezolus --version)",
+      "Bash(/tmp/test_query)",
+      "Bash(/tmp:*)",
+      "Bash(python3:*)",
+      "Read(//Users/brian/.cargo/registry/src/**)",
+      "Bash(/Users/brian/workspace/brayniac/rezolus/target/release/rezolus view /Users/brian/workspace/brayniac/rezolus/test.parquet 127.0.0.1:9999)",
+      "Read(//Users/brian/**)",
+      "Bash(pkill:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
