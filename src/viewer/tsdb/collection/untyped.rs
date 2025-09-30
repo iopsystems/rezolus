@@ -29,36 +29,4 @@ impl UntypedCollection {
 
         result
     }
-
-    /// Group by the specified labels, returning a map of label values to summed series
-    pub fn group_by(&self, group_labels: &[String]) -> Vec<(Vec<(String, String)>, UntypedSeries)> {
-        let mut groups: HashMap<Vec<(String, String)>, UntypedSeries> = HashMap::new();
-
-        for (labels, series) in self.inner.iter() {
-            // Extract the values for the grouping labels
-            let mut group_key = Vec::new();
-            for label_name in group_labels {
-                if let Some(label_value) = labels.inner.get(label_name) {
-                    group_key.push((label_name.clone(), label_value.clone()));
-                }
-            }
-
-            // Add this series to the appropriate group
-            if let Some(group_series) = groups.get_mut(&group_key) {
-                // Add to existing group
-                for (time, value) in series.inner.iter() {
-                    if !group_series.inner.contains_key(time) {
-                        group_series.inner.insert(*time, *value);
-                    } else {
-                        *group_series.inner.get_mut(time).unwrap() += value;
-                    }
-                }
-            } else {
-                // Create new group with this series
-                groups.insert(group_key, series.clone());
-            }
-        }
-
-        groups.into_iter().collect()
-    }
 }
