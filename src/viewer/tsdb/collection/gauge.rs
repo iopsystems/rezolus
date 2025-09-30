@@ -52,47 +52,4 @@ impl GaugeCollection {
 
         result
     }
-
-    /// Group by the specified labels, returning a map of label values to summed series
-    pub fn group_by(
-        &self,
-        group_labels: &[String],
-        filter: &Labels,
-    ) -> Vec<(Vec<(String, String)>, UntypedSeries)> {
-        let mut groups: HashMap<Vec<(String, String)>, UntypedSeries> = HashMap::new();
-
-        for (labels, series) in self.inner.iter() {
-            // Skip if doesn't match filter
-            if !labels.matches(filter) {
-                continue;
-            }
-
-            // Extract the values for the grouping labels
-            let mut group_key = Vec::new();
-            for label_name in group_labels {
-                if let Some(label_value) = labels.inner.get(label_name) {
-                    group_key.push((label_name.clone(), label_value.clone()));
-                }
-            }
-
-            let untyped = series.untyped();
-
-            // Add this series to the appropriate group
-            if let Some(group_series) = groups.get_mut(&group_key) {
-                // Add to existing group
-                for (time, value) in untyped.inner.iter() {
-                    if !group_series.inner.contains_key(time) {
-                        group_series.inner.insert(*time, *value);
-                    } else {
-                        *group_series.inner.get_mut(time).unwrap() += value;
-                    }
-                }
-            } else {
-                // Create new group with this series
-                groups.insert(group_key, untyped);
-            }
-        }
-
-        groups.into_iter().collect()
-    }
 }
