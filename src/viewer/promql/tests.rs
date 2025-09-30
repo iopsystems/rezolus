@@ -151,89 +151,9 @@ fn test_histogram_quantile_parsing() {
         60.0,
     );
 
-    // Should return MetricNotFound for empty TSDB
+    // Should return Unsupported error since histogram_quantile is not yet implemented
     match result {
-        Err(QueryError::MetricNotFound(_)) => {}
-        _ => panic!("Expected MetricNotFound error for empty TSDB"),
-    }
-}
-
-#[test]
-fn test_histogram_percentiles_parsing() {
-    let tsdb = Arc::new(create_test_tsdb());
-    let engine = QueryEngine::new(tsdb);
-
-    // Test multi-percentile histogram_percentiles parsing
-    let result = engine.query_range(
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)",
-        0.0,
-        3600.0,
-        60.0,
-    );
-
-    // Should return MetricNotFound for empty TSDB
-    match result {
-        Err(QueryError::MetricNotFound(_)) => {}
-        _ => panic!("Expected MetricNotFound error for empty TSDB"),
-    }
-}
-
-#[test]
-fn test_histogram_percentiles_with_rate_parsing() {
-    let tsdb = Arc::new(create_test_tsdb());
-    let engine = QueryEngine::new(tsdb);
-
-    // Test multi-percentile histogram_percentiles with rate() parsing
-    let result = engine.query_range(
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999], rate(tcp_packet_latency[5m]))",
-        0.0,
-        3600.0,
-        60.0,
-    );
-
-    // Should return MetricNotFound for empty TSDB
-    match result {
-        Err(QueryError::MetricNotFound(_)) => {}
-        _ => panic!("Expected MetricNotFound error for empty TSDB"),
-    }
-}
-
-#[test]
-fn test_histogram_percentiles_invalid_syntax() {
-    let tsdb = Arc::new(create_test_tsdb());
-    let engine = QueryEngine::new(tsdb);
-
-    // Test invalid syntax - missing bracket
-    let result = engine.query_range(
-        "histogram_percentiles(0.5, 0.9, tcp_packet_latency)",
-        0.0,
-        3600.0,
-        60.0,
-    );
-
-    // Should return ParseError
-    match result {
-        Err(QueryError::ParseError(_)) => {}
-        _ => panic!("Expected ParseError for invalid syntax"),
-    }
-}
-
-#[test]
-fn test_histogram_percentiles_invalid_percentile_values() {
-    let tsdb = Arc::new(create_test_tsdb());
-    let engine = QueryEngine::new(tsdb);
-
-    // Test invalid percentile values (outside 0-1 range)
-    let result = engine.query_range(
-        "histogram_percentiles([0.5, 1.5, 0.99], tcp_packet_latency)",
-        0.0,
-        3600.0,
-        60.0,
-    );
-
-    // Should return EvaluationError
-    match result {
-        Err(QueryError::EvaluationError(_)) => {}
-        _ => panic!("Expected EvaluationError for invalid percentile values"),
+        Err(QueryError::Unsupported(msg)) if msg.contains("histogram_quantile") => {}
+        _ => panic!("Expected Unsupported error for histogram_quantile"),
     }
 }

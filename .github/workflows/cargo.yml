@@ -26,6 +26,7 @@ jobs:
           sudo apt-get -y install libelf-dev
       - name: cargo check
         run: |
+          rustup component add rustfmt
           cargo check --all-targets
 
   clippy:
