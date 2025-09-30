@@ -127,6 +127,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt-get -y install libelf-dev
+          rustup component add rustfmt
 
       - name: build
         shell: bash
