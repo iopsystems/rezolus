@@ -92,6 +92,7 @@ jobs:
       - name: cargo fmt
         shell: bash
         run: |
+          rustup component add rustfmt
           cargo fmt --all -- --check
 
   # Second group of checks: These are more expensive than the first set so we
