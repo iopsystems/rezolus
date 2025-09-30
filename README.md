@@ -48,6 +48,11 @@ Open a Parquet artifact in a web-based dashboard:
 - View your Rezolus Recorder and Hindsight artifacts
 - Interactive dashboard using a local web server
 
+### MCP Server
+Provides tools for AI-guided analysis of recordings:
+- Allows a model to interact with a Rezolus recording
+- Tool calls for analysis including anomaly detection and correlation
+
 ## Use Cases
 We believe that Rezolus is useful for:
 - Performance engineering
