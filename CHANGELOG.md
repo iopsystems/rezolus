@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [5.4.0] - 2025-09-30
+
+### Fixed
+
+- Fixes CPU IPNS, Frequency, and complex user queries in the viewer. (#629)
+
+### Added
+
+- Homebrew and Debian Trixie packaging jobs (#595 #612)
+- Installation script and documentation (#613)
+- MCP server for LLM guided analysis of recordings. (#614 #617 #618 #622)
+- Support for external BTF. (#620)
+
 ## [5.3.1] - 2025-08-21
 
 ### Fixed
@@ -165,7 +178,7 @@
 ### Added
 
 - Allow setting the metric snapshot interval to better address cases where
-  metrics are not scraped on a secondly basis. (#286)
+  metrics are not scraped on a per-second basis. (#286)
 - Network carrier change metric. (#290)
 
 ### Changed
@@ -446,7 +459,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.3.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.4.0...HEAD
+[5.4.0]: https://github.com/iopsystems/rezolus/compare/v5.3.1...v5.4.0
 [5.3.1]: https://github.com/iopsystems/rezolus/compare/v5.3.0...v5.3.1
 [5.3.0]: https://github.com/iopsystems/rezolus/compare/v5.2.3...v5.3.0
 [5.2.3]: https://github.com/iopsystems/rezolus/compare/v5.2.2...v5.2.3

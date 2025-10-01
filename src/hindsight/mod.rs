@@ -26,7 +26,7 @@ pub fn command() -> Command {
 /// This is intended to be run as a daemon that allows retroactive collection of
 /// high-resolution metrics in the event of an anomaly. To be effective the
 /// collection `interval` should be more frequent than your observability stack
-/// allows for, for example secondly collection in an environment with only
+/// allows for, for example per-second collection in an environment with only
 /// minutely metrics. Additionally the `duration` should allow adequate time to
 /// not only cover the duration of an anomalous event but give time for an
 /// engineer or automated process to respond and trigger the process to persist

@@ -26,6 +26,7 @@ jobs:
           sudo apt-get -y install libelf-dev
       - name: cargo check
         run: |
+          rustup component add rustfmt
           cargo check --all-targets
 
   clippy:
@@ -92,6 +93,7 @@ jobs:
       - name: cargo fmt
         shell: bash
         run: |
+          rustup component add rustfmt
           cargo fmt --all -- --check
 
   # Second group of checks: These are more expensive than the first set so we
@@ -125,6 +127,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt-get -y install libelf-dev
+          rustup component add rustfmt
 
       - name: build
         shell: bash
