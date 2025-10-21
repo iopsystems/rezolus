@@ -4,6 +4,7 @@ use std::sync::Arc;
 mod blockio;
 mod cgroups;
 mod cpu;
+mod memory;
 mod network;
 mod overview;
 mod query_explorer;
@@ -18,6 +19,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Overview", "/overview", overview::generate),
     ("Query Explorer", "/query", query_explorer::generate),
     ("CPU", "/cpu", cpu::generate),
+    ("Memory", "/memory", memory::generate),
     ("Network", "/network", network::generate),
     ("Scheduler", "/scheduler", scheduler::generate),
     ("Syscall", "/syscall", syscall::generate),
@@ -67,6 +69,7 @@ mod tests {
                 "blockio.json",
                 "cgroups.json",
                 "cpu.json",
+                "memory.json",
                 "network.json",
                 "overview.json",
                 "query.json",

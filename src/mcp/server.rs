@@ -209,7 +209,7 @@ impl Server {
                             },
                             {
                                 "name": "detect_anomalies",
-                                "description": "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis",
+                                "description": "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis. IMPORTANT: Call describe_metrics first to see available metrics and labels before constructing your query. The query must result in a SINGLE time series - use sum() to aggregate multiple series.",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -219,7 +219,7 @@ impl Server {
                                         },
                                         "query": {
                                             "type": "string",
-                                            "description": "PromQL query to analyze for anomalies"
+                                            "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use rate() to get per-second rates, e.g., 'sum(rate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output."
                                         }
                                     },
                                     "required": ["parquet_file", "query"]
