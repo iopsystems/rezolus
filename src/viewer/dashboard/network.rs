@@ -38,6 +38,26 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     view.group(traffic);
 
     /*
+     * Errors
+     */
+
+    let mut errors = Group::new("Errors", "errors");
+
+    // Network packet drops - dropped packets at network layer
+    errors.plot_promql(
+        PlotOpts::line("Packet Drops", "packet-drops", Unit::Rate),
+        "sum(irate(network_drop[5m]))".to_string(),
+    );
+
+    // TCP retransmits - retransmitted TCP packets (key health indicator)
+    errors.plot_promql(
+        PlotOpts::line("TCP Retransmits", "tcp-retransmits", Unit::Rate),
+        "sum(irate(tcp_retransmit[5m]))".to_string(),
+    );
+
+    view.group(errors);
+
+    /*
      * TCP
      */
 
