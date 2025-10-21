@@ -151,9 +151,9 @@ fn test_histogram_quantile_parsing() {
         60.0,
     );
 
-    // Should return Unsupported error since histogram_quantile is not yet implemented
+    // Should return MetricNotFound error for empty TSDB
     match result {
-        Err(QueryError::Unsupported(msg)) if msg.contains("histogram_quantile") => {}
-        _ => panic!("Expected Unsupported error for histogram_quantile"),
+        Err(QueryError::MetricNotFound(_)) => {}
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
     }
 }
