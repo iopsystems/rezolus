@@ -503,12 +503,72 @@ impl QueryEngine {
             "histogram_quantile" => {
                 // histogram_quantile(quantile, histogram)
                 if call.args.args.len() >= 2 {
-                    // For now, reconstruct the query string and use legacy handler
-                    // TODO: Implement proper AST-based histogram handling
-                    // TODO: Implement histogram quantile support
-                    Err(QueryError::Unsupported(
-                        "histogram_quantile not yet implemented".to_string(),
-                    ))
+                    // First argument should be a quantile value (0.0 to 1.0)
+                    let quantile = match &*call.args.args[0] {
+                        Expr::NumberLiteral(num) => num.val,
+                        _ => {
+                            return Err(QueryError::ParseError(
+                                "histogram_quantile first argument must be a number".to_string(),
+                            ))
+                        }
+                    };
+
+                    // Second argument should be a vector selector (histogram metric)
+                    let metric_name = match &*call.args.args[1] {
+                        Expr::VectorSelector(selector) => {
+                            selector.name.as_deref().ok_or_else(|| {
+                                QueryError::ParseError("Vector selector missing name".to_string())
+                            })?
+                        }
+                        _ => {
+                            return Err(QueryError::ParseError(
+                                "histogram_quantile second argument must be a metric name"
+                                    .to_string(),
+                            ))
+                        }
+                    };
+
+                    // Get the histogram data
+                    if let Some(collection) = self.tsdb.histograms(metric_name, Labels::default()) {
+                        // Sum all histogram series together
+                        let summed_series = collection.sum();
+
+                        // Calculate the percentile
+                        if let Some(percentile_series) = summed_series.percentiles(&[quantile]) {
+                            if let Some(series) = percentile_series.first() {
+                                let start_ns = (start * 1e9) as u64;
+                                let end_ns = (end * 1e9) as u64;
+
+                                let values: Vec<(f64, f64)> = series
+                                    .inner
+                                    .range(start_ns..=end_ns)
+                                    .map(|(ts, val)| (*ts as f64 / 1e9, *val))
+                                    .collect();
+
+                                if !values.is_empty() {
+                                    let mut metric_labels = HashMap::new();
+                                    metric_labels
+                                        .insert("__name__".to_string(), metric_name.to_string());
+                                    metric_labels
+                                        .insert("quantile".to_string(), quantile.to_string());
+
+                                    return Ok(QueryResult::Matrix {
+                                        result: vec![MatrixSample {
+                                            metric: metric_labels,
+                                            values,
+                                        }],
+                                    });
+                                }
+                            }
+                        }
+
+                        Err(QueryError::MetricNotFound(format!(
+                            "No histogram data found for {}",
+                            metric_name
+                        )))
+                    } else {
+                        Err(QueryError::MetricNotFound(metric_name.to_string()))
+                    }
                 } else {
                     Err(QueryError::ParseError(
                         "histogram_quantile requires 2 arguments".to_string(),
