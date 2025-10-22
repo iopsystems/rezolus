@@ -517,14 +517,13 @@ impl QueryEngine {
                     let metric_name = match &*call.args.args[1] {
                         Expr::VectorSelector(selector) => {
                             selector.name.as_deref().ok_or_else(|| {
-                                QueryError::ParseError(
-                                    "Vector selector missing name".to_string()
-                                )
+                                QueryError::ParseError("Vector selector missing name".to_string())
                             })?
                         }
                         _ => {
                             return Err(QueryError::ParseError(
-                                "histogram_quantile second argument must be a metric name".to_string(),
+                                "histogram_quantile second argument must be a metric name"
+                                    .to_string(),
                             ))
                         }
                     };
@@ -548,8 +547,10 @@ impl QueryEngine {
 
                                 if !values.is_empty() {
                                     let mut metric_labels = HashMap::new();
-                                    metric_labels.insert("__name__".to_string(), metric_name.to_string());
-                                    metric_labels.insert("quantile".to_string(), quantile.to_string());
+                                    metric_labels
+                                        .insert("__name__".to_string(), metric_name.to_string());
+                                    metric_labels
+                                        .insert("quantile".to_string(), quantile.to_string());
 
                                     return Ok(QueryResult::Matrix {
                                         result: vec![MatrixSample {
