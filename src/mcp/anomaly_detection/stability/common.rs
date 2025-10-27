@@ -9,7 +9,7 @@ pub struct CycleMinima {
 }
 
 /// Noise type identified from Allan/Hadamard slope
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum NoiseType {
     WhitePhase,       // slope = -1
     FlickerPhase,     // slope = -1/2

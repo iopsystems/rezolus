@@ -7,16 +7,12 @@ use std::sync::Arc;
 
 // Declare sub-modules
 mod cusum;
-mod fft;
 mod mad;
 mod stability;
 
 // Re-export public types from sub-modules
-pub use stability::{AllanAnalysis, CycleMinima, HadamardAnalysis, ModifiedAllanAnalysis, NoiseType};
-pub use cusum::{
-    ChangeDirection, CliffPoint, CusumAnalysis, SensitivityLevel, WindowChangePoint,
-};
-pub use fft::{DominantFrequency, FftAnalysis};
+pub use stability::{AllanAnalysis, HadamardAnalysis, ModifiedAllanAnalysis, NoiseType};
+pub use cusum::CusumAnalysis;
 pub use mad::MadAnalysis;
 
 /// Result of anomaly detection analysis
@@ -30,7 +26,6 @@ pub struct AnomalyDetectionResult {
     pub smoothing_window: Option<f64>,
     pub mad_analysis: MadAnalysis,
     pub cusum_analysis: CusumAnalysis,
-    pub fft_analysis: FftAnalysis,
     pub allan_analysis: AllanAnalysis,
     pub hadamard_analysis: HadamardAnalysis,
     pub modified_allan_analysis: ModifiedAllanAnalysis,
@@ -465,9 +460,6 @@ pub fn detect_anomalies(
         return Err("Query returned no data points. The metric might not exist or label selectors filtered out all series.".into());
     }
 
-    // Perform FFT analysis (step is the sample interval in seconds) - on raw data
-    let fft_analysis = fft::perform_fft_analysis(&values, step)?;
-
     // Perform Allan Deviation analysis - this determines optimal smoothing window
     let allan_analysis = stability::perform_allan_analysis(&values, step)?;
 
@@ -504,8 +496,18 @@ pub fn detect_anomalies(
         &values
     };
 
-    // Perform MAD analysis with conservative threshold
-    let mad_analysis = mad::perform_mad_analysis(analysis_values, 5.0)?;
+    // Perform MAD analysis with Allan-based adaptive threshold
+    // Different noise types require different sensitivity:
+    // - White/Flicker Phase: Low noise → stricter threshold (more sensitive)
+    // - Frequency noise: Medium → moderate threshold
+    // - Random Walk/drift: Expected to wander → looser threshold (less sensitive)
+    let mad_threshold = match allan_analysis.noise_type {
+        NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0,  // Stricter for low-noise systems
+        NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 5.0,  // Standard threshold
+        NoiseType::RandomWalk | NoiseType::FlickerWalk => 6.5,  // Looser for drifting systems
+        NoiseType::Unknown => 5.0,  // Default conservative threshold
+    };
+    let mad_analysis = mad::perform_mad_analysis(analysis_values, mad_threshold)?;
 
     // Perform CUSUM analysis - run on RAW values with Allan window for change-point detection
     // Window-based change-point detection uses Allan-determined optimal window and significance
@@ -517,7 +519,6 @@ pub fn detect_anomalies(
         analysis_values,
         &mad_analysis,
         &cusum_analysis,
-        &fft_analysis,
         &allan_analysis,
         &hadamard_analysis,
         &modified_allan_analysis,
@@ -535,7 +536,6 @@ pub fn detect_anomalies(
         smoothing_window: if use_smoothed { Some(smoothing_window) } else { None },
         mad_analysis,
         cusum_analysis,
-        fft_analysis,
         allan_analysis,
         hadamard_analysis,
         modified_allan_analysis,
@@ -721,10 +721,9 @@ fn identify_anomalies(
     values: &[f64],
     mad: &MadAnalysis,
     cusum: &CusumAnalysis,
-    _fft: &FftAnalysis,
     allan: &AllanAnalysis,
-    _hadamard: &HadamardAnalysis,
-    _modified: &ModifiedAllanAnalysis,
+    hadamard: &HadamardAnalysis,
+    modified: &ModifiedAllanAnalysis,
 ) -> Vec<Anomaly> {
     let mut anomalies = Vec::new();
     let mut anomaly_scores: HashMap<usize, f64> = HashMap::new();
@@ -780,44 +779,94 @@ fn identify_anomalies(
         // Don't mark nearby points for gradual changes - too noisy
     }
 
-    // Check for deviations from detected cycles (Allan deviation minima)
-    if allan.has_cyclic_pattern && !allan.minima.is_empty() {
-        let primary_period = allan.minima[0].tau_seconds;
+    // Score noise characteristic transitions (fundamental system behavior changes)
+    // These are VERY important - they indicate the system's dynamics have changed
+    for transition in &allan.noise_transitions {
+        // Weight based on confidence and severity of change
+        let base_weight = 3.5 * transition.confidence; // High base weight for noise transitions
 
-        // Look for breaks in the pattern at expected cycle points
-        for i in 0..timestamps.len() {
-            let time_offset = timestamps[i] - timestamps[0];
-            let cycles_elapsed = (time_offset / primary_period).round();
+        // Extra weight for dramatic deviation changes
+        let deviation_weight = if transition.deviation_change_factor > 3.0 || transition.deviation_change_factor < 0.33 {
+            1.0  // Very dramatic change
+        } else if transition.deviation_change_factor > 2.0 || transition.deviation_change_factor < 0.5 {
+            0.5  // Moderate change
+        } else {
+            0.0
+        };
 
-            // Check if we're at a cycle boundary (within 10% tolerance)
-            if cycles_elapsed > 0.0 {
-                let expected_time = cycles_elapsed * primary_period + timestamps[0];
-                let time_error = (timestamps[i] - expected_time).abs() / primary_period;
+        let total_weight = base_weight + deviation_weight;
+        *anomaly_scores.entry(transition.index).or_insert(0.0) += total_weight;
 
-                if time_error < 0.1 {
-                    // We're at a cycle boundary - check for pattern break
-                    if i > 0 && i < values.len() - 1 {
-                        let expected_pattern_window = ((primary_period / 2.0) as usize).min(10);
-                        if i >= expected_pattern_window {
-                            // Simple check: significant deviation from recent average
-                            let recent_avg = values[i - expected_pattern_window..i]
-                                .iter()
-                                .sum::<f64>() / expected_pattern_window as f64;
-                            let deviation = (values[i] - recent_avg).abs();
-                            let threshold = mad.mad * 3.0; // More lenient for cycle breaks
-
-                            if deviation > threshold {
-                                *anomaly_scores.entry(i).or_insert(0.0) += 0.7; // Cycle break detection
-                            }
-                        }
-                    }
-                }
+        // Mark surrounding region - noise transitions affect a window
+        for offset in 1..=10 {
+            if transition.index >= offset {
+                *anomaly_scores.entry(transition.index - offset).or_insert(0.0) += total_weight * 0.2;
+            }
+            if transition.index + offset < values.len() {
+                *anomaly_scores.entry(transition.index + offset).or_insert(0.0) += total_weight * 0.2;
             }
         }
     }
 
-    // Note: We also use Allan/Hadamard analysis to understand the noise characteristics
-    // which helps us set better thresholds and understand the system behavior
+    // Score Hadamard noise transitions (complementary view to Allan)
+    // Hadamard is better for frequency noise and less sensitive to linear drift
+    for transition in &hadamard.noise_transitions {
+        let base_weight = 3.0 * transition.confidence; // Slightly lower than Allan
+
+        let deviation_weight = if transition.deviation_change_factor > 3.0 || transition.deviation_change_factor < 0.33 {
+            0.8
+        } else if transition.deviation_change_factor > 2.0 || transition.deviation_change_factor < 0.5 {
+            0.4
+        } else {
+            0.0
+        };
+
+        let total_weight = base_weight + deviation_weight;
+        *anomaly_scores.entry(transition.index).or_insert(0.0) += total_weight;
+
+        // Mark surrounding region
+        for offset in 1..=10 {
+            if transition.index >= offset {
+                *anomaly_scores.entry(transition.index - offset).or_insert(0.0) += total_weight * 0.2;
+            }
+            if transition.index + offset < values.len() {
+                *anomaly_scores.entry(transition.index + offset).or_insert(0.0) += total_weight * 0.2;
+            }
+        }
+    }
+
+    // Score Modified Allan noise transitions (best for frequency drift)
+    // Modified Allan handles frequency drift better than standard Allan
+    for transition in &modified.noise_transitions {
+        let base_weight = 3.2 * transition.confidence; // Between Allan and Hadamard
+
+        let deviation_weight = if transition.deviation_change_factor > 3.0 || transition.deviation_change_factor < 0.33 {
+            0.9
+        } else if transition.deviation_change_factor > 2.0 || transition.deviation_change_factor < 0.5 {
+            0.45
+        } else {
+            0.0
+        };
+
+        let total_weight = base_weight + deviation_weight;
+        *anomaly_scores.entry(transition.index).or_insert(0.0) += total_weight;
+
+        // Mark surrounding region
+        for offset in 1..=10 {
+            if transition.index >= offset {
+                *anomaly_scores.entry(transition.index - offset).or_insert(0.0) += total_weight * 0.2;
+            }
+            if transition.index + offset < values.len() {
+                *anomaly_scores.entry(transition.index + offset).or_insert(0.0) += total_weight * 0.2;
+            }
+        }
+    }
+
+    // Allan/Hadamard/Modified Allan deviations are used to:
+    // 1. Determine optimal smoothing window (applied to analysis_values)
+    // 2. Provide significance testing to CUSUM (allan_window and allan_significance)
+    // 3. Adapt MAD thresholds based on noise characteristics
+    // 4. Detect fundamental changes in system dynamics (noise transitions from all three methods)
 
     // Create anomaly records for high-scoring points
     for (idx, score) in anomaly_scores {
@@ -963,7 +1012,8 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     output.push_str(&format!("Median: {:.4}\n", result.mad_analysis.median));
     output.push_str(&format!("MAD: {:.4}\n", result.mad_analysis.mad));
     output.push_str(&format!(
-        "Threshold (5σ): {:.4}\n",
+        "Threshold ({:.1}σ, Allan-adapted): {:.4}\n",
+        result.mad_analysis.threshold_sigma,
         result.mad_analysis.threshold
     ));
     output.push_str(&format!(
@@ -1100,59 +1150,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     }
     output.push('\n');
 
-    // FFT Analysis
-    output.push_str("FFT (Fast Fourier Transform) Analysis\n");
-    output.push_str("--------------------------------------\n");
-
-    // Calculate and show analysis constraints
-    if !result.timestamps.is_empty() && result.timestamps.len() > 1 {
-        let sample_interval = if result.timestamps.len() > 1 {
-            (result.timestamps[1] - result.timestamps[0]).abs()
-        } else {
-            1.0
-        };
-        let recording_duration =
-            (result.timestamps[result.timestamps.len() - 1] - result.timestamps[0]).abs();
-        let min_detectable_period = 2.0 * sample_interval;
-        let max_detectable_period = recording_duration / 2.0;
-
-        output.push_str(&format!(
-            "Analysis Constraints:\n  Min Period: {min_detectable_period:.2}s (Nyquist limit)\n  Max Period: {max_detectable_period:.2}s (half recording length)\n\n"
-        ));
-    }
-
-    if result.fft_analysis.has_periodic_pattern {
-        output.push_str(&format!(
-            "Periodic Pattern: Yes (strength: {:.2}%)\n",
-            result.fft_analysis.periodicity_strength * 100.0
-        ));
-        if let Some(period) = result.fft_analysis.period_seconds {
-            output.push_str(&format!("Primary Period: {period:.2} seconds\n"));
-        }
-    } else {
-        output.push_str("Periodic Pattern: No significant periodicity detected\n");
-    }
-
-    if !result.fft_analysis.dominant_frequencies.is_empty() {
-        output.push_str("\nDominant Frequencies:\n");
-        for (i, freq) in result
-            .fft_analysis
-            .dominant_frequencies
-            .iter()
-            .enumerate()
-            .take(3)
-        {
-            output.push_str(&format!(
-                "  {}. {:.4} Hz (period: {:.2}s, power: {:.2}%)\n",
-                i + 1,
-                freq.frequency_hz,
-                freq.period_seconds,
-                freq.relative_power * 100.0
-            ));
-        }
-    }
-    output.push('\n');
-
     // Allan Deviation Analysis
     output.push_str("Allan Deviation Analysis\n");
     output.push_str("------------------------\n");
@@ -1181,6 +1178,38 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     } else {
         output.push_str("\nNo significant cyclic patterns detected\n");
     }
+
+    // Show noise characteristic transitions
+    if !result.allan_analysis.noise_transitions.is_empty() {
+        output.push_str("\nNoise Characteristic Transitions Detected:\n");
+        output.push_str("  (Fundamental changes in system dynamics)\n");
+        for (i, transition) in result.allan_analysis.noise_transitions.iter().enumerate().take(5) {
+            if let Some(timestamp) = result.timestamps.get(transition.index) {
+                let change_direction = if transition.deviation_change_factor > 1.0 {
+                    format!("increased {:.1}x", transition.deviation_change_factor)
+                } else {
+                    format!("decreased {:.1}x", 1.0 / transition.deviation_change_factor)
+                };
+
+                output.push_str(&format!(
+                    "  {}. {} - {:?} → {:?}\n     Allan deviation {} (confidence: {:.1}%)\n",
+                    i + 1,
+                    format_timestamp(*timestamp),
+                    transition.from_noise_type,
+                    transition.to_noise_type,
+                    change_direction,
+                    transition.confidence * 100.0
+                ));
+            }
+        }
+        if result.allan_analysis.noise_transitions.len() > 5 {
+            output.push_str(&format!(
+                "  ... and {} more transitions\n",
+                result.allan_analysis.noise_transitions.len() - 5
+            ));
+        }
+    }
+
     output.push('\n');
 
     // Hadamard Deviation Analysis
@@ -1199,6 +1228,37 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
             ));
         }
     }
+
+    // Show Hadamard noise transitions
+    if !result.hadamard_analysis.noise_transitions.is_empty() {
+        output.push_str("\nNoise Transitions (Hadamard view):\n");
+        for (i, transition) in result.hadamard_analysis.noise_transitions.iter().enumerate().take(5) {
+            if let Some(timestamp) = result.timestamps.get(transition.index) {
+                let change_direction = if transition.deviation_change_factor > 1.0 {
+                    format!("increased {:.1}x", transition.deviation_change_factor)
+                } else {
+                    format!("decreased {:.1}x", 1.0 / transition.deviation_change_factor)
+                };
+
+                output.push_str(&format!(
+                    "  {}. {} - {:?} → {:?}\n     HDEV {} (conf: {:.0}%)\n",
+                    i + 1,
+                    format_timestamp(*timestamp),
+                    transition.from_noise_type,
+                    transition.to_noise_type,
+                    change_direction,
+                    transition.confidence * 100.0
+                ));
+            }
+        }
+        if result.hadamard_analysis.noise_transitions.len() > 5 {
+            output.push_str(&format!(
+                "  ... and {} more transitions\n",
+                result.hadamard_analysis.noise_transitions.len() - 5
+            ));
+        }
+    }
+
     output.push('\n');
 
     // Modified Allan Deviation Analysis
@@ -1219,6 +1279,37 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     } else {
         output.push_str("No significant patterns detected\n");
     }
+
+    // Show Modified Allan noise transitions
+    if !result.modified_allan_analysis.noise_transitions.is_empty() {
+        output.push_str("\nNoise Transitions (Modified Allan view):\n");
+        for (i, transition) in result.modified_allan_analysis.noise_transitions.iter().enumerate().take(5) {
+            if let Some(timestamp) = result.timestamps.get(transition.index) {
+                let change_direction = if transition.deviation_change_factor > 1.0 {
+                    format!("increased {:.1}x", transition.deviation_change_factor)
+                } else {
+                    format!("decreased {:.1}x", 1.0 / transition.deviation_change_factor)
+                };
+
+                output.push_str(&format!(
+                    "  {}. {} - {:?} → {:?}\n     MDEV {} (conf: {:.0}%)\n",
+                    i + 1,
+                    format_timestamp(*timestamp),
+                    transition.from_noise_type,
+                    transition.to_noise_type,
+                    change_direction,
+                    transition.confidence * 100.0
+                ));
+            }
+        }
+        if result.modified_allan_analysis.noise_transitions.len() > 5 {
+            output.push_str(&format!(
+                "  ... and {} more transitions\n",
+                result.modified_allan_analysis.noise_transitions.len() - 5
+            ));
+        }
+    }
+
     output.push('\n');
 
     // Detected Anomalies

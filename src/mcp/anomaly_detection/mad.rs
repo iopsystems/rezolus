@@ -6,6 +6,7 @@ pub struct MadAnalysis {
     pub median: f64,
     pub mad: f64,
     pub threshold: f64,
+    pub threshold_sigma: f64,  // The sigma multiplier used (Allan-adapted)
     pub outliers: Vec<usize>,
     pub outlier_count: usize,
 }
@@ -57,6 +58,7 @@ pub(super) fn perform_mad_analysis(
         median,
         mad,
         threshold,
+        threshold_sigma: threshold_multiplier,
         outlier_count: outliers.len(),
         outliers,
     })

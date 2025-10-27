@@ -9,7 +9,7 @@ mod modified_allan;
 
 // Re-export public types
 pub use allan::AllanAnalysis;
-pub use common::{CycleMinima, NoiseType};
+pub use common::NoiseType;
 pub use hadamard::HadamardAnalysis;
 pub use modified_allan::ModifiedAllanAnalysis;
 

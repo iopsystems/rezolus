@@ -259,14 +259,14 @@ fn detect_window_change_points(
             .map(|v| (v - before_mean).powi(2))
             .sum::<f64>()
             / before_window.len() as f64;
-        let before_std = before_var.sqrt();
+        let _before_std = before_var.sqrt();
 
         let after_var = after_window
             .iter()
             .map(|v| (v - after_mean).powi(2))
             .sum::<f64>()
             / after_window.len() as f64;
-        let after_std = after_var.sqrt();
+        let _after_std = after_var.sqrt();
 
         // Calculate mean change percentage
         let mean_change = (after_mean - before_mean).abs();
