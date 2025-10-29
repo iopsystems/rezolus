@@ -241,9 +241,9 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
         "memory_numa_other",      // Less actionable than foreign
         "memory_numa_interleave", // Rarely used policy
         // Cgroup CPU bandwidth config - skip static configuration values
-        "cgroup_cpu_bandwidth_periods",        // Total periods elapsed - not actionable
+        "cgroup_cpu_bandwidth_periods", // Total periods elapsed - not actionable
         "cgroup_cpu_bandwidth_period_duration", // Static config value
-        "cgroup_cpu_bandwidth_quota",          // Static config value
+        "cgroup_cpu_bandwidth_quota",   // Static config value
     ];
 
     // Collect all metrics to analyze
@@ -283,7 +283,9 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
     }
 
     // CPU Instructions Per Cycle (IPC) - efficiency metric
-    if tsdb.counter_names().contains(&"cpu_instructions") && tsdb.counter_names().contains(&"cpu_cycles") {
+    if tsdb.counter_names().contains(&"cpu_instructions")
+        && tsdb.counter_names().contains(&"cpu_cycles")
+    {
         derived_metrics.push((
             "cpu_instructions_per_cycle".to_string(),
             "derived",
@@ -292,7 +294,9 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
     }
 
     // Cgroup versions of the same
-    if tsdb.counter_names().contains(&"cgroup_cpu_aperf") && tsdb.counter_names().contains(&"cgroup_cpu_mperf") {
+    if tsdb.counter_names().contains(&"cgroup_cpu_aperf")
+        && tsdb.counter_names().contains(&"cgroup_cpu_mperf")
+    {
         derived_metrics.push((
             "cgroup_cpu_frequency_ratio".to_string(),
             "derived",
@@ -300,11 +304,16 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
         ));
     }
 
-    if tsdb.counter_names().contains(&"cgroup_cpu_instructions") && tsdb.counter_names().contains(&"cgroup_cpu_cycles") {
+    if tsdb.counter_names().contains(&"cgroup_cpu_instructions")
+        && tsdb.counter_names().contains(&"cgroup_cpu_cycles")
+    {
         derived_metrics.push((
             "cgroup_cpu_instructions_per_cycle".to_string(),
             "derived",
-            Some("sum(rate(cgroup_cpu_instructions[1m])) / sum(rate(cgroup_cpu_cycles[1m]))".to_string()),
+            Some(
+                "sum(rate(cgroup_cpu_instructions[1m])) / sum(rate(cgroup_cpu_cycles[1m]))"
+                    .to_string(),
+            ),
         ));
     }
 
@@ -342,12 +351,20 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
                     let high_severity = result
                         .anomalies
                         .iter()
-                        .filter(|a| matches!(a.severity, anomaly_detection::AnomalySeverity::High | anomaly_detection::AnomalySeverity::Critical))
+                        .filter(|a| {
+                            matches!(
+                                a.severity,
+                                anomaly_detection::AnomalySeverity::High
+                                    | anomaly_detection::AnomalySeverity::Critical
+                            )
+                        })
                         .count();
                     let medium_severity = result
                         .anomalies
                         .iter()
-                        .filter(|a| matches!(a.severity, anomaly_detection::AnomalySeverity::Medium))
+                        .filter(|a| {
+                            matches!(a.severity, anomaly_detection::AnomalySeverity::Medium)
+                        })
                         .count();
                     let low_severity = result
                         .anomalies
@@ -406,7 +423,9 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
             );
         }
 
-        println!("\nRun 'detect-anomalies <file> <metric>' for detailed analysis of specific metrics.");
+        println!(
+            "\nRun 'detect-anomalies <file> <metric>' for detailed analysis of specific metrics."
+        );
     }
 }
 
@@ -462,8 +481,12 @@ fn format_query_result(result: &QueryResult) -> String {
             writeln!(&mut output, "====================").unwrap();
             for series in result {
                 writeln!(&mut output, "{}:", format_metric(&series.metric)).unwrap();
-                writeln!(&mut output, "  Time series with {} points", series.values.len())
-                    .unwrap();
+                writeln!(
+                    &mut output,
+                    "  Time series with {} points",
+                    series.values.len()
+                )
+                .unwrap();
                 if !series.values.is_empty() {
                     let first = &series.values[0];
                     let last = &series.values[series.values.len() - 1];
@@ -472,14 +495,8 @@ fn format_query_result(result: &QueryResult) -> String {
 
                     // Calculate basic stats
                     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
-                    let min = values
-                        .iter()
-                        .copied()
-                        .fold(f64::INFINITY, f64::min);
-                    let max = values
-                        .iter()
-                        .copied()
-                        .fold(f64::NEG_INFINITY, f64::max);
+                    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+                    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                     let sum: f64 = values.iter().sum();
                     let mean = sum / values.len() as f64;
 
@@ -590,9 +607,7 @@ impl TryFrom<ArgMatches> for Config {
                     .get_one::<PathBuf>("FILE")
                     .ok_or("File argument is required")?
                     .clone();
-                let query = sub_args
-                    .get_one::<String>("QUERY")
-                    .cloned();
+                let query = sub_args.get_one::<String>("QUERY").cloned();
                 Mode::DetectAnomalies { file, query }
             }
             Some(("query", sub_args)) => {

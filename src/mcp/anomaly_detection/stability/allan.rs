@@ -10,7 +10,7 @@ pub struct NoiseTransition {
     pub timestamp_offset: f64,
     pub from_noise_type: NoiseType,
     pub to_noise_type: NoiseType,
-    pub deviation_change_factor: f64,  // How much the Allan deviation changed
+    pub deviation_change_factor: f64, // How much the Allan deviation changed
     pub confidence: f64,
 }
 
@@ -22,7 +22,7 @@ pub struct AllanAnalysis {
     pub noise_type: NoiseType,
     pub minima: Vec<CycleMinima>,
     pub has_cyclic_pattern: bool,
-    pub noise_transitions: Vec<NoiseTransition>,  // Detected changes in noise characteristics
+    pub noise_transitions: Vec<NoiseTransition>, // Detected changes in noise characteristics
 }
 
 pub(in crate::mcp::anomaly_detection) fn perform_allan_analysis(
@@ -144,7 +144,8 @@ fn detect_noise_transitions(
                     let noise_type_changed = !matches!(
                         (&prev_type, &current_noise_type),
                         (NoiseType::Unknown, NoiseType::Unknown)
-                    ) && std::mem::discriminant(&prev_type) != std::mem::discriminant(&current_noise_type);
+                    ) && std::mem::discriminant(&prev_type)
+                        != std::mem::discriminant(&current_noise_type);
 
                     let deviation_change_factor = if prev_dev > 0.0 {
                         current_deviation / prev_dev
@@ -153,7 +154,8 @@ fn detect_noise_transitions(
                     };
 
                     // Detect significant change: noise type changed OR deviation changed by 2x
-                    let significant_deviation_change = deviation_change_factor > 2.0 || deviation_change_factor < 0.5;
+                    let significant_deviation_change =
+                        deviation_change_factor > 2.0 || deviation_change_factor < 0.5;
 
                     if noise_type_changed || significant_deviation_change {
                         // Transition point is at the start of the current window

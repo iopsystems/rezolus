@@ -76,10 +76,10 @@ pub(super) fn perform_cusum_analysis_with_allan(
     // Run multi-scale CUSUM with different sensitivities
     // Adjusted thresholds to reduce false positives
     let sensitivity_configs = vec![
-        ("High Sensitivity", 0.5, 5.0),   // Detect small changes (was 0.25, 2.0)
+        ("High Sensitivity", 0.5, 5.0), // Detect small changes (was 0.25, 2.0)
         ("Medium Sensitivity", 1.0, 6.0), // Standard detection (was 0.5, 4.0)
-        ("Low Sensitivity", 1.5, 8.0),    // Only major changes (was 1.0, 6.0)
-        ("Cliff Detection", 2.5, 10.0),   // Dramatic changes (was 2.0, 8.0)
+        ("Low Sensitivity", 1.5, 8.0),  // Only major changes (was 1.0, 6.0)
+        ("Cliff Detection", 2.5, 10.0), // Dramatic changes (was 2.0, 8.0)
     ];
 
     let mut all_change_points = Vec::new();

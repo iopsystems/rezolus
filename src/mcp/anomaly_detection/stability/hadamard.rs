@@ -128,7 +128,8 @@ fn detect_hadamard_transitions(
                     let noise_type_changed = !matches!(
                         (&prev_type, &current_noise_type),
                         (NoiseType::Unknown, NoiseType::Unknown)
-                    ) && std::mem::discriminant(&prev_type) != std::mem::discriminant(&current_noise_type);
+                    ) && std::mem::discriminant(&prev_type)
+                        != std::mem::discriminant(&current_noise_type);
 
                     let deviation_change_factor = if prev_dev > 0.0 {
                         current_deviation / prev_dev
@@ -137,7 +138,8 @@ fn detect_hadamard_transitions(
                     };
 
                     // Detect significant change: noise type changed OR deviation changed by 2x
-                    let significant_deviation_change = deviation_change_factor > 2.0 || deviation_change_factor < 0.5;
+                    let significant_deviation_change =
+                        deviation_change_factor > 2.0 || deviation_change_factor < 0.5;
 
                     if noise_type_changed || significant_deviation_change {
                         // Transition point is at the start of the current window

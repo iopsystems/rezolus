@@ -6,7 +6,7 @@ pub struct MadAnalysis {
     pub median: f64,
     pub mad: f64,
     pub threshold: f64,
-    pub threshold_sigma: f64,  // The sigma multiplier used (Allan-adapted)
+    pub threshold_sigma: f64, // The sigma multiplier used (Allan-adapted)
     pub outliers: Vec<usize>,
     pub outlier_count: usize,
 }

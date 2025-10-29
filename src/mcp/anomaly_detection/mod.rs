@@ -11,9 +11,9 @@ mod mad;
 mod stability;
 
 // Re-export public types from sub-modules
-pub use stability::{AllanAnalysis, HadamardAnalysis, ModifiedAllanAnalysis, NoiseType};
 pub use cusum::CusumAnalysis;
 pub use mad::MadAnalysis;
+pub use stability::{AllanAnalysis, HadamardAnalysis, ModifiedAllanAnalysis, NoiseType};
 
 /// Result of anomaly detection analysis
 #[derive(Debug, Serialize, Deserialize)]
@@ -64,11 +64,23 @@ pub enum AnomalySeverity {
 fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Error>> {
     // Check for rate/irate/increase/delta/deriv functions that require range vectors
     let range_vector_functions = [
-        "rate(", "irate(", "increase(", "delta(", "deriv(",
-        "rate_over_time(", "avg_over_time(", "min_over_time(",
-        "max_over_time(", "sum_over_time(", "count_over_time(",
-        "stddev_over_time(", "stdvar_over_time(", "changes(",
-        "resets(", "holt_winters(", "predict_linear("
+        "rate(",
+        "irate(",
+        "increase(",
+        "delta(",
+        "deriv(",
+        "rate_over_time(",
+        "avg_over_time(",
+        "min_over_time(",
+        "max_over_time(",
+        "sum_over_time(",
+        "count_over_time(",
+        "stddev_over_time(",
+        "stdvar_over_time(",
+        "changes(",
+        "resets(",
+        "holt_winters(",
+        "predict_linear(",
     ];
 
     for func in &range_vector_functions {
@@ -93,13 +105,13 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
                                 last_close_paren = i;
                                 break;
                             }
-                        },
+                        }
                         '[' => {
                             // Check if this is inside our function
                             if paren_depth > 0 {
                                 has_range_vector = true;
                             }
-                        },
+                        }
                         _ => {}
                     }
                 }
@@ -145,7 +157,8 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
                     \n\
                     Range vectors alone cannot be graphed or analyzed.",
                     query, query, query
-                ).into());
+                )
+                .into());
             }
         }
     }
@@ -188,7 +201,11 @@ fn extract_metric_name(query: &str) -> Option<&str> {
 }
 
 /// Show available labels for a metric
-fn show_available_labels(output: &mut String, metric_name: &str, labels_list: &[crate::viewer::tsdb::Labels]) {
+fn show_available_labels(
+    output: &mut String,
+    metric_name: &str,
+    labels_list: &[crate::viewer::tsdb::Labels],
+) {
     use std::collections::HashMap;
 
     // Collect all unique label keys and their values
@@ -207,7 +224,10 @@ fn show_available_labels(output: &mut String, metric_name: &str, labels_list: &[
     }
 
     if label_values.is_empty() {
-        output.push_str(&format!("  No labels available (use just '{}')\n", metric_name));
+        output.push_str(&format!(
+            "  No labels available (use just '{}')\n",
+            metric_name
+        ));
         return;
     }
 
@@ -224,16 +244,23 @@ fn show_available_labels(output: &mut String, metric_name: &str, labels_list: &[
 
         if sorted_values.len() <= 10 {
             // Show all values
-            output.push_str(&sorted_values.iter()
-                .map(|v| format!("\"{}\"", v))
-                .collect::<Vec<_>>()
-                .join(", "));
+            output.push_str(
+                &sorted_values
+                    .iter()
+                    .map(|v| format!("\"{}\"", v))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
         } else {
             // Show first 10 values
-            output.push_str(&sorted_values.iter().take(10)
-                .map(|v| format!("\"{}\"", v))
-                .collect::<Vec<_>>()
-                .join(", "));
+            output.push_str(
+                &sorted_values
+                    .iter()
+                    .take(10)
+                    .map(|v| format!("\"{}\"", v))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
             output.push_str(&format!(" ... ({} more)", sorted_values.len() - 10));
         }
         output.push('\n');
@@ -245,8 +272,10 @@ fn show_available_labels(output: &mut String, metric_name: &str, labels_list: &[
 
     if let Some((first_key, first_values)) = label_values.iter().next() {
         if let Some(first_value) = first_values.iter().next() {
-            output.push_str(&format!("  {}{{{}=\"{}\"}}  (filtered by label)\n",
-                metric_name, first_key, first_value));
+            output.push_str(&format!(
+                "  {}{{{}=\"{}\"}}  (filtered by label)\n",
+                metric_name, first_key, first_value
+            ));
         }
     }
 }
@@ -280,15 +309,24 @@ fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std:
     // Check metric type and construct appropriate query
     if tsdb.counter_names().contains(&metric_name) {
         // Counter: use sum(rate(metric[1m]))
-        eprintln!("Auto-detected '{}' as COUNTER, using: sum(rate({}[1m]))", metric_name, query);
+        eprintln!(
+            "Auto-detected '{}' as COUNTER, using: sum(rate({}[1m]))",
+            metric_name, query
+        );
         Ok(format!("sum(rate({}[1m]))", query))
     } else if tsdb.gauge_names().contains(&metric_name) {
         // Gauge: use sum(metric)
-        eprintln!("Auto-detected '{}' as GAUGE, using: sum({})", metric_name, query);
+        eprintln!(
+            "Auto-detected '{}' as GAUGE, using: sum({})",
+            metric_name, query
+        );
         Ok(format!("sum({})", query))
     } else if tsdb.histogram_names().contains(&metric_name) {
         // Histogram: use histogram_quantile for p99
-        eprintln!("Auto-detected '{}' as HISTOGRAM, using: histogram_quantile(0.99, {})", metric_name, query);
+        eprintln!(
+            "Auto-detected '{}' as HISTOGRAM, using: histogram_quantile(0.99, {})",
+            metric_name, query
+        );
         Ok(format!("histogram_quantile(0.99, {})", query))
     } else {
         // Unknown metric - return as-is and let normal error handling deal with it
@@ -320,7 +358,8 @@ pub fn detect_anomalies(
             "Invalid time range for anomaly detection: start ({}) >= end ({}). \
             The parquet file may not contain enough data.",
             start_time, end_time
-        ).into());
+        )
+        .into());
     }
 
     let step = 1.0; // 1 second resolution
@@ -332,7 +371,8 @@ pub fn detect_anomalies(
             "Time range too short for anomaly detection: {:.1} seconds. \
             Need at least 10 seconds of data for meaningful analysis.",
             duration
-        ).into());
+        )
+        .into());
     }
 
     // Try to execute the query
@@ -364,9 +404,10 @@ pub fn detect_anomalies(
                             suggestions.insert(0, *metric);
                         }
                         // Then check for partial matches
-                        else if metric.contains(&hint_normalized) ||
-                                metric.starts_with(&format!("{}_", hint_normalized)) ||
-                                metric.ends_with(&format!("_{}", hint_normalized)) {
+                        else if metric.contains(&hint_normalized)
+                            || metric.starts_with(&format!("{}_", hint_normalized))
+                            || metric.ends_with(&format!("_{}", hint_normalized))
+                        {
                             suggestions.push(*metric);
                         }
                     }
@@ -384,13 +425,25 @@ pub fn detect_anomalies(
 
                         // Show available labels for this metric
                         if let Some(labels_list) = tsdb.counter_labels(metric_name) {
-                            error_with_help.push_str(&format!("\n\nMetric '{}' (COUNTER) has {} series.", metric_name, labels_list.len()));
+                            error_with_help.push_str(&format!(
+                                "\n\nMetric '{}' (COUNTER) has {} series.",
+                                metric_name,
+                                labels_list.len()
+                            ));
                             show_available_labels(&mut error_with_help, metric_name, &labels_list);
                         } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
-                            error_with_help.push_str(&format!("\n\nMetric '{}' (GAUGE) has {} series.", metric_name, labels_list.len()));
+                            error_with_help.push_str(&format!(
+                                "\n\nMetric '{}' (GAUGE) has {} series.",
+                                metric_name,
+                                labels_list.len()
+                            ));
                             show_available_labels(&mut error_with_help, metric_name, &labels_list);
                         } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
-                            error_with_help.push_str(&format!("\n\nMetric '{}' (HISTOGRAM) has {} series.", metric_name, labels_list.len()));
+                            error_with_help.push_str(&format!(
+                                "\n\nMetric '{}' (HISTOGRAM) has {} series.",
+                                metric_name,
+                                labels_list.len()
+                            ));
                             show_available_labels(&mut error_with_help, metric_name, &labels_list);
                         }
 
@@ -410,7 +463,8 @@ pub fn detect_anomalies(
                         error_with_help.push_str(&format!("\n  - {}", metric));
                     }
                     if all_metrics.len() > 10 {
-                        error_with_help.push_str(&format!("\n  ... and {} more", all_metrics.len() - 10));
+                        error_with_help
+                            .push_str(&format!("\n  ... and {} more", all_metrics.len() - 10));
                     }
                 }
 
@@ -442,16 +496,31 @@ pub fn detect_anomalies(
 
             // Check if metric exists and show available labels
             if let Some(labels_list) = tsdb.counter_labels(metric_name) {
-                error_msg.push_str(&format!("\nMetric '{}' (COUNTER) exists with {} series.\n", metric_name, labels_list.len()));
+                error_msg.push_str(&format!(
+                    "\nMetric '{}' (COUNTER) exists with {} series.\n",
+                    metric_name,
+                    labels_list.len()
+                ));
                 show_available_labels(&mut error_msg, metric_name, &labels_list);
             } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
-                error_msg.push_str(&format!("\nMetric '{}' (GAUGE) exists with {} series.\n", metric_name, labels_list.len()));
+                error_msg.push_str(&format!(
+                    "\nMetric '{}' (GAUGE) exists with {} series.\n",
+                    metric_name,
+                    labels_list.len()
+                ));
                 show_available_labels(&mut error_msg, metric_name, &labels_list);
             } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
-                error_msg.push_str(&format!("\nMetric '{}' (HISTOGRAM) exists with {} series.\n", metric_name, labels_list.len()));
+                error_msg.push_str(&format!(
+                    "\nMetric '{}' (HISTOGRAM) exists with {} series.\n",
+                    metric_name,
+                    labels_list.len()
+                ));
                 show_available_labels(&mut error_msg, metric_name, &labels_list);
             } else {
-                error_msg.push_str(&format!("\nMetric '{}' not found in this recording.\n", metric_name));
+                error_msg.push_str(&format!(
+                    "\nMetric '{}' not found in this recording.\n",
+                    metric_name
+                ));
             }
 
             return Err(error_msg.into());
@@ -502,16 +571,17 @@ pub fn detect_anomalies(
     // - Frequency noise: Medium → moderate threshold
     // - Random Walk/drift: Expected to wander → looser threshold (less sensitive)
     let mad_threshold = match allan_analysis.noise_type {
-        NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0,  // Stricter for low-noise systems
-        NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 5.0,  // Standard threshold
+        NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0, // Stricter for low-noise systems
+        NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 5.0, // Standard threshold
         NoiseType::RandomWalk | NoiseType::FlickerWalk => 6.5,  // Looser for drifting systems
-        NoiseType::Unknown => 5.0,  // Default conservative threshold
+        NoiseType::Unknown => 5.0,                              // Default conservative threshold
     };
     let mad_analysis = mad::perform_mad_analysis(analysis_values, mad_threshold)?;
 
     // Perform CUSUM analysis - run on RAW values with Allan window for change-point detection
     // Window-based change-point detection uses Allan-determined optimal window and significance
-    let cusum_analysis = cusum::perform_cusum_analysis_with_allan(&values, step, allan_window, &allan_analysis)?;
+    let cusum_analysis =
+        cusum::perform_cusum_analysis_with_allan(&values, step, allan_window, &allan_analysis)?;
 
     // Combine analyses to identify high-confidence anomalies
     let anomalies = identify_anomalies(
@@ -532,8 +602,16 @@ pub fn detect_anomalies(
         total_points: values.len(),
         timestamps,
         values,
-        smoothed_values: if use_smoothed { Some(smoothed_values) } else { None },
-        smoothing_window: if use_smoothed { Some(smoothing_window) } else { None },
+        smoothed_values: if use_smoothed {
+            Some(smoothed_values)
+        } else {
+            None
+        },
+        smoothing_window: if use_smoothed {
+            Some(smoothing_window)
+        } else {
+            None
+        },
         mad_analysis,
         cusum_analysis,
         allan_analysis,
@@ -556,7 +634,8 @@ fn extract_time_series(
 
             // Debug: Check if this is a rate/irate query with range vector
             let has_range_vector = query.contains("[") && query.contains("]");
-            let is_rate_query = query.contains("rate(") || query.contains("irate(") || query.contains("increase(");
+            let is_rate_query =
+                query.contains("rate(") || query.contains("irate(") || query.contains("increase(");
 
             if is_rate_query && has_range_vector {
                 // This should have returned a Matrix, not a Vector!
@@ -580,13 +659,19 @@ fn extract_time_series(
                     .replace("irate(", "irate(")
                     .replace("))", "[1m]))")
                     .replace("})", "}[1m]))");
-                format!("\n\nYour query appears to be missing a range vector selector.\nTry: {}", fixed)
+                format!(
+                    "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
+                    fixed
+                )
             } else if query.contains("increase(") {
                 let fixed = query
                     .replace("increase(", "increase(")
                     .replace("))", "[1m]))")
                     .replace("})", "}[1m]))");
-                format!("\n\nYour query appears to be missing a range vector selector.\nTry: {}", fixed)
+                format!(
+                    "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
+                    fixed
+                )
             } else {
                 "\n\nFor counter metrics, use: rate(metric_name[1m]) or irate(metric_name[1m])\nFor gauge metrics that need smoothing, use: avg_over_time(metric_name[1m])".to_string()
             };
@@ -596,7 +681,8 @@ fn extract_time_series(
                     "Query returned no time series data. The query executed as an instant vector, \
                     which returns only current values, not a time series.{}",
                     example_query
-                ).into());
+                )
+                .into());
             }
 
             // Even with data, it's still just instant values
@@ -615,7 +701,8 @@ fn extract_time_series(
             // If there are multiple series, sum them by timestamp
             if result.len() > 1 {
                 // Aggregate multiple series by summing values at each timestamp
-                let mut timestamp_values: std::collections::BTreeMap<i64, f64> = std::collections::BTreeMap::new();
+                let mut timestamp_values: std::collections::BTreeMap<i64, f64> =
+                    std::collections::BTreeMap::new();
 
                 for series in result {
                     for (ts, val) in &series.values {
@@ -641,7 +728,8 @@ fn extract_time_series(
                 "Scalar query returned a single value ({:.4}). \
                 Anomaly detection requires time series data with multiple points.",
                 result.1
-            ).into())
+            )
+            .into())
         }
     }
 }
@@ -664,15 +752,15 @@ fn apply_allan_smoothing(
         match allan_analysis.noise_type {
             NoiseType::WhitePhase | NoiseType::FlickerPhase => {
                 // High frequency noise - use moderate window
-                15.0 * sample_interval  // Was 5.0
+                15.0 * sample_interval // Was 5.0
             }
             NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => {
                 // Medium frequency noise
-                30.0 * sample_interval  // Was 10.0
+                30.0 * sample_interval // Was 10.0
             }
             NoiseType::RandomWalk | NoiseType::FlickerWalk => {
                 // Low frequency drift - use larger window
-                60.0 * sample_interval  // Was 20.0
+                60.0 * sample_interval // Was 20.0
             }
             NoiseType::Unknown => {
                 // Default: 30 seconds for better smoothing
@@ -704,7 +792,10 @@ fn apply_allan_smoothing(
             (values.len().saturating_sub(window_samples), values.len())
         } else {
             // Middle - use centered window
-            (i.saturating_sub(half_window), (i + half_window + 1).min(values.len()))
+            (
+                i.saturating_sub(half_window),
+                (i + half_window + 1).min(values.len()),
+            )
         };
 
         let window = &values[start..end];
@@ -752,7 +843,7 @@ fn identify_anomalies(
     // Score CUSUM cliffs with highest weight (dramatic changes)
     for cliff in &cusum.cliffs {
         *anomaly_scores.entry(cliff.index).or_insert(0.0) += 3.0; // Highest weight for cliffs
-        // Mark surrounding points with lower weight
+                                                                  // Mark surrounding points with lower weight
         if cliff.index > 0 {
             *anomaly_scores.entry(cliff.index - 1).or_insert(0.0) += 0.8;
         }
@@ -786,10 +877,14 @@ fn identify_anomalies(
         let base_weight = 3.5 * transition.confidence; // High base weight for noise transitions
 
         // Extra weight for dramatic deviation changes
-        let deviation_weight = if transition.deviation_change_factor > 3.0 || transition.deviation_change_factor < 0.33 {
-            1.0  // Very dramatic change
-        } else if transition.deviation_change_factor > 2.0 || transition.deviation_change_factor < 0.5 {
-            0.5  // Moderate change
+        let deviation_weight = if transition.deviation_change_factor > 3.0
+            || transition.deviation_change_factor < 0.33
+        {
+            1.0 // Very dramatic change
+        } else if transition.deviation_change_factor > 2.0
+            || transition.deviation_change_factor < 0.5
+        {
+            0.5 // Moderate change
         } else {
             0.0
         };
@@ -800,10 +895,14 @@ fn identify_anomalies(
         // Mark surrounding region - noise transitions affect a window
         for offset in 1..=10 {
             if transition.index >= offset {
-                *anomaly_scores.entry(transition.index - offset).or_insert(0.0) += total_weight * 0.2;
+                *anomaly_scores
+                    .entry(transition.index - offset)
+                    .or_insert(0.0) += total_weight * 0.2;
             }
             if transition.index + offset < values.len() {
-                *anomaly_scores.entry(transition.index + offset).or_insert(0.0) += total_weight * 0.2;
+                *anomaly_scores
+                    .entry(transition.index + offset)
+                    .or_insert(0.0) += total_weight * 0.2;
             }
         }
     }
@@ -813,9 +912,13 @@ fn identify_anomalies(
     for transition in &hadamard.noise_transitions {
         let base_weight = 3.0 * transition.confidence; // Slightly lower than Allan
 
-        let deviation_weight = if transition.deviation_change_factor > 3.0 || transition.deviation_change_factor < 0.33 {
+        let deviation_weight = if transition.deviation_change_factor > 3.0
+            || transition.deviation_change_factor < 0.33
+        {
             0.8
-        } else if transition.deviation_change_factor > 2.0 || transition.deviation_change_factor < 0.5 {
+        } else if transition.deviation_change_factor > 2.0
+            || transition.deviation_change_factor < 0.5
+        {
             0.4
         } else {
             0.0
@@ -827,10 +930,14 @@ fn identify_anomalies(
         // Mark surrounding region
         for offset in 1..=10 {
             if transition.index >= offset {
-                *anomaly_scores.entry(transition.index - offset).or_insert(0.0) += total_weight * 0.2;
+                *anomaly_scores
+                    .entry(transition.index - offset)
+                    .or_insert(0.0) += total_weight * 0.2;
             }
             if transition.index + offset < values.len() {
-                *anomaly_scores.entry(transition.index + offset).or_insert(0.0) += total_weight * 0.2;
+                *anomaly_scores
+                    .entry(transition.index + offset)
+                    .or_insert(0.0) += total_weight * 0.2;
             }
         }
     }
@@ -840,9 +947,13 @@ fn identify_anomalies(
     for transition in &modified.noise_transitions {
         let base_weight = 3.2 * transition.confidence; // Between Allan and Hadamard
 
-        let deviation_weight = if transition.deviation_change_factor > 3.0 || transition.deviation_change_factor < 0.33 {
+        let deviation_weight = if transition.deviation_change_factor > 3.0
+            || transition.deviation_change_factor < 0.33
+        {
             0.9
-        } else if transition.deviation_change_factor > 2.0 || transition.deviation_change_factor < 0.5 {
+        } else if transition.deviation_change_factor > 2.0
+            || transition.deviation_change_factor < 0.5
+        {
             0.45
         } else {
             0.0
@@ -854,10 +965,14 @@ fn identify_anomalies(
         // Mark surrounding region
         for offset in 1..=10 {
             if transition.index >= offset {
-                *anomaly_scores.entry(transition.index - offset).or_insert(0.0) += total_weight * 0.2;
+                *anomaly_scores
+                    .entry(transition.index - offset)
+                    .or_insert(0.0) += total_weight * 0.2;
             }
             if transition.index + offset < values.len() {
-                *anomaly_scores.entry(transition.index + offset).or_insert(0.0) += total_weight * 0.2;
+                *anomaly_scores
+                    .entry(transition.index + offset)
+                    .or_insert(0.0) += total_weight * 0.2;
             }
         }
     }
@@ -932,7 +1047,9 @@ fn identify_anomalies(
             // Stricter criteria for higher severity levels
             let severity = if method_confidence >= 0.95 && deviation_factor > 10.0 {
                 AnomalySeverity::Critical
-            } else if method_confidence >= 0.9 || (method_confidence >= 0.85 && deviation_factor > 7.0) {
+            } else if method_confidence >= 0.9
+                || (method_confidence >= 0.85 && deviation_factor > 7.0)
+            {
                 AnomalySeverity::High
             } else if method_confidence >= 0.8 || deviation_factor > 7.0 {
                 AnomalySeverity::Medium
@@ -1013,8 +1130,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     output.push_str(&format!("MAD: {:.4}\n", result.mad_analysis.mad));
     output.push_str(&format!(
         "Threshold ({:.1}σ, Allan-adapted): {:.4}\n",
-        result.mad_analysis.threshold_sigma,
-        result.mad_analysis.threshold
+        result.mad_analysis.threshold_sigma, result.mad_analysis.threshold
     ));
     output.push_str(&format!(
         "Outliers Found: {} ({:.2}% of data)\n",
@@ -1071,14 +1187,20 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     if let Some(window) = result.smoothing_window {
         output.push_str(&format!(
             "Change-point window (Allan-based): {:.1}s\n",
-            window * 2.0  // 2x the smoothing window
+            window * 2.0 // 2x the smoothing window
         ));
     }
 
     // Show window-based regime shifts (most important for detecting experiments)
     if !result.cusum_analysis.window_change_points.is_empty() && !result.timestamps.is_empty() {
         output.push_str("\n  SUSTAINED REGIME SHIFTS (experimental changes):\n");
-        for (i, wcp) in result.cusum_analysis.window_change_points.iter().enumerate().take(5) {
+        for (i, wcp) in result
+            .cusum_analysis
+            .window_change_points
+            .iter()
+            .enumerate()
+            .take(5)
+        {
             if wcp.index < result.timestamps.len() {
                 let direction = if wcp.after_mean > wcp.before_mean {
                     "INCREASE"
@@ -1153,12 +1275,18 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     // Allan Deviation Analysis
     output.push_str("Allan Deviation Analysis\n");
     output.push_str("------------------------\n");
-    output.push_str(&format!("Noise Type: {:?}\n", result.allan_analysis.noise_type));
+    output.push_str(&format!(
+        "Noise Type: {:?}\n",
+        result.allan_analysis.noise_type
+    ));
 
     // Show smoothing information if applied
     if let Some(window) = result.smoothing_window {
         output.push_str(&format!("\nData Smoothing Applied:\n"));
-        output.push_str(&format!("  Allan-determined averaging window: {:.2}s\n", window));
+        output.push_str(&format!(
+            "  Allan-determined averaging window: {:.2}s\n",
+            window
+        ));
         output.push_str("  Purpose: Filter spike noise to detect regime shifts\n");
         output.push_str("  Anomaly detection performed on smoothed data\n");
     } else {
@@ -1183,7 +1311,13 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     if !result.allan_analysis.noise_transitions.is_empty() {
         output.push_str("\nNoise Characteristic Transitions Detected:\n");
         output.push_str("  (Fundamental changes in system dynamics)\n");
-        for (i, transition) in result.allan_analysis.noise_transitions.iter().enumerate().take(5) {
+        for (i, transition) in result
+            .allan_analysis
+            .noise_transitions
+            .iter()
+            .enumerate()
+            .take(5)
+        {
             if let Some(timestamp) = result.timestamps.get(transition.index) {
                 let change_direction = if transition.deviation_change_factor > 1.0 {
                     format!("increased {:.1}x", transition.deviation_change_factor)
@@ -1215,7 +1349,10 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     // Hadamard Deviation Analysis
     output.push_str("Hadamard Deviation Analysis\n");
     output.push_str("---------------------------\n");
-    output.push_str(&format!("Noise Type: {:?}\n", result.hadamard_analysis.noise_type));
+    output.push_str(&format!(
+        "Noise Type: {:?}\n",
+        result.hadamard_analysis.noise_type
+    ));
 
     if !result.hadamard_analysis.minima.is_empty() {
         output.push_str("Detected Minima:\n");
@@ -1232,7 +1369,13 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     // Show Hadamard noise transitions
     if !result.hadamard_analysis.noise_transitions.is_empty() {
         output.push_str("\nNoise Transitions (Hadamard view):\n");
-        for (i, transition) in result.hadamard_analysis.noise_transitions.iter().enumerate().take(5) {
+        for (i, transition) in result
+            .hadamard_analysis
+            .noise_transitions
+            .iter()
+            .enumerate()
+            .take(5)
+        {
             if let Some(timestamp) = result.timestamps.get(transition.index) {
                 let change_direction = if transition.deviation_change_factor > 1.0 {
                     format!("increased {:.1}x", transition.deviation_change_factor)
@@ -1264,11 +1407,20 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     // Modified Allan Deviation Analysis
     output.push_str("Modified Allan Deviation Analysis\n");
     output.push_str("---------------------------------\n");
-    output.push_str(&format!("Noise Type: {:?}\n", result.modified_allan_analysis.noise_type));
+    output.push_str(&format!(
+        "Noise Type: {:?}\n",
+        result.modified_allan_analysis.noise_type
+    ));
 
     if !result.modified_allan_analysis.minima.is_empty() {
         output.push_str("Detected Minima (better frequency drift handling):\n");
-        for (i, minima) in result.modified_allan_analysis.minima.iter().enumerate().take(3) {
+        for (i, minima) in result
+            .modified_allan_analysis
+            .minima
+            .iter()
+            .enumerate()
+            .take(3)
+        {
             output.push_str(&format!(
                 "  {}. Period: {:.2}s (confidence: {:.2}%)\n",
                 i + 1,
@@ -1283,7 +1435,13 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     // Show Modified Allan noise transitions
     if !result.modified_allan_analysis.noise_transitions.is_empty() {
         output.push_str("\nNoise Transitions (Modified Allan view):\n");
-        for (i, transition) in result.modified_allan_analysis.noise_transitions.iter().enumerate().take(5) {
+        for (i, transition) in result
+            .modified_allan_analysis
+            .noise_transitions
+            .iter()
+            .enumerate()
+            .take(5)
+        {
             if let Some(timestamp) = result.timestamps.get(transition.index) {
                 let change_direction = if transition.deviation_change_factor > 1.0 {
                     format!("increased {:.1}x", transition.deviation_change_factor)

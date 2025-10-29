@@ -175,15 +175,22 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
     // Add common query examples section
     output.push_str("\n\nCOMMON QUERY PATTERNS:\n");
     output.push_str("----------------------\n");
-    output.push_str("Use the 'rezolus mcp query <file> <query>' command to execute these queries.\n\n");
+    output.push_str(
+        "Use the 'rezolus mcp query <file> <query>' command to execute these queries.\n\n",
+    );
 
     output.push_str("Counter queries (use rate() for per-second rates):\n");
     output.push_str("  rate(cpu_cycles[1m])              - CPU cycles per second for each core\n");
-    output.push_str("  sum(rate(cpu_cycles[1m]))         - Total CPU cycles/sec across all cores\n");
+    output
+        .push_str("  sum(rate(cpu_cycles[1m]))         - Total CPU cycles/sec across all cores\n");
     output.push_str("  rate(cpu_instructions[1m])        - Instructions retired per second\n");
     output.push_str("  sum(rate(blockio_bytes[1m]))      - Total block I/O bytes per second\n");
-    output.push_str("  rate(syscall{op=\"read\"}[1m])     - Read syscalls per second (filtered by label)\n");
-    output.push_str("  sum by (op) (rate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n");
+    output.push_str(
+        "  rate(syscall{op=\"read\"}[1m])     - Read syscalls per second (filtered by label)\n",
+    );
+    output.push_str(
+        "  sum by (op) (rate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n",
+    );
 
     output.push_str("Gauge queries (instant values):\n");
     output.push_str("  cpu_usage                          - Current CPU usage per core\n");
@@ -191,8 +198,12 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
     output.push_str("  memory_size                        - Memory size metrics\n\n");
 
     output.push_str("Histogram queries (use histogram_quantile for percentiles):\n");
-    output.push_str("  histogram_quantile(0.99, scheduler_runqueue_latency) - p99 runqueue latency\n");
-    output.push_str("  histogram_quantile(0.50, tcp_receive_size)           - Median TCP receive size\n\n");
+    output.push_str(
+        "  histogram_quantile(0.99, scheduler_runqueue_latency) - p99 runqueue latency\n",
+    );
+    output.push_str(
+        "  histogram_quantile(0.50, tcp_receive_size)           - Median TCP receive size\n\n",
+    );
 
     output.push_str("Aggregation and filtering:\n");
     output.push_str("  sum(gauge_metric)                  - Sum across all series\n");
@@ -201,8 +212,11 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
     output.push_str("  metric{label=\"value\"}             - Filter by label value\n");
     output.push_str("  sum by (label) (metric)            - Aggregate by label\n\n");
 
-    output.push_str("Note: Counter metrics track cumulative values, so use rate() to get per-second rates.\n");
-    output.push_str("      Gauges can be queried directly as they represent point-in-time values.\n");
+    output.push_str(
+        "Note: Counter metrics track cumulative values, so use rate() to get per-second rates.\n",
+    );
+    output
+        .push_str("      Gauges can be queried directly as they represent point-in-time values.\n");
     output.push_str("      Histograms require histogram_quantile() to extract percentiles.\n");
 
     output
