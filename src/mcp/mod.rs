@@ -334,7 +334,7 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
         let query = if let Some(q) = custom_query {
             q.clone()
         } else {
-            match metric_type.as_ref() {
+            match &**metric_type {
                 "counter" => format!("sum(rate({}[1m]))", metric_name),
                 "gauge" => format!("sum({})", metric_name),
                 "histogram_p50" => format!("histogram_quantile(0.50, {})", metric_name),

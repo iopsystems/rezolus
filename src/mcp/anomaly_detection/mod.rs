@@ -173,7 +173,7 @@ fn extract_metric_name(query: &str) -> Option<&str> {
     // Pattern: rate(metric_name[...]) or sum(rate(metric_name[...]))
     if let Some(start) = query.rfind("rate(") {
         let after_rate = &query[start + 5..];
-        if let Some(end) = after_rate.find(|c: char| c == '[' || c == '{' || c == ')') {
+        if let Some(end) = after_rate.find(['[', '{', ')']) {
             return Some(after_rate[..end].trim());
         }
     }
@@ -182,7 +182,7 @@ fn extract_metric_name(query: &str) -> Option<&str> {
     for func in &["sum(", "avg(", "min(", "max(", "count("] {
         if let Some(start) = query.find(func) {
             let after_func = &query[start + func.len()..];
-            if let Some(end) = after_func.find(|c: char| c == '{' || c == ')' || c == '[') {
+            if let Some(end) = after_func.find(['{', ')', '[']) {
                 let metric = after_func[..end].trim();
                 if !metric.is_empty() && !metric.contains('(') {
                     return Some(metric);
@@ -192,7 +192,7 @@ fn extract_metric_name(query: &str) -> Option<&str> {
     }
 
     // Pattern: bare metric or metric{labels}
-    if let Some(end) = query.find(|c: char| c == '{' || c == '[' || c == '(' || c == ' ') {
+    if let Some(end) = query.find(['{', '[', '(', ' ']) {
         return Some(query[..end].trim());
     }
 
@@ -217,7 +217,7 @@ fn show_available_labels(
             if key != "metric" && key != "unit" && key != "metric_type" {
                 label_values
                     .entry(key.clone())
-                    .or_insert_with(std::collections::HashSet::new)
+                    .or_default()
                     .insert(value.clone());
             }
         }
@@ -396,7 +396,7 @@ pub fn detect_anomalies(
                 let mut suggestions = Vec::new();
                 if let Some(hint) = metric_hint {
                     // Normalize the hint to use underscores
-                    let hint_normalized = hint.replace('/', "_").replace('-', "_");
+                    let hint_normalized = hint.replace(['/', '-'], "_");
 
                     for metric in &all_metrics {
                         // Check for exact match first
@@ -416,38 +416,38 @@ pub fn detect_anomalies(
                 let mut error_with_help = format!("Query failed: {}", error_msg);
 
                 // Check if query has label selectors - might be invalid label values
-                if query.contains('{') && metric_hint.is_some() {
-                    let metric_name = metric_hint.unwrap();
+                if query.contains('{') {
+                    if let Some(metric_name) = metric_hint {
+                        // Check if the metric actually exists (exact match in suggestions means it exists)
+                        if !suggestions.is_empty() && suggestions[0] == metric_name {
+                            error_with_help.push_str("\n\nThe metric exists but your label selector might be filtering out all series.");
 
-                    // Check if the metric actually exists (exact match in suggestions means it exists)
-                    if !suggestions.is_empty() && suggestions[0] == metric_name {
-                        error_with_help.push_str("\n\nThe metric exists but your label selector might be filtering out all series.");
+                            // Show available labels for this metric
+                            if let Some(labels_list) = tsdb.counter_labels(metric_name) {
+                                error_with_help.push_str(&format!(
+                                    "\n\nMetric '{}' (COUNTER) has {} series.",
+                                    metric_name,
+                                    labels_list.len()
+                                ));
+                                show_available_labels(&mut error_with_help, metric_name, &labels_list);
+                            } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
+                                error_with_help.push_str(&format!(
+                                    "\n\nMetric '{}' (GAUGE) has {} series.",
+                                    metric_name,
+                                    labels_list.len()
+                                ));
+                                show_available_labels(&mut error_with_help, metric_name, &labels_list);
+                            } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
+                                error_with_help.push_str(&format!(
+                                    "\n\nMetric '{}' (HISTOGRAM) has {} series.",
+                                    metric_name,
+                                    labels_list.len()
+                                ));
+                                show_available_labels(&mut error_with_help, metric_name, &labels_list);
+                            }
 
-                        // Show available labels for this metric
-                        if let Some(labels_list) = tsdb.counter_labels(metric_name) {
-                            error_with_help.push_str(&format!(
-                                "\n\nMetric '{}' (COUNTER) has {} series.",
-                                metric_name,
-                                labels_list.len()
-                            ));
-                            show_available_labels(&mut error_with_help, metric_name, &labels_list);
-                        } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
-                            error_with_help.push_str(&format!(
-                                "\n\nMetric '{}' (GAUGE) has {} series.",
-                                metric_name,
-                                labels_list.len()
-                            ));
-                            show_available_labels(&mut error_with_help, metric_name, &labels_list);
-                        } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
-                            error_with_help.push_str(&format!(
-                                "\n\nMetric '{}' (HISTOGRAM) has {} series.",
-                                metric_name,
-                                labels_list.len()
-                            ));
-                            show_available_labels(&mut error_with_help, metric_name, &labels_list);
+                            return Err(error_with_help.into());
                         }
-
-                        return Err(error_with_help.into());
                     }
                 }
 
@@ -655,8 +655,6 @@ fn extract_time_series(
             let example_query = if query.contains("rate(") || query.contains("irate(") {
                 // Query has rate() but missing the range vector
                 let fixed = query
-                    .replace("rate(", "rate(")
-                    .replace("irate(", "irate(")
                     .replace("))", "[1m]))")
                     .replace("})", "}[1m]))");
                 format!(
@@ -665,7 +663,6 @@ fn extract_time_series(
                 )
             } else if query.contains("increase(") {
                 let fixed = query
-                    .replace("increase(", "increase(")
                     .replace("))", "[1m]))")
                     .replace("})", "}[1m]))");
                 format!(
@@ -686,11 +683,11 @@ fn extract_time_series(
             }
 
             // Even with data, it's still just instant values
-            return Err(format!(
+            Err(format!(
                 "Query returned instant values instead of time series data. \
                 Anomaly detection requires metrics with range vectors to analyze patterns over time.{}",
                 example_query
-            ).into());
+            ).into())
         }
         QueryResult::Matrix { result } => {
             // For matrix results, we have time series data
@@ -1282,7 +1279,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
 
     // Show smoothing information if applied
     if let Some(window) = result.smoothing_window {
-        output.push_str(&format!("\nData Smoothing Applied:\n"));
+        output.push_str("\nData Smoothing Applied:\n");
         output.push_str(&format!(
             "  Allan-determined averaging window: {:.2}s\n",
             window
