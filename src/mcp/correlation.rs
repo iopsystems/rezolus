@@ -44,9 +44,13 @@ pub struct SeriesCorrelation {
 
 /// Calculate cross-correlation between two PromQL expressions
 ///
+/// IMPORTANT: Counter metrics must be wrapped in rate() or irate() functions
+/// for meaningful correlation analysis. Raw counter values are monotonically
+/// increasing and will show spurious correlations.
+///
 /// This handles various cases:
-/// - Simple metrics: `cpu_usage` vs `memory_used`
-/// - Rate queries: `irate(cpu_cycles[5m])` vs `irate(instructions[5m])`
+/// - Simple metrics: `cpu_usage` vs `memory_used` (for gauges)
+/// - Rate queries: `irate(cpu_cycles[5m])` vs `irate(instructions[5m])` (for counters)
 /// - Aggregations: `sum by (name) (irate(cgroup_cpu_usage[5m]))` vs `sum by (id) (irate(cpu_usage[5m]))`
 /// - Complex expressions: `cpu_usage / cpu_total` vs `memory_used / memory_total`
 ///
@@ -54,6 +58,8 @@ pub struct SeriesCorrelation {
 /// increased CPU usage due to garbage collection after a delay.
 ///
 /// The time range and step are determined automatically from the underlying TSDB.
+///
+/// Note: Use describe_metrics tool to identify counter vs gauge metrics.
 pub fn calculate_correlation(
     engine: &Arc<QueryEngine>,
     tsdb: &Arc<Tsdb>,

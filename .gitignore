@@ -1,4 +1,5 @@
 .cargo
 !.cargo/config.toml
+.claude
 target
 **/*.rs.bk

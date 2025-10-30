@@ -10,6 +10,7 @@ name = "rezolus"
 path = "src/main.rs"
 
 [dependencies]
+allan = "0.3.0"
 anyhow = "1.0.98"
 archspec = "0.1.3"
 arrow = "54.3.1"
