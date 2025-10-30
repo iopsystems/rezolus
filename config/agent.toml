@@ -130,3 +130,7 @@ enabled = true
 # Samples TCP traffic using a BPF sampler to get metrics for TX/RX bytes and
 # packets
 [samplers.tcp_traffic]
+
+# Samples GPU metrics on Apple Silicon using powermetrics
+[samplers.gpu_apple]
+enabled = true
