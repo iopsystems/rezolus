@@ -224,7 +224,7 @@ fn detect_window_change_points(
     // Use Allan-determined window size for change-point detection
     // This adapts to the noise characteristics of the metric
     // For regime shift detection, use 2x the Allan window to ensure we capture sustained changes
-    let window_duration = (allan_window_seconds * 2.0).max(30.0).min(120.0);
+    let window_duration = (allan_window_seconds * 2.0).clamp(30.0, 120.0);
     let window_size = (window_duration / sample_interval).round() as usize;
     let window_size = window_size.max(10).min(values.len() / 4);
 

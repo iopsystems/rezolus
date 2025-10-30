@@ -22,7 +22,7 @@ pub(super) fn perform_mad_analysis(
     // Calculate median
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = if sorted.len() % 2 == 0 {
+    let median = if sorted.len().is_multiple_of(2) {
         (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
     } else {
         sorted[sorted.len() / 2]
@@ -34,7 +34,7 @@ pub(super) fn perform_mad_analysis(
     // Calculate MAD (median of absolute deviations)
     let mut sorted_deviations = deviations.clone();
     sorted_deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mad = if sorted_deviations.len() % 2 == 0 {
+    let mad = if sorted_deviations.len().is_multiple_of(2) {
         (sorted_deviations[sorted_deviations.len() / 2 - 1]
             + sorted_deviations[sorted_deviations.len() / 2])
             / 2.0

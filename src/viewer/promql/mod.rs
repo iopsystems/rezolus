@@ -645,10 +645,7 @@ impl QueryEngine {
                                     }
                                 }
 
-                                grouped
-                                    .entry(group_key)
-                                    .or_insert_with(Vec::new)
-                                    .push(sample);
+                                grouped.entry(group_key).or_default().push(sample);
                             }
 
                             // Now aggregate each group
@@ -963,7 +960,7 @@ impl QueryEngine {
                         let sum_series = collection.filtered_sum(&Labels::default());
                         if let Some((_ts, value)) = sum_series.inner.iter().next() {
                             return Ok(QueryResult::Scalar {
-                                result: (start, *value as f64),
+                                result: (start, *value),
                             });
                         }
                     }
@@ -983,7 +980,7 @@ impl QueryEngine {
                         let values: Vec<(f64, f64)> = untyped
                             .inner
                             .range(start_ns..=end_ns)
-                            .map(|(ts, val)| (*ts as f64 / 1e9, *val as f64))
+                            .map(|(ts, val)| (*ts as f64 / 1e9, *val))
                             .collect();
 
                         if !values.is_empty() {
@@ -1073,7 +1070,7 @@ impl QueryEngine {
                 let points: Vec<(f64, f64)> = untyped
                     .inner
                     .range(window_start..=window_end)
-                    .map(|(ts, val)| (*ts as f64 / 1e9, *val as f64))
+                    .map(|(ts, val)| (*ts as f64 / 1e9, *val))
                     .collect();
 
                 if points.len() >= 2 {
