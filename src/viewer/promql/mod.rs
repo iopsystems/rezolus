@@ -645,10 +645,7 @@ impl QueryEngine {
                                     }
                                 }
 
-                                grouped
-                                    .entry(group_key)
-                                    .or_default()
-                                    .push(sample);
+                                grouped.entry(group_key).or_default().push(sample);
                             }
 
                             // Now aggregate each group

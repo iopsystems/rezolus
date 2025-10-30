@@ -429,21 +429,33 @@ pub fn detect_anomalies(
                                     metric_name,
                                     labels_list.len()
                                 ));
-                                show_available_labels(&mut error_with_help, metric_name, &labels_list);
+                                show_available_labels(
+                                    &mut error_with_help,
+                                    metric_name,
+                                    &labels_list,
+                                );
                             } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
                                 error_with_help.push_str(&format!(
                                     "\n\nMetric '{}' (GAUGE) has {} series.",
                                     metric_name,
                                     labels_list.len()
                                 ));
-                                show_available_labels(&mut error_with_help, metric_name, &labels_list);
+                                show_available_labels(
+                                    &mut error_with_help,
+                                    metric_name,
+                                    &labels_list,
+                                );
                             } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
                                 error_with_help.push_str(&format!(
                                     "\n\nMetric '{}' (HISTOGRAM) has {} series.",
                                     metric_name,
                                     labels_list.len()
                                 ));
-                                show_available_labels(&mut error_with_help, metric_name, &labels_list);
+                                show_available_labels(
+                                    &mut error_with_help,
+                                    metric_name,
+                                    &labels_list,
+                                );
                             }
 
                             return Err(error_with_help.into());
@@ -654,17 +666,13 @@ fn extract_time_series(
 
             let example_query = if query.contains("rate(") || query.contains("irate(") {
                 // Query has rate() but missing the range vector
-                let fixed = query
-                    .replace("))", "[1m]))")
-                    .replace("})", "}[1m]))");
+                let fixed = query.replace("))", "[1m]))").replace("})", "}[1m]))");
                 format!(
                     "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
                     fixed
                 )
             } else if query.contains("increase(") {
-                let fixed = query
-                    .replace("))", "[1m]))")
-                    .replace("})", "}[1m]))");
+                let fixed = query.replace("))", "[1m]))").replace("})", "}[1m]))");
                 format!(
                     "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
                     fixed
