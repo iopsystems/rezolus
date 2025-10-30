@@ -7,24 +7,12 @@ use nix::unistd::Pid;
 use plist::Value;
 use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 use super::stats::*;
 
-// Shared state for tracking energy deltas across the parsing thread
-struct EnergyTracker {
-    last_energy: Option<i64>,
-    last_update: Option<Instant>,
-}
-
-lazy_static::lazy_static! {
-    static ref ENERGY_TRACKER: StdMutex<EnergyTracker> = StdMutex::new(EnergyTracker {
-        last_energy: None,
-        last_update: None,
-    });
-}
 
 #[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -192,34 +180,13 @@ fn parse_plist_sample(data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
                 debug!("GPU utilization: {}%", utilization);
             }
 
-            // GPU Energy and Power
-            // gpu_energy is in millijoules (mJ), we calculate power in milliwatts (mW)
-            if let Some(Value::Integer(energy)) = gpu_dict.get("gpu_energy") {
-                let current_energy = energy.as_signed().unwrap_or(0);
-                let now = Instant::now();
-
-                // Update the cumulative energy counter
-                let _ = GPU_ENERGY_CONSUMPTION.set(0, current_energy as u64);
-
-                // Calculate instantaneous power from energy delta
-                if let Ok(mut tracker) = ENERGY_TRACKER.lock() {
-                    if let (Some(last_energy), Some(last_update)) =
-                        (tracker.last_energy, tracker.last_update)
-                    {
-                        let energy_delta_mj = current_energy - last_energy;
-                        let time_delta_secs = now.duration_since(last_update).as_secs_f64();
-
-                        if time_delta_secs > 0.0 && energy_delta_mj >= 0 {
-                            // Power (mW) = Energy (mJ) / Time (s)
-                            let power_mw = (energy_delta_mj as f64 / time_delta_secs) as i64;
-                            let _ = GPU_POWER_USAGE.set(0, power_mw);
-                            debug!("GPU power: {} mW, energy: {} mJ", power_mw, current_energy);
-                        }
-                    }
-
-                    tracker.last_energy = Some(current_energy);
-                    tracker.last_update = Some(now);
-                }
+            // GPU Power
+            // Note: powermetrics plist 'gpu_energy' is actually instantaneous power in mW,
+            // not cumulative energy despite the misleading field name
+            if let Some(Value::Integer(power)) = gpu_dict.get("gpu_energy") {
+                let current_power_mw = power.as_signed().unwrap_or(0);
+                let _ = GPU_POWER_USAGE.set(0, current_power_mw);
+                debug!("GPU power: {} mW", current_power_mw);
             }
         }
     }
