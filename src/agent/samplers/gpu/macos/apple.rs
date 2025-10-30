@@ -203,7 +203,9 @@ fn parse_plist_sample(data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
 
                 // Calculate instantaneous power from energy delta
                 if let Ok(mut tracker) = ENERGY_TRACKER.lock() {
-                    if let (Some(last_energy), Some(last_update)) = (tracker.last_energy, tracker.last_update) {
+                    if let (Some(last_energy), Some(last_update)) =
+                        (tracker.last_energy, tracker.last_update)
+                    {
                         let energy_delta_mj = current_energy - last_energy;
                         let time_delta_secs = now.duration_since(last_update).as_secs_f64();
 
