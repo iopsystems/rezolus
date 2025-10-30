@@ -1,10 +1,14 @@
 use super::*;
 
+#[cfg(not(feature = "developer-mode"))]
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use clap::ArgMatches;
-use http::{header, StatusCode, Uri};
+use http::StatusCode;
+#[cfg(not(feature = "developer-mode"))]
+use http::{header, Uri};
+#[cfg(not(feature = "developer-mode"))]
 use include_dir::{include_dir, Dir};
 use serde::Serialize;
 use tokio::net::TcpListener;
@@ -25,6 +29,7 @@ use tower_http::services::{ServeDir, ServeFile};
 #[cfg(feature = "developer-mode")]
 use std::path::Path;
 
+#[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
 mod dashboard;
@@ -277,6 +282,7 @@ async fn data(
     )
 }
 
+#[cfg(not(feature = "developer-mode"))]
 async fn index() -> impl IntoResponse {
     if let Some(asset) = ASSETS.get_file("index.html") {
         let body = asset.contents_utf8().unwrap();
@@ -297,6 +303,7 @@ async fn index() -> impl IntoResponse {
     }
 }
 
+#[cfg(not(feature = "developer-mode"))]
 async fn lib(uri: Uri) -> impl IntoResponse {
     let path = uri.path();
 

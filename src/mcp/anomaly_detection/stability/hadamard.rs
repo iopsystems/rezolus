@@ -139,7 +139,7 @@ fn detect_hadamard_transitions(
 
                     // Detect significant change: noise type changed OR deviation changed by 2x
                     let significant_deviation_change =
-                        deviation_change_factor > 2.0 || deviation_change_factor < 0.5;
+                        !(0.5..=2.0).contains(&deviation_change_factor);
 
                     if noise_type_changed || significant_deviation_change {
                         // Transition point is at the start of the current window
@@ -151,7 +151,7 @@ fn detect_hadamard_transitions(
                         if noise_type_changed {
                             confidence += 0.3; // Noise type change is significant
                         }
-                        if deviation_change_factor > 3.0 || deviation_change_factor < 0.33 {
+                        if !(0.33..=3.0).contains(&deviation_change_factor) {
                             confidence += 0.3; // Very large deviation change
                         } else if significant_deviation_change {
                             confidence += 0.2; // Moderate deviation change
