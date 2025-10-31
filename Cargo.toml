@@ -66,6 +66,10 @@ perf-event2 = "0.7.4"
 perf-event-open-sys2 = "5.0.6"
 nvml-wrapper = "0.11.0"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+plist = "1.8"
+
 [target.'cfg(target_os = "linux")'.build-dependencies]
 libbpf-cargo = { version = "0.25.0" }
 

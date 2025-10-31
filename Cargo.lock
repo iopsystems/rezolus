@@ -1057,7 +1057,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73736a89c4aff73035ba2ed2e565061954da00d4970fc9ac25dcc85a2a20d790"
 dependencies = [
  "dispatch2",
- "nix",
+ "nix 0.30.1",
  "windows-sys 0.61.1",
 ]
 
@@ -1959,7 +1959,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "912fae30b08bcbdb861d4b85bd09c05352c0ac9d7b93765ced5ca23709e7e590"
 dependencies = [
  "cc",
- "nix",
+ "nix 0.30.1",
  "pkg-config",
 ]
 
@@ -2251,6 +2251,18 @@ checksum = "bf78b1242a953be96e01b5f8ed8ffdfc8055c0a2b779899b3835e5d27a69dced"
 
 [[package]]
 name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.9.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
+name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
@@ -2291,7 +2303,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -2715,6 +2727,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "plist"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "740ebea15c5d1428f910cd1a5f52cebf8d25006245ed8ade92702f4943d91e07"
+dependencies = [
+ "base64",
+ "indexmap",
+ "quick-xml",
+ "serde",
+ "time",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2781,6 +2806,15 @@ dependencies = [
  "lrlex",
  "lrpar",
  "regex",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.38.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42a232e7487fc2ef313d96dde7948e7a3c05101870d8985e4fd8d26aedd27b89"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -2936,6 +2970,7 @@ dependencies = [
  "memmap2 0.9.9",
  "metriken",
  "metriken-exposition",
+ "nix 0.29.0",
  "notify",
  "nvml-wrapper",
  "open",
@@ -2945,6 +2980,7 @@ dependencies = [
  "perf-event-open-sys2",
  "perf-event2",
  "plain",
+ "plist",
  "promql-parser",
  "rayon",
  "reqwest",
