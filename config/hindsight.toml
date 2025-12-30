@@ -12,8 +12,12 @@ source = "127.0.0.1:4241"
 # the location that is used for the ring buffer.
 output = "/tmp/rezolus.parquet"
 
-# Specify the output format
-format = "parquet"
+# Optional: enable HTTP endpoint for remote dump triggering
+# Supports endpoints:
+#   GET  /status     - Buffer status and time range info
+#   GET  /dump       - Download ring buffer as parquet (query params: start, end, last)
+#   POST /dump/file  - Write ring buffer to output file
+# listen = "127.0.0.1:4242"
 
 [log]
 # Controls the log level: "error", "warn", "info", "debug", "trace"

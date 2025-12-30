@@ -187,6 +187,53 @@ sudo systemctl start rezolus-hindsight
 sudo systemctl kill -sHUP rezolus-hindsight
 ```
 
+##### HTTP Endpoint (Optional)
+
+Hindsight can optionally expose an HTTP endpoint for remote buffer management.
+Enable it by adding a `listen` address to the configuration:
+
+```toml
+listen = "127.0.0.1:4242"
+```
+
+Available endpoints:
+
+- `GET /status` - Returns buffer status including time range, utilization, and
+  snapshot count
+- `GET /dump` - Downloads the ring buffer as a parquet file
+- `POST /dump/file` - Writes the ring buffer to the configured output file
+
+The `/dump` and `/dump/file` endpoints support query parameters for time
+filtering:
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `last`    | Relative time range | `?last=5m` |
+| `start`   | Start time (Unix timestamp or RFC 3339) | `?start=2024-01-01T12:00:00Z` |
+| `end`     | End time (Unix timestamp or RFC 3339) | `?end=2024-01-01T13:00:00Z` |
+
+Examples:
+
+```bash
+# check buffer status
+curl http://localhost:4242/status
+
+# download last 5 minutes as parquet
+curl -o dump.parquet "http://localhost:4242/dump?last=5m"
+
+# download a specific time range using RFC 3339 datetime
+curl -o dump.parquet "http://localhost:4242/dump?start=2024-01-01T12:00:00Z&end=2024-01-01T13:00:00Z"
+
+# download a specific time range using Unix timestamps
+curl -o dump.parquet "http://localhost:4242/dump?start=1704067200&end=1704070800"
+
+# trigger a dump to the configured output file
+curl -X POST http://localhost:4242/dump/file
+
+# trigger a dump of the last 10 minutes to file
+curl -X POST "http://localhost:4242/dump/file?last=10m"
+```
+
 ### Build from source
 ```bash
 git clone https://github.com/iopsystems/rezolus

@@ -1,5 +1,3 @@
-use crate::Format;
-
 use clap::ArgMatches;
 use ringlog::Level;
 use serde::Deserialize;
@@ -27,10 +25,6 @@ fn duration() -> String {
 
 fn output() -> String {
     "/tmp/rezolus.parquet".into()
-}
-
-fn parquet() -> Format {
-    Format::Parquet
 }
 
 #[derive(Deserialize, Default)]
