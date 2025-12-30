@@ -402,32 +402,28 @@ fn perform_dump_to_file(
 
         // Apply time filter if specified
         if time_range.start.is_some() || time_range.end.is_some() {
-            if let Ok(snapshot) = rmp_serde::from_slice::<Snapshot>(&buf) {
-                if let Snapshot::V2(ref s) = snapshot {
-                    if !time_range.contains(s.systemtime) {
-                        continue;
+            if let Ok(Snapshot::V2(ref s)) = rmp_serde::from_slice::<Snapshot>(&buf) {
+                if !time_range.contains(s.systemtime) {
+                    continue;
+                }
+                // Track timestamps
+                if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
+                    let ts = dur.as_secs();
+                    if first_timestamp.is_none() {
+                        first_timestamp = Some(ts);
                     }
-                    // Track timestamps
-                    if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
-                        let ts = dur.as_secs();
-                        if first_timestamp.is_none() {
-                            first_timestamp = Some(ts);
-                        }
-                        last_timestamp = Some(ts);
-                    }
+                    last_timestamp = Some(ts);
                 }
             }
         } else {
             // No time filter, still track timestamps for response
-            if let Ok(snapshot) = rmp_serde::from_slice::<Snapshot>(&buf) {
-                if let Snapshot::V2(ref s) = snapshot {
-                    if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
-                        let ts = dur.as_secs();
-                        if first_timestamp.is_none() {
-                            first_timestamp = Some(ts);
-                        }
-                        last_timestamp = Some(ts);
+            if let Ok(Snapshot::V2(ref s)) = rmp_serde::from_slice::<Snapshot>(&buf) {
+                if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
+                    let ts = dur.as_secs();
+                    if first_timestamp.is_none() {
+                        first_timestamp = Some(ts);
                     }
+                    last_timestamp = Some(ts);
                 }
             }
         }

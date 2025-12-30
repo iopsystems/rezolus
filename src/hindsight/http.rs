@@ -63,7 +63,7 @@ impl DumpParams {
                 .map_err(|e| format!("invalid duration '{}': {}", last, e))?;
             let now = SystemTime::now();
             let start = now
-                .checked_sub((*duration).into())
+                .checked_sub(*duration)
                 .ok_or_else(|| "duration too large".to_string())?;
             return Ok(TimeRange::new(Some(start), Some(now)));
         }
