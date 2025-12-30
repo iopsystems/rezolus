@@ -376,7 +376,10 @@ fn perform_dump_to_file(
         }
 
         // seek to the start of the snapshot slot
-        if writer.seek(SeekFrom::Start(i * shared.snapshot_len)).is_err() {
+        if writer
+            .seek(SeekFrom::Start(i * shared.snapshot_len))
+            .is_err()
+        {
             continue;
         }
 

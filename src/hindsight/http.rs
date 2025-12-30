@@ -68,7 +68,11 @@ impl DumpParams {
             return Ok(TimeRange::new(Some(start), Some(now)));
         }
 
-        let start = self.start.as_ref().map(|s| parse_timestamp(s)).transpose()?;
+        let start = self
+            .start
+            .as_ref()
+            .map(|s| parse_timestamp(s))
+            .transpose()?;
         let end = self.end.as_ref().map(|s| parse_timestamp(s)).transpose()?;
 
         // Validate start <= end if both are specified
@@ -174,10 +178,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
     })
 }
 
-async fn dump(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<DumpParams>,
-) -> Response {
+async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParams>) -> Response {
     let shared = &state.shared;
 
     let time_range = match params.resolve_time_range() {
@@ -192,7 +193,11 @@ async fn dump(
     };
 
     if data.is_empty() {
-        return (StatusCode::OK, "no snapshots match the specified time range").into_response();
+        return (
+            StatusCode::OK,
+            "no snapshots match the specified time range",
+        )
+            .into_response();
     }
 
     match convert_to_parquet(&data, shared.interval) {
@@ -214,12 +219,18 @@ async fn dump_to_file(
 ) -> Response {
     let time_range = match params.resolve_time_range() {
         Ok(r) => r,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(DumpFileResponse {
-            path: String::new(),
-            snapshots: 0,
-            time_range: None,
-            error: Some(e),
-        })).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(DumpFileResponse {
+                    path: String::new(),
+                    snapshots: 0,
+                    time_range: None,
+                    error: Some(e),
+                }),
+            )
+                .into_response()
+        }
     };
 
     // Send request to sampling loop
@@ -230,24 +241,32 @@ async fn dump_to_file(
     };
 
     if state.dump_tx.send(request).await.is_err() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(DumpFileResponse {
-            path: String::new(),
-            snapshots: 0,
-            time_range: None,
-            error: Some("sampling loop not available".to_string()),
-        })).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(DumpFileResponse {
+                path: String::new(),
+                snapshots: 0,
+                time_range: None,
+                error: Some("sampling loop not available".to_string()),
+            }),
+        )
+            .into_response();
     }
 
     // Wait for response
     match response_rx.await {
         Ok(response) => {
             if let Some(error) = response.error {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(DumpFileResponse {
-                    path: String::new(),
-                    snapshots: 0,
-                    time_range: None,
-                    error: Some(error),
-                })).into_response()
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(DumpFileResponse {
+                        path: String::new(),
+                        snapshots: 0,
+                        time_range: None,
+                        error: Some(error),
+                    }),
+                )
+                    .into_response()
             } else {
                 let time_range = match (response.start_time, response.end_time) {
                     (Some(start), Some(end)) => Some(TimeRangeResponse { start, end }),
@@ -258,15 +277,20 @@ async fn dump_to_file(
                     snapshots: response.snapshots,
                     time_range,
                     error: None,
-                }).into_response()
+                })
+                .into_response()
             }
         }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(DumpFileResponse {
-            path: String::new(),
-            snapshots: 0,
-            time_range: None,
-            error: Some("failed to receive response from sampling loop".to_string()),
-        })).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(DumpFileResponse {
+                path: String::new(),
+                snapshots: 0,
+                time_range: None,
+                error: Some("failed to receive response from sampling loop".to_string()),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -275,8 +299,8 @@ fn read_filtered_snapshots(
     shared: &SharedState,
     time_range: &TimeRange,
 ) -> Result<Vec<u8>, String> {
-    let mut file = File::open(&shared.temp_path)
-        .map_err(|e| format!("failed to open ring buffer: {}", e))?;
+    let mut file =
+        File::open(&shared.temp_path).map_err(|e| format!("failed to open ring buffer: {}", e))?;
 
     let idx = shared.idx();
     let valid_count = shared.valid_snapshot_count();
@@ -336,8 +360,8 @@ fn extract_timestamp(data: &[u8]) -> Option<SystemTime> {
 
 /// Get the oldest and newest timestamps in the ring buffer
 fn get_timestamp_bounds(shared: &SharedState) -> Result<(Option<u64>, Option<u64>), String> {
-    let mut file = File::open(&shared.temp_path)
-        .map_err(|e| format!("failed to open ring buffer: {}", e))?;
+    let mut file =
+        File::open(&shared.temp_path).map_err(|e| format!("failed to open ring buffer: {}", e))?;
 
     let idx = shared.idx();
     let valid_count = shared.valid_snapshot_count();
@@ -397,18 +421,19 @@ fn get_timestamp_bounds(shared: &SharedState) -> Result<(Option<u64>, Option<u64
 /// Convert msgpack data to parquet format
 fn convert_to_parquet(data: &[u8], interval: Duration) -> Result<Vec<u8>, String> {
     // Write msgpack data to a temp file
-    let mut input = tempfile::tempfile()
-        .map_err(|e| format!("failed to create temp file: {}", e))?;
+    let mut input =
+        tempfile::tempfile().map_err(|e| format!("failed to create temp file: {}", e))?;
 
     std::io::Write::write_all(&mut input, data)
         .map_err(|e| format!("failed to write temp file: {}", e))?;
 
-    input.seek(SeekFrom::Start(0))
+    input
+        .seek(SeekFrom::Start(0))
         .map_err(|e| format!("failed to seek temp file: {}", e))?;
 
     // Create output temp file
-    let output = tempfile::tempfile()
-        .map_err(|e| format!("failed to create output temp file: {}", e))?;
+    let output =
+        tempfile::tempfile().map_err(|e| format!("failed to create output temp file: {}", e))?;
 
     // Convert
     MsgpackToParquet::with_options(ParquetOptions::new())
@@ -421,11 +446,13 @@ fn convert_to_parquet(data: &[u8], interval: Duration) -> Result<Vec<u8>, String
 
     // Read the parquet data
     let mut output = output;
-    output.seek(SeekFrom::Start(0))
+    output
+        .seek(SeekFrom::Start(0))
         .map_err(|e| format!("failed to seek output file: {}", e))?;
 
     let mut result = Vec::new();
-    output.read_to_end(&mut result)
+    output
+        .read_to_end(&mut result)
         .map_err(|e| format!("failed to read parquet data: {}", e))?;
 
     Ok(result)

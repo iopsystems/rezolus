@@ -125,7 +125,12 @@ pub struct DumpToFileResponse {
 }
 
 impl DumpToFileResponse {
-    pub fn success(path: PathBuf, snapshots: u64, start_time: Option<u64>, end_time: Option<u64>) -> Self {
+    pub fn success(
+        path: PathBuf,
+        snapshots: u64,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Self {
         Self {
             path,
             snapshots,
