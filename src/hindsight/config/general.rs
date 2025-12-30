@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Format, Url};
+use crate::Url;
 
 #[derive(Deserialize)]
 pub struct General {
@@ -19,8 +19,8 @@ pub struct General {
     #[serde(default = "output")]
     output: String,
 
-    #[serde(default = "parquet")]
-    format: Format,
+    // optional HTTP listen address for dump endpoint
+    listen: Option<String>,
 }
 
 impl Default for General {
@@ -30,7 +30,7 @@ impl Default for General {
             duration: duration(),
             source: source(),
             output: output(),
-            format: parquet(),
+            listen: None,
         }
     }
 }
@@ -45,10 +45,6 @@ impl General {
 
     pub fn output(&self) -> PathBuf {
         self.output.clone().into()
-    }
-
-    pub fn format(&self) -> Format {
-        self.format
     }
 
     pub fn interval(&self) -> humantime::Duration {
@@ -78,5 +74,22 @@ impl General {
     pub fn url(&self) -> Url {
         let source = self.source();
         Url::try_from(format!("http://{source}/metrics/binary").as_str()).unwrap()
+    }
+
+    pub fn listen(&self) -> Option<SocketAddr> {
+        self.listen.as_ref().map(|s| {
+            s.to_socket_addrs()
+                .map_err(|e| {
+                    eprintln!("bad listen address: {e}");
+                    std::process::exit(1);
+                })
+                .unwrap()
+                .next()
+                .ok_or_else(|| {
+                    eprintln!("could not resolve listen socket addr");
+                    std::process::exit(1);
+                })
+                .unwrap()
+        })
     }
 }
