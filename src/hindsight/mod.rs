@@ -2,8 +2,11 @@ use super::*;
 use std::fs::OpenOptions;
 
 mod config;
+mod http;
+mod state;
 
 pub use config::Config;
+use state::{DumpToFileRequest, DumpToFileResponse, SharedState, TimeRange};
 
 pub fn command() -> Command {
     Command::new("hindsight")
@@ -31,6 +34,9 @@ pub fn command() -> Command {
 /// not only cover the duration of an anomalous event but give time for an
 /// engineer or automated process to respond and trigger the process to persist
 /// the ring buffer.
+///
+/// Optionally, an HTTP endpoint can be enabled to allow remote triggering of
+/// ring buffer dumps without terminating the service.
 pub fn run(config: Config) {
     // load config from file
     let config: Arc<Config> = config.into();
@@ -121,19 +127,28 @@ pub fn run(config: Config) {
         })
         .unwrap();
 
-    // our writer will always be a new temporary file
-    let mut writer = {
+    // Get the directory for temp files
+    let temp_dir = {
         let mut path: PathBuf = config.general().output();
         path.pop();
+        path
+    };
 
-        match tempfile_in(path.clone()) {
-            Ok(t) => t,
-            Err(error) => {
-                eprintln!("could not open temporary file in: {path:?}\n{error}");
-                std::process::exit(1);
-            }
+    // our writer will always be a new temporary file
+    // Use NamedTempFile so we can get the path for sharing with HTTP handlers
+    let writer = match tempfile::NamedTempFile::new_in(&temp_dir) {
+        Ok(t) => t,
+        Err(error) => {
+            eprintln!("could not open temporary file in: {temp_dir:?}\n{error}");
+            std::process::exit(1);
         }
     };
+
+    // Get the path before we convert to file handle
+    let temp_path = writer.path().to_path_buf();
+
+    // Convert to regular file handle for writing
+    let mut writer = writer.into_file();
 
     // estimate the snapshot size and latency
     let start = Instant::now();
@@ -180,186 +195,268 @@ pub fn run(config: Config) {
         std::process::exit(1);
     });
 
-    let mut idx = 0;
+    // Create shared state for HTTP handlers
+    let shared_state = Arc::new(SharedState::new(
+        temp_path,
+        snapshot_len,
+        snapshot_count,
+        config.general().interval().into(),
+        config.general().duration().into(),
+        config.general().output(),
+    ));
+
+    // Create channel for dump-to-file requests
+    let (dump_tx, mut dump_rx) = tokio::sync::mpsc::channel::<DumpToFileRequest>(8);
+
+    // Optionally spawn HTTP server
+    if let Some(listen_addr) = config.general().listen() {
+        let shared = shared_state.clone();
+        rt.spawn(async move {
+            http::serve(listen_addr, shared, dump_tx).await;
+        });
+    }
+
+    let shared_for_loop = shared_state.clone();
 
     rt.block_on(async move {
+        let shared = shared_for_loop;
+
         // sampling interval
         let mut interval = crate::common::aligned_interval(config.general().interval().into());
 
         // sampling loop
         while STATE.load(Ordering::Relaxed) < TERMINATING {
             // sample in a loop until RUNNING is false
-            while STATE.load(Ordering::Relaxed) == RUNNING {
-                // wait to sample
-                interval.tick().await;
+            loop {
+                tokio::select! {
+                    biased;
 
-                let start = Instant::now();
-
-                // sample rezolus
-                if let Ok(response) = async_client.get(url.clone()).send().await {
-                    if let Ok(body) = response.bytes().await {
-                        let latency = start.elapsed();
-
-                        debug!("sampling latency: {} us", latency.as_micros());
-
-                        debug!("body size: {}", body.len());
-
-                        // seek to position in snapshot
-                        writer
-                            .seek(SeekFrom::Start(idx * snapshot_len))
-                            .expect("failed to seek");
-
-                        // write the size of the snapshot
-                        writer
-                            .write_all(&body.len().to_be_bytes())
-                            .expect("failed to write snapshot size");
-
-                        // write the actual snapshot content
-                        writer.write_all(&body).expect("failed to write snapshot");
-                    } else {
-                        error!("failed to read response");
-                        std::process::exit(1);
+                    // Check for dump-to-file requests from HTTP endpoint
+                    Some(request) = dump_rx.recv() => {
+                        debug!("received dump-to-file request via HTTP");
+                        let response = perform_dump_to_file(
+                            &mut writer,
+                            &mut destination,
+                            &shared,
+                            &config,
+                            &request.time_range,
+                        );
+                        let _ = request.response_tx.send(response);
                     }
-                } else {
-                    error!("failed to get metrics");
-                    std::process::exit(1);
-                }
 
-                idx += 1;
-
-                if idx >= snapshot_count {
-                    idx = 0;
-                }
-            }
-
-            debug!("flushing writer and preparing destination");
-            let _ = writer.flush();
-            let _ = destination.seek(SeekFrom::Start(0));
-            let _ = destination.set_len(0);
-
-            // handle any output format specific transforms
-            //
-            // note: as the idx is the position we will write to next, it is
-            //       also the position to start reading from
-            match config.general().format() {
-                Format::Raw => {
-                    debug!("capturing ringbuffer and writing to raw");
-
-                    for offset in 0..snapshot_count {
-                        let mut i = idx + offset;
-
-                        // handle wrap-around in the ring-buffer
-                        if i >= snapshot_count {
-                            i -= snapshot_count;
+                    // Regular sampling tick
+                    _ = interval.tick() => {
+                        // Check if we should exit the sampling loop
+                        if STATE.load(Ordering::Relaxed) != RUNNING {
+                            break;
                         }
 
-                        // seek to the start of the snapshot slot
-                        writer
-                            .seek(SeekFrom::Start(i * snapshot_len))
-                            .expect("failed to seek");
+                        let start = Instant::now();
 
-                        // read the size of the snapshot
-                        let mut len = [0, 0, 0, 0, 0, 0, 0, 0];
-                        writer
-                            .read_exact(&mut len)
-                            .expect("failed to read snapshot len");
+                        // sample rezolus
+                        if let Ok(response) = async_client.get(url.clone()).send().await {
+                            if let Ok(body) = response.bytes().await {
+                                let latency = start.elapsed();
 
-                        // read the contents of the snapshot
-                        let mut buf = vec![0; u64::from_be_bytes(len) as usize];
-                        writer
-                            .read_exact(&mut buf)
-                            .expect("failed to read snapshot");
+                                debug!("sampling latency: {} us", latency.as_micros());
+                                debug!("body size: {}", body.len());
 
-                        // write the contents of the snapshot to the packed file
-                        destination
-                            .write_all(&buf)
-                            .expect("failed to write to packed file");
-                    }
+                                let idx = shared.idx();
 
-                    let _ = destination.flush();
+                                // seek to position in snapshot
+                                writer
+                                    .seek(SeekFrom::Start(idx * snapshot_len))
+                                    .expect("failed to seek");
 
-                    debug!("finished");
-                }
-                Format::Parquet => {
-                    debug!("capturing ringbuffer and writing to parquet");
+                                // write the size of the snapshot
+                                writer
+                                    .write_all(&body.len().to_be_bytes())
+                                    .expect("failed to write snapshot size");
 
-                    let _ = writer.rewind();
+                                // write the actual snapshot content
+                                writer.write_all(&body).expect("failed to write snapshot");
 
-                    // we need another temporary file to consume the empty space
-                    // between snapshots
-
-                    // TODO(bmartin): we can probably remove this by using our
-                    // own msgpack -> parquet conversion
-
-                    // our writer will always be a temporary file
-                    let mut packed = {
-                        let mut path: PathBuf = config.general().output();
-                        path.pop();
-
-                        match tempfile_in(path.clone()) {
-                            Ok(t) => t,
-                            Err(error) => {
-                                eprintln!("could not open temporary file in: {path:?}\n{error}");
+                                // Update shared state atomically
+                                shared.advance_idx();
+                            } else {
+                                error!("failed to read response");
                                 std::process::exit(1);
                             }
+                        } else {
+                            error!("failed to get metrics");
+                            std::process::exit(1);
                         }
-                    };
-
-                    for offset in 0..snapshot_count {
-                        let mut i = idx + offset;
-
-                        // handle wrap-around in the ring-buffer
-                        if i >= snapshot_count {
-                            i -= snapshot_count;
-                        }
-
-                        // seek to the start of the snapshot slot
-                        writer
-                            .seek(SeekFrom::Start(i * snapshot_len))
-                            .expect("failed to seek");
-
-                        // read the size of the snapshot
-                        let mut len = [0, 0, 0, 0, 0, 0, 0, 0];
-                        writer
-                            .read_exact(&mut len)
-                            .expect("failed to read snapshot len");
-
-                        // read the contents of the snapshot
-                        let mut buf = vec![0; u64::from_be_bytes(len) as usize];
-                        writer
-                            .read_exact(&mut buf)
-                            .expect("failed to read snapshot");
-
-                        // write the contents of the snapshot to the packed file
-                        packed
-                            .write_all(&buf)
-                            .expect("failed to write to packed file");
                     }
-
-                    let _ = packed.flush();
-                    let _ = packed.rewind();
-
-                    if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
-                        .metadata(
-                            "sampling_interval_ms".to_string(),
-                            config.general().interval().as_millis().to_string(),
-                        )
-                        .convert_file_handle(packed, &destination)
-                    {
-                        eprintln!("error saving parquet file: {e}");
-                    }
-
-                    let _ = destination.flush();
                 }
             }
 
-            debug!("ringbuffer capture complete");
+            // Handle Ctrl+C triggered dump (CAPTURING state)
+            if STATE.load(Ordering::Relaxed) == CAPTURING {
+                debug!("flushing writer and preparing destination");
+                let _ = writer.flush();
 
-            if STATE.load(Ordering::SeqCst) == TERMINATING {
-                return;
-            } else {
-                STATE.store(RUNNING, Ordering::SeqCst);
+                let response = perform_dump_to_file(
+                    &mut writer,
+                    &mut destination,
+                    &shared,
+                    &config,
+                    &TimeRange::default(), // no time filter
+                );
+
+                if let Some(error) = response.error {
+                    error!("dump failed: {}", error);
+                } else {
+                    info!(
+                        "ringbuffer capture complete: {} snapshots written to {}",
+                        response.snapshots,
+                        response.path.display()
+                    );
+                }
+
+                if STATE.load(Ordering::SeqCst) == TERMINATING {
+                    return;
+                } else {
+                    STATE.store(RUNNING, Ordering::SeqCst);
+                }
             }
         }
     });
+}
+
+/// Perform a dump of the ring buffer to the destination file
+fn perform_dump_to_file(
+    writer: &mut std::fs::File,
+    destination: &mut std::fs::File,
+    shared: &SharedState,
+    config: &Config,
+    time_range: &TimeRange,
+) -> DumpToFileResponse {
+    use metriken_exposition::{MsgpackToParquet, ParquetOptions, Snapshot};
+    use std::time::UNIX_EPOCH;
+
+    debug!("capturing ringbuffer and writing to parquet");
+
+    let idx = shared.idx();
+    let valid_count = shared.valid_snapshot_count();
+
+    // Prepare destination
+    if let Err(e) = destination.seek(SeekFrom::Start(0)) {
+        return DumpToFileResponse::error(format!("failed to seek destination: {}", e));
+    }
+    if let Err(e) = destination.set_len(0) {
+        return DumpToFileResponse::error(format!("failed to truncate destination: {}", e));
+    }
+
+    let mut snapshots_written = 0u64;
+    let mut first_timestamp: Option<u64> = None;
+    let mut last_timestamp: Option<u64> = None;
+
+    // Get temp directory for packed file
+    let temp_dir = {
+        let mut path: PathBuf = config.general().output();
+        path.pop();
+        path
+    };
+
+    // Create temporary file for packed msgpack data
+    let mut packed = match tempfile_in(temp_dir.clone()) {
+        Ok(t) => t,
+        Err(error) => {
+            return DumpToFileResponse::error(format!(
+                "could not open temporary file in: {:?}\n{}",
+                temp_dir, error
+            ));
+        }
+    };
+
+    for offset in 0..valid_count {
+        let mut i = idx + offset;
+        if i >= shared.snapshot_count {
+            i -= shared.snapshot_count;
+        }
+
+        // seek to the start of the snapshot slot
+        if writer
+            .seek(SeekFrom::Start(i * shared.snapshot_len))
+            .is_err()
+        {
+            continue;
+        }
+
+        // read the size of the snapshot
+        let mut len = [0u8; 8];
+        if writer.read_exact(&mut len).is_err() {
+            continue;
+        }
+
+        let size = u64::from_be_bytes(len) as usize;
+        if size == 0 {
+            continue;
+        }
+
+        // read the contents of the snapshot
+        let mut buf = vec![0u8; size];
+        if writer.read_exact(&mut buf).is_err() {
+            continue;
+        }
+
+        // Apply time filter if specified
+        if time_range.start.is_some() || time_range.end.is_some() {
+            if let Ok(Snapshot::V2(ref s)) = rmp_serde::from_slice::<Snapshot>(&buf) {
+                if !time_range.contains(s.systemtime) {
+                    continue;
+                }
+                // Track timestamps
+                if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
+                    let ts = dur.as_secs();
+                    if first_timestamp.is_none() {
+                        first_timestamp = Some(ts);
+                    }
+                    last_timestamp = Some(ts);
+                }
+            }
+        } else {
+            // No time filter, still track timestamps for response
+            if let Ok(Snapshot::V2(ref s)) = rmp_serde::from_slice::<Snapshot>(&buf) {
+                if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
+                    let ts = dur.as_secs();
+                    if first_timestamp.is_none() {
+                        first_timestamp = Some(ts);
+                    }
+                    last_timestamp = Some(ts);
+                }
+            }
+        }
+
+        // write the contents of the snapshot to the packed file
+        if packed.write_all(&buf).is_err() {
+            return DumpToFileResponse::error("failed to write to packed file".to_string());
+        }
+        snapshots_written += 1;
+    }
+
+    let _ = packed.flush();
+    if packed.rewind().is_err() {
+        return DumpToFileResponse::error("failed to rewind packed file".to_string());
+    }
+
+    if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
+        .metadata(
+            "sampling_interval_ms".to_string(),
+            config.general().interval().as_millis().to_string(),
+        )
+        .convert_file_handle(packed, &mut *destination)
+    {
+        return DumpToFileResponse::error(format!("error saving parquet file: {}", e));
+    }
+
+    let _ = destination.flush();
+    debug!("finished parquet dump");
+
+    DumpToFileResponse::success(
+        config.general().output(),
+        snapshots_written,
+        first_timestamp,
+        last_timestamp,
+    )
 }
