@@ -1,11 +1,21 @@
 //! Collects tlb flush event information using BPF and traces:
-//! * `tlb_flush`
+//! * `tlb_flush` (x86_64 tracepoint)
+//! * `tlb_finish_mmu` (ARM64 kprobe fallback)
 //!
 //! And produces these stats:
 //! * `cpu_tlb_flush`
 //! * `cgroup_cpu_tlb_flush`
 //!
 //! These stats can be used to understand the reason for TLB flushes.
+//!
+//! ## Architecture Support
+//!
+//! - **x86_64**: Uses the `tlb_flush` tracepoint which provides detailed reason
+//!   codes (task_switch, remote_shootdown, local_shootdown, etc.)
+//!
+//! - **ARM64**: Uses a kprobe on `tlb_finish_mmu` which is called after TLB
+//!   batch operations. This provides basic TLB flush counting without reason
+//!   breakdown (all flushes are counted as "unknown" reason).
 
 const NAME: &str = "cpu_tlb_flush";
 
@@ -44,13 +54,33 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
+    // Events vector includes all reason types
+    // On x86_64: detailed reason counters from the tracepoint
+    // On ARM64: only TLB_FLUSH_UNKNOWN is used (reason unavailable)
     let events = vec![
         &TLB_FLUSH_TASK_SWITCH,
         &TLB_FLUSH_REMOTE_SHOOTDOWN,
         &TLB_FLUSH_LOCAL_SHOOTDOWN,
         &TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
         &TLB_FLUSH_REMOTE_SEND_IPI,
+        &TLB_FLUSH_UNKNOWN,
     ];
+
+    // Select the appropriate BPF program based on architecture
+    // x86_64: use tlb_flush tracepoint (provides detailed reason codes)
+    // ARM64: use tlb_finish_mmu kprobe (basic counting, no reason breakdown)
+    #[cfg(target_arch = "x86_64")]
+    let enabled_programs = &["tlb_flush"];
+
+    #[cfg(target_arch = "aarch64")]
+    let enabled_programs = &["tlb_finish_mmu"];
+
+    // Other architectures are not supported
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        debug!("{NAME} sampler is not supported on this architecture");
+        return Ok(None);
+    }
 
     let bpf = BpfBuilder::new(
         &config,
@@ -61,6 +91,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
+    .enabled_programs(enabled_programs)
     .cpu_counters("events", events)
     .packed_counters("cgroup_task_switch", &CGROUP_TLB_FLUSH_TASK_SWITCH)
     .packed_counters(
@@ -96,9 +127,16 @@ impl SkelExt for ModSkel<'_> {
 
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
+        #[cfg(target_arch = "x86_64")]
         debug!(
             "{NAME} tlb_flush() BPF instruction count: {}",
             self.progs.tlb_flush.insn_cnt()
+        );
+
+        #[cfg(target_arch = "aarch64")]
+        debug!(
+            "{NAME} tlb_finish_mmu() BPF instruction count: {}",
+            self.progs.tlb_finish_mmu.insn_cnt()
         );
     }
 }

@@ -17,7 +17,7 @@ pub trait OpenSkelExt {
 }
 
 pub trait SkelExt {
-    fn map(&self, name: &str) -> &libbpf_rs::Map;
+    fn map(&self, name: &str) -> &libbpf_rs::Map<'_>;
 }
 
 pub trait CgroupInfo {

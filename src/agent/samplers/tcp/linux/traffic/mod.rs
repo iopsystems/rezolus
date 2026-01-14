@@ -56,7 +56,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 impl SkelExt for ModSkel<'_> {
-    fn map(&self, name: &str) -> &libbpf_rs::Map {
+    fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
             "counters" => &self.maps.counters,
             "rx_size" => &self.maps.rx_size,

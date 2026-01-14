@@ -43,7 +43,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 impl SkelExt for ModSkel<'_> {
-    fn map(&self, name: &str) -> &libbpf_rs::Map {
+    fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
             "srtt" => &self.maps.srtt,
             "jitter" => &self.maps.jitter,

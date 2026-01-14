@@ -1,5 +1,7 @@
 mod bandwidth;
+mod branch;
 mod cores;
+mod dtlb;
 mod frequency;
 mod l3;
 mod migrations;

@@ -8,6 +8,7 @@ use metriken::{LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -194,7 +195,7 @@ enum Event {
 }
 
 impl Event {
-    fn builder(&self) -> perf_event::Builder {
+    fn builder(&self) -> perf_event::Builder<'_> {
         match self {
             Self::Hardware(e) => perf_event::Builder::new(*e),
         }
@@ -228,6 +229,10 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
     btf_path: Option<String>,
+    /// Optional list of program names to enable. If None, all programs are
+    /// enabled (default behavior). If Some, only the listed programs will have
+    /// autoload enabled; all others will be disabled before loading.
+    enabled_programs: Option<HashSet<&'static str>>,
 }
 
 impl<T: 'static> Builder<T>
@@ -254,6 +259,7 @@ where
             packed_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
+            enabled_programs: None,
         }
     }
 
@@ -286,7 +292,7 @@ where
                 Box::leak(Box::new(MaybeUninit::uninit()));
 
             // Open the BPF program with optional custom BTF path
-            let open_skel = if let Some(ref btf_path) = self.btf_path {
+            let mut open_skel = if let Some(ref btf_path) = self.btf_path {
                 debug!("Loading BPF program with external BTF from: {}", btf_path);
 
                 // Create C string for the BTF path
@@ -317,6 +323,22 @@ where
                 // Open normally without custom BTF
                 (self.skel)().open(open_object)?
             };
+
+            // If enabled_programs is set, disable autoload for programs not in the list
+            if let Some(ref enabled) = self.enabled_programs {
+                for mut prog in open_skel.open_object_mut().progs_mut() {
+                    let prog_name = prog.name().to_string_lossy();
+                    if !enabled.contains(prog_name.as_ref()) {
+                        debug!(
+                            "{} disabling autoload for program: {}",
+                            self.name, prog_name
+                        );
+                        prog.set_autoload(false);
+                    } else {
+                        debug!("{} enabling program: {}", self.name, prog_name);
+                    }
+                }
+            }
 
             // load the BPF program
             let mut skel = open_skel.load()?;
@@ -603,6 +625,33 @@ where
 
     pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {
         self.ringbuf_handler.push((name, handler));
+        self
+    }
+
+    /// Specify which BPF programs to enable. By default, all programs in the
+    /// skeleton are enabled. When this method is called, only the listed
+    /// programs will be loaded and attached; all others will have autoload
+    /// disabled.
+    ///
+    /// This is useful for architecture-specific program selection, where
+    /// different probe types are needed on different platforms (e.g., using
+    /// a tracepoint on x86_64 but a kprobe on ARM64).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // On ARM64, only attach the kprobe version
+    /// BpfBuilder::new(...)
+    ///     .enabled_programs(&["tlb_finish_mmu"])
+    ///     .build()?;
+    ///
+    /// // On x86_64, only attach the tracepoint version
+    /// BpfBuilder::new(...)
+    ///     .enabled_programs(&["tlb_flush"])
+    ///     .build()?;
+    /// ```
+    pub fn enabled_programs(mut self, names: &[&'static str]) -> Self {
+        self.enabled_programs = Some(names.iter().copied().collect());
         self
     }
 }
