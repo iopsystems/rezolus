@@ -1,8 +1,12 @@
 //! This sampler is used to measure CPU L3 cache access and misses. It does this
-//! by using two uncore PMUs for each L3 cache domain.
+//! by using perf events that are processor dependent:
 //!
-//! This requires that we identify each L3 cache domain but also identify the
-//! correct raw perf events to use which are processor dependent.
+//! - AMD Zen: Uses uncore L3 PMU (type 0xb) per CCX/CCD
+//! - Intel: Uses CHA (Caching Home Agent) uncore PMU per core
+//! - ARM Graviton: Uses core PMU events (L3D_CACHE, L3D_CACHE_REFILL)
+//!
+//! This requires that we identify each L3 cache domain and the correct raw perf
+//! events to use which are processor dependent.
 
 const NAME: &str = "cpu_l3";
 
@@ -124,10 +128,11 @@ impl L3Cache {
         let (access_event, miss_event) = if let Some(events) = get_events() {
             events
         } else {
+            debug!("no L3 cache events available for CPU{cpu}");
             return Err(());
         };
 
-        if let Ok(mut access) = perf_event::Builder::new(access_event)
+        match perf_event::Builder::new(access_event)
             .one_cpu(cpu)
             .any_pid()
             .exclude_hv(false)
@@ -138,25 +143,33 @@ impl L3Cache {
             )
             .build()
         {
-            if let Ok(miss) = perf_event::Builder::new(miss_event)
-                .one_cpu(cpu)
-                .any_pid()
-                .exclude_hv(false)
-                .exclude_kernel(false)
-                .build_with_group(&mut access)
-            {
-                match access.enable_group() {
-                    Ok(_) => {
-                        return Ok(L3Cache {
-                            access,
-                            miss,
-                            shared_cores,
-                        });
-                    }
+            Ok(mut access) => {
+                match perf_event::Builder::new(miss_event)
+                    .one_cpu(cpu)
+                    .any_pid()
+                    .exclude_hv(false)
+                    .exclude_kernel(false)
+                    .build_with_group(&mut access)
+                {
+                    Ok(miss) => match access.enable_group() {
+                        Ok(_) => {
+                            return Ok(L3Cache {
+                                access,
+                                miss,
+                                shared_cores,
+                            });
+                        }
+                        Err(e) => {
+                            error!("failed to enable the perf group on CPU{cpu}: {e}");
+                        }
+                    },
                     Err(e) => {
-                        error!("failed to enable the perf group on CPU{cpu}: {e}");
+                        debug!("failed to create L3 miss counter on CPU{cpu}: {e}");
                     }
                 }
+            }
+            Err(e) => {
+                debug!("failed to create L3 access counter on CPU{cpu}: {e}");
             }
         }
 
@@ -237,12 +250,28 @@ fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
 fn get_l3_caches() -> Result<Vec<L3Cache>, std::io::Error> {
     let mut l3_domains = l3_domains()?;
 
+    if l3_domains.is_empty() {
+        debug!("no L3 cache domains found");
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no L3 cache domains found",
+        ));
+    }
+
     let mut l3_caches = Vec::new();
 
     for l3_domain in l3_domains.drain(..) {
         if let Ok(l3_cache) = L3Cache::new(l3_domain) {
             l3_caches.push(l3_cache);
         }
+    }
+
+    if l3_caches.is_empty() {
+        debug!("failed to create perf counters for any L3 cache domain");
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "failed to create L3 cache perf counters",
+        ));
     }
 
     Ok(l3_caches)
@@ -270,20 +299,71 @@ fn parse_cpu_list(list: &str) -> Vec<usize> {
     cores
 }
 
+/// Discovers the Intel CHA uncore PMU type from sysfs.
+/// Returns None if not available (not Intel or no CHA PMU).
+fn get_intel_cha_pmu_type() -> Option<u32> {
+    // Try to read the PMU type from the first CHA device
+    let type_path = "/sys/bus/event_source/devices/uncore_cha_0/type";
+    if let Ok(content) = std::fs::read_to_string(type_path) {
+        if let Ok(pmu_type) = content.trim().parse::<u32>() {
+            return Some(pmu_type);
+        }
+    }
+    None
+}
+
 fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
     if let Ok(uarch) = archspec::cpu::host().map(|u| u.name().to_owned()) {
+        debug!("archspec detected microarchitecture: {}", uarch);
         let events = match uarch.as_str() {
+            // AMD Zen family - uses L3 uncore PMU (type 0xb)
+            // Event 0xFF04 = L3 cache access (all request types)
+            // Event 0x0104 = L3 cache miss
             "zen" | "zen2" | "zen3" | "zen4" | "zen5" => (
                 LowLevelEvent::new(0xb, 0xFF04),
                 LowLevelEvent::new(0xb, 0x0104),
             ),
+
+            // Intel server CPUs - uses CHA uncore PMU (dynamic type discovery)
+            // LLC_LOOKUP: Event 0x34, Umask 0x0F (any lookup, all MESI states)
+            // TOR_INSERTS.IA_MISS: Event 0x35, Umask 0x21 (misses from cores)
+            // Config format: (umask << 8) | event_code
+            "skylake_avx512" | "cascadelake" | "icelake" | "sapphirerapids" | "emeraldrapids"
+            | "graniterapids" => {
+                if let Some(cha_type) = get_intel_cha_pmu_type() {
+                    let llc_lookup_config = (0x0F << 8) | 0x34; // LLC_LOOKUP.ANY
+                    let tor_miss_config = (0x21 << 8) | 0x35; // TOR_INSERTS.IA_MISS
+                    (
+                        LowLevelEvent::new(cha_type, llc_lookup_config),
+                        LowLevelEvent::new(cha_type, tor_miss_config),
+                    )
+                } else {
+                    debug!("Intel CHA PMU not available");
+                    return None;
+                }
+            }
+
+            // ARM Graviton / Neoverse - uses core PMU (type 4 = PERF_TYPE_RAW)
+            // L3D_CACHE: Event 0x2B = L3 cache access
+            // L3D_CACHE_REFILL: Event 0x2A = L3 cache miss (refill from outside cluster)
+            "neoverse_n1" | "neoverse_v1" | "neoverse_n2" | "neoverse_v2" | "graviton2"
+            | "graviton3" | "graviton4" | "cortex_a72" => {
+                const PERF_TYPE_RAW: u32 = 4;
+                (
+                    LowLevelEvent::new(PERF_TYPE_RAW, 0x2B), // L3D_CACHE
+                    LowLevelEvent::new(PERF_TYPE_RAW, 0x2A), // L3D_CACHE_REFILL
+                )
+            }
+
             _ => {
+                debug!("unsupported microarchitecture for L3 cache metrics: {uarch}");
                 return None;
             }
         };
 
         Some(events)
     } else {
+        debug!("failed to detect CPU microarchitecture for L3 cache metrics");
         None
     }
 }

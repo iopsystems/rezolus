@@ -67,6 +67,13 @@ enabled = true
 # be used to calculate CPU frequency
 [samplers.cpu_frequency]
 
+# Performance counter based sampler that gathers branch instructions and
+# mispredictions.
+[samplers.cpu_branch]
+
+# Performance counter based sampler that gathers DTLB (Data TLB) misses.
+[samplers.cpu_dtlb]
+
 # Performance counter based sampler that gathers L3 cache accesses and misses.
 [samplers.cpu_l3]
 

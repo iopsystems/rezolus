@@ -2,6 +2,10 @@
 // Copyright (c) 2025 The Rezolus Authors
 
 // This BPF program tracks tlb_flush events
+//
+// On x86_64: Uses the tlb_flush tracepoint which provides detailed reason codes
+// On ARM64: Uses kprobe on tlb_finish_mmu for basic TLB flush counting
+//           (ARM64 doesn't emit the tlb_flush tracepoint)
 
 #include <vmlinux.h>
 #include "../../../agent/bpf/cgroup.h"
@@ -18,6 +22,8 @@
 #define REASON_LOCAL_SHOOTDOWN 2
 #define REASON_LOCAL_MM_SHOOTDOWN 3
 #define REASON_REMOTE_SEND_IPI 4
+// ARM64 uses "unknown" since reason breakdown is unavailable
+#define REASON_UNKNOWN 5
 
 // counters for tlb_flush events
 // 0 - task_switch
@@ -25,6 +31,7 @@
 // 2 - local shootdown
 // 3 - local mm shootdown
 // 4 - remote send ipi
+// 5 - unknown (ARM64: reason breakdown unavailable)
 //
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -149,6 +156,41 @@ int BPF_PROG(tlb_flush, int reason, u64 pages) {
                 array_incr(&cgroup_remote_send_ipi, cgroup_id);
                 break;
             }
+        }
+    }
+
+    return 0;
+}
+
+// ARM64 kprobe version - tlb_finish_mmu is called after TLB batch operations
+// This provides basic TLB flush counting without reason breakdown
+SEC("kprobe/tlb_finish_mmu")
+int BPF_KPROBE(tlb_finish_mmu) {
+    u32 offset, idx;
+
+    offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
+    idx = REASON_UNKNOWN + offset;
+
+    array_incr(&events, idx);
+
+    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
+
+    void* task_group = BPF_CORE_READ(current, sched_task_group);
+    if (task_group) {
+        int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
+
+        if (cgroup_id < MAX_CGROUPS) {
+            int ret = handle_new_cgroup(current, &cgroup_serial_numbers, &cgroup_info);
+
+            if (ret == 0) {
+                // New cgroup detected, zero the counters
+                u64 zero = 0;
+                bpf_map_update_elem(&cgroup_task_switch, &cgroup_id, &zero, BPF_ANY);
+            }
+
+            // On ARM64, count all flushes in the task_switch bucket
+            // (we don't have reason breakdown)
+            array_incr(&cgroup_task_switch, cgroup_id);
         }
     }
 

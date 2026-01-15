@@ -59,6 +59,13 @@ pub static TLB_FLUSH_LOCAL_MM_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CP
 )]
 pub static TLB_FLUSH_REMOTE_SEND_IPI: CounterGroup = CounterGroup::new(MAX_CPUS);
 
+#[metric(
+    name = "cpu_tlb_flush",
+    description = "The number of tlb_flush events with unknown reason (e.g., ARM64 where reason breakdown is unavailable)",
+    metadata = { reason = "unknown" }
+)]
+pub static TLB_FLUSH_UNKNOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
+
 /*
  * per-cgroup
  */
