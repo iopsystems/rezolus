@@ -580,7 +580,8 @@ impl QueryEngine {
                 // due to array literal syntax not being standard PromQL.
                 // This branch handles any case where the parser does parse it.
                 Err(QueryError::Unsupported(
-                    "histogram_percentiles should be handled via query_range pre-parser".to_string(),
+                    "histogram_percentiles should be handled via query_range pre-parser"
+                        .to_string(),
                 ))
             }
             _ => Err(QueryError::Unsupported(format!(
@@ -1213,7 +1214,8 @@ impl QueryEngine {
                     if !values.is_empty() {
                         let mut metric_labels = HashMap::new();
                         metric_labels.insert("__name__".to_string(), metric_name.to_string());
-                        metric_labels.insert("percentile".to_string(), percentiles[idx].to_string());
+                        metric_labels
+                            .insert("percentile".to_string(), percentiles[idx].to_string());
 
                         result_samples.push(MatrixSample {
                             metric: metric_labels,
