@@ -109,6 +109,84 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     view.group(performance);
 
     /*
+     * Branch Prediction
+     */
+
+    let mut branch = Group::new("Branch Prediction", "branch-prediction");
+
+    // Branch Misprediction Rate %
+    branch.plot_promql(
+        PlotOpts::line("Misprediction Rate %", "branch-miss-rate", Unit::Percentage),
+        "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m])) * 100"
+            .to_string(),
+    );
+
+    // Per-CPU Branch Misprediction Rate
+    branch.plot_promql(
+        PlotOpts::heatmap(
+            "Misprediction Rate % (Per-CPU)",
+            "branch-miss-rate-per-cpu",
+            Unit::Percentage,
+        ),
+        "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m])) * 100"
+            .to_string(),
+    );
+
+    // Branch Instructions per Second
+    branch.plot_promql(
+        PlotOpts::line("Instructions", "branch-instructions", Unit::Rate),
+        "sum(irate(cpu_branch_instructions[5m]))".to_string(),
+    );
+
+    // Per-CPU Branch Instructions
+    branch.plot_promql(
+        PlotOpts::heatmap(
+            "Instructions (Per-CPU)",
+            "branch-instructions-per-cpu",
+            Unit::Rate,
+        ),
+        "sum by (id) (irate(cpu_branch_instructions[5m]))".to_string(),
+    );
+
+    // Branch Misses per Second
+    branch.plot_promql(
+        PlotOpts::line("Misses", "branch-misses", Unit::Rate),
+        "sum(irate(cpu_branch_misses[5m]))".to_string(),
+    );
+
+    // Per-CPU Branch Misses
+    branch.plot_promql(
+        PlotOpts::heatmap("Misses (Per-CPU)", "branch-misses-per-cpu", Unit::Rate),
+        "sum by (id) (irate(cpu_branch_misses[5m]))".to_string(),
+    );
+
+    view.group(branch);
+
+    /*
+     * DTLB (Data Translation Lookaside Buffer)
+     * cpu_dtlb_miss aggregates all variants:
+     * - unlabeled (AMD/ARM combined)
+     * - op="load" (Intel)
+     * - op="store" (Intel)
+     */
+
+    let mut dtlb = Group::new("DTLB", "dtlb");
+
+    // Total DTLB Misses (aggregates all op labels)
+    dtlb.plot_promql(
+        PlotOpts::line("Misses", "dtlb-misses", Unit::Rate),
+        "sum(irate(cpu_dtlb_miss[5m]))".to_string(),
+    );
+
+    // Per-CPU DTLB Misses
+    dtlb.plot_promql(
+        PlotOpts::heatmap("Misses (Per-CPU)", "dtlb-misses-per-cpu", Unit::Rate),
+        "sum by (id) (irate(cpu_dtlb_miss[5m]))".to_string(),
+    );
+
+    view.group(dtlb);
+
+    /*
      * Migrations
      */
 

@@ -1,7 +1,8 @@
 //! Collects CPU DTLB (Data Translation Lookaside Buffer) miss counters:
 //!
-//! * `cpu_dtlb_load_miss` - DTLB load misses (page table walks)
-//! * `cpu_dtlb_store_miss` - DTLB store misses (page table walks)
+//! * `cpu_dtlb_miss` - DTLB misses (AMD/ARM combined)
+//! * `cpu_dtlb_miss{op="load"}` - DTLB load misses (Intel only)
+//! * `cpu_dtlb_miss{op="store"}` - DTLB store misses (Intel only)
 //!
 //! High DTLB miss rates indicate memory access patterns with poor locality
 //! or working sets larger than the TLB can cache. Consider using huge pages
@@ -185,14 +186,20 @@ impl Core {
     pub fn refresh(&mut self) {
         if let Ok(group) = self.load_miss.read_group() {
             if let Some(load) = group.get(&self.load_miss) {
-                let load = load.value();
-                let _ = CPU_DTLB_LOAD_MISS.set(self.id, load);
-            }
+                let load_val = load.value();
 
-            if let Some(ref store_counter) = self.store_miss {
-                if let Some(store) = group.get(store_counter) {
-                    let store = store.value();
-                    let _ = CPU_DTLB_STORE_MISS.set(self.id, store);
+                // Check if we have separate load/store events (Intel) or combined (AMD/ARM)
+                if let Some(ref store_counter) = self.store_miss {
+                    // Intel: use labeled metrics for load and store
+                    let _ = CPU_DTLB_MISS_LOAD.set(self.id, load_val);
+
+                    if let Some(store) = group.get(store_counter) {
+                        let store_val = store.value();
+                        let _ = CPU_DTLB_MISS_STORE.set(self.id, store_val);
+                    }
+                } else {
+                    // AMD/ARM: use unlabeled metric for combined misses
+                    let _ = CPU_DTLB_MISS.set(self.id, load_val);
                 }
             }
         }
