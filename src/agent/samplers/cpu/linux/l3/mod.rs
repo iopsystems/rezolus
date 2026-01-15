@@ -312,17 +312,36 @@ fn get_intel_cha_pmu_type() -> Option<u32> {
     None
 }
 
+/// Discovers the AMD L3 uncore PMU type from sysfs.
+/// Returns None if not available (not AMD or no L3 PMU).
+fn get_amd_l3_pmu_type() -> Option<u32> {
+    let type_path = "/sys/bus/event_source/devices/amd_l3/type";
+    if let Ok(content) = std::fs::read_to_string(type_path) {
+        if let Ok(pmu_type) = content.trim().parse::<u32>() {
+            return Some(pmu_type);
+        }
+    }
+    None
+}
+
 fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
     if let Ok(uarch) = archspec::cpu::host().map(|u| u.name().to_owned()) {
         debug!("archspec detected microarchitecture: {}", uarch);
         let events = match uarch.as_str() {
-            // AMD Zen family - uses L3 uncore PMU (type 0xb)
+            // AMD Zen family - uses L3 uncore PMU (dynamic type discovery)
             // Event 0xFF04 = L3 cache access (all request types)
             // Event 0x0104 = L3 cache miss
-            "zen" | "zen2" | "zen3" | "zen4" | "zen5" => (
-                LowLevelEvent::new(0xb, 0xFF04),
-                LowLevelEvent::new(0xb, 0x0104),
-            ),
+            "zen" | "zen2" | "zen3" | "zen4" | "zen5" => {
+                if let Some(l3_type) = get_amd_l3_pmu_type() {
+                    (
+                        LowLevelEvent::new(l3_type, 0xFF04),
+                        LowLevelEvent::new(l3_type, 0x0104),
+                    )
+                } else {
+                    debug!("AMD L3 PMU not available");
+                    return None;
+                }
+            }
 
             // Intel server CPUs - uses CHA uncore PMU (dynamic type discovery)
             // LLC_LOOKUP: Event 0x34, Umask 0x0F (any lookup, all MESI states)
