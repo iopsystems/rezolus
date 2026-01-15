@@ -362,16 +362,15 @@ fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
                 }
             }
 
-            // ARM Graviton / Neoverse - uses core PMU (type 4 = PERF_TYPE_RAW)
-            // L3D_CACHE: Event 0x2B = L3 cache access
-            // L3D_CACHE_REFILL: Event 0x2A = L3 cache miss (refill from outside cluster)
+            // ARM Graviton / Neoverse - L3 cache metrics not supported
+            // The L3D_CACHE and L3D_CACHE_REFILL events are per-core, not per-L3-domain.
+            // Sampling one core and attributing to all cores in the domain is misleading.
+            // Proper support would require CMN (Coherent Mesh Network) PMU which has
+            // limited availability on cloud instances.
             "neoverse_n1" | "neoverse_v1" | "neoverse_n2" | "neoverse_v2" | "graviton2"
             | "graviton3" | "graviton4" | "cortex_a72" => {
-                const PERF_TYPE_RAW: u32 = 4;
-                (
-                    LowLevelEvent::new(PERF_TYPE_RAW, 0x2B), // L3D_CACHE
-                    LowLevelEvent::new(PERF_TYPE_RAW, 0x2A), // L3D_CACHE_REFILL
-                )
+                debug!("ARM L3 cache metrics not supported: per-core events cannot provide accurate L3 domain metrics");
+                return None;
             }
 
             _ => {

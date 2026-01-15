@@ -11,7 +11,6 @@ On AWS Graviton instances (and potentially other ARM systems), you may notice th
 - `cpu_cycles` / `cpu_instructions` (IPC)
 - `cpu_dtlb_miss`
 - `cpu_branch_instructions` / `cpu_branch_misses`
-- `cpu_l3_access` / `cpu_l3_miss`
 - CPU frequency metrics
 
 BPF-based metrics like `cpu_usage`, `scheduler_*`, `syscall_*`, etc. are **not affected** and will report data for all CPUs including CPU 0.
