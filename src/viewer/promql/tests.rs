@@ -1,9 +1,32 @@
-use crate::viewer::promql::{QueryEngine, QueryError};
+use crate::viewer::promql::{MatrixSample, QueryEngine, QueryError};
 use crate::viewer::tsdb::Tsdb;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 fn create_test_tsdb() -> Tsdb {
     Tsdb::default()
+}
+
+/// Test helper: aggregate samples using the specified operation
+fn aggregate_samples(op: &str, samples: &[&MatrixSample]) -> Vec<(f64, f64)> {
+    let agg_fn = QueryEngine::get_aggregation_fn(op).expect("Unknown aggregation");
+
+    // Collect all values at each timestamp
+    let mut timestamp_values: BTreeMap<u64, Vec<f64>> = BTreeMap::new();
+    for sample in samples {
+        for (ts, val) in &sample.values {
+            let ts_key = (*ts * 1e9) as u64;
+            timestamp_values.entry(ts_key).or_default().push(*val);
+        }
+    }
+
+    // Apply the aggregation function at each timestamp
+    timestamp_values
+        .into_iter()
+        .filter_map(|(ts_ns, values)| {
+            agg_fn(&values).map(|result| (ts_ns as f64 / 1e9, result))
+        })
+        .collect()
 }
 
 #[test]
@@ -286,9 +309,6 @@ fn test_avg_by_aggregation_parsing() {
 
 #[test]
 fn test_aggregate_samples_sum() {
-    use crate::viewer::promql::{MatrixSample, QueryEngine};
-    use std::collections::HashMap;
-
     // Test the aggregate_samples function directly
     let sample1 = MatrixSample {
         metric: HashMap::new(),
@@ -300,7 +320,7 @@ fn test_aggregate_samples_sum() {
     };
 
     let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
-    let result = QueryEngine::aggregate_samples("sum", &samples);
+    let result = aggregate_samples("sum", &samples);
 
     assert_eq!(result.len(), 2);
     assert_eq!(result[0], (1.0, 15.0)); // 10 + 5
@@ -309,9 +329,6 @@ fn test_aggregate_samples_sum() {
 
 #[test]
 fn test_aggregate_samples_avg() {
-    use crate::viewer::promql::{MatrixSample, QueryEngine};
-    use std::collections::HashMap;
-
     let sample1 = MatrixSample {
         metric: HashMap::new(),
         values: vec![(1.0, 10.0), (2.0, 20.0)],
@@ -322,7 +339,7 @@ fn test_aggregate_samples_avg() {
     };
 
     let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
-    let result = QueryEngine::aggregate_samples("avg", &samples);
+    let result = aggregate_samples("avg", &samples);
 
     assert_eq!(result.len(), 2);
     assert_eq!(result[0], (1.0, 15.0)); // (10 + 20) / 2
@@ -331,9 +348,6 @@ fn test_aggregate_samples_avg() {
 
 #[test]
 fn test_aggregate_samples_min() {
-    use crate::viewer::promql::{MatrixSample, QueryEngine};
-    use std::collections::HashMap;
-
     let sample1 = MatrixSample {
         metric: HashMap::new(),
         values: vec![(1.0, 10.0), (2.0, 50.0)],
@@ -344,7 +358,7 @@ fn test_aggregate_samples_min() {
     };
 
     let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
-    let result = QueryEngine::aggregate_samples("min", &samples);
+    let result = aggregate_samples("min", &samples);
 
     assert_eq!(result.len(), 2);
     assert_eq!(result[0], (1.0, 5.0)); // min(10, 5)
@@ -353,9 +367,6 @@ fn test_aggregate_samples_min() {
 
 #[test]
 fn test_aggregate_samples_max() {
-    use crate::viewer::promql::{MatrixSample, QueryEngine};
-    use std::collections::HashMap;
-
     let sample1 = MatrixSample {
         metric: HashMap::new(),
         values: vec![(1.0, 10.0), (2.0, 50.0)],
@@ -366,7 +377,7 @@ fn test_aggregate_samples_max() {
     };
 
     let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
-    let result = QueryEngine::aggregate_samples("max", &samples);
+    let result = aggregate_samples("max", &samples);
 
     assert_eq!(result.len(), 2);
     assert_eq!(result[0], (1.0, 10.0)); // max(10, 5)
@@ -375,9 +386,6 @@ fn test_aggregate_samples_max() {
 
 #[test]
 fn test_aggregate_samples_count() {
-    use crate::viewer::promql::{MatrixSample, QueryEngine};
-    use std::collections::HashMap;
-
     let sample1 = MatrixSample {
         metric: HashMap::new(),
         values: vec![(1.0, 10.0), (2.0, 20.0)],
@@ -392,7 +400,7 @@ fn test_aggregate_samples_count() {
     };
 
     let samples: Vec<&MatrixSample> = vec![&sample1, &sample2, &sample3];
-    let result = QueryEngine::aggregate_samples("count", &samples);
+    let result = aggregate_samples("count", &samples);
 
     assert_eq!(result.len(), 2);
     assert_eq!(result[0], (1.0, 3.0)); // 3 samples at t=1.0
@@ -401,9 +409,6 @@ fn test_aggregate_samples_count() {
 
 #[test]
 fn test_aggregate_samples_stdvar() {
-    use crate::viewer::promql::{MatrixSample, QueryEngine};
-    use std::collections::HashMap;
-
     // Values: 10, 20, 30 at t=1.0 -> mean=20, variance=((10-20)^2 + (20-20)^2 + (30-20)^2)/3 = 200/3
     let sample1 = MatrixSample {
         metric: HashMap::new(),
@@ -419,7 +424,7 @@ fn test_aggregate_samples_stdvar() {
     };
 
     let samples: Vec<&MatrixSample> = vec![&sample1, &sample2, &sample3];
-    let result = QueryEngine::aggregate_samples("stdvar", &samples);
+    let result = aggregate_samples("stdvar", &samples);
 
     assert_eq!(result.len(), 1);
     let expected_variance = 200.0 / 3.0; // ~66.67
@@ -428,9 +433,6 @@ fn test_aggregate_samples_stdvar() {
 
 #[test]
 fn test_aggregate_samples_stddev() {
-    use crate::viewer::promql::{MatrixSample, QueryEngine};
-    use std::collections::HashMap;
-
     // Values: 10, 20, 30 at t=1.0 -> stddev = sqrt(variance) = sqrt(200/3)
     let sample1 = MatrixSample {
         metric: HashMap::new(),
@@ -446,7 +448,7 @@ fn test_aggregate_samples_stddev() {
     };
 
     let samples: Vec<&MatrixSample> = vec![&sample1, &sample2, &sample3];
-    let result = QueryEngine::aggregate_samples("stddev", &samples);
+    let result = aggregate_samples("stddev", &samples);
 
     assert_eq!(result.len(), 1);
     let expected_stddev = (200.0_f64 / 3.0).sqrt(); // ~8.16

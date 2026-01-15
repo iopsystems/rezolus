@@ -693,7 +693,7 @@ impl QueryEngine {
     }
 
     /// Get the aggregation function for a given operator name
-    fn get_aggregation_fn(op: &str) -> Option<Box<dyn Fn(&[f64]) -> Option<f64>>> {
+    pub(crate) fn get_aggregation_fn(op: &str) -> Option<Box<dyn Fn(&[f64]) -> Option<f64>>> {
         match op {
             "sum" => Some(Box::new(|values: &[f64]| Some(values.iter().sum()))),
             "avg" => Some(Box::new(|values: &[f64]| {
@@ -754,15 +754,6 @@ impl QueryEngine {
             .collect()
     }
 
-    /// Aggregate multiple samples at each timestamp according to the operation
-    /// (convenience wrapper for tests and external callers)
-    pub fn aggregate_samples(op: &str, samples: &[&MatrixSample]) -> Vec<(f64, f64)> {
-        if let Some(agg_fn) = Self::get_aggregation_fn(op) {
-            Self::aggregate_samples_with_fn(samples, &*agg_fn)
-        } else {
-            vec![]
-        }
-    }
 
     /// Apply a binary operation to two query results
     fn apply_binary_op(
