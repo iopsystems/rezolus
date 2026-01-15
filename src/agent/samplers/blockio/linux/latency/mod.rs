@@ -46,7 +46,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 impl SkelExt for ModSkel<'_> {
-    fn map(&self, name: &str) -> &libbpf_rs::Map {
+    fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
             "read_latency" => &self.maps.read_latency,
             "write_latency" => &self.maps.write_latency,
