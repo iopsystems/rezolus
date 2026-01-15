@@ -94,7 +94,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 impl SkelExt for ModSkel<'_> {
-    fn map(&self, name: &str) -> &libbpf_rs::Map {
+    fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
             "cgroup_info" => &self.maps.cgroup_info,
             "bandwidth_info" => &self.maps.bandwidth_info,
