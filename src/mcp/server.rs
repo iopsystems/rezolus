@@ -43,6 +43,7 @@ enum McpTool {
     AnalyzeCorrelation,
     DescribeMetrics,
     DetectAnomalies,
+    Query,
     Unknown(String),
 }
 
@@ -53,6 +54,7 @@ impl From<&str> for McpTool {
             "analyze_correlation" => McpTool::AnalyzeCorrelation,
             "describe_metrics" => McpTool::DescribeMetrics,
             "detect_anomalies" => McpTool::DetectAnomalies,
+            "query" => McpTool::Query,
             other => McpTool::Unknown(other.to_string()),
         }
     }
@@ -220,6 +222,24 @@ impl Server {
                                         "query": {
                                             "type": "string",
                                             "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use rate() to get per-second rates, e.g., 'sum(rate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output."
+                                        }
+                                    },
+                                    "required": ["parquet_file", "query"]
+                                }
+                            },
+                            {
+                                "name": "query",
+                                "description": "Execute a PromQL query and return results as JSON. Returns Prometheus-compatible format with resultType (vector/matrix/scalar) and result data. Use describe_metrics first to see available metrics and their types. Results can be used programmatically by other tools.",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "parquet_file": {
+                                            "type": "string",
+                                            "description": "Path to the parquet file"
+                                        },
+                                        "query": {
+                                            "type": "string",
+                                            "description": "PromQL query expression. For COUNTERS use rate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
                                         }
                                     },
                                     "required": ["parquet_file", "query"]
@@ -416,6 +436,28 @@ impl Server {
                     }
                 }))),
             },
+            McpTool::Query => match self.execute_query(arguments).await {
+                Ok(result) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": result
+                            }
+                        ]
+                    }
+                }))),
+                Err(e) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": format!("Query error: {}", e)
+                    }
+                }))),
+            },
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -580,5 +622,134 @@ impl Server {
 
         let result = detect_anomalies(&engine, &tsdb, query)?;
         Ok(format_anomaly_detection_result(&result))
+    }
+
+    /// Execute a PromQL query and return results as JSON
+    async fn execute_query(
+        &self,
+        arguments: &Value,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+
+        let query = arguments
+            .get("query")
+            .and_then(|q| q.as_str())
+            .ok_or("Missing query")?;
+
+        // Get cached or load TSDB and engine
+        let engine = self.get_query_engine(parquet_file).await?;
+
+        // Get time range from the recording
+        let (start_time, end_time) = engine.get_time_range();
+        let step = 1.0;
+
+        // Execute query
+        let result = engine.query_range(query, start_time, end_time, step)?;
+
+        // Return as JSON string
+        Ok(serde_json::to_string_pretty(&result)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::viewer::promql::QueryResult;
+
+    #[test]
+    fn test_mcp_tool_from_str_query() {
+        assert!(matches!(McpTool::from("query"), McpTool::Query));
+    }
+
+    #[test]
+    fn test_mcp_tool_from_str_unknown() {
+        assert!(matches!(
+            McpTool::from("nonexistent"),
+            McpTool::Unknown(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_execute_query_missing_parquet_file() {
+        let server = Server::new();
+        let args = json!({"query": "cpu_cores"});
+        let result = server.execute_query(&args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Missing parquet_file"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_query_missing_query() {
+        let server = Server::new();
+        let args = json!({"parquet_file": "/some/file.parquet"});
+        let result = server.execute_query(&args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Missing query"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_query_nonexistent_file() {
+        let server = Server::new();
+        let args = json!({
+            "parquet_file": "/nonexistent/file.parquet",
+            "query": "cpu_cores"
+        });
+        let result = server.execute_query(&args).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_query_result_scalar_json_format() {
+        let result = QueryResult::Scalar {
+            result: (1704067200.0, 42.0),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"resultType\":\"scalar\""));
+        assert!(json.contains("\"result\":[1704067200.0,42.0]"));
+    }
+
+    #[test]
+    fn test_query_result_vector_json_format() {
+        use std::collections::HashMap;
+        use crate::viewer::promql::Sample;
+
+        let mut metric = HashMap::new();
+        metric.insert("__name__".to_string(), "cpu_cores".to_string());
+
+        let result = QueryResult::Vector {
+            result: vec![Sample {
+                metric,
+                value: (1704067200.0, 4.0),
+            }],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"resultType\":\"vector\""));
+        assert!(json.contains("\"result\""));
+        assert!(json.contains("\"metric\""));
+        assert!(json.contains("\"value\""));
+    }
+
+    #[test]
+    fn test_query_result_matrix_json_format() {
+        use std::collections::HashMap;
+        use crate::viewer::promql::MatrixSample;
+
+        let mut metric = HashMap::new();
+        metric.insert("__name__".to_string(), "cpu_cycles".to_string());
+
+        let result = QueryResult::Matrix {
+            result: vec![MatrixSample {
+                metric,
+                values: vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
+            }],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"resultType\":\"matrix\""));
+        assert!(json.contains("\"result\""));
+        assert!(json.contains("\"metric\""));
+        assert!(json.contains("\"values\""));
     }
 }
