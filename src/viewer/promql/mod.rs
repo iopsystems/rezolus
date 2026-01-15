@@ -576,18 +576,13 @@ impl QueryEngine {
                 }
             }
             "histogram_percentiles" => {
-                // histogram_percentiles(percentiles_array, histogram)
-                if call.args.args.len() >= 2 {
-                    // For now, reconstruct the query string and use legacy handler
-                    // TODO: Implement histogram percentiles support
-                    Err(QueryError::Unsupported(
-                        "histogram_percentiles not yet implemented".to_string(),
-                    ))
-                } else {
-                    Err(QueryError::ParseError(
-                        "histogram_percentiles requires 2 arguments".to_string(),
-                    ))
-                }
+                // histogram_percentiles is handled via pre-parsing in query_range()
+                // due to array literal syntax not being standard PromQL.
+                // This branch handles any case where the parser does parse it.
+                Err(QueryError::Unsupported(
+                    "histogram_percentiles should be handled via query_range pre-parser"
+                        .to_string(),
+                ))
             }
             _ => Err(QueryError::Unsupported(format!(
                 "Function {} not yet supported",
@@ -1149,6 +1144,102 @@ impl QueryEngine {
         Ok(result_samples)
     }
 
+    /// Handle histogram_percentiles(percentiles_array, histogram_metric) queries
+    /// Example: histogram_percentiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)
+    fn handle_histogram_percentiles(
+        &self,
+        query_str: &str,
+        start: f64,
+        end: f64,
+    ) -> Result<QueryResult, QueryError> {
+        // Extract the inner part: [0.5, 0.9, 0.99, 0.999], tcp_packet_latency
+        let inner = &query_str["histogram_percentiles(".len()..query_str.len() - 1];
+
+        // Find the array portion [...]
+        let array_start = inner.find('[').ok_or_else(|| {
+            QueryError::ParseError(
+                "histogram_percentiles first argument must be an array of percentiles".to_string(),
+            )
+        })?;
+        let array_end = inner.find(']').ok_or_else(|| {
+            QueryError::ParseError("Missing closing bracket in percentiles array".to_string())
+        })?;
+
+        // Parse the percentiles array
+        let array_str = &inner[array_start + 1..array_end];
+        let percentiles: Vec<f64> = array_str
+            .split(',')
+            .map(|s| s.trim().parse::<f64>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                QueryError::ParseError(format!("Failed to parse percentile value: {}", e))
+            })?;
+
+        if percentiles.is_empty() {
+            return Err(QueryError::ParseError(
+                "Percentiles array cannot be empty".to_string(),
+            ));
+        }
+
+        // Extract the metric name (everything after the array and comma)
+        let after_array = &inner[array_end + 1..].trim();
+        let metric_name = after_array
+            .strip_prefix(',')
+            .map(|s| s.trim())
+            .ok_or_else(|| {
+                QueryError::ParseError(
+                    "histogram_percentiles requires a metric name as second argument".to_string(),
+                )
+            })?;
+
+        // Get the histogram data
+        if let Some(collection) = self.tsdb.histograms(metric_name, Labels::default()) {
+            // Sum all histogram series together
+            let summed_series = collection.sum();
+
+            // Calculate all percentiles
+            if let Some(percentile_series_vec) = summed_series.percentiles(&percentiles) {
+                let start_ns = (start * 1e9) as u64;
+                let end_ns = (end * 1e9) as u64;
+
+                let mut result_samples = Vec::new();
+
+                for (idx, series) in percentile_series_vec.iter().enumerate() {
+                    let values: Vec<(f64, f64)> = series
+                        .inner
+                        .range(start_ns..=end_ns)
+                        .map(|(ts, val)| (*ts as f64 / 1e9, *val))
+                        .collect();
+
+                    if !values.is_empty() {
+                        let mut metric_labels = HashMap::new();
+                        metric_labels.insert("__name__".to_string(), metric_name.to_string());
+                        metric_labels
+                            .insert("percentile".to_string(), percentiles[idx].to_string());
+
+                        result_samples.push(MatrixSample {
+                            metric: metric_labels,
+                            values,
+                        });
+                    }
+                }
+
+                if !result_samples.is_empty() {
+                    return Ok(QueryResult::Matrix {
+                        result: result_samples,
+                    });
+                }
+            }
+
+            Err(QueryError::MetricNotFound(format!(
+                "No histogram data found for {}",
+                metric_name
+            )))
+        } else {
+            Err(QueryError::MetricNotFound(metric_name.to_string()))
+        }
+    }
+
     /// Calculate slope using least squares linear regression
     fn calculate_slope(&self, points: &[(f64, f64)]) -> f64 {
         if points.len() < 2 {
@@ -1184,6 +1275,12 @@ impl QueryEngine {
         end: f64,
         step: f64,
     ) -> Result<QueryResult, QueryError> {
+        // Handle histogram_percentiles specially since it uses array literal syntax
+        // that may not be parsed correctly by the standard PromQL parser
+        if query_str.starts_with("histogram_percentiles(") && query_str.ends_with(")") {
+            return self.handle_histogram_percentiles(query_str, start, end);
+        }
+
         // Parse the query into an AST
         match parser::parse(query_str) {
             Ok(expr) => {
