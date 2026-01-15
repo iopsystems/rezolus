@@ -157,3 +157,298 @@ fn test_histogram_quantile_parsing() {
         _ => panic!("Expected MetricNotFound error for empty TSDB"),
     }
 }
+
+#[test]
+fn test_avg_aggregation_parsing() {
+    let tsdb = Arc::new(create_test_tsdb());
+    let engine = QueryEngine::new(tsdb);
+
+    // Test avg() query parsing
+    let result = engine.query("avg(rate(cpu_cycles[1m]))", None);
+
+    // Should return MetricNotFound for empty TSDB (not Unsupported)
+    match result {
+        Err(QueryError::MetricNotFound(_)) => {}
+        Err(QueryError::Unsupported(msg)) => {
+            panic!("avg should be supported, got Unsupported: {}", msg)
+        }
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
+    }
+}
+
+#[test]
+fn test_min_aggregation_parsing() {
+    let tsdb = Arc::new(create_test_tsdb());
+    let engine = QueryEngine::new(tsdb);
+
+    // Test min() query parsing
+    let result = engine.query("min(rate(cpu_cycles[1m]))", None);
+
+    // Should return MetricNotFound for empty TSDB (not Unsupported)
+    match result {
+        Err(QueryError::MetricNotFound(_)) => {}
+        Err(QueryError::Unsupported(msg)) => {
+            panic!("min should be supported, got Unsupported: {}", msg)
+        }
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
+    }
+}
+
+#[test]
+fn test_max_aggregation_parsing() {
+    let tsdb = Arc::new(create_test_tsdb());
+    let engine = QueryEngine::new(tsdb);
+
+    // Test max() query parsing
+    let result = engine.query("max(rate(cpu_cycles[1m]))", None);
+
+    // Should return MetricNotFound for empty TSDB (not Unsupported)
+    match result {
+        Err(QueryError::MetricNotFound(_)) => {}
+        Err(QueryError::Unsupported(msg)) => {
+            panic!("max should be supported, got Unsupported: {}", msg)
+        }
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
+    }
+}
+
+#[test]
+fn test_count_aggregation_parsing() {
+    let tsdb = Arc::new(create_test_tsdb());
+    let engine = QueryEngine::new(tsdb);
+
+    // Test count() query parsing
+    let result = engine.query("count(rate(cpu_cycles[1m]))", None);
+
+    // Should return MetricNotFound for empty TSDB (not Unsupported)
+    match result {
+        Err(QueryError::MetricNotFound(_)) => {}
+        Err(QueryError::Unsupported(msg)) => {
+            panic!("count should be supported, got Unsupported: {}", msg)
+        }
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
+    }
+}
+
+#[test]
+fn test_stddev_aggregation_parsing() {
+    let tsdb = Arc::new(create_test_tsdb());
+    let engine = QueryEngine::new(tsdb);
+
+    // Test stddev() query parsing
+    let result = engine.query("stddev(rate(cpu_cycles[1m]))", None);
+
+    // Should return MetricNotFound for empty TSDB (not Unsupported)
+    match result {
+        Err(QueryError::MetricNotFound(_)) => {}
+        Err(QueryError::Unsupported(msg)) => {
+            panic!("stddev should be supported, got Unsupported: {}", msg)
+        }
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
+    }
+}
+
+#[test]
+fn test_stdvar_aggregation_parsing() {
+    let tsdb = Arc::new(create_test_tsdb());
+    let engine = QueryEngine::new(tsdb);
+
+    // Test stdvar() query parsing
+    let result = engine.query("stdvar(rate(cpu_cycles[1m]))", None);
+
+    // Should return MetricNotFound for empty TSDB (not Unsupported)
+    match result {
+        Err(QueryError::MetricNotFound(_)) => {}
+        Err(QueryError::Unsupported(msg)) => {
+            panic!("stdvar should be supported, got Unsupported: {}", msg)
+        }
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
+    }
+}
+
+#[test]
+fn test_avg_by_aggregation_parsing() {
+    let tsdb = Arc::new(create_test_tsdb());
+    let engine = QueryEngine::new(tsdb);
+
+    // Test avg by (label) query parsing
+    let result = engine.query("avg by (cpu) (rate(cpu_cycles[1m]))", None);
+
+    // Should return MetricNotFound for empty TSDB (not Unsupported)
+    match result {
+        Err(QueryError::MetricNotFound(_)) => {}
+        Err(QueryError::Unsupported(msg)) => {
+            panic!("avg by should be supported, got Unsupported: {}", msg)
+        }
+        _ => panic!("Expected MetricNotFound error for empty TSDB"),
+    }
+}
+
+#[test]
+fn test_aggregate_samples_sum() {
+    use crate::viewer::promql::{MatrixSample, QueryEngine};
+    use std::collections::HashMap;
+
+    // Test the aggregate_samples function directly
+    let sample1 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 10.0), (2.0, 20.0)],
+    };
+    let sample2 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 5.0), (2.0, 15.0)],
+    };
+
+    let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
+    let result = QueryEngine::aggregate_samples("sum", &samples);
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0], (1.0, 15.0)); // 10 + 5
+    assert_eq!(result[1], (2.0, 35.0)); // 20 + 15
+}
+
+#[test]
+fn test_aggregate_samples_avg() {
+    use crate::viewer::promql::{MatrixSample, QueryEngine};
+    use std::collections::HashMap;
+
+    let sample1 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 10.0), (2.0, 20.0)],
+    };
+    let sample2 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 20.0), (2.0, 40.0)],
+    };
+
+    let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
+    let result = QueryEngine::aggregate_samples("avg", &samples);
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0], (1.0, 15.0)); // (10 + 20) / 2
+    assert_eq!(result[1], (2.0, 30.0)); // (20 + 40) / 2
+}
+
+#[test]
+fn test_aggregate_samples_min() {
+    use crate::viewer::promql::{MatrixSample, QueryEngine};
+    use std::collections::HashMap;
+
+    let sample1 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 10.0), (2.0, 50.0)],
+    };
+    let sample2 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 5.0), (2.0, 15.0)],
+    };
+
+    let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
+    let result = QueryEngine::aggregate_samples("min", &samples);
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0], (1.0, 5.0)); // min(10, 5)
+    assert_eq!(result[1], (2.0, 15.0)); // min(50, 15)
+}
+
+#[test]
+fn test_aggregate_samples_max() {
+    use crate::viewer::promql::{MatrixSample, QueryEngine};
+    use std::collections::HashMap;
+
+    let sample1 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 10.0), (2.0, 50.0)],
+    };
+    let sample2 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 5.0), (2.0, 15.0)],
+    };
+
+    let samples: Vec<&MatrixSample> = vec![&sample1, &sample2];
+    let result = QueryEngine::aggregate_samples("max", &samples);
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0], (1.0, 10.0)); // max(10, 5)
+    assert_eq!(result[1], (2.0, 50.0)); // max(50, 15)
+}
+
+#[test]
+fn test_aggregate_samples_count() {
+    use crate::viewer::promql::{MatrixSample, QueryEngine};
+    use std::collections::HashMap;
+
+    let sample1 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 10.0), (2.0, 20.0)],
+    };
+    let sample2 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 5.0), (2.0, 15.0)],
+    };
+    let sample3 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 7.0)], // Only has timestamp 1.0
+    };
+
+    let samples: Vec<&MatrixSample> = vec![&sample1, &sample2, &sample3];
+    let result = QueryEngine::aggregate_samples("count", &samples);
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0], (1.0, 3.0)); // 3 samples at t=1.0
+    assert_eq!(result[1], (2.0, 2.0)); // 2 samples at t=2.0
+}
+
+#[test]
+fn test_aggregate_samples_stdvar() {
+    use crate::viewer::promql::{MatrixSample, QueryEngine};
+    use std::collections::HashMap;
+
+    // Values: 10, 20, 30 at t=1.0 -> mean=20, variance=((10-20)^2 + (20-20)^2 + (30-20)^2)/3 = 200/3
+    let sample1 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 10.0)],
+    };
+    let sample2 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 20.0)],
+    };
+    let sample3 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 30.0)],
+    };
+
+    let samples: Vec<&MatrixSample> = vec![&sample1, &sample2, &sample3];
+    let result = QueryEngine::aggregate_samples("stdvar", &samples);
+
+    assert_eq!(result.len(), 1);
+    let expected_variance = 200.0 / 3.0; // ~66.67
+    assert!((result[0].1 - expected_variance).abs() < 0.01);
+}
+
+#[test]
+fn test_aggregate_samples_stddev() {
+    use crate::viewer::promql::{MatrixSample, QueryEngine};
+    use std::collections::HashMap;
+
+    // Values: 10, 20, 30 at t=1.0 -> stddev = sqrt(variance) = sqrt(200/3)
+    let sample1 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 10.0)],
+    };
+    let sample2 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 20.0)],
+    };
+    let sample3 = MatrixSample {
+        metric: HashMap::new(),
+        values: vec![(1.0, 30.0)],
+    };
+
+    let samples: Vec<&MatrixSample> = vec![&sample1, &sample2, &sample3];
+    let result = QueryEngine::aggregate_samples("stddev", &samples);
+
+    assert_eq!(result.len(), 1);
+    let expected_stddev = (200.0_f64 / 3.0).sqrt(); // ~8.16
+    assert!((result[0].1 - expected_stddev).abs() < 0.01);
+}

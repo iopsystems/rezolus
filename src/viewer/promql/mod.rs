@@ -601,29 +601,27 @@ impl QueryEngine {
     ) -> Result<QueryResult, QueryError> {
         let op_str = agg.op.to_string();
 
+        // All aggregations follow the same pattern: evaluate inner, group if needed, aggregate
         match op_str.as_str() {
-            "sum" => {
+            "sum" | "avg" | "min" | "max" | "count" | "stddev" | "stdvar" => {
                 // Evaluate the inner expression first
                 let inner = self.evaluate_expr(&agg.expr, start, end, step)?;
 
                 // Check if there's a grouping modifier
                 if let Some(modifier) = &agg.modifier {
-                    // Handle "sum by (labels)" grouping
-                    // The modifier is an enum that can be Include (for "by") or Exclude (for "without")
+                    // Handle "agg by (labels)" or "agg without (labels)" grouping
                     match inner {
                         QueryResult::Matrix { result: samples } => {
                             // Group samples by the specified labels
-                            // Use BTreeMap as key since HashMap doesn't implement Hash
                             let mut grouped: HashMap<BTreeMap<String, String>, Vec<&MatrixSample>> =
                                 HashMap::new();
 
                             for sample in &samples {
                                 let mut group_key = BTreeMap::new();
 
-                                // Check what kind of modifier we have
                                 match modifier {
                                     parser::LabelModifier::Include(labels) => {
-                                        // "sum by (labels)" - keep only specified labels
+                                        // "agg by (labels)" - keep only specified labels
                                         for label_name in &labels.labels {
                                             if let Some(value) = sample.metric.get(label_name) {
                                                 group_key.insert(label_name.clone(), value.clone());
@@ -631,7 +629,7 @@ impl QueryEngine {
                                         }
                                     }
                                     parser::LabelModifier::Exclude(labels) => {
-                                        // "sum without (labels)" - keep all labels except specified
+                                        // "agg without (labels)" - keep all labels except specified
                                         for (key, value) in &sample.metric {
                                             if !labels.labels.contains(key) && key != "__name__" {
                                                 group_key.insert(key.clone(), value.clone());
@@ -647,26 +645,10 @@ impl QueryEngine {
                             let mut result_samples = Vec::new();
 
                             for (group_labels, group_samples) in grouped {
-                                // Collect all timestamps and sum values
-                                let mut timestamp_map: BTreeMap<u64, f64> = BTreeMap::new();
-                                let mut sample_count_map: BTreeMap<u64, usize> = BTreeMap::new();
-
-                                for sample in group_samples {
-                                    for (ts, val) in &sample.values {
-                                        let ts_key = (*ts * 1e9) as u64;
-                                        *timestamp_map.entry(ts_key).or_insert(0.0) += val;
-                                        *sample_count_map.entry(ts_key).or_insert(0) += 1;
-                                    }
-                                }
-
-                                // Convert back to vector
-                                let result_values: Vec<(f64, f64)> = timestamp_map
-                                    .into_iter()
-                                    .map(|(ts_ns, val)| (ts_ns as f64 / 1e9, val))
-                                    .collect();
+                                let result_values =
+                                    Self::aggregate_samples(&op_str, &group_samples);
 
                                 if !result_values.is_empty() {
-                                    // Convert BTreeMap back to HashMap for the result
                                     let mut metric_map = HashMap::new();
                                     for (k, v) in group_labels {
                                         metric_map.insert(k, v);
@@ -686,30 +668,15 @@ impl QueryEngine {
                         _ => Ok(inner),
                     }
                 } else {
-                    // Simple sum without grouping - aggregate all series
+                    // Simple aggregation without grouping - aggregate all series
                     match inner {
                         QueryResult::Matrix { result: samples } => {
-                            // Sum all time series together
                             if samples.is_empty() {
                                 return Ok(QueryResult::Matrix { result: vec![] });
                             }
 
-                            // Collect all timestamps
-                            let mut timestamp_map: std::collections::BTreeMap<u64, f64> =
-                                std::collections::BTreeMap::new();
-
-                            for sample in &samples {
-                                for (ts, val) in &sample.values {
-                                    let ts_key = (*ts * 1e9) as u64;
-                                    *timestamp_map.entry(ts_key).or_insert(0.0) += val;
-                                }
-                            }
-
-                            // Convert back to vector
-                            let result_values: Vec<(f64, f64)> = timestamp_map
-                                .into_iter()
-                                .map(|(ts_ns, val)| (ts_ns as f64 / 1e9, val))
-                                .collect();
+                            let sample_refs: Vec<&MatrixSample> = samples.iter().collect();
+                            let result_values = Self::aggregate_samples(&op_str, &sample_refs);
 
                             Ok(QueryResult::Matrix {
                                 result: vec![MatrixSample {
@@ -722,18 +689,61 @@ impl QueryEngine {
                     }
                 }
             }
-            "avg" | "min" | "max" | "count" => {
-                // For other aggregations, fall back to legacy for now
-                Err(QueryError::Unsupported(format!(
-                    "Aggregation {} not yet fully implemented",
-                    op_str
-                )))
-            }
             _ => Err(QueryError::Unsupported(format!(
                 "Unknown aggregation: {}",
                 op_str
             ))),
         }
+    }
+
+    /// Aggregate multiple samples at each timestamp according to the operation
+    pub fn aggregate_samples(op: &str, samples: &[&MatrixSample]) -> Vec<(f64, f64)> {
+        // Collect all values at each timestamp
+        let mut timestamp_values: BTreeMap<u64, Vec<f64>> = BTreeMap::new();
+
+        for sample in samples {
+            for (ts, val) in &sample.values {
+                let ts_key = (*ts * 1e9) as u64;
+                timestamp_values.entry(ts_key).or_default().push(*val);
+            }
+        }
+
+        // Apply the aggregation operation at each timestamp
+        timestamp_values
+            .into_iter()
+            .filter_map(|(ts_ns, values)| {
+                let result = match op {
+                    "sum" => values.iter().sum(),
+                    "avg" => {
+                        if values.is_empty() {
+                            return None;
+                        }
+                        values.iter().sum::<f64>() / values.len() as f64
+                    }
+                    "min" => values.iter().cloned().fold(f64::INFINITY, f64::min),
+                    "max" => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                    "count" => values.len() as f64,
+                    "stddev" => {
+                        if values.len() < 2 {
+                            return Some((ts_ns as f64 / 1e9, 0.0));
+                        }
+                        let mean = values.iter().sum::<f64>() / values.len() as f64;
+                        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                            / values.len() as f64;
+                        variance.sqrt()
+                    }
+                    "stdvar" => {
+                        if values.len() < 2 {
+                            return Some((ts_ns as f64 / 1e9, 0.0));
+                        }
+                        let mean = values.iter().sum::<f64>() / values.len() as f64;
+                        values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
+                    }
+                    _ => return None,
+                };
+                Some((ts_ns as f64 / 1e9, result))
+            })
+            .collect()
     }
 
     /// Apply a binary operation to two query results
