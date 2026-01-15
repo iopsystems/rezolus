@@ -625,10 +625,7 @@ impl Server {
     }
 
     /// Execute a PromQL query and return results as JSON
-    async fn execute_query(
-        &self,
-        arguments: &Value,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    async fn execute_query(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
         let parquet_file = arguments
             .get("parquet_file")
             .and_then(|f| f.as_str())
@@ -666,10 +663,7 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_from_str_unknown() {
-        assert!(matches!(
-            McpTool::from("nonexistent"),
-            McpTool::Unknown(_)
-        ));
+        assert!(matches!(McpTool::from("nonexistent"), McpTool::Unknown(_)));
     }
 
     #[tokio::test]
@@ -678,7 +672,10 @@ mod tests {
         let args = json!({"query": "cpu_cores"});
         let result = server.execute_query(&args).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Missing parquet_file"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing parquet_file"));
     }
 
     #[tokio::test]
@@ -713,8 +710,8 @@ mod tests {
 
     #[test]
     fn test_query_result_vector_json_format() {
-        use std::collections::HashMap;
         use crate::viewer::promql::Sample;
+        use std::collections::HashMap;
 
         let mut metric = HashMap::new();
         metric.insert("__name__".to_string(), "cpu_cores".to_string());
@@ -734,8 +731,8 @@ mod tests {
 
     #[test]
     fn test_query_result_matrix_json_format() {
-        use std::collections::HashMap;
         use crate::viewer::promql::MatrixSample;
+        use std::collections::HashMap;
 
         let mut metric = HashMap::new();
         metric.insert("__name__".to_string(), "cpu_cycles".to_string());
