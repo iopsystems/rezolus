@@ -601,103 +601,140 @@ impl QueryEngine {
     ) -> Result<QueryResult, QueryError> {
         let op_str = agg.op.to_string();
 
-        // All aggregations follow the same pattern: evaluate inner, group if needed, aggregate
-        match op_str.as_str() {
-            "sum" | "avg" | "min" | "max" | "count" | "stddev" | "stdvar" => {
-                // Evaluate the inner expression first
-                let inner = self.evaluate_expr(&agg.expr, start, end, step)?;
+        // Get the aggregation function for this operator
+        let agg_fn = Self::get_aggregation_fn(&op_str).ok_or_else(|| {
+            QueryError::Unsupported(format!("Unknown aggregation: {}", op_str))
+        })?;
 
-                // Check if there's a grouping modifier
-                if let Some(modifier) = &agg.modifier {
-                    // Handle "agg by (labels)" or "agg without (labels)" grouping
-                    match inner {
-                        QueryResult::Matrix { result: samples } => {
-                            // Group samples by the specified labels
-                            let mut grouped: HashMap<BTreeMap<String, String>, Vec<&MatrixSample>> =
-                                HashMap::new();
+        // Evaluate the inner expression
+        let inner = self.evaluate_expr(&agg.expr, start, end, step)?;
 
-                            for sample in &samples {
-                                let mut group_key = BTreeMap::new();
+        // Check if there's a grouping modifier
+        if let Some(modifier) = &agg.modifier {
+            // Handle "agg by (labels)" or "agg without (labels)" grouping
+            match inner {
+                QueryResult::Matrix { result: samples } => {
+                    // Group samples by the specified labels
+                    let mut grouped: HashMap<BTreeMap<String, String>, Vec<&MatrixSample>> =
+                        HashMap::new();
 
-                                match modifier {
-                                    parser::LabelModifier::Include(labels) => {
-                                        // "agg by (labels)" - keep only specified labels
-                                        for label_name in &labels.labels {
-                                            if let Some(value) = sample.metric.get(label_name) {
-                                                group_key.insert(label_name.clone(), value.clone());
-                                            }
-                                        }
-                                    }
-                                    parser::LabelModifier::Exclude(labels) => {
-                                        // "agg without (labels)" - keep all labels except specified
-                                        for (key, value) in &sample.metric {
-                                            if !labels.labels.contains(key) && key != "__name__" {
-                                                group_key.insert(key.clone(), value.clone());
-                                            }
-                                        }
+                    for sample in &samples {
+                        let mut group_key = BTreeMap::new();
+
+                        match modifier {
+                            parser::LabelModifier::Include(labels) => {
+                                // "agg by (labels)" - keep only specified labels
+                                for label_name in &labels.labels {
+                                    if let Some(value) = sample.metric.get(label_name) {
+                                        group_key.insert(label_name.clone(), value.clone());
                                     }
                                 }
-
-                                grouped.entry(group_key).or_default().push(sample);
                             }
-
-                            // Now aggregate each group
-                            let mut result_samples = Vec::new();
-
-                            for (group_labels, group_samples) in grouped {
-                                let result_values =
-                                    Self::aggregate_samples(&op_str, &group_samples);
-
-                                if !result_values.is_empty() {
-                                    let mut metric_map = HashMap::new();
-                                    for (k, v) in group_labels {
-                                        metric_map.insert(k, v);
+                            parser::LabelModifier::Exclude(labels) => {
+                                // "agg without (labels)" - keep all labels except specified
+                                for (key, value) in &sample.metric {
+                                    if !labels.labels.contains(key) && key != "__name__" {
+                                        group_key.insert(key.clone(), value.clone());
                                     }
-
-                                    result_samples.push(MatrixSample {
-                                        metric: metric_map,
-                                        values: result_values,
-                                    });
                                 }
                             }
-
-                            Ok(QueryResult::Matrix {
-                                result: result_samples,
-                            })
                         }
-                        _ => Ok(inner),
+
+                        grouped.entry(group_key).or_default().push(sample);
                     }
-                } else {
-                    // Simple aggregation without grouping - aggregate all series
-                    match inner {
-                        QueryResult::Matrix { result: samples } => {
-                            if samples.is_empty() {
-                                return Ok(QueryResult::Matrix { result: vec![] });
+
+                    // Now aggregate each group
+                    let mut result_samples = Vec::new();
+
+                    for (group_labels, group_samples) in grouped {
+                        let result_values =
+                            Self::aggregate_samples_with_fn(&group_samples, &agg_fn);
+
+                        if !result_values.is_empty() {
+                            let mut metric_map = HashMap::new();
+                            for (k, v) in group_labels {
+                                metric_map.insert(k, v);
                             }
 
-                            let sample_refs: Vec<&MatrixSample> = samples.iter().collect();
-                            let result_values = Self::aggregate_samples(&op_str, &sample_refs);
-
-                            Ok(QueryResult::Matrix {
-                                result: vec![MatrixSample {
-                                    metric: HashMap::new(),
-                                    values: result_values,
-                                }],
-                            })
+                            result_samples.push(MatrixSample {
+                                metric: metric_map,
+                                values: result_values,
+                            });
                         }
-                        _ => Ok(inner),
                     }
+
+                    Ok(QueryResult::Matrix {
+                        result: result_samples,
+                    })
                 }
+                _ => Ok(inner),
             }
-            _ => Err(QueryError::Unsupported(format!(
-                "Unknown aggregation: {}",
-                op_str
-            ))),
+        } else {
+            // Simple aggregation without grouping - aggregate all series
+            match inner {
+                QueryResult::Matrix { result: samples } => {
+                    if samples.is_empty() {
+                        return Ok(QueryResult::Matrix { result: vec![] });
+                    }
+
+                    let sample_refs: Vec<&MatrixSample> = samples.iter().collect();
+                    let result_values = Self::aggregate_samples_with_fn(&sample_refs, &agg_fn);
+
+                    Ok(QueryResult::Matrix {
+                        result: vec![MatrixSample {
+                            metric: HashMap::new(),
+                            values: result_values,
+                        }],
+                    })
+                }
+                _ => Ok(inner),
+            }
         }
     }
 
-    /// Aggregate multiple samples at each timestamp according to the operation
-    pub fn aggregate_samples(op: &str, samples: &[&MatrixSample]) -> Vec<(f64, f64)> {
+    /// Get the aggregation function for a given operator name
+    fn get_aggregation_fn(op: &str) -> Option<Box<dyn Fn(&[f64]) -> Option<f64>>> {
+        match op {
+            "sum" => Some(Box::new(|values: &[f64]| Some(values.iter().sum()))),
+            "avg" => Some(Box::new(|values: &[f64]| {
+                if values.is_empty() {
+                    None
+                } else {
+                    Some(values.iter().sum::<f64>() / values.len() as f64)
+                }
+            })),
+            "min" => Some(Box::new(|values: &[f64]| {
+                Some(values.iter().cloned().fold(f64::INFINITY, f64::min))
+            })),
+            "max" => Some(Box::new(|values: &[f64]| {
+                Some(values.iter().cloned().fold(f64::NEG_INFINITY, f64::max))
+            })),
+            "count" => Some(Box::new(|values: &[f64]| Some(values.len() as f64))),
+            "stddev" => Some(Box::new(|values: &[f64]| {
+                if values.len() < 2 {
+                    return Some(0.0);
+                }
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                let variance =
+                    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+                Some(variance.sqrt())
+            })),
+            "stdvar" => Some(Box::new(|values: &[f64]| {
+                if values.len() < 2 {
+                    return Some(0.0);
+                }
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                Some(values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64)
+            })),
+            _ => None,
+        }
+    }
+
+    /// Aggregate multiple samples at each timestamp using the provided function
+    fn aggregate_samples_with_fn(
+        samples: &[&MatrixSample],
+        agg_fn: &dyn Fn(&[f64]) -> Option<f64>,
+    ) -> Vec<(f64, f64)> {
         // Collect all values at each timestamp
         let mut timestamp_values: BTreeMap<u64, Vec<f64>> = BTreeMap::new();
 
@@ -708,42 +745,23 @@ impl QueryEngine {
             }
         }
 
-        // Apply the aggregation operation at each timestamp
+        // Apply the aggregation function at each timestamp
         timestamp_values
             .into_iter()
             .filter_map(|(ts_ns, values)| {
-                let result = match op {
-                    "sum" => values.iter().sum(),
-                    "avg" => {
-                        if values.is_empty() {
-                            return None;
-                        }
-                        values.iter().sum::<f64>() / values.len() as f64
-                    }
-                    "min" => values.iter().cloned().fold(f64::INFINITY, f64::min),
-                    "max" => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                    "count" => values.len() as f64,
-                    "stddev" => {
-                        if values.len() < 2 {
-                            return Some((ts_ns as f64 / 1e9, 0.0));
-                        }
-                        let mean = values.iter().sum::<f64>() / values.len() as f64;
-                        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-                            / values.len() as f64;
-                        variance.sqrt()
-                    }
-                    "stdvar" => {
-                        if values.len() < 2 {
-                            return Some((ts_ns as f64 / 1e9, 0.0));
-                        }
-                        let mean = values.iter().sum::<f64>() / values.len() as f64;
-                        values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
-                    }
-                    _ => return None,
-                };
-                Some((ts_ns as f64 / 1e9, result))
+                agg_fn(&values).map(|result| (ts_ns as f64 / 1e9, result))
             })
             .collect()
+    }
+
+    /// Aggregate multiple samples at each timestamp according to the operation
+    /// (convenience wrapper for tests and external callers)
+    pub fn aggregate_samples(op: &str, samples: &[&MatrixSample]) -> Vec<(f64, f64)> {
+        if let Some(agg_fn) = Self::get_aggregation_fn(op) {
+            Self::aggregate_samples_with_fn(samples, &*agg_fn)
+        } else {
+            vec![]
+        }
     }
 
     /// Apply a binary operation to two query results
