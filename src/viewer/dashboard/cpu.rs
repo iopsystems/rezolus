@@ -84,13 +84,13 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // L3 Cache Hit Rate
     performance.plot_promql(
         PlotOpts::line("L3 Hit %", "l3-hit", Unit::Percentage),
-        "(1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))) * 100".to_string(),
+        "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))".to_string(),
     );
 
     // Per-CPU L3 Hit Rate
     performance.plot_promql(
         PlotOpts::heatmap("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage),
-        "(1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))) * 100"
+        "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))"
             .to_string(),
     );
 
@@ -117,8 +117,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
     // Branch Misprediction Rate %
     branch.plot_promql(
         PlotOpts::line("Misprediction Rate %", "branch-miss-rate", Unit::Percentage),
-        "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m])) * 100"
-            .to_string(),
+        "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))".to_string(),
     );
 
     // Per-CPU Branch Misprediction Rate
@@ -128,7 +127,7 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
             "branch-miss-rate-per-cpu",
             Unit::Percentage,
         ),
-        "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m])) * 100"
+        "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))"
             .to_string(),
     );
 
