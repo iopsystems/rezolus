@@ -6,10 +6,7 @@ use crate::agent::*;
 
 /// DTLB misses without op label - used on AMD/ARM where load and store
 /// misses are reported as a single combined event
-#[metric(
-    name = "cpu_dtlb_miss",
-    description = "The number of DTLB misses"
-)]
+#[metric(name = "cpu_dtlb_miss", description = "The number of DTLB misses")]
 pub static CPU_DTLB_MISS: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 /// DTLB load misses - Intel only
