@@ -1181,9 +1181,9 @@ impl QueryEngine {
             ));
         }
 
-        // Extract the metric name (everything after the array and comma)
+        // Extract the metric selector (everything after the array and comma)
         let after_array = &inner[array_end + 1..].trim();
-        let metric_name = after_array
+        let metric_selector = after_array
             .strip_prefix(',')
             .map(|s| s.trim())
             .ok_or_else(|| {
@@ -1192,8 +1192,11 @@ impl QueryEngine {
                 )
             })?;
 
-        // Get the histogram data
-        if let Some(collection) = self.tsdb.histograms(metric_name, Labels::default()) {
+        // Parse the metric selector to extract name and labels
+        let (metric_name, labels) = self.parse_metric_selector(metric_selector)?;
+
+        // Get the histogram data with label filtering
+        if let Some(collection) = self.tsdb.histograms(&metric_name, labels) {
             // Sum all histogram series together
             let summed_series = collection.sum();
 
