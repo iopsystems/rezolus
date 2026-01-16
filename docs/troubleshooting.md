@@ -11,7 +11,6 @@ On AWS Graviton instances (and potentially other ARM systems), you may notice th
 - `cpu_cycles` / `cpu_instructions` (IPC)
 - `cpu_dtlb_miss`
 - `cpu_branch_instructions` / `cpu_branch_misses`
-- `cpu_l3_access` / `cpu_l3_miss`
 - CPU frequency metrics
 
 BPF-based metrics like `cpu_usage`, `scheduler_*`, `syscall_*`, etc. are **not affected** and will report data for all CPUs including CPU 0.
@@ -76,3 +75,27 @@ The NMI watchdog works by programming a PMU counter to overflow after a certain 
 On ARM systems with limited PMU counters (typically 6 general-purpose counters on Neoverse cores), the NMI watchdog may consume counters in a way that prevents other perf events from being scheduled on CPU 0.
 
 This is a kernel/hardware limitation, not a Rezolus bug. The same limitation affects the `perf` tool and any other software using hardware performance counters.
+
+## L3 Cache Metrics Not Available on ARM (Graviton)
+
+### Symptoms
+
+The `cpu_l3_access` and `cpu_l3_miss` metrics are not available on ARM platforms including AWS Graviton instances.
+
+### Cause
+
+On x86 platforms (AMD and Intel), L3 cache metrics are collected using uncore PMUs that provide cache-level visibility across all cores sharing the L3 cache.
+
+ARM platforms expose L3 cache events (`L3D_CACHE`, `L3D_CACHE_REFILL`) as per-core PMU events rather than per-cache-domain events. These events count each core's requests to the L3, not actual L3 operations. If multiple cores access the same cache line, each core counts it separately - making aggregation across cores misleading. For profiling a specific workload's cache behavior, use `perf stat -p <pid>` with these events instead.
+
+Accurate L3 cache metrics on ARM would require access to the CMN (Coherent Mesh Network) PMU, which provides actual cache slice counters. However, CMN PMU access is often restricted or unavailable on cloud instances.
+
+### Affected Platforms
+
+- All AWS Graviton generations (Graviton2, Graviton3, Graviton4)
+- ARM Neoverse-based systems (N1, V1, N2, V2)
+- Other ARM platforms using per-core L3 cache events
+
+### Workaround
+
+There is currently no workaround. L3 cache metrics are only available on x86 platforms (AMD Zen and Intel server CPUs) where uncore PMUs provide accurate cache-domain-level visibility.
