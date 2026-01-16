@@ -183,6 +183,19 @@ pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
         "sum by (id) (irate(cpu_dtlb_miss[5m]))".to_string(),
     );
 
+    // DTLB MPKI (Misses Per Kilo Instructions) - system-wide
+    dtlb.plot_promql(
+        PlotOpts::line("MPKI", "dtlb-mpki", Unit::Count),
+        "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000".to_string(),
+    );
+
+    // DTLB MPKI - per-CPU
+    dtlb.plot_promql(
+        PlotOpts::heatmap("MPKI (Per-CPU)", "dtlb-mpki-per-cpu", Unit::Count),
+        "sum by (id) (irate(cpu_dtlb_miss[5m])) / sum by (id) (irate(cpu_instructions[5m])) * 1000"
+            .to_string(),
+    );
+
     view.group(dtlb);
 
     /*
