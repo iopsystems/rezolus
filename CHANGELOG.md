@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [5.5.0] - 2026-01-23
+
+### Added
+
+- Memory section and network errors added to the viewer. (#637)
+- Use stability analysis to improve anomaly detection in mcp server. (#639)
+- Macos GPU sampler. (#642)
+- Hindsight HTTP endpoint for snapshotting. (#652)
+- Perf counters for branch prediction and DTLB. (#655)
+- Improved support for CPU L3 sampler. (#664)
+
+
 ## [5.4.0] - 2025-09-30
 
 ### Fixed
