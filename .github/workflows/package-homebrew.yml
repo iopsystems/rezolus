@@ -77,8 +77,11 @@ jobs:
 
       - name: Create the Homebrew update PR
         run: |
+          TAG=${{ steps.release-tag.outputs.result }}
+          TARBALL_URL="https://github.com/iopsystems/rezolus/archive/refs/tags/${TAG}.tar.gz"
+
           BREW_ARGS=(
-            --tag ${{ steps.release-tag.outputs.result }}
+            --url "${TARBALL_URL}"
             --no-fork
             --no-browse
           )
