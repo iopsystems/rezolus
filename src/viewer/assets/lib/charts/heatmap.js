@@ -7,17 +7,18 @@ import {
 import {
     getBaseOption,
     getNoDataOption,
+    COLORS,
 } from './base.js';
 
 /**
  * Configures the Chart based on Chart.spec
  * Responsible for calling setOption on the echart instance, and for setting up any
  * chart-specific dynamic behavior.
- * 
+ *
  * Heatmaps have both the worst built-in support in echarts and have additional complications.
- * 
+ *
  * In particular, we are concerned about perf when there are many data points, so we downsample as needed.
- * 
+ *
  * @param {import('./chart.js').Chart} chart - the chart to configure
  */
 export function configureHeatmap(chart) {
@@ -122,7 +123,7 @@ export function configureHeatmap(chart) {
         }
         // If this is a downsampled data point, `value` is the max value.
         // Otherwise, it's just the value, with `minValue` being null.
-        const [time, cpu, timeIndex, minValue, value] = params.data;
+        const [time, cpu, timeIndex, minVal, value] = params.data;
 
         const formattedTime = formatDateTime(time);
 
@@ -131,23 +132,23 @@ export function configureHeatmap(chart) {
             const formatter = createAxisLabelFormatter(unitSystem);
             label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
             formattedValue = formatter(value);
-            formattedMinValue = minValue === null ? '' : formatter(minValue);
+            formattedMinValue = minVal === null ? '' : formatter(minVal);
         } else {
             label = '';
             formattedValue = value.toFixed(6);
-            formattedMinValue = minValue === null ? '' : minValue.toFixed(6);
+            formattedMinValue = minVal === null ? '' : minVal.toFixed(6);
         }
-        const valueString = minValue === null ? formattedValue : `${formattedMinValue} - ${formattedValue}`;
-        return `<div>
-                    <div>
+        const valueString = minVal === null ? formattedValue : `${formattedMinValue} - ${formattedValue}`;
+        return `<div style="font-family: 'Inter', -apple-system, sans-serif;">
+                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                         ${formattedTime}
                     </div>
-                    <div style="margin-top: 5px;">
-                        <span style="background-color: #aaaaff33; padding: 2px 5px; border-radius: 4px; font-size: .85em;">
-                            CPU: ${cpu}
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: ${COLORS.accent};">
+                            CPU ${cpu}
                         </span>
                         ${label}
-                        <span style="font-weight: bold; float: right; margin-left: 20px;">
+                        <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 12px; color: ${COLORS.fg};">
                             ${valueString}
                         </span>
                     </div>
@@ -160,16 +161,23 @@ export function configureHeatmap(chart) {
         nameLocation: 'middle',
         nameGap: 40,
         nameTextStyle: {
-            color: '#E0E0E0',
-            fontSize: 14,
+            color: COLORS.fg,
+            fontSize: 11,
+            fontFamily: '"JetBrains Mono", "SF Mono", monospace',
             padding: [0, 0, 0, 20]
         },
         data: continuousCpuIds,
+        axisLine: {
+            show: false,
+        },
         axisLabel: {
             interval: yAxisLabelInterval,
-            color: '#ABABAB'
+            color: COLORS.fgSecondary,
+            fontSize: 10,
+            fontFamily: '"JetBrains Mono", "SF Mono", monospace',
         },
         axisTick: {
+            show: false,
             interval: yAxisTickInterval,
         }
     };
@@ -196,31 +204,35 @@ export function configureHeatmap(chart) {
                 type: 'line',
                 animation: false,
                 lineStyle: {
-                    color: '#E0E0E0',
+                    color: COLORS.accent,
+                    opacity: 0.5,
                 },
                 label: {
-                    backgroundColor: '#505765'
+                    backgroundColor: COLORS.bgCard
                 }
             },
             position: 'top',
             formatter: tooltipFormatter,
-            textStyle: {
-                color: '#E0E0E0'
-            },
-            backgroundColor: 'rgba(50, 50, 50, 0.8)',
-            borderColor: 'rgba(70, 70, 70, 0.8)',
         },
         visualMap: {
             type: 'continuous',
             min: minValue,
             max: maxValue,
             calculable: false,
-            show: false, // Show the color scale
+            show: false,
             inRange: {
+                // Inferno colormap - perceptually uniform, high contrast
                 color: [
-                    '#440154', '#481a6c', '#472f7d', '#414487', '#39568c',
-                    '#31688e', '#2a788e', '#23888e', '#1f988b', '#22a884',
-                    '#35b779', '#54c568', '#7ad151', '#a5db36', '#d2e21b', '#fde725'
+                    '#000004',  // black
+                    '#1b0c41',  // dark purple
+                    '#4a0c6b',  // purple
+                    '#781c6d',  // magenta
+                    '#a52c60',  // pink-red
+                    '#cf4446',  // red
+                    '#ed6925',  // orange
+                    '#fb9b06',  // yellow-orange
+                    '#f7d13d',  // yellow
+                    '#fcffa4',  // pale yellow
                 ]
             }
         },
@@ -247,7 +259,15 @@ export function configureHeatmap(chart) {
         }]
     };
 
-    chart.echart.setOption(option);
+    // Use notMerge: true to clear any previous chart configuration
+    chart.echart.setOption(option, { notMerge: true });
+
+    // Re-enable drag-to-zoom after clearing the chart
+    chart.echart.dispatchAction({
+        type: 'takeGlobalCursor',
+        key: 'dataZoomSelect',
+        dataZoomSelectActive: true,
+    });
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {
@@ -278,8 +298,8 @@ export function configureHeatmap(chart) {
 /**
  * Create a downsampled version of the data matrix.
  * Combines every `factor` data points along the x axis into a single data point with a min and max value.
- * @param {Array<Array<number>>} dataMatrix 
- * @param {number} factor 
+ * @param {Array<Array<number>>} dataMatrix
+ * @param {number} factor
  * @returns {Array<Array<number>>}
  */
 const downsample = (dataMatrix, factor) => {

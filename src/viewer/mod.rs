@@ -311,6 +311,12 @@ async fn lib(uri: Uri) -> impl IntoResponse {
         let body = asset.contents_utf8().unwrap();
         let content_type = if path.ends_with(".js") {
             "text/javascript"
+        } else if path.ends_with(".css") {
+            "text/css"
+        } else if path.ends_with(".html") {
+            "text/html"
+        } else if path.ends_with(".json") {
+            "application/json"
         } else {
             "text/plain"
         };

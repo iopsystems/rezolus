@@ -8,6 +8,7 @@ import {
     getBaseYAxisOption,
     getTooltipFormatter,
     getNoDataOption,
+    CHART_PALETTE,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
 
@@ -43,8 +44,6 @@ export function configureMultiSeriesChart(chart) {
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
-    // const yAxisLabel = format.y_axis_label || format.axis_label;
-    // const valueLabel = format.value_label;
     const logScale = format.log_scale;
     const minValue = format.min;
     const maxValue = format.max;
@@ -53,13 +52,10 @@ export function configureMultiSeriesChart(chart) {
     const series = [];
 
     // Get colors only for selected cgroups (not for aggregate "Other")
-    const cgroupColors = seriesNames.map((name) => {
+    const cgroupColors = seriesNames.map((name, index) => {
         const color = globalColorMapper.getSelectedCgroupColor(name);
-        // If no color assigned (shouldn't happen for selected cgroups), fall back to index-based color
-        return (
-            color ||
-            globalColorMapper.getColorByIndex(seriesNames.indexOf(name))
-        );
+        // If no color assigned (shouldn't happen for selected cgroups), fall back to palette
+        return color || CHART_PALETTE[index % CHART_PALETTE.length];
     });
 
     for (let i = 1; i < data.length; i++) {
@@ -79,15 +75,19 @@ export function configureMultiSeriesChart(chart) {
             step: 'start',
             lineStyle: {
                 color,
-                width: 2,
+                width: isOtherCategory ? 1 : 1.5,
+                opacity: isOtherCategory ? 0.6 : 1,
             },
             // Add symbol for "Other" category to make it more distinguishable
             showSymbol: isOtherCategory,
-            symbolSize: isOtherCategory ? 4 : 0,
+            symbolSize: isOtherCategory ? 3 : 0,
             // Ensure "Other" appears behind other lines
             z: isOtherCategory ? 1 : 2,
             emphasis: {
-                focus: 'series'
+                focus: 'series',
+                lineStyle: {
+                    width: 2,
+                }
             },
             animationDuration: 0
         });
@@ -110,9 +110,17 @@ export function configureMultiSeriesChart(chart) {
                 val => val),
         },
         series: series,
-        // Don't use the default color palette for normal cgroups
+        // Use the curated color palette
         color: cgroupColors,
     };
 
-    chart.echart.setOption(option);
+    // Use notMerge: true to clear any previous chart configuration
+    chart.echart.setOption(option, { notMerge: true });
+
+    // Re-enable drag-to-zoom after clearing the chart
+    chart.echart.dispatchAction({
+        type: 'takeGlobalCursor',
+        key: 'dataZoomSelect',
+        dataZoomSelectActive: true,
+    });
 }

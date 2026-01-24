@@ -1,17 +1,30 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 
 <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Rezolus - High-resolution systems performance telemetry viewer" />
+    <meta name="theme-color" content="#0a0e14" />
+
     <title>Rezolus</title>
 
+    <!-- Preconnect for faster font loading -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!-- Load Inter for body text and JetBrains Mono for code/data -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+    <!-- Core libraries -->
     <script src="lib/mithril.js"></script>
     <script src="lib/charts/echarts.min.js"></script>
 
-    <!-- Use type="module" to enable ES module imports -->
+    <!-- Application entry point -->
     <script type="module" src="lib/script.js"></script>
 
-    <link rel="stylesheet" href="lib/style.css">
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Styles -->
+    <link rel="stylesheet" href="lib/style.css" />
 </head>
 
 <body>

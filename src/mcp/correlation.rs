@@ -445,6 +445,14 @@ fn extract_matrix_samples(
                 values: vec![*result],
             }])
         }
+        QueryResult::HistogramHeatmap { .. } => {
+            // Histogram heatmap data cannot be converted to matrix samples
+            Err(
+                "Histogram heatmap data is not suitable for correlation analysis. \
+                Use histogram_percentiles() instead."
+                    .into(),
+            )
+        }
     }
 }
 

@@ -1,11 +1,11 @@
 /**
  * ColorMapper provides consistent color assignment for cgroups across all charts and page refreshes
  * using a deterministic hash function to assign colors based on cgroup names.
- * 
+ *
  * Can also be configured (useConsistentCgroupColors == false) to use a more distinguishable (but inconsistent)
  * color palette. This assigns colors to each series based on its index rather than its name.
- * 
- * In all cases, the "Other" category is always gray.
+ *
+ * In all cases, the "Other" category is always a muted gray.
  */
 export class ColorMapper {
     constructor() {
@@ -16,76 +16,33 @@ export class ColorMapper {
         // Track the order colors were assigned
         this.colorAssignmentOrder = [];
 
-        /*
-            import colorsys
-
-            count = 45
-            for i in range(count):
-                h = i / count
-                if i % 3 == 0:
-                    l = .5
-                    s = .5
-                elif i % 3 == 1:
-                    l = .6
-                    s = .6
-                else:
-                    l = .4
-                    s = .7
-                    
-                (r, g, b) = colorsys.hls_to_rgb(h, l, s)
-                x = ''.join('{:02X}'.format(round(a * 255)) for a in [r, g, b])
-                print("'#" + x + "',")
-        */
+        // Curated color palette optimized for dark backgrounds
+        // Designed for maximum distinguishability while maintaining visual harmony
         this.colorPalette = [
-            '#BF4040',
-            '#D66C5C',
-            '#AD451F',
-            '#BF7340',
-            '#D69D5C',
-            '#AD7E1F',
-            '#BFA640',
-            '#D6CE5C',
-            '#A4AD1F',
-            '#A6BF40',
-            '#ADD65C',
-            '#6BAD1F',
-            '#73BF40',
-            '#7CD65C',
-            '#32AD1F',
-            '#40BF40',
-            '#5CD66C',
-            '#1FAD45',
-            '#40BF73',
-            '#5CD69D',
-            '#1FAD7E',
-            '#40BFA6',
-            '#5CD6CE',
-            '#1FA4AD',
-            '#40A6BF',
-            '#5CADD6',
-            '#1F6BAD',
-            '#4073BF',
-            '#5C7CD6',
-            '#1F32AD',
-            '#4040BF',
-            '#6C5CD6',
-            '#451FAD',
-            '#7340BF',
-            '#9D5CD6',
-            '#7E1FAD',
-            '#A640BF',
-            '#CE5CD6',
-            '#AD1FA4',
-            '#BF40A6',
-            '#D65CAD',
-            '#AD1F6B',
-            '#BF4073',
-            '#D65C7C',
-            '#AD1F32',
-        ]
+            '#58a6ff', // Electric blue (primary)
+            '#39d5ff', // Bright cyan
+            '#2dd4bf', // Teal
+            '#3fb950', // Green
+            '#a3e635', // Lime
+            '#fbbf24', // Amber
+            '#f97316', // Orange
+            '#f85149', // Red
+            '#f472b6', // Pink
+            '#a78bfa', // Purple
+            '#818cf8', // Indigo
+            '#38bdf8', // Sky blue
+            '#34d399', // Emerald
+            '#facc15', // Yellow
+            '#fb923c', // Light orange
+            '#e879f9', // Fuchsia
+            '#c084fc', // Violet
+            '#22d3ee', // Cyan bright
+            '#4ade80', // Light green
+            '#fca5a1', // Light coral
+        ];
 
-        // Always use gray for "Other" category - consistent across all charts
-        this.otherColor = '#666666';
+        // Muted gray for "Other" category - consistent across all charts
+        this.otherColor = '#484f58';
     }
 
     /**
@@ -135,14 +92,14 @@ export class ColorMapper {
 
     /**
      * Get the nth color in the fixed color palette.
-     * 
+     *
      * @param {number} index - The index to get a color for
      * @returns {string} The color code for this index
      */
     getColorByIndex(index) {
-        // This results in a 15-color palette (only the most saturated of the original 45 colors) in a reasonable order.
-        const STARTING_INDEX = 2;
-        const JUMP_DISTANCE = 12;
+        // Use a jump pattern to maximize visual distinction between adjacent series
+        const STARTING_INDEX = 0;
+        const JUMP_DISTANCE = 7; // Prime number for better distribution
         return this.colorPalette[(STARTING_INDEX + index * JUMP_DISTANCE) % this.colorPalette.length];
     }
 

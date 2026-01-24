@@ -512,6 +512,24 @@ fn format_query_result(result: &QueryResult) -> String {
             writeln!(&mut output, "==============").unwrap();
             writeln!(&mut output, "{} = {}", result.0, result.1).unwrap();
         }
+        QueryResult::HistogramHeatmap { result } => {
+            writeln!(&mut output, "Histogram Heatmap Result:").unwrap();
+            writeln!(&mut output, "=========================").unwrap();
+            writeln!(
+                &mut output,
+                "Time points: {}, Buckets: {}, Data points: {}",
+                result.timestamps.len(),
+                result.bucket_bounds.len(),
+                result.data.len()
+            )
+            .unwrap();
+            writeln!(
+                &mut output,
+                "Value range: {:.2} - {:.2}",
+                result.min_value, result.max_value
+            )
+            .unwrap();
+        }
     }
 
     output

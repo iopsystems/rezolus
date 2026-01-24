@@ -43,6 +43,21 @@ pub struct MatrixSample {
     pub values: Vec<(f64, f64)>, // Vec of (timestamp_seconds, value)
 }
 
+/// Histogram heatmap data for visualization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistogramHeatmapResult {
+    /// Timestamps in seconds
+    pub timestamps: Vec<f64>,
+    /// Bucket boundaries (latency values in the histogram's unit, e.g., nanoseconds)
+    pub bucket_bounds: Vec<u64>,
+    /// Heatmap data as [time_index, bucket_index, count]
+    pub data: Vec<(usize, usize, f64)>,
+    /// Minimum count value (for color scaling)
+    pub min_value: f64,
+    /// Maximum count value (for color scaling)
+    pub max_value: f64,
+}
+
 /// Result of a PromQL query
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resultType", rename_all = "camelCase")]
@@ -55,6 +70,9 @@ pub enum QueryResult {
 
     #[serde(rename = "scalar")]
     Scalar { result: (f64, f64) }, // (timestamp, value)
+
+    #[serde(rename = "histogram_heatmap")]
+    HistogramHeatmap { result: HistogramHeatmapResult },
 }
 
 /// The PromQL query engine
@@ -1271,6 +1289,82 @@ impl QueryEngine {
         (n * sum_xy - sum_x * sum_y) / denominator
     }
 
+    /// Handle histogram_heatmap(histogram_metric) queries
+    /// Returns bucket data suitable for rendering as a latency heatmap
+    fn handle_histogram_heatmap(
+        &self,
+        query_str: &str,
+        start: f64,
+        end: f64,
+    ) -> Result<QueryResult, QueryError> {
+        // Extract the metric selector from histogram_heatmap(metric_selector)
+        let inner = &query_str["histogram_heatmap(".len()..query_str.len() - 1];
+        let metric_selector = inner.trim();
+
+        // Parse the metric selector to extract name and labels
+        let (metric_name, labels) = self.parse_metric_selector(metric_selector)?;
+
+        // Get the histogram data with label filtering
+        if let Some(collection) = self.tsdb.histograms(&metric_name, labels) {
+            // Sum all histogram series together
+            let summed_series = collection.sum();
+
+            // Get heatmap data
+            if let Some(heatmap_data) = summed_series.heatmap() {
+                let start_sec = start;
+                let end_sec = end;
+
+                // Filter data to the requested time range
+                let mut filtered_timestamps = Vec::new();
+                let mut filtered_data = Vec::new();
+                let mut time_index_map = std::collections::HashMap::new();
+
+                for (old_idx, ts) in heatmap_data.timestamps.iter().enumerate() {
+                    if *ts >= start_sec && *ts <= end_sec {
+                        let new_idx = filtered_timestamps.len();
+                        time_index_map.insert(old_idx, new_idx);
+                        filtered_timestamps.push(*ts);
+                    }
+                }
+
+                let mut min_value = f64::MAX;
+                let mut max_value = f64::MIN;
+
+                for (time_idx, bucket_idx, count) in heatmap_data.data.iter() {
+                    if let Some(&new_time_idx) = time_index_map.get(time_idx) {
+                        filtered_data.push((new_time_idx, *bucket_idx, *count));
+                        min_value = min_value.min(*count);
+                        max_value = max_value.max(*count);
+                    }
+                }
+
+                if min_value == f64::MAX {
+                    min_value = 0.0;
+                }
+                if max_value == f64::MIN {
+                    max_value = 0.0;
+                }
+
+                return Ok(QueryResult::HistogramHeatmap {
+                    result: HistogramHeatmapResult {
+                        timestamps: filtered_timestamps,
+                        bucket_bounds: heatmap_data.bucket_bounds,
+                        data: filtered_data,
+                        min_value,
+                        max_value,
+                    },
+                });
+            }
+
+            Err(QueryError::MetricNotFound(format!(
+                "No histogram data found for {}",
+                metric_name
+            )))
+        } else {
+            Err(QueryError::MetricNotFound(metric_name.to_string()))
+        }
+    }
+
     pub fn query_range(
         &self,
         query_str: &str,
@@ -1282,6 +1376,11 @@ impl QueryEngine {
         // that may not be parsed correctly by the standard PromQL parser
         if query_str.starts_with("histogram_percentiles(") && query_str.ends_with(")") {
             return self.handle_histogram_percentiles(query_str, start, end);
+        }
+
+        // Handle histogram_heatmap specially
+        if query_str.starts_with("histogram_heatmap(") && query_str.ends_with(")") {
+            return self.handle_histogram_heatmap(query_str, start, end);
         }
 
         // Parse the query into an AST
