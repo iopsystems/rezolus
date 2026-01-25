@@ -78,10 +78,13 @@ jobs:
       - name: Create the Homebrew update PR
         run: |
           TAG=${{ steps.release-tag.outputs.result }}
+          # Strip leading 'v' from tag to get version (e.g., v5.5.0 -> 5.5.0)
+          VERSION="${TAG#v}"
           TARBALL_URL="https://github.com/iopsystems/rezolus/archive/refs/tags/${TAG}.tar.gz"
 
           BREW_ARGS=(
             --url "${TARBALL_URL}"
+            --version "${VERSION}"
             --no-fork
             --no-browse
           )
