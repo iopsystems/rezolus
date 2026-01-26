@@ -3,6 +3,61 @@ import {
 } from './util/units.js';
 import { formatDateTime } from './util/utils.js';
 
+// Color constants matching the new CSS design tokens
+const COLORS = {
+    // Foreground hierarchy
+    fg: '#e6edf3',
+    fgSecondary: '#8b949e',
+    fgMuted: '#484f58',
+    fgSubtle: '#30363d',
+
+    // Accent colors
+    accent: '#58a6ff',
+    accentEmphasis: '#79c0ff',
+    accentMuted: 'rgba(56, 139, 253, 0.4)',
+    accentSubtle: 'rgba(56, 139, 253, 0.15)',
+    accentGlow: 'rgba(56, 139, 253, 0.25)',
+
+    // Backgrounds
+    bgVoid: '#05080d',
+    bgCard: '#0d1117',
+    bgTertiary: '#161b22',
+    bgElevated: '#1c2128',
+
+    // Borders
+    borderSubtle: 'rgba(48, 54, 61, 0.4)',
+    borderDefault: 'rgba(48, 54, 61, 0.7)',
+
+    // Grid lines - very subtle for clean charts
+    gridLine: 'rgba(48, 54, 61, 0.5)',
+
+    // Chart series colors - curated palette
+    chartBlue: '#58a6ff',
+    chartCyan: '#39d5ff',
+    chartTeal: '#2dd4bf',
+    chartGreen: '#3fb950',
+    chartLime: '#a3e635',
+    chartYellow: '#fbbf24',
+    chartOrange: '#f97316',
+    chartRed: '#f85149',
+    chartPink: '#f472b6',
+    chartPurple: '#a78bfa',
+};
+
+// Default chart color palette for multi-series charts
+export const CHART_PALETTE = [
+    COLORS.chartBlue,
+    COLORS.chartCyan,
+    COLORS.chartTeal,
+    COLORS.chartGreen,
+    COLORS.chartLime,
+    COLORS.chartYellow,
+    COLORS.chartOrange,
+    COLORS.chartRed,
+    COLORS.chartPink,
+    COLORS.chartPurple,
+];
+
 /**
  * Creates a placeholder option for charts with no data
  * @param {string} title - The title of the chart
@@ -12,12 +67,13 @@ export function getNoDataOption(title) {
     return {
         title: {
             text: title,
-            left: 'center',
-            top: '10',
+            left: '16',
+            top: '12',
             textStyle: {
-                color: '#E0E0E0',
-                fontSize: 16,
-                fontWeight: 'normal',
+                color: COLORS.fg,
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: '"JetBrains Mono", "SF Mono", monospace',
             },
         },
         graphic: {
@@ -25,10 +81,10 @@ export function getNoDataOption(title) {
             left: 'center',
             top: 'middle',
             style: {
-                text: 'No data',
-                fontSize: 14,
-                fill: '#999',
-                font: 'normal 14px sans-serif',
+                text: 'No data available',
+                fontSize: 12,
+                fill: COLORS.fgMuted,
+                font: 'normal 12px "Inter", -apple-system, sans-serif',
             },
         },
         xAxis: {
@@ -38,9 +94,9 @@ export function getNoDataOption(title) {
             show: false,
         },
         grid: {
-            left: '14%',
-            right: '5%',
-            top: '35',
+            left: '60',
+            right: '24',
+            top: '50',
             bottom: '35',
         },
     };
@@ -79,17 +135,17 @@ export function getTooltipFormatter(valueFormatter) {
         });
 
         const result =
-            `<div>
-                <div>
+            `<div style="font-family: 'Inter', -apple-system, sans-serif;">
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                     ${formatDateTime(paramsArray[0].value[0])}
                 </div>
-                <div style="margin-top: 5px;">
-                    ${sortedParams.map(p => `<div>
-                        ${p.marker}
-                        <span style="margin-left: 2px;">
-                            ${p.seriesName}
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    ${sortedParams.map(p => `<div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+                        <span style="display: flex; align-items: center; gap: 6px;">
+                            ${p.marker}
+                            <span style="color: ${COLORS.fgSecondary}; font-size: 12px;">${p.seriesName}</span>
                         </span>
-                        <span style="float: right; margin-left: 20px; font-weight: bold;">
+                        <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 12px; color: ${COLORS.fg};">
                             ${valueFormatter(p.value[1])}
                         </span>
                     </div>`).join('')}
@@ -103,10 +159,9 @@ export function getTooltipFormatter(valueFormatter) {
 export function getBaseOption(title) {
     return {
         grid: {
-            left: '14%',
-            right: '5%',
-            // Subtracting from the element height, these give 384px height for the chart itself.
-            top: '35',
+            left: '60',
+            right: '24',
+            top: '50',
             bottom: '35',
             containLabel: false,
         },
@@ -120,16 +175,17 @@ export function getBaseOption(title) {
             // Testing showed that their "automatic" determination of how many ticks fit is independent
             // of the size of the chart. So this value is trying to be empirically correct for charts of
             // a reasonable size (which is dependent on the size of the window).
-            // TODO: should we adjust split number based on the size of the window? Or take x axis labels
-            // into our own hands?
-            splitNumber: 4,
+            splitNumber: 5,
             axisLine: {
-                lineStyle: {
-                    color: '#ABABAB'
-                }
+                show: false,
+            },
+            axisTick: {
+                show: false,
             },
             axisLabel: {
-                color: '#ABABAB',
+                color: COLORS.fgSecondary,
+                fontSize: 10,
+                fontFamily: '"JetBrains Mono", "SF Mono", monospace',
                 formatter: {
                     year: '{yyyy}',
                     month: '{MMM}',
@@ -141,6 +197,13 @@ export function getBaseOption(title) {
                     none: '{hh}:{mm}:{ss}.{SSS}'
                 }
             },
+            splitLine: {
+                show: true,
+                lineStyle: {
+                    color: COLORS.gridLine,
+                    type: 'dashed',
+                }
+            },
         },
         tooltip: {
             trigger: 'axis',
@@ -148,15 +211,29 @@ export function getBaseOption(title) {
                 type: 'line',
                 snap: true,
                 animation: false,
+                lineStyle: {
+                    color: COLORS.accent,
+                    opacity: 0.6,
+                    width: 1,
+                },
                 label: {
-                    backgroundColor: '#505765'
+                    backgroundColor: COLORS.bgCard,
+                    borderColor: COLORS.borderSubtle,
+                    color: COLORS.fg,
+                    fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+                    fontSize: 10,
                 }
             },
             textStyle: {
-                color: '#E0E0E0'
+                color: COLORS.fg,
+                fontSize: 12,
+                fontFamily: '"Inter", -apple-system, sans-serif',
             },
-            backgroundColor: 'rgba(50, 50, 50, 0.8)',
-            borderColor: 'rgba(70, 70, 70, 0.8)',
+            backgroundColor: 'rgba(13, 17, 23, 0.95)',
+            borderColor: COLORS.borderDefault,
+            borderWidth: 1,
+            padding: [12, 14],
+            extraCssText: 'box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); border-radius: 8px;',
         },
         // This invisible toolbox is a workaround to have drag-to-zoom as the default behavior.
         // We programmatically activate the zoom tool and hide the interface.
@@ -178,16 +255,23 @@ export function getBaseOption(title) {
         },
         title: {
             text: title,
-            left: 'center',
+            left: '16',
+            top: '12',
             textStyle: {
-                color: '#E0E0E0'
+                color: COLORS.fg,
+                fontSize: 13,
+                fontWeight: 600,
+                fontFamily: '"JetBrains Mono", "SF Mono", monospace',
             }
         },
         textStyle: {
-            color: '#E0E0E0'
+            color: COLORS.fg,
+            fontFamily: '"Inter", -apple-system, sans-serif',
         },
         darkMode: true,
-        backgroundColor: 'transparent'
+        backgroundColor: 'transparent',
+        // Use the curated color palette
+        color: CHART_PALETTE,
     };
 }
 
@@ -199,13 +283,16 @@ export function getBaseYAxisOption(logScale, minValue, maxValue, unitSystem) {
         min: minValue,
         max: maxValue,
         axisLine: {
-            lineStyle: {
-                color: '#ABABAB'
-            }
+            show: false,
+        },
+        axisTick: {
+            show: false,
         },
         axisLabel: {
-            color: '#ABABAB',
-            margin: 16,
+            color: COLORS.fgSecondary,
+            fontSize: 10,
+            fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+            margin: 12,
             formatter: unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
                 function (value) {
@@ -222,8 +309,12 @@ export function getBaseYAxisOption(logScale, minValue, maxValue, unitSystem) {
         },
         splitLine: {
             lineStyle: {
-                color: 'rgba(171, 171, 171, 0.2)'
+                color: COLORS.gridLine,
+                type: 'dashed',
             }
         }
     };
 }
+
+// Export colors for use in other chart modules
+export { COLORS };

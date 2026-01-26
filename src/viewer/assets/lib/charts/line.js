@@ -6,6 +6,7 @@ import {
     getBaseYAxisOption,
     getTooltipFormatter,
     getNoDataOption,
+    COLORS,
 } from './base.js';
 
 /**
@@ -40,14 +41,30 @@ export function configureLineChart(chart) {
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
-    // const yAxisLabel = format.y_axis_label || format.axis_label;
-    // const valueLabel = format.value_label;
     const logScale = format.log_scale;
     const minValue = format.min;
     const maxValue = format.max;
 
+    // Calculate minimum zoom span (5x sample interval as percentage of total duration)
+    const sampleInterval = timeData.length > 1 ? (timeData[1] - timeData[0]) : 1;
+    const totalDuration = timeData[timeData.length - 1] - timeData[0];
+    const minZoomSpan = Math.max(0.1, (sampleInterval * 5 / totalDuration) * 100);
+
     const option = {
         ...baseOption,
+        // Add dataZoom component with minSpan to enforce minimum zoom level
+        dataZoom: [{
+            type: 'inside',
+            xAxisIndex: 0,
+            minSpan: minZoomSpan,
+            filterMode: 'none',
+        }, {
+            type: 'slider',
+            show: false,
+            xAxisIndex: 0,
+            minSpan: minZoomSpan,
+            filterMode: 'none',
+        }],
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
@@ -65,11 +82,37 @@ export function configureLineChart(chart) {
             },
             step: 'start',
             lineStyle: {
-                width: 2
+                width: 1.5,
+                color: COLORS.accent,
+            },
+            itemStyle: {
+                color: COLORS.accent,
+            },
+            areaStyle: {
+                color: {
+                    type: 'linear',
+                    x: 0,
+                    y: 0,
+                    x2: 0,
+                    y2: 1,
+                    colorStops: [
+                        { offset: 0, color: 'rgba(88, 166, 255, 0.2)' },
+                        { offset: 0.5, color: 'rgba(88, 166, 255, 0.08)' },
+                        { offset: 1, color: 'rgba(88, 166, 255, 0.01)' },
+                    ],
+                },
             },
             animationDuration: 0, // Don't animate the line in
         }]
     };
 
-    chart.echart.setOption(option);
+    // Use notMerge: true to clear any previous chart configuration
+    chart.echart.setOption(option, { notMerge: true });
+
+    // Re-enable drag-to-zoom after clearing the chart
+    chart.echart.dispatchAction({
+        type: 'takeGlobalCursor',
+        key: 'dataZoomSelect',
+        dataZoomSelectActive: true,
+    });
 }

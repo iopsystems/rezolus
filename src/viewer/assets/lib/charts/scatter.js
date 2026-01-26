@@ -8,6 +8,8 @@ import {
     getBaseYAxisOption,
     getTooltipFormatter,
     getNoDataOption,
+    CHART_PALETTE,
+    COLORS,
 } from './base.js';
 
 /**
@@ -32,8 +34,6 @@ export function configureScatterChart(chart) {
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
-    // const yAxisLabel = format.y_axis_label || format.axis_label;
-    // const valueLabel = format.value_label;
     const logScale = format.log_scale;
     const minValue = format.min;
     const maxValue = format.max;
@@ -46,6 +46,15 @@ export function configureScatterChart(chart) {
 
     const percentileLabels = format.percentile_labels || ['p50', 'p90', 'p99', 'p99.9', 'p99.99'];
 
+    // Use curated palette for scatter points
+    const scatterColors = [
+        COLORS.accent,      // Electric blue
+        COLORS.chartCyan,   // Bright cyan
+        COLORS.chartTeal,   // Teal
+        COLORS.chartGreen,  // Green
+        COLORS.chartPurple, // Purple
+    ];
+
     for (let i = 1; i < data.length; i++) {
         const percentileValues = data[i];
         const percentileData = [];
@@ -57,31 +66,46 @@ export function configureScatterChart(chart) {
             }
         }
 
-        // Add a series for this percentile
+        const color = scatterColors[(i - 1) % scatterColors.length];
         series.push({
             name: percentileLabels[i - 1] || `Percentile ${i}`,
             type: 'scatter',
             data: percentileData,
-            symbolSize: 6,
+            symbolSize: 5,
+            itemStyle: {
+                color: color,
+            },
             emphasis: {
                 focus: 'series',
                 itemStyle: {
-                    shadowBlur: 10,
-                    shadowColor: 'rgba(255, 255, 255, 0.5)'
+                    shadowBlur: 12,
+                    shadowColor: `${color}66`, // 40% opacity
                 }
             }
         });
     }
 
-    // Detect if this is a scheduler or time-based chart by looking at title or unit
-    const isSchedulerChart =
-        (chart.spec.opts.title && (chart.spec.opts.title.includes('Latency') || chart.spec.opts.title.includes('Time'))) ||
-        unitSystem === 'time';
-    // TODO: remove the above second-guessing and just use the unit system.
+    // Calculate minimum zoom span (5x sample interval as percentage of total duration)
+    const sampleInterval = timeData.length > 1 ? (timeData[1] - timeData[0]) : 1;
+    const totalDuration = timeData[timeData.length - 1] - timeData[0];
+    const minZoomSpan = Math.max(0.1, (sampleInterval * 5 / totalDuration) * 100);
 
     // Return scatter chart configuration with reliable time axis
     const option = {
         ...baseOption,
+        // Add dataZoom component with minSpan to enforce minimum zoom level
+        dataZoom: [{
+            type: 'inside',
+            xAxisIndex: 0,
+            minSpan: minZoomSpan,
+            filterMode: 'none',
+        }, {
+            type: 'slider',
+            show: false,
+            xAxisIndex: 0,
+            minSpan: minZoomSpan,
+            filterMode: 'none',
+        }],
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
@@ -89,8 +113,17 @@ export function configureScatterChart(chart) {
                 createAxisLabelFormatter(unitSystem) :
                 val => val),
         },
-        series: series
+        series: series,
+        color: scatterColors,
     };
 
-    chart.echart.setOption(option);
+    // Use notMerge: true to clear any previous chart configuration (e.g., heatmap custom series)
+    chart.echart.setOption(option, { notMerge: true });
+
+    // Re-enable drag-to-zoom after clearing the chart
+    chart.echart.dispatchAction({
+        type: 'takeGlobalCursor',
+        key: 'dataZoomSelect',
+        dataZoomSelectActive: true,
+    });
 }
