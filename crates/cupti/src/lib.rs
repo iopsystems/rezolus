@@ -7,9 +7,9 @@
 #[macro_use]
 mod macros;
 
+mod error;
 pub mod pmsampling;
 pub mod profiler;
-mod error;
 mod util;
 
 use cupti_sys::{
@@ -34,8 +34,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// goes out of scope.
 pub fn initialize() -> Result<InitializeGuard> {
     use cupti_sys::{
-        cuDeviceGet, cuInit, CUdevice, CUpti_Profiler_Initialize_Params, cuptiProfilerInitialize,
-        load_libraries, CUDA_SUCCESS,
+        cuDeviceGet, cuInit, cuptiProfilerInitialize, load_libraries, CUdevice,
+        CUpti_Profiler_Initialize_Params, CUDA_SUCCESS,
     };
 
     // First, ensure libraries are loaded
@@ -65,7 +65,7 @@ pub fn initialize() -> Result<InitializeGuard> {
 ///
 /// Normally dropping [`InitializeGuard`] will take care of this for you.
 pub fn deinitialize() -> Result<()> {
-    use cupti_sys::{CUpti_Profiler_DeInitialize_Params, cuptiProfilerDeInitialize};
+    use cupti_sys::{cuptiProfilerDeInitialize, CUpti_Profiler_DeInitialize_Params};
 
     let mut params = CUpti_Profiler_DeInitialize_Params {
         structSize: CUpti_Profiler_DeInitialize_Params_STRUCT_SIZE,
@@ -111,7 +111,7 @@ impl Drop for InitializeGuard {
 pub fn get_device_chip_name(device_index: usize) -> Result<&'static str> {
     use std::ffi::CStr;
 
-    use cupti_sys::{CUpti_Device_GetChipName_Params, cuptiDeviceGetChipName};
+    use cupti_sys::{cuptiDeviceGetChipName, CUpti_Device_GetChipName_Params};
 
     let mut params = CUpti_Device_GetChipName_Params {
         structSize: CUpti_Device_GetChipName_Params_STRUCT_SIZE,

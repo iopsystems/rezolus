@@ -78,12 +78,16 @@ pub const CUPTI_PM_SAMPLING_TRIGGER_MODE_GPU_TIME_INTERVAL: CUpti_PmSampling_Tri
 
 // PM sampling decode stop reasons
 pub const CUPTI_PM_SAMPLING_DECODE_STOP_REASON_OTHER: CUpti_PmSampling_DecodeStopReason = 0;
-pub const CUPTI_PM_SAMPLING_DECODE_STOP_REASON_COUNTER_DATA_FULL: CUpti_PmSampling_DecodeStopReason = 1;
-pub const CUPTI_PM_SAMPLING_DECODE_STOP_REASON_END_OF_RECORDS: CUpti_PmSampling_DecodeStopReason = 2;
+pub const CUPTI_PM_SAMPLING_DECODE_STOP_REASON_COUNTER_DATA_FULL:
+    CUpti_PmSampling_DecodeStopReason = 1;
+pub const CUPTI_PM_SAMPLING_DECODE_STOP_REASON_END_OF_RECORDS: CUpti_PmSampling_DecodeStopReason =
+    2;
 
 // Hardware buffer append modes
-pub const CUPTI_PM_SAMPLING_HARDWARE_BUFFER_APPEND_MODE_KEEP_OLDEST: CUpti_PmSampling_HardwareBuffer_AppendMode = 0;
-pub const CUPTI_PM_SAMPLING_HARDWARE_BUFFER_APPEND_MODE_KEEP_LATEST: CUpti_PmSampling_HardwareBuffer_AppendMode = 1;
+pub const CUPTI_PM_SAMPLING_HARDWARE_BUFFER_APPEND_MODE_KEEP_OLDEST:
+    CUpti_PmSampling_HardwareBuffer_AppendMode = 0;
+pub const CUPTI_PM_SAMPLING_HARDWARE_BUFFER_APPEND_MODE_KEEP_LATEST:
+    CUpti_PmSampling_HardwareBuffer_AppendMode = 1;
 
 // =============================================================================
 // Opaque Types
@@ -351,9 +355,8 @@ pub struct CUpti_PmSampling_CounterData_GetSampleInfo_Params {
 
 macro_rules! struct_size {
     ($type:ty, $last_field:ident) => {{
-        std::mem::offset_of!($type, $last_field) + std::mem::size_of::<
-            <$type as StructLastField>::LastFieldType
-        >()
+        std::mem::offset_of!($type, $last_field)
+            + std::mem::size_of::<<$type as StructLastField>::LastFieldType>()
     }};
 }
 
@@ -438,14 +441,18 @@ pub const CUpti_Profiler_Host_Deinitialize_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_Profiler_Host_Deinitialize_Params, pHostObject);
 pub const CUpti_Profiler_Host_ConfigAddMetrics_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_Profiler_Host_ConfigAddMetrics_Params, numMetrics);
-pub const CUpti_Profiler_Host_GetConfigImageSize_Params_STRUCT_SIZE: usize =
-    struct_size!(CUpti_Profiler_Host_GetConfigImageSize_Params, configImageSize);
+pub const CUpti_Profiler_Host_GetConfigImageSize_Params_STRUCT_SIZE: usize = struct_size!(
+    CUpti_Profiler_Host_GetConfigImageSize_Params,
+    configImageSize
+);
 pub const CUpti_Profiler_Host_GetConfigImage_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_Profiler_Host_GetConfigImage_Params, pConfigImage);
 pub const CUpti_Profiler_Host_GetNumOfPasses_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_Profiler_Host_GetNumOfPasses_Params, numOfPasses);
-pub const CUpti_Profiler_Host_EvaluateToGpuValues_Params_STRUCT_SIZE: usize =
-    struct_size!(CUpti_Profiler_Host_EvaluateToGpuValues_Params, pMetricValues);
+pub const CUpti_Profiler_Host_EvaluateToGpuValues_Params_STRUCT_SIZE: usize = struct_size!(
+    CUpti_Profiler_Host_EvaluateToGpuValues_Params,
+    pMetricValues
+);
 pub const CUpti_PmSampling_Enable_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_PmSampling_Enable_Params, pPmSamplingObject);
 pub const CUpti_PmSampling_Disable_Params_STRUCT_SIZE: usize =
@@ -458,16 +465,24 @@ pub const CUpti_PmSampling_Stop_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_PmSampling_Stop_Params, pPmSamplingObject);
 pub const CUpti_PmSampling_DecodeData_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_PmSampling_DecodeData_Params, overflow);
-pub const CUpti_PmSampling_GetCounterAvailability_Params_STRUCT_SIZE: usize =
-    struct_size!(CUpti_PmSampling_GetCounterAvailability_Params, pCounterAvailabilityImage);
+pub const CUpti_PmSampling_GetCounterAvailability_Params_STRUCT_SIZE: usize = struct_size!(
+    CUpti_PmSampling_GetCounterAvailability_Params,
+    pCounterAvailabilityImage
+);
 pub const CUpti_PmSampling_GetCounterDataSize_Params_STRUCT_SIZE: usize =
     struct_size!(CUpti_PmSampling_GetCounterDataSize_Params, counterDataSize);
-pub const CUpti_PmSampling_CounterDataImage_Initialize_Params_STRUCT_SIZE: usize =
-    struct_size!(CUpti_PmSampling_CounterDataImage_Initialize_Params, pCounterData);
-pub const CUpti_PmSampling_GetCounterDataInfo_Params_STRUCT_SIZE: usize =
-    struct_size!(CUpti_PmSampling_GetCounterDataInfo_Params, numCompletedSamples);
-pub const CUpti_PmSampling_CounterData_GetSampleInfo_Params_STRUCT_SIZE: usize =
-    struct_size!(CUpti_PmSampling_CounterData_GetSampleInfo_Params, endTimestamp);
+pub const CUpti_PmSampling_CounterDataImage_Initialize_Params_STRUCT_SIZE: usize = struct_size!(
+    CUpti_PmSampling_CounterDataImage_Initialize_Params,
+    pCounterData
+);
+pub const CUpti_PmSampling_GetCounterDataInfo_Params_STRUCT_SIZE: usize = struct_size!(
+    CUpti_PmSampling_GetCounterDataInfo_Params,
+    numCompletedSamples
+);
+pub const CUpti_PmSampling_CounterData_GetSampleInfo_Params_STRUCT_SIZE: usize = struct_size!(
+    CUpti_PmSampling_CounterData_GetSampleInfo_Params,
+    endTimestamp
+);
 
 // =============================================================================
 // Function Types
@@ -478,29 +493,54 @@ type FnCuInit = unsafe extern "C" fn(flags: c_uint) -> CUresult;
 type FnCuDeviceGet = unsafe extern "C" fn(device: *mut CUdevice, ordinal: c_int) -> CUresult;
 
 // CUPTI profiler functions
-type FnCuptiProfilerInitialize = unsafe extern "C" fn(params: *mut CUpti_Profiler_Initialize_Params) -> CUptiResult;
-type FnCuptiProfilerDeInitialize = unsafe extern "C" fn(params: *mut CUpti_Profiler_DeInitialize_Params) -> CUptiResult;
-type FnCuptiDeviceGetChipName = unsafe extern "C" fn(params: *mut CUpti_Device_GetChipName_Params) -> CUptiResult;
-type FnCuptiProfilerHostInitialize = unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_Initialize_Params) -> CUptiResult;
-type FnCuptiProfilerHostDeinitialize = unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_Deinitialize_Params) -> CUptiResult;
-type FnCuptiProfilerHostConfigAddMetrics = unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_ConfigAddMetrics_Params) -> CUptiResult;
-type FnCuptiProfilerHostGetConfigImageSize = unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_GetConfigImageSize_Params) -> CUptiResult;
-type FnCuptiProfilerHostGetConfigImage = unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_GetConfigImage_Params) -> CUptiResult;
-type FnCuptiProfilerHostGetNumOfPasses = unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_GetNumOfPasses_Params) -> CUptiResult;
-type FnCuptiProfilerHostEvaluateToGpuValues = unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_EvaluateToGpuValues_Params) -> CUptiResult;
+type FnCuptiProfilerInitialize =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_Initialize_Params) -> CUptiResult;
+type FnCuptiProfilerDeInitialize =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_DeInitialize_Params) -> CUptiResult;
+type FnCuptiDeviceGetChipName =
+    unsafe extern "C" fn(params: *mut CUpti_Device_GetChipName_Params) -> CUptiResult;
+type FnCuptiProfilerHostInitialize =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_Initialize_Params) -> CUptiResult;
+type FnCuptiProfilerHostDeinitialize =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_Deinitialize_Params) -> CUptiResult;
+type FnCuptiProfilerHostConfigAddMetrics =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_ConfigAddMetrics_Params) -> CUptiResult;
+type FnCuptiProfilerHostGetConfigImageSize =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_GetConfigImageSize_Params) -> CUptiResult;
+type FnCuptiProfilerHostGetConfigImage =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_GetConfigImage_Params) -> CUptiResult;
+type FnCuptiProfilerHostGetNumOfPasses =
+    unsafe extern "C" fn(params: *mut CUpti_Profiler_Host_GetNumOfPasses_Params) -> CUptiResult;
+type FnCuptiProfilerHostEvaluateToGpuValues = unsafe extern "C" fn(
+    params: *mut CUpti_Profiler_Host_EvaluateToGpuValues_Params,
+) -> CUptiResult;
 
 // CUPTI PM sampling functions
-type FnCuptiPmSamplingEnable = unsafe extern "C" fn(params: *mut CUpti_PmSampling_Enable_Params) -> CUptiResult;
-type FnCuptiPmSamplingDisable = unsafe extern "C" fn(params: *mut CUpti_PmSampling_Disable_Params) -> CUptiResult;
-type FnCuptiPmSamplingSetConfig = unsafe extern "C" fn(params: *mut CUpti_PmSampling_SetConfig_Params) -> CUptiResult;
-type FnCuptiPmSamplingStart = unsafe extern "C" fn(params: *mut CUpti_PmSampling_Start_Params) -> CUptiResult;
-type FnCuptiPmSamplingStop = unsafe extern "C" fn(params: *mut CUpti_PmSampling_Stop_Params) -> CUptiResult;
-type FnCuptiPmSamplingDecodeData = unsafe extern "C" fn(params: *mut CUpti_PmSampling_DecodeData_Params) -> CUptiResult;
-type FnCuptiPmSamplingGetCounterAvailability = unsafe extern "C" fn(params: *mut CUpti_PmSampling_GetCounterAvailability_Params) -> CUptiResult;
-type FnCuptiPmSamplingGetCounterDataSize = unsafe extern "C" fn(params: *mut CUpti_PmSampling_GetCounterDataSize_Params) -> CUptiResult;
-type FnCuptiPmSamplingCounterDataImageInitialize = unsafe extern "C" fn(params: *mut CUpti_PmSampling_CounterDataImage_Initialize_Params) -> CUptiResult;
-type FnCuptiPmSamplingGetCounterDataInfo = unsafe extern "C" fn(params: *mut CUpti_PmSampling_GetCounterDataInfo_Params) -> CUptiResult;
-type FnCuptiPmSamplingCounterDataGetSampleInfo = unsafe extern "C" fn(params: *mut CUpti_PmSampling_CounterData_GetSampleInfo_Params) -> CUptiResult;
+type FnCuptiPmSamplingEnable =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_Enable_Params) -> CUptiResult;
+type FnCuptiPmSamplingDisable =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_Disable_Params) -> CUptiResult;
+type FnCuptiPmSamplingSetConfig =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_SetConfig_Params) -> CUptiResult;
+type FnCuptiPmSamplingStart =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_Start_Params) -> CUptiResult;
+type FnCuptiPmSamplingStop =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_Stop_Params) -> CUptiResult;
+type FnCuptiPmSamplingDecodeData =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_DecodeData_Params) -> CUptiResult;
+type FnCuptiPmSamplingGetCounterAvailability = unsafe extern "C" fn(
+    params: *mut CUpti_PmSampling_GetCounterAvailability_Params,
+) -> CUptiResult;
+type FnCuptiPmSamplingGetCounterDataSize =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_GetCounterDataSize_Params) -> CUptiResult;
+type FnCuptiPmSamplingCounterDataImageInitialize = unsafe extern "C" fn(
+    params: *mut CUpti_PmSampling_CounterDataImage_Initialize_Params,
+) -> CUptiResult;
+type FnCuptiPmSamplingGetCounterDataInfo =
+    unsafe extern "C" fn(params: *mut CUpti_PmSampling_GetCounterDataInfo_Params) -> CUptiResult;
+type FnCuptiPmSamplingCounterDataGetSampleInfo = unsafe extern "C" fn(
+    params: *mut CUpti_PmSampling_CounterData_GetSampleInfo_Params,
+) -> CUptiResult;
 
 // =============================================================================
 // Library Loading
@@ -558,54 +598,101 @@ impl CuptiLibraries {
 
         unsafe {
             // Load CUDA functions - extract function pointers immediately
-            let cu_init: FnCuInit = *cuda_lib.get::<FnCuInit>(b"cuInit\0")
+            let cu_init: FnCuInit = *cuda_lib
+                .get::<FnCuInit>(b"cuInit\0")
                 .map_err(|e| format!("failed to load cuInit: {e}"))?;
-            let cu_device_get: FnCuDeviceGet = *cuda_lib.get::<FnCuDeviceGet>(b"cuDeviceGet\0")
+            let cu_device_get: FnCuDeviceGet = *cuda_lib
+                .get::<FnCuDeviceGet>(b"cuDeviceGet\0")
                 .map_err(|e| format!("failed to load cuDeviceGet: {e}"))?;
 
             // Load CUPTI profiler functions - extract function pointers immediately
-            let cupti_profiler_initialize: FnCuptiProfilerInitialize = *cupti_lib.get::<FnCuptiProfilerInitialize>(b"cuptiProfilerInitialize\0")
+            let cupti_profiler_initialize: FnCuptiProfilerInitialize = *cupti_lib
+                .get::<FnCuptiProfilerInitialize>(b"cuptiProfilerInitialize\0")
                 .map_err(|e| format!("failed to load cuptiProfilerInitialize: {e}"))?;
-            let cupti_profiler_deinitialize: FnCuptiProfilerDeInitialize = *cupti_lib.get::<FnCuptiProfilerDeInitialize>(b"cuptiProfilerDeInitialize\0")
+            let cupti_profiler_deinitialize: FnCuptiProfilerDeInitialize = *cupti_lib
+                .get::<FnCuptiProfilerDeInitialize>(b"cuptiProfilerDeInitialize\0")
                 .map_err(|e| format!("failed to load cuptiProfilerDeInitialize: {e}"))?;
-            let cupti_device_get_chip_name: FnCuptiDeviceGetChipName = *cupti_lib.get::<FnCuptiDeviceGetChipName>(b"cuptiDeviceGetChipName\0")
+            let cupti_device_get_chip_name: FnCuptiDeviceGetChipName = *cupti_lib
+                .get::<FnCuptiDeviceGetChipName>(b"cuptiDeviceGetChipName\0")
                 .map_err(|e| format!("failed to load cuptiDeviceGetChipName: {e}"))?;
-            let cupti_profiler_host_initialize: FnCuptiProfilerHostInitialize = *cupti_lib.get::<FnCuptiProfilerHostInitialize>(b"cuptiProfilerHostInitialize\0")
+            let cupti_profiler_host_initialize: FnCuptiProfilerHostInitialize = *cupti_lib
+                .get::<FnCuptiProfilerHostInitialize>(b"cuptiProfilerHostInitialize\0")
                 .map_err(|e| format!("failed to load cuptiProfilerHostInitialize: {e}"))?;
-            let cupti_profiler_host_deinitialize: FnCuptiProfilerHostDeinitialize = *cupti_lib.get::<FnCuptiProfilerHostDeinitialize>(b"cuptiProfilerHostDeinitialize\0")
+            let cupti_profiler_host_deinitialize: FnCuptiProfilerHostDeinitialize = *cupti_lib
+                .get::<FnCuptiProfilerHostDeinitialize>(b"cuptiProfilerHostDeinitialize\0")
                 .map_err(|e| format!("failed to load cuptiProfilerHostDeinitialize: {e}"))?;
-            let cupti_profiler_host_config_add_metrics: FnCuptiProfilerHostConfigAddMetrics = *cupti_lib.get::<FnCuptiProfilerHostConfigAddMetrics>(b"cuptiProfilerHostConfigAddMetrics\0")
-                .map_err(|e| format!("failed to load cuptiProfilerHostConfigAddMetrics: {e}"))?;
-            let cupti_profiler_host_get_config_image_size: FnCuptiProfilerHostGetConfigImageSize = *cupti_lib.get::<FnCuptiProfilerHostGetConfigImageSize>(b"cuptiProfilerHostGetConfigImageSize\0")
-                .map_err(|e| format!("failed to load cuptiProfilerHostGetConfigImageSize: {e}"))?;
-            let cupti_profiler_host_get_config_image: FnCuptiProfilerHostGetConfigImage = *cupti_lib.get::<FnCuptiProfilerHostGetConfigImage>(b"cuptiProfilerHostGetConfigImage\0")
-                .map_err(|e| format!("failed to load cuptiProfilerHostGetConfigImage: {e}"))?;
-            let cupti_profiler_host_get_num_of_passes: FnCuptiProfilerHostGetNumOfPasses = *cupti_lib.get::<FnCuptiProfilerHostGetNumOfPasses>(b"cuptiProfilerHostGetNumOfPasses\0")
-                .map_err(|e| format!("failed to load cuptiProfilerHostGetNumOfPasses: {e}"))?;
-            let cupti_profiler_host_evaluate_to_gpu_values: FnCuptiProfilerHostEvaluateToGpuValues = *cupti_lib.get::<FnCuptiProfilerHostEvaluateToGpuValues>(b"cuptiProfilerHostEvaluateToGpuValues\0")
-                .map_err(|e| format!("failed to load cuptiProfilerHostEvaluateToGpuValues: {e}"))?;
+            let cupti_profiler_host_config_add_metrics: FnCuptiProfilerHostConfigAddMetrics =
+                *cupti_lib
+                    .get::<FnCuptiProfilerHostConfigAddMetrics>(
+                        b"cuptiProfilerHostConfigAddMetrics\0",
+                    )
+                    .map_err(|e| {
+                        format!("failed to load cuptiProfilerHostConfigAddMetrics: {e}")
+                    })?;
+            let cupti_profiler_host_get_config_image_size: FnCuptiProfilerHostGetConfigImageSize =
+                *cupti_lib
+                    .get::<FnCuptiProfilerHostGetConfigImageSize>(
+                        b"cuptiProfilerHostGetConfigImageSize\0",
+                    )
+                    .map_err(|e| {
+                        format!("failed to load cuptiProfilerHostGetConfigImageSize: {e}")
+                    })?;
+            let cupti_profiler_host_get_config_image: FnCuptiProfilerHostGetConfigImage =
+                *cupti_lib
+                    .get::<FnCuptiProfilerHostGetConfigImage>(b"cuptiProfilerHostGetConfigImage\0")
+                    .map_err(|e| format!("failed to load cuptiProfilerHostGetConfigImage: {e}"))?;
+            let cupti_profiler_host_get_num_of_passes: FnCuptiProfilerHostGetNumOfPasses =
+                *cupti_lib
+                    .get::<FnCuptiProfilerHostGetNumOfPasses>(b"cuptiProfilerHostGetNumOfPasses\0")
+                    .map_err(|e| format!("failed to load cuptiProfilerHostGetNumOfPasses: {e}"))?;
+            let cupti_profiler_host_evaluate_to_gpu_values: FnCuptiProfilerHostEvaluateToGpuValues =
+                *cupti_lib
+                    .get::<FnCuptiProfilerHostEvaluateToGpuValues>(
+                        b"cuptiProfilerHostEvaluateToGpuValues\0",
+                    )
+                    .map_err(|e| {
+                        format!("failed to load cuptiProfilerHostEvaluateToGpuValues: {e}")
+                    })?;
 
             // Load CUPTI PM sampling functions - extract function pointers immediately
-            let cupti_pm_sampling_enable: FnCuptiPmSamplingEnable = *cupti_lib.get::<FnCuptiPmSamplingEnable>(b"cuptiPmSamplingEnable\0")
+            let cupti_pm_sampling_enable: FnCuptiPmSamplingEnable = *cupti_lib
+                .get::<FnCuptiPmSamplingEnable>(b"cuptiPmSamplingEnable\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingEnable: {e}"))?;
-            let cupti_pm_sampling_disable: FnCuptiPmSamplingDisable = *cupti_lib.get::<FnCuptiPmSamplingDisable>(b"cuptiPmSamplingDisable\0")
+            let cupti_pm_sampling_disable: FnCuptiPmSamplingDisable = *cupti_lib
+                .get::<FnCuptiPmSamplingDisable>(b"cuptiPmSamplingDisable\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingDisable: {e}"))?;
-            let cupti_pm_sampling_set_config: FnCuptiPmSamplingSetConfig = *cupti_lib.get::<FnCuptiPmSamplingSetConfig>(b"cuptiPmSamplingSetConfig\0")
+            let cupti_pm_sampling_set_config: FnCuptiPmSamplingSetConfig = *cupti_lib
+                .get::<FnCuptiPmSamplingSetConfig>(b"cuptiPmSamplingSetConfig\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingSetConfig: {e}"))?;
-            let cupti_pm_sampling_start: FnCuptiPmSamplingStart = *cupti_lib.get::<FnCuptiPmSamplingStart>(b"cuptiPmSamplingStart\0")
+            let cupti_pm_sampling_start: FnCuptiPmSamplingStart = *cupti_lib
+                .get::<FnCuptiPmSamplingStart>(b"cuptiPmSamplingStart\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingStart: {e}"))?;
-            let cupti_pm_sampling_stop: FnCuptiPmSamplingStop = *cupti_lib.get::<FnCuptiPmSamplingStop>(b"cuptiPmSamplingStop\0")
+            let cupti_pm_sampling_stop: FnCuptiPmSamplingStop = *cupti_lib
+                .get::<FnCuptiPmSamplingStop>(b"cuptiPmSamplingStop\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingStop: {e}"))?;
-            let cupti_pm_sampling_decode_data: FnCuptiPmSamplingDecodeData = *cupti_lib.get::<FnCuptiPmSamplingDecodeData>(b"cuptiPmSamplingDecodeData\0")
+            let cupti_pm_sampling_decode_data: FnCuptiPmSamplingDecodeData = *cupti_lib
+                .get::<FnCuptiPmSamplingDecodeData>(b"cuptiPmSamplingDecodeData\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingDecodeData: {e}"))?;
             let cupti_pm_sampling_get_counter_availability: FnCuptiPmSamplingGetCounterAvailability = *cupti_lib.get::<FnCuptiPmSamplingGetCounterAvailability>(b"cuptiPmSamplingGetCounterAvailability\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingGetCounterAvailability: {e}"))?;
-            let cupti_pm_sampling_get_counter_data_size: FnCuptiPmSamplingGetCounterDataSize = *cupti_lib.get::<FnCuptiPmSamplingGetCounterDataSize>(b"cuptiPmSamplingGetCounterDataSize\0")
-                .map_err(|e| format!("failed to load cuptiPmSamplingGetCounterDataSize: {e}"))?;
+            let cupti_pm_sampling_get_counter_data_size: FnCuptiPmSamplingGetCounterDataSize =
+                *cupti_lib
+                    .get::<FnCuptiPmSamplingGetCounterDataSize>(
+                        b"cuptiPmSamplingGetCounterDataSize\0",
+                    )
+                    .map_err(|e| {
+                        format!("failed to load cuptiPmSamplingGetCounterDataSize: {e}")
+                    })?;
             let cupti_pm_sampling_counter_data_image_initialize: FnCuptiPmSamplingCounterDataImageInitialize = *cupti_lib.get::<FnCuptiPmSamplingCounterDataImageInitialize>(b"cuptiPmSamplingCounterDataImageInitialize\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingCounterDataImageInitialize: {e}"))?;
-            let cupti_pm_sampling_get_counter_data_info: FnCuptiPmSamplingGetCounterDataInfo = *cupti_lib.get::<FnCuptiPmSamplingGetCounterDataInfo>(b"cuptiPmSamplingGetCounterDataInfo\0")
-                .map_err(|e| format!("failed to load cuptiPmSamplingGetCounterDataInfo: {e}"))?;
+            let cupti_pm_sampling_get_counter_data_info: FnCuptiPmSamplingGetCounterDataInfo =
+                *cupti_lib
+                    .get::<FnCuptiPmSamplingGetCounterDataInfo>(
+                        b"cuptiPmSamplingGetCounterDataInfo\0",
+                    )
+                    .map_err(|e| {
+                        format!("failed to load cuptiPmSamplingGetCounterDataInfo: {e}")
+                    })?;
             let cupti_pm_sampling_counter_data_get_sample_info: FnCuptiPmSamplingCounterDataGetSampleInfo = *cupti_lib.get::<FnCuptiPmSamplingCounterDataGetSampleInfo>(b"cuptiPmSamplingCounterDataGetSampleInfo\0")
                 .map_err(|e| format!("failed to load cuptiPmSamplingCounterDataGetSampleInfo: {e}"))?;
 
@@ -681,7 +768,8 @@ impl CuptiLibraries {
 }
 
 fn get_libs() -> Result<&'static CuptiLibraries, &'static str> {
-    LIBRARIES.get_or_init(|| CuptiLibraries::load())
+    LIBRARIES
+        .get_or_init(|| CuptiLibraries::load())
         .as_ref()
         .map_err(|e| e.as_str())
 }
@@ -727,7 +815,9 @@ pub unsafe fn cuDeviceGet(device: *mut CUdevice, ordinal: c_int) -> CUresult {
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerInitialize(params: *mut CUpti_Profiler_Initialize_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerInitialize(
+    params: *mut CUpti_Profiler_Initialize_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_initialize)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -736,7 +826,9 @@ pub unsafe fn cuptiProfilerInitialize(params: *mut CUpti_Profiler_Initialize_Par
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerDeInitialize(params: *mut CUpti_Profiler_DeInitialize_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerDeInitialize(
+    params: *mut CUpti_Profiler_DeInitialize_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_deinitialize)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -754,7 +846,9 @@ pub unsafe fn cuptiDeviceGetChipName(params: *mut CUpti_Device_GetChipName_Param
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerHostInitialize(params: *mut CUpti_Profiler_Host_Initialize_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerHostInitialize(
+    params: *mut CUpti_Profiler_Host_Initialize_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_host_initialize)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -763,7 +857,9 @@ pub unsafe fn cuptiProfilerHostInitialize(params: *mut CUpti_Profiler_Host_Initi
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerHostDeinitialize(params: *mut CUpti_Profiler_Host_Deinitialize_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerHostDeinitialize(
+    params: *mut CUpti_Profiler_Host_Deinitialize_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_host_deinitialize)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -772,7 +868,9 @@ pub unsafe fn cuptiProfilerHostDeinitialize(params: *mut CUpti_Profiler_Host_Dei
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerHostConfigAddMetrics(params: *mut CUpti_Profiler_Host_ConfigAddMetrics_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerHostConfigAddMetrics(
+    params: *mut CUpti_Profiler_Host_ConfigAddMetrics_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_host_config_add_metrics)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -781,7 +879,9 @@ pub unsafe fn cuptiProfilerHostConfigAddMetrics(params: *mut CUpti_Profiler_Host
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerHostGetConfigImageSize(params: *mut CUpti_Profiler_Host_GetConfigImageSize_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerHostGetConfigImageSize(
+    params: *mut CUpti_Profiler_Host_GetConfigImageSize_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_host_get_config_image_size)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -790,7 +890,9 @@ pub unsafe fn cuptiProfilerHostGetConfigImageSize(params: *mut CUpti_Profiler_Ho
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerHostGetConfigImage(params: *mut CUpti_Profiler_Host_GetConfigImage_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerHostGetConfigImage(
+    params: *mut CUpti_Profiler_Host_GetConfigImage_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_host_get_config_image)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -799,7 +901,9 @@ pub unsafe fn cuptiProfilerHostGetConfigImage(params: *mut CUpti_Profiler_Host_G
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerHostGetNumOfPasses(params: *mut CUpti_Profiler_Host_GetNumOfPasses_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerHostGetNumOfPasses(
+    params: *mut CUpti_Profiler_Host_GetNumOfPasses_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_host_get_num_of_passes)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -808,7 +912,9 @@ pub unsafe fn cuptiProfilerHostGetNumOfPasses(params: *mut CUpti_Profiler_Host_G
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiProfilerHostEvaluateToGpuValues(params: *mut CUpti_Profiler_Host_EvaluateToGpuValues_Params) -> CUptiResult {
+pub unsafe fn cuptiProfilerHostEvaluateToGpuValues(
+    params: *mut CUpti_Profiler_Host_EvaluateToGpuValues_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_profiler_host_evaluate_to_gpu_values)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -835,7 +941,9 @@ pub unsafe fn cuptiPmSamplingDisable(params: *mut CUpti_PmSampling_Disable_Param
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiPmSamplingSetConfig(params: *mut CUpti_PmSampling_SetConfig_Params) -> CUptiResult {
+pub unsafe fn cuptiPmSamplingSetConfig(
+    params: *mut CUpti_PmSampling_SetConfig_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_pm_sampling_set_config)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -862,7 +970,9 @@ pub unsafe fn cuptiPmSamplingStop(params: *mut CUpti_PmSampling_Stop_Params) -> 
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiPmSamplingDecodeData(params: *mut CUpti_PmSampling_DecodeData_Params) -> CUptiResult {
+pub unsafe fn cuptiPmSamplingDecodeData(
+    params: *mut CUpti_PmSampling_DecodeData_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_pm_sampling_decode_data)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -871,7 +981,9 @@ pub unsafe fn cuptiPmSamplingDecodeData(params: *mut CUpti_PmSampling_DecodeData
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiPmSamplingGetCounterAvailability(params: *mut CUpti_PmSampling_GetCounterAvailability_Params) -> CUptiResult {
+pub unsafe fn cuptiPmSamplingGetCounterAvailability(
+    params: *mut CUpti_PmSampling_GetCounterAvailability_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_pm_sampling_get_counter_availability)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -880,7 +992,9 @@ pub unsafe fn cuptiPmSamplingGetCounterAvailability(params: *mut CUpti_PmSamplin
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiPmSamplingGetCounterDataSize(params: *mut CUpti_PmSampling_GetCounterDataSize_Params) -> CUptiResult {
+pub unsafe fn cuptiPmSamplingGetCounterDataSize(
+    params: *mut CUpti_PmSampling_GetCounterDataSize_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_pm_sampling_get_counter_data_size)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -889,7 +1003,9 @@ pub unsafe fn cuptiPmSamplingGetCounterDataSize(params: *mut CUpti_PmSampling_Ge
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiPmSamplingCounterDataImageInitialize(params: *mut CUpti_PmSampling_CounterDataImage_Initialize_Params) -> CUptiResult {
+pub unsafe fn cuptiPmSamplingCounterDataImageInitialize(
+    params: *mut CUpti_PmSampling_CounterDataImage_Initialize_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_pm_sampling_counter_data_image_initialize)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -898,7 +1014,9 @@ pub unsafe fn cuptiPmSamplingCounterDataImageInitialize(params: *mut CUpti_PmSam
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiPmSamplingGetCounterDataInfo(params: *mut CUpti_PmSampling_GetCounterDataInfo_Params) -> CUptiResult {
+pub unsafe fn cuptiPmSamplingGetCounterDataInfo(
+    params: *mut CUpti_PmSampling_GetCounterDataInfo_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_pm_sampling_get_counter_data_info)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,
@@ -907,7 +1025,9 @@ pub unsafe fn cuptiPmSamplingGetCounterDataInfo(params: *mut CUpti_PmSampling_Ge
 
 /// # Safety
 /// Caller must ensure params is valid.
-pub unsafe fn cuptiPmSamplingCounterDataGetSampleInfo(params: *mut CUpti_PmSampling_CounterData_GetSampleInfo_Params) -> CUptiResult {
+pub unsafe fn cuptiPmSamplingCounterDataGetSampleInfo(
+    params: *mut CUpti_PmSampling_CounterData_GetSampleInfo_Params,
+) -> CUptiResult {
     match get_libs() {
         Ok(libs) => (libs.cupti_pm_sampling_counter_data_get_sample_info)(params),
         Err(_) => CUPTI_ERROR_UNKNOWN,

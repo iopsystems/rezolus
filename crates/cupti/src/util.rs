@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{c_char, CStr, CString};
 use std::fmt;
 use std::ops::{Deref, Index};
 use std::ptr::NonNull;
