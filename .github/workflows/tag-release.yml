@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: Tag Release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Required permissions for creating tags, releases, and pushing version bumps
+permissions:
+  contents: write
+
+jobs:
+  tag-release:
+    name: Tag release and bump dev version
+    runs-on: ubuntu-latest
+    # Only run if the commit message starts with "release: prepare v"
+    if: "${{ startsWith(github.event.head_commit.message, 'release: prepare v') }}"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use PAT to allow pushing past branch protection
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v${{ steps.version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+          echo "Created and pushed tag v${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Extract changelog for this version
+          # Looks for content between "## [X.Y.Z]" and the next "## [" section
+          CHANGELOG=$(awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^$/d')
+
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release v$VERSION"
+          fi
+
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes "$CHANGELOG"
+
+          echo "Created GitHub release v$VERSION"
+
+      - name: Install Rust
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          cargo publish
+          echo "Published to crates.io"
+
+      - name: Install cargo-release
+        if: steps.check_tag.outputs.exists == 'false'
+        run: cargo install cargo-release --locked
+
+      - name: Bump to next dev version
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          # Calculate next dev version (patch bump + alpha.0)
+          VERSION="${{ steps.version.outputs.version }}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEXT_DEV="${MAJOR}.${MINOR}.$((PATCH + 1))-alpha.0"
+          echo "Bumping to next dev version: $NEXT_DEV"
+
+          # Update Cargo.toml and Cargo.lock
+          cargo release version "$NEXT_DEV" --execute --no-confirm
+
+          # Commit and push
+          git add -A
+          git commit -m "chore: begin next development iteration (${NEXT_DEV})"
+          git push origin main
+
+      - name: Summary
+        run: |
+          echo "## Release Tagged" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check_tag.outputs.exists }}" == "true" ]; then
+            echo "Tag v${{ steps.version.outputs.version }} already existed, skipped." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Created tag: v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Created GitHub release" >> $GITHUB_STEP_SUMMARY
+            echo "- Published to crates.io" >> $GITHUB_STEP_SUMMARY
+            echo "- Bumped to next dev version" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The package workflows will now build and publish artifacts." >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,41 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release
+#
+# Usage:
+#   cargo release version patch    # 5.5.0-alpha.0 -> 5.5.0
+#   cargo release version minor    # 5.5.0-alpha.0 -> 5.6.0
+#   cargo release version major    # 5.5.0-alpha.0 -> 6.0.0
+#   cargo release version 5.6.0    # explicit version
+#
+# Dry run (recommended first):
+#   cargo release version patch --dry-run
+#
+# This configuration is used by the /release Claude skill and
+# the tag-release.yml GitHub workflow.
+
+# Don't publish via cargo-release (handled by tag-release.yml workflow)
+publish = false
+
+# Tag settings (used by workflow, not directly by cargo release in our flow)
+tag = false
+tag-prefix = "v"
+tag-name = "{{prefix}}{{version}}"
+
+# Don't push (we handle this in the skill/workflow)
+push = false
+
+# Commit message format
+pre-release-commit-message = "release: {{version}}"
+
+# Allow releasing from main branch only
+allow-branch = ["main", "release/*"]
+
+# Consolidate commits: one commit for version bump
+consolidate-commits = true
+
+# Don't run cargo publish
+no-verify = false
+
+# Sign commits and tags (disabled by default)
+sign-commit = false
+sign-tag = false
