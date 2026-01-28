@@ -184,9 +184,10 @@ fn sample_device(device_index: usize, device: &mut DeviceSampler) -> anyhow::Res
 
     let sample_index = data_info.num_completed_samples - 1;
 
-    let values = device
-        .counter_data
-        .evaluate(&device.sampler, sample_index, &device.metric_names)?;
+    let values =
+        device
+            .counter_data
+            .evaluate(&device.sampler, sample_index, &device.metric_names)?;
 
     // Current metrics:
     // [0] gr__cycles_active.avg - GR (graphics) cycles active
