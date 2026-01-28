@@ -736,6 +736,14 @@ fn extract_time_series(
             )
             .into())
         }
+        QueryResult::HistogramHeatmap { .. } => {
+            // Histogram heatmap data - not suitable for standard time series analysis
+            Err(
+                "Histogram heatmap data is not suitable for anomaly detection. \
+                Use histogram_percentiles() instead for time series analysis."
+                    .into(),
+            )
+        }
     }
 }
 

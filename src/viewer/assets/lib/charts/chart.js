@@ -9,6 +9,9 @@ import {
     configureHeatmap
 } from './heatmap.js';
 import {
+    configureHistogramHeatmap
+} from './histogram_heatmap.js';
+import {
     configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper from './util/colormap.js';
@@ -33,6 +36,21 @@ export class ChartsState {
     clear() {
         this.zoomLevel = null;
         this.charts.clear();
+    }
+
+    // Reset zoom level on all charts
+    resetZoom() {
+        this.zoomLevel = {
+            start: 0,
+            end: 100,
+        };
+        this.charts.forEach(chart => {
+            chart.dispatchAction({
+                type: 'dataZoom',
+                start: 0,
+                end: 100,
+            });
+        });
     }
 }
 
@@ -149,14 +167,29 @@ export class Chart {
         }
 
         // Store original time data for human-friendly tick calculation
+        let timeData = null;
         if (this.spec.data && this.spec.data.length > 0) {
             if (this.spec.data[0] && Array.isArray(this.spec.data[0])) {
                 // For line and scatter charts, time is in the first row
-                this.echart.originalTimeData = this.spec.data[0];
+                timeData = this.spec.data[0];
+                this.echart.originalTimeData = timeData;
             }
         } else if (this.spec.time_data) {
             // For heatmaps, time is in time_data property
-            this.echart.originalTimeData = this.spec.time_data;
+            timeData = this.spec.time_data;
+            this.echart.originalTimeData = timeData;
+        }
+
+        // Calculate sample interval and minimum zoom percentage
+        // Minimum zoom is 5x the sample interval
+        if (timeData && timeData.length >= 2) {
+            const sampleInterval = timeData[1] - timeData[0]; // in seconds
+            const totalDuration = timeData[timeData.length - 1] - timeData[0];
+            const minVisibleDuration = sampleInterval * 5;
+            // Convert to percentage of total duration
+            this.minZoomPercent = Math.max(0.1, (minVisibleDuration / totalDuration) * 100);
+        } else {
+            this.minZoomPercent = 0.1; // fallback minimum
         }
 
         // Store chart instance for cleanup and to prevent re-initialization
@@ -189,7 +222,30 @@ export class Chart {
 
             const details = event.batch[0];
 
-            const { start, end, startValue, endValue } = details;
+            let { start, end, startValue, endValue } = details;
+
+            // Enforce minimum zoom level (5x sample interval)
+            const zoomRange = end - start;
+            const minZoom = this.minZoomPercent || 0.1;
+
+            if (zoomRange < minZoom) {
+                // Zoom is too tight, clamp it
+                const center = (start + end) / 2;
+                start = Math.max(0, center - minZoom / 2);
+                end = Math.min(100, center + minZoom / 2);
+
+                // Adjust if we hit the boundaries
+                if (start === 0) {
+                    end = Math.min(100, minZoom);
+                } else if (end === 100) {
+                    start = Math.max(0, 100 - minZoom);
+                }
+
+                // Clear startValue/endValue since we're using percentages
+                startValue = undefined;
+                endValue = undefined;
+            }
+
             this.chartsState.zoomLevel = {
                 start,
                 end,
@@ -243,6 +299,8 @@ export class Chart {
             configureLineChart(this, this.spec, this.chartsState);
         } else if (opts.style === 'heatmap') {
             configureHeatmap(this, this.spec, this.chartsState);
+        } else if (opts.style === 'histogram_heatmap') {
+            configureHistogramHeatmap(this, this.spec, this.chartsState);
         } else if (opts.style === 'scatter') {
             configureScatterChart(this, this.spec, this.chartsState);
         } else if (opts.style === 'multi') {
