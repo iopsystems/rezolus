@@ -1,5 +1,6 @@
 .cargo
 !.cargo/config.toml
-.claude
+.claude/*
+!.claude/skills/
 target
 **/*.rs.bk
