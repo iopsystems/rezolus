@@ -90,7 +90,9 @@ enabled = true
 # host_processor_info() is used
 [samplers.cpu_usage]
 
-# Produces various nVIDIA specific GPU metrics using NVML
+# Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
+# CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)
+# requires Turing+ GPU and is only available when built with --features cupti.
 [samplers.gpu_nvidia]
 
 # Memory utilization from /proc/meminfo

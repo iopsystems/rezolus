@@ -5,12 +5,13 @@ use crate::agent::*;
 use nvml_wrapper::enum_wrappers::device::*;
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
-use parking_lot::Mutex;
-use tokio::task::spawn_blocking;
+use tokio::sync::Mutex;
 
 mod stats;
 
 use stats::*;
+
+mod cupti;
 
 const KB: i64 = 1024;
 const MB: i64 = 1024 * KB;
@@ -25,12 +26,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let inner = NvidiaInner::new()?;
 
     Ok(Some(Box::new(Nvidia {
-        inner: Arc::new(Mutex::new(inner)),
+        inner: inner.into(),
     })))
 }
 
-pub struct Nvidia {
-    inner: Arc<Mutex<NvidiaInner>>,
+struct Nvidia {
+    inner: Mutex<NvidiaInner>,
 }
 
 #[async_trait]
@@ -40,37 +41,44 @@ impl Sampler for Nvidia {
     }
 
     async fn refresh(&self) {
-        let inner = self.inner.clone();
-
-        // we spawn onto a blocking thread because this can take on the order of
-        // tens of milliseconds on large systems
-
-        let _ = spawn_blocking(move || {
-            let mut inner = inner.lock();
-            let _ = inner.refresh();
-        })
-        .await;
+        let mut inner = self.inner.lock().await;
+        let _ = inner.refresh().await;
     }
 }
 
 struct NvidiaInner {
     nvml: Nvml,
     devices: usize,
+    cupti: Option<cupti::CuptiSampler>,
 }
 
 impl NvidiaInner {
     pub fn new() -> Result<Self, NvmlError> {
         let nvml = Nvml::init()?;
+        let devices = nvml.device_count()? as usize;
 
-        let devices = nvml.device_count()?;
+        let cupti = cupti::CuptiSampler::new(devices);
 
         Ok(Self {
             nvml,
-            devices: devices as _,
+            devices,
+            cupti,
         })
     }
 
-    fn refresh(&mut self) -> Result<(), std::io::Error> {
+    pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
+        // Sample NVML metrics
+        self.refresh_nvml();
+
+        // Sample CUPTI PM metrics if available
+        if let Some(ref cupti) = self.cupti {
+            let _ = cupti.sample().await;
+        }
+
+        Ok(())
+    }
+
+    fn refresh_nvml(&mut self) {
         for id in 0..self.devices {
             if let Ok(device) = self.nvml.device_by_index(id as _) {
                 /*
@@ -174,7 +182,5 @@ impl NvidiaInner {
                 }
             }
         }
-
-        Ok(())
     }
 }
