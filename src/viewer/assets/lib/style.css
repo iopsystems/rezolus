@@ -175,6 +175,33 @@ body::after {
     -webkit-mask-repeat: no-repeat;
 }
 
+#topnav .topnav-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.75rem;
+}
+
+#topnav .topnav-actions button {
+    padding: 0.5rem 1rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    color: var(--fg-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+#topnav .topnav-actions button:hover {
+    background: var(--bg-elevated);
+    border-color: var(--accent-muted);
+    color: var(--fg);
+    box-shadow: var(--shadow-glow);
+}
+
 
 /* ==========================================================================
    Header - File Info Section
