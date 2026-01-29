@@ -4,13 +4,13 @@
 #include <vmlinux.h>
 #include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
+#include "../../../agent/bpf/task.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
 #define CPU_USAGE_GROUP_WIDTH 8
 #define MAX_CPUS 1024
-#define MAX_PID 4194304
 #define SOFTIRQ_GROUP_WIDTH 16
 
 // cpu usage stat index
@@ -42,8 +42,14 @@
 #define HRTIMER 8
 #define RCU 9
 
-// dummy instance for skeleton to generate definition
+// dummy instances for skeleton to generate definitions
 struct cgroup_info _cgroup_info = {};
+struct task_info _task_info = {};
+struct task_exit _task_exit = {};
+
+/*
+ * cgroup tracking
+ */
 
 // ringbuf to pass cgroup info
 struct {
@@ -62,6 +68,39 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_serial_numbers SEC(".maps");
 
+/*
+ * task tracking
+ */
+
+// ringbuf to pass task info for new tasks
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(key_size, 0);
+    __uint(value_size, 0);
+    __uint(max_entries, TASK_RINGBUF_CAPACITY);
+} task_info SEC(".maps");
+
+// ringbuf to notify userspace of task exits
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(key_size, 0);
+    __uint(value_size, 0);
+    __uint(max_entries, TASK_RINGBUF_CAPACITY);
+} task_exit SEC(".maps");
+
+// holds task start times to detect new or reused PIDs
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_PID);
+} task_start_times SEC(".maps");
+
+/*
+ * softirq tracking
+ */
+
 // track the start time of softirq
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -71,16 +110,6 @@ struct {
 } softirq_start SEC(".maps");
 
 // per-cpu softirq counts by category
-// 0 - HI
-// 1 - TIMER
-// 2 - NET_TX
-// 3 - NET_RX
-// 4 - BLOCK
-// 5 - IRQ_POLL
-// 6 - TASKLET
-// 7 - SCHED
-// 8 - HRTIMER
-// 9 - RCU
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -90,16 +119,6 @@ struct {
 } softirq SEC(".maps");
 
 // per-cpu softirq time in nanoseconds by category
-// 0 - HI
-// 1 - TIMER
-// 2 - NET_TX
-// 3 - NET_RX
-// 4 - BLOCK
-// 5 - IRQ_POLL
-// 6 - TASKLET
-// 7 - SCHED
-// 8 - HRTIMER
-// 9 - RCU
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -107,6 +126,10 @@ struct {
     __type(value, u64);
     __uint(max_entries, MAX_CPUS* SOFTIRQ_GROUP_WIDTH);
 } softirq_time SEC(".maps");
+
+/*
+ * cpu usage counters
+ */
 
 // per-cpu cpu usage tracking in nanoseconds by category
 // 0 - USER
@@ -119,7 +142,7 @@ struct {
     __uint(max_entries, MAX_CPUS* CPU_USAGE_GROUP_WIDTH);
 } cpu_usage SEC(".maps");
 
-// tracking per-task user time
+// tracking per-task user time (internal, for delta calculation)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -128,7 +151,7 @@ struct {
     __uint(max_entries, MAX_PID);
 } task_utime SEC(".maps");
 
-// tracking per-task system time
+// tracking per-task system time (internal, for delta calculation)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -136,6 +159,15 @@ struct {
     __type(value, u64);
     __uint(max_entries, MAX_PID);
 } task_stime SEC(".maps");
+
+// per-task cpu usage in nanoseconds (user + system, exported)
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_PID);
+} task_cpu_usage SEC(".maps");
 
 // per-cgroup user
 struct {
@@ -155,6 +187,47 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_system SEC(".maps");
 
+/**
+ * handle_new_task - Check if task is new/reused and send info to userspace
+ * @task: The task_struct to check
+ *
+ * Returns 0 if new task was detected and info sent, 1 if existing task, -1 on error.
+ */
+static __noinline int handle_new_task(struct task_struct* task) {
+    if (!task)
+        return -1;
+
+    u32 pid = BPF_CORE_READ(task, pid);
+    if (pid == 0 || pid >= MAX_PID)
+        return -1;
+
+    u64 start_time = BPF_CORE_READ(task, start_time);
+
+    u64* last_start = bpf_map_lookup_elem(&task_start_times, &pid);
+    if (!last_start)
+        return -1;
+
+    // Check if this is the same task we've seen before
+    if (*last_start == start_time)
+        return 1;
+
+    // New task or PID reuse - zero the counters first
+    u64 zero = 0;
+    bpf_map_update_elem(&task_utime, &pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
+
+    // Update the start time
+    bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
+
+    // Populate and send task info
+    struct task_info info = {};
+    populate_task_info(task, &info);
+    bpf_ringbuf_output(&task_info, &info, sizeof(info), 0);
+
+    return 0;
+}
+
 // The kprobe handler is not always invoked, so using the delta to count the CPU usage could cause
 // undercounting. Kernel increases the task utime/stime before invoking cpuacct_account_field. So we
 // count the CPU usage by tracking the per-task utime/stime. The user time includes both the
@@ -173,6 +246,9 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     pid = BPF_CORE_READ(task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return 0;
+
+    // Check if this is a new task
+    handle_new_task(task);
 
     curr_utime = BPF_CORE_READ(task, utime);
     curr_stime = BPF_CORE_READ(task, stime);
@@ -225,6 +301,12 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
         }
     }
 
+    // Update per-task CPU usage (total of user + system)
+    u64 delta_total = delta_utime + delta_stime;
+    if (delta_total > 0) {
+        array_add(&task_cpu_usage, pid, delta_total);
+    }
+
     // Additional accounting on a per-cgroup basis
     struct task_group *tg = BPF_CORE_READ(task, sched_task_group);
     if (!tg)
@@ -250,6 +332,31 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     if (delta_stime > 0) {
         array_add(&cgroup_system, cgroup_id, delta_stime);
     }
+
+    return 0;
+}
+
+SEC("tp_btf/sched_process_exit")
+int handle__sched_process_exit(u64* ctx) {
+    /* TP_PROTO(struct task_struct *p) */
+    struct task_struct* task = (struct task_struct*)ctx[0];
+
+    u32 pid = BPF_CORE_READ(task, pid);
+    if (pid == 0 || pid >= MAX_PID)
+        return 0;
+
+    // Zero the exported counter FIRST to prevent exporting values without metadata
+    u64 zero = 0;
+    bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
+
+    // Clean up internal tracking state
+    bpf_map_update_elem(&task_utime, &pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_start_times, &pid, &zero, BPF_ANY);
+
+    // Notify userspace to clear metadata
+    struct task_exit exit_event = { .pid = pid };
+    bpf_ringbuf_output(&task_exit, &exit_event, sizeof(exit_event), 0);
 
     return 0;
 }

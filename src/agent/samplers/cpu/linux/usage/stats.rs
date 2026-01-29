@@ -57,6 +57,17 @@ pub static CGROUP_CPU_USAGE_USER: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 pub static CGROUP_CPU_USAGE_SYSTEM: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 /*
+ * per-task metrics
+ */
+
+#[metric(
+    name = "task_cpu_usage",
+    description = "The amount of CPU time used on a per-task basis",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static TASK_CPU_USAGE: CounterGroup = CounterGroup::new(MAX_PID);
+
+/*
  * softirq metrics
  */
 
