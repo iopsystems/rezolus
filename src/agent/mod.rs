@@ -9,7 +9,10 @@ use config::Config;
 use samplers::{Sampler, SamplerResult, SAMPLERS};
 
 #[allow(unused_imports)]
-use metrics::{CounterGroup, CounterGroupError, GaugeGroup, GaugeGroupError, MetricGroup};
+use metrics::{
+    CounterGroup, CounterGroupError, GaugeGroup, GaugeGroupError, MetricGroup, SparseCounterGroup,
+    SparseCounterGroupError,
+};
 
 #[cfg(target_os = "linux")]
 mod bpf;

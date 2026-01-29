@@ -213,3 +213,56 @@ impl<'a> PackedCounters<'a> {
         }
     }
 }
+
+/// Like `PackedCounters`, but for `SparseCounterGroup` which uses sparse
+/// metadata storage for high-cardinality metrics like per-task counters.
+pub struct SparsePackedCounters<'a> {
+    _map: &'a Map<'a>,
+    mmap: MmapMut,
+    counters: &'static SparseCounterGroup,
+}
+
+impl<'a> SparsePackedCounters<'a> {
+    /// Create a new set of counters from the provided BPF map and collection of
+    /// counter metrics.
+    ///
+    /// The map layout is not cacheline padded. The ordering of the dynamic
+    /// counters must exactly match the layout in the BPF map.
+    pub fn new(map: &'a Map, counters: &'static SparseCounterGroup) -> Self {
+        let total_bytes = counters.len() * std::mem::size_of::<u64>();
+
+        let fd = map.as_fd().as_raw_fd();
+        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+        let mmap: MmapMut = unsafe {
+            MmapOptions::new()
+                .len(total_bytes)
+                .map_mut(&file)
+                .expect("failed to mmap() bpf counterset")
+        };
+
+        let (_prefix, values, _suffix) = unsafe { mmap.align_to::<u64>() };
+
+        if values.len() != counters.len() {
+            panic!("mmap region not aligned or width doesn't match");
+        }
+
+        Self {
+            _map: map,
+            mmap,
+            counters,
+        }
+    }
+
+    /// Refreshes the counters by reading from the BPF map and setting each
+    /// counter metric to the current value.
+    pub fn refresh(&mut self) {
+        let (_prefix, values, _suffix) = unsafe { self.mmap.align_to::<u64>() };
+
+        // update all individual counters
+        for (idx, value) in values.iter().enumerate() {
+            if *value != 0 {
+                let _ = self.counters.set(idx, *value);
+            }
+        }
+    }
+}

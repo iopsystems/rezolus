@@ -1,11 +1,15 @@
 mod counters;
 mod gauges;
+mod sparse_counters;
 
 #[allow(unused_imports)]
 pub use counters::{CounterGroup, CounterGroupError};
 
 #[allow(unused_imports)]
 pub use gauges::{GaugeGroup, GaugeGroupError};
+
+#[allow(unused_imports)]
+pub use sparse_counters::{SparseCounterGroup, SparseCounterGroupError};
 
 use std::collections::HashMap;
 
