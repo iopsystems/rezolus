@@ -1061,21 +1061,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cupti"
-version = "0.1.0"
-dependencies = [
- "c-enum",
- "cupti-sys",
-]
-
-[[package]]
-name = "cupti-sys"
-version = "0.1.0"
-dependencies = [
- "libloading",
-]
-
-[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2970,7 +2955,6 @@ dependencies = [
  "clocksource",
  "core_affinity",
  "ctrlc",
- "cupti",
  "futures",
  "h2",
  "histogram",

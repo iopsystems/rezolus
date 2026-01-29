@@ -1,9 +1,0 @@
-[package]
-name = "cupti"
-version = "0.1.0"
-edition = "2021"
-publish = false
-
-[dependencies]
-c-enum = "0.2.3"
-cupti-sys = { path = "../cupti-sys" }

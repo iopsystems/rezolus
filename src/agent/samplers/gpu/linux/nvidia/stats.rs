@@ -113,33 +113,3 @@ pub static GPU_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
     metadata = { unit = "percentage" }
 )]
 pub static GPU_MEMORY_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
-
-// CUPTI PM Sampling Metrics (Turing+ GPUs)
-
-#[metric(
-    name = "gpu_sm_utilization",
-    description = "SM throughput as percentage of peak (0-100).",
-    metadata = { unit = "percentage" }
-)]
-pub static GPU_SM_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
-
-#[metric(
-    name = "gpu_dram_throughput",
-    description = "DRAM throughput as percentage of peak (0-100).",
-    metadata = { unit = "percentage" }
-)]
-pub static GPU_DRAM_THROUGHPUT: GaugeGroup = GaugeGroup::new(MAX_GPUS);
-
-#[metric(
-    name = "gpu_l2_hit_rate",
-    description = "L2 cache hit rate (0-100).",
-    metadata = { unit = "percentage" }
-)]
-pub static GPU_L2_HIT_RATE: GaugeGroup = GaugeGroup::new(MAX_GPUS);
-
-#[metric(
-    name = "gpu_achieved_occupancy",
-    description = "Ratio of active warps to max warps (0-100).",
-    metadata = { unit = "percentage" }
-)]
-pub static GPU_ACHIEVED_OCCUPANCY: GaugeGroup = GaugeGroup::new(MAX_GPUS);
