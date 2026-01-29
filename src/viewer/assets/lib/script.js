@@ -5,6 +5,9 @@ const TopNav = {
     view() {
         return m('div#topnav', [
             m('div.logo', 'REZOLUS'),
+            m('div.topnav-actions', [
+                m('button', { onclick: () => chartsState.resetZoom() }, 'RESET ZOOM'),
+            ]),
         ]);
     },
 };
@@ -102,9 +105,6 @@ const Main = {
                         interval && m('span', formatInterval(interval) + ' sampling'),
                         filesize && m('span', formatSize(filesize)),
                     ]),
-                ]),
-                m('div.header-actions', [
-                    m('button', { onclick: () => chartsState.resetZoom() }, 'RESET ZOOM'),
                 ]),
             ]),
             m('main', [
