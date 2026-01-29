@@ -11,8 +11,6 @@ mod stats;
 
 use stats::*;
 
-mod cupti;
-
 const KB: i64 = 1024;
 const MB: i64 = 1024 * KB;
 const MHZ: i64 = 1_000_000;
@@ -49,7 +47,6 @@ impl Sampler for Nvidia {
 struct NvidiaInner {
     nvml: Nvml,
     devices: usize,
-    cupti: Option<cupti::CuptiSampler>,
 }
 
 impl NvidiaInner {
@@ -57,24 +54,11 @@ impl NvidiaInner {
         let nvml = Nvml::init()?;
         let devices = nvml.device_count()? as usize;
 
-        let cupti = cupti::CuptiSampler::new(devices);
-
-        Ok(Self {
-            nvml,
-            devices,
-            cupti,
-        })
+        Ok(Self { nvml, devices })
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
-        // Sample NVML metrics
         self.refresh_nvml();
-
-        // Sample CUPTI PM metrics if available
-        if let Some(ref cupti) = self.cupti {
-            let _ = cupti.sample().await;
-        }
-
         Ok(())
     }
 
