@@ -2,10 +2,12 @@
 //! * `cpuacct_account_field`
 //! * `softirq_entry`
 //! * `softirq_exit`
+//! * `sched_process_exit`
 //!
 //! And produces these stats:
 //! * `cpu_usage`
 //! * `cgroup_cpu_usage`
+//! * `task_cpu_usage`
 //! * `softirq`
 //! * `softirq_time`
 //!
@@ -32,10 +34,87 @@ use stats::*;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
+unsafe impl plain::Plain for bpf::types::task_info {}
+unsafe impl plain::Plain for bpf::types::task_exit {}
+
 static CGROUP_METRICS: &[&dyn MetricGroup] = &[&CGROUP_CPU_USAGE_USER, &CGROUP_CPU_USAGE_SYSTEM];
+static TASK_METRICS: &[&dyn MetricGroup] = &[&TASK_CPU_USAGE];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)
+}
+
+fn handle_task_info(data: &[u8]) -> i32 {
+    let mut info = bpf::types::task_info::default();
+
+    if plain::copy_from_bytes(&mut info, data).is_ok() {
+        let pid = info.pid as usize;
+        let tgid = info.tgid;
+
+        // Extract comm (task name)
+        let comm = std::str::from_utf8(&info.comm)
+            .unwrap_or("")
+            .trim_end_matches(char::from(0))
+            .to_string();
+
+        // Extract cgroup name hierarchy
+        let cgroup_name = std::str::from_utf8(&info.cgroup_name)
+            .unwrap_or("")
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let cgroup_pname = std::str::from_utf8(&info.cgroup_pname)
+            .unwrap_or("")
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        let cgroup_gpname = std::str::from_utf8(&info.cgroup_gpname)
+            .unwrap_or("")
+            .trim_end_matches(char::from(0))
+            .replace("\\x2d", "-");
+
+        // Construct cgroup path
+        let cgroup = if !cgroup_gpname.is_empty() {
+            if info.cgroup_level > 3 {
+                format!(".../{cgroup_gpname}/{cgroup_pname}/{cgroup_name}")
+            } else {
+                format!("/{cgroup_gpname}/{cgroup_pname}/{cgroup_name}")
+            }
+        } else if !cgroup_pname.is_empty() {
+            format!("/{cgroup_pname}/{cgroup_name}")
+        } else if !cgroup_name.is_empty() {
+            format!("/{cgroup_name}")
+        } else {
+            "/".to_string()
+        };
+
+        // Set metadata for all task metrics
+        for metric in TASK_METRICS {
+            metric.insert_metadata(pid, "pid".to_string(), pid.to_string());
+            metric.insert_metadata(pid, "tgid".to_string(), tgid.to_string());
+            if !comm.is_empty() {
+                metric.insert_metadata(pid, "comm".to_string(), comm.clone());
+            }
+            metric.insert_metadata(pid, "cgroup".to_string(), cgroup.clone());
+        }
+    }
+
+    0
+}
+
+fn handle_task_exit(data: &[u8]) -> i32 {
+    let mut exit = bpf::types::task_exit::default();
+
+    if plain::copy_from_bytes(&mut exit, data).is_ok() {
+        let pid = exit.pid as usize;
+
+        // Clear metadata for all task metrics
+        for metric in TASK_METRICS {
+            metric.clear_metadata(pid);
+        }
+    }
+
+    0
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -86,7 +165,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .cpu_counters("softirq_time", softirq_time)
     .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
     .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
+    .packed_counters("task_cpu_usage", &TASK_CPU_USAGE)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
+    .ringbuf_handler("task_info", handle_task_info)
+    .ringbuf_handler("task_exit", handle_task_exit)
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -101,6 +183,9 @@ impl SkelExt for ModSkel<'_> {
             "cpu_usage" => &self.maps.cpu_usage,
             "softirq" => &self.maps.softirq,
             "softirq_time" => &self.maps.softirq_time,
+            "task_info" => &self.maps.task_info,
+            "task_exit" => &self.maps.task_exit,
+            "task_cpu_usage" => &self.maps.task_cpu_usage,
             _ => unimplemented!(),
         }
     }
@@ -111,6 +196,10 @@ impl OpenSkelExt for ModSkel<'_> {
         debug!(
             "{NAME} cpuacct_account_field() BPF instruction count: {}",
             self.progs.cpuacct_account_field_kprobe.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_process_exit() BPF instruction count: {}",
+            self.progs.handle__sched_process_exit.insn_cnt()
         );
     }
 }

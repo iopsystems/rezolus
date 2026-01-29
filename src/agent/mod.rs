@@ -26,6 +26,9 @@ pub const MAX_CPUS: usize = 1024;
 // This is the maximum number of cgroups we track with BPF counters.
 pub const MAX_CGROUPS: usize = 4096;
 
+// This is the maximum PID we track with BPF counters.
+pub const MAX_PID: usize = 4194304;
+
 /// Runs Rezolus in `agent` mode in which it gathers systems telemetry and
 /// exposes metrics on an OTel/Prometheus compatible endpoint and a
 /// Rezolus-specific msgpack endpoint.
