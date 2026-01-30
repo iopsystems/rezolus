@@ -1,3 +1,4 @@
+use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue, ExternalMetricsStore};
 use crate::agent::*;
 
 use metriken::{RwLockHistogram, Value};
@@ -10,6 +11,7 @@ pub struct SnapshotBuilder {
     cached: Option<CachedSnapshot>,
     samplers: Arc<Box<[Box<dyn Sampler>]>>,
     ttl: Duration,
+    external_store: Option<Arc<ExternalMetricsStore>>,
 }
 
 struct CachedSnapshot {
@@ -18,11 +20,16 @@ struct CachedSnapshot {
 }
 
 impl SnapshotBuilder {
-    pub fn new(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        samplers: Arc<Box<[Box<dyn Sampler>]>>,
+        external_store: Option<Arc<ExternalMetricsStore>>,
+    ) -> Self {
         Self {
             cached: None,
             samplers,
             ttl: config.general().ttl(),
+            external_store,
         }
     }
 
@@ -45,9 +52,17 @@ impl SnapshotBuilder {
         let duration = start.elapsed();
         debug!("sampling latency: {} us", duration.as_micros());
 
+        // cleanup expired external metrics and get active ones
+        let external_metrics = if let Some(store) = &self.external_store {
+            store.cleanup();
+            store.get_active()
+        } else {
+            Vec::new()
+        };
+
         // update the cached snapshot
         self.cached = Some(CachedSnapshot {
-            snapshot: create(timestamp, duration),
+            snapshot: create(timestamp, duration, external_metrics),
             timestamp: last,
         });
     }
@@ -63,7 +78,11 @@ impl SnapshotBuilder {
     }
 }
 
-fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
+fn create(
+    timestamp: SystemTime,
+    duration: Duration,
+    external_metrics: Vec<ExternalMetric>,
+) -> Snapshot {
     let mut s = SnapshotV2 {
         systemtime: timestamp,
         duration,
@@ -178,6 +197,58 @@ fn create(timestamp: SystemTime, duration: Duration) -> Snapshot {
                 }
             }
             _ => {}
+        }
+    }
+
+    // Add external metrics with "ext_" prefix to avoid ID collision
+    for (ext_id, metric) in external_metrics.into_iter().enumerate() {
+        let mut metadata: HashMap<String, String> = [
+            ("metric".to_string(), metric.name.clone()),
+            ("source".to_string(), "external".to_string()),
+        ]
+        .into();
+
+        // Add all labels as metadata
+        for (k, v) in metric.labels {
+            metadata.insert(k, v);
+        }
+
+        let name = format!("ext_{ext_id}");
+
+        match metric.value {
+            ExternalMetricValue::Counter(value) => {
+                s.counters.push(Counter {
+                    name,
+                    value,
+                    metadata,
+                });
+            }
+            ExternalMetricValue::Gauge(value) => {
+                s.gauges.push(Gauge {
+                    name,
+                    value,
+                    metadata,
+                });
+            }
+            ExternalMetricValue::Histogram {
+                grouping_power,
+                max_value_power,
+                buckets,
+            } => {
+                // Try to create a histogram from the buckets
+                if let Ok(value) =
+                    histogram::Histogram::from_buckets(grouping_power, max_value_power, buckets)
+                {
+                    metadata.insert("grouping_power".to_string(), grouping_power.to_string());
+                    metadata.insert("max_value_power".to_string(), max_value_power.to_string());
+
+                    s.histograms.push(Histogram {
+                        name,
+                        value,
+                        metadata,
+                    });
+                }
+            }
         }
     }
 
