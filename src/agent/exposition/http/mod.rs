@@ -12,8 +12,16 @@ mod snapshot;
 
 use snapshot::SnapshotBuilder;
 
-pub async fn serve(config: Arc<Config>, samplers: Arc<Box<[Box<dyn Sampler>]>>) {
-    let state = Arc::new(Mutex::new(SnapshotBuilder::new(config.clone(), samplers)));
+pub async fn serve(
+    config: Arc<Config>,
+    samplers: Arc<Box<[Box<dyn Sampler>]>>,
+    external_store: Option<Arc<ExternalMetricsStore>>,
+) {
+    let state = Arc::new(Mutex::new(SnapshotBuilder::new(
+        config.clone(),
+        samplers,
+        external_store,
+    )));
 
     let app: Router = app(state);
 

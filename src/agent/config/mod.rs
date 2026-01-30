@@ -7,11 +7,13 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 
+mod external_metrics;
 mod general;
 mod log;
 mod sampler;
 mod scheduler;
 
+use external_metrics::ExternalMetrics;
 use general::General;
 use log::Log;
 use sampler::Sampler as SamplerConfig;
@@ -38,6 +40,8 @@ pub struct Config {
     #[serde(default)]
     log: Log,
     #[serde(default)]
+    external_metrics: ExternalMetrics,
+    #[serde(default)]
     defaults: SamplerConfig,
     #[serde(default)]
     samplers: HashMap<String, SamplerConfig>,
@@ -61,6 +65,7 @@ impl Config {
 
         config.general.check();
         config.scheduler.check();
+        config.external_metrics.check();
 
         config.defaults.check("default");
 
@@ -82,6 +87,10 @@ impl Config {
     #[cfg(target_os = "linux")]
     pub fn scheduler(&self) -> &Scheduler {
         &self.scheduler
+    }
+
+    pub fn external_metrics(&self) -> &ExternalMetrics {
+        &self.external_metrics
     }
 
     pub fn enabled(&self, name: &str) -> bool {

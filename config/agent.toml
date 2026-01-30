@@ -36,6 +36,17 @@ ttl = "10ms"
 # Controls the log level: "error", "warn", "info", "debug", "trace"
 level = "info"
 
+# External metrics ingestion via Unix domain socket.
+# Allows external processes to push metrics into Rezolus.
+# [external_metrics]
+# enabled = true
+# socket_path = "/var/run/rezolus/external.sock"
+# protocol = "auto"  # "binary" | "line" | "auto"
+# metric_ttl = "60s"
+# max_connections = 1000
+# max_metrics = 100000
+# max_metrics_per_connection = 10000
+
 # The defaults are used for each sampler unless there's a sampler level
 # configuration present.
 

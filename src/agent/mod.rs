@@ -2,10 +2,12 @@ use super::*;
 
 mod config;
 mod exposition;
+mod external_metrics;
 mod metrics;
 mod samplers;
 
 use config::Config;
+use external_metrics::{ExternalMetricsStore, Protocol, ServerState};
 use samplers::{Sampler, SamplerResult, SAMPLERS};
 
 #[allow(unused_imports)]
@@ -100,8 +102,49 @@ pub fn run(config: PathBuf) {
 
     let samplers = Arc::new(samplers.into_boxed_slice());
 
+    // Initialize external metrics store if enabled
+    let external_store = if config.external_metrics().enabled() {
+        // Build set of reserved (internal) metric names to prevent collisions
+        let reserved_names: std::collections::HashSet<String> = metriken::metrics()
+            .iter()
+            .map(|m| m.name().to_string())
+            .collect();
+
+        debug!(
+            "external metrics: {} internal metric names reserved",
+            reserved_names.len()
+        );
+
+        let store = Arc::new(ExternalMetricsStore::new(
+            config.external_metrics().metric_ttl(),
+            config.external_metrics().max_metrics(),
+            reserved_names,
+        ));
+
+        let protocol = Protocol::from_str(config.external_metrics().protocol())
+            .expect("invalid protocol (should have been caught by config validation)");
+
+        let server_state = Arc::new(ServerState::new(
+            Arc::clone(&store),
+            protocol,
+            config.external_metrics().max_connections(),
+            config.external_metrics().max_metrics_per_connection(),
+        ));
+
+        let socket_path = config.external_metrics().socket_path().clone();
+        rt.spawn(async move {
+            if let Err(e) = external_metrics::serve(&socket_path, server_state).await {
+                error!("external metrics server error: {}", e);
+            }
+        });
+
+        Some(store)
+    } else {
+        None
+    };
+
     rt.spawn(async move {
-        exposition::http::serve(config, samplers).await;
+        exposition::http::serve(config, samplers, external_store).await;
     });
 
     loop {
