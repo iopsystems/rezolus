@@ -225,8 +225,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_expired() {
-        let store =
-            ExternalMetricsStore::new(Duration::from_millis(10), 1000, HashSet::new());
+        let store = ExternalMetricsStore::new(Duration::from_millis(10), 1000, HashSet::new());
         let labels = HashMap::new();
 
         store.upsert(

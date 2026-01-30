@@ -107,13 +107,31 @@ async fn handle_connection(
     let mut ctx = ConnectionContext::default();
     match state.protocol {
         Protocol::Binary => {
-            handle_binary(stream, &state.store, &mut ctx, state.max_metrics_per_connection).await
+            handle_binary(
+                stream,
+                &state.store,
+                &mut ctx,
+                state.max_metrics_per_connection,
+            )
+            .await
         }
         Protocol::Line => {
-            handle_line(stream, &state.store, &mut ctx, state.max_metrics_per_connection).await
+            handle_line(
+                stream,
+                &state.store,
+                &mut ctx,
+                state.max_metrics_per_connection,
+            )
+            .await
         }
         Protocol::Auto => {
-            handle_auto(stream, &state.store, &mut ctx, state.max_metrics_per_connection).await
+            handle_auto(
+                stream,
+                &state.store,
+                &mut ctx,
+                state.max_metrics_per_connection,
+            )
+            .await
         }
     }
 }
@@ -140,10 +158,24 @@ async fn handle_auto(
 
     if peeked >= 4 && peek_buf == binary::MAGIC {
         // Binary protocol - need to reconstruct the full message
-        handle_binary_with_prefix(stream, store, &peek_buf[..peeked], ctx, max_metrics_per_connection).await
+        handle_binary_with_prefix(
+            stream,
+            store,
+            &peek_buf[..peeked],
+            ctx,
+            max_metrics_per_connection,
+        )
+        .await
     } else {
         // Line protocol - treat peeked bytes as start of line
-        handle_line_with_prefix(stream, store, &peek_buf[..peeked], ctx, max_metrics_per_connection).await
+        handle_line_with_prefix(
+            stream,
+            store,
+            &peek_buf[..peeked],
+            ctx,
+            max_metrics_per_connection,
+        )
+        .await
     }
 }
 

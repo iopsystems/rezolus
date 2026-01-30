@@ -86,7 +86,13 @@ pub fn parse_and_ingest(
     }
 
     let payload = &data[12..12 + payload_size];
-    parse_metrics(payload, metric_count, store, ctx, max_metrics_per_connection)
+    parse_metrics(
+        payload,
+        metric_count,
+        store,
+        ctx,
+        max_metrics_per_connection,
+    )
 }
 
 fn parse_metrics(

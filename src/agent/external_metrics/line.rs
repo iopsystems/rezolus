@@ -404,15 +404,21 @@ mod tests {
         let mut ctx = ConnectionContext::default();
 
         // Set session labels
-        let result =
-            parse_line_with_context(r#"# SESSION service="myapp",pid="12345""#, &store, &mut ctx, 1000);
+        let result = parse_line_with_context(
+            r#"# SESSION service="myapp",pid="12345""#,
+            &store,
+            &mut ctx,
+            1000,
+        );
         assert!(matches!(result, Ok(ParseResult::SessionSet)));
-        assert_eq!(ctx.session_labels.get("service"), Some(&"myapp".to_string()));
+        assert_eq!(
+            ctx.session_labels.get("service"),
+            Some(&"myapp".to_string())
+        );
         assert_eq!(ctx.session_labels.get("pid"), Some(&"12345".to_string()));
 
         // Now send a metric - session labels should be merged
-        let result =
-            parse_line_with_context("my_counter counter:42", &store, &mut ctx, 1000);
+        let result = parse_line_with_context("my_counter counter:42", &store, &mut ctx, 1000);
         assert!(matches!(result, Ok(ParseResult::MetricIngested)));
 
         let active = store.get_active();
