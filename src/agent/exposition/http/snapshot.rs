@@ -200,8 +200,8 @@ fn create(
         }
     }
 
-    // Add external metrics with "ext_" prefix to avoid ID collision
-    for (ext_id, metric) in external_metrics.into_iter().enumerate() {
+    // Add external metrics
+    for metric in external_metrics.into_iter() {
         let mut metadata: HashMap<String, String> = [
             ("metric".to_string(), metric.name.clone()),
             ("source".to_string(), "external".to_string()),
@@ -213,7 +213,7 @@ fn create(
             metadata.insert(k, v);
         }
 
-        let name = format!("ext_{ext_id}");
+        let name = String::new();
 
         match metric.value {
             ExternalMetricValue::Counter(value) => {
