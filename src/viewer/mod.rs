@@ -34,11 +34,13 @@ static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
 mod dashboard;
 mod plot;
-pub mod promql;
-pub mod tsdb;
+
+// Re-export from metriken-query crate
+pub use metriken_query::promql;
+pub use metriken_query::tsdb;
 
 use plot::*;
-use promql::QueryEngine;
+use promql::{routes as promql_routes, QueryEngine};
 use tsdb::*;
 
 pub fn command() -> Command {
@@ -235,7 +237,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/about", get(about))
         .route("/data/{path}", get(data))
         .with_state(state.clone())
-        .merge(promql::routes(state.query_engine.clone()));
+        .merge(promql_routes(state.query_engine.clone()));
 
     #[cfg(feature = "developer-mode")]
     let router = {

@@ -2194,6 +2194,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "metriken-query"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccbf8b5b21c023c081c6ba0759e6e7798c83d45e0f8635143bec088343a98c97"
+dependencies = [
+ "arrow 56.2.0",
+ "axum",
+ "histogram",
+ "parquet 56.2.0",
+ "promql-parser",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2970,6 +2986,7 @@ dependencies = [
  "memmap2 0.9.9",
  "metriken",
  "metriken-exposition",
+ "metriken-query",
  "nix 0.29.0",
  "notify",
  "nvml-wrapper",
@@ -2981,7 +2998,6 @@ dependencies = [
  "perf-event2",
  "plain",
  "plist",
- "promql-parser",
  "rayon",
  "reqwest",
  "ringlog",
