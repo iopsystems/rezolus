@@ -112,6 +112,11 @@ enabled = true
 # Memory NUMA metrics from /proc/vmstat
 [samplers.memory_vmstat]
 
+# Reads ENA (Elastic Network Adapter) driver statistics via ethtool ioctls to
+# expose AWS EC2 allowance exceeded counters for bandwidth, PPS, connection
+# tracking, and link-local traffic. Does nothing on non-ENA interfaces.
+[samplers.network_ethtool]
+
 # Produces network interface statistics from /sys/class/net for TX/RX errors
 [samplers.network_interfaces]
 
