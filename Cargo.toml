@@ -87,6 +87,21 @@ debug = true
 lto = true
 codegen-units = 1
 
+[package.metadata.deb]
+maintainer = "IOP Systems <team@iop.systems>"
+section = "admin"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/rezolus", "usr/bin/", "755"],
+    ["config/agent.toml", "etc/rezolus/", "644"],
+    ["config/exporter.toml", "etc/rezolus/", "644"],
+    ["config/hindsight.toml", "etc/rezolus/", "644"],
+    ["debian/rezolus.rezolus.service", "usr/lib/systemd/system/rezolus.service", "644"],
+    ["debian/rezolus.rezolus-exporter.service", "usr/lib/systemd/system/rezolus-exporter.service", "644"],
+    ["debian/rezolus.rezolus-hindsight.service", "usr/lib/systemd/system/rezolus-hindsight.service", "644"],
+]
+
 [package.metadata.generate-rpm]
 auto_req = "builtin"
 assets = [

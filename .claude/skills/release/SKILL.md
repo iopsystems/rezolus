@@ -98,10 +98,11 @@ Example: `/release minor`
    - Changelog update
 
    ### After Merge
-   The release workflow will automatically:
-   1. Create git tag `v${NEW_VERSION}`
-   2. Create GitHub release (triggers package builds)
-   3. Bump to next development version (`X.Y.(Z+1)-alpha.0`)
+   The release workflows will automatically:
+   1. Create git tag `v${NEW_VERSION}` and bump to next dev version
+   2. Build and publish packages (deb, rpm, Homebrew)
+   3. Create GitHub release with all artifacts
+   4. Publish to crates.io
 
    ---
    See CHANGELOG.md for details.
@@ -113,12 +114,20 @@ Example: `/release minor`
 
 ## After PR Merge
 
-When the PR is merged to main, the `tag-release.yml` workflow will:
-1. Detect the version from Cargo.toml
-2. Create and push the git tag `vX.Y.Z`
-3. Create a GitHub release (which triggers `package-deb.yml`, `package-rpm.yml`, `package-homebrew.yml`)
-4. Publish to crates.io
-5. Bump to next dev version (e.g., `5.5.1-alpha.0`) and push to main
+When the PR is merged to main, the following workflow chain runs automatically:
+
+1. **`tag-release.yml`** (triggered by push to main with release commit message):
+   - Detects the version from Cargo.toml
+   - Creates and pushes the git tag `vX.Y.Z`
+   - Bumps to next dev version (e.g., `5.5.1-alpha.0`) and pushes to main
+
+2. **`release.yml`** (triggered by the tag push):
+   - Builds .deb packages for all supported distros and architectures
+   - Builds .rpm packages for Rocky Linux and Amazon Linux
+   - Uploads packages to GCP Artifact Registry
+   - Creates GitHub release with all package artifacts
+   - Publishes to crates.io (stable releases only)
+   - Updates Homebrew formula (stable releases only)
 
 ## Troubleshooting
 

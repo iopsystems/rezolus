@@ -13,10 +13,10 @@
 # This configuration is used by the /release Claude skill and
 # the tag-release.yml GitHub workflow.
 
-# Don't publish via cargo-release (handled by tag-release.yml workflow)
+# Don't publish via cargo-release (handled by release.yml workflow on tag push)
 publish = false
 
-# Tag settings (used by workflow, not directly by cargo release in our flow)
+# Tag settings (tag-release.yml creates tags, release.yml builds and publishes)
 tag = false
 tag-prefix = "v"
 tag-name = "{{prefix}}{{version}}"
