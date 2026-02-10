@@ -1,0 +1,389 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: write-all
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  RUST_BACKTRACE: 1
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-deb:
+    name: "deb ${{ matrix.distro }}:${{ matrix.release }} (${{ matrix.arch }})"
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      matrix:
+        include:
+          # debian
+          - { distro: debian, release: bullseye, arch: x86_64 }
+          - { distro: debian, release: bullseye, arch: arm64 }
+          - { distro: debian, release: bookworm, arch: x86_64 }
+          - { distro: debian, release: bookworm, arch: arm64 }
+          - { distro: debian, release: trixie, arch: x86_64 }
+          - { distro: debian, release: trixie, arch: arm64 }
+
+          # ubuntu
+          - { distro: ubuntu, release: focal, arch: x86_64 } # 20.04
+          - { distro: ubuntu, release: jammy, arch: x86_64 } # 22.04
+          - { distro: ubuntu, release: jammy, arch: arm64 } # 22.04
+          - { distro: ubuntu, release: noble, arch: x86_64 } # 24.04
+          - { distro: ubuntu, release: noble, arch: arm64 } # 24.04
+      fail-fast: false
+    env:
+      DEB_BUILD_OPTS: nocheck
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: run packaging script
+        run: |
+          mkdir -p target/debian
+          docker run --rm                   \
+            -v $(pwd):/mnt/rezolus              \
+            -v $(pwd)/target/debian:/mnt/output \
+            ${{ matrix.distro }}:${{ matrix.release }} \
+            /mnt/rezolus/debian/package.sh      \
+            --release "0"                       \
+            --chown "$(id -u)"                  \
+            --verbose
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: target/debian/*
+          name: deb_${{ matrix.distro }}_${{ matrix.release }}_${{ matrix.arch }}
+
+  build-rpm:
+    name: "rpm ${{ matrix.distro }}:${{ matrix.version }} (${{ matrix.arch }})"
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    container: "${{ matrix.distro }}:${{ matrix.version }}"
+    strategy:
+      matrix:
+        include:
+          - { distro: rockylinux, version: 9, arch: x86_64 }
+          - { distro: rockylinux, version: 9, arch: arm64 }
+          - { distro: amazonlinux, version: 2023, arch: x86_64 }
+          - { distro: amazonlinux, version: 2023, arch: arm64 }
+      fail-fast: false
+    steps:
+      - name: install basic dependencies
+        if: matrix.distro == 'amazonlinux'
+        shell: bash
+        run: |
+          yum install -y tar gzip
+
+      - uses: actions/checkout@v4
+
+      - name: install rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: install build dependencies
+        shell: bash
+        run: |
+          yum install -y gcc elfutils-devel clang openssl-devel
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-rpm-${{ matrix.distro }}-${{ matrix.version}}-${{ matrix.arch }}
+
+      - name: install rpm packaging tool
+        run: cargo install cargo-generate-rpm
+
+      - name: build
+        shell: bash
+        run: |
+          cargo build --release --locked
+
+      - name: package
+        shell: bash
+        run: |
+          # Build with cargo-generate-rpm
+          cargo generate-rpm --payload-compress gzip
+
+          # Install rpm-build for rebuilding with proper headers
+          yum install -y rpm-build
+
+          # Fix each RPM using rpmbuild to add ARCHIVESIZE
+          for rpm in target/generate-rpm/*.rpm; do
+            echo "Fixing $(basename $rpm) for GCP Artifact Registry..."
+
+            # Extract metadata from the existing RPM
+            FULL_VERSION=$(rpm -qp --qf "%{VERSION}" "$rpm")
+            RPM_ARCH=$(rpm -qp --qf "%{ARCH}" "$rpm")
+
+            # Parse version and determine release format
+            if [[ "$FULL_VERSION" == *"-alpha"* ]]; then
+              RPM_VERSION=$(echo "$FULL_VERSION" | cut -d'-' -f1)
+              ALPHA_VERSION=$(echo "$FULL_VERSION" | sed 's/.*-alpha\.//')
+              RPM_RELEASE="0.1.alpha.${ALPHA_VERSION}"
+            elif [[ "$FULL_VERSION" == *"-beta"* ]]; then
+              RPM_VERSION=$(echo "$FULL_VERSION" | cut -d'-' -f1)
+              BETA_VERSION=$(echo "$FULL_VERSION" | sed 's/.*-beta\.//')
+              RPM_RELEASE="0.2.beta.${BETA_VERSION}"
+            elif [[ "$FULL_VERSION" == *"-rc"* ]]; then
+              RPM_VERSION=$(echo "$FULL_VERSION" | cut -d'-' -f1)
+              RC_VERSION=$(echo "$FULL_VERSION" | sed 's/.*-rc\.//')
+              RPM_RELEASE="0.3.rc.${RC_VERSION}"
+            else
+              # Stable release
+              RPM_VERSION="$FULL_VERSION"
+              RPM_RELEASE="1"
+            fi
+
+            echo "  Version: $RPM_VERSION"
+            echo "  Release: $RPM_RELEASE"
+
+            # Setup rpmbuild directory
+            mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+            # Create spec from template
+            sed -e "s/@NAME@/rezolus/g" \
+                -e "s/@VERSION@/${RPM_VERSION}/g" \
+                -e "s/@RELEASE@/${RPM_RELEASE}/g" \
+                -e "s/@ARCH@/${RPM_ARCH}/g" \
+                rpm/rezolus.spec.template > ~/rpmbuild/SPECS/rezolus.spec
+
+            # Rebuild the RPM with proper headers
+            rpmbuild -bb \
+              --define "_topdir $HOME/rpmbuild" \
+              --define "_sourcedir $GITHUB_WORKSPACE" \
+              --define "_binary_payload w9.gzdio" \
+              ~/rpmbuild/SPECS/rezolus.spec
+
+            # Replace the original RPM with the fixed one
+            mv ~/rpmbuild/RPMS/*/*.rpm "$rpm"
+
+            # Cleanup for next iteration
+            rm -rf ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          done
+
+          # Final verification
+          echo ""
+          echo "Verifying ARCHIVESIZE headers:"
+          for rpm in target/generate-rpm/*.rpm; do
+            echo "$(basename $rpm):"
+            rpm -qp --qf "  VERSION: %{VERSION}\n  RELEASE: %{RELEASE}\n  ARCHIVESIZE: %{ARCHIVESIZE}\n" "$rpm"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: target/generate-rpm/*
+          name: rpm_${{ matrix.distro }}_${{ matrix.version }}_${{ matrix.arch }}
+
+  publish:
+    name: Publish release artifacts
+    runs-on: ubuntu-latest
+    needs:
+      - build-deb
+      - build-rpm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: check release type
+        id: check-release
+        run: |
+          TAG="${{ github.ref_name }}"
+
+          # Check if this is a stable release (no + or -)
+          if [[ "$TAG" == *"+"* ]] || [[ "$TAG" == *"-"* ]]; then
+            echo "is_stable=false" >> $GITHUB_OUTPUT
+            echo "Non-stable release detected: $TAG"
+          else
+            echo "is_stable=true" >> $GITHUB_OUTPUT
+            echo "Stable release detected: $TAG"
+          fi
+
+      # Download deb artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          path: target/artifacts/
+          pattern: deb_*
+
+      # Download rpm artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          path: target/rpm/
+          pattern: rpm_*
+
+      # Upload debs to systemslab registry
+      - uses: google-github-actions/auth@v1
+        id: auth-systemslab
+        with:
+          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
+
+      - uses: google-github-actions/setup-gcloud@v1
+
+      - name: upload debs to systemslab registry (all releases)
+        run: |
+          gcloud config set artifacts/repository systemslab
+          gcloud config set artifacts/location us
+
+          for artifact in target/artifacts/deb_*/*; do
+            [ -f "$artifact" ] || continue
+            name="$(basename "$artifact")"
+            directory="$(basename "$(dirname "$artifact")")"
+            # directory format: deb_<distro>_<release>_<arch>
+            release="$(echo "$directory" | cut -d _ -f 3)"
+
+            echo "::group::upload to systemslab $release $name"
+            gcloud artifacts apt upload "$release" --source "$artifact"
+            gcloud artifacts apt upload "$release-public" --source "$artifact"
+            echo "::endgroup::"
+          done
+
+      # Upload debs to rezolus registry (stable releases only)
+      - uses: google-github-actions/auth@v1
+        if: steps.check-release.outputs.is_stable == 'true'
+        id: auth-rezolus
+        with:
+          credentials_json: "${{ secrets.GCP_CREDENTIALS_REZOLUS }}"
+
+      - uses: google-github-actions/setup-gcloud@v1
+        if: steps.check-release.outputs.is_stable == 'true'
+
+      - name: upload debs to rezolus registry (stable releases only)
+        if: steps.check-release.outputs.is_stable == 'true'
+        run: |
+          gcloud config set artifacts/location us
+
+          for artifact in target/artifacts/deb_*/*; do
+            [ -f "$artifact" ] || continue
+            name="$(basename "$artifact")"
+            directory="$(basename "$(dirname "$artifact")")"
+            # directory format: deb_<distro>_<release>_<arch>
+            distro="$(echo "$directory" | cut -d _ -f 2)"
+            release="$(echo "$directory" | cut -d _ -f 3)"
+
+            repo_name="${distro}-${release}"
+
+            echo "::group::upload to $repo_name repository: $name"
+            gcloud artifacts apt upload "$repo_name" \
+              --source="$artifact" \
+              --quiet
+            echo "::endgroup::"
+          done
+
+      # Upload rpms to rezolus registry (stable releases only)
+      - name: upload rpms to rezolus registry (stable releases only)
+        if: steps.check-release.outputs.is_stable == 'true'
+        run: |
+          gcloud config set artifacts/location us
+
+          for artifact in target/rpm/rpm_*/*; do
+            [ -f "$artifact" ] || continue
+            name="$(basename "$artifact")"
+            directory="$(basename "$(dirname "$artifact")")"
+            # directory format: rpm_<distro>_<version>_<arch>
+            distro="$(echo "$directory" | cut -d _ -f 2)"
+            version="$(echo "$directory" | cut -d _ -f 3)"
+
+            # Map distro names to repository names
+            case "$distro" in
+              rockylinux)
+                repo_name="rocky${version}"
+                ;;
+              amazonlinux)
+                repo_name="al${version}"
+                ;;
+              *)
+                repo_name="${distro}${version}"
+                ;;
+            esac
+
+            echo "::group::upload to $repo_name repository: $name"
+            gcloud artifacts yum upload "$repo_name" \
+              --source="$artifact" \
+              --quiet
+            echo "::endgroup::"
+          done
+
+      # Create GitHub release with all artifacts
+      - name: prepare release artifacts
+        run: |
+          mkdir -p target/release-artifacts
+
+          # Collect deb packages
+          for artifact in target/artifacts/deb_*/*; do
+            [ -f "$artifact" ] || continue
+            name="$(basename "$artifact")"
+            directory="$(basename "$(dirname "$artifact")")"
+            distro="$(echo "$directory" | cut -d _ -f 2)"
+            release="$(echo "$directory" | cut -d _ -f 3)"
+            arch="$(echo "$directory" | cut -d _ -f 4)"
+            mv "$artifact" "target/release-artifacts/${distro}_${release}_${arch}_${name}"
+          done
+
+          # Collect rpm packages
+          for artifact in target/rpm/rpm_*/*; do
+            [ -f "$artifact" ] || continue
+            name="$(basename "$artifact")"
+            directory="$(basename "$(dirname "$artifact")")"
+            distro="$(echo "$directory" | cut -d _ -f 2)"
+            version="$(echo "$directory" | cut -d _ -f 3)"
+            arch="$(echo "$directory" | cut -d _ -f 4)"
+            mv "$artifact" "target/release-artifacts/${distro}_${version}_${arch}_${name}"
+          done
+
+      - name: extract changelog
+        id: changelog
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+
+          CHANGELOG=$(awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^$/d')
+
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release v$VERSION"
+          fi
+
+          # Write to file for gh release
+          echo "$CHANGELOG" > /tmp/release-notes.md
+
+      - name: create GitHub release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file /tmp/release-notes.md \
+            target/release-artifacts/*
+
+      # Publish to crates.io
+      - name: install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: publish to crates.io
+        if: steps.check-release.outputs.is_stable == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          cargo publish
+          echo "Published to crates.io"
+
+      # Update Homebrew formula
+      - name: set up Homebrew
+        if: steps.check-release.outputs.is_stable == 'true'
+        uses: Homebrew/actions/setup-homebrew@master
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: set up git for Homebrew
+        if: steps.check-release.outputs.is_stable == 'true'
+        uses: Homebrew/actions/git-user-config@master
+
+      - name: update Homebrew formula
+        if: steps.check-release.outputs.is_stable == 'true'
+        run: |
+          brew tap iopsystems/iop
+          brew bump-formula-pr iopsystems/iop/rezolus \
+            --tag "${{ github.ref_name }}" \
+            --no-fork \
+            --no-browse

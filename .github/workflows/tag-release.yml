@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-# Required permissions for creating tags, releases, and pushing version bumps
+# Required permissions for creating tags and pushing version bumps
 permissions:
   contents: write
 
@@ -56,38 +56,9 @@ jobs:
           git push origin "v${{ steps.version.outputs.version }}"
           echo "Created and pushed tag v${{ steps.version.outputs.version }}"
 
-      - name: Create GitHub Release
-        if: steps.check_tag.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-
-          # Extract changelog for this version
-          # Looks for content between "## [X.Y.Z]" and the next "## [" section
-          CHANGELOG=$(awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^$/d')
-
-          if [ -z "$CHANGELOG" ]; then
-            CHANGELOG="Release v$VERSION"
-          fi
-
-          gh release create "v$VERSION" \
-            --title "v$VERSION" \
-            --notes "$CHANGELOG"
-
-          echo "Created GitHub release v$VERSION"
-
       - name: Install Rust
         if: steps.check_tag.outputs.exists == 'false'
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish to crates.io
-        if: steps.check_tag.outputs.exists == 'false'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: |
-          cargo publish
-          echo "Published to crates.io"
 
       - name: Install cargo-release
         if: steps.check_tag.outputs.exists == 'false'
@@ -118,9 +89,7 @@ jobs:
             echo "Tag v${{ steps.version.outputs.version }} already existed, skipped." >> $GITHUB_STEP_SUMMARY
           else
             echo "- Created tag: v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Created GitHub release" >> $GITHUB_STEP_SUMMARY
-            echo "- Published to crates.io" >> $GITHUB_STEP_SUMMARY
             echo "- Bumped to next dev version" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The package workflows will now build and publish artifacts." >> $GITHUB_STEP_SUMMARY
+            echo "The release workflow will now build packages, create the GitHub release, publish to crates.io, and update Homebrew." >> $GITHUB_STEP_SUMMARY
           fi
