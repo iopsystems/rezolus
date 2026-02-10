@@ -87,6 +87,7 @@ Example: `/release minor`
    git push -u origin release/v${NEW_VERSION}
 
    gh pr create \
+     --repo iopsystems/rezolus \
      --title "release: v${NEW_VERSION}" \
      --body "$(cat <<'EOF'
    ## Release v${NEW_VERSION}
