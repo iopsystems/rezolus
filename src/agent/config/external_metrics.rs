@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::ffi::CString;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -48,6 +49,12 @@ pub struct ExternalMetrics {
 
     #[serde(default = "default_max_metrics_per_connection")]
     max_metrics_per_connection: usize,
+
+    #[serde(default)]
+    socket_group: Option<String>,
+
+    #[serde(default)]
+    socket_mode: Option<u32>,
 }
 
 impl ExternalMetrics {
@@ -89,6 +96,31 @@ impl ExternalMetrics {
             eprintln!("external_metrics.max_metrics_per_connection must be greater than 0");
             std::process::exit(1);
         }
+
+        // Validate socket_group
+        if let Some(ref group) = self.socket_group {
+            let c_group = match CString::new(group.as_str()) {
+                Ok(s) => s,
+                Err(_) => {
+                    eprintln!("external_metrics.socket_group contains invalid characters");
+                    std::process::exit(1);
+                }
+            };
+            unsafe {
+                if libc::getgrnam(c_group.as_ptr()).is_null() {
+                    eprintln!("external_metrics.socket_group: group '{group}' not found");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        // Validate socket_mode
+        if let Some(mode) = self.socket_mode {
+            if mode > 0o777 {
+                eprintln!("external_metrics.socket_mode must be <= 0o777");
+                std::process::exit(1);
+            }
+        }
     }
 
     pub fn enabled(&self) -> bool {
@@ -117,5 +149,13 @@ impl ExternalMetrics {
 
     pub fn max_metrics_per_connection(&self) -> usize {
         self.max_metrics_per_connection
+    }
+
+    pub fn socket_group(&self) -> Option<&str> {
+        self.socket_group.as_deref()
+    }
+
+    pub fn socket_mode(&self) -> Option<u32> {
+        self.socket_mode
     }
 }

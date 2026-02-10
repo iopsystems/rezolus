@@ -60,7 +60,12 @@ impl ServerState {
 }
 
 /// Start the Unix domain socket server.
-pub async fn serve(socket_path: &Path, state: Arc<ServerState>) -> Result<(), std::io::Error> {
+pub async fn serve(
+    socket_path: &Path,
+    state: Arc<ServerState>,
+    socket_group: Option<&str>,
+    socket_mode: Option<u32>,
+) -> Result<(), std::io::Error> {
     // Remove existing socket file if present
     if socket_path.exists() {
         std::fs::remove_file(socket_path)?;
@@ -72,6 +77,36 @@ pub async fn serve(socket_path: &Path, state: Arc<ServerState>) -> Result<(), st
     }
 
     let listener = UnixListener::bind(socket_path)?;
+
+    // Apply socket permissions after bind
+    if let Some(mode) = socket_mode {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode))?;
+    }
+
+    if let Some(group) = socket_group {
+        let c_group = std::ffi::CString::new(group).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid group name")
+        })?;
+        let c_path =
+            std::ffi::CString::new(socket_path.as_os_str().as_encoded_bytes()).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid socket path")
+            })?;
+        unsafe {
+            let gr = libc::getgrnam(c_group.as_ptr());
+            if gr.is_null() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("group '{group}' not found"),
+                ));
+            }
+            let gid = (*gr).gr_gid;
+            if libc::chown(c_path.as_ptr(), u32::MAX, gid) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+    }
+
     info!("external metrics server listening on {:?}", socket_path);
 
     loop {

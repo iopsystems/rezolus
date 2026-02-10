@@ -46,6 +46,8 @@ level = "info"
 # max_connections = 1000
 # max_metrics = 100000
 # max_metrics_per_connection = 10000
+# socket_group = "rezolus"
+# socket_mode = 0o770
 
 # The defaults are used for each sampler unless there's a sampler level
 # configuration present.

@@ -132,8 +132,17 @@ pub fn run(config: PathBuf) {
         ));
 
         let socket_path = config.external_metrics().socket_path().clone();
+        let socket_group = config.external_metrics().socket_group().map(String::from);
+        let socket_mode = config.external_metrics().socket_mode();
         rt.spawn(async move {
-            if let Err(e) = external_metrics::serve(&socket_path, server_state).await {
+            if let Err(e) = external_metrics::serve(
+                &socket_path,
+                server_state,
+                socket_group.as_deref(),
+                socket_mode,
+            )
+            .await
+            {
                 error!("external metrics server error: {}", e);
             }
         });
