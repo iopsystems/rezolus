@@ -113,3 +113,33 @@ pub static GPU_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
     metadata = { unit = "percentage" }
 )]
 pub static GPU_MEMORY_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+// GPU Performance Monitoring - requires Hopper+ and GPM support
+
+#[metric(
+    name = "gpu_sm_utilization",
+    description = "The percentage of time each SM had at least 1 warp assigned, averaged over all SMs. (0-100). Requires Hopper+ GPU.",
+    metadata = { unit = "percentage" }
+)]
+pub static GPU_SM_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu_sm_occupancy",
+    description = "The percentage of warps that were active vs theoretical maximum, averaged over all SMs. (0-100). Requires Hopper+ GPU.",
+    metadata = { unit = "percentage" }
+)]
+pub static GPU_SM_OCCUPANCY: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu_dram_bandwidth_utilization",
+    description = "The percentage of DRAM (HBM) bandwidth used. (0-100). Requires Hopper+ GPU.",
+    metadata = { unit = "percentage" }
+)]
+pub static GPU_DRAM_BW_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu_tensor_utilization",
+    description = "The percentage of time the GPU's SMs were doing any tensor operations. (0-100). Requires Hopper+ GPU.",
+    metadata = { unit = "percentage" }
+)]
+pub static GPU_TENSOR_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);

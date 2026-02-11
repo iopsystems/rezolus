@@ -2414,8 +2414,7 @@ dependencies = [
 [[package]]
 name = "nvml-wrapper"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d5c6c0ef9702176a570f06ad94f3198bc29c524c8b498f1b9346e1b1bdcbb3a"
+source = "git+https://github.com/brayniac/nvml-wrapper?branch=gpm#7a247ed894905a5a767337871f6a4de53312b3b3"
 dependencies = [
  "bitflags 2.10.0",
  "libloading",
@@ -2428,8 +2427,7 @@ dependencies = [
 [[package]]
 name = "nvml-wrapper-sys"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd23dbe2eb8d8335d2bce0299e0a07d6a63c089243d626ca75b770a962ff49e6"
+source = "git+https://github.com/brayniac/nvml-wrapper?branch=gpm#7a247ed894905a5a767337871f6a4de53312b3b3"
 dependencies = [
  "libloading",
 ]

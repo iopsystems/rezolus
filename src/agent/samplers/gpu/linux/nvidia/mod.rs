@@ -3,7 +3,9 @@ const NAME: &str = "gpu_nvidia";
 use crate::agent::*;
 
 use nvml_wrapper::enum_wrappers::device::*;
+use nvml_wrapper::enums::gpm::GpmMetricId;
 use nvml_wrapper::error::NvmlError;
+use nvml_wrapper::gpm::{gpm_metrics_get, GpmSample};
 use nvml_wrapper::Nvml;
 use tokio::sync::Mutex;
 
@@ -45,8 +47,13 @@ impl Sampler for Nvidia {
 }
 
 struct NvidiaInner {
+    // SAFETY: gpm_samples must be declared before nvml so that samples are
+    // dropped before the Nvml instance they reference. Rust drops struct
+    // fields in declaration order.
+    gpm_samples: Vec<Option<GpmSample<'static>>>,
     nvml: Nvml,
     devices: usize,
+    gpm_supported: Vec<bool>,
 }
 
 impl NvidiaInner {
@@ -54,7 +61,24 @@ impl NvidiaInner {
         let nvml = Nvml::init()?;
         let devices = nvml.device_count()? as usize;
 
-        Ok(Self { nvml, devices })
+        let mut gpm_supported = vec![false; devices];
+
+        for id in 0..devices {
+            if let Ok(device) = nvml.device_by_index(id as _) {
+                if let Ok(supported) = device.gpm_support() {
+                    gpm_supported[id] = supported;
+                }
+            }
+        }
+
+        let gpm_samples = (0..devices).map(|_| None).collect();
+
+        Ok(Self {
+            gpm_samples,
+            nvml,
+            devices,
+            gpm_supported,
+        })
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
@@ -163,6 +187,60 @@ impl NvidiaInner {
                 if let Ok(utilization) = device.utilization_rates() {
                     let _ = GPU_UTILIZATION.set(id, utilization.gpu as i64);
                     let _ = GPU_MEMORY_UTILIZATION.set(id, utilization.memory as i64);
+                }
+
+                /*
+                 * GPM metrics (Hopper+)
+                 */
+
+                if self.gpm_supported[id] {
+                    if let Ok(new_sample) = device.gpm_sample() {
+                        // SAFETY: The sample borrows from self.nvml. We transmute
+                        // the lifetime to 'static so we can store it in the struct.
+                        // This is sound because gpm_samples is declared before nvml
+                        // in the struct, so samples drop before nvml.
+                        let new_sample: GpmSample<'static> =
+                            unsafe { std::mem::transmute(new_sample) };
+
+                        if let Some(prev_sample) = self.gpm_samples[id].as_ref() {
+                            if let Ok(results) = gpm_metrics_get(
+                                // SAFETY: transmuting &Nvml back to its true lifetime
+                                // for the duration of this call. The reference is valid
+                                // because self.nvml is alive.
+                                unsafe { std::mem::transmute(&self.nvml) },
+                                prev_sample,
+                                &new_sample,
+                                &[
+                                    GpmMetricId::SmUtil,
+                                    GpmMetricId::SmOccupancy,
+                                    GpmMetricId::DramBwUtil,
+                                    GpmMetricId::AnyTensorUtil,
+                                ],
+                            ) {
+                                for result in results.into_iter().flatten() {
+                                    match result.metric_id {
+                                        GpmMetricId::SmUtil => {
+                                            let _ = GPU_SM_UTILIZATION.set(id, result.value as i64);
+                                        }
+                                        GpmMetricId::SmOccupancy => {
+                                            let _ = GPU_SM_OCCUPANCY.set(id, result.value as i64);
+                                        }
+                                        GpmMetricId::DramBwUtil => {
+                                            let _ = GPU_DRAM_BW_UTILIZATION
+                                                .set(id, result.value as i64);
+                                        }
+                                        GpmMetricId::AnyTensorUtil => {
+                                            let _ =
+                                                GPU_TENSOR_UTILIZATION.set(id, result.value as i64);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+
+                        self.gpm_samples[id] = Some(new_sample);
+                    }
                 }
             }
         }
