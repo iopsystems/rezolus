@@ -33,8 +33,8 @@ allow-branch = ["main", "release/*"]
 # Consolidate commits: one commit for version bump
 consolidate-commits = true
 
-# Don't run cargo publish
-no-verify = false
+# Don't run cargo verify
+verify = false
 
 # Sign commits and tags (disabled by default)
 sign-commit = false

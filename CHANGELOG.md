@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [5.6.0] - 2026-02-26
+
+### Added
+
+- GPU GPM metrics for Hopper+ GPUs. (#689)
+- Socket group and socket mode configuration for external metrics socket. (#687)
+- Network ethtool sampler for ENA allowance counters. (#683)
+- Unix domain socket external metrics ingestion. (#677)
+- SparseCounterGroup for high-cardinality metrics. (#676)
+- Per-task CPU usage metrics. (#675)
+- GPU metrics dashboard section in viewer. (#673)
+- CUPTI PM sampling for GPU metrics. (#671)
+
+### Changed
+
+- Viewer uses metriken-query crate for TSDB and PromQL. (#678)
+- Viewer style improvements. (#668 #674)
+
 ## [5.5.0] - 2026-01-23
 
 ### Added
@@ -471,7 +489,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.4.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.6.0...HEAD
+[5.6.0]: https://github.com/iopsystems/rezolus/compare/v5.5.0...v5.6.0
+[5.5.0]: https://github.com/iopsystems/rezolus/compare/v5.4.0...v5.5.0
 [5.4.0]: https://github.com/iopsystems/rezolus/compare/v5.3.1...v5.4.0
 [5.3.1]: https://github.com/iopsystems/rezolus/compare/v5.3.0...v5.3.1
 [5.3.0]: https://github.com/iopsystems/rezolus/compare/v5.2.3...v5.3.0
