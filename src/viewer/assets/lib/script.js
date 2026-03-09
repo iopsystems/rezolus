@@ -6,7 +6,10 @@ const TopNav = {
         return m('div#topnav', [
             m('div.logo', 'REZOLUS'),
             m('div.topnav-actions', [
-                m('button', { onclick: () => chartsState.resetZoom() }, 'RESET ZOOM'),
+                m('button', {
+                    onclick: () => chartsState.resetZoom(),
+                    disabled: chartsState.isDefaultZoom(),
+                }, 'RESET ZOOM'),
             ]),
         ]);
     },
