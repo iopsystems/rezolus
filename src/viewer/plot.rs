@@ -175,7 +175,24 @@ impl Group {
         });
     }
 
-    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
+    pub fn plot_promql(&mut self, mut opts: PlotOpts, promql_query: String) {
+        // Auto-fill description from metric registry if not already set
+        if opts.description.is_none() {
+            use std::sync::OnceLock;
+            static DESCRIPTIONS: OnceLock<std::collections::HashMap<String, String>> =
+                OnceLock::new();
+            let descriptions =
+                DESCRIPTIONS.get_or_init(crate::common::metric_descriptions);
+
+            // Find the first metric name that appears in the query
+            for (name, desc) in descriptions {
+                if promql_query.contains(name.as_str()) {
+                    opts.description = Some(desc.clone());
+                    break;
+                }
+            }
+        }
+
         self.plots.push(Plot {
             opts,
             data: Vec::new(), // Will be populated by frontend
@@ -216,6 +233,8 @@ pub struct PlotOpts {
     style: String,
     // Unified configuration for value formatting, axis labels, etc.
     format: Option<FormatConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -245,6 +264,7 @@ impl PlotOpts {
             id: id.into(),
             style: "line".to_string(),
             format: Some(FormatConfig::new(unit)),
+            description: None,
         }
     }
 
@@ -254,6 +274,7 @@ impl PlotOpts {
             id: id.into(),
             style: "multi".to_string(),
             format: Some(FormatConfig::new(unit)),
+            description: None,
         }
     }
 
@@ -263,6 +284,7 @@ impl PlotOpts {
             id: id.into(),
             style: "scatter".to_string(),
             format: Some(FormatConfig::new(unit)),
+            description: None,
         }
     }
 
@@ -272,6 +294,7 @@ impl PlotOpts {
             id: id.into(),
             style: "heatmap".to_string(),
             format: Some(FormatConfig::new(unit)),
+            description: None,
         }
     }
 

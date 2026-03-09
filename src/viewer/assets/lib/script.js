@@ -1334,10 +1334,16 @@ const Group = {
                                 min_value: heatmapData.min_value,
                                 max_value: heatmapData.max_value,
                             };
-                            return m(Chart, { spec: heatmapSpec, chartsState });
+                            return m('div.chart-wrapper', [
+                                m(Chart, { spec: heatmapSpec, chartsState }),
+                                heatmapSpec.opts.description && m('span.chart-info-icon', { title: heatmapSpec.opts.description }, '\u2139'),
+                            ]);
                         }
 
-                        return m(Chart, { spec, chartsState });
+                        return m('div.chart-wrapper', [
+                            m(Chart, { spec, chartsState }),
+                            spec.opts.description && m('span.chart-info-icon', { title: spec.opts.description }, '\u2139'),
+                        ]);
                     }),
                 ),
             ],

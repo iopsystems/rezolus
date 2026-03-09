@@ -1,5 +1,16 @@
 pub static HISTOGRAM_GROUPING_POWER: u8 = 3;
 
+/// Returns a map of metric names to their descriptions from the global metric registry.
+pub fn metric_descriptions() -> std::collections::HashMap<String, String> {
+    let mut descriptions = std::collections::HashMap::new();
+    for metric in metriken::metrics().iter() {
+        if let Some(description) = metric.description() {
+            descriptions.insert(metric.name().to_string(), description.to_string());
+        }
+    }
+    descriptions
+}
+
 // Time units with base unit as nanoseconds
 pub const SECONDS: u64 = 1_000 * MILLISECONDS;
 pub const MILLISECONDS: u64 = 1_000 * MICROSECONDS;

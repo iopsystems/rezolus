@@ -515,6 +515,25 @@ main {
     height: 420px;
 }
 
+.chart-wrapper {
+    position: relative;
+}
+
+.chart-info-icon {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    z-index: 10;
+    cursor: help;
+    font-size: 13px;
+    color: var(--fg-muted);
+    pointer-events: auto;
+}
+
+.chart-info-icon:hover {
+    color: var(--fg-secondary);
+}
+
 /* ==========================================================================
    Query Explorer
    ========================================================================== */
