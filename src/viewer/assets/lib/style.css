@@ -202,6 +202,13 @@ body::after {
     box-shadow: var(--shadow-glow);
 }
 
+#topnav .topnav-actions button:disabled {
+    color: var(--fg-muted);
+    cursor: not-allowed;
+    opacity: 0.5;
+    pointer-events: none;
+}
+
 
 /* ==========================================================================
    Header - File Info Section

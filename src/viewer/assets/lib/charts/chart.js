@@ -38,6 +38,10 @@ export class ChartsState {
         this.charts.clear();
     }
 
+    isDefaultZoom() {
+        return !this.zoomLevel || (this.zoomLevel.start === 0 && this.zoomLevel.end === 100);
+    }
+
     // Reset zoom level on all charts
     resetZoom() {
         this.zoomLevel = {
@@ -261,6 +265,7 @@ export class Chart {
                     endValue,
                 });
             });
+            m.redraw();
         });
 
         // Enable drag-to-zoom
@@ -286,6 +291,7 @@ export class Chart {
                     end: 100,
                 });
             });
+            m.redraw();
         })
     }
 
