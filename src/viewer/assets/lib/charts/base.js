@@ -229,11 +229,11 @@ export function getBaseOption(title) {
                 fontSize: 12,
                 fontFamily: '"Inter", -apple-system, sans-serif',
             },
-            backgroundColor: 'rgba(13, 17, 23, 0.95)',
+            backgroundColor: '#0d1117',
             borderColor: COLORS.borderDefault,
             borderWidth: 1,
             padding: [12, 14],
-            extraCssText: 'box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); border-radius: 8px;',
+            extraCssText: 'background-color: #0d1117 !important; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); border-radius: 8px;',
         },
         // This invisible toolbox is a workaround to have drag-to-zoom as the default behavior.
         // We programmatically activate the zoom tool and hide the interface.
