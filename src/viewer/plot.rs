@@ -181,8 +181,7 @@ impl Group {
             use std::sync::OnceLock;
             static DESCRIPTIONS: OnceLock<std::collections::HashMap<String, String>> =
                 OnceLock::new();
-            let descriptions =
-                DESCRIPTIONS.get_or_init(crate::common::metric_descriptions);
+            let descriptions = DESCRIPTIONS.get_or_init(crate::common::metric_descriptions);
 
             // Find the first metric name that appears in the query
             for (name, desc) in descriptions {
