@@ -31,11 +31,11 @@ export function configureHeatmap(chart) {
     } = chart.spec;
 
     if (!data || data.length < 1 || !timeData || timeData.length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title));
+        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
         return;
     }
 
-    const baseOption = getBaseOption(opts.title);
+    const baseOption = getBaseOption(opts.title, opts.description);
 
     // Extract all unique CPU IDs
     const yIndices = new Set();
