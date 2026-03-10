@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [5.7.0] - 2026-03-10
+
+### Added
+
+- Ensure tooltip background is present so that its text remains legible. (#697)
+
+### Fixed
+
+- Bump metriken-query to 0.2.0 which fixes histogram_quantile() semantics. (#699)
+- Disable "Reset Zoom" button when already zoomed out. (#696)
+- Fix charts shifting on hover.
+
 ## [5.6.0] - 2026-02-26
 
 ### Added
@@ -489,7 +501,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.6.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.7.0...HEAD
+[5.7.0]: https://github.com/iopsystems/rezolus/compare/v5.6.0...v5.7.0
 [5.6.0]: https://github.com/iopsystems/rezolus/compare/v5.5.0...v5.6.0
 [5.5.0]: https://github.com/iopsystems/rezolus/compare/v5.4.0...v5.5.0
 [5.4.0]: https://github.com/iopsystems/rezolus/compare/v5.3.1...v5.4.0
