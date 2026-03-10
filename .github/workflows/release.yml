@@ -360,6 +360,9 @@ jobs:
       - name: install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: clean up GCP credential files
+        run: rm -f gha-creds-*.json
+
       - name: publish to crates.io
         if: steps.check-release.outputs.is_stable == 'true'
         env:
