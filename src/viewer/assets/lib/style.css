@@ -178,6 +178,7 @@ body::after {
 #topnav .topnav-actions {
     margin-left: auto;
     display: flex;
+    align-items: center;
     gap: 0.75rem;
 }
 
@@ -425,17 +426,7 @@ main {
 .zoom-hint {
     font-size: var(--font-size-xs);
     color: var(--fg-muted);
-    margin-bottom: 1.5rem;
     font-family: var(--font-mono);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.zoom-hint::before {
-    content: '⌘';
-    font-size: 0.9em;
-    opacity: 0.5;
 }
 
 /* ==========================================================================
@@ -938,9 +929,6 @@ main {
     margin-bottom: 1rem;
 }
 
-.section-header-row .zoom-hint {
-    margin-bottom: 0;
-}
 
 .heatmap-mode-toggle {
     padding: 0.5rem 1rem;

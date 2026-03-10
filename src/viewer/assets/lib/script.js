@@ -6,6 +6,7 @@ const TopNav = {
         return m('div#topnav', [
             m('div.logo', 'REZOLUS'),
             m('div.topnav-actions', [
+                m('span.zoom-hint', 'Drag to zoom · Scroll to zoom · Double-click to reset'),
                 m('button', {
                     onclick: () => chartsState.resetZoom(),
                     disabled: chartsState.isDefaultZoom(),
@@ -682,7 +683,6 @@ const SectionContent = {
         // Special handling for Query Explorer
         if (attrs.section.name === 'Query Explorer') {
             return m('div#section-content', [
-                m('div.zoom-hint', 'Drag to zoom · Scroll to zoom · Double-click to reset'),
                 m(QueryExplorer),
             ]);
         }
@@ -691,7 +691,6 @@ const SectionContent = {
         if (attrs.section.route === '/cgroups') {
             return m('div#section-content.cgroups-section', [
                 m('div.section-header-row', [
-                    m('div.zoom-hint', 'Drag to zoom · Scroll to zoom · Double-click to reset'),
                     heatmapToggle,
                 ]),
                 m('div.section-breadcrumb', [
@@ -723,7 +722,6 @@ const SectionContent = {
 
         return m('div#section-content', [
             m('div.section-header-row', [
-                m('div.zoom-hint', 'Drag to zoom · Scroll to zoom · Double-click to reset'),
                 heatmapToggle,
             ]),
             m('div.section-breadcrumb', [
