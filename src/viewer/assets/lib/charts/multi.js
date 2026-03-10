@@ -25,11 +25,11 @@ export function configureMultiSeriesChart(chart) {
     } = chart.spec;
 
     if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title));
+        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
         return;
     }
 
-    const baseOption = getBaseOption(opts.title);
+    const baseOption = getBaseOption(opts.title, opts.description);
 
     // For multi-series charts, the first row contains timestamps, subsequent rows are series data
     const timeData = data[0];

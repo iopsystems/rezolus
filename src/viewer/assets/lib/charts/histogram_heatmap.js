@@ -80,11 +80,11 @@ export function configureHistogramHeatmap(chart) {
     } = chart.spec;
 
     if (!data || data.length === 0 || !timeData || timeData.length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title));
+        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
         return;
     }
 
-    const baseOption = getBaseOption(opts.title);
+    const baseOption = getBaseOption(opts.title, opts.description);
 
     // Find the range of buckets that actually have data
     let minBucketIdx = Infinity;

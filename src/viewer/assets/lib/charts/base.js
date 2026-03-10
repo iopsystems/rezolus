@@ -63,10 +63,19 @@ export const CHART_PALETTE = [
  * @param {string} title - The title of the chart
  * @returns {Object} ECharts option object for no-data placeholder
  */
-export function getNoDataOption(title) {
+export function getNoDataOption(title, description) {
+    const hasDescription = !!description;
     return {
         title: {
             text: title,
+            subtext: description || '',
+            subtextStyle: {
+                color: '#6a7b8f',
+                fontSize: 11,
+                fontFamily: '"Inter", -apple-system, sans-serif',
+                fontWeight: 'normal',
+            },
+            itemGap: 4,
             left: '16',
             top: '12',
             textStyle: {
@@ -96,7 +105,7 @@ export function getNoDataOption(title) {
         grid: {
             left: '60',
             right: '24',
-            top: '50',
+            top: hasDescription ? '62' : '50',
             bottom: '35',
         },
     };
@@ -156,12 +165,13 @@ export function getTooltipFormatter(valueFormatter) {
     }
 }
 
-export function getBaseOption(title) {
+export function getBaseOption(title, description) {
+    const hasDescription = !!description;
     return {
         grid: {
             left: '60',
             right: '24',
-            top: '50',
+            top: hasDescription ? '62' : '50',
             bottom: '35',
             containLabel: false,
         },
@@ -255,6 +265,14 @@ export function getBaseOption(title) {
         },
         title: {
             text: title,
+            subtext: description || '',
+            subtextStyle: {
+                color: '#6a7b8f',
+                fontSize: 11,
+                fontFamily: '"Inter", -apple-system, sans-serif',
+                fontWeight: 'normal',
+            },
+            itemGap: 4,
             left: '16',
             top: '12',
             textStyle: {
