@@ -175,12 +175,106 @@ body::after {
     -webkit-mask-repeat: no-repeat;
 }
 
+#topnav .logo .live-indicator {
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #fff;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+}
+
+#topnav .logo .live-indicator.recording {
+    background: #e53e3e;
+    animation: live-pulse 2s ease-in-out infinite;
+}
+
+#topnav .logo .live-indicator.stopped {
+    background: var(--fg-muted);
+    animation: none;
+}
+
+@keyframes live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
 #topnav .topnav-actions {
     margin-left: auto;
     display: flex;
     align-items: center;
     gap: 0.75rem;
 }
+
+#topnav .topnav-separator {
+    width: 1px;
+    height: 20px;
+    background: var(--border-default);
+}
+
+/* Transport controls group */
+.transport-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#topnav .topnav-actions .transport-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all var(--transition-base);
+    font-size: 18px;
+    line-height: 1;
+}
+
+#topnav .topnav-actions .transport-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* Record button — red */
+#topnav .topnav-actions .transport-btn.record-btn {
+    background: rgba(229, 62, 62, 0.2);
+    color: #f56565;
+}
+
+#topnav .topnav-actions .transport-btn.record-btn:hover:not(:disabled) {
+    background: rgba(229, 62, 62, 0.35);
+    color: #fc8181;
+    box-shadow: 0 0 12px rgba(229, 62, 62, 0.25);
+}
+
+/* Stop button — amber */
+#topnav .topnav-actions .transport-btn.stop-btn {
+    background: rgba(236, 201, 75, 0.15);
+    color: #ecc94b;
+}
+
+#topnav .topnav-actions .transport-btn.stop-btn:hover:not(:disabled) {
+    background: rgba(236, 201, 75, 0.3);
+    color: #f6e05e;
+    box-shadow: 0 0 12px rgba(236, 201, 75, 0.2);
+}
+
+/* Save button — blue */
+#topnav .topnav-actions .transport-btn.save-btn {
+    background: rgba(88, 166, 255, 0.15);
+    color: var(--accent);
+}
+
+#topnav .topnav-actions .transport-btn.save-btn:hover {
+    background: rgba(88, 166, 255, 0.3);
+    color: var(--accent-emphasis);
+    box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+}
+
 
 #topnav .topnav-actions button {
     padding: 0.5rem 1rem;
@@ -918,43 +1012,7 @@ main {
     width: 100%;
 }
 
-/* ==========================================================================
-   Section Header Row
-   ========================================================================== */
-
-.section-header-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-}
-
-
-.heatmap-mode-toggle {
-    padding: 0.5rem 1rem;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    color: var(--fg-secondary);
-    cursor: pointer;
-    transition: all var(--transition-base);
-}
-
-.heatmap-mode-toggle:hover:not(:disabled) {
-    background: var(--accent-subtle);
-    border-color: var(--accent-muted);
-    color: var(--accent);
-    box-shadow: 0 0 12px var(--accent-glow);
-}
-
-.heatmap-mode-toggle:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
+/* (heatmap toggle moved to topnav) */
 
 /* ==========================================================================
    Cgroups Controls

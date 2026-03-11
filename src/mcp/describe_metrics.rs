@@ -1,5 +1,4 @@
 use crate::viewer::tsdb::Tsdb;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Format metrics description for display

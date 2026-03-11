@@ -77,6 +77,7 @@ export function configureLineChart(chart) {
             type: 'line',
             name: opts.title,
             showSymbol: false,
+            sampling: 'lttb',
             emphasis: {
                 focus: 'series'
             },

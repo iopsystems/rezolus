@@ -1,12 +1,102 @@
 import { ChartsState, Chart } from './charts/chart.js';
 
+// Live mode state - detected at startup
+let liveMode = false;
+let liveRefreshInterval = null;
+
+// Transport state for live mode (Wireshark-style)
+// Starts recording — data flows from agent into TSDB and UI refreshes
+let recording = true;
+
+// Detect live mode on startup
+m.request({ method: 'GET', url: '/api/v1/mode', withCredentials: true })
+    .then((response) => {
+        liveMode = response.live === true;
+        if (liveMode) {
+            startLiveRefresh();
+        }
+    })
+    .catch(() => { /* ignore - assume file mode */ });
+
+// Transport control actions
+const startRecording = async () => {
+    try {
+        // Clear TSDB so the new recording has no gaps
+        await m.request({ method: 'POST', url: '/api/v1/reset', withCredentials: true, background: true });
+        // Clear frontend caches
+        Object.keys(sectionResponseCache).forEach(k => delete sectionResponseCache[k]);
+        heatmapDataCache.clear();
+        chartsState.clear();
+        recording = true;
+        m.redraw();
+    } catch (e) {
+        console.error('Failed to start recording:', e);
+    }
+};
+
+const stopRecording = () => {
+    recording = false;
+};
+
+const saveCapture = () => {
+    const a = document.createElement('a');
+    a.href = '/api/v1/save';
+    a.download = 'rezolus-capture.parquet';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+};
+
 // Top navigation bar component
 const TopNav = {
-    view() {
+    view({ attrs }) {
+        const sectionRoute = attrs.sectionRoute;
+        const groups = attrs.groups;
+        const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
+
         return m('div#topnav', [
-            m('div.logo', 'REZOLUS'),
+            m('div.logo', [
+                'REZOLUS',
+                liveMode && m('span.live-indicator', {
+                    class: recording ? 'recording' : 'stopped',
+                }, recording ? 'REC' : 'STOPPED'),
+            ]),
             m('div.topnav-actions', [
-                m('span.zoom-hint', 'Drag to zoom · Scroll to zoom · Double-click to reset'),
+                // Transport controls (live mode only)
+                liveMode && m('div.transport-controls', [
+                    m('button.transport-btn.record-btn', {
+                        onclick: startRecording,
+                        title: 'Start new recording (clears current data)',
+                        disabled: recording,
+                    }, m.trust('<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="6"/></svg>')),
+                    m('button.transport-btn.stop-btn', {
+                        onclick: stopRecording,
+                        title: 'Stop recording',
+                        disabled: !recording,
+                    }, m.trust('<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="1"/></svg>')),
+                    m('button.transport-btn.save-btn', {
+                        onclick: saveCapture,
+                        title: 'Save capture as parquet',
+                    }, m.trust('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8m0 0l-3-3m3 3l3-3"/><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/></svg>')),
+                ]),
+
+                // Separator between transport and view controls
+                liveMode && m('div.topnav-separator'),
+
+                // Heatmap/Percentile action toggle (global, always visible)
+                m('button', {
+                    onclick: async () => {
+                        heatmapEnabled = !heatmapEnabled;
+                        if (heatmapEnabled && (!sectionHeatmapData || sectionHeatmapData.size === 0)) {
+                            await fetchSectionHeatmapData(sectionRoute, groups);
+                        } else {
+                            m.redraw();
+                        }
+                    },
+                    disabled: heatmapLoading,
+                }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
+
+                m('span.zoom-hint', 'Drag to zoom \u00B7 Scroll to zoom \u00B7 Double-click to reset'),
                 m('button', {
                     onclick: () => chartsState.resetZoom(),
                     disabled: chartsState.isDefaultZoom(),
@@ -99,7 +189,10 @@ const Main = {
 
         return m(
             'div',
-            m(TopNav),
+            m(TopNav, {
+                sectionRoute: activeSection?.route,
+                groups,
+            }),
             m('header', [
                 m('div.file-info', [
                     m('div.filename', filename || 'metrics.parquet'),
@@ -107,7 +200,7 @@ const Main = {
                         source && m('span', source),
                         version && m('span', version),
                         interval && m('span', formatInterval(interval) + ' sampling'),
-                        filesize && m('span', formatSize(filesize)),
+                        !liveMode && filesize && m('span', formatSize(filesize)),
                     ]),
                 ]),
             ]),
@@ -657,28 +750,6 @@ const QueryExplorer = {
 const SectionContent = {
     view({ attrs }) {
         const sectionRoute = attrs.section.route;
-        const hasHistogramCharts = sectionHasHistogramCharts(attrs.groups);
-        const heatmapState = sectionHeatmapState.get(sectionRoute) || { enabled: false, heatmapData: new Map(), loading: false };
-
-        // Toggle handler for heatmap mode
-        const toggleHeatmapMode = async () => {
-            const newEnabled = !heatmapState.enabled;
-            const newState = { ...heatmapState, enabled: newEnabled };
-            sectionHeatmapState.set(sectionRoute, newState);
-
-            if (newEnabled && heatmapState.heatmapData.size === 0) {
-                // Fetch heatmap data for all histogram charts
-                await fetchSectionHeatmapData(sectionRoute, attrs.groups);
-            } else {
-                m.redraw();
-            }
-        };
-
-        // Heatmap toggle button (shown when section has histogram charts)
-        const heatmapToggle = hasHistogramCharts ? m('button.heatmap-mode-toggle', {
-            onclick: toggleHeatmapMode,
-            disabled: heatmapState.loading,
-        }, heatmapState.loading ? 'Loading...' : (heatmapState.enabled ? 'Show Percentiles' : 'Show Heatmaps')) : null;
 
         // Special handling for Query Explorer
         if (attrs.section.name === 'Query Explorer') {
@@ -690,9 +761,6 @@ const SectionContent = {
         // Special handling for cgroups with selector
         if (attrs.section.route === '/cgroups') {
             return m('div#section-content.cgroups-section', [
-                m('div.section-header-row', [
-                    heatmapToggle,
-                ]),
                 m('div.section-breadcrumb', [
                     'Samplers » ',
                     m('span.section-name', attrs.section.name),
@@ -721,9 +789,6 @@ const SectionContent = {
         }
 
         return m('div#section-content', [
-            m('div.section-header-row', [
-                heatmapToggle,
-            ]),
             m('div.section-breadcrumb', [
                 'Samplers » ',
                 m('span.section-name', attrs.section.name),
@@ -1241,62 +1306,61 @@ const CgroupSelector = {
     },
 };
 
-// Page-level heatmap mode state
-// Key: section route, Value: { enabled: boolean, heatmapData: Map<chartId, data>, loading: boolean }
-const sectionHeatmapState = new Map();
+// Global heatmap mode — applies to all sections
+let heatmapEnabled = false;
+let heatmapLoading = false;
+// Cache of fetched heatmap data per section: sectionRoute -> Map<chartId, data>
+const heatmapDataCache = new Map();
 
-// Helper function to check if a section has histogram charts
-const sectionHasHistogramCharts = (groups) => {
-    if (!groups) return false;
-    return groups.some(group =>
-        group.plots && group.plots.some(plot =>
-            plot.promql_query && plot.promql_query.includes('histogram_percentiles')
-        )
-    );
-};
-
-// Fetch heatmap data for all histogram charts in a section
+// Fetch heatmap data for all histogram charts in a section — queries run in parallel.
 const fetchSectionHeatmapData = async (sectionRoute, groups) => {
-    const state = sectionHeatmapState.get(sectionRoute) || { enabled: false, heatmapData: new Map(), loading: false };
-    state.loading = true;
-    sectionHeatmapState.set(sectionRoute, state);
+    heatmapLoading = true;
     m.redraw();
 
-    const heatmapData = new Map();
-
+    // Collect all histogram plots that need heatmap queries
+    const heatmapPlots = [];
     for (const group of groups || []) {
         for (const plot of group.plots || []) {
             if (plot.promql_query && plot.promql_query.includes('histogram_percentiles')) {
-                // Convert histogram_percentiles query to histogram_heatmap query
                 const match = plot.promql_query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
                 if (!match) continue;
 
                 const metricSelector = match[1].trim();
-                const heatmapQuery = `histogram_heatmap(${metricSelector})`;
-
-                try {
-                    const result = await executePromQLRangeQuery(heatmapQuery);
-
-                    if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
-                        const heatmapResult = result.data.result;
-                        heatmapData.set(plot.opts.id, {
-                            time_data: heatmapResult.timestamps,
-                            bucket_bounds: heatmapResult.bucket_bounds,
-                            data: heatmapResult.data.map(([timeIdx, bucketIdx, count]) => [timeIdx, bucketIdx, count]),
-                            min_value: heatmapResult.min_value,
-                            max_value: heatmapResult.max_value,
-                        });
-                    }
-                } catch (error) {
-                    console.error('Failed to fetch histogram heatmap:', error);
-                }
+                heatmapPlots.push({
+                    id: plot.opts.id,
+                    query: `histogram_heatmap(${metricSelector})`,
+                });
             }
         }
     }
 
-    state.heatmapData = heatmapData;
-    state.loading = false;
-    sectionHeatmapState.set(sectionRoute, state);
+    // Fire all heatmap queries concurrently
+    const results = await Promise.allSettled(
+        heatmapPlots.map((hp) => executePromQLRangeQuery(hp.query)),
+    );
+
+    const heatmapData = new Map();
+    for (let i = 0; i < heatmapPlots.length; i++) {
+        const outcome = results[i];
+        if (outcome.status === 'fulfilled') {
+            const result = outcome.value;
+            if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
+                const heatmapResult = result.data.result;
+                heatmapData.set(heatmapPlots[i].id, {
+                    time_data: heatmapResult.timestamps,
+                    bucket_bounds: heatmapResult.bucket_bounds,
+                    data: heatmapResult.data,
+                    min_value: heatmapResult.min_value,
+                    max_value: heatmapResult.max_value,
+                });
+            }
+        } else {
+            console.error('Failed to fetch histogram heatmap:', outcome.reason);
+        }
+    }
+
+    heatmapDataCache.set(sectionRoute, heatmapData);
+    heatmapLoading = false;
     m.redraw();
 };
 
@@ -1304,8 +1368,8 @@ const fetchSectionHeatmapData = async (sectionRoute, groups) => {
 const Group = {
     view({ attrs }) {
         const sectionRoute = attrs.sectionRoute;
-        const heatmapState = sectionHeatmapState.get(sectionRoute);
-        const isHeatmapMode = heatmapState?.enabled && !heatmapState?.loading;
+        const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
+        const isHeatmapMode = heatmapEnabled && !heatmapLoading;
 
         return m(
             'div.group',
@@ -1320,9 +1384,9 @@ const Group = {
                         // Check if this is a histogram chart and we're in heatmap mode
                         const isHistogramChart = spec.promql_query && spec.promql_query.includes('histogram_percentiles');
 
-                        if (isHistogramChart && isHeatmapMode && heatmapState?.heatmapData?.has(spec.opts.id)) {
+                        if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
                             // Create heatmap spec from the fetched data
-                            const heatmapData = heatmapState.heatmapData.get(spec.opts.id);
+                            const heatmapData = sectionHeatmapData.get(spec.opts.id);
                             const heatmapSpec = {
                                 ...spec,
                                 opts: {
@@ -1355,27 +1419,38 @@ const chartsState = new ChartsState();
 
 const sectionResponseCache = {};
 
-// Execute a PromQL range query
-const executePromQLRangeQuery = async (query) => {
-    // First, get the data time range
+// Fetch time range metadata from the backend (cached per refresh cycle)
+let cachedMetadata = null;
+
+const fetchMetadata = async () => {
     const metadataResponse = await m.request({
         method: 'GET',
         url: '/api/v1/metadata',
         withCredentials: true,
+        background: true, // Prevent auto-redraw during refresh
     });
 
     if (metadataResponse.status !== 'success') {
         throw new Error('Failed to get metadata');
     }
 
-    const minTime = metadataResponse.data.minTime;
-    const maxTime = metadataResponse.data.maxTime;
+    return metadataResponse.data;
+};
+
+// Execute a PromQL range query using pre-fetched or cached metadata
+const executePromQLRangeQuery = async (query, metadata) => {
+    // Use provided metadata, cached metadata, or fetch fresh
+    const meta = metadata || cachedMetadata || await fetchMetadata();
+
+    const minTime = meta.minTime;
+    const maxTime = meta.maxTime;
     const duration = maxTime - minTime;
 
     // Use a reasonable time window - either 1 hour or the full range if it's shorter
     const windowDuration = Math.min(3600, duration); // 1 hour max
     const start = Math.max(minTime, maxTime - windowDuration);
-    const step = Math.max(1, Math.floor(windowDuration / 100)); // About 100 data points
+    // Target ~500 data points for good LTTB downsampling in the frontend
+    const step = Math.max(1, Math.floor(windowDuration / 500));
 
     const url = `/api/v1/query_range?query=${encodeURIComponent(query)}&start=${start}&end=${maxTime}&step=${step}`;
 
@@ -1383,204 +1458,179 @@ const executePromQLRangeQuery = async (query) => {
         method: 'GET',
         url,
         withCredentials: true,
+        background: true, // Prevent auto-redraw during refresh
     });
 };
 
-// Process dashboard data and execute PromQL queries where needed
-const processDashboardData = async (data) => {
-    for (const group of data.groups || []) {
-        for (const plot of group.plots || []) {
-            if (plot.promql_query) {
-                try {
-                    const result = await executePromQLRangeQuery(
-                        plot.promql_query,
-                    );
+// Apply a PromQL result to its plot, transforming into the chart data format.
+const applyResultToPlot = (plot, result) => {
+    if (
+        result.status === 'success' &&
+        result.data &&
+        result.data.result &&
+        result.data.result.length > 0
+    ) {
+        const hasMultipleSeries =
+            result.data.result.length > 1 ||
+            (plot.opts &&
+                (plot.opts.style === 'multi' ||
+                    plot.opts.style === 'scatter' ||
+                    plot.opts.style === 'heatmap'));
 
-                    // Convert PromQL result to chart data format
-                    if (
-                        result.status === 'success' &&
-                        result.data &&
-                        result.data.result &&
-                        result.data.result.length > 0
-                    ) {
-                        // Check if we have multiple series (from by() clause)
-                        const hasMultipleSeries =
-                            result.data.result.length > 1 ||
-                            (plot.opts &&
-                                (plot.opts.style === 'multi' ||
-                                    plot.opts.style === 'heatmap'));
+        if (hasMultipleSeries) {
+            if (plot.opts && plot.opts.style === 'heatmap') {
+                // Transform to heatmap format: [time_index, cpu_id, value]
+                const heatmapData = [];
+                const timeSet = new Set();
 
-                        if (hasMultipleSeries) {
-                            // Check if this is a heatmap chart
-                            if (plot.opts && plot.opts.style === 'heatmap') {
-                                // Transform to heatmap format: [time_index, cpu_id, value]
-                                const heatmapData = [];
-                                const timeSet = new Set();
+                result.data.result.forEach((item) => {
+                    if (item.values && Array.isArray(item.values)) {
+                        item.values.forEach(([timestamp, _]) => {
+                            timeSet.add(timestamp);
+                        });
+                    }
+                });
 
-                                // First pass: collect all unique timestamps
-                                result.data.result.forEach((item) => {
-                                    if (
-                                        item.values &&
-                                        Array.isArray(item.values)
-                                    ) {
-                                        item.values.forEach(
-                                            ([timestamp, _]) => {
-                                                timeSet.add(timestamp);
-                                            },
-                                        );
-                                    }
-                                });
+                const timestamps = Array.from(timeSet).sort((a, b) => a - b);
+                const timestampToIndex = new Map();
+                timestamps.forEach((ts, idx) => {
+                    timestampToIndex.set(ts, idx);
+                });
 
-                                // Convert to sorted array and create timestamp index map
-                                const timestamps = Array.from(timeSet).sort(
-                                    (a, b) => a - b,
-                                );
-                                const timestampToIndex = new Map();
-                                timestamps.forEach((ts, idx) => {
-                                    timestampToIndex.set(ts, idx);
-                                });
+                result.data.result.forEach((item, idx) => {
+                    if (item.values && Array.isArray(item.values)) {
+                        let cpuId = idx;
+                        if (item.metric && item.metric.id) {
+                            cpuId = parseInt(item.metric.id);
+                        }
 
-                                // Second pass: create heatmap data with time indices
-                                result.data.result.forEach((item, idx) => {
-                                    if (
-                                        item.values &&
-                                        Array.isArray(item.values)
-                                    ) {
-                                        // Extract CPU ID from metric labels
-                                        let cpuId = idx; // Default to index
-                                        if (item.metric && item.metric.id) {
-                                            cpuId = parseInt(item.metric.id);
-                                        }
+                        item.values.forEach(([timestamp, value]) => {
+                            const timeIndex = timestampToIndex.get(timestamp);
+                            heatmapData.push([
+                                timeIndex,
+                                cpuId,
+                                parseFloat(value),
+                            ]);
+                        });
+                    }
+                });
 
-                                        // Add each data point as [time_index, cpu_id, value]
-                                        item.values.forEach(
-                                            ([timestamp, value]) => {
-                                                const timeIndex =
-                                                    timestampToIndex.get(
-                                                        timestamp,
-                                                    );
-                                                heatmapData.push([
-                                                    timeIndex,
-                                                    cpuId,
-                                                    parseFloat(value),
-                                                ]);
-                                            },
-                                        );
-                                    }
-                                });
+                let minValue = Infinity;
+                let maxValue = -Infinity;
+                heatmapData.forEach(([_, __, value]) => {
+                    minValue = Math.min(minValue, value);
+                    maxValue = Math.max(maxValue, value);
+                });
 
-                                // Calculate min and max values for heatmap scaling
-                                let minValue = Infinity;
-                                let maxValue = -Infinity;
-                                heatmapData.forEach(([_, __, value]) => {
-                                    minValue = Math.min(minValue, value);
-                                    maxValue = Math.max(maxValue, value);
-                                });
+                plot.data = heatmapData;
+                plot.time_data = timestamps;
+                plot.min_value = minValue;
+                plot.max_value = maxValue;
+            } else {
+                // Multi-series line chart data
+                const allData = [];
+                const seriesNames = [];
+                let timestamps = null;
 
-                                plot.data = heatmapData;
-                                plot.time_data = timestamps; // Store timestamps for x-axis
-                                plot.min_value = minValue;
-                                plot.max_value = maxValue;
-                            } else {
-                                // Multi-series line chart data
-                                const allData = [];
-                                const seriesNames = [];
-                                let timestamps = null;
-
-                                result.data.result.forEach((item, idx) => {
-                                    if (
-                                        item.values &&
-                                        Array.isArray(item.values)
-                                    ) {
-                                        // Extract series name from metric labels
-                                        let seriesName = 'Series ' + (idx + 1);
-                                        if (item.metric) {
-                                            // Find first non-__name__ label
-                                            for (const [
-                                                key,
-                                                value,
-                                            ] of Object.entries(item.metric)) {
-                                                if (key !== '__name__') {
-                                                    seriesName = value; // Just use the value for cleaner names
-                                                    break;
-                                                }
-                                            }
-                                        }
-
-                                        // Only add series with data
-                                        if (item.values.length > 0) {
-                                            seriesNames.push(seriesName);
-
-                                            // Extract timestamps (should be same for all series)
-                                            if (!timestamps) {
-                                                timestamps = item.values.map(
-                                                    ([ts, _]) => ts,
-                                                );
-                                                allData.push(timestamps);
-                                            }
-
-                                            // Extract values for this series
-                                            const values = item.values.map(
-                                                ([_, val]) => parseFloat(val),
-                                            );
-                                            allData.push(values);
-                                        }
-                                    }
-                                });
-
-                                if (allData.length > 1) {
-                                    plot.data = allData;
-                                    plot.series_names = seriesNames;
-                                } else {
-                                    plot.data = [];
+                result.data.result.forEach((item, idx) => {
+                    if (item.values && Array.isArray(item.values)) {
+                        let seriesName = 'Series ' + (idx + 1);
+                        if (item.metric) {
+                            for (const [key, value] of Object.entries(
+                                item.metric,
+                            )) {
+                                if (key !== '__name__') {
+                                    seriesName = value;
+                                    break;
                                 }
                             }
-                        } else {
-                            // Single series data
-                            const sample = result.data.result[0];
-                            if (sample.values && Array.isArray(sample.values)) {
-                                // Extract timestamps and values
-                                const timestamps = sample.values.map(
-                                    ([ts, _]) => ts,
-                                );
-                                const values = sample.values.map(([_, val]) =>
-                                    parseFloat(val),
-                                );
-                                plot.data = [timestamps, values];
-                            } else {
-                                plot.data = [];
-                            }
                         }
-                    } else {
-                        console.warn(
-                            `Empty or unsuccessful result for query "${plot.promql_query}":`,
-                            result,
-                        );
-                        plot.data = [];
+
+                        if (item.values.length > 0) {
+                            seriesNames.push(seriesName);
+
+                            if (!timestamps) {
+                                timestamps = item.values.map(([ts, _]) => ts);
+                                allData.push(timestamps);
+                            }
+
+                            const values = item.values.map(([_, val]) =>
+                                parseFloat(val),
+                            );
+                            allData.push(values);
+                        }
                     }
-                } catch (error) {
-                    console.error(
-                        `Failed to execute PromQL query "${plot.promql_query}":`,
-                        error,
-                    );
-                    // Check if it's a 404 or similar error
-                    if (error.message && error.message.includes('404')) {
-                        console.warn(
-                            `Metric not found for query: ${plot.promql_query}`,
-                        );
-                    }
-                    // Keep empty data on error
+                });
+
+                if (allData.length > 1) {
+                    plot.data = allData;
+                    plot.series_names = seriesNames;
+                } else {
                     plot.data = [];
                 }
             }
+        } else {
+            // Single series data
+            const sample = result.data.result[0];
+            if (sample.values && Array.isArray(sample.values)) {
+                const timestamps = sample.values.map(([ts, _]) => ts);
+                const values = sample.values.map(([_, val]) =>
+                    parseFloat(val),
+                );
+                plot.data = [timestamps, values];
+            } else {
+                plot.data = [];
+            }
+        }
+    } else {
+        plot.data = [];
+    }
+};
+
+// Process dashboard data — fire all PromQL queries in parallel.
+const processDashboardData = async (data) => {
+    const metadata = await fetchMetadata();
+    cachedMetadata = metadata;
+
+    // Collect all plots that need queries
+    const queryPlots = [];
+    for (const group of data.groups || []) {
+        for (const plot of group.plots || []) {
+            if (plot.promql_query) {
+                queryPlots.push(plot);
+            }
         }
     }
+
+    // Fire all queries concurrently
+    const results = await Promise.allSettled(
+        queryPlots.map((plot) =>
+            executePromQLRangeQuery(plot.promql_query, metadata),
+        ),
+    );
+
+    // Apply results to their plots
+    for (let i = 0; i < queryPlots.length; i++) {
+        const plot = queryPlots[i];
+        const outcome = results[i];
+        if (outcome.status === 'fulfilled') {
+            applyResultToPlot(plot, outcome.value);
+        } else {
+            console.error(
+                `Failed to execute PromQL query "${plot.promql_query}":`,
+                outcome.reason,
+            );
+            plot.data = [];
+        }
+    }
+
     return data;
 };
 
 // Fetch data for a section and cache it.
 const preloadSection = async (section) => {
-    if (sectionResponseCache[section]) {
+    // Skip preloading in live mode - data changes constantly
+    if (liveMode || sectionResponseCache[section]) {
         return Promise.resolve();
     }
 
@@ -1660,6 +1710,49 @@ const preloadSections = (allSections) => {
     }, 5000); // Wait 5 seconds before starting any preloading
 };
 
+// Live mode: re-fetch section JSON and re-process PromQL queries.
+// This creates new data objects so chart components detect the change
+// via reference comparison in onupdate.
+let liveRefreshInProgress = false;
+
+const refreshCurrentSection = async () => {
+    if (liveRefreshInProgress) return;
+
+    // Skip UI refresh when paused or zoomed in — TSDB still ingests in the background
+    if (!recording || !chartsState.isDefaultZoom()) return;
+
+    const currentRoute = m.route.get();
+    if (!currentRoute) return;
+
+    const section = currentRoute.replace(/^\//, '');
+    if (!section) return;
+
+    liveRefreshInProgress = true;
+    try {
+        const url = `/data/${section}.json`;
+        const data = await m.request({ method: 'GET', url, withCredentials: true, background: true });
+
+        // Run regular queries and histogram heatmap queries concurrently
+        const promises = [processDashboardData(data)];
+        if (heatmapEnabled) {
+            promises.push(fetchSectionHeatmapData(currentRoute, data.groups));
+        }
+        await Promise.all(promises);
+
+        sectionResponseCache[section] = data;
+        m.redraw();
+    } catch (e) {
+        // Keep existing data on error
+    } finally {
+        liveRefreshInProgress = false;
+    }
+};
+
+const startLiveRefresh = () => {
+    if (liveRefreshInterval) return;
+    liveRefreshInterval = setInterval(refreshCurrentSection, 5000);
+};
+
 // Main application entry point
 m.route.prefix = ''; // use regular paths for navigation, eg. /overview
 m.route(document.body, '/overview', {
@@ -1684,19 +1777,25 @@ m.route(document.body, '/overview', {
                 }
             }
 
+            // In live mode, always read from cache dynamically so
+            // refreshes flow through to the rendered view.
+            const cachedView = (sectionKey, path) => ({
+                view() {
+                    const data = sectionResponseCache[sectionKey];
+                    if (!data) return m('div', 'Loading...');
+                    const activeSection = data.sections.find(
+                        (section) => section.route === path,
+                    );
+                    return m(Main, { ...data, activeSection });
+                },
+            });
+
             if (sectionResponseCache[params.section]) {
-                const data = sectionResponseCache[params.section];
-                const activeSection = data.sections.find(
-                    (section) => section.route === requestedPath,
-                );
-                return {
-                    view() {
-                        return m(Main, {
-                            ...data,
-                            activeSection,
-                        });
-                    },
-                };
+                // Fetch heatmap data if globally enabled and not cached for this section
+                if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                    fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
+                }
+                return cachedView(params.section, requestedPath);
             }
 
             const url = `/data/${params.section}.json`;
@@ -1713,21 +1812,16 @@ m.route(document.body, '/overview', {
                     // Process PromQL queries for this section
                     const processedData = await processDashboardData(data);
                     sectionResponseCache[params.section] = processedData;
-                    const activeSection = processedData.sections.find(
-                        (section) => section.route === requestedPath,
-                    );
+
+                    // Fetch heatmap data if globally enabled and not cached for this section
+                    if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                        fetchSectionHeatmapData(requestedPath, processedData.groups);
+                    }
 
                     // Preload other sections after initial load
                     preloadSections(processedData.sections);
 
-                    return {
-                        view() {
-                            return m(Main, {
-                                ...processedData,
-                                activeSection,
-                            });
-                        },
-                    };
+                    return cachedView(params.section, requestedPath);
                 });
         },
     },
