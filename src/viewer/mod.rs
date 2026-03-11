@@ -192,9 +192,7 @@ pub fn run(config: Config) {
                             let first_line = body.lines().next().unwrap_or("");
                             let parts: Vec<&str> = first_line.split_whitespace().collect();
                             match parts.as_slice() {
-                                [name, ver, ..] => {
-                                    (name.to_string(), ver.to_string())
-                                }
+                                [name, ver, ..] => (name.to_string(), ver.to_string()),
                                 _ => ("rezolus".to_string(), String::new()),
                             }
                         }
@@ -405,10 +403,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/label/{name}/values", get(label_values))
         .route("/metadata", get(metadata))
         .route("/mode", get(mode))
-        .route(
-            "/reset",
-            axum::routing::post(reset_tsdb),
-        )
+        .route("/reset", axum::routing::post(reset_tsdb))
         .route("/save", get(save_parquet))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
