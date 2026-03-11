@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn generate(data: &Arc<Tsdb>, sections: Vec<Section>) -> View {
+pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     /*

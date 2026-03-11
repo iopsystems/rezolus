@@ -69,6 +69,7 @@ export function configureMultiSeriesChart(chart) {
             name: name,
             type: 'line',
             data: zippedData,
+            sampling: 'lttb',
             itemStyle: {
                 color,
             },

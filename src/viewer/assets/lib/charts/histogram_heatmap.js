@@ -104,35 +104,60 @@ export function configureHistogramHeatmap(chart) {
     const minBucketValue = minBucketIdx > 0 ? Math.max(1, bucketBounds[minBucketIdx - 1]) : 1;
     const maxBucketValue = bucketBounds[maxBucketIdx];
 
-    // Calculate the time interval for cell width (in milliseconds)
-    const timeIntervalMs = timeData.length > 1
-        ? (timeData[1] - timeData[0]) * 1000
-        : 1000;
+    // Downsample along the time axis if there are too many data points.
+    // Target roughly 500 time columns to keep rendering fast.
+    const MAX_TIME_COLUMNS = 500;
+    const bucketRange = maxBucketIdx - minBucketIdx + 1;
+    const factor = timeData.length > MAX_TIME_COLUMNS
+        ? Math.ceil(timeData.length / MAX_TIME_COLUMNS)
+        : 1;
 
-    // Create a lookup map for data points
-    const dataMap = new Map();
-    for (const [timeIdx, bucketIdx, count] of data) {
-        if (bucketIdx >= minBucketIdx && bucketIdx <= maxBucketIdx) {
-            dataMap.set(`${timeIdx}-${bucketIdx}`, count);
-        }
+    // Build downsampled time array
+    const dsTimeData = [];
+    for (let t = 0; t < timeData.length; t += factor) {
+        dsTimeData.push(timeData[t]);
     }
 
-    // Only generate data for cells with actual data (non-zero counts)
-    // This is much faster than rendering all cells - empty cells show as background
-    const allCellsData = [];
+    // Calculate the time interval for cell width (in milliseconds)
+    const timeIntervalMs = dsTimeData.length > 1
+        ? (dsTimeData[1] - dsTimeData[0]) * 1000
+        : (timeData.length > 1 ? (timeData[1] - timeData[0]) * 1000 : 1000);
+
+    // Aggregate data: for each downsampled time group × bucket, take the max count
+    // Use a flat array keyed by (dsTimeIdx * bucketRange + bucketOffset) for speed
+    const dsTimeCount = dsTimeData.length;
+    const aggMax = new Float64Array(dsTimeCount * bucketRange); // initialized to 0
+
     for (const [timeIdx, bucketIdx, count] of data) {
         if (bucketIdx < minBucketIdx || bucketIdx > maxBucketIdx || count === 0) {
             continue;
         }
-        const timestampMs = timeData[timeIdx] * 1000;
-        const lowerBound = bucketIdx > 0 ? Math.max(1, bucketBounds[bucketIdx - 1]) : 1;
-        const upperBound = bucketBounds[bucketIdx];
+        const dsTimeIdx = Math.floor(timeIdx / factor);
+        const bucketOffset = bucketIdx - minBucketIdx;
+        const key = dsTimeIdx * bucketRange + bucketOffset;
+        if (count > aggMax[key]) {
+            aggMax[key] = count;
+        }
+    }
 
-        // Normalize count by bucket width in log space to get density
-        const logWidth = Math.log(upperBound) - Math.log(lowerBound);
-        const normalizedCount = logWidth > 0 ? count / logWidth : count;
+    // Build the final cell data from the aggregated values
+    const allCellsData = [];
+    for (let dt = 0; dt < dsTimeCount; dt++) {
+        const timestampMs = dsTimeData[dt] * 1000;
+        for (let bo = 0; bo < bucketRange; bo++) {
+            const count = aggMax[dt * bucketRange + bo];
+            if (count === 0) continue;
 
-        allCellsData.push([timestampMs, lowerBound, upperBound, normalizedCount, timeIdx, bucketIdx]);
+            const bucketIdx = bo + minBucketIdx;
+            const lowerBound = bucketIdx > 0 ? Math.max(1, bucketBounds[bucketIdx - 1]) : 1;
+            const upperBound = bucketBounds[bucketIdx];
+
+            // Normalize count by bucket width in log space to get density
+            const logWidth = Math.log(upperBound) - Math.log(lowerBound);
+            const normalizedCount = logWidth > 0 ? count / logWidth : count;
+
+            allCellsData.push([timestampMs, lowerBound, upperBound, normalizedCount, dt, bucketIdx]);
+        }
     }
 
     // Calculate min/max of normalized values for color scaling
@@ -190,8 +215,8 @@ export function configureHistogramHeatmap(chart) {
         const gridWidth = coordSys.width;
         const gridHeight = coordSys.height;
 
-        const cellStartMs = timestampMs - timeIntervalMs;
-        const cellEndMs = timestampMs;
+        const cellStartMs = timestampMs;
+        const cellEndMs = timestampMs + timeIntervalMs;
 
         const xStartCoord = api.coord([cellStartMs, lowerBound]);
         const xEndCoord = api.coord([cellEndMs, upperBound]);
@@ -331,6 +356,8 @@ export function configureHistogramHeatmap(chart) {
             },
             data: allCellsData,
             clip: true,
+            progressive: 5000,
+            progressiveThreshold: 3000,
             animation: false,
         }]
     };

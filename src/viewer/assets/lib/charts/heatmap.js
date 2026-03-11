@@ -66,11 +66,14 @@ export function configureHeatmap(chart) {
         dataMatrix[y][timeIndex] = value;
     }
 
+    // Build data ordered by time (columns) first, then CPU (rows),
+    // so that ECharts' progressive rendering fills left-to-right.
     const processedData = [];
-    for (let i = 0; i < data.length; i++) {
-        const [timeIndex, y, value] = data[i];
-        if (timeIndex >= 0 && timeIndex < timeData.length) {
-            processedData.push([timeData[timeIndex] * 1000, y, timeIndex, null, value]);
+    for (let t = 0; t < xCount; t++) {
+        for (let y = 0; y < yCount; y++) {
+            if (dataMatrix[y][t] !== null) {
+                processedData.push([timeData[t] * 1000, y, t, null, dataMatrix[y][t]]);
+            }
         }
     }
 
@@ -87,8 +90,9 @@ export function configureHeatmap(chart) {
         const downsampledData = downsample(dataMatrix, factor);
         const downsampledXCount = downsampledData[0].length;
         const processedDownsampledData = [];
-        for (let y = 0; y < yCount; y++) {
-            for (let x = 0; x < downsampledXCount; x++) {
+        // Iterate time-first so progressive rendering fills left-to-right
+        for (let x = 0; x < downsampledXCount; x++) {
+            for (let y = 0; y < yCount; y++) {
                 const minAndMax = downsampledData[y][x];
                 if (minAndMax !== null) {
                     processedDownsampledData.push([timeData[x * factor] * 1000, y, x * factor, minAndMax[0], minAndMax[1]]);

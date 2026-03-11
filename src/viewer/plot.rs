@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::Arc;
 
 #[derive(Default, Serialize)]
 pub struct View {
@@ -16,7 +15,7 @@ pub struct View {
 }
 
 impl View {
-    pub fn new(data: &Arc<Tsdb>, sections: Vec<Section>) -> Self {
+    pub fn new(data: &Tsdb, sections: Vec<Section>) -> Self {
         let interval = data.interval();
         let source = data.source().to_string();
         let version = data.version().to_string();
