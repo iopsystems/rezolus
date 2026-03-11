@@ -325,7 +325,7 @@ async fn ingest_loop(
         // Buffer raw bytes for parquet export
         snapshots.lock().push_back(body.to_vec());
 
-        if sample_count <= 5 || sample_count % 60 == 0 {
+        if sample_count <= 5 || sample_count.is_multiple_of(60) {
             debug!(
                 "ingested {} samples, counters: {}, gauges: {}, histograms: {}",
                 sample_count,
