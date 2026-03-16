@@ -7,6 +7,7 @@
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
+#include "core_fixes.h"
 
 #define TASK_COMM_LEN 16
 #define TASK_CGROUP_NAME_LEN 64
@@ -55,16 +56,21 @@ static __always_inline void populate_task_info(struct task_struct* task,
 
         // Read parent cgroup name
         if (info->cgroup_level > 0) {
+            struct kernfs_node* kn = BPF_CORE_READ(tg, css.cgroup, kn);
+            struct kernfs_node* parent = get_kernfs_node_parent(kn);
             bpf_probe_read_kernel_str(
                 &info->cgroup_pname, TASK_CGROUP_NAME_LEN,
-                BPF_CORE_READ(tg, css.cgroup, kn, parent, name));
+                BPF_CORE_READ(parent, name));
         }
 
         // Read grandparent cgroup name
         if (info->cgroup_level > 1) {
+            struct kernfs_node* kn = BPF_CORE_READ(tg, css.cgroup, kn);
+            struct kernfs_node* parent = get_kernfs_node_parent(kn);
+            struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
             bpf_probe_read_kernel_str(
                 &info->cgroup_gpname, TASK_CGROUP_NAME_LEN,
-                BPF_CORE_READ(tg, css.cgroup, kn, parent, parent, name));
+                BPF_CORE_READ(grandparent, name));
         }
     }
 }

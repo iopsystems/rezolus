@@ -90,20 +90,6 @@ struct {
     __type(value, u32);
 } instructions SEC(".maps");
 
-/**
- * commit 2f064a59a1 ("sched: Change task_struct::state") changes
- * the name of task_struct::state to task_struct::__state
- * see:
- *     https://github.com/torvalds/linux/commit/2f064a59a1
- */
-struct task_struct___o {
-    volatile long int state;
-} __attribute__((preserve_access_index));
-
-struct task_struct___x {
-    unsigned int __state;
-} __attribute__((preserve_access_index));
-
 // attach a tracepoint on sched_switch for per-cgroup accounting
 
 SEC("tp_btf/sched_switch")
