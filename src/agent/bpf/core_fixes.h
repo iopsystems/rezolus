@@ -52,33 +52,6 @@ static __always_inline struct gendisk* get_gendisk(void* bio) {
 }
 
 /**
- * commit d5869fdc189f ("block: introduce block_rq_error tracepoint")
- * adds a new tracepoint block_rq_error and it shares the same arguments
- * with tracepoint block_rq_complete. As a result, the kernel BTF now has
- * a `struct trace_event_raw_block_rq_completion` instead of
- * `struct trace_event_raw_block_rq_complete`.
- * see:
- *     https://github.com/torvalds/linux/commit/d5869fdc189f
- */
-struct trace_event_raw_block_rq_complete___x {
-    dev_t dev;
-    sector_t sector;
-    unsigned int nr_sector;
-} __attribute__((preserve_access_index));
-
-struct trace_event_raw_block_rq_completion___x {
-    dev_t dev;
-    sector_t sector;
-    unsigned int nr_sector;
-} __attribute__((preserve_access_index));
-
-static __always_inline bool has_block_rq_completion() {
-    if (bpf_core_type_exists(struct trace_event_raw_block_rq_completion___x))
-        return true;
-    return false;
-}
-
-/**
  * commit d152c682f03c ("block: add an explicit ->disk backpointer to the
  * request_queue") and commit f3fa33acca9f ("block: remove the ->rq_disk
  * field in struct request") make some changes to `struct request` and
