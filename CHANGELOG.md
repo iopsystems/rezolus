@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [5.8.1] - 2026-03-16
+
+### Fixed
+
+- Remove unused BPF function requiring clang 15+. (#708)
+
 ## [5.8.0] - 2026-03-16
 
 ### Added
@@ -511,7 +517,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.8.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.8.1...HEAD
+[5.8.1]: https://github.com/iopsystems/rezolus/compare/v5.8.0...v5.8.1
 [5.8.0]: https://github.com/iopsystems/rezolus/compare/v5.7.0...v5.8.0
 [5.7.0]: https://github.com/iopsystems/rezolus/compare/v5.6.0...v5.7.0
 [5.6.0]: https://github.com/iopsystems/rezolus/compare/v5.5.0...v5.6.0
