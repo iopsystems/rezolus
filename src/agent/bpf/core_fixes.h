@@ -126,4 +126,27 @@ static __always_inline bool renamedata_has_old_mnt_userns_field(void) {
     return false;
 }
 
+/**
+ * commit 6b03518505da ("kernfs: hide new members of struct kernfs_node")
+ * renames kernfs_node::parent to kernfs_node::__parent in kernel v6.12+
+ * to prevent out-of-tree modules from accessing it directly.
+ * see:
+ *     https://github.com/torvalds/linux/commit/6b03518505da
+ */
+struct kernfs_node___old {
+    struct kernfs_node* parent;
+} __attribute__((preserve_access_index));
+
+struct kernfs_node___new {
+    struct kernfs_node* __parent;
+} __attribute__((preserve_access_index));
+
+static __always_inline struct kernfs_node* get_kernfs_node_parent(void* kn) {
+    struct kernfs_node___new* node = kn;
+
+    if (bpf_core_field_exists(node->__parent))
+        return BPF_CORE_READ(node, __parent);
+    return BPF_CORE_READ((struct kernfs_node___old*)kn, parent);
+}
+
 #endif /* __CORE_FIXES_BPF_H */

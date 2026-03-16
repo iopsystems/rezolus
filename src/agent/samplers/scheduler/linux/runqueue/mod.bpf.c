@@ -27,28 +27,6 @@
 #define IVCSW 0
 #define RUNQ_WAIT 1
 
-/**
- * commit 2f064a59a1 ("sched: Change task_struct::state") changes
- * the name of task_struct::state to task_struct::__state
- * see:
- *     https://github.com/torvalds/linux/commit/2f064a59a1
- */
-struct task_struct___o {
-    volatile long int state;
-} __attribute__((preserve_access_index));
-
-struct task_struct___x {
-    unsigned int __state;
-} __attribute__((preserve_access_index));
-
-static __always_inline __s64 get_task_state(void* task) {
-    struct task_struct___x* t = task;
-
-    if (bpf_core_field_exists(t->__state))
-        return BPF_CORE_READ(t, __state);
-    return BPF_CORE_READ((struct task_struct___o*)task, state);
-}
-
 // counters (see constants defined at top)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -238,14 +216,17 @@ int handle__sched_switch(u64* ctx) {
                     BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn, name));
 
                 // read the cgroup parent name
+                struct kernfs_node* kn = BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn);
+                struct kernfs_node* parent = get_kernfs_node_parent(kn);
                 bpf_probe_read_kernel_str(
                     &cginfo.pname, CGROUP_NAME_LEN,
-                    BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn, parent, name));
+                    BPF_CORE_READ(parent, name));
 
                 // read the cgroup grandparent name
+                struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
                 bpf_probe_read_kernel_str(
                     &cginfo.gpname, CGROUP_NAME_LEN,
-                    BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn, parent, parent, name));
+                    BPF_CORE_READ(grandparent, name));
 
                 // push the cgroup info into the ringbuf
                 bpf_ringbuf_output(&cgroup_info, &cginfo, sizeof(cginfo), 0);

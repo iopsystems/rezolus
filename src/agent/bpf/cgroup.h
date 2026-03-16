@@ -4,6 +4,7 @@
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
+#include "core_fixes.h"
 
 #define CGROUP_NAME_LEN 64
 #define MAX_CGROUPS 4096
@@ -71,16 +72,21 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
 
     // For non-root cgroups, read parent name
     if (cginfo.level > 0) {
+        struct kernfs_node* kn = BPF_CORE_READ(task, sched_task_group, css.cgroup, kn);
+        struct kernfs_node* parent = get_kernfs_node_parent(kn);
         bpf_probe_read_kernel_str(
             &cginfo.pname, CGROUP_NAME_LEN,
-            BPF_CORE_READ(task, sched_task_group, css.cgroup, kn, parent, name));
+            BPF_CORE_READ(parent, name));
     }
 
     // For cgroups at level 2 or higher, read grandparent
     if (cginfo.level > 1) {
+        struct kernfs_node* kn = BPF_CORE_READ(task, sched_task_group, css.cgroup, kn);
+        struct kernfs_node* parent = get_kernfs_node_parent(kn);
+        struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
         bpf_probe_read_kernel_str(
             &cginfo.gpname, CGROUP_NAME_LEN,
-            BPF_CORE_READ(task, sched_task_group, css.cgroup, kn, parent, parent, name));
+            BPF_CORE_READ(grandparent, name));
     }
 
     // Push the cgroup info into the ringbuf
@@ -146,14 +152,19 @@ static __always_inline int handle_new_cgroup_from_css(struct cgroup_subsys_state
 
     // For non-root cgroups, read parent name
     if (cginfo.level > 0) {
+        struct kernfs_node* kn = BPF_CORE_READ(css, cgroup, kn);
+        struct kernfs_node* parent = get_kernfs_node_parent(kn);
         bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, parent, name));
+                                  BPF_CORE_READ(parent, name));
     }
 
     // For cgroups at level 2 or higher, read grandparent
     if (cginfo.level > 1) {
+        struct kernfs_node* kn = BPF_CORE_READ(css, cgroup, kn);
+        struct kernfs_node* parent = get_kernfs_node_parent(kn);
+        struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
         bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(css, cgroup, kn, parent, parent, name));
+                                  BPF_CORE_READ(grandparent, name));
     }
 
     // Push the cgroup info into the ringbuf
