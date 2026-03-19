@@ -54,43 +54,49 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
         return 1;
     }
 
-    // Initialize the cgroup info
-    struct cgroup_info cginfo = {
-        .id = cgroup_id,
-        .level = BPF_CORE_READ(task, sched_task_group, css.cgroup, level),
-    };
+    // Reserve ringbuf space to avoid stack allocation of cgroup_info
+    struct cgroup_info *cginfo = bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
+    if (!cginfo) {
+        // Still update serial number even if ringbuf is full
+        bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
+        return 0;
+    }
+
+    __builtin_memset(cginfo, 0, sizeof(struct cgroup_info));
+    cginfo->id = cgroup_id;
+    cginfo->level = BPF_CORE_READ(task, sched_task_group, css.cgroup, level);
 
     // Read the cgroup name hierarchy
-    if (cginfo.level == 0) {
+    if (cginfo->level == 0) {
         // Root cgroup - set name to "/"
-        cginfo.name[0] = '/';
-        cginfo.name[1] = '\0';
+        cginfo->name[0] = '/';
+        cginfo->name[1] = '\0';
     } else {
-        bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN,
+        bpf_probe_read_kernel_str(&cginfo->name, CGROUP_NAME_LEN,
                                   BPF_CORE_READ(task, sched_task_group, css.cgroup, kn, name));
     }
 
     // For non-root cgroups, read parent name
-    if (cginfo.level > 0) {
+    if (cginfo->level > 0) {
         struct kernfs_node* kn = BPF_CORE_READ(task, sched_task_group, css.cgroup, kn);
         struct kernfs_node* parent = get_kernfs_node_parent(kn);
         bpf_probe_read_kernel_str(
-            &cginfo.pname, CGROUP_NAME_LEN,
+            &cginfo->pname, CGROUP_NAME_LEN,
             BPF_CORE_READ(parent, name));
     }
 
     // For cgroups at level 2 or higher, read grandparent
-    if (cginfo.level > 1) {
+    if (cginfo->level > 1) {
         struct kernfs_node* kn = BPF_CORE_READ(task, sched_task_group, css.cgroup, kn);
         struct kernfs_node* parent = get_kernfs_node_parent(kn);
         struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
         bpf_probe_read_kernel_str(
-            &cginfo.gpname, CGROUP_NAME_LEN,
+            &cginfo->gpname, CGROUP_NAME_LEN,
             BPF_CORE_READ(grandparent, name));
     }
 
-    // Push the cgroup info into the ringbuf
-    bpf_ringbuf_output(cgroup_info_ringbuf, &cginfo, sizeof(cginfo), 0);
+    // Submit the cgroup info
+    bpf_ringbuf_submit(cginfo, 0);
 
     // Update the serial number in the local map
     bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
@@ -134,41 +140,47 @@ static __always_inline int handle_new_cgroup_from_css(struct cgroup_subsys_state
         return 1;
     }
 
-    // Initialize the cgroup info
-    struct cgroup_info cginfo = {
-        .id = cgroup_id,
-        .level = BPF_CORE_READ(css, cgroup, level),
-    };
+    // Reserve ringbuf space to avoid stack allocation of cgroup_info
+    struct cgroup_info *cginfo = bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
+    if (!cginfo) {
+        // Still update serial number even if ringbuf is full
+        bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
+        return 0;
+    }
+
+    __builtin_memset(cginfo, 0, sizeof(struct cgroup_info));
+    cginfo->id = cgroup_id;
+    cginfo->level = BPF_CORE_READ(css, cgroup, level);
 
     // Read the cgroup name hierarchy
-    if (cginfo.level == 0) {
+    if (cginfo->level == 0) {
         // Root cgroup - set name to "/"
-        cginfo.name[0] = '/';
-        cginfo.name[1] = '\0';
+        cginfo->name[0] = '/';
+        cginfo->name[1] = '\0';
     } else {
-        bpf_probe_read_kernel_str(&cginfo.name, CGROUP_NAME_LEN,
+        bpf_probe_read_kernel_str(&cginfo->name, CGROUP_NAME_LEN,
                                   BPF_CORE_READ(css, cgroup, kn, name));
     }
 
     // For non-root cgroups, read parent name
-    if (cginfo.level > 0) {
+    if (cginfo->level > 0) {
         struct kernfs_node* kn = BPF_CORE_READ(css, cgroup, kn);
         struct kernfs_node* parent = get_kernfs_node_parent(kn);
-        bpf_probe_read_kernel_str(&cginfo.pname, CGROUP_NAME_LEN,
+        bpf_probe_read_kernel_str(&cginfo->pname, CGROUP_NAME_LEN,
                                   BPF_CORE_READ(parent, name));
     }
 
     // For cgroups at level 2 or higher, read grandparent
-    if (cginfo.level > 1) {
+    if (cginfo->level > 1) {
         struct kernfs_node* kn = BPF_CORE_READ(css, cgroup, kn);
         struct kernfs_node* parent = get_kernfs_node_parent(kn);
         struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
-        bpf_probe_read_kernel_str(&cginfo.gpname, CGROUP_NAME_LEN,
+        bpf_probe_read_kernel_str(&cginfo->gpname, CGROUP_NAME_LEN,
                                   BPF_CORE_READ(grandparent, name));
     }
 
-    // Push the cgroup info into the ringbuf
-    bpf_ringbuf_output(cgroup_info_ringbuf, &cginfo, sizeof(cginfo), 0);
+    // Submit the cgroup info
+    bpf_ringbuf_submit(cginfo, 0);
 
     // Update the serial number in the local map
     bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);

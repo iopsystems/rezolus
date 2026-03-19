@@ -220,10 +220,14 @@ static __noinline int handle_new_task(struct task_struct* task) {
     // Update the start time
     bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
 
-    // Populate and send task info
-    struct task_info info = {};
-    populate_task_info(task, &info);
-    bpf_ringbuf_output(&task_info, &info, sizeof(info), 0);
+    // Populate and send task info (use ringbuf_reserve to avoid stack allocation)
+    struct task_info *info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
+    if (!info)
+        return 0;
+
+    __builtin_memset(info, 0, sizeof(struct task_info));
+    populate_task_info(task, info);
+    bpf_ringbuf_submit(info, 0);
 
     return 0;
 }
@@ -355,8 +359,11 @@ int handle__sched_process_exit(u64* ctx) {
     bpf_map_update_elem(&task_start_times, &pid, &zero, BPF_ANY);
 
     // Notify userspace to clear metadata
-    struct task_exit exit_event = { .pid = pid };
-    bpf_ringbuf_output(&task_exit, &exit_event, sizeof(exit_event), 0);
+    struct task_exit *exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
+    if (exit_event) {
+        exit_event->pid = pid;
+        bpf_ringbuf_submit(exit_event, 0);
+    }
 
     return 0;
 }
