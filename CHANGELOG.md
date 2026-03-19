@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+## [5.8.2] - 2026-03-19
+
+### Fixed
+
+- Use `bpf_ringbuf_reserve`/`submit` instead of stack allocation with
+  `bpf_ringbuf_output` across all BPF programs. Fixes BPF stack overflow
+  on newer kernels where combined stack size exceeded the 512-byte limit. (#710)
+
 ## [5.8.1] - 2026-03-16
 
 ### Fixed
@@ -517,7 +525,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.8.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.8.2...HEAD
+[5.8.2]: https://github.com/iopsystems/rezolus/compare/v5.8.1...v5.8.2
 [5.8.1]: https://github.com/iopsystems/rezolus/compare/v5.8.0...v5.8.1
 [5.8.0]: https://github.com/iopsystems/rezolus/compare/v5.7.0...v5.8.0
 [5.7.0]: https://github.com/iopsystems/rezolus/compare/v5.6.0...v5.7.0
