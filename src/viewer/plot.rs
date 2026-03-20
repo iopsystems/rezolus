@@ -188,9 +188,8 @@ impl Group {
             let mut best_match: Option<(&str, &str)> = None;
             for (name, desc) in descriptions {
                 if promql_query.contains(name.as_str())
-                    && best_match.is_none_or(|(best_name, _): (&str, _)| {
-                        name.len() > best_name.len()
-                    })
+                    && best_match
+                        .is_none_or(|(best_name, _): (&str, _)| name.len() > best_name.len())
                 {
                     best_match = Some((name.as_str(), desc.as_str()));
                 }
