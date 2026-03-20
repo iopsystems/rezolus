@@ -86,7 +86,7 @@ pub fn snapshot(
                 }
             }
 
-            if let Ok(Some(percentiles)) = delta.percentiles(&[50.0, 90.0, 99.0, 99.9, 99.99]) {
+            if let Ok(Some(percentiles)) = delta.percentiles(&[0.5, 0.9, 0.99, 0.999, 0.9999]) {
                 for (percentile, value) in percentiles.into_iter().map(|(p, b)| (p, b.end())) {
                     if let Ok(value) = value.try_into() {
                         let mut metadata = metadata.clone();
