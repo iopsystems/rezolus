@@ -47,6 +47,21 @@ const saveCapture = () => {
     document.body.removeChild(a);
 };
 
+// Format utilities
+const formatSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+};
+
+const formatInterval = (secs) => {
+    if (!secs) return '';
+    if (secs < 0.001) return (secs * 1000000).toFixed(0) + 'us';
+    if (secs < 1) return (secs * 1000).toFixed(0) + 'ms';
+    return secs.toFixed(0) + 's';
+};
+
 // Top navigation bar component
 const TopNav = {
     view({ attrs }) {
@@ -60,6 +75,13 @@ const TopNav = {
                 liveMode && m('span.live-indicator', {
                     class: recording ? 'recording' : 'stopped',
                 }, recording ? 'REC' : 'STOPPED'),
+            ]),
+            attrs.filename && m('div.topnav-source', attrs.filename),
+            m('div.topnav-meta', [
+                attrs.source && m('span', attrs.source),
+                attrs.version && m('span', attrs.version),
+                attrs.interval && m('span', formatInterval(attrs.interval)),
+                !liveMode && attrs.filesize && m('span', formatSize(attrs.filesize)),
             ]),
             m('div.topnav-actions', [
                 // Transport controls (live mode only)
@@ -96,7 +118,6 @@ const TopNav = {
                     disabled: heatmapLoading,
                 }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
 
-                m('span.zoom-hint', 'Drag to zoom \u00B7 Scroll to zoom \u00B7 Double-click to reset'),
                 m('button', {
                     onclick: () => chartsState.resetZoom(),
                     disabled: chartsState.isDefaultZoom(),
@@ -167,43 +188,47 @@ const Sidebar = {
     },
 };
 
+// Status bar component
+const StatusBar = {
+    view({ attrs }) {
+        const { source, version, interval, filesize } = attrs;
+        return m('div#status-bar', [
+            source && m('span.status-item', [
+                m('span.status-label', 'Source'),
+                source,
+            ]),
+            version && m('span.status-item', [
+                m('span.status-label', 'Version'),
+                version,
+            ]),
+            interval && m('span.status-item', [
+                m('span.status-label', 'Interval'),
+                formatInterval(interval),
+            ]),
+            !liveMode && filesize && m('span.status-item', [
+                m('span.status-label', 'Size'),
+                formatSize(filesize),
+            ]),
+        ]);
+    },
+};
+
 // Main component
 const Main = {
     view({
         attrs: { activeSection, groups, sections, source, version, filename, interval, filesize },
     }) {
-        // Format file size
-        const formatSize = (bytes) => {
-            if (!bytes) return '';
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-        };
-
-        // Format interval
-        const formatInterval = (ms) => {
-            if (!ms) return '';
-            if (ms < 1000) return ms + 'ms';
-            return (ms / 1000).toFixed(0) + 's';
-        };
-
         return m(
             'div',
             m(TopNav, {
                 sectionRoute: activeSection?.route,
                 groups,
+                filename,
+                source,
+                version,
+                interval,
+                filesize,
             }),
-            m('header', [
-                m('div.file-info', [
-                    m('div.filename', filename || 'metrics.parquet'),
-                    m('div.metadata', [
-                        source && m('span', source),
-                        version && m('span', version),
-                        interval && m('span', formatInterval(interval) + ' sampling'),
-                        !liveMode && filesize && m('span', formatSize(filesize)),
-                    ]),
-                ]),
-            ]),
             m('main', [
                 m(Sidebar, {
                     activeSection,
@@ -315,7 +340,21 @@ const QueryExplorer = {
         };
     },
 
+    oncreate(vnode) {
+        // In live mode, re-execute the active query on the refresh interval
+        if (liveMode) {
+            vnode.state.liveInterval = setInterval(() => {
+                if (recording && vnode.state.query && vnode.state.result && !vnode.state.loading) {
+                    vnode.state.executeQuery();
+                }
+            }, 5000);
+        }
+    },
+
     onremove(vnode) {
+        if (vnode.state.liveInterval) {
+            clearInterval(vnode.state.liveInterval);
+        }
         // Clean up the query explorer's chart state when component is removed
         if (vnode.state.queryChartsState) {
             vnode.state.queryChartsState.clear();
@@ -761,38 +800,17 @@ const SectionContent = {
         // Special handling for cgroups with selector
         if (attrs.section.route === '/cgroups') {
             return m('div#section-content.cgroups-section', [
-                m('div.section-breadcrumb', [
-                    'Samplers » ',
-                    m('span.section-name', attrs.section.name),
-                ]),
+                m('h1.section-title', attrs.section.name),
                 m(CgroupSelector, { groups: attrs.groups }),
-                m('div.cgroups-layout', [
-                    m(
-                        'div.cgroups-left',
-                        attrs.groups
-                            .filter(
-                                (g) => g.metadata && g.metadata.side === 'left',
-                            )
-                            .map((group) => m(Group, { ...group, sectionRoute })),
-                    ),
-                    m(
-                        'div.cgroups-right',
-                        attrs.groups
-                            .filter(
-                                (g) =>
-                                    g.metadata && g.metadata.side === 'right',
-                            )
-                            .map((group) => m(Group, { ...group, sectionRoute })),
-                    ),
-                ]),
+                m(
+                    'div#groups',
+                    attrs.groups.map((group) => m(Group, { ...group, sectionRoute })),
+                ),
             ]);
         }
 
         return m('div#section-content', [
-            m('div.section-breadcrumb', [
-                'Samplers » ',
-                m('span.section-name', attrs.section.name),
-            ]),
+            m('h1.section-title', attrs.section.name),
             m(
                 'div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute })),
@@ -921,18 +939,18 @@ const CgroupSelector = {
 
         // Update all PromQL queries with the selected cgroups
         const selectedArray = Array.from(vnode.state.selectedCgroups);
-        // Build regex pattern: escape special chars and wrap alternation in parentheses
-        // Escape dots (.) since they're regex wildcards, but not slashes (/) as they're literals
-        const selectedRegex =
+        // Build alternation pattern for Labels::matches
+        // No escaping needed — Labels::matches uses simple string equality,
+        // and cgroup names don't contain | which is the only special character.
+        const selectedPattern =
             selectedArray.length > 1
-                ? '(' +
-                  selectedArray
-                      .map((cg) => cg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-                      .join('|') +
-                  ')'
+                ? '(' + selectedArray.join('|') + ')'
                 : selectedArray.length === 1
-                  ? selectedArray[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                  : '^$'; // Match nothing if no selection
+                  ? selectedArray[0]
+                  : ''; // Empty string matches nothing
+
+        // Store globally so live refresh can re-apply the pattern
+        activeCgroupPattern = selectedPattern || null;
 
         // Store the original queries if not already stored
         if (!vnode.state.originalQueries) {
@@ -971,7 +989,7 @@ const CgroupSelector = {
                         // Replace the placeholder with actual selected cgroups
                         const updatedQuery = originalQuery.replace(
                             /__SELECTED_CGROUPS__/g,
-                            selectedRegex,
+                            selectedPattern,
                         );
                         plotsToUpdate.push({
                             plot,
@@ -1306,6 +1324,10 @@ const CgroupSelector = {
     },
 };
 
+// Active cgroup selection pattern — used by processDashboardData during live refresh
+// to substitute __SELECTED_CGROUPS__ placeholders in cgroup queries.
+let activeCgroupPattern = null;
+
 // Global heatmap mode — applies to all sections
 let heatmapEnabled = false;
 let heatmapLoading = false;
@@ -1597,6 +1619,16 @@ const processDashboardData = async (data) => {
     for (const group of data.groups || []) {
         for (const plot of group.plots || []) {
             if (plot.promql_query) {
+                // For cgroup placeholder queries: if we have an active selection,
+                // substitute it so the refresh uses the current filter. Otherwise
+                // leave the placeholder (which won't match any cgroup name, giving
+                // correct initial state: aggregate=all, individual=empty).
+                if (plot.promql_query.includes('__SELECTED_CGROUPS__') && activeCgroupPattern) {
+                    plot.promql_query = plot.promql_query.replace(
+                        /__SELECTED_CGROUPS__/g,
+                        activeCgroupPattern,
+                    );
+                }
                 queryPlots.push(plot);
             }
         }
@@ -1725,7 +1757,7 @@ const refreshCurrentSection = async () => {
     if (!currentRoute) return;
 
     const section = currentRoute.replace(/^\//, '');
-    if (!section) return;
+    if (!section || section === 'query') return;
 
     liveRefreshInProgress = true;
     try {

@@ -182,12 +182,21 @@ impl Group {
                 OnceLock::new();
             let descriptions = DESCRIPTIONS.get_or_init(crate::common::metric_descriptions);
 
-            // Find the first metric name that appears in the query
+            // Find the longest matching metric name in the query to avoid
+            // shorter names matching incorrectly (e.g. "syscall" matching
+            // a query for "syscall_latency")
+            let mut best_match: Option<(&str, &str)> = None;
             for (name, desc) in descriptions {
-                if promql_query.contains(name.as_str()) {
-                    opts.description = Some(desc.clone());
-                    break;
+                if promql_query.contains(name.as_str())
+                    && best_match.is_none_or(|(best_name, _): (&str, _)| {
+                        name.len() > best_name.len()
+                    })
+                {
+                    best_match = Some((name.as_str(), desc.as_str()));
                 }
+            }
+            if let Some((_, desc)) = best_match {
+                opts.description = Some(desc.to_string());
             }
         }
 
