@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Installation - Rezolus Docs</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+</style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="text-2xl font-black tracking-tighter text-slate-900 dark:text-white no-underline">Rezolus</a>
+<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.8.3</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Getting Started</h4>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="installation.html">Installation</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Core Concepts</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Telemetry Types</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Reference</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl">
+
+<h1 class="text-4xl font-black tracking-tight mb-4">Installation</h1>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-12">Get Rezolus running on your system.</p>
+
+<!-- Platform tabs -->
+<div class="mb-10">
+<div class="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg w-fit">
+<button onclick="showTab('linux')" id="tab-linux" class="px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all">Linux</button>
+<button onclick="showTab('macos')" id="tab-macos" class="px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all">macOS</button>
+</div>
+</div>
+
+<!-- Linux -->
+<div id="panel-linux">
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Quick Install</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-4">The installer adds the package repository for your distro, installs Rezolus, and enables the agent, exporter, and hindsight services via systemd.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-amber-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+</div>
+<div class="p-6 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -fsSL https://install.rezolus.com | bash</code></div>
+</div>
+</div>
+<p class="text-xs text-slate-400 mt-3">Use <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">--disable-services</code> to install without auto-starting. Use <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">-y</code> for non-interactive mode.</p>
+</section>
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Supported Distributions</h2>
+<div class="space-y-4">
+<div class="p-5 rounded-xl border border-slate-200 dark:border-slate-800">
+<h3 class="text-sm font-bold mb-2">Debian / Ubuntu</h3>
+<p class="text-sm text-slate-500">Debian 11, 12, 13 &middot; Ubuntu 20.04, 22.04, 24.04</p>
+</div>
+<div class="p-5 rounded-xl border border-slate-200 dark:border-slate-800">
+<h3 class="text-sm font-bold mb-2">RHEL / Amazon Linux</h3>
+<p class="text-sm text-slate-500">Rocky Linux 9 &middot; Amazon Linux 2023</p>
+</div>
+</div>
+</section>
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Services</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-4">The package installs three systemd services:</p>
+<div class="overflow-x-auto">
+<table class="w-full text-sm">
+<thead><tr class="border-b border-slate-200 dark:border-slate-800">
+<th class="text-left py-2 pr-4 font-bold text-xs uppercase tracking-wider text-slate-400">Service</th>
+<th class="text-left py-2 pr-4 font-bold text-xs uppercase tracking-wider text-slate-400">Runs as</th>
+<th class="text-left py-2 font-bold text-xs uppercase tracking-wider text-slate-400">Description</th>
+</tr></thead>
+<tbody class="text-slate-600 dark:text-slate-400">
+<tr class="border-b border-slate-100 dark:border-slate-800/50"><td class="py-3 pr-4"><code class="text-blue-600 dark:text-blue-400">rezolus</code></td><td class="py-3 pr-4">root</td><td class="py-3">Agent &mdash; collects metrics via eBPF</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800/50"><td class="py-3 pr-4"><code class="text-blue-600 dark:text-blue-400">rezolus-exporter</code></td><td class="py-3 pr-4">rezolus</td><td class="py-3">Prometheus exporter</td></tr>
+<tr><td class="py-3 pr-4"><code class="text-blue-600 dark:text-blue-400">rezolus-hindsight</code></td><td class="py-3 pr-4">rezolus</td><td class="py-3">Rolling ring buffer for post-incident analysis</td></tr>
+</tbody>
+</table>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-6">
+<div class="p-6 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># Check status</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl status rezolus</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Restart after config change</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl restart rezolus</code></div>
+</div>
+</div>
+</section>
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Build from Source</h2>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
+<div class="p-6 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">git clone https://github.com/iopsystems/rezolus</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">cd rezolus</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">cargo build --release</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed mb-4">Install the binary, configs, and service files:</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-6 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo cp target/release/rezolus /usr/bin/</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo mkdir -p /etc/rezolus</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo cp config/*.toml /etc/rezolus/</code></div>
+<div class="mt-2 text-slate-500 text-xs"># Install systemd services</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo cp debian/rezolus.rezolus.service /etc/systemd/system/rezolus.service</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo cp debian/rezolus.rezolus-exporter.service /etc/systemd/system/rezolus-exporter.service</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo cp debian/rezolus.rezolus-hindsight.service /etc/systemd/system/rezolus-hindsight.service</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl daemon-reload</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl enable --now rezolus</code></div>
+</div>
+</div>
+</section>
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Requirements</h2>
+<ul class="space-y-3 text-sm text-slate-600 dark:text-slate-400">
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> Linux kernel 5.8+ for eBPF features</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> Root access (agent runs as root for eBPF)</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> Architectures: x86_64 and ARM64</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> Rust toolchain (for building from source only)</li>
+</ul>
+</section>
+
+</div>
+
+<!-- macOS -->
+<div id="panel-macos" class="hidden">
+
+<div class="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 mb-10">
+<p class="text-sm text-amber-800 dark:text-amber-300"><strong>Note:</strong> macOS support is limited to basic CPU metrics. eBPF-based samplers (scheduler, block I/O, TCP, syscall) require Linux.</p>
+</div>
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Install</h2>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-amber-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+</div>
+<div class="p-6 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -fsSL https://install.rezolus.com | bash</code></div>
+</div>
+</div>
+</section>
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Run</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-4">On macOS, the agent is run manually (no systemd):</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-6 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo rezolus /etc/rezolus/agent.toml</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Verify</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl http://localhost:4241/metrics/json | jq .</code></div>
+</div>
+</div>
+</section>
+
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Build from Source</h2>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-6 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">git clone https://github.com/iopsystems/rezolus</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">cd rezolus</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">cargo build --release</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo cp target/release/rezolus /usr/local/bin/</code></div>
+</div>
+</div>
+</section>
+
+</div>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-sm">
+<span></span>
+<a href="architecture.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">Architecture &rarr;</a>
+</div>
+
+</main>
+</div>
+<script>
+function showTab(platform) {
+    document.getElementById('panel-linux').classList.toggle('hidden', platform !== 'linux');
+    document.getElementById('panel-macos').classList.toggle('hidden', platform !== 'macos');
+    const linuxTab = document.getElementById('tab-linux');
+    const macosTab = document.getElementById('tab-macos');
+    if (platform === 'linux') {
+        linuxTab.className = 'px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all';
+        macosTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
+    } else {
+        macosTab.className = 'px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all';
+        linuxTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
+    }
+}
+</script>
+</body></html>
