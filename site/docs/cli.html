@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CLI &amp; Configuration - Rezolus Docs</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+</style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="text-2xl font-black tracking-tighter text-slate-900 dark:text-white no-underline">Rezolus</a>
+<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.8.3</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Getting Started</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Core Concepts</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Telemetry Types</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Reference</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="cli.html">CLI &amp; Configuration</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl">
+
+<h1 class="text-4xl font-black tracking-tight mb-4">CLI &amp; Configuration</h1>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-12">Commands, flags, and TOML configuration reference.</p>
+
+<!-- CLI Commands -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-8">Commands</h2>
+
+<div class="space-y-10">
+
+<!-- Agent -->
+<div>
+<h3 class="text-base font-bold mb-3">Agent <span class="text-xs font-normal text-slate-400 ml-1">default mode</span></h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo rezolus &lt;CONFIG&gt;</code></div>
+</div>
+</div>
+<p class="text-xs text-slate-400 mt-2">Collect metrics via eBPF. Requires root. Listens on 0.0.0.0:4241.</p>
+</div>
+
+<!-- Exporter -->
+<div>
+<h3 class="text-base font-bold mb-3">Exporter</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus exporter &lt;CONFIG&gt;</code></div>
+</div>
+</div>
+<p class="text-xs text-slate-400 mt-2">Pull from agent, expose Prometheus metrics on :4242.</p>
+</div>
+
+<!-- Recorder -->
+<div>
+<h3 class="text-base font-bold mb-3">Recorder</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record [OPTIONS] &lt;URL&gt; &lt;OUTPUT&gt;</code></div>
+</div>
+</div>
+<div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
+<div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;  <span class="text-slate-600">Collection interval [default: 1s]</span></div>
+<div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;  <span class="text-slate-600">Collection duration</span></div>
+<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;      <span class="text-slate-600">parquet|raw [default: parquet]</span></div>
+<div><span class="text-slate-400">-v, --verbose</span>              <span class="text-slate-600">Increase verbosity (stackable)</span></div>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-sm">
+<div class="text-slate-600 text-xs mb-2"># Record 30s at 100ms intervals</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -i 100ms -d 30s http://localhost:4241 output.parquet</code></div>
+</div>
+</div>
+</div>
+
+<!-- Hindsight -->
+<div>
+<h3 class="text-base font-bold mb-3">Hindsight</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus hindsight &lt;CONFIG&gt;</code></div>
+</div>
+</div>
+<p class="text-xs text-slate-400 mt-2">Rolling ring buffer. Send SIGHUP to trigger snapshot.</p>
+</div>
+
+<!-- Viewer -->
+<div>
+<h3 class="text-base font-bold mb-3">Viewer</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view [OPTIONS] &lt;INPUT&gt; [LISTEN]</code></div>
+</div>
+</div>
+<div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
+<div><span class="text-slate-400">-v, --verbose</span>  <span class="text-slate-600">Increase verbosity</span></div>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-sm">
+<div class="text-slate-600 text-xs mb-2"># View a recording</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view output.parquet</code></div>
+<div class="text-slate-600 text-xs mt-3 mb-2"># View live agent</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://localhost:4241</code></div>
+</div>
+</div>
+</div>
+
+<!-- MCP -->
+<div>
+<h3 class="text-base font-bold mb-3">MCP Server</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp [SUBCOMMAND]</code></div>
+</div>
+</div>
+<div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
+<div><span class="text-slate-400">analyze-correlation</span> &lt;FILE&gt; &lt;Q1&gt; &lt;Q2&gt;</div>
+<div><span class="text-slate-400">describe-recording</span> &lt;FILE&gt;</div>
+<div><span class="text-slate-400">describe-metrics</span> &lt;FILE&gt;</div>
+<div><span class="text-slate-400">detect-anomalies</span> &lt;FILE&gt; [QUERY]</div>
+<div><span class="text-slate-400">query</span> &lt;FILE&gt; &lt;QUERY&gt;</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<!-- Configuration -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">Configuration</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-8">Each mode uses a TOML config file. Examples are in the <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs">config/</code> directory.</p>
+
+<!-- Agent Config -->
+<h3 class="text-base font-bold mb-3">Agent</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-8">
+<div class="flex items-center px-4 py-2 bg-slate-800">
+<span class="text-[10px] font-mono opacity-50 uppercase tracking-widest">config/agent.toml</span>
+</div>
+<div class="p-5 font-mono text-sm leading-7">
+<div class="text-slate-500"># General settings</div>
+<div><span class="text-purple-400">[general]</span></div>
+<div><span class="text-blue-400">listen</span> = <span class="text-green-400">"0.0.0.0:4241"</span></div>
+<div class="mt-3 text-slate-500"># Logging</div>
+<div><span class="text-purple-400">[log]</span></div>
+<div><span class="text-blue-400">level</span> = <span class="text-green-400">"info"</span>  <span class="text-slate-600"># error | warn | info | debug | trace</span></div>
+<div class="mt-3 text-slate-500"># Scheduler tuning</div>
+<div><span class="text-purple-400">[scheduler]</span></div>
+<div><span class="text-blue-400">policy</span> = <span class="text-green-400">"normal"</span>  <span class="text-slate-600"># normal | round_robin | fifo</span></div>
+<div class="mt-3 text-slate-500"># Default for all samplers</div>
+<div><span class="text-purple-400">[defaults]</span></div>
+<div><span class="text-blue-400">enabled</span> = <span class="text-amber-400">true</span></div>
+<div class="mt-3 text-slate-500"># Per-sampler overrides</div>
+<div><span class="text-purple-400">[samplers.cpu_usage]</span></div>
+<div><span class="text-blue-400">enabled</span> = <span class="text-amber-400">true</span></div>
+<div class="mt-1"><span class="text-purple-400">[samplers.scheduler_runqueue]</span></div>
+<div><span class="text-blue-400">enabled</span> = <span class="text-amber-400">true</span></div>
+</div>
+</div>
+
+<!-- Exporter Config -->
+<h3 class="text-base font-bold mb-3">Exporter</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-8">
+<div class="flex items-center px-4 py-2 bg-slate-800">
+<span class="text-[10px] font-mono opacity-50 uppercase tracking-widest">config/exporter.toml</span>
+</div>
+<div class="p-5 font-mono text-sm leading-7">
+<div><span class="text-purple-400">[general]</span></div>
+<div><span class="text-blue-400">listen</span> = <span class="text-green-400">"0.0.0.0:4242"</span></div>
+<div><span class="text-blue-400">source</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
+<div class="mt-3"><span class="text-purple-400">[prometheus]</span></div>
+<div><span class="text-blue-400">histogram</span> = <span class="text-green-400">"summary"</span>  <span class="text-slate-600"># summary | histogram</span></div>
+</div>
+</div>
+
+<!-- Hindsight Config -->
+<h3 class="text-base font-bold mb-3">Hindsight</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800">
+<span class="text-[10px] font-mono opacity-50 uppercase tracking-widest">config/hindsight.toml</span>
+</div>
+<div class="p-5 font-mono text-sm leading-7">
+<div><span class="text-purple-400">[general]</span></div>
+<div><span class="text-blue-400">interval</span> = <span class="text-green-400">"1s"</span></div>
+<div><span class="text-blue-400">duration</span> = <span class="text-green-400">"1h"</span></div>
+<div><span class="text-blue-400">source</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
+<div><span class="text-blue-400">output</span> = <span class="text-green-400">"/var/lib/rezolus/hindsight.parquet"</span></div>
+<div><span class="text-blue-400">listen</span> = <span class="text-green-400">"0.0.0.0:4242"</span>  <span class="text-slate-600"># optional HTTP API</span></div>
+</div>
+</div>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-sm">
+<a href="api.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; API Reference</a>
+<span></span>
+</div>
+
+</main>
+</div>
+</body></html>

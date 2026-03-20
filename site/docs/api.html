@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>API Reference - Rezolus Docs</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+</style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="text-2xl font-black tracking-tighter text-slate-900 dark:text-white no-underline">Rezolus</a>
+<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.8.3</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Getting Started</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Core Concepts</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Telemetry Types</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Reference</h4>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="api.html">API Reference</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl">
+
+<h1 class="text-4xl font-black tracking-tight mb-4">API Reference</h1>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-12">HTTP endpoints exposed by each operating mode.</p>
+
+<!-- Agent -->
+<section class="mb-16" id="agent-api">
+<h2 class="text-xl font-bold mb-2">Agent</h2>
+<p class="text-sm text-slate-400 mb-6">Default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4241</code></p>
+
+<div class="space-y-4">
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Returns the Rezolus version string.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/metrics/json</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">JSON snapshot of all current metric values including counters, gauges, and histograms.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/metrics/binary</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Msgpack-encoded binary snapshot. Used internally by the exporter, recorder, and hindsight modes.</p></div>
+</div>
+</div>
+</section>
+
+<!-- Exporter -->
+<section class="mb-16" id="exporter-api">
+<h2 class="text-xl font-bold mb-2">Exporter</h2>
+<p class="text-sm text-slate-400 mb-6">Default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4242</code></p>
+
+<div class="space-y-4">
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/metrics</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Prometheus-format metrics. Histograms converted to summary percentiles as configured.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/metrics/json</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Proxied JSON metrics from the upstream agent.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/metrics/binary</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Proxied msgpack metrics from the upstream agent.</p></div>
+</div>
+</div>
+</section>
+
+<!-- Hindsight -->
+<section class="mb-16" id="hindsight-api">
+<h2 class="text-xl font-bold mb-2">Hindsight</h2>
+<p class="text-sm text-slate-400 mb-6">Optional HTTP API, default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4242</code></p>
+
+<div class="space-y-4">
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/status</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Buffer status including time range of stored data.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/dump</code>
+</div>
+<div class="px-5 py-4">
+<p class="text-sm text-slate-500 mb-4">Download ring buffer contents as Parquet.</p>
+<h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Query Parameters</h4>
+<div class="space-y-2 text-xs text-slate-500">
+<div><code class="text-blue-600 dark:text-blue-400">last</code> &mdash; Duration window, e.g. <code>?last=5m</code></div>
+<div><code class="text-blue-600 dark:text-blue-400">start</code> &mdash; Start timestamp, e.g. <code>?start=2024-01-01T12:00:00Z</code></div>
+<div><code class="text-blue-600 dark:text-blue-400">end</code> &mdash; End timestamp</div>
+</div>
+</div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-[10px] font-bold rounded uppercase">POST</span>
+<code class="text-sm font-bold">/dump/file</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Write ring buffer to the configured output file on disk.</p></div>
+</div>
+</div>
+</section>
+
+<!-- Viewer -->
+<section class="mb-16" id="viewer-api">
+<h2 class="text-xl font-bold mb-2">Viewer</h2>
+<p class="text-sm text-slate-400 mb-6">Local web server</p>
+
+<div class="space-y-4">
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/api/v1/query</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">PromQL instant query against the built-in TSDB.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/api/v1/query_range</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">PromQL range query for time-series data.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/api/v1/labels</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">All available label names.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/api/v1/label/{name}/values</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">All values for a specific label.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
+<code class="text-sm font-bold">/api/v1/metadata</code>
+</div>
+<div class="px-5 py-4"><p class="text-sm text-slate-500">Time range metadata for the loaded recording.</p></div>
+</div>
+</div>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-sm">
+<a href="telemetry.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Telemetry Types</a>
+<a href="cli.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">CLI &amp; Configuration &rarr;</a>
+</div>
+
+</main>
+</div>
+</body></html>

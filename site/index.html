@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Rezolus - High Resolution Systems Performance Telemetry</title>
+<meta name="description" content="Rezolus is a high-resolution systems performance telemetry agent using eBPF for low-overhead instrumentation on Linux."/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: {
+          extend: {
+            colors: {
+              "surface": "#f7f9ff",
+              "on-surface": "#171c22",
+              "surface-variant": "#dee3eb",
+              "on-surface-variant": "#414754",
+              "primary": "#0059ba",
+              "primary-container": "#0d71e6",
+              "on-primary": "#ffffff",
+              "on-primary-container": "#fefcff",
+              "outline": "#727785",
+              "outline-variant": "#c1c6d6",
+            },
+            fontFamily: {
+              "headline": ["Inter"],
+              "body": ["Inter"],
+            },
+          },
+        },
+      }
+    </script>
+<style>
+    .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+    body { font-family: 'Inter', sans-serif; }
+</style>
+</head>
+<body class="bg-surface text-on-surface dark:bg-slate-950 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="text-2xl font-black tracking-tighter text-slate-900 dark:text-white no-underline">Rezolus</a>
+<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="#features">Features</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="#quickstart">Quick Start</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="docs/installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+<a href="#quickstart" class="bg-primary dark:bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-bold no-underline hover:opacity-90 transition-opacity">
+    Get Started
+</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<section class="pt-40 pb-24 px-6">
+<div class="max-w-3xl mx-auto text-center">
+<div class="mb-6">
+<span class="inline-block px-3 py-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-xs font-bold tracking-widest uppercase rounded-full">Open Source</span>
+</div>
+<h1 class="text-5xl md:text-7xl font-black tracking-tight text-slate-900 dark:text-white mb-8 leading-[1.05]">
+    High resolution systems performance telemetry
+</h1>
+<p class="text-xl md:text-2xl text-slate-500 dark:text-slate-400 leading-relaxed mb-12 max-w-2xl mx-auto">
+    eBPF-powered instrumentation for Linux with near-zero overhead. Capture CPU, scheduler, I/O, network, and syscall metrics at the resolution your systems demand.
+</p>
+<div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+<a href="#quickstart" class="bg-primary dark:bg-blue-600 text-white px-8 py-3.5 rounded-lg text-sm font-bold no-underline hover:opacity-90 transition-opacity">
+    Get Started
+</a>
+<a href="docs/architecture.html" class="border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 px-8 py-3.5 rounded-lg text-sm font-bold no-underline hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+    How It Works
+</a>
+</div>
+</div>
+</section>
+
+<!-- Features -->
+<section class="py-24 px-6" id="features">
+<div class="max-w-6xl mx-auto">
+<div class="text-center mb-20">
+<h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Six tools, one binary</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 max-w-xl mx-auto">Rezolus covers the full observability workflow &mdash; from collection to analysis.</p>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-16">
+
+<div>
+<div class="w-12 h-12 rounded-xl bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center mb-5">
+<span class="material-symbols-outlined text-blue-600 dark:text-blue-400" data-icon="monitoring">monitoring</span>
+</div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Agent</h3>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Collects system metrics via eBPF with near-zero overhead. Exposes data over HTTP for downstream consumers.</p>
+</div>
+
+<div>
+<div class="w-12 h-12 rounded-xl bg-green-100 dark:bg-green-900/40 flex items-center justify-center mb-5">
+<span class="material-symbols-outlined text-green-600 dark:text-green-400" data-icon="upload">upload</span>
+</div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Exporter</h3>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Serves Prometheus-compatible metrics with configurable histogram percentiles. Scrape-ready.</p>
+</div>
+
+<div>
+<div class="w-12 h-12 rounded-xl bg-purple-100 dark:bg-purple-900/40 flex items-center justify-center mb-5">
+<span class="material-symbols-outlined text-purple-600 dark:text-purple-400" data-icon="fiber_smart_record">fiber_smart_record</span>
+</div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Recorder</h3>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Captures high-fidelity metric snapshots to Parquet files for benchmarking and performance analysis.</p>
+</div>
+
+<div>
+<div class="w-12 h-12 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center mb-5">
+<span class="material-symbols-outlined text-amber-600 dark:text-amber-400" data-icon="history">history</span>
+</div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Hindsight</h3>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Maintains a rolling ring buffer on disk. Trigger snapshots via signal or HTTP for post-incident analysis.</p>
+</div>
+
+<div>
+<div class="w-12 h-12 rounded-xl bg-rose-100 dark:bg-rose-900/40 flex items-center justify-center mb-5">
+<span class="material-symbols-outlined text-rose-600 dark:text-rose-400" data-icon="dashboard">dashboard</span>
+</div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Viewer</h3>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Interactive web dashboard with PromQL support. Explore recordings or stream live from a running agent.</p>
+</div>
+
+<div>
+<div class="w-12 h-12 rounded-xl bg-cyan-100 dark:bg-cyan-900/40 flex items-center justify-center mb-5">
+<span class="material-symbols-outlined text-cyan-600 dark:text-cyan-400" data-icon="smart_toy">smart_toy</span>
+</div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">MCP Server</h3>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">AI-guided analysis tools. Query recordings with PromQL, detect anomalies, and correlate metrics.</p>
+</div>
+
+</div>
+</div>
+</section>
+
+<!-- Quick Start -->
+<section class="py-24 px-6 bg-white dark:bg-slate-900" id="quickstart">
+<div class="max-w-2xl mx-auto">
+<div class="text-center mb-16">
+<h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Up and running in seconds</h2>
+</div>
+
+<!-- Platform tabs -->
+<div class="mb-8">
+<div class="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg w-fit">
+<button onclick="showTab('linux')" id="tab-linux" class="px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all">Linux</button>
+<button onclick="showTab('macos')" id="tab-macos" class="px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all">macOS</button>
+</div>
+</div>
+
+<!-- Linux flow -->
+<div id="panel-linux" class="space-y-10">
+
+<div>
+<div class="flex items-center gap-3 mb-4">
+<div class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">1</div>
+<h3 class="text-base font-bold text-slate-900 dark:text-white">Install and start</h3>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-amber-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+</div>
+<div class="p-6 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -fsSL https://install.rezolus.com | bash</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 mt-3">This adds the package repo, installs Rezolus, and starts the agent as a systemd service. Supports Debian, Ubuntu, Rocky Linux, and Amazon Linux.</p>
+</div>
+
+<div>
+<div class="flex items-center gap-3 mb-4">
+<div class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">2</div>
+<h3 class="text-base font-bold text-slate-900 dark:text-white">Explore your metrics</h3>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-amber-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+</div>
+<div class="p-6 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># Open the interactive dashboard</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://localhost:4241</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 mt-3">Streams live metrics from the agent into an interactive web dashboard. The agent listens on <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">0.0.0.0:4241</code>, so you can also point the viewer at a remote host.</p>
+</div>
+
+<p class="text-xs text-slate-400">Requires Linux kernel 5.8+ and root. See <a href="docs/installation.html" class="text-blue-600 dark:text-blue-400 underline">full installation docs</a> for building from source or managing services individually.</p>
+</div>
+
+<!-- macOS flow -->
+<div id="panel-macos" class="space-y-10 hidden">
+
+<div>
+<div class="flex items-center gap-3 mb-4">
+<div class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">1</div>
+<h3 class="text-base font-bold text-slate-900 dark:text-white">Install via Homebrew</h3>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-amber-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+</div>
+<div class="p-6 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -fsSL https://install.rezolus.com | bash</code></div>
+</div>
+</div>
+</div>
+
+<div>
+<div class="flex items-center gap-3 mb-4">
+<div class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">2</div>
+<h3 class="text-base font-bold text-slate-900 dark:text-white">Run the agent and explore</h3>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-amber-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+</div>
+<div class="p-6 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># View a remote Linux host's metrics from your Mac</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://&lt;remote-host&gt;:4241</code></div>
+<div class="text-slate-500 text-xs mt-3"># Or run the agent locally (CPU metrics only)</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo rezolus /etc/rezolus/agent.toml</code></div>
+</div>
+</div>
+</div>
+
+<div class="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+<p class="text-sm text-amber-800 dark:text-amber-300"><strong>Note:</strong> The macOS agent collects basic CPU and Apple GPU metrics only. eBPF-based samplers (scheduler, block I/O, TCP, syscall) require Linux. Use the viewer and recorder to work with remote Linux agents.</p>
+</div>
+</div>
+
+</div>
+</section>
+
+<!-- Metrics overview -->
+<section class="py-24 px-6">
+<div class="max-w-6xl mx-auto">
+<div class="text-center mb-16">
+<h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">What it measures</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 max-w-xl mx-auto">Nine sampler categories covering the full Linux performance stack.</p>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+<a href="docs/telemetry.html#cpu" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="memory">memory</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">CPU</h3>
+<p class="text-xs text-slate-400">Usage, frequency, perf counters, cache, TLB</p>
+</a>
+<a href="docs/telemetry.html#gpu" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="developer_board">developer_board</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">GPU</h3>
+<p class="text-xs text-slate-400">NVIDIA and Apple Silicon metrics</p>
+</a>
+<a href="docs/telemetry.html#memory" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="dynamic_form">dynamic_form</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">Memory</h3>
+<p class="text-xs text-slate-400">Usage, vmstat, NUMA allocations</p>
+</a>
+<a href="docs/telemetry.html#network" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="lan">lan</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">Network</h3>
+<p class="text-xs text-slate-400">Traffic, errors, ethtool counters</p>
+</a>
+<a href="docs/telemetry.html#tcp" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="cable">cable</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">TCP</h3>
+<p class="text-xs text-slate-400">Connect latency, jitter, retransmits</p>
+</a>
+<a href="docs/telemetry.html#blockio" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="storage">storage</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">Block I/O</h3>
+<p class="text-xs text-slate-400">Latency distributions, request counts</p>
+</a>
+<a href="docs/telemetry.html#scheduler" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="schedule">schedule</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">Scheduler</h3>
+<p class="text-xs text-slate-400">Runqueue latency, context switches</p>
+</a>
+<a href="docs/telemetry.html#syscall" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="terminal">terminal</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">Syscall</h3>
+<p class="text-xs text-slate-400">Counts and latency by type</p>
+</a>
+<a href="docs/telemetry.html#rezolus" class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<div class="text-2xl mb-3"><span class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="speed">speed</span></div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white mb-1">Rezolus</h3>
+<p class="text-xs text-slate-400">Self-monitoring: CPU, memory, I/O</p>
+</a>
+</div>
+</div>
+</section>
+
+<!-- Docs CTA -->
+<section class="py-24 px-6 bg-white dark:bg-slate-900">
+<div class="max-w-4xl mx-auto">
+<div class="text-center mb-16">
+<h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Documentation</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400">Everything you need to deploy and operate Rezolus.</p>
+</div>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<a href="docs/installation.html" class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<span class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="download">download</span>
+<div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white">Installation</h3>
+<p class="text-xs text-slate-400">Packages, source builds, platform support</p>
+</div>
+</a>
+<a href="docs/architecture.html" class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<span class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="account_tree">account_tree</span>
+<div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white">Architecture</h3>
+<p class="text-xs text-slate-400">Modes, samplers, eBPF integration</p>
+</div>
+</a>
+<a href="docs/cli.html" class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<span class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="terminal">terminal</span>
+<div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white">CLI &amp; Configuration</h3>
+<p class="text-xs text-slate-400">Commands, flags, TOML config reference</p>
+</div>
+</a>
+<a href="docs/api.html" class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+<span class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors" data-icon="api">api</span>
+<div>
+<h3 class="text-sm font-bold text-slate-900 dark:text-white">API Reference</h3>
+<p class="text-xs text-slate-400">HTTP endpoints for every mode</p>
+</div>
+</a>
+</div>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="py-12 px-6 border-t border-slate-200 dark:border-slate-800">
+<div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+<div>
+<div class="text-lg font-bold text-slate-900 dark:text-white mb-1">Rezolus</div>
+<p class="text-sm text-slate-400">MIT or Apache-2.0</p>
+</div>
+<div class="flex gap-8 text-sm text-slate-400">
+<a class="hover:text-blue-500 transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+<a class="hover:text-blue-500 transition-colors no-underline" href="https://discord.gg/YC5GDsH4dG">Discord</a>
+</div>
+</div>
+</footer>
+
+<script>
+document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+    anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) target.scrollIntoView({ behavior: 'smooth' });
+    });
+});
+
+function showTab(platform) {
+    document.getElementById('panel-linux').classList.toggle('hidden', platform !== 'linux');
+    document.getElementById('panel-macos').classList.toggle('hidden', platform !== 'macos');
+    const linuxTab = document.getElementById('tab-linux');
+    const macosTab = document.getElementById('tab-macos');
+    if (platform === 'linux') {
+        linuxTab.className = 'px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all';
+        macosTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
+    } else {
+        macosTab.className = 'px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all';
+        linuxTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
+    }
+}
+</script>
+</body></html>

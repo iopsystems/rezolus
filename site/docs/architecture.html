@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Architecture - Rezolus Docs</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+</style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="text-2xl font-black tracking-tighter text-slate-900 dark:text-white no-underline">Rezolus</a>
+<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.8.3</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Getting Started</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Core Concepts</h4>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="architecture.html">Architecture</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Telemetry Types</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Reference</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl">
+
+<h1 class="text-4xl font-black tracking-tight mb-4">Architecture</h1>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-12">How Rezolus is structured and how the pieces fit together.</p>
+
+<!-- Operating Modes -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-6">Operating Modes</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-8 leading-relaxed">Rezolus is a single binary with six subcommands. Each mode handles a different stage of the observability workflow.</p>
+
+<div class="space-y-6">
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-blue-600" data-icon="monitoring">monitoring</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Agent</h3>
+<code class="text-xs text-slate-400">sudo rezolus &lt;config.toml&gt;</code>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">The core collection engine. Attaches eBPF programs to kernel tracepoints and kprobes to collect metrics across CPU, scheduler, block I/O, network, memory, TCP, and syscalls. Exposes data via HTTP on port 4241 in JSON and msgpack formats.</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-green-100 dark:bg-green-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-green-600" data-icon="upload">upload</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Exporter</h3>
+<code class="text-xs text-slate-400">rezolus exporter &lt;config.toml&gt;</code>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Pulls metrics from the agent's msgpack endpoint and serves them in Prometheus format on port 4242. Converts histograms to configurable summary percentiles. Designed for Prometheus scraping.</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-purple-600" data-icon="fiber_smart_record">fiber_smart_record</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Recorder</h3>
+<code class="text-xs text-slate-400">rezolus record &lt;url&gt; &lt;output&gt;</code>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">On-demand metric capture to Parquet files. Connects to a running agent and writes high-fidelity snapshots at configurable intervals and durations. Ideal for benchmarking and performance engineering.</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-amber-600" data-icon="history">history</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Hindsight</h3>
+<code class="text-xs text-slate-400">rezolus hindsight &lt;config.toml&gt;</code>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Maintains a rolling ring buffer of high-resolution metrics on disk. Trigger snapshots via SIGHUP or the HTTP API. Supports time-range queries for extracting the window around an incident.</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-rose-100 dark:bg-rose-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-rose-600" data-icon="dashboard">dashboard</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Viewer</h3>
+<code class="text-xs text-slate-400">rezolus view &lt;input&gt; [listen]</code>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">Web-based interactive dashboard for exploring Parquet recordings or streaming live from a running agent. Includes a built-in TSDB with PromQL query support and pre-built dashboards for each metric category.</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-cyan-100 dark:bg-cyan-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-cyan-600" data-icon="smart_toy">smart_toy</span>
+</div>
+<div>
+<h3 class="text-base font-bold">MCP Server</h3>
+<code class="text-xs text-slate-400">rezolus mcp [subcommand]</code>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">AI-guided analysis server. Provides tools for querying recordings with PromQL, detecting anomalies, analyzing correlations between metrics, and describing recording metadata.</p>
+</div>
+
+</div>
+</section>
+
+<!-- eBPF -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-6">eBPF Integration</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed mb-4">Rezolus uses <strong class="text-slate-700 dark:text-slate-300">libbpf-rs</strong> for eBPF program management. BPF programs are written in C (<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs">.bpf.c</code> files) alongside their Rust module counterparts and compiled at build time via <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs">build.rs</code>.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed mb-4">At runtime, the agent attaches these programs to kernel tracepoints and kprobes. This provides kernel-level visibility with near-zero overhead &mdash; no polling of <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs">/proc</code> or <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs">/sys</code> required for instrumented metrics.</p>
+<div class="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+<p class="text-sm text-amber-800 dark:text-amber-300"><strong>Requires:</strong> Linux kernel 5.8+ and root access. macOS builds omit eBPF samplers.</p>
+</div>
+</section>
+
+<!-- Key Technical Details -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-6">Key Technical Details</h2>
+<ul class="space-y-3 text-sm text-slate-600 dark:text-slate-400">
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">Async runtime:</strong> Tokio with minimal threads</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">HTTP framework:</strong> Axum</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">Metrics library:</strong> metriken crate</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">Sampler registration:</strong> <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs">linkme</code> distributed slices for static registration</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">Data format:</strong> Parquet via metriken-exposition</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">Hardware topology:</strong> systeminfo crate</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">Architectures:</strong> x86_64 and ARM64</li>
+</ul>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-sm">
+<a href="installation.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Installation</a>
+<a href="telemetry.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">Telemetry Types &rarr;</a>
+</div>
+
+</main>
+</div>
+</body></html>

@@ -2,7 +2,11 @@ name: cargo-build
 
 on:
   push:
+    paths-ignore:
+      - 'site/**'
   pull_request:
+    paths-ignore:
+      - 'site/**'
 
 env:
   CARGO_TERM_COLOR: always
