@@ -1,6 +1,5 @@
 use crate::debug;
 
-use ringlog::Level;
 use serde::Deserialize;
 
 use std::collections::HashMap;

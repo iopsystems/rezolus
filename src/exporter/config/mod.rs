@@ -2,7 +2,6 @@ use crate::common::HISTOGRAM_GROUPING_POWER;
 use clap::ArgMatches;
 use std::path::PathBuf;
 
-use ringlog::Level;
 use serde::Deserialize;
 
 use std::net::{SocketAddr, ToSocketAddrs};

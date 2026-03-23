@@ -4,9 +4,9 @@ use clap::{value_parser, Command, ValueEnum};
 use linkme::distributed_slice;
 use metriken_exposition::{MsgpackToParquet, ParquetOptions};
 use reqwest::{Client, Url};
-use ringlog::*;
 use serde::Deserialize;
 use tempfile::tempfile_in;
+use tracing::{debug, error, info, warn};
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;

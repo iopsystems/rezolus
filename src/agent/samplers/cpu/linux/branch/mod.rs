@@ -11,6 +11,7 @@
 const NAME: &str = "cpu_branch";
 
 use crate::agent::*;
+use tracing::trace;
 
 use perf_event::events::Hardware;
 use perf_event::ReadFormat;

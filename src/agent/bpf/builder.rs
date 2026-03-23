@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::*;
 use crate::{error, warn};
+use tracing::trace;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
