@@ -56,6 +56,15 @@ pub struct LogDrain {
     _guard: WorkerGuard,
 }
 
+/// Map CLI verbosity flags (-v, -vv) to a tracing level.
+pub fn verbosity_to_level(verbose: u8) -> tracing::Level {
+    match verbose {
+        0 => tracing::Level::INFO,
+        1 => tracing::Level::DEBUG,
+        _ => tracing::Level::TRACE,
+    }
+}
+
 /// Initialize tracing with a non-blocking stderr writer at the given level.
 pub fn configure_logging(level: tracing::Level) -> LogDrain {
     let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stderr());

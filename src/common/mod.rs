@@ -1,5 +1,5 @@
 mod logging;
-pub use logging::{configure_logging, Level, LogConfig, LogDrain};
+pub use logging::{configure_logging, verbosity_to_level, Level, LogConfig, LogDrain};
 
 pub static HISTOGRAM_GROUPING_POWER: u8 = 3;
 

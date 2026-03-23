@@ -78,12 +78,7 @@ pub fn run(config: Config) {
 
 fn run_server(config: Config) {
     // configure logging
-    let level = match config.verbose {
-        0 => tracing::Level::INFO,
-        1 => tracing::Level::DEBUG,
-        _ => tracing::Level::TRACE,
-    };
-    let _log_drain = configure_logging(level);
+    let _log_drain = configure_logging(verbosity_to_level(config.verbose));
 
     // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
