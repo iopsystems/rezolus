@@ -1,4 +1,54 @@
+use serde::Deserialize;
 use tracing_appender::non_blocking::WorkerGuard;
+
+#[derive(Copy, Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[serde(deny_unknown_fields)]
+pub enum Level {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl Level {
+    pub fn to_tracing_level(self) -> tracing::Level {
+        match self {
+            Level::Error => tracing::Level::ERROR,
+            Level::Warn => tracing::Level::WARN,
+            Level::Info => tracing::Level::INFO,
+            Level::Debug => tracing::Level::DEBUG,
+            Level::Trace => tracing::Level::TRACE,
+        }
+    }
+}
+
+impl Default for Level {
+    fn default() -> Self {
+        Level::Info
+    }
+}
+
+#[derive(Deserialize)]
+pub struct LogConfig {
+    #[serde(default)]
+    level: Level,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: Level::default(),
+        }
+    }
+}
+
+impl LogConfig {
+    pub fn level(&self) -> Level {
+        self.level
+    }
+}
 
 /// Holds the tracing worker guard. Must be kept alive for the process lifetime
 /// to ensure logs are flushed.
