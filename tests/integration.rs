@@ -143,10 +143,9 @@ enabled = false
         let addr = format!("127.0.0.1:{}", self.port);
 
         while Instant::now() < deadline {
-            if let Ok(_stream) = TcpStream::connect_timeout(
-                &addr.parse().unwrap(),
-                Duration::from_millis(100),
-            ) {
+            if let Ok(_stream) =
+                TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(100))
+            {
                 // Give the agent a moment to finish initializing all samplers
                 std::thread::sleep(Duration::from_secs(2));
                 return;
@@ -162,8 +161,8 @@ enabled = false
     /// Fetch the JSON snapshot from the agent.
     fn fetch_snapshot(&self) -> Snapshot {
         let url = format!("http://127.0.0.1:{}/metrics/json", self.port);
-        let resp = reqwest::blocking::get(&url)
-            .unwrap_or_else(|e| panic!("failed to fetch {url}: {e}"));
+        let resp =
+            reqwest::blocking::get(&url).unwrap_or_else(|e| panic!("failed to fetch {url}: {e}"));
         assert!(resp.status().is_success(), "HTTP {}", resp.status());
         let body = resp.text().expect("failed to read response body");
         serde_json::from_str::<Snapshot>(&body).expect("failed to parse JSON snapshot")
@@ -264,10 +263,7 @@ fn cpu_usage_metrics() {
         .filter_map(|c| c.metadata.get("state").map(|s| s.as_str()))
         .collect();
     assert!(states.contains(&"user"), "missing cpu_usage state=user");
-    assert!(
-        states.contains(&"system"),
-        "missing cpu_usage state=system"
-    );
+    assert!(states.contains(&"system"), "missing cpu_usage state=system");
 
     // At least some CPU should have non-zero usage
     let has_nonzero = cpu_usage_counters.iter().any(|c| c.value > 0);
@@ -308,10 +304,7 @@ fn memory_metrics() {
         .iter()
         .filter(|g| g.metadata.get("metric").map(|s| s.as_str()) == Some("memory_meminfo"))
         .collect();
-    assert!(
-        !meminfo_gauges.is_empty(),
-        "no memory_meminfo gauges found"
-    );
+    assert!(!meminfo_gauges.is_empty(), "no memory_meminfo gauges found");
 }
 
 /// Verify the softirq metrics from the cpu_usage sampler.
@@ -365,9 +358,7 @@ fn bpf_self_telemetry() {
     let run_counts: Vec<_> = snapshot
         .counters
         .iter()
-        .filter(|c| {
-            c.metadata.get("metric").map(|s| s.as_str()) == Some("rezolus_bpf_run_count")
-        })
+        .filter(|c| c.metadata.get("metric").map(|s| s.as_str()) == Some("rezolus_bpf_run_count"))
         .collect();
     let has_nonzero = run_counts.iter().any(|c| c.value > 0);
     assert!(has_nonzero, "all rezolus_bpf_run_count are zero");
@@ -410,10 +401,7 @@ fn counters_are_monotonic() {
     // cpu_usage should be monotonically increasing (cumulative nanoseconds)
     let cpu1 = max_value(&snap1, "cpu_usage");
     let cpu2 = max_value(&snap2, "cpu_usage");
-    assert!(
-        cpu2 >= cpu1,
-        "cpu_usage decreased: {cpu1} -> {cpu2}"
-    );
+    assert!(cpu2 >= cpu1, "cpu_usage decreased: {cpu1} -> {cpu2}");
     assert!(
         cpu2 > cpu1,
         "cpu_usage did not increase between snapshots: {cpu1} -> {cpu2}"
