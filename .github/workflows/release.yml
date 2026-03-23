@@ -442,8 +442,11 @@ jobs:
       - name: update Homebrew formula
         if: steps.check-release.outputs.is_stable == 'true'
         run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
           brew tap iopsystems/iop
           brew bump-formula-pr iopsystems/iop/rezolus \
-            --tag "${{ github.ref_name }}" \
+            --url "https://github.com/iopsystems/rezolus/archive/refs/tags/${TAG}.tar.gz" \
+            --version "${VERSION}" \
             --no-fork \
             --no-browse
