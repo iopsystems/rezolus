@@ -165,7 +165,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .cpu_counters("softirq_time", softirq_time)
     .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
     .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
-    .packed_counters("task_cpu_usage", &TASK_CPU_USAGE)
+    .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("task_info", handle_task_info)
     .ringbuf_handler("task_exit", handle_task_exit)
