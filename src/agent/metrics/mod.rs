@@ -1,4 +1,4 @@
-mod counters;
+pub(crate) mod counters;
 mod gauges;
 mod sparse_counters;
 

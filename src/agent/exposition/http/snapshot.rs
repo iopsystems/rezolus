@@ -148,50 +148,74 @@ fn create(
                         })
                     }
                 } else if let Some(counters) = any.downcast_ref::<CounterGroup>() {
-                    if let Some(c) = counters.load() {
-                        for (counter_id, counter) in c.iter().enumerate() {
-                            if *counter == 0 {
-                                continue;
-                            }
-                            let mut metadata = metadata.clone();
+                    // Prefer zero-copy mmap path, fall back to cloned Vec
+                    let values: Option<&[u64]> = counters.load_values();
+                    let owned;
+                    let c: &[u64] = if let Some(v) = values {
+                        v
+                    } else if let Some(v) = {
+                        owned = counters.load();
+                        owned.as_deref()
+                    } {
+                        v
+                    } else {
+                        continue;
+                    };
 
-                            metadata.insert("id".to_string(), counter_id.to_string());
-
-                            if let Some(m) = counters.load_metadata(counter_id) {
-                                for (k, v) in m {
-                                    metadata.insert(k, v);
-                                }
-                            }
-
-                            s.counters.push(Counter {
-                                name: format!("{metric_id}x{counter_id}"),
-                                value: *counter,
-                                metadata,
-                            })
+                    for (counter_id, counter) in c.iter().enumerate() {
+                        if *counter == 0 {
+                            continue;
                         }
+                        let mut metadata = metadata.clone();
+
+                        metadata.insert("id".to_string(), counter_id.to_string());
+
+                        if let Some(m) = counters.load_metadata(counter_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.counters.push(Counter {
+                            name: format!("{metric_id}x{counter_id}"),
+                            value: *counter,
+                            metadata,
+                        })
                     }
                 } else if let Some(counters) = any.downcast_ref::<SparseCounterGroup>() {
-                    if let Some(c) = counters.load() {
-                        for (counter_id, counter) in c.iter().enumerate() {
-                            if *counter == 0 {
-                                continue;
-                            }
-                            let mut metadata = metadata.clone();
+                    // Prefer zero-copy mmap path, fall back to cloned Vec
+                    let values: Option<&[u64]> = counters.load_values();
+                    let owned;
+                    let c: &[u64] = if let Some(v) = values {
+                        v
+                    } else if let Some(v) = {
+                        owned = counters.load();
+                        owned.as_deref()
+                    } {
+                        v
+                    } else {
+                        continue;
+                    };
 
-                            metadata.insert("id".to_string(), counter_id.to_string());
-
-                            if let Some(m) = counters.load_metadata(counter_id) {
-                                for (k, v) in m {
-                                    metadata.insert(k, v);
-                                }
-                            }
-
-                            s.counters.push(Counter {
-                                name: format!("{metric_id}x{counter_id}"),
-                                value: *counter,
-                                metadata,
-                            })
+                    for (counter_id, counter) in c.iter().enumerate() {
+                        if *counter == 0 {
+                            continue;
                         }
+                        let mut metadata = metadata.clone();
+
+                        metadata.insert("id".to_string(), counter_id.to_string());
+
+                        if let Some(m) = counters.load_metadata(counter_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.counters.push(Counter {
+                            name: format!("{metric_id}x{counter_id}"),
+                            value: *counter,
+                            metadata,
+                        })
                     }
                 } else if let Some(gauges) = any.downcast_ref::<GaugeGroup>() {
                     if let Some(g) = gauges.load() {

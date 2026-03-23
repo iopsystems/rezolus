@@ -193,6 +193,12 @@ impl<'a> PackedCounters<'a> {
             panic!("mmap region not aligned or width doesn't match");
         }
 
+        // Attach the mmap directly to the counter group so the exposition code
+        // can read values without an intermediate copy.
+        unsafe {
+            counters.attach_mmap_values(values.as_ptr(), values.len());
+        }
+
         Self {
             _map: map,
             mmap,
@@ -200,18 +206,9 @@ impl<'a> PackedCounters<'a> {
         }
     }
 
-    /// Refreshes the counters by reading from the BPF map and setting each
-    /// counter metric to the current value.
-    pub fn refresh(&mut self) {
-        let (_prefix, values, _suffix) = unsafe { self.mmap.align_to::<u64>() };
-
-        // update all individual counters
-        for (idx, value) in values.iter().enumerate() {
-            if *value != 0 {
-                let _ = self.counters.set(idx, *value);
-            }
-        }
-    }
+    /// No-op: values are read directly from the mmap by the exposition code.
+    /// Kept for API compatibility with the sampler refresh loop.
+    pub fn refresh(&mut self) {}
 }
 
 /// Like `PackedCounters`, but for `SparseCounterGroup` which uses sparse
@@ -246,6 +243,12 @@ impl<'a> SparsePackedCounters<'a> {
             panic!("mmap region not aligned or width doesn't match");
         }
 
+        // Attach the mmap directly to the counter group so the exposition code
+        // can read values without an intermediate copy.
+        unsafe {
+            counters.attach_mmap_values(values.as_ptr(), values.len());
+        }
+
         Self {
             _map: map,
             mmap,
@@ -253,16 +256,7 @@ impl<'a> SparsePackedCounters<'a> {
         }
     }
 
-    /// Refreshes the counters by reading from the BPF map and setting each
-    /// counter metric to the current value.
-    pub fn refresh(&mut self) {
-        let (_prefix, values, _suffix) = unsafe { self.mmap.align_to::<u64>() };
-
-        // update all individual counters
-        for (idx, value) in values.iter().enumerate() {
-            if *value != 0 {
-                let _ = self.counters.set(idx, *value);
-            }
-        }
-    }
+    /// No-op: values are read directly from the mmap by the exposition code.
+    /// Kept for API compatibility with the sampler refresh loop.
+    pub fn refresh(&mut self) {}
 }
