@@ -1,5 +1,4 @@
 use clap::ArgMatches;
-use ringlog::Level;
 use serde::Deserialize;
 
 use std::net::{SocketAddr, ToSocketAddrs};

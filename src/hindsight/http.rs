@@ -1,5 +1,5 @@
 use super::state::{DumpToFileRequest, SharedState, TimeRange};
-use ringlog::info;
+use tracing::info;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;

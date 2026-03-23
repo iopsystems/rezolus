@@ -41,25 +41,8 @@ pub fn run(config: Config) {
     // load config from file
     let config: Arc<Config> = config.into();
 
-    // configure debug log
-    let debug_output: Box<dyn Output> = Box::new(Stderr::new());
-
-    let level = config.log().level();
-
-    let debug_log = if level <= Level::Info {
-        LogBuilder::new().format(ringlog::default_format)
-    } else {
-        LogBuilder::new()
-    }
-    .output(debug_output)
-    .build()
-    .expect("failed to initialize debug log");
-
-    let mut log = MultiLogBuilder::new()
-        .level_filter(level.to_level_filter())
-        .default(debug_log)
-        .build()
-        .start();
+    // configure logging
+    let _log_drain = configure_logging(config.log().level().to_tracing_level());
 
     // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -68,14 +51,6 @@ pub fn run(config: Config) {
         .thread_name("rezolus")
         .build()
         .expect("failed to launch async runtime");
-
-    // spawn logging thread
-    rt.spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let _ = log.flush();
-        }
-    });
 
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);

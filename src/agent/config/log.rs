@@ -1,8 +1,34 @@
-use super::*;
+use serde::Deserialize;
+
+#[derive(Copy, Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[serde(deny_unknown_fields)]
+pub enum Level {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl Level {
+    pub fn to_tracing_level(self) -> tracing::Level {
+        match self {
+            Level::Error => tracing::Level::ERROR,
+            Level::Warn => tracing::Level::WARN,
+            Level::Info => tracing::Level::INFO,
+            Level::Debug => tracing::Level::DEBUG,
+            Level::Trace => tracing::Level::TRACE,
+        }
+    }
+}
+
+fn log_level() -> Level {
+    Level::Info
+}
 
 #[derive(Deserialize)]
 pub struct Log {
-    #[serde(with = "LevelDef")]
     #[serde(default = "log_level")]
     level: Level,
 }
@@ -17,20 +43,4 @@ impl Log {
     pub fn level(&self) -> Level {
         self.level
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[serde(remote = "Level")]
-#[serde(deny_unknown_fields)]
-enum LevelDef {
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
-}
-
-fn log_level() -> Level {
-    Level::Info
 }

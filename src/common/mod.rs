@@ -1,3 +1,6 @@
+mod logging;
+pub use logging::{configure_logging, LogDrain};
+
 pub static HISTOGRAM_GROUPING_POWER: u8 = 3;
 
 /// Returns a map of metric names to their descriptions from the global metric registry.
