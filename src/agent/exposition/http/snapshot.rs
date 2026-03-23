@@ -170,6 +170,29 @@ fn create(
                             })
                         }
                     }
+                } else if let Some(counters) = any.downcast_ref::<SparseCounterGroup>() {
+                    if let Some(c) = counters.load() {
+                        for (counter_id, counter) in c.iter().enumerate() {
+                            if *counter == 0 {
+                                continue;
+                            }
+                            let mut metadata = metadata.clone();
+
+                            metadata.insert("id".to_string(), counter_id.to_string());
+
+                            if let Some(m) = counters.load_metadata(counter_id) {
+                                for (k, v) in m {
+                                    metadata.insert(k, v);
+                                }
+                            }
+
+                            s.counters.push(Counter {
+                                name: format!("{metric_id}x{counter_id}"),
+                                value: *counter,
+                                metadata,
+                            })
+                        }
+                    }
                 } else if let Some(gauges) = any.downcast_ref::<GaugeGroup>() {
                     if let Some(g) = gauges.load() {
                         for (gauge_id, gauge) in g.iter().enumerate() {

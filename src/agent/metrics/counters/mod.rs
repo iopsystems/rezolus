@@ -88,6 +88,7 @@ impl MetricGroup for CounterGroup {
         if let Some(metadata) = self.metadata.get() {
             if let Some(m) = metadata.write().get_mut(idx) {
                 m.clear();
+                m.shrink_to_fit();
             }
         }
     }
