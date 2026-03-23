@@ -99,3 +99,119 @@ impl MetricGroup for SparseCounterGroup {
         self.entries
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_and_load() {
+        let group = SparseCounterGroup::new(4);
+        assert!(group.load().is_none());
+
+        group.set(0, 100).unwrap();
+        group.set(3, 400).unwrap();
+
+        let values = group.load().unwrap();
+        assert_eq!(values, vec![100, 0, 0, 400]);
+    }
+
+    #[test]
+    fn set_out_of_bounds() {
+        let group = SparseCounterGroup::new(4);
+        assert_eq!(group.set(4, 1), Err(SparseCounterGroupError::InvalidIndex));
+        assert_eq!(
+            group.set(100, 1),
+            Err(SparseCounterGroupError::InvalidIndex)
+        );
+    }
+
+    #[test]
+    fn overwrite_value() {
+        let group = SparseCounterGroup::new(2);
+        group.set(0, 10).unwrap();
+        group.set(0, 20).unwrap();
+        assert_eq!(group.load().unwrap()[0], 20);
+    }
+
+    #[test]
+    fn metadata_lifecycle() {
+        let group = SparseCounterGroup::new(4);
+
+        // no metadata before any insert
+        assert!(group.load_metadata(0).is_none());
+
+        // insert metadata
+        group.insert_metadata(0, "key".into(), "value".into());
+        let m = group.load_metadata(0).unwrap();
+        assert_eq!(m.get("key").unwrap(), "value");
+
+        // other indices have no metadata (sparse: not even present)
+        assert!(group.load_metadata(1).is_none());
+
+        // clear metadata actually removes the entry
+        group.clear_metadata(0);
+        assert!(group.load_metadata(0).is_none());
+    }
+
+    #[test]
+    fn metadata_multiple_keys() {
+        let group = SparseCounterGroup::new(2);
+        group.insert_metadata(0, "a".into(), "1".into());
+        group.insert_metadata(0, "b".into(), "2".into());
+
+        let m = group.load_metadata(0).unwrap();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.get("a").unwrap(), "1");
+        assert_eq!(m.get("b").unwrap(), "2");
+    }
+
+    #[test]
+    fn metadata_out_of_bounds_is_ignored() {
+        let group = SparseCounterGroup::new(2);
+        // should not panic
+        group.insert_metadata(10, "key".into(), "value".into());
+        assert!(group.load_metadata(10).is_none());
+    }
+
+    #[test]
+    fn clear_metadata_before_init_is_noop() {
+        let group = SparseCounterGroup::new(4);
+        // should not panic when metadata OnceLock hasn't been initialized
+        group.clear_metadata(0);
+    }
+
+    #[test]
+    fn clear_metadata_fully_removes_entry() {
+        let group = SparseCounterGroup::new(8);
+        group.insert_metadata(3, "pid".into(), "42".into());
+        group.insert_metadata(3, "comm".into(), "nginx".into());
+
+        assert!(group.load_metadata(3).is_some());
+
+        group.clear_metadata(3);
+
+        // after clear, the entry should be completely gone (not just empty)
+        assert!(group.load_metadata(3).is_none());
+    }
+
+    #[test]
+    fn metadata_reuse_after_clear() {
+        let group = SparseCounterGroup::new(8);
+
+        // simulate task lifecycle: create, exit, new task reuses PID
+        group.insert_metadata(5, "comm".into(), "old_task".into());
+        group.clear_metadata(5);
+        group.insert_metadata(5, "comm".into(), "new_task".into());
+
+        let m = group.load_metadata(5).unwrap();
+        assert_eq!(m.get("comm").unwrap(), "new_task");
+        assert_eq!(m.len(), 1); // only the new metadata, no leftovers
+    }
+
+    #[test]
+    fn len() {
+        let group = SparseCounterGroup::new(128);
+        assert_eq!(group.len(), 128);
+    }
+}

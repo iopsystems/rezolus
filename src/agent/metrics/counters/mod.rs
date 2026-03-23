@@ -97,3 +97,90 @@ impl MetricGroup for CounterGroup {
         self.entries
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_and_load() {
+        let group = CounterGroup::new(4);
+        assert!(group.load().is_none());
+
+        group.set(0, 100).unwrap();
+        group.set(3, 400).unwrap();
+
+        let values = group.load().unwrap();
+        assert_eq!(values, vec![100, 0, 0, 400]);
+    }
+
+    #[test]
+    fn set_out_of_bounds() {
+        let group = CounterGroup::new(4);
+        assert_eq!(group.set(4, 1), Err(CounterGroupError::InvalidIndex));
+        assert_eq!(group.set(100, 1), Err(CounterGroupError::InvalidIndex));
+    }
+
+    #[test]
+    fn overwrite_value() {
+        let group = CounterGroup::new(2);
+        group.set(0, 10).unwrap();
+        group.set(0, 20).unwrap();
+        assert_eq!(group.load().unwrap()[0], 20);
+    }
+
+    #[test]
+    fn metadata_lifecycle() {
+        let group = CounterGroup::new(4);
+
+        // no metadata before any insert
+        assert!(group.load_metadata(0).is_none());
+
+        // insert metadata
+        group.insert_metadata(0, "key".into(), "value".into());
+        let m = group.load_metadata(0).unwrap();
+        assert_eq!(m.get("key").unwrap(), "value");
+
+        // other indices are empty
+        let m = group.load_metadata(1).unwrap();
+        assert!(m.is_empty());
+
+        // clear metadata
+        group.clear_metadata(0);
+        let m = group.load_metadata(0).unwrap();
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn metadata_multiple_keys() {
+        let group = CounterGroup::new(2);
+        group.insert_metadata(0, "a".into(), "1".into());
+        group.insert_metadata(0, "b".into(), "2".into());
+
+        let m = group.load_metadata(0).unwrap();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.get("a").unwrap(), "1");
+        assert_eq!(m.get("b").unwrap(), "2");
+    }
+
+    #[test]
+    fn metadata_out_of_bounds_is_ignored() {
+        let group = CounterGroup::new(2);
+        // should not panic
+        group.insert_metadata(10, "key".into(), "value".into());
+        assert!(group.load_metadata(10).is_none());
+    }
+
+    #[test]
+    fn clear_metadata_before_init_is_noop() {
+        let group = CounterGroup::new(4);
+        // should not panic when metadata OnceLock hasn't been initialized
+        group.clear_metadata(0);
+    }
+
+    #[test]
+    fn len() {
+        let group = CounterGroup::new(128);
+        assert_eq!(group.len(), 128);
+    }
+}
