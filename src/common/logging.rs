@@ -1,12 +1,13 @@
 use serde::Deserialize;
 use tracing_appender::non_blocking::WorkerGuard;
 
-#[derive(Copy, Clone, Debug, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[serde(deny_unknown_fields)]
 pub enum Level {
     Error,
     Warn,
+    #[default]
     Info,
     Debug,
     Trace,
@@ -24,24 +25,10 @@ impl Level {
     }
 }
 
-impl Default for Level {
-    fn default() -> Self {
-        Level::Info
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 pub struct LogConfig {
     #[serde(default)]
     level: Level,
-}
-
-impl Default for LogConfig {
-    fn default() -> Self {
-        Self {
-            level: Level::default(),
-        }
-    }
 }
 
 impl LogConfig {
