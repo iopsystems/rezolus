@@ -8,6 +8,40 @@ use thiserror::Error;
 
 type OnceLockVec<T> = OnceLock<RwLock<Vec<T>>>;
 
+/// A pointer to a memory-mapped u64 slice from a BPF map.
+///
+/// This allows reading counter values directly from the kernel's BPF map
+/// without copying into a separate userspace buffer. The backing mmap lives
+/// for the process lifetime (BPF maps are never unmapped).
+///
+/// # Safety
+/// The pointer must remain valid for the lifetime of the process. This is
+/// guaranteed because BPF map mmaps are created at sampler init and never
+/// unmapped. `MmapMut` (from memmap2) is `Send + Sync`.
+pub struct MmapSlice {
+    ptr: *const u64,
+    len: usize,
+}
+
+unsafe impl Send for MmapSlice {}
+unsafe impl Sync for MmapSlice {}
+
+impl MmapSlice {
+    /// Create a new MmapSlice from a raw pointer and length.
+    ///
+    /// # Safety
+    /// The caller must ensure that `ptr` points to a valid, aligned slice of
+    /// `len` u64 values that remains valid for the lifetime of this struct.
+    pub unsafe fn new(ptr: *const u64, len: usize) -> Self {
+        Self { ptr, len }
+    }
+
+    /// Return the mmap contents as a u64 slice.
+    pub fn as_slice(&self) -> &[u64] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
 #[derive(Error, Debug, PartialEq)]
 #[allow(dead_code)]
 pub enum CounterGroupError {
@@ -19,6 +53,7 @@ pub enum CounterGroupError {
 #[allow(dead_code)]
 pub struct CounterGroup {
     values: OnceLockVec<u64>,
+    mmap_values: OnceLock<MmapSlice>,
     metadata: OnceLockVec<HashMap<String, String>>,
     entries: usize,
 }
@@ -39,9 +74,30 @@ impl CounterGroup {
     pub const fn new(entries: usize) -> Self {
         Self {
             values: OnceLock::new(),
+            mmap_values: OnceLock::new(),
             metadata: OnceLock::new(),
             entries,
         }
+    }
+
+    /// Attach a memory-mapped BPF map as the backing store for counter values.
+    ///
+    /// When attached, `load_values()` returns a zero-copy slice from the mmap
+    /// and `PackedCounters::refresh()` becomes a no-op for values.
+    ///
+    /// # Safety
+    /// The caller must ensure that `ptr` points to a valid, aligned slice of
+    /// `len` u64 values backed by a BPF map mmap that lives for the process
+    /// lifetime.
+    pub unsafe fn attach_mmap_values(&self, ptr: *const u64, len: usize) {
+        let _ = self.mmap_values.set(MmapSlice::new(ptr, len));
+    }
+
+    /// Load counter values as a zero-copy slice from the attached BPF mmap.
+    ///
+    /// Returns `None` if no mmap is attached (use `load()` as fallback).
+    pub fn load_values(&self) -> Option<&[u64]> {
+        self.mmap_values.get().map(|m| m.as_slice())
     }
 
     /// Sets the counter at a given index to the provided value
@@ -57,7 +113,8 @@ impl CounterGroup {
         }
     }
 
-    /// Load the counter values
+    /// Load the counter values (allocates a clone). Prefer `load_values()` when
+    /// an mmap is attached for zero-copy access.
     pub fn load(&self) -> Option<Vec<u64>> {
         self.values.get().map(|v| v.read().clone())
     }
@@ -182,5 +239,30 @@ mod tests {
     fn len() {
         let group = CounterGroup::new(128);
         assert_eq!(group.len(), 128);
+    }
+
+    #[test]
+    fn load_values_without_mmap() {
+        let group = CounterGroup::new(4);
+        assert!(group.load_values().is_none());
+    }
+
+    #[test]
+    fn load_values_from_mmap() {
+        let group = CounterGroup::new(4);
+        let data: Vec<u64> = vec![10, 20, 0, 40];
+
+        unsafe {
+            group.attach_mmap_values(data.as_ptr(), data.len());
+        }
+
+        let values = group.load_values().unwrap();
+        assert_eq!(values, &[10, 20, 0, 40]);
+
+        // load() should still return None (values Vec was never initialized)
+        assert!(group.load().is_none());
+
+        // Keep data alive for the duration of the test
+        drop(data);
     }
 }

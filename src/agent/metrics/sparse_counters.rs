@@ -1,3 +1,4 @@
+use crate::agent::metrics::counters::MmapSlice;
 use crate::agent::metrics::MetricGroup;
 use metriken::Metric;
 use metriken::Value;
@@ -26,6 +27,7 @@ pub enum SparseCounterGroupError {
 #[allow(dead_code)]
 pub struct SparseCounterGroup {
     values: OnceLockVec<u64>,
+    mmap_values: OnceLock<MmapSlice>,
     metadata: OnceLock<RwLock<HashMap<usize, HashMap<String, String>>>>,
     entries: usize,
 }
@@ -46,9 +48,23 @@ impl SparseCounterGroup {
     pub const fn new(entries: usize) -> Self {
         Self {
             values: OnceLock::new(),
+            mmap_values: OnceLock::new(),
             metadata: OnceLock::new(),
             entries,
         }
+    }
+
+    /// Attach a memory-mapped BPF map as the backing store for counter values.
+    ///
+    /// # Safety
+    /// See [`MmapSlice::new`] for safety requirements.
+    pub unsafe fn attach_mmap_values(&self, ptr: *const u64, len: usize) {
+        let _ = self.mmap_values.set(MmapSlice::new(ptr, len));
+    }
+
+    /// Load counter values as a zero-copy slice from the attached BPF mmap.
+    pub fn load_values(&self) -> Option<&[u64]> {
+        self.mmap_values.get().map(|m| m.as_slice())
     }
 
     /// Sets the counter at a given index to the provided value
@@ -64,7 +80,8 @@ impl SparseCounterGroup {
         }
     }
 
-    /// Load the counter values
+    /// Load the counter values (allocates a clone). Prefer `load_values()` when
+    /// an mmap is attached for zero-copy access.
     pub fn load(&self) -> Option<Vec<u64>> {
         self.values.get().map(|v| v.read().clone())
     }
@@ -213,5 +230,29 @@ mod tests {
     fn len() {
         let group = SparseCounterGroup::new(128);
         assert_eq!(group.len(), 128);
+    }
+
+    #[test]
+    fn load_values_without_mmap() {
+        let group = SparseCounterGroup::new(4);
+        assert!(group.load_values().is_none());
+    }
+
+    #[test]
+    fn load_values_from_mmap() {
+        let group = SparseCounterGroup::new(4);
+        let data: Vec<u64> = vec![10, 20, 0, 40];
+
+        unsafe {
+            group.attach_mmap_values(data.as_ptr(), data.len());
+        }
+
+        let values = group.load_values().unwrap();
+        assert_eq!(values, &[10, 20, 0, 40]);
+
+        // load() should still return None (values Vec was never initialized)
+        assert!(group.load().is_none());
+
+        drop(data);
     }
 }
