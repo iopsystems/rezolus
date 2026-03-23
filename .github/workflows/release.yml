@@ -175,6 +175,39 @@ jobs:
             rpm -qp --qf "  VERSION: %{VERSION}\n  RELEASE: %{RELEASE}\n  ARCHIVESIZE: %{ARCHIVESIZE}\n" "$rpm"
           done
 
+      - name: sign RPM packages
+        if: ${{ secrets.GPG_SIGNING_KEY != '' }}
+        shell: bash
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+        run: |
+          # Import the GPG signing key
+          echo "$GPG_SIGNING_KEY" | base64 -d | gpg --batch --import
+
+          # Get the key ID
+          GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format long 2>/dev/null | grep '^sec' | head -1 | awk '{print $2}' | cut -d'/' -f2)
+          echo "Signing with key: $GPG_KEY_ID"
+
+          # Configure RPM macros for signing
+          cat > ~/.rpmmacros << MACROS
+          %_gpg_name ${GPG_KEY_ID}
+          %__gpg_sign_cmd %{__gpg} gpg --batch --pinentry-mode loopback --no-verbose --no-armor --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}
+          MACROS
+
+          # Sign each RPM
+          for rpm in target/generate-rpm/*.rpm; do
+            echo "Signing $(basename $rpm)..."
+            rpm --addsign "$rpm"
+          done
+
+          # Verify signatures
+          echo ""
+          echo "Verifying RPM signatures:"
+          for rpm in target/generate-rpm/*.rpm; do
+            echo "$(basename $rpm):"
+            rpm --checksig "$rpm"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           path: target/generate-rpm/*
@@ -333,6 +366,30 @@ jobs:
             arch="$(echo "$directory" | cut -d _ -f 4)"
             mv "$artifact" "target/release-artifacts/${distro}_${version}_${arch}_${name}"
           done
+
+      - name: generate checksums and sign release artifacts
+        env:
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+        run: |
+          cd target/release-artifacts
+
+          # Generate SHA256 checksums for all artifacts
+          sha256sum * > SHA256SUMS
+
+          echo "Generated checksums:"
+          cat SHA256SUMS
+
+          # Sign the checksums file if GPG key is available
+          if [ -n "$GPG_SIGNING_KEY" ]; then
+            echo "$GPG_SIGNING_KEY" | base64 -d | gpg --batch --import
+
+            gpg --batch --pinentry-mode loopback \
+              --detach-sign --armor SHA256SUMS
+
+            echo "Checksums signed: SHA256SUMS.asc"
+          else
+            echo "GPG key not configured, skipping signature"
+          fi
 
       - name: extract changelog
         id: changelog

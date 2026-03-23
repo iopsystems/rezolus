@@ -284,8 +284,10 @@ case "$PACKAGE_MANAGER" in
 name=Rezolus Repository
 baseurl=https://us-yum.pkg.dev/projects/rezolus/${REPO_NAME}
 enabled=1
+repo_gpgcheck=1
 gpgcheck=1
 gpgkey=https://us-yum.pkg.dev/doc/repo-signing-key.gpg
+       https://keys.rezolus.com
 EOF
 
         echo "Installing Rezolus..."
