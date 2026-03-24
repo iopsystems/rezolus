@@ -270,12 +270,19 @@ pub fn run(config: Config) {
 
                 let _ = writer.rewind();
 
-                if let Err(e) = MsgpackToParquet::with_options(ParquetOptions::new())
+                let mut converter = MsgpackToParquet::with_options(ParquetOptions::new())
                     .metadata(
                         "sampling_interval_ms".to_string(),
                         config.interval.as_millis().to_string(),
-                    )
-                    .convert_file_handle(writer, destination.unwrap())
+                    );
+
+                if let Some(info) = systeminfo::summary() {
+                    if let Ok(json) = serde_json::to_string(&info) {
+                        converter = converter.metadata("systeminfo".to_string(), json);
+                    }
+                }
+
+                if let Err(e) = converter.convert_file_handle(writer, destination.unwrap())
                 {
                     eprintln!("error saving parquet file: {e}");
                 }
