@@ -48,9 +48,8 @@ fn collect_cpu_info() -> (
     let mut package_set = HashSet::new();
 
     for id in &cpu_ids {
-        if let Ok(core_id) = read_usize(format!(
-            "/sys/devices/system/cpu/cpu{id}/topology/core_id"
-        )) {
+        if let Ok(core_id) = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/core_id"))
+        {
             let pkg_id = read_usize(format!(
                 "/sys/devices/system/cpu/cpu{id}/topology/physical_package_id"
             ))
@@ -230,14 +229,12 @@ fn collect_nvidia_gpus() -> Vec<GpuSummary> {
         .ok()
         .and_then(|v| {
             // First line typically: "NVRM version: NVIDIA UNIX ... <version> ..."
-            v.lines()
-                .next()
-                .and_then(|line| {
-                    line.split_whitespace()
-                        .position(|w| w.starts_with("5") || w.starts_with("4") || w.starts_with("3"))
-                        .and_then(|pos| line.split_whitespace().nth(pos))
-                        .map(|s| s.to_string())
-                })
+            v.lines().next().and_then(|line| {
+                line.split_whitespace()
+                    .position(|w| w.starts_with("5") || w.starts_with("4") || w.starts_with("3"))
+                    .and_then(|pos| line.split_whitespace().nth(pos))
+                    .map(|s| s.to_string())
+            })
         });
 
     if let Ok(entries) = fs::read_dir(gpu_dir) {

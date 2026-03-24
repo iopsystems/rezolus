@@ -167,11 +167,7 @@ fn format_cache_size(bytes: u64) -> String {
 }
 
 fn sysctl_string(name: &str) -> Option<String> {
-    let output = Command::new("sysctl")
-        .arg("-n")
-        .arg(name)
-        .output()
-        .ok()?;
+    let output = Command::new("sysctl").arg("-n").arg(name).output().ok()?;
 
     if !output.status.success() {
         return None;

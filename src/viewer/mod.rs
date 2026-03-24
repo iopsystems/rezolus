@@ -655,11 +655,11 @@ async fn save_parquet(
         }
 
         converter
-        .convert_file_handle(reader, Cursor::new(&mut output))
-        .map(|rows| {
-            info!("saved parquet with {rows} rows");
-            output
-        })
+            .convert_file_handle(reader, Cursor::new(&mut output))
+            .map(|rows| {
+                info!("saved parquet with {rows} rows");
+                output
+            })
     })
     .await;
 

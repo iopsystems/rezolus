@@ -415,11 +415,10 @@ fn perform_dump_to_file(
         return DumpToFileResponse::error("failed to rewind packed file".to_string());
     }
 
-    let mut converter = MsgpackToParquet::with_options(ParquetOptions::new())
-        .metadata(
-            "sampling_interval_ms".to_string(),
-            config.general().interval().as_millis().to_string(),
-        );
+    let mut converter = MsgpackToParquet::with_options(ParquetOptions::new()).metadata(
+        "sampling_interval_ms".to_string(),
+        config.general().interval().as_millis().to_string(),
+    );
 
     if let Some(info) = systeminfo::summary() {
         if let Ok(json) = serde_json::to_string(&info) {
@@ -427,8 +426,7 @@ fn perform_dump_to_file(
         }
     }
 
-    if let Err(e) = converter.convert_file_handle(packed, &mut *destination)
-    {
+    if let Err(e) = converter.convert_file_handle(packed, &mut *destination) {
         return DumpToFileResponse::error(format!("error saving parquet file: {}", e));
     }
 
