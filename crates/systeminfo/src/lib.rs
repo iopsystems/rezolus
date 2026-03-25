@@ -12,7 +12,9 @@ pub mod hwinfo;
 pub mod summary;
 
 pub use crate::error::{Error, Result};
-pub use crate::summary::{summary, CacheSummary, GpuSummary, SystemSummary};
+pub use crate::summary::{
+    summary, CacheSummary, CpuTopologyEntry, GpuSummary, NicSummary, SystemSummary,
+};
 
 /// Read the [`SystemInfo`] for the current system.
 pub fn systeminfo() -> Result<SystemInfo> {

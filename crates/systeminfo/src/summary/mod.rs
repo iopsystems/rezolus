@@ -43,11 +43,34 @@ pub struct SystemSummary {
     /// Number of NUMA nodes (Linux only)
     pub numa_nodes: Option<usize>,
 
+    // CPU topology — per-CPU placement in the physical hierarchy
+    pub cpu_topology: Vec<CpuTopologyEntry>,
+
     // Cache topology (deduplicated)
     pub caches: Vec<CacheSummary>,
 
+    // Network interfaces
+    pub nics: Vec<NicSummary>,
+
     // GPUs
     pub gpus: Vec<GpuSummary>,
+}
+
+/// Placement of a single logical CPU in the physical hierarchy.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CpuTopologyEntry {
+    /// Logical CPU ID (matches metric labels like `cpu_usage{id="42"}`)
+    pub cpu: usize,
+    /// Physical core ID
+    pub core: usize,
+    /// Die ID within the package
+    pub die: usize,
+    /// Package / socket ID
+    pub package: usize,
+    /// NUMA node this CPU belongs to
+    pub numa_node: Option<usize>,
 }
 
 /// Summary of a single cache level, deduplicated across CPUs.
@@ -61,6 +84,24 @@ pub struct CacheSummary {
     pub size: Option<String>,
     /// Number of instances of this cache
     pub instances: usize,
+    /// Which logical CPUs share each instance of this cache.
+    /// Each inner Vec is one cache instance's set of CPU IDs.
+    pub shared_cpus: Vec<Vec<usize>>,
+}
+
+/// Summary of a network interface.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NicSummary {
+    /// Interface name (e.g., "eth0", "en0")
+    pub name: String,
+    /// Link speed in Mbps
+    pub speed: Option<usize>,
+    /// NUMA node this NIC is attached to
+    pub numa_node: Option<usize>,
+    /// NIC driver name
+    pub driver: Option<String>,
 }
 
 /// Summary of a GPU device.
@@ -76,6 +117,8 @@ pub struct GpuSummary {
     pub memory_bytes: Option<u64>,
     /// Driver version string
     pub driver: Option<String>,
+    /// NUMA node this GPU is attached to
+    pub numa_node: Option<usize>,
 }
 
 /// Collect a cross-platform system summary.
