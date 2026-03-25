@@ -167,16 +167,17 @@ pub fn run(config: Config) {
         Source::Live(url) => {
             info!("Connecting to live agent at {url}...");
 
-            // Fetch agent version from the root endpoint
-            let (source, version) = rt.block_on(async {
+            // Fetch agent version and systeminfo from the agent
+            let (source, version, agent_systeminfo) = rt.block_on(async {
                 let client = Client::builder()
                     .http1_only()
                     .build()
                     .expect("failed to create http client");
-                match client.get(url.clone()).send().await {
+
+                // Fetch version from root endpoint
+                let (source, version) = match client.get(url.clone()).send().await {
                     Ok(response) => match response.text().await {
                         Ok(body) => {
-                            // Parse "Rezolus 5.4.0 Agent\n..."
                             let first_line = body.lines().next().unwrap_or("");
                             let parts: Vec<&str> = first_line.split_whitespace().collect();
                             match parts.as_slice() {
@@ -190,7 +191,17 @@ pub fn run(config: Config) {
                         eprintln!("failed to connect to agent at {url}: {e}");
                         std::process::exit(1);
                     }
-                }
+                };
+
+                // Fetch systeminfo from agent
+                let mut info_url = url.clone();
+                info_url.set_path("/api/v1/systeminfo");
+                let sysinfo = match client.get(info_url).send().await {
+                    Ok(response) if response.status().is_success() => response.text().await.ok(),
+                    _ => None,
+                };
+
+                (source, version, sysinfo)
             });
 
             info!("Connected to {source} {version} at {url}");
@@ -203,8 +214,11 @@ pub fn run(config: Config) {
             tsdb.set_filename(url.to_string());
             let mut state = dashboard::generate(tsdb, None);
             state.live = true;
-            state.systeminfo =
-                systeminfo::summary().and_then(|info| serde_json::to_string(&info).ok());
+
+            // Use agent's systeminfo; fall back to local system
+            state.systeminfo = agent_systeminfo.or_else(|| {
+                systeminfo::summary().and_then(|info| serde_json::to_string(&info).ok())
+            });
 
             // Spawn the ingest loop
             let ingest_tsdb = state.tsdb.clone();
@@ -672,6 +686,9 @@ async fn save_parquet(
             .unwrap();
     }
 
+    // Grab the stored systeminfo (from agent or local) for parquet metadata
+    let sysinfo_json = state.systeminfo.clone();
+
     // Run the synchronous parquet conversion off the async runtime
     let result = tokio::task::spawn_blocking(move || {
         let total_size: usize = snapshot_data.iter().map(|s| s.len()).sum();
@@ -688,10 +705,8 @@ async fn save_parquet(
         )
         .metadata("sampling_interval_ms".to_string(), "1000".to_string());
 
-        if let Some(info) = systeminfo::summary() {
-            if let Ok(json) = serde_json::to_string(&info) {
-                converter = converter.metadata("systeminfo".to_string(), json);
-            }
+        if let Some(json) = sysinfo_json {
+            converter = converter.metadata("systeminfo".to_string(), json);
         }
 
         converter

@@ -39,6 +39,7 @@ fn app(state: Arc<Mutex<SnapshotBuilder>>) -> Router {
         .route("/", get(root))
         .route("/metrics/binary", get(msgpack))
         .route("/metrics/json", get(json))
+        .route("/api/v1/systeminfo", get(system_info))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
@@ -68,4 +69,20 @@ async fn json(State(state): State<Arc<Mutex<SnapshotBuilder>>>) -> String {
 async fn root() -> String {
     let version = env!("CARGO_PKG_VERSION");
     format!("Rezolus {version} Agent\nFor information, see: https://rezolus.com\n")
+}
+
+async fn system_info() -> axum::response::Response {
+    match systeminfo::summary() {
+        Some(info) => {
+            let json = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
+            axum::response::Response::builder()
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(json))
+                .unwrap()
+        }
+        None => axum::response::Response::builder()
+            .status(axum::http::StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    }
 }
