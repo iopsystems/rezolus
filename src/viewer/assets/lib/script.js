@@ -797,15 +797,32 @@ const SectionContent = {
             ]);
         }
 
-        // Special handling for cgroups with selector
+        // Special handling for cgroups with selector and two-column layout
         if (attrs.section.route === '/cgroups') {
+            const leftGroups = attrs.groups.filter(
+                (g) => g.metadata?.side === 'left',
+            );
+            const rightGroups = attrs.groups.filter(
+                (g) => g.metadata?.side === 'right',
+            );
+
             return m('div#section-content.cgroups-section', [
                 m('h1.section-title', attrs.section.name),
                 m(CgroupSelector, { groups: attrs.groups }),
-                m(
-                    'div#groups',
-                    attrs.groups.map((group) => m(Group, { ...group, sectionRoute })),
-                ),
+                m('div.cgroup-columns', [
+                    m(
+                        'div.cgroup-column.cgroup-column-left',
+                        leftGroups.map((group) =>
+                            m(Group, { ...group, sectionRoute }),
+                        ),
+                    ),
+                    m(
+                        'div.cgroup-column.cgroup-column-right',
+                        rightGroups.map((group) =>
+                            m(Group, { ...group, sectionRoute }),
+                        ),
+                    ),
+                ]),
             ]);
         }
 
