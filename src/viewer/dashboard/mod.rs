@@ -4,6 +4,7 @@ mod blockio;
 mod cgroups;
 mod cpu;
 mod gpu;
+mod hardware;
 mod memory;
 mod network;
 mod overview;
@@ -17,6 +18,7 @@ type Generator = fn(&Tsdb, Vec<Section>) -> View;
 
 static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Overview", "/overview", overview::generate),
+    ("Hardware", "/hardware", hardware::generate),
     ("Query Explorer", "/query", query_explorer::generate),
     ("CPU", "/cpu", cpu::generate),
     ("GPU", "/gpu", gpu::generate),
@@ -76,6 +78,7 @@ mod tests {
                 "cgroups.json",
                 "cpu.json",
                 "gpu.json",
+                "hardware.json",
                 "memory.json",
                 "network.json",
                 "overview.json",

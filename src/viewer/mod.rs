@@ -146,8 +146,23 @@ pub fn run(config: Config) {
 
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
+            // Extract systeminfo from parquet file-level metadata
+            let systeminfo = {
+                use parquet::file::reader::FileReader;
+                use parquet::file::serialized_reader::SerializedFileReader;
+                std::fs::File::open(path).ok().and_then(|f| {
+                    let reader = SerializedFileReader::new(f).ok()?;
+                    let kv = reader.metadata().file_metadata().key_value_metadata()?;
+                    kv.iter()
+                        .find(|kv| kv.key == "systeminfo")
+                        .and_then(|kv| kv.value.clone())
+                })
+            };
+
             info!("Generating dashboards...");
-            dashboard::generate(data, filesize)
+            let mut state = dashboard::generate(data, filesize);
+            state.systeminfo = systeminfo;
+            state
         }
         Source::Live(url) => {
             info!("Connecting to live agent at {url}...");
@@ -188,6 +203,8 @@ pub fn run(config: Config) {
             tsdb.set_filename(url.to_string());
             let mut state = dashboard::generate(tsdb, None);
             state.live = true;
+            state.systeminfo =
+                systeminfo::summary().and_then(|info| serde_json::to_string(&info).ok());
 
             // Spawn the ingest loop
             let ingest_tsdb = state.tsdb.clone();
@@ -351,6 +368,8 @@ struct AppState {
     /// Raw msgpack snapshot bytes for parquet export (live mode only).
     snapshots: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
     live: bool,
+    /// Serialized SystemSummary JSON from parquet metadata or live system.
+    systeminfo: Option<String>,
 }
 
 impl AppState {
@@ -360,6 +379,7 @@ impl AppState {
             tsdb: Arc::new(parking_lot::RwLock::new(tsdb)),
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: false,
+            systeminfo: None,
         }
     }
 }
@@ -378,6 +398,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/mode", get(mode))
         .route("/reset", axum::routing::post(reset_tsdb))
         .route("/save", get(save_parquet))
+        .route("/systeminfo", get(systeminfo_handler))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -446,6 +467,23 @@ async fn mode(
     axum::response::Json(serde_json::json!({
         "live": state.live,
     }))
+}
+
+/// Returns the system hardware summary from parquet metadata or the live system.
+async fn systeminfo_handler(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::response::Response {
+    match &state.systeminfo {
+        Some(json) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(json.clone()))
+            .unwrap(),
+        None => axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    }
 }
 
 // PromQL API handlers that delegate to the swappable QueryEngine
