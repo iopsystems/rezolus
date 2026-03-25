@@ -1,4 +1,4 @@
-use super::{CacheSummary, GpuSummary, SystemSummary};
+use super::{CacheSummary, CpuTopologyEntry, GpuSummary, NicSummary, SystemSummary};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -9,9 +9,11 @@ pub fn collect() -> SystemSummary {
     let hostname = read_string("/proc/sys/kernel/hostname").ok();
 
     let (cpu_model, cpu_vendor, cpus, cores, packages, smt) = collect_cpu_info();
+    let cpu_topology = collect_cpu_topology();
     let memory_total_bytes = collect_memory();
     let numa_nodes = collect_numa_nodes();
     let caches = collect_caches();
+    let nics = collect_nics();
     let gpus = collect_gpus();
 
     SystemSummary {
@@ -27,7 +29,9 @@ pub fn collect() -> SystemSummary {
         smt,
         memory_total_bytes,
         numa_nodes,
+        cpu_topology,
         caches,
+        nics,
         gpus,
     }
 }
@@ -135,6 +139,60 @@ fn collect_memory() -> Option<u64> {
     None
 }
 
+fn collect_cpu_topology() -> Vec<CpuTopologyEntry> {
+    let cpu_ids = match read_list("/sys/devices/system/cpu/online") {
+        Ok(ids) => ids,
+        Err(_) => return Vec::new(),
+    };
+
+    // Build a map of CPU ID -> NUMA node
+    let numa_map = build_numa_map();
+
+    let mut entries = Vec::with_capacity(cpu_ids.len());
+
+    for id in cpu_ids {
+        let core =
+            read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/core_id")).unwrap_or(0);
+        let package = read_usize(format!(
+            "/sys/devices/system/cpu/cpu{id}/topology/physical_package_id"
+        ))
+        .unwrap_or(0);
+        let die = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/die_id"))
+            .unwrap_or(package);
+        let numa_node = numa_map.get(&id).copied();
+
+        entries.push(CpuTopologyEntry {
+            cpu: id,
+            core,
+            die,
+            package,
+            numa_node,
+        });
+    }
+
+    entries
+}
+
+/// Build a map from CPU ID to NUMA node by reading sysfs node topology.
+fn build_numa_map() -> std::collections::HashMap<usize, usize> {
+    let mut map = std::collections::HashMap::new();
+
+    let node_ids = match read_list("/sys/devices/system/node/online") {
+        Ok(ids) => ids,
+        Err(_) => return map,
+    };
+
+    for node_id in node_ids {
+        if let Ok(cpus) = read_list(format!("/sys/devices/system/node/node{node_id}/cpulist")) {
+            for cpu in cpus {
+                map.insert(cpu, node_id);
+            }
+        }
+    }
+
+    map
+}
+
 fn collect_numa_nodes() -> Option<usize> {
     read_list("/sys/devices/system/node/online")
         .ok()
@@ -155,6 +213,7 @@ fn collect_caches() -> Vec<CacheSummary> {
         let mut size: Option<String> = None;
         let mut cache_type: Option<String> = None;
         let mut seen_leaders = HashSet::new();
+        let mut shared_cpus = Vec::new();
 
         for cpu_id in &cpu_ids {
             let base = format!("/sys/devices/system/cpu/cpu{cpu_id}/cache/index{index}");
@@ -171,6 +230,7 @@ fn collect_caches() -> Vec<CacheSummary> {
             }
 
             count += 1;
+            shared_cpus.push(shared);
 
             if size.is_none() {
                 size = read_string(format!("{base}/size")).ok();
@@ -195,6 +255,7 @@ fn collect_caches() -> Vec<CacheSummary> {
             level,
             size,
             instances: count,
+            shared_cpus,
         });
     }
 
@@ -210,6 +271,53 @@ fn index_to_level(index: usize) -> usize {
         "/sys/devices/system/cpu/cpu0/cache/index{index}/level"
     ))
     .unwrap_or(index + 1)
+}
+
+fn collect_nics() -> Vec<NicSummary> {
+    let net_dir = Path::new("/sys/class/net");
+    if !net_dir.exists() {
+        return Vec::new();
+    }
+
+    let mut nics = Vec::new();
+
+    let entries = match fs::read_dir(net_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip loopback and non-physical interfaces
+        if name == "lo" {
+            continue;
+        }
+
+        // Only include interfaces that are "up"
+        let operstate = match read_string(format!("/sys/class/net/{name}/operstate")) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if operstate != "up" {
+            continue;
+        }
+
+        let speed = read_usize(format!("/sys/class/net/{name}/speed")).ok();
+        let numa_node = read_usize(format!("/sys/class/net/{name}/device/numa_node")).ok();
+        let driver = fs::read_link(format!("/sys/class/net/{name}/device/driver/module"))
+            .ok()
+            .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()));
+
+        nics.push(NicSummary {
+            name,
+            speed,
+            numa_node,
+            driver,
+        });
+    }
+
+    nics
 }
 
 fn collect_gpus() -> Vec<GpuSummary> {
@@ -249,11 +357,19 @@ fn collect_nvidia_gpus() -> Vec<GpuSummary> {
                     }
                 }
 
+                // Try to get NUMA node from the PCI device sysfs path.
+                // /proc/driver/nvidia/gpus/<pci_addr>/information
+                // -> /sys/bus/pci/devices/<pci_addr>/numa_node
+                let pci_addr = entry.file_name().to_string_lossy().to_string();
+                let numa_node =
+                    read_usize(format!("/sys/bus/pci/devices/{pci_addr}/numa_node")).ok();
+
                 gpus.push(GpuSummary {
                     name,
                     vendor: "nvidia".to_string(),
-                    memory_bytes: None, // Not available from procfs
+                    memory_bytes: None,
                     driver: driver.clone(),
+                    numa_node,
                 });
             }
         }
