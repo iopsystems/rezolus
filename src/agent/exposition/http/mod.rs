@@ -39,7 +39,7 @@ fn app(state: Arc<Mutex<SnapshotBuilder>>) -> Router {
         .route("/", get(root))
         .route("/metrics/binary", get(msgpack))
         .route("/metrics/json", get(json))
-        .route("/api/v1/systeminfo", get(system_info))
+        .route("/systeminfo", get(system_info))
         .with_state(state)
         .layer(
             ServiceBuilder::new()

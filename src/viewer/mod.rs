@@ -195,7 +195,7 @@ pub fn run(config: Config) {
 
                 // Fetch systeminfo from agent
                 let mut info_url = url.clone();
-                info_url.set_path("/api/v1/systeminfo");
+                info_url.set_path("/systeminfo");
                 let sysinfo = match client.get(info_url).send().await {
                     Ok(response) if response.status().is_success() => response.text().await.ok(),
                     _ => None,
@@ -215,10 +215,7 @@ pub fn run(config: Config) {
             let mut state = dashboard::generate(tsdb, None);
             state.live = true;
 
-            // Use agent's systeminfo; fall back to local system
-            state.systeminfo = agent_systeminfo.or_else(|| {
-                systeminfo::summary().and_then(|info| serde_json::to_string(&info).ok())
-            });
+            state.systeminfo = agent_systeminfo;
 
             // Spawn the ingest loop
             let ingest_tsdb = state.tsdb.clone();

@@ -24,6 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct AppState {
     pub shared: Arc<SharedState>,
     pub dump_tx: mpsc::Sender<DumpToFileRequest>,
+    pub agent_systeminfo: Option<String>,
 }
 
 /// Query parameters for dump endpoints
@@ -119,8 +120,13 @@ pub async fn serve(
     listen: SocketAddr,
     shared: Arc<SharedState>,
     dump_tx: mpsc::Sender<DumpToFileRequest>,
+    agent_systeminfo: Option<String>,
 ) {
-    let state = Arc::new(AppState { shared, dump_tx });
+    let state = Arc::new(AppState {
+        shared,
+        dump_tx,
+        agent_systeminfo,
+    });
 
     let app = Router::new()
         .route("/", get(root))
@@ -200,7 +206,7 @@ async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParam
             .into_response();
     }
 
-    match convert_to_parquet(&data, shared.interval) {
+    match convert_to_parquet(&data, shared.interval, &state.agent_systeminfo) {
         Ok(parquet_data) => Response::builder()
             .header("Content-Type", "application/octet-stream")
             .header(
@@ -419,7 +425,11 @@ fn get_timestamp_bounds(shared: &SharedState) -> Result<(Option<u64>, Option<u64
 }
 
 /// Convert msgpack data to parquet format
-fn convert_to_parquet(data: &[u8], interval: Duration) -> Result<Vec<u8>, String> {
+fn convert_to_parquet(
+    data: &[u8],
+    interval: Duration,
+    agent_systeminfo: &Option<String>,
+) -> Result<Vec<u8>, String> {
     // Write msgpack data to a temp file
     let mut input =
         tempfile::tempfile().map_err(|e| format!("failed to create temp file: {}", e))?;
@@ -441,10 +451,8 @@ fn convert_to_parquet(data: &[u8], interval: Duration) -> Result<Vec<u8>, String
         interval.as_millis().to_string(),
     );
 
-    if let Some(info) = systeminfo::summary() {
-        if let Ok(json) = serde_json::to_string(&info) {
-            converter = converter.metadata("systeminfo".to_string(), json);
-        }
+    if let Some(json) = agent_systeminfo {
+        converter = converter.metadata("systeminfo".to_string(), json.clone());
     }
 
     converter

@@ -79,6 +79,24 @@ pub fn run(config: Config) {
         }
     };
 
+    // Fetch systeminfo from the agent
+    let agent_systeminfo: Option<String> = {
+        let mut info_url = url.clone();
+        info_url.set_path("/systeminfo");
+        blocking_client
+            .get(info_url)
+            .send()
+            .ok()
+            .filter(|r| r.status().is_success())
+            .and_then(|r| r.text().ok())
+    };
+
+    if agent_systeminfo.is_some() {
+        debug!("fetched systeminfo from agent");
+    } else {
+        debug!("agent systeminfo not available");
+    }
+
     // our async http client
     let async_client = match reqwest::Client::builder().http1_only().build() {
         Ok(c) => c,
@@ -186,8 +204,9 @@ pub fn run(config: Config) {
     // Optionally spawn HTTP server
     if let Some(listen_addr) = config.general().listen() {
         let shared = shared_state.clone();
+        let sysinfo = agent_systeminfo.clone();
         rt.spawn(async move {
-            http::serve(listen_addr, shared, dump_tx).await;
+            http::serve(listen_addr, shared, dump_tx, sysinfo).await;
         });
     }
 
@@ -215,6 +234,7 @@ pub fn run(config: Config) {
                             &shared,
                             &config,
                             &request.time_range,
+                            &agent_systeminfo,
                         );
                         let _ = request.response_tx.send(response);
                     }
@@ -276,6 +296,7 @@ pub fn run(config: Config) {
                     &shared,
                     &config,
                     &TimeRange::default(), // no time filter
+                    &agent_systeminfo,
                 );
 
                 if let Some(error) = response.error {
@@ -305,6 +326,7 @@ fn perform_dump_to_file(
     shared: &SharedState,
     config: &Config,
     time_range: &TimeRange,
+    agent_systeminfo: &Option<String>,
 ) -> DumpToFileResponse {
     use metriken_exposition::{MsgpackToParquet, ParquetOptions, Snapshot};
     use std::time::UNIX_EPOCH;
@@ -420,10 +442,8 @@ fn perform_dump_to_file(
         config.general().interval().as_millis().to_string(),
     );
 
-    if let Some(info) = systeminfo::summary() {
-        if let Ok(json) = serde_json::to_string(&info) {
-            converter = converter.metadata("systeminfo".to_string(), json);
-        }
+    if let Some(json) = agent_systeminfo {
+        converter = converter.metadata("systeminfo".to_string(), json.clone());
     }
 
     if let Err(e) = converter.convert_file_handle(packed, &mut *destination) {
