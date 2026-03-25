@@ -3073,6 +3073,7 @@ dependencies = [
  "serde_json",
  "syscall-numbers",
  "sysconf",
+ "systeminfo",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3442,6 +3443,16 @@ dependencies = [
  "enum-as-inner",
  "libc",
  "thiserror 1.0.69",
+ "walkdir",
+]
+
+[[package]]
+name = "systeminfo"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
  "walkdir",
 ]
 

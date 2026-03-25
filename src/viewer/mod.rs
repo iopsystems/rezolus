@@ -643,15 +643,23 @@ async fn save_parquet(
         let reader = Cursor::new(raw);
         let mut output = Vec::new();
 
-        metriken_exposition::MsgpackToParquet::with_options(
+        let mut converter = metriken_exposition::MsgpackToParquet::with_options(
             metriken_exposition::ParquetOptions::new(),
         )
-        .metadata("sampling_interval_ms".to_string(), "1000".to_string())
-        .convert_file_handle(reader, Cursor::new(&mut output))
-        .map(|rows| {
-            info!("saved parquet with {rows} rows");
-            output
-        })
+        .metadata("sampling_interval_ms".to_string(), "1000".to_string());
+
+        if let Some(info) = systeminfo::summary() {
+            if let Ok(json) = serde_json::to_string(&info) {
+                converter = converter.metadata("systeminfo".to_string(), json);
+            }
+        }
+
+        converter
+            .convert_file_handle(reader, Cursor::new(&mut output))
+            .map(|rows| {
+                info!("saved parquet with {rows} rows");
+                output
+            })
     })
     .await;
 

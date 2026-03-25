@@ -436,11 +436,18 @@ fn convert_to_parquet(data: &[u8], interval: Duration) -> Result<Vec<u8>, String
         tempfile::tempfile().map_err(|e| format!("failed to create output temp file: {}", e))?;
 
     // Convert
-    MsgpackToParquet::with_options(ParquetOptions::new())
-        .metadata(
-            "sampling_interval_ms".to_string(),
-            interval.as_millis().to_string(),
-        )
+    let mut converter = MsgpackToParquet::with_options(ParquetOptions::new()).metadata(
+        "sampling_interval_ms".to_string(),
+        interval.as_millis().to_string(),
+    );
+
+    if let Some(info) = systeminfo::summary() {
+        if let Ok(json) = serde_json::to_string(&info) {
+            converter = converter.metadata("systeminfo".to_string(), json);
+        }
+    }
+
+    converter
         .convert_file_handle(input, &output)
         .map_err(|e| format!("failed to convert to parquet: {}", e))?;
 
