@@ -892,6 +892,21 @@ main {
     width: 100%;
 }
 
+.cgroup-columns {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.cgroup-column {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Single-column charts within each cgroup column since each column is half-width */
+.cgroup-column .group .charts {
+    grid-template-columns: 1fr;
+}
+
 .cgroup-selector {
     background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
     border: 1px solid var(--border-subtle);
