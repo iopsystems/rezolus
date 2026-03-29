@@ -85,6 +85,54 @@ export const SCATTER_PALETTE = [
 
 // ── Heatmap colormaps ────────────────────────────────────────────────
 
+/**
+ * Interpolate through an RGB ramp.
+ * @param {Array<Array<number>>} ramp - array of [r,g,b] stops
+ * @param {number} t - 0..1
+ * @returns {string} `rgb(r,g,b)`
+ */
+function interpolateRamp(ramp, t) {
+    const idx = t * (ramp.length - 1);
+    const i = Math.floor(idx);
+    const f = idx - i;
+
+    if (i >= ramp.length - 1) {
+        return `rgb(${ramp[ramp.length - 1].join(',')})`;
+    }
+
+    const c0 = ramp[i];
+    const c1 = ramp[i + 1];
+    const r = Math.round(c0[0] + f * (c1[0] - c0[0]));
+    const g = Math.round(c0[1] + f * (c1[1] - c0[1]));
+    const b = Math.round(c0[2] + f * (c1[2] - c0[2]));
+
+    return `rgb(${r},${g},${b})`;
+}
+
+/** Viridis hex ramp for echarts visualMap (darkest stops removed for visibility on dark bg) */
+export const VIRIDIS_COLORS = [
+    '#414487', '#2a788e', '#22a884',
+    '#7ad151', '#fde725',
+];
+
+/** Viridis RGB ramp for custom renderItem (darkest stops removed) */
+const VIRIDIS_RGB = [
+    [65, 68, 135],
+    [42, 120, 142],
+    [34, 168, 132],
+    [122, 209, 81],
+    [253, 231, 37],
+];
+
+/**
+ * Viridis colormap — interpolates through the RGB ramp.
+ * @param {number} t - 0..1
+ * @returns {string} `rgb(r,g,b)`
+ */
+export function viridisColor(t) {
+    return interpolateRamp(VIRIDIS_RGB, t);
+}
+
 /** Inferno hex ramp for echarts visualMap (darkest stops removed for visibility on dark bg) */
 export const INFERNO_COLORS = [
     '#4a0c6b', '#781c6d', '#a52c60',
@@ -109,21 +157,7 @@ const INFERNO_RGB = [
  * @returns {string} `rgb(r,g,b)`
  */
 export function infernoColor(t) {
-    const idx = t * (INFERNO_RGB.length - 1);
-    const i = Math.floor(idx);
-    const f = idx - i;
-
-    if (i >= INFERNO_RGB.length - 1) {
-        return `rgb(${INFERNO_RGB[INFERNO_RGB.length - 1].join(',')})`;
-    }
-
-    const c0 = INFERNO_RGB[i];
-    const c1 = INFERNO_RGB[i + 1];
-    const r = Math.round(c0[0] + f * (c1[0] - c0[0]));
-    const g = Math.round(c0[1] + f * (c1[1] - c0[1]));
-    const b = Math.round(c0[2] + f * (c1[2] - c0[2]));
-
-    return `rgb(${r},${g},${b})`;
+    return interpolateRamp(INFERNO_RGB, t);
 }
 
 // ── Cgroup color mapper ──────────────────────────────────────────────

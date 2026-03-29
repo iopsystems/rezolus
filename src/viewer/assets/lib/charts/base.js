@@ -24,20 +24,13 @@ export const TIME_AXIS_FORMATTER = {
  * When `chart.spec.noCollapse` is set (e.g. cgroups section where data
  * arrives after user selection), shows only the title at full height instead.
  */
-export function applyNoData(chart, opts) {
+export function applyNoData(chart) {
     if (chart.spec.noCollapse) {
-        const baseOpt = getBaseOption(opts.title, opts.description);
-        chart.echart.setOption({ title: baseOpt.title, backgroundColor: 'transparent' }, { notMerge: true });
+        chart.echart.setOption({ backgroundColor: 'transparent' }, { notMerge: true });
         return;
     }
     chart.echart.clear();
     chart.domNode.classList.add('no-data');
-    if (!chart.domNode.querySelector('.no-data-title')) {
-        const el = document.createElement('span');
-        el.className = 'no-data-title';
-        el.textContent = opts.title;
-        chart.domNode.appendChild(el);
-    }
 }
 
 /**
@@ -114,14 +107,13 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart) {
     }
 }
 
-export function getBaseOption(title, description) {
-    const hasDescription = !!description;
+export function getBaseOption() {
     return {
         grid: {
             left: '12',
             right: '17',
-            top: hasDescription ? '62' : '50',
-            bottom: '35',
+            top: '56',
+            bottom: '24',
             containLabel: true,
         },
         xAxis: {
@@ -189,21 +181,6 @@ export function getBaseOption(title, description) {
                     },
                 },
             },
-        },
-        title: {
-            text: title,
-            subtext: description || '',
-            subtextStyle: {
-                color: COLORS.fgLabel,
-                ...FONTS.subtitle,
-            },
-            itemGap: 4,
-            left: '16',
-            top: '12',
-            textStyle: {
-                color: COLORS.fg,
-                ...FONTS.title,
-            }
         },
         textStyle: {
             color: COLORS.fg,
@@ -283,7 +260,6 @@ export function getDataZoomConfig(minZoomSpan) {
  */
 export function applyChartOption(chart, option) {
     chart.domNode.classList.remove('no-data');
-    chart.domNode.querySelector('.no-data-title')?.remove();
     chart.echart.setOption(option, { notMerge: true });
     chart.echart.dispatchAction({
         type: 'takeGlobalCursor',

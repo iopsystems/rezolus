@@ -26,6 +26,8 @@ export class ChartsState {
     //     endValue?: number,  // raw x axis data value
     // }
     zoomLevel = null;
+    // 'global' (time bar) | 'local' (chart drag) | null
+    zoomSource = null;
     // All `Chart` instances, mapped by id
     charts = new Map();
     // Global color mapper - for consistent cgroup colors
@@ -35,6 +37,7 @@ export class ChartsState {
     // will be disposed of when it is removed from the DOM.
     clear() {
         this.zoomLevel = null;
+        this.zoomSource = null;
         this.charts.clear();
     }
 
@@ -48,6 +51,7 @@ export class ChartsState {
             start: 0,
             end: 100,
         };
+        this.zoomSource = null;
         this.charts.forEach(chart => {
             chart.dispatchAction({
                 type: 'dataZoom',
@@ -312,6 +316,7 @@ export class Chart {
                 startValue,
                 endValue,
             };
+            this.chartsState.zoomSource = 'local';
             this.chartsState.charts.forEach(chart => {
                 chart.dispatchAction({
                     type: 'dataZoom',
@@ -357,7 +362,6 @@ export class Chart {
 
         // Double click on a chart -> reset zoom level
         // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
-        // TODO: Add a visible interface element to reset zoom, too.
         this.echart.getZr().on('dblclick', () => {
             this.chartsState.resetAll();
             m.redraw();
@@ -460,9 +464,11 @@ export class Chart {
 
         // Clean up histogram heatmap DOM overlays when switching to a different chart type
         if (opts.style !== 'histogram_heatmap') {
-            for (const cls of ['histogram-toggle', 'heatmap-label-min', 'heatmap-label-max']) {
+            for (const cls of ['heatmap-label-min', 'heatmap-label-max']) {
                 this.domNode?.querySelector('.' + cls)?.remove();
             }
+            // Toggle lives in the wrapper (parent), not the canvas container
+            this.domNode?.parentNode?.querySelector('.histogram-toggle')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules

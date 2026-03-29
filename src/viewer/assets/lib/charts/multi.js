@@ -10,6 +10,7 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
+    applyNoData,
     applyChartOption,
     COLORS,
     FONTS,
@@ -29,13 +30,11 @@ export function configureMultiSeriesChart(chart) {
     } = chart.spec;
 
     if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
-        // Show title only — don't collapse, cgroup data arrives after user selection
-        const baseOpt = getBaseOption(opts.title, opts.description);
-        chart.echart.setOption({ title: baseOpt.title, backgroundColor: 'transparent' }, { notMerge: true });
+        applyNoData(chart);
         return;
     }
 
-    const baseOption = getBaseOption(opts.title, opts.description);
+    const baseOption = getBaseOption();
 
     // For multi-series charts, the first row contains timestamps, subsequent rows are series data
     const timeData = data[0];
@@ -43,7 +42,7 @@ export function configureMultiSeriesChart(chart) {
 
     let seriesNames = chart.spec.series_names;
     if (!seriesNames || seriesNames.length !== lineCount) {
-        console.log("series_names is missing or wrong length", seriesNames);
+        console.warn("series_names is missing or wrong length", seriesNames);
         seriesNames = Array.from(Array(lineCount).keys()).map(i => `Series ${i + 1}`);
     }
 
@@ -105,9 +104,10 @@ export function configureMultiSeriesChart(chart) {
 
     const option = {
         ...baseOption,
+        grid: { ...baseOption.grid, top: '60' },
         legend: {
             show: true,
-            top: '12',
+            top: '10',
             right: '16',
             icon: 'roundRect',
             itemWidth: 10,

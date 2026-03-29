@@ -201,7 +201,6 @@ function formatWithUnit(value, unitSystem, precision = 2) {
     const absValue = Math.abs(value);
 
     // Normalize unit system name - handle both 'time' and 'time_ns'
-    // 5/14/2025: I don't know if this is needed.
     const normalizedUnitSystem = unitSystem === 'time_ns' ? 'time' : unitSystem;
 
     // Get the unit system configuration

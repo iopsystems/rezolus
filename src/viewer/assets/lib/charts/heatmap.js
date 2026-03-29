@@ -12,7 +12,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
-import { INFERNO_COLORS } from './util/colormap.js';
+import { VIRIDIS_COLORS } from './util/colormap.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -35,11 +35,11 @@ export function configureHeatmap(chart) {
     } = chart.spec;
 
     if (!data || data.length < 1 || !timeData || timeData.length === 0) {
-        applyNoData(chart, opts);
+        applyNoData(chart);
         return;
     }
 
-    const baseOption = getBaseOption(opts.title, opts.description);
+    const baseOption = getBaseOption();
 
     // Extract all unique CPU IDs
     const yIndices = new Set();
@@ -191,6 +191,7 @@ export function configureHeatmap(chart) {
 
     const option = {
         ...baseOption,
+        grid: { ...baseOption.grid, top: '56' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.
@@ -234,7 +235,7 @@ export function configureHeatmap(chart) {
             itemHeight: 120,
             text: ['', ''],
             inRange: {
-                color: INFERNO_COLORS,
+                color: VIRIDIS_COLORS,
             }
         },
         graphic: {
