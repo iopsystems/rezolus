@@ -113,7 +113,7 @@ export function getBaseOption() {
             left: '12',
             right: '17',
             top: '56',
-            bottom: '35',
+            bottom: '24',
             containLabel: true,
         },
         xAxis: {

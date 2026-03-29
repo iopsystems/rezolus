@@ -12,7 +12,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
-import { INFERNO_COLORS } from './util/colormap.js';
+import { VIRIDIS_COLORS } from './util/colormap.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -235,7 +235,7 @@ export function configureHeatmap(chart) {
             itemHeight: 120,
             text: ['', ''],
             inRange: {
-                color: INFERNO_COLORS,
+                color: VIRIDIS_COLORS,
             }
         },
         graphic: {

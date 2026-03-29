@@ -886,7 +886,7 @@ main {
 
 .chart-expand {
     position: absolute;
-    bottom: 16px;
+    bottom: 12px;
     left: 16px;
     font-family: var(--font-mono);
     font-size: 11px;
