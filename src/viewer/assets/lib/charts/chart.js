@@ -26,6 +26,8 @@ export class ChartsState {
     //     endValue?: number,  // raw x axis data value
     // }
     zoomLevel = null;
+    // 'global' (time bar) | 'local' (chart drag) | null
+    zoomSource = null;
     // All `Chart` instances, mapped by id
     charts = new Map();
     // Global color mapper - for consistent cgroup colors
@@ -35,6 +37,7 @@ export class ChartsState {
     // will be disposed of when it is removed from the DOM.
     clear() {
         this.zoomLevel = null;
+        this.zoomSource = null;
         this.charts.clear();
     }
 
@@ -48,6 +51,7 @@ export class ChartsState {
             start: 0,
             end: 100,
         };
+        this.zoomSource = null;
         this.charts.forEach(chart => {
             chart.dispatchAction({
                 type: 'dataZoom',
@@ -312,6 +316,7 @@ export class Chart {
                 startValue,
                 endValue,
             };
+            this.chartsState.zoomSource = 'local';
             this.chartsState.charts.forEach(chart => {
                 chart.dispatchAction({
                     type: 'dataZoom',
