@@ -128,7 +128,6 @@ export class Chart {
 
         // If the chart is already initialized and data has changed, update it
         if (this.echart && oldSpec.data !== this.spec.data) {
-            // Instead of reinitializing, just update the chart configuration
             this.configureChartByType();
         }
     }

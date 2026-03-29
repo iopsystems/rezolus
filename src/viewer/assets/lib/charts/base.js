@@ -18,10 +18,18 @@ export const TIME_AXIS_FORMATTER = {
 };
 
 /**
- * Apply a collapsed no-data placeholder to a chart.
- * Shows only the title in muted text and shrinks the container via CSS.
+ * Apply a no-data placeholder to a chart.
+ *
+ * By default, collapses the chart to a compact 56px bar with a muted title.
+ * When `chart.spec.noCollapse` is set (e.g. cgroups section where data
+ * arrives after user selection), shows only the title at full height instead.
  */
 export function applyNoData(chart, opts) {
+    if (chart.spec.noCollapse) {
+        const baseOpt = getBaseOption(opts.title, opts.description);
+        chart.echart.setOption({ title: baseOpt.title, backgroundColor: 'transparent' }, { notMerge: true });
+        return;
+    }
     chart.echart.clear();
     chart.domNode.classList.add('no-data');
     if (!chart.domNode.querySelector('.no-data-title')) {
