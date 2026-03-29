@@ -10,7 +10,7 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
-    getNoDataOption,
+    applyNoData,
     calculateMinZoomSpan,
     getDataZoomConfig,
     applyChartOption,
@@ -32,7 +32,7 @@ export function configureScatterChart(chart) {
     } = chart.spec;
 
     if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
+        applyNoData(chart, opts);
         return;
     }
 

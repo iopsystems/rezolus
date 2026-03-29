@@ -8,7 +8,7 @@ import {
 } from './util/units.js';
 import {
     getBaseOption,
-    getNoDataOption,
+    applyNoData,
     getTooltipFreezeFooter,
     calculateMinZoomSpan,
     getDataZoomConfig,
@@ -97,7 +97,7 @@ export function configureHistogramHeatmap(chart) {
     } = chart.spec;
 
     if (!data || data.length === 0 || !timeData || timeData.length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
+        applyNoData(chart, opts);
         return;
     }
 

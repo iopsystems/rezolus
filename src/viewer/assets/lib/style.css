@@ -683,9 +683,38 @@ main {
     opacity: 1;
 }
 
+.chart.no-data {
+    height: 56px;
+}
+
+.chart.no-data > div {
+    display: none !important;
+}
+
+.no-data-title {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+.chart.no-data:hover {
+    border-color: var(--border-default);
+    box-shadow: none;
+}
+
 .chart-full-width {
     grid-column: 1 / -1;
     height: 336px;
+}
+
+.chart-full-width.no-data {
+    height: 56px;
 }
 
 .chart-wrapper {

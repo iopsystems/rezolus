@@ -18,46 +18,18 @@ export const TIME_AXIS_FORMATTER = {
 };
 
 /**
- * Creates a placeholder option for charts with no data
+ * Apply a collapsed no-data placeholder to a chart.
+ * Shows only the title in muted text and shrinks the container via CSS.
  */
-export function getNoDataOption(title, description) {
-    const hasDescription = !!description;
-    return {
-        title: {
-            text: title,
-            subtext: description || '',
-            subtextStyle: {
-                color: COLORS.fgLabel,
-                ...FONTS.subtitle,
-            },
-            itemGap: 4,
-            left: '16',
-            top: '12',
-            textStyle: {
-                color: COLORS.fg,
-                ...FONTS.title,
-            },
-        },
-        graphic: {
-            type: 'text',
-            left: 'center',
-            top: 'middle',
-            style: {
-                text: 'No data available',
-                fill: COLORS.fgMuted,
-                font: `normal ${FONTS.tooltipBody.fontSize}px ${FONTS.sans}`,
-            },
-        },
-        xAxis: { show: false },
-        yAxis: { show: false },
-        grid: {
-            left: '12',
-            right: '17',
-            top: hasDescription ? '62' : '50',
-            bottom: '35',
-            containLabel: true,
-        },
-    };
+export function applyNoData(chart, opts) {
+    chart.echart.clear();
+    chart.domNode.classList.add('no-data');
+    if (!chart.domNode.querySelector('.no-data-title')) {
+        const el = document.createElement('span');
+        el.className = 'no-data-title';
+        el.textContent = opts.title;
+        chart.domNode.appendChild(el);
+    }
 }
 
 /**
@@ -302,6 +274,8 @@ export function getDataZoomConfig(minZoomSpan) {
  * Apply a chart option with notMerge and re-enable drag-to-zoom.
  */
 export function applyChartOption(chart, option) {
+    chart.domNode.classList.remove('no-data');
+    chart.domNode.querySelector('.no-data-title')?.remove();
     chart.echart.setOption(option, { notMerge: true });
     chart.echart.dispatchAction({
         type: 'takeGlobalCursor',

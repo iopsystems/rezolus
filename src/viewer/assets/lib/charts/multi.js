@@ -10,7 +10,6 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
-    getNoDataOption,
     applyChartOption,
     COLORS,
     FONTS,
@@ -30,7 +29,9 @@ export function configureMultiSeriesChart(chart) {
     } = chart.spec;
 
     if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
+        // Show title only — don't collapse, cgroup data arrives after user selection
+        const baseOpt = getBaseOption(opts.title, opts.description);
+        chart.echart.setOption({ title: baseOpt.title, backgroundColor: 'transparent' }, { notMerge: true });
         return;
     }
 

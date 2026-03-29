@@ -6,7 +6,7 @@ import {
 } from './util/utils.js';
 import {
     getBaseOption,
-    getNoDataOption,
+    applyNoData,
     getTooltipFreezeFooter,
     applyChartOption,
     COLORS,
@@ -35,7 +35,7 @@ export function configureHeatmap(chart) {
     } = chart.spec;
 
     if (!data || data.length < 1 || !timeData || timeData.length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
+        applyNoData(chart, opts);
         return;
     }
 
