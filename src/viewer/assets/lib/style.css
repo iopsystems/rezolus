@@ -1220,6 +1220,422 @@ main {
 }
 
 /* ==========================================================================
+   System Info Section
+   ========================================================================== */
+
+.systeminfo-section {
+    padding: 0;
+}
+
+.systeminfo-empty {
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    margin-top: 1rem;
+}
+
+.sysinfo-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.sysinfo-group {
+    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    padding: 1.25rem;
+    transition: border-color var(--transition-base);
+}
+
+.sysinfo-group:hover {
+    border-color: var(--border-emphasis);
+}
+
+.sysinfo-group-title {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.sysinfo-group-title::before {
+    content: '';
+    width: 3px;
+    height: 14px;
+    background: var(--accent);
+    border-radius: 2px;
+}
+
+.sysinfo-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.sysinfo-table tr + tr {
+    border-top: 1px solid var(--border-subtle);
+}
+
+.sysinfo-label {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.5rem 1rem 0.5rem 0;
+    white-space: nowrap;
+    width: 1%;
+}
+
+.sysinfo-value {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--fg-secondary);
+    padding: 0.5rem 0;
+}
+
+.sysinfo-raw {
+    margin-top: 1.5rem;
+}
+
+.sysinfo-raw .sysinfo-group-title {
+    margin-bottom: 0.75rem;
+}
+
+.sysinfo-json {
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    padding: 1.25rem;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    color: var(--fg-secondary);
+    line-height: 1.6;
+    overflow-x: auto;
+    max-height: 600px;
+    overflow-y: auto;
+    user-select: text;
+}
+
+/* Sidebar systeminfo link — same style as query explorer link */
+#sidebar .systeminfo-link {
+    color: var(--fg-secondary);
+    display: flex;
+    align-items: center;
+}
+
+#sidebar .systeminfo-link .arrow {
+    margin-right: 0.5rem;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    transition: transform var(--transition-base);
+}
+
+#sidebar .systeminfo-link:hover .arrow {
+    transform: translateX(2px);
+}
+
+#sidebar .systeminfo-link.selected {
+    color: var(--accent);
+}
+
+/* ==========================================================================
+   CPU Topology Diagram
+   ========================================================================== */
+
+.topo-canvas {
+    margin-top: 1.5rem;
+    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.topo-inner {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+/* Toggle chips */
+.topo-toggles {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.topo-toggle {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background: var(--bg-elevated);
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+.topo-toggle:hover { color: var(--fg-secondary); }
+.topo-toggle.active { color: var(--fg); }
+
+.topo-toggle-threads.active { border-color: rgba(63, 185, 80, 0.6); }
+.topo-toggle-caches.active  { border-color: rgba(249, 115, 22, 0.6); }
+.topo-toggle-numa.active    { border-color: rgba(88, 166, 255, 0.6); }
+
+/* Packages container */
+.topo-packages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+/* Package */
+.topo-package {
+    border: var(--topo-border, 2px) solid var(--border-default);
+    border-radius: var(--card-radius);
+    padding: 0.75rem;
+    background: var(--bg-void);
+}
+
+.topo-package-header {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 0.5rem;
+}
+
+/* NUMA grid — 1 or 2 columns driven by JS via --topo-numa-cols */
+.topo-numa-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--topo-numa-cols, 1), auto);
+    gap: 12px;
+}
+
+/* NUMA box */
+.topo-numa-box {
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 0.5rem;
+}
+
+.topo-numa-box.numa-highlighted {
+    border-color: rgba(88, 166, 255, 0.6);
+}
+
+.topo-numa-header {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 400;
+    color: rgba(88, 166, 255, 0.9);
+    margin-bottom: 0.35rem;
+}
+
+/* LLC groups within a NUMA node */
+.topo-llc-groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.topo-llc-group {
+    display: grid;
+    gap: var(--topo-border, 2px);
+    flex: 1 1 0;
+}
+
+/* Core cell */
+.topo-core {
+    background: var(--bg-tertiary);
+    border: var(--topo-border, 2px) solid rgba(63, 185, 80, 0.6);
+    border-radius: 3px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-height: 8px;
+    min-width: 0;
+    padding: 4px 2px;
+    transition: border-color var(--transition-base);
+}
+
+.topo-core:hover {
+    border-color: rgba(63, 185, 80, 0.9);
+}
+
+.core-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--fg);
+    line-height: 1;
+}
+
+/* Thread sub-cells */
+.topo-threads {
+    display: flex;
+    gap: 1px;
+    margin-top: 2px;
+}
+
+.topo-thread {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--fg);
+    background: var(--bg-elevated);
+    border-radius: 2px;
+    padding: 0 2px;
+    line-height: 1.3;
+}
+
+/* L1 pair — orange outline box per core */
+.topo-l1-pair {
+    display: flex;
+    gap: 2px;
+    justify-content: center;
+    align-items: center;
+    background: rgba(22, 27, 34, 0.4);
+    border: var(--topo-border, 2px) solid rgba(249, 115, 22, 0.6);
+    border-radius: 3px;
+    padding: 3px 4px;
+    box-sizing: border-box;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Compact L1 — outline only, no content */
+.topo-l1-pair.compact {
+    min-height: 6px;
+    padding: 2px;
+}
+
+.topo-l1 {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--fg);
+    background: rgba(28, 33, 40, 0.6);
+    border-radius: 2px;
+    padding: 2px 4px;
+    line-height: 1.4;
+}
+
+/* Cache bars — span their cores (orange outline) */
+.topo-cache-bar {
+    border: var(--topo-border, 2px) solid rgba(249, 115, 22, 0.6);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    padding: 3px 6px;
+    box-sizing: border-box;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.topo-cache-name {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--fg);
+    line-height: 1.2;
+}
+
+.topo-cache-size {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--fg-secondary);
+    line-height: 1.2;
+}
+
+.topo-mid-cache {
+    background: rgba(22, 27, 34, 0.4);
+    border-radius: 3px;
+}
+
+.topo-llc {
+    background: rgba(13, 17, 23, 0.5);
+    border-radius: 4px;
+}
+
+/* ── Legend (shown when labels are omitted) ───────────────────────── */
+
+.topo-legend {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-subtle);
+    overflow-x: auto;
+}
+
+.topo-legend-title {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    color: var(--fg-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.topo-legend-cluster {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.topo-legend-cluster .topo-subgroups {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+}
+
+.topo-legend-cluster .topo-subgroup {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.topo-legend-cluster .topo-core-row {
+    display: flex;
+    gap: 2px;
+}
+
+.topo-legend-cluster .topo-cache-bar {
+    width: auto;
+}
+
+/* ── Descriptions ─────────────────────────────────────────────────── */
+
+.topo-descriptions {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.topo-desc {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    color: var(--fg-secondary);
+    line-height: 1.6;
+    margin-bottom: 0.35rem;
+}
+
+/* ==========================================================================
    Status Bar
    ========================================================================== */
 
