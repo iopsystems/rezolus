@@ -10,6 +10,7 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
+    applyNoData,
     applyChartOption,
     COLORS,
     FONTS,
@@ -29,7 +30,7 @@ export function configureMultiSeriesChart(chart) {
     } = chart.spec;
 
     if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
-        chart.echart.setOption({ backgroundColor: 'transparent' }, { notMerge: true });
+        applyNoData(chart);
         return;
     }
 
