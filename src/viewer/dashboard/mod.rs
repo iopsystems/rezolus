@@ -30,7 +30,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Rezolus", "/rezolus", rezolus::generate),
 ];
 
-pub fn generate(data: Tsdb) -> AppState {
+pub fn generate(data: Tsdb, filesize: Option<u64>) -> AppState {
     let mut state = AppState::new(data);
 
     let sections: Vec<Section> = SECTION_META
@@ -44,7 +44,10 @@ pub fn generate(data: Tsdb) -> AppState {
     let tsdb = state.tsdb.read();
     for (_, route, generator) in SECTION_META {
         let key = format!("{}.json", &route[1..]);
-        let view = generator(&tsdb, sections.clone());
+        let mut view = generator(&tsdb, sections.clone());
+        if let Some(size) = filesize {
+            view.set_filesize(size);
+        }
         state
             .sections
             .insert(key, serde_json::to_string(&view).unwrap());
@@ -61,7 +64,7 @@ mod tests {
     #[test]
     fn generate_produces_expected_keys() {
         let data = Tsdb::default();
-        let state = generate(data);
+        let state = generate(data, None);
 
         let mut keys: Vec<_> = state.sections.keys().cloned().collect();
         keys.sort();

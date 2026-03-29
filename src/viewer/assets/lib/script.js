@@ -62,6 +62,14 @@ const formatInterval = (secs) => {
     return secs.toFixed(0) + 's';
 };
 
+const formatDuration = (secs) => {
+    if (!secs && secs !== 0) return '';
+    if (secs < 60) return secs.toFixed(0) + 's';
+    if (secs < 3600) return (secs / 60).toFixed(1) + 'm';
+    if (secs < 86400) return (secs / 3600).toFixed(1) + 'h';
+    return (secs / 86400).toFixed(1) + 'd';
+};
+
 // Collapsible metadata state
 let metadataExpanded = false;
 
@@ -86,6 +94,10 @@ const TopNav = {
         if (attrs.version) metaEntries.push(['Version', attrs.version]);
         if (attrs.interval) metaEntries.push(['Interval', formatInterval(attrs.interval)]);
         if (!liveMode && attrs.filesize) metaEntries.push(['Size', formatSize(attrs.filesize)]);
+        if (attrs.start_time != null && attrs.end_time != null) {
+            metaEntries.push(['Duration', formatDuration((attrs.end_time - attrs.start_time) / 1000)]);
+        }
+        if (attrs.num_series != null) metaEntries.push(['Series', attrs.num_series.toLocaleString()]);
 
         return m('div#topnav', [
             m('div.logo', [
@@ -246,7 +258,7 @@ const StatusBar = {
 // Main component
 const Main = {
     view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize },
+        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series },
     }) {
         return m(
             'div',
@@ -258,6 +270,9 @@ const Main = {
                 version,
                 interval,
                 filesize,
+                start_time,
+                end_time,
+                num_series,
             }),
             m('main', [
                 m(Sidebar, {

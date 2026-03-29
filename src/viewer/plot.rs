@@ -7,6 +7,14 @@ pub struct View {
     source: String,
     version: String,
     filename: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filesize: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_time: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_time: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_series: Option<usize>,
     groups: Vec<Group>,
     sections: Vec<Section>,
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
@@ -21,15 +29,44 @@ impl View {
         let version = data.version().to_string();
         let filename = data.filename().to_string();
 
+        // Compute time bounds as epoch milliseconds
+        let (start_time, end_time) = match data.time_range() {
+            Some((min, max)) => (Some(min as f64 / 1e6), Some(max as f64 / 1e6)),
+            None => (None, None),
+        };
+
+        // Count total time series (each metric × label combination)
+        let num_series = {
+            let mut count = 0usize;
+            for name in data.counter_names() {
+                count += data.counter_labels(name).map_or(0, |l| l.len());
+            }
+            for name in data.gauge_names() {
+                count += data.gauge_labels(name).map_or(0, |l| l.len());
+            }
+            for name in data.histogram_names() {
+                count += data.histogram_labels(name).map_or(0, |l| l.len());
+            }
+            Some(count)
+        };
+
         Self {
             interval,
             source,
             version,
             filename,
+            filesize: None,
+            start_time,
+            end_time,
+            num_series,
             groups: Vec::new(),
             sections,
             metadata: std::collections::HashMap::new(),
         }
+    }
+
+    pub fn set_filesize(&mut self, size: u64) {
+        self.filesize = Some(size);
     }
 
     pub fn group(&mut self, group: Group) -> &Self {
