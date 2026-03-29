@@ -2,7 +2,131 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 
-// Query Explorer component for running custom PromQL queries
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/** Build a human-readable series label from a PromQL metric map. */
+const buildSeriesLabel = (metric, fallbackIdx) => {
+    if (!metric) return 'Series ' + (fallbackIdx + 1);
+
+    const labels = [];
+    if (metric.id !== undefined) labels.push(`id=${metric.id}`);
+
+    const excluded = ['__name__', 'id', 'metric', 'metric_type', 'unit'];
+    const other = Object.entries(metric)
+        .filter(([k]) => !excluded.includes(k))
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([k, v]) => `${k}=${v}`);
+    labels.push(...other);
+
+    return labels.length > 0 ? labels.join(', ') : 'Series ' + (fallbackIdx + 1);
+};
+
+/** Transform multi-series PromQL result into { allData, seriesNames } or null. */
+const buildMultiSeriesData = (resultData) => {
+    const seriesNames = [];
+    const allData = [];
+    let timestamps = null;
+
+    for (let i = 0; i < resultData.length; i++) {
+        const item = resultData[i];
+        if (!item.values || !Array.isArray(item.values)) continue;
+
+        seriesNames.push(buildSeriesLabel(item.metric, i));
+
+        if (!timestamps) {
+            timestamps = item.values.map(([ts]) => ts);
+            allData.push(timestamps);
+        }
+        allData.push(item.values.map(([, val]) => parseFloat(val)));
+    }
+
+    return allData.length > 1 ? { allData, seriesNames } : null;
+};
+
+/** Transform single-series PromQL result into [timestamps, values] or null. */
+const buildSingleSeriesData = (resultData) => {
+    const timestamps = [];
+    const values = [];
+
+    for (const item of resultData) {
+        if (item.values && Array.isArray(item.values)) {
+            for (const [ts, val] of item.values) {
+                timestamps.push(ts);
+                values.push(parseFloat(val));
+            }
+        } else if (item.value && Array.isArray(item.value) && item.value.length === 2) {
+            timestamps.push(item.value[0]);
+            values.push(parseFloat(item.value[1]));
+        }
+    }
+
+    return timestamps.length > 0 ? [timestamps, values] : null;
+};
+
+/** Render a Chart component for a query result. */
+const renderQueryChart = (resultData, query, chartsState) => {
+    if (!resultData || resultData.length === 0) return m('p', 'No data returned');
+
+    const isMulti = resultData.length > 1;
+
+    if (isMulti) {
+        const multi = buildMultiSeriesData(resultData);
+        if (!multi) return null;
+
+        const key = `query-chart-multi-${query}`;
+        return m('div.query-chart', { key }, [
+            m(Chart, {
+                spec: {
+                    opts: { id: key, title: 'Query Result', style: 'multi' },
+                    data: multi.allData,
+                    series_names: multi.seriesNames,
+                },
+                chartsState,
+            }),
+        ]);
+    }
+
+    const data = buildSingleSeriesData(resultData);
+    if (!data) return null;
+
+    const key = `query-chart-line-${query}`;
+    return m('div.query-chart', { key }, [
+        m(Chart, {
+            spec: {
+                opts: { id: key, title: 'Query Result', style: 'line' },
+                data,
+            },
+            chartsState,
+        }),
+    ]);
+};
+
+/** Render a clickable example query item. */
+const exampleQuery = (state, query, description) =>
+    m('li', [
+        m('code', {
+            onclick: () => { state.query = query; state.executeQuery(); },
+        }, query),
+        description && (' - ' + description),
+    ]);
+
+/** Render a labeled input field with an Apply button. */
+const fieldRow = (label, value, oninput, onApply) =>
+    m('div.single-chart-field', [
+        m('label', label),
+        m('div.field-input-row', [
+            m('input.field-input', {
+                type: 'text',
+                value,
+                oninput,
+                onkeydown: (e) => { if (e.key === 'Enter') onApply(); },
+            }),
+            m('button.field-apply-btn', { onclick: onApply }, 'Apply'),
+        ]),
+    ]);
+
+// ── QueryExplorer ───────────────────────────────────────────────────
+
 // Attrs: { liveMode: boolean, isRecording: () => boolean }
 export const QueryExplorer = {
     oninit(vnode) {
@@ -13,29 +137,8 @@ export const QueryExplorer = {
         vnode.state.queryHistory = JSON.parse(
             localStorage.getItem('promql_history') || '[]',
         );
-        // Create a separate ChartsState for query explorer to prevent flickering
-        // when other sections load in the background
         vnode.state.queryChartsState = new ChartsState();
 
-        // Format a PromQL value (handle both instant and range values)
-        vnode.state.formatValue = (value) => {
-            if (Array.isArray(value) && value.length === 2) {
-                // Instant query result: [timestamp, value]
-                const v = parseFloat(value[1]);
-                if (Math.abs(v) < 0.01 && v !== 0) {
-                    return v.toExponential(3);
-                } else if (Math.abs(v) >= 1000000) {
-                    return (v / 1000000).toFixed(2) + 'M';
-                } else if (Math.abs(v) >= 1000) {
-                    return (v / 1000).toFixed(2) + 'K';
-                } else {
-                    return v.toFixed(3);
-                }
-            }
-            return String(value);
-        };
-
-        // Bind the executeQuery method to the state
         vnode.state.executeQuery = async () => {
             if (!vnode.state.query.trim()) return;
 
@@ -43,7 +146,6 @@ export const QueryExplorer = {
             vnode.state.error = null;
 
             try {
-                // First, get the data time range
                 const metadataResponse = await m.request({
                     method: 'GET',
                     url: '/api/v1/metadata',
@@ -54,42 +156,32 @@ export const QueryExplorer = {
                     throw new Error('Failed to get metadata');
                 }
 
-                const minTime = metadataResponse.data.minTime;
-                const maxTime = metadataResponse.data.maxTime;
+                const { minTime, maxTime } = metadataResponse.data;
                 const duration = maxTime - minTime;
-
-                // Use a reasonable time window - either 1 hour or the full range if it's shorter
-                const windowDuration = Math.min(3600, duration); // 1 hour max
+                const windowDuration = Math.min(3600, duration);
                 const start = Math.max(minTime, maxTime - windowDuration);
-                const step = Math.max(1, Math.floor(windowDuration / 100)); // About 100 data points
+                const step = Math.max(1, Math.floor(windowDuration / 100));
 
                 const url = `/api/v1/query_range?query=${encodeURIComponent(vnode.state.query)}&start=${start}&end=${maxTime}&step=${step}`;
-
-                const response = await m.request({
+                vnode.state.result = await m.request({
                     method: 'GET',
                     url,
                     withCredentials: true,
                 });
-
-                vnode.state.result = response;
             } catch (error) {
                 vnode.state.error = error.message || 'Query failed';
             }
 
             vnode.state.loading = false;
 
-            // Add to history if successful and no error
+            // Add to history if successful
             if (
                 !vnode.state.error &&
                 vnode.state.result &&
                 !vnode.state.queryHistory.includes(vnode.state.query)
             ) {
                 vnode.state.queryHistory.unshift(vnode.state.query);
-                // Keep only last 20 queries
-                vnode.state.queryHistory = vnode.state.queryHistory.slice(
-                    0,
-                    20,
-                );
+                vnode.state.queryHistory = vnode.state.queryHistory.slice(0, 20);
                 localStorage.setItem(
                     'promql_history',
                     JSON.stringify(vnode.state.queryHistory),
@@ -101,7 +193,6 @@ export const QueryExplorer = {
     },
 
     oncreate(vnode) {
-        // In live mode, re-execute the active query on the refresh interval
         if (vnode.attrs.liveMode) {
             vnode.state.liveInterval = setInterval(() => {
                 const isRecording = vnode.attrs.isRecording;
@@ -113,441 +204,85 @@ export const QueryExplorer = {
     },
 
     onremove(vnode) {
-        if (vnode.state.liveInterval) {
-            clearInterval(vnode.state.liveInterval);
-        }
-        // Clean up the query explorer's chart state when component is removed
-        if (vnode.state.queryChartsState) {
-            vnode.state.queryChartsState.clear();
-        }
+        if (vnode.state.liveInterval) clearInterval(vnode.state.liveInterval);
+        if (vnode.state.queryChartsState) vnode.state.queryChartsState.clear();
     },
 
     view(vnode) {
+        const st = vnode.state;
+
         return m('div.query-explorer', [
+            // Input section
             m('div.query-input-section', [
                 m('h2', 'PromQL Query Explorer'),
                 m('div.query-input-wrapper', [
                     m('textarea.query-input', {
-                        placeholder:
-                            'Enter a PromQL query (e.g., sum(rate(syscall[5m])) or rate(network_bytes{direction="transmit"}[5m]))',
-                        value: vnode.state.query,
-                        oninput: (e) => (vnode.state.query = e.target.value),
+                        placeholder: 'Enter a PromQL query (e.g., sum(rate(syscall[5m])) or rate(network_bytes{direction="transmit"}[5m]))',
+                        value: st.query,
+                        oninput: (e) => { st.query = e.target.value; },
                         onkeydown: (e) => {
-                            if (e.key === 'Enter' && e.ctrlKey) {
-                                vnode.state.executeQuery();
-                            }
+                            if (e.key === 'Enter' && e.ctrlKey) st.executeQuery();
                         },
                     }),
-                    m(
-                        'button.execute-btn',
-                        {
-                            onclick: () => vnode.state.executeQuery(),
-                            disabled: vnode.state.loading,
-                        },
-                        vnode.state.loading
-                            ? 'Running...'
-                            : 'Execute Query (Ctrl+Enter)',
-                    ),
+                    m('button.execute-btn', {
+                        onclick: () => st.executeQuery(),
+                        disabled: st.loading,
+                    }, st.loading ? 'Running...' : 'Execute Query (Ctrl+Enter)'),
                 ]),
 
-                // Query history dropdown
-                vnode.state.queryHistory.length > 0 &&
-                    m('div.query-history', [
-                        m('h3', 'Recent Queries'),
-                        m(
-                            'select.history-select',
-                            {
-                                onchange: (e) => {
-                                    vnode.state.query = e.target.value;
-                                },
-                            },
-                            [
-                                m(
-                                    'option',
-                                    { value: '' },
-                                    '-- Select from history --',
-                                ),
-                                vnode.state.queryHistory.map((q) =>
-                                    m(
-                                        'option',
-                                        { value: q },
-                                        q.length > 80
-                                            ? q.substring(0, 77) + '...'
-                                            : q,
-                                    ),
-                                ),
-                            ],
+                // Query history
+                st.queryHistory.length > 0 && m('div.query-history', [
+                    m('h3', 'Recent Queries'),
+                    m('select.history-select', {
+                        onchange: (e) => { st.query = e.target.value; },
+                    }, [
+                        m('option', { value: '' }, '-- Select from history --'),
+                        st.queryHistory.map((q) =>
+                            m('option', { value: q }, q.length > 80 ? q.substring(0, 77) + '...' : q),
                         ),
                     ]),
+                ]),
             ]),
 
-            // Error display
-            vnode.state.error &&
-                m('div.error-message', [
-                    m('strong', 'Error: '),
-                    vnode.state.error,
-                ]),
+            // Error
+            st.error && m('div.error-message', [m('strong', 'Error: '), st.error]),
 
-            // Result display
-            vnode.state.result &&
-                m('div.query-result', [
-                    m('h3', 'Result'),
-                    vnode.state.result.status === 'success'
-                        ? m('div.result-data', [
-                              vnode.state.result.data &&
-                              vnode.state.result.data.result &&
-                              vnode.state.result.data.result.length > 0
-                                  ? [
-                                        // Create a chart if we have time series data
-                                        (() => {
-                                            // Check if we have multiple series (from by() clause)
-                                            const resultData =
-                                                vnode.state.result.data.result;
-                                            const hasMultipleSeries =
-                                                resultData.length > 1;
+            // Result
+            st.result && m('div.query-result', [
+                m('h3', 'Result'),
+                st.result.status === 'success'
+                    ? m('div.result-data', [
+                        renderQueryChart(
+                            st.result.data && st.result.data.result,
+                            st.query,
+                            st.queryChartsState,
+                        ),
+                    ])
+                    : m('div.error-message', 'Query failed: ' + (st.result.error || 'Unknown error')),
+            ]),
 
-                                            if (hasMultipleSeries) {
-                                                // Multi-series chart (e.g., from "sum by (cpu) (...)")
-                                                const seriesNames = [];
-                                                const allData = [];
-                                                let timestamps = null;
-
-                                                resultData.forEach(
-                                                    (item, idx) => {
-                                                        if (
-                                                            item.values &&
-                                                            Array.isArray(
-                                                                item.values,
-                                                            )
-                                                        ) {
-                                                            // Extract series name from metric labels
-                                                            let seriesName =
-                                                                'Series ' +
-                                                                (idx + 1);
-                                                            if (item.metric) {
-                                                                // Get all labels except __name__, sorted properly
-                                                                const labels = [];
-                                                                let hasId = false;
-
-                                                                // First check if 'id' label exists
-                                                                if (item.metric.id !== undefined) {
-                                                                    labels.push(`id=${item.metric.id}`);
-                                                                    hasId = true;
-                                                                }
-
-                                                                // Then add all other labels (except __name__, id, and metadata labels), sorted alphabetically
-                                                                const excludedLabels = ['__name__', 'id', 'metric', 'metric_type', 'unit'];
-                                                                const otherLabels = Object.entries(item.metric)
-                                                                    .filter(([key, _]) => !excludedLabels.includes(key))
-                                                                    .sort((a, b) => a[0].localeCompare(b[0]))
-                                                                    .map(([key, value]) => `${key}=${value}`);
-
-                                                                labels.push(...otherLabels);
-
-                                                                if (labels.length > 0) {
-                                                                    seriesName = labels.join(', ');
-                                                                }
-                                                            }
-                                                            seriesNames.push(
-                                                                seriesName,
-                                                            );
-
-                                                            // Extract timestamps (should be same for all series)
-                                                            if (!timestamps) {
-                                                                timestamps =
-                                                                    item.values.map(
-                                                                        ([
-                                                                            ts,
-                                                                            _,
-                                                                        ]) =>
-                                                                            ts,
-                                                                    );
-                                                                allData.push(
-                                                                    timestamps,
-                                                                );
-                                                            }
-
-                                                            // Extract values for this series
-                                                            const values =
-                                                                item.values.map(
-                                                                    ([
-                                                                        _,
-                                                                        val,
-                                                                    ]) =>
-                                                                        parseFloat(
-                                                                            val,
-                                                                        ),
-                                                                );
-                                                            allData.push(
-                                                                values,
-                                                            );
-                                                        }
-                                                    },
-                                                );
-
-                                                if (allData.length > 1) {
-                                                    // Use a stable chart key based on the query to prevent recreating
-                                                    const chartKey = `query-chart-multi-${vnode.state.query}`;
-
-                                                    const chartSpec = {
-                                                        opts: {
-                                                            id: chartKey,
-                                                            title: 'Query Result',
-                                                            style: 'multi',
-                                                        },
-                                                        data: allData,
-                                                        series_names:
-                                                            seriesNames,
-                                                    };
-
-                                                    return m(
-                                                        'div.query-chart',
-                                                        { key: chartKey },
-                                                        [
-                                                            m(Chart, {
-                                                                spec: chartSpec,
-                                                                chartsState: vnode.state.queryChartsState,
-                                                            }),
-                                                        ],
-                                                    );
-                                                }
-                                            } else {
-                                                // Single series chart
-                                                const timestamps = [];
-                                                const values = [];
-
-                                                resultData.forEach(
-                                                    (item, idx) => {
-                                                        if (
-                                                            item.values &&
-                                                            Array.isArray(
-                                                                item.values,
-                                                            )
-                                                        ) {
-                                                            // Matrix result - multiple time points
-                                                            item.values.forEach(
-                                                                ([
-                                                                    timestamp,
-                                                                    value,
-                                                                ]) => {
-                                                                    timestamps.push(
-                                                                        timestamp,
-                                                                    );
-                                                                    values.push(
-                                                                        parseFloat(
-                                                                            value,
-                                                                        ),
-                                                                    );
-                                                                },
-                                                            );
-                                                        } else if (
-                                                            item.value &&
-                                                            Array.isArray(
-                                                                item.value,
-                                                            ) &&
-                                                            item.value
-                                                                .length === 2
-                                                        ) {
-                                                            // Vector result - single time point
-                                                            timestamps.push(
-                                                                item.value[0],
-                                                            );
-                                                            values.push(
-                                                                parseFloat(
-                                                                    item
-                                                                        .value[1],
-                                                                ),
-                                                            );
-                                                        }
-                                                    },
-                                                );
-
-                                                if (timestamps.length > 0) {
-                                                    const chartData = [
-                                                        timestamps,
-                                                        values,
-                                                    ];
-                                                    // Use a stable chart key based on the query to prevent recreating
-                                                    const chartKey = `query-chart-line-${vnode.state.query}`;
-
-                                                    const chartSpec = {
-                                                        opts: {
-                                                            id: chartKey,
-                                                            title: 'Query Result',
-                                                            style: 'line',
-                                                        },
-                                                        data: chartData,
-                                                    };
-
-                                                    return m(
-                                                        'div.query-chart',
-                                                        { key: chartKey },
-                                                        [
-                                                            m(Chart, {
-                                                                spec: chartSpec,
-                                                                chartsState: vnode.state.queryChartsState,
-                                                            }),
-                                                        ],
-                                                    );
-                                                }
-                                            }
-                                            return null;
-                                        })(),
-                                    ]
-                                  : m('p', 'No data returned'),
-                          ])
-                        : m(
-                              'div.error-message',
-                              'Query failed: ' +
-                                  (vnode.state.result.error || 'Unknown error'),
-                          ),
-                ]),
-
-            // Example queries section
+            // Example queries
             m('div.example-queries', [
                 m('h3', 'Example Queries'),
                 m('ul', [
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum(irate(syscall[5m]))';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum(irate(syscall[5m]))',
-                        ),
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores',
-                        ),
-                        ' - Average CPU utilization (0-1)',
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum(irate(network_bytes{direction="transmit"}[5m])) * 8';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum(irate(network_bytes{direction="transmit"}[5m])) * 8',
-                        ),
-                        ' - Network transmit (bits/sec)',
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))',
-                        ),
-                        ' - IPC (Instructions per Cycle)',
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum by (id) (irate(cpu_usage[5m])) / 1e9';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum by (id) (irate(cpu_usage[5m])) / 1e9',
-                        ),
-                        ' - Per-CPU usage (cores)',
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum by (state) (irate(cpu_usage[5m])) / 1e9';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum by (state) (irate(cpu_usage[5m])) / 1e9',
-                        ),
-                        ' - CPU by state (user/system)',
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum by (direction) (irate(network_bytes[5m]))';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum by (direction) (irate(network_bytes[5m]))',
-                        ),
-                        ' - Network by direction',
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'histogram_quantile(0.95, scheduler_runqueue_latency)';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'histogram_quantile(0.95, scheduler_runqueue_latency)',
-                        ),
-                        ' - P95 scheduler latency',
-                    ),
-                    m(
-                        'li',
-                        m(
-                            'code',
-                            {
-                                onclick: () => {
-                                    vnode.state.query =
-                                        'sum by (op) (irate(syscall[5m]))';
-                                    vnode.state.executeQuery();
-                                },
-                            },
-                            'sum by (op) (irate(syscall[5m]))',
-                        ),
-                        ' - Syscalls by operation',
-                    ),
+                    exampleQuery(st, 'sum(irate(syscall[5m]))'),
+                    exampleQuery(st, 'sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores', 'Average CPU utilization (0-1)'),
+                    exampleQuery(st, 'sum(irate(network_bytes{direction="transmit"}[5m])) * 8', 'Network transmit (bits/sec)'),
+                    exampleQuery(st, 'sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))', 'IPC (Instructions per Cycle)'),
+                    exampleQuery(st, 'sum by (id) (irate(cpu_usage[5m])) / 1e9', 'Per-CPU usage (cores)'),
+                    exampleQuery(st, 'sum by (state) (irate(cpu_usage[5m])) / 1e9', 'CPU by state (user/system)'),
+                    exampleQuery(st, 'sum by (direction) (irate(network_bytes[5m]))', 'Network by direction'),
+                    exampleQuery(st, 'histogram_quantile(0.95, scheduler_runqueue_latency)', 'P95 scheduler latency'),
+                    exampleQuery(st, 'sum by (op) (irate(syscall[5m]))', 'Syscalls by operation'),
                 ]),
             ]),
         ]);
     },
 };
 
-// Single-chart expanded view — opened in a new tab from the "Expand" link.
+// ── SingleChartView ─────────────────────────────────────────────────
+
+// Expanded view for a single chart — opened in a new tab from the "Expand" link.
 // Shows one chart at full width with an editable PromQL query input below it.
 // Attrs: { data, chartId, applyResultToPlot: (plot, result) => void }
 export const SingleChartView = {
@@ -590,44 +325,42 @@ export const SingleChartView = {
         const plot = vnode.state.plot;
         if (!plot) return m('div.single-chart-view', m('p', `Chart "${chartId}" not found`));
 
+        const st = vnode.state;
+
         const spec = {
             ...plot,
-            opts: { ...plot.opts, title: vnode.state.title, description: vnode.state.description },
+            opts: { ...plot.opts, title: st.title, description: st.description },
         };
 
         const executeQuery = async () => {
-            if (!vnode.state.query.trim()) return;
-            vnode.state.loading = true;
-            vnode.state.error = null;
+            if (!st.query.trim()) return;
+            st.loading = true;
+            st.error = null;
 
             try {
                 const meta = await m.request({ method: 'GET', url: '/api/v1/metadata', withCredentials: true });
-                const minTime = meta.data.minTime;
-                const maxTime = meta.data.maxTime;
-                const duration = maxTime - minTime;
-                const step = Math.max(1, Math.floor(duration / 1000));
+                const { minTime, maxTime } = meta.data;
+                const step = Math.max(1, Math.floor((maxTime - minTime) / 1000));
 
-                const url = `/api/v1/query_range?query=${encodeURIComponent(vnode.state.query)}&start=${minTime}&end=${maxTime}&step=${step}`;
+                const url = `/api/v1/query_range?query=${encodeURIComponent(st.query)}&start=${minTime}&end=${maxTime}&step=${step}`;
                 const response = await m.request({ method: 'GET', url, withCredentials: true });
 
                 if (response.status === 'success' && response.data && response.data.result) {
                     applyResultToPlot(plot, response);
-                    // Force chart re-render by bumping the data reference
-                    vnode.state.singleChartsState.clear();
+                    st.singleChartsState.clear();
                 } else {
-                    vnode.state.error = response.error || 'Query returned no data';
+                    st.error = response.error || 'Query returned no data';
                 }
             } catch (e) {
-                vnode.state.error = e.message || 'Query failed';
+                st.error = e.message || 'Query failed';
             }
 
-            vnode.state.loading = false;
+            st.loading = false;
             m.redraw();
         };
 
         const applyFields = () => {
-            // Directly reconfigure every chart in this view so title/description update
-            vnode.state.singleChartsState.charts.forEach(chart => {
+            st.singleChartsState.charts.forEach(chart => {
                 chart.spec = spec;
                 chart.configureChartByType();
             });
@@ -638,44 +371,18 @@ export const SingleChartView = {
                 m('h1.section-title', 'Single Chart View'),
             ]),
             m('div.single-chart-container', [
-                m(Chart, { spec, chartsState: vnode.state.singleChartsState, interval: data.interval }),
+                m(Chart, { spec, chartsState: st.singleChartsState, interval: data.interval }),
             ]),
             m('div.single-chart-fields', [
-                m('div.single-chart-field', [
-                    m('label', 'Title'),
-                    m('div.field-input-row', [
-                        m('input.field-input', {
-                            type: 'text',
-                            value: vnode.state.title,
-                            oninput: (e) => { vnode.state.title = e.target.value; },
-                            onkeydown: (e) => {
-                                if (e.key === 'Enter') applyFields();
-                            },
-                        }),
-                        m('button.field-apply-btn', { onclick: applyFields }, 'Apply'),
-                    ]),
-                ]),
-                m('div.single-chart-field', [
-                    m('label', 'Description'),
-                    m('div.field-input-row', [
-                        m('input.field-input', {
-                            type: 'text',
-                            value: vnode.state.description,
-                            oninput: (e) => { vnode.state.description = e.target.value; },
-                            onkeydown: (e) => {
-                                if (e.key === 'Enter') applyFields();
-                            },
-                        }),
-                        m('button.field-apply-btn', { onclick: applyFields }, 'Apply'),
-                    ]),
-                ]),
+                fieldRow('Title', st.title, (e) => { st.title = e.target.value; }, applyFields),
+                fieldRow('Description', st.description, (e) => { st.description = e.target.value; }, applyFields),
             ]),
             m('div.single-chart-query', [
                 m('label', 'PromQL Query'),
                 m('div.query-input-wrapper', [
                     m('textarea.query-input', {
-                        value: vnode.state.query,
-                        oninput: (e) => vnode.state.query = e.target.value,
+                        value: st.query,
+                        oninput: (e) => { st.query = e.target.value; },
                         onkeydown: (e) => {
                             if (e.key === 'Enter' && e.ctrlKey) executeQuery();
                         },
@@ -683,10 +390,10 @@ export const SingleChartView = {
                     }),
                     m('button.execute-btn', {
                         onclick: executeQuery,
-                        disabled: vnode.state.loading,
-                    }, vnode.state.loading ? 'Running...' : 'Execute (Ctrl+Enter)'),
+                        disabled: st.loading,
+                    }, st.loading ? 'Running...' : 'Execute (Ctrl+Enter)'),
                 ]),
-                vnode.state.error && m('div.error-message', vnode.state.error),
+                st.error && m('div.error-message', st.error),
             ]),
         ]);
     },

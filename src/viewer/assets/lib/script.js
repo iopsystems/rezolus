@@ -124,6 +124,7 @@ const SectionContent = {
                 m(CgroupSelector, {
                     groups: attrs.groups,
                     executeQuery: executePromQLRangeQuery,
+                    applyResultToPlot: applyResultToPlot,
                     substitutePattern: substituteCgroupPattern,
                     setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
                 }),
