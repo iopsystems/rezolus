@@ -1,7 +1,7 @@
 // explorers.js - QueryExplorer and SingleChartView components
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { executePromQLRangeQuery } from './data.js';
+import { executePromQLRangeQuery, fetchHeatmapForPlot } from './data.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -274,6 +274,9 @@ export const SingleChartView = {
         vnode.state.plot = null;
         vnode.state.loading = false;
         vnode.state.error = null;
+        vnode.state.heatmapMode = false;
+        vnode.state.heatmapData = null;
+        vnode.state.heatmapLoading = false;
     },
 
     onremove(vnode) {
@@ -341,12 +344,65 @@ export const SingleChartView = {
             });
         };
 
+        const isHistogram = plot.promql_query && plot.promql_query.includes('histogram_percentiles');
+
+        const toggleHeatmap = async () => {
+            if (st.heatmapMode) {
+                st.heatmapMode = false;
+                st.singleChartsState.resetAll();
+                st.singleChartsState.clear();
+                m.redraw();
+                return;
+            }
+            if (!st.heatmapData) {
+                st.heatmapLoading = true;
+                m.redraw();
+                st.heatmapData = await fetchHeatmapForPlot(plot);
+                st.heatmapLoading = false;
+            }
+            if (st.heatmapData) {
+                st.heatmapMode = true;
+                st.singleChartsState.resetAll();
+                st.singleChartsState.clear();
+            }
+            m.redraw();
+        };
+
+        const hasLocalZoom = st.singleChartsState.zoomSource === 'local' && !st.singleChartsState.isDefaultZoom();
+        const hasSelection = hasLocalZoom ||
+            Array.from(st.singleChartsState.charts.values()).some(
+                c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
+
+        let chartSpec = spec;
+        if (st.heatmapMode && st.heatmapData) {
+            chartSpec = {
+                ...spec,
+                opts: { ...spec.opts, style: 'histogram_heatmap' },
+                time_data: st.heatmapData.time_data,
+                bucket_bounds: st.heatmapData.bucket_bounds,
+                data: st.heatmapData.data,
+                min_value: st.heatmapData.min_value,
+                max_value: st.heatmapData.max_value,
+            };
+        }
+
         return m('div.single-chart-view', [
-            m('div.single-chart-header', [
+            m('div.section-header-row', [
                 m('h1.section-title', 'Single Chart View'),
+                m('div.section-actions', [
+                    hasSelection && m('button.section-action-btn', {
+                        onclick: () => { st.singleChartsState.resetAll(); m.redraw(); },
+                    }, 'RESET SELECTION'),
+                    isHistogram && m('button.section-action-btn', {
+                        onclick: toggleHeatmap,
+                        disabled: st.heatmapLoading,
+                    }, st.heatmapLoading ? 'LOADING...' : (st.heatmapMode ? 'SHOW PERCENTILES' : 'SHOW HEATMAP')),
+                ]),
             ]),
             m('div.single-chart-container', [
-                m(Chart, { spec, chartsState: st.singleChartsState, interval: data.interval }),
+                m('div.chart-wrapper', [
+                    m(Chart, { spec: chartSpec, chartsState: st.singleChartsState, interval: data.interval }),
+                ]),
             ]),
             m('div.single-chart-fields', [
                 fieldRow('Title', st.title, (e) => { st.title = e.target.value; }, applyFields),

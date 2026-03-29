@@ -254,9 +254,65 @@ const processDashboardData = async (data, activeCgroupPattern) => {
     return data;
 };
 
+/**
+ * Fetch heatmap data for a single histogram-percentiles plot.
+ * Returns the heatmap payload object or null if the plot isn't a histogram or the query fails.
+ */
+const fetchHeatmapForPlot = async (plot) => {
+    const query = plot.promql_query;
+    if (!query || !query.includes('histogram_percentiles')) return null;
+
+    const match = query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
+    if (!match) return null;
+
+    const metricSelector = match[1].trim();
+    const result = await executePromQLRangeQuery(`histogram_heatmap(${metricSelector})`);
+
+    if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
+        const hr = result.data.result;
+        return {
+            time_data: hr.timestamps,
+            bucket_bounds: hr.bucket_bounds,
+            data: hr.data,
+            min_value: hr.min_value,
+            max_value: hr.max_value,
+        };
+    }
+    return null;
+};
+
+/**
+ * Fetch heatmap data for all histogram charts in a set of groups.
+ * Returns a Map<chartId, heatmapPayload>.
+ */
+const fetchHeatmapsForGroups = async (groups) => {
+    const plots = [];
+    for (const group of groups || []) {
+        for (const plot of group.plots || []) {
+            if (plot.promql_query && plot.promql_query.includes('histogram_percentiles')) {
+                plots.push(plot);
+            }
+        }
+    }
+
+    const results = await Promise.allSettled(plots.map(p => fetchHeatmapForPlot(p)));
+
+    const heatmapData = new Map();
+    for (let i = 0; i < plots.length; i++) {
+        if (results[i].status === 'fulfilled' && results[i].value) {
+            heatmapData.set(plots[i].opts.id, results[i].value);
+        } else if (results[i].status === 'rejected') {
+            console.error('Failed to fetch histogram heatmap:', results[i].reason);
+        }
+    }
+    return heatmapData;
+};
+
 export {
     executePromQLRangeQuery,
     applyResultToPlot,
+    fetchHeatmapForPlot,
+    fetchHeatmapsForGroups,
     substituteCgroupPattern,
     processDashboardData,
 };

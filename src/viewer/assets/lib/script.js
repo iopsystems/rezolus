@@ -2,7 +2,7 @@ import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
-import { executePromQLRangeQuery, applyResultToPlot, substituteCgroupPattern, processDashboardData } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
@@ -51,7 +51,24 @@ const saveCapture = () => {
     document.body.removeChild(a);
 };
 
-
+// Build common TopNav attrs from section data. Pass extra to override/add fields.
+const topNavAttrs = (data, sectionRoute, extra) => ({
+    sectionRoute,
+    groups: data.groups,
+    filename: data.filename,
+    source: data.source,
+    version: data.version,
+    interval: data.interval,
+    filesize: data.filesize,
+    num_series: data.num_series,
+    liveMode,
+    recording,
+    onStartRecording: startRecording,
+    onStopRecording: stopRecording,
+    onSaveCapture: saveCapture,
+    chartsState,
+    ...extra,
+});
 
 // Main component
 const Main = {
@@ -60,24 +77,11 @@ const Main = {
     }) {
         return m(
             'div',
-            m(TopNav, {
-                sectionRoute: activeSection?.route,
-                groups,
-                filename,
-                source,
-                version,
-                interval,
-                filesize,
-                start_time,
-                end_time,
-                num_series,
-                liveMode,
-                recording,
-                onStartRecording: startRecording,
-                onStopRecording: stopRecording,
-                onSaveCapture: saveCapture,
-                chartsState,
-            }),
+            m(TopNav, topNavAttrs(
+                { groups, filename, source, version, interval, filesize, num_series },
+                activeSection?.route,
+                { start_time, end_time },
+            )),
             m('main', [
                 m(Sidebar, {
                     activeSection,
@@ -195,54 +199,14 @@ let heatmapLoading = false;
 // Cache of fetched heatmap data per section: sectionRoute -> Map<chartId, data>
 const heatmapDataCache = new Map();
 
-// Fetch heatmap data for all histogram charts in a section — queries run in parallel.
+// Fetch heatmap data for all histogram charts in a section.
 const fetchSectionHeatmapData = async (sectionRoute, groups) => {
     heatmapLoading = true;
     m.redraw();
 
-    // Collect all histogram plots that need heatmap queries
-    const heatmapPlots = [];
-    for (const group of groups || []) {
-        for (const plot of group.plots || []) {
-            if (plot.promql_query && plot.promql_query.includes('histogram_percentiles')) {
-                const match = plot.promql_query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
-                if (!match) continue;
-
-                const metricSelector = match[1].trim();
-                heatmapPlots.push({
-                    id: plot.opts.id,
-                    query: `histogram_heatmap(${metricSelector})`,
-                });
-            }
-        }
-    }
-
-    // Fire all heatmap queries concurrently
-    const results = await Promise.allSettled(
-        heatmapPlots.map((hp) => executePromQLRangeQuery(hp.query)),
-    );
-
-    const heatmapData = new Map();
-    for (let i = 0; i < heatmapPlots.length; i++) {
-        const outcome = results[i];
-        if (outcome.status === 'fulfilled') {
-            const result = outcome.value;
-            if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
-                const heatmapResult = result.data.result;
-                heatmapData.set(heatmapPlots[i].id, {
-                    time_data: heatmapResult.timestamps,
-                    bucket_bounds: heatmapResult.bucket_bounds,
-                    data: heatmapResult.data,
-                    min_value: heatmapResult.min_value,
-                    max_value: heatmapResult.max_value,
-                });
-            }
-        } else {
-            console.error('Failed to fetch histogram heatmap:', outcome.reason);
-        }
-    }
-
+    const heatmapData = await fetchHeatmapsForGroups(groups);
     heatmapDataCache.set(sectionRoute, heatmapData);
+
     heatmapLoading = false;
     m.redraw();
 };
@@ -430,24 +394,7 @@ m.route(document.body, '/overview', {
                     if (!data) return m('div', 'Loading...');
                     const activeSection = data.sections.find(s => s.route === `/${sectionKey}`);
                     return m('div', [
-                        m(TopNav, {
-                            sectionRoute: activeSection?.route,
-                            groups: data.groups,
-                            filename: data.filename,
-                            source: data.source,
-                            version: data.version,
-                            interval: data.interval,
-                            filesize: data.filesize,
-                            start_time: data.start_time,
-                            end_time: data.end_time,
-                            num_series: data.num_series,
-                            liveMode,
-                            recording,
-                            onStartRecording: startRecording,
-                            onStopRecording: stopRecording,
-                            onSaveCapture: saveCapture,
-                            chartsState,
-                        }),
+                        m(TopNav, topNavAttrs(data, activeSection?.route)),
                         m('main.single-chart-main', [
                             m(SingleChartView, {
                                 data,

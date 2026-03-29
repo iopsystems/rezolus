@@ -47,18 +47,6 @@
     --danger: #f85149;
     --info: #58a6ff;
 
-    /* Chart accent colors - carefully curated palette */
-    --chart-blue: #58a6ff;
-    --chart-cyan: #39d5ff;
-    --chart-teal: #2dd4bf;
-    --chart-green: #3fb950;
-    --chart-lime: #a3e635;
-    --chart-yellow: #fbbf24;
-    --chart-orange: #f97316;
-    --chart-red: #f85149;
-    --chart-pink: #f472b6;
-    --chart-purple: #a78bfa;
-
     /* Layout dimensions */
     --sidebar-width: 180px;
     --header-height: 56px;
@@ -317,8 +305,6 @@ body::after {
     flex-shrink: 0;
 }
 
-
-
 .topnav-source {
     position: relative;
     font-family: var(--font-mono);
@@ -451,7 +437,6 @@ body::after {
     box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
 }
 
-
 #topnav .topnav-actions button {
     padding: 0.5rem 1rem;
     background: var(--bg-tertiary);
@@ -478,87 +463,6 @@ body::after {
     cursor: not-allowed;
     opacity: 0.5;
     pointer-events: none;
-}
-
-
-/* ==========================================================================
-   Header - File Info Section
-   ========================================================================== */
-
-header {
-    margin-top: var(--header-height);
-    margin-left: var(--sidebar-width);
-    padding: 1rem var(--content-padding);
-    background: linear-gradient(180deg, var(--bg-secondary) 0%, transparent 100%);
-    border-bottom: 1px solid var(--border-subtle);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    position: relative;
-    z-index: 10;
-}
-
-header .file-info {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-header .file-info .filename {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-base);
-    font-weight: 600;
-    color: var(--fg);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-
-header .file-info .metadata {
-    font-size: var(--font-size-xs);
-    color: var(--fg-secondary);
-    font-family: var(--font-mono);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem;
-}
-
-header .file-info .metadata span {
-    background: var(--bg-tertiary);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    border: 1px solid var(--border-subtle);
-}
-
-header .file-info .metadata span::after {
-    content: none;
-}
-
-header .header-actions {
-    display: flex;
-    gap: 0.75rem;
-}
-
-header .header-actions button {
-    padding: 0.5rem 1rem;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    color: var(--fg-secondary);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    cursor: pointer;
-    transition: all var(--transition-base);
-}
-
-header .header-actions button:hover {
-    background: var(--bg-elevated);
-    border-color: var(--accent-muted);
-    color: var(--fg);
-    box-shadow: var(--shadow-glow);
 }
 
 /* ==========================================================================
@@ -684,18 +588,6 @@ main {
     overflow: hidden;
 }
 
-.section-breadcrumb {
-    font-size: var(--font-size-sm);
-    color: var(--fg-muted);
-    margin-bottom: 0.5rem;
-    font-family: var(--font-mono);
-}
-
-.section-breadcrumb .section-name {
-    color: var(--fg);
-    font-weight: 600;
-}
-
 .section-header-row {
     display: flex;
     align-items: center;
@@ -742,8 +634,6 @@ main {
     opacity: 0.4;
     cursor: not-allowed;
 }
-
-
 
 /* ==========================================================================
    Chart Groups
@@ -923,20 +813,6 @@ main {
     margin: 0 auto;
 }
 
-.single-chart-header {
-    margin-bottom: 1rem;
-}
-
-.single-chart-header .section-title {
-    margin-bottom: 0.25rem;
-}
-
-.chart-description {
-    color: var(--fg-muted);
-    font-size: var(--font-size-sm);
-    margin: 0;
-}
-
 .single-chart-container .chart {
     height: 500px;
 }
@@ -961,7 +837,8 @@ main {
     font-weight: 600;
 }
 
-.field-input {
+.field-input,
+.query-input {
     width: 100%;
     padding: 1rem;
     background: var(--bg-void);
@@ -975,7 +852,8 @@ main {
     box-sizing: border-box;
 }
 
-.field-input:focus {
+.field-input:focus,
+.query-input:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow:
@@ -983,7 +861,8 @@ main {
         var(--shadow-glow);
 }
 
-.field-input::placeholder {
+.field-input::placeholder,
+.query-input::placeholder {
     color: var(--fg-muted);
 }
 
@@ -1058,30 +937,8 @@ main {
 }
 
 .query-input {
-    width: 100%;
     min-height: 120px;
-    padding: 1rem;
-    background: var(--bg-void);
-    color: var(--fg);
-    border: 1px solid var(--border-default);
-    border-radius: var(--card-radius);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    line-height: 1.6;
     resize: vertical;
-    transition: all var(--transition-base);
-}
-
-.query-input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow:
-        0 0 0 3px var(--accent-subtle),
-        var(--shadow-glow);
-}
-
-.query-input::placeholder {
-    color: var(--fg-muted);
 }
 
 .execute-btn {
@@ -1122,7 +979,9 @@ main {
     margin-top: 1.25rem;
 }
 
-.query-history h3 {
+.query-history h3,
+.example-queries h3,
+.selector-column h4 {
     margin-bottom: 0.5rem;
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
@@ -1174,36 +1033,6 @@ main {
     height: 336px;
 }
 
-.result-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: var(--bg-card);
-    border-radius: var(--card-radius);
-    overflow: hidden;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-}
-
-.result-table th,
-.result-table td {
-    padding: 0.75rem 1rem;
-    text-align: left;
-    border-bottom: 1px solid var(--border-subtle);
-}
-
-.result-table th {
-    background: var(--bg-tertiary);
-    font-weight: 600;
-    font-size: var(--font-size-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--fg-secondary);
-}
-
-.result-table tr:hover td {
-    background: var(--bg-tertiary);
-}
-
 .example-queries {
     margin-top: 1.5rem;
     padding: 1.25rem;
@@ -1214,12 +1043,6 @@ main {
 
 .example-queries h3 {
     margin-bottom: 1rem;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--fg-muted);
 }
 
 .example-queries ul {
@@ -1325,13 +1148,7 @@ main {
 }
 
 .selector-column h4 {
-    margin-bottom: 0.5rem;
     color: var(--fg-muted);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
 }
 
 .cgroup-select {
@@ -1402,60 +1219,6 @@ main {
     font-size: var(--font-size-xs);
 }
 
-.cgroups-layout {
-    display: flex;
-    gap: 1rem;
-}
-
-.cgroups-left,
-.cgroups-right {
-    flex: 1;
-}
-
-.cgroups-left .group,
-.cgroups-right .group {
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--card-radius);
-    padding: 1rem;
-    margin-bottom: 1rem;
-}
-
-.cgroups-left h2,
-.cgroups-right h2 {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-base);
-    font-weight: 600;
-    margin-bottom: 1rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid var(--border-subtle);
-}
-
-.cgroups-left .chart,
-.cgroups-right .chart {
-    max-width: 100%;
-    width: 100%;
-}
-
-/* (heatmap toggle moved to topnav) */
-
-/* ==========================================================================
-   Cgroups Controls
-   ========================================================================== */
-
-#cgroups-controls {
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--card-radius);
-    margin-bottom: 1rem;
-    padding: 1rem;
-}
-
-#cgroups-controls input[type="checkbox"] {
-    margin-right: 0.75em;
-    accent-color: var(--accent);
-}
-
 /* ==========================================================================
    Status Bar
    ========================================================================== */
@@ -1520,92 +1283,3 @@ main {
     scrollbar-color: var(--bg-tertiary) var(--bg);
 }
 
-/* ==========================================================================
-   Responsive Adjustments
-   ========================================================================== */
-
-
-/* ==========================================================================
-   Animation Keyframes
-   ========================================================================== */
-
-@keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes shimmer {
-    0% {
-        background-position: -200% 0;
-    }
-    100% {
-        background-position: 200% 0;
-    }
-}
-
-/* Loading skeleton animation */
-.skeleton {
-    background: linear-gradient(
-        90deg,
-        var(--bg-tertiary) 25%,
-        var(--bg-elevated) 50%,
-        var(--bg-tertiary) 75%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-}
-
-/* Chart loading state */
-.chart.loading {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.chart.loading::after {
-    content: '';
-    width: 32px;
-    height: 32px;
-    border: 2px solid var(--border-default);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-/* ==========================================================================
-   Utility Classes
-   ========================================================================== */
-
-.visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-}
-
-.truncate {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.mono {
-    font-family: var(--font-mono);
-}
