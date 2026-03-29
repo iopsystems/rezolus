@@ -97,11 +97,11 @@ export function configureHistogramHeatmap(chart) {
     } = chart.spec;
 
     if (!data || data.length === 0 || !timeData || timeData.length === 0) {
-        applyNoData(chart, opts);
+        applyNoData(chart);
         return;
     }
 
-    const baseOption = getBaseOption(opts.title, opts.description);
+    const baseOption = getBaseOption();
 
     // Find the range of buckets that actually have data
     let minBucketIdx = Infinity;
@@ -308,7 +308,7 @@ export function configureHistogramHeatmap(chart) {
         grid: {
             left: '12',
             right: '17',
-            top: opts.description ? '62' : '50',
+            top: '56',
             bottom: '35',
             containLabel: true,
         },
@@ -409,22 +409,22 @@ export function configureHistogramHeatmap(chart) {
     updateLabels();
 
     // DOM checkbox overlay for percentage/raw count toggle.
-    // Lives outside ECharts so toggling never triggers a canvas redraw.
-    let checkboxEl = chart.domNode.querySelector('.histogram-toggle');
+    // Lives in the chart-wrapper (parent of canvas) so it aligns with the DOM title row.
+    const wrapper = chart.domNode.parentNode;
+    let checkboxEl = wrapper.querySelector('.histogram-toggle');
     if (!checkboxEl) {
         checkboxEl = document.createElement('span');
         checkboxEl.className = 'histogram-toggle';
         checkboxEl.style.cssText = `
             position: absolute;
-            top: 24px;
-            right: 175px;
+            top: 10px;
+            right: 180px;
             ${FONTS.cssControl}
             cursor: pointer;
             user-select: none;
-            z-index: 10;
-            transform: translateY(-50%);
+            z-index: 3;
         `;
-        chart.domNode.appendChild(checkboxEl);
+        wrapper.appendChild(checkboxEl);
     }
 
     const updateCheckbox = () => {

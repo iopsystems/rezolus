@@ -34,11 +34,11 @@ export function configureLineChart(chart) {
         !data[1] ||
         data[0].length === 0
     ) {
-        applyNoData(chart, opts);
+        applyNoData(chart);
         return;
     }
 
-    const baseOption = getBaseOption(opts.title, opts.description);
+    const baseOption = getBaseOption();
 
     const [timeData, valueData] = data;
 

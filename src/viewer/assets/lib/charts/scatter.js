@@ -32,11 +32,11 @@ export function configureScatterChart(chart) {
     } = chart.spec;
 
     if (!data || data.length < 2 || !data[0] || data[0].length === 0) {
-        applyNoData(chart, opts);
+        applyNoData(chart);
         return;
     }
 
-    const baseOption = getBaseOption(opts.title, opts.description);
+    const baseOption = getBaseOption();
 
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
@@ -116,10 +116,14 @@ export function configureScatterChart(chart) {
 
     const minZoomSpan = calculateMinZoomSpan(timeData);
 
+    const uniqueNamesForLayout = [...new Set(series.map(s => s.name))];
+    const hasTwoRowLegend = uniqueNamesForLayout.some(n => n.includes('.'));
+
     const option = {
         ...baseOption,
+        grid: { ...baseOption.grid, top: hasTwoRowLegend ? '68' : '60' },
         legend: (() => {
-            const uniqueNames = [...new Set(series.map(s => s.name))];
+            const uniqueNames = uniqueNamesForLayout;
             const row1 = uniqueNames.filter(n => !n.includes('.'));
             const row2 = uniqueNames.filter(n => n.includes('.'));
             // Fixed item width so swatches align across rows into a grid
@@ -165,7 +169,7 @@ export function configureScatterChart(chart) {
                 },
             }));
             if (row2.length === 0) {
-                return { ...shared, top: '12', data: initData(row1) };
+                return { ...shared, top: '10', data: initData(row1) };
             }
             return [
                 { ...shared, top: '4', data: initData(row1) },

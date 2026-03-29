@@ -263,6 +263,11 @@ const Group = {
             ? { ...opts, title: `${titlePrefix} / ${opts.title}` }
             : opts;
 
+        const chartHeader = (opts) => m('div.chart-header', [
+            m('span.chart-title', opts.title),
+            opts.description && m('span.chart-subtitle', opts.description),
+        ]);
+
         const expandLink = (spec) => {
             if (!spec.promql_query) return null;
             const href = `${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
@@ -306,6 +311,7 @@ const Group = {
                                 max_value: heatmapData.max_value,
                             };
                             return m('div.chart-wrapper', [
+                                chartHeader(heatmapSpec.opts),
                                 m(Chart, { spec: heatmapSpec, chartsState, interval }),
                                 expandLink(spec),
                             ]);
@@ -313,6 +319,7 @@ const Group = {
 
                         const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse: attrs.noCollapse };
                         return m('div.chart-wrapper', [
+                            chartHeader(prefixedSpec.opts),
                             m(Chart, { spec: prefixedSpec, chartsState, interval }),
                             expandLink(spec),
                         ]);

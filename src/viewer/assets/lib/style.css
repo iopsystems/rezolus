@@ -789,30 +789,90 @@ main {
    ========================================================================== */
 
 .chart {
-    height: 304px;
+    height: 270px;
+    overflow: hidden;
+    position: relative;
+}
+
+.chart.no-data {
+    height: 0;
+    border: none;
+    background: none;
+}
+
+.chart.no-data > div {
+    display: none !important;
+}
+
+.chart-wrapper:has(.no-data) {
+    min-height: 40px;
+}
+
+.chart-wrapper:has(.no-data) .chart-header {
+    opacity: 0.5;
+}
+
+.chart-wrapper:has(.no-data):hover {
+    border-color: var(--border-default);
+    box-shadow: none;
+}
+
+.chart-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 10px 16px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.chart-header > * {
+    pointer-events: auto;
+}
+
+.chart-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+    user-select: text;
+    width: fit-content;
+}
+
+.chart-subtitle {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--fg-muted);
+    user-select: text;
+    width: fit-content;
+}
+
+.chart-wrapper {
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
     background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
     border: 1px solid var(--border-default);
     border-radius: var(--card-radius);
-    overflow: hidden;
-    position: relative;
     transition: all var(--transition-base);
 }
 
-.chart::before {
+.chart-wrapper::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-        180deg,
-        rgba(88, 166, 255, 0.03) 0%,
-        transparent 30%
-    );
+    background: linear-gradient(180deg, rgba(88, 166, 255, 0.03) 0%, transparent 30%);
     pointer-events: none;
     opacity: 0;
     transition: opacity var(--transition-base);
 }
 
-.chart:hover {
+.chart-wrapper:hover {
     border-color: var(--border-emphasis);
     box-shadow:
         var(--shadow-lg),
@@ -820,48 +880,8 @@ main {
         inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
-.chart:hover::before {
+.chart-wrapper:hover::before {
     opacity: 1;
-}
-
-.chart.no-data {
-    height: 56px;
-}
-
-.chart.no-data > div {
-    display: none !important;
-}
-
-.no-data-title {
-    position: absolute;
-    left: 16px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--fg-muted);
-    font-family: var(--font-mono);
-    font-size: 13px;
-    font-weight: 600;
-    pointer-events: none;
-}
-
-.chart.no-data:hover {
-    border-color: var(--border-default);
-    box-shadow: none;
-}
-
-.chart-full-width {
-    grid-column: 1 / -1;
-    height: 336px;
-}
-
-.chart-full-width.no-data {
-    height: 56px;
-}
-
-.chart-wrapper {
-    position: relative;
-    min-width: 0;
-    overflow: hidden;
 }
 
 .chart-expand {
