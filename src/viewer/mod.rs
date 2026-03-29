@@ -146,22 +146,38 @@ pub fn run(config: Config) {
 
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
+            // Extract systeminfo from parquet file-level metadata
+            let systeminfo = {
+                use parquet::file::reader::FileReader;
+                use parquet::file::serialized_reader::SerializedFileReader;
+                std::fs::File::open(path).ok().and_then(|f| {
+                    let reader = SerializedFileReader::new(f).ok()?;
+                    let kv = reader.metadata().file_metadata().key_value_metadata()?;
+                    kv.iter()
+                        .find(|kv| kv.key == "systeminfo")
+                        .and_then(|kv| kv.value.clone())
+                })
+            };
+
             info!("Generating dashboards...");
-            dashboard::generate(data, filesize)
+            let mut state = dashboard::generate(data, filesize);
+            state.systeminfo = systeminfo;
+            state
         }
         Source::Live(url) => {
             info!("Connecting to live agent at {url}...");
 
-            // Fetch agent version from the root endpoint
-            let (source, version) = rt.block_on(async {
+            // Fetch agent version and systeminfo from the agent
+            let (source, version, agent_systeminfo) = rt.block_on(async {
                 let client = Client::builder()
                     .http1_only()
                     .build()
                     .expect("failed to create http client");
-                match client.get(url.clone()).send().await {
+
+                // Fetch version from root endpoint
+                let (source, version) = match client.get(url.clone()).send().await {
                     Ok(response) => match response.text().await {
                         Ok(body) => {
-                            // Parse "Rezolus 5.4.0 Agent\n..."
                             let first_line = body.lines().next().unwrap_or("");
                             let parts: Vec<&str> = first_line.split_whitespace().collect();
                             match parts.as_slice() {
@@ -175,7 +191,17 @@ pub fn run(config: Config) {
                         eprintln!("failed to connect to agent at {url}: {e}");
                         std::process::exit(1);
                     }
-                }
+                };
+
+                // Fetch systeminfo from agent
+                let mut info_url = url.clone();
+                info_url.set_path("/systeminfo");
+                let sysinfo = match client.get(info_url).send().await {
+                    Ok(response) if response.status().is_success() => response.text().await.ok(),
+                    _ => None,
+                };
+
+                (source, version, sysinfo)
             });
 
             info!("Connected to {source} {version} at {url}");
@@ -188,6 +214,8 @@ pub fn run(config: Config) {
             tsdb.set_filename(url.to_string());
             let mut state = dashboard::generate(tsdb, None);
             state.live = true;
+
+            state.systeminfo = agent_systeminfo;
 
             // Spawn the ingest loop
             let ingest_tsdb = state.tsdb.clone();
@@ -351,6 +379,8 @@ struct AppState {
     /// Raw msgpack snapshot bytes for parquet export (live mode only).
     snapshots: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
     live: bool,
+    /// Serialized SystemSummary JSON from parquet metadata or live system.
+    systeminfo: Option<String>,
 }
 
 impl AppState {
@@ -360,6 +390,7 @@ impl AppState {
             tsdb: Arc::new(parking_lot::RwLock::new(tsdb)),
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: false,
+            systeminfo: None,
         }
     }
 }
@@ -378,6 +409,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/mode", get(mode))
         .route("/reset", axum::routing::post(reset_tsdb))
         .route("/save", get(save_parquet))
+        .route("/systeminfo", get(systeminfo_handler))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -446,6 +478,23 @@ async fn mode(
     axum::response::Json(serde_json::json!({
         "live": state.live,
     }))
+}
+
+/// Returns the system hardware summary from parquet metadata or the live system.
+async fn systeminfo_handler(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::response::Response {
+    match &state.systeminfo {
+        Some(json) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(json.clone()))
+            .unwrap(),
+        None => axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("{}"))
+            .unwrap(),
+    }
 }
 
 // PromQL API handlers that delegate to the swappable QueryEngine
@@ -634,6 +683,9 @@ async fn save_parquet(
             .unwrap();
     }
 
+    // Grab the stored systeminfo (from agent or local) for parquet metadata
+    let sysinfo_json = state.systeminfo.clone();
+
     // Run the synchronous parquet conversion off the async runtime
     let result = tokio::task::spawn_blocking(move || {
         let total_size: usize = snapshot_data.iter().map(|s| s.len()).sum();
@@ -650,10 +702,8 @@ async fn save_parquet(
         )
         .metadata("sampling_interval_ms".to_string(), "1000".to_string());
 
-        if let Some(info) = systeminfo::summary() {
-            if let Ok(json) = serde_json::to_string(&info) {
-                converter = converter.metadata("systeminfo".to_string(), json);
-            }
+        if let Some(json) = sysinfo_json {
+            converter = converter.metadata("systeminfo".to_string(), json);
         }
 
         converter

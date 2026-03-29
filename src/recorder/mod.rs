@@ -202,6 +202,25 @@ pub fn run(config: Config) {
         });
     }
 
+    // Fetch the agent's systeminfo for embedding in parquet metadata
+    let agent_systeminfo: Option<String> = {
+        let client = client.clone();
+        let mut info_url = config.url.clone();
+        info_url.set_path("/systeminfo");
+        rt.block_on(async move {
+            match client.get(info_url).send().await {
+                Ok(response) if response.status().is_success() => response.text().await.ok(),
+                _ => None,
+            }
+        })
+    };
+
+    if agent_systeminfo.is_some() {
+        debug!("fetched systeminfo from agent");
+    } else {
+        debug!("agent systeminfo not available");
+    }
+
     if config.duration.is_some() {
         info!("recording metrics... ctrl-c to terminate early");
     } else {
@@ -276,10 +295,8 @@ pub fn run(config: Config) {
                         config.interval.as_millis().to_string(),
                     );
 
-                if let Some(info) = systeminfo::summary() {
-                    if let Ok(json) = serde_json::to_string(&info) {
-                        converter = converter.metadata("systeminfo".to_string(), json);
-                    }
+                if let Some(ref json) = agent_systeminfo {
+                    converter = converter.metadata("systeminfo".to_string(), json.clone());
                 }
 
                 if let Err(e) = converter.convert_file_handle(writer, destination.unwrap())
