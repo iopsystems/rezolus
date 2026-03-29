@@ -2056,7 +2056,6 @@ const preloadSection = async (section) => {
     }
 
     const url = `/data/${section}.json`;
-    console.time(`Preload ${url}`);
     const data = await m.request({
         method: 'GET',
         url,
@@ -2064,7 +2063,6 @@ const preloadSection = async (section) => {
     });
 
     const processedData = await processDashboardData(data);
-    console.timeEnd(`Preload ${url}`);
     sectionResponseCache[section] = processedData;
 };
 
@@ -2351,7 +2349,6 @@ m.route(document.body, '/overview', {
             }
 
             const url = `/data/${params.section}.json`;
-            console.time(`Load ${url}`);
             return m
                 .request({
                     method: 'GET',
@@ -2359,7 +2356,6 @@ m.route(document.body, '/overview', {
                     withCredentials: true,
                 })
                 .then(async (data) => {
-                    console.timeEnd(`Load ${url}`);
 
                     // Process PromQL queries for this section
                     const processedData = await processDashboardData(data);

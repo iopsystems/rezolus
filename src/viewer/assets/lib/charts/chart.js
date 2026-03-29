@@ -362,7 +362,6 @@ export class Chart {
 
         // Double click on a chart -> reset zoom level
         // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
-        // TODO: Add a visible interface element to reset zoom, too.
         this.echart.getZr().on('dblclick', () => {
             this.chartsState.resetAll();
             m.redraw();

@@ -317,11 +317,7 @@ body::after {
     flex-shrink: 0;
 }
 
-#topnav .topnav-separator {
-    width: 1px;
-    height: 20px;
-    background: var(--border-default);
-}
+
 
 .topnav-source {
     position: relative;
@@ -747,11 +743,7 @@ main {
     cursor: not-allowed;
 }
 
-.zoom-hint {
-    font-size: var(--font-size-xs);
-    color: var(--fg-muted);
-    font-family: var(--font-mono);
-}
+
 
 /* ==========================================================================
    Chart Groups
