@@ -62,12 +62,30 @@ const formatInterval = (secs) => {
     return secs.toFixed(0) + 's';
 };
 
+// Collapsible metadata state
+let metadataExpanded = false;
+
+// Close metadata dropdown on click outside
+document.addEventListener('click', (e) => {
+    if (metadataExpanded && !e.target.closest('.topnav-source')) {
+        metadataExpanded = false;
+        m.redraw();
+    }
+});
+
 // Top navigation bar component
 const TopNav = {
     view({ attrs }) {
         const sectionRoute = attrs.sectionRoute;
         const groups = attrs.groups;
         const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
+
+        // Build metadata key/value pairs
+        const metaEntries = [];
+        if (attrs.source) metaEntries.push(['Source', attrs.source]);
+        if (attrs.version) metaEntries.push(['Version', attrs.version]);
+        if (attrs.interval) metaEntries.push(['Interval', formatInterval(attrs.interval)]);
+        if (!liveMode && attrs.filesize) metaEntries.push(['Size', formatSize(attrs.filesize)]);
 
         return m('div#topnav', [
             m('div.logo', [
@@ -76,12 +94,19 @@ const TopNav = {
                     class: recording ? 'recording' : 'stopped',
                 }, recording ? 'REC' : 'STOPPED'),
             ]),
-            attrs.filename && m('div.topnav-source', attrs.filename),
-            m('div.topnav-meta', [
-                attrs.source && m('span', attrs.source),
-                attrs.version && m('span', attrs.version),
-                attrs.interval && m('span', formatInterval(attrs.interval)),
-                !liveMode && attrs.filesize && m('span', formatSize(attrs.filesize)),
+            attrs.filename && m('div.topnav-source', {
+                onclick: () => { metadataExpanded = !metadataExpanded; },
+            }, [
+                m('span.topnav-source-name', attrs.filename),
+                m('span.topnav-source-chevron', { class: metadataExpanded ? 'expanded' : '' }, '\u25BE'),
+                metadataExpanded && metaEntries.length > 0 && m('div.topnav-meta-table', [
+                    m('div.topnav-meta-row.topnav-meta-header',
+                        metaEntries.map(([key]) => m('span', key)),
+                    ),
+                    m('div.topnav-meta-row.topnav-meta-values',
+                        metaEntries.map(([, val]) => m('span', val)),
+                    ),
+                ]),
             ]),
             m('div.topnav-actions', [
                 // Transport controls (live mode only)
@@ -105,18 +130,23 @@ const TopNav = {
                 // Separator between transport and view controls
                 liveMode && m('div.topnav-separator'),
 
-                // Heatmap/Percentile action toggle (global, always visible)
-                m('button', {
-                    onclick: async () => {
-                        heatmapEnabled = !heatmapEnabled;
-                        if (heatmapEnabled && (!sectionHeatmapData || sectionHeatmapData.size === 0)) {
-                            await fetchSectionHeatmapData(sectionRoute, groups);
-                        } else {
-                            m.redraw();
-                        }
-                    },
-                    disabled: heatmapLoading,
-                }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
+                // Heatmap/Percentile action toggle (global, visible when section has histogram charts)
+                (() => {
+                    const hasHistogramCharts = (groups || []).some(g =>
+                        (g.plots || []).some(p => p.promql_query && p.promql_query.includes('histogram_percentiles'))
+                    );
+                    return m('button', {
+                        onclick: async () => {
+                            heatmapEnabled = !heatmapEnabled;
+                            if (heatmapEnabled && (!sectionHeatmapData || sectionHeatmapData.size === 0)) {
+                                await fetchSectionHeatmapData(sectionRoute, groups);
+                            } else {
+                                m.redraw();
+                            }
+                        },
+                        disabled: heatmapLoading || !hasHistogramCharts,
+                    }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS'));
+                })(),
 
                 m('button', {
                     onclick: () => chartsState.resetZoom(),
@@ -237,6 +267,7 @@ const Main = {
                 m(SectionContent, {
                     section: activeSection,
                     groups,
+                    interval,
                 }),
             ]),
         );
@@ -789,9 +820,11 @@ const QueryExplorer = {
 const SectionContent = {
     view({ attrs }) {
         const sectionRoute = attrs.section.route;
+        const sectionName = attrs.section.name;
+        const interval = attrs.interval;
 
         // Special handling for Query Explorer
-        if (attrs.section.name === 'Query Explorer') {
+        if (sectionName === 'Query Explorer') {
             return m('div#section-content', [
                 m(QueryExplorer),
             ]);
@@ -807,19 +840,19 @@ const SectionContent = {
             );
 
             return m('div#section-content.cgroups-section', [
-                m('h1.section-title', attrs.section.name),
+                m('h1.section-title', sectionName),
                 m(CgroupSelector, { groups: attrs.groups }),
                 m('div.cgroup-columns', [
                     m(
                         'div.cgroup-column.cgroup-column-left',
                         leftGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute }),
+                            m(Group, { ...group, sectionRoute, sectionName, interval }),
                         ),
                     ),
                     m(
                         'div.cgroup-column.cgroup-column-right',
                         rightGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute }),
+                            m(Group, { ...group, sectionRoute, sectionName, interval }),
                         ),
                     ),
                 ]),
@@ -827,10 +860,10 @@ const SectionContent = {
         }
 
         return m('div#section-content', [
-            m('h1.section-title', attrs.section.name),
+            m('h1.section-title', sectionName),
             m(
                 'div#groups',
-                attrs.groups.map((group) => m(Group, { ...group, sectionRoute })),
+                attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
             ),
         ]);
     },
@@ -1407,8 +1440,19 @@ const fetchSectionHeatmapData = async (sectionRoute, groups) => {
 const Group = {
     view({ attrs }) {
         const sectionRoute = attrs.sectionRoute;
+        const sectionName = attrs.sectionName;
+        const interval = attrs.interval;
         const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
         const isHeatmapMode = heatmapEnabled && !heatmapLoading;
+
+        // Prefix plot titles for self-contained chart labels.
+        // Overview page uses group name (CPU, Network, etc.) since it aggregates multiple sections.
+        // Other pages use section name (Memory, CPU, etc.).
+        const isOverview = sectionRoute === '/overview';
+        const titlePrefix = isOverview ? attrs.name : sectionName;
+        const prefixTitle = (opts) => titlePrefix
+            ? { ...opts, title: `${titlePrefix} / ${opts.title}` }
+            : opts;
 
         return m(
             'div.group',
@@ -1429,7 +1473,7 @@ const Group = {
                             const heatmapSpec = {
                                 ...spec,
                                 opts: {
-                                    ...spec.opts,
+                                    ...prefixTitle(spec.opts),
                                     style: 'histogram_heatmap',
                                 },
                                 time_data: heatmapData.time_data,
@@ -1439,12 +1483,13 @@ const Group = {
                                 max_value: heatmapData.max_value,
                             };
                             return m('div.chart-wrapper', [
-                                m(Chart, { spec: heatmapSpec, chartsState }),
+                                m(Chart, { spec: heatmapSpec, chartsState, interval }),
                             ]);
                         }
 
+                        const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts) };
                         return m('div.chart-wrapper', [
-                            m(Chart, { spec, chartsState }),
+                            m(Chart, { spec: prefixedSpec, chartsState, interval }),
                         ]);
                     }),
                 ),
@@ -1455,6 +1500,14 @@ const Group = {
 
 // Application state management
 const chartsState = new ChartsState();
+
+// Double-click anywhere on the page resets zoom and clears all pin selections
+document.addEventListener('dblclick', () => {
+    if (!chartsState.isDefaultZoom() || chartsState.charts.size > 0) {
+        chartsState.resetAll();
+        m.redraw();
+    }
+});
 
 const sectionResponseCache = {};
 

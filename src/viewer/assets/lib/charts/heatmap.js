@@ -7,8 +7,12 @@ import {
 import {
     getBaseOption,
     getNoDataOption,
+    getTooltipFreezeFooter,
+    applyChartOption,
     COLORS,
+    FONTS,
 } from './base.js';
+import { INFERNO_COLORS } from './util/colormap.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -143,19 +147,20 @@ export function configureHeatmap(chart) {
             formattedMinValue = minVal === null ? '' : minVal.toFixed(6);
         }
         const valueString = minVal === null ? formattedValue : `${formattedMinValue} - ${formattedValue}`;
-        return `<div style="font-family: 'Inter', -apple-system, sans-serif;">
-                    <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
+        return `<div style="${FONTS.cssSans}">
+                    <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                         ${formattedTime}
                     </div>
                     <div style="display: flex; align-items: center; gap: 12px;">
-                        <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: ${COLORS.accent};">
+                        <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
                             CPU ${cpu}
                         </span>
                         ${label}
-                        <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 12px; color: ${COLORS.fg};">
+                        <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">
                             ${valueString}
                         </span>
                     </div>
+                    ${getTooltipFreezeFooter(chart)}
                 </div>`;
     };
 
@@ -166,8 +171,7 @@ export function configureHeatmap(chart) {
         nameGap: 40,
         nameTextStyle: {
             color: COLORS.fg,
-            fontSize: 11,
-            fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+            ...FONTS.legend,
             padding: [0, 0, 0, 20]
         },
         data: continuousCpuIds,
@@ -177,8 +181,7 @@ export function configureHeatmap(chart) {
         axisLabel: {
             interval: yAxisLabelInterval,
             color: COLORS.fgSecondary,
-            fontSize: 10,
-            fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+            ...FONTS.axisLabel,
         },
         axisTick: {
             show: false,
@@ -223,22 +226,39 @@ export function configureHeatmap(chart) {
             min: minValue,
             max: maxValue,
             calculable: false,
-            show: false,
+            show: true,
+            orient: 'horizontal',
+            top: 13,
+            right: 16,
+            itemWidth: 10,
+            itemHeight: 120,
+            text: ['', ''],
             inRange: {
-                // Inferno colormap - perceptually uniform, high contrast
-                color: [
-                    '#000004',  // black
-                    '#1b0c41',  // dark purple
-                    '#4a0c6b',  // purple
-                    '#781c6d',  // magenta
-                    '#a52c60',  // pink-red
-                    '#cf4446',  // red
-                    '#ed6925',  // orange
-                    '#fb9b06',  // yellow-orange
-                    '#f7d13d',  // yellow
-                    '#fcffa4',  // pale yellow
-                ]
+                color: INFERNO_COLORS,
             }
+        },
+        graphic: {
+            elements: [{
+                type: 'text',
+                right: 136,
+                top: 35,
+                style: {
+                    text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
+                    fill: COLORS.fgLabel,
+                    font: FONTS.footnoteFont,
+                    textAlign: 'center',
+                },
+            }, {
+                type: 'text',
+                right: 16,
+                top: 35,
+                style: {
+                    text: createAxisLabelFormatter(unitSystem || 'count')(maxValue),
+                    fill: COLORS.fgLabel,
+                    font: FONTS.footnoteFont,
+                    textAlign: 'center',
+                },
+            }],
         },
         series: [{
             name: chart.spec.opts.title,
@@ -249,7 +269,7 @@ export function configureHeatmap(chart) {
             emphasis: {
                 itemStyle: {
                     shadowBlur: 10,
-                    shadowColor: 'rgba(0, 0, 0, 0.5)'
+                    shadowColor: COLORS.shadowStrong
                 }
             },
             // https://echarts.apache.org/en/option.html#series-heatmap.progressive
@@ -263,15 +283,7 @@ export function configureHeatmap(chart) {
         }]
     };
 
-    // Use notMerge: true to clear any previous chart configuration
-    chart.echart.setOption(option, { notMerge: true });
-
-    // Re-enable drag-to-zoom after clearing the chart
-    chart.echart.dispatchAction({
-        type: 'takeGlobalCursor',
-        key: 'dataZoomSelect',
-        dataZoomSelectActive: true,
-    });
+    applyChartOption(chart, option);
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {

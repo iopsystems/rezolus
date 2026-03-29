@@ -2,10 +2,16 @@ import {
     createAxisLabelFormatter,
 } from './util/units.js';
 import {
+    insertGapNulls,
+} from './util/utils.js';
+import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
     getNoDataOption,
+    calculateMinZoomSpan,
+    getDataZoomConfig,
+    applyChartOption,
     COLORS,
 } from './base.js';
 
@@ -36,7 +42,8 @@ export function configureLineChart(chart) {
 
     const [timeData, valueData] = data;
 
-    const zippedData = timeData.map((t, i) => [t * 1000, valueData[i]]);
+    let zippedData = timeData.map((t, i) => [t * 1000, valueData[i]]);
+    zippedData = insertGapNulls(zippedData, chart.interval);
 
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
@@ -45,32 +52,15 @@ export function configureLineChart(chart) {
     const minValue = format.min;
     const maxValue = format.max;
 
-    // Calculate minimum zoom span (5x sample interval as percentage of total duration)
-    const sampleInterval = timeData.length > 1 ? (timeData[1] - timeData[0]) : 1;
-    const totalDuration = timeData[timeData.length - 1] - timeData[0];
-    const minZoomSpan = Math.max(0.1, (sampleInterval * 5 / totalDuration) * 100);
-
     const option = {
         ...baseOption,
-        // Add dataZoom component with minSpan to enforce minimum zoom level
-        dataZoom: [{
-            type: 'inside',
-            xAxisIndex: 0,
-            minSpan: minZoomSpan,
-            filterMode: 'none',
-        }, {
-            type: 'slider',
-            show: false,
-            xAxisIndex: 0,
-            minSpan: minZoomSpan,
-            filterMode: 'none',
-        }],
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
             formatter: getTooltipFormatter(unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
-                val => val),
+                val => val, null, chart),
         },
         series: [{
             data: zippedData,
@@ -97,9 +87,9 @@ export function configureLineChart(chart) {
                     x2: 0,
                     y2: 1,
                     colorStops: [
-                        { offset: 0, color: 'rgba(88, 166, 255, 0.2)' },
-                        { offset: 0.5, color: 'rgba(88, 166, 255, 0.08)' },
-                        { offset: 1, color: 'rgba(88, 166, 255, 0.01)' },
+                        { offset: 0, color: COLORS.accentAreaTop },
+                        { offset: 0.5, color: COLORS.accentAreaMid },
+                        { offset: 1, color: COLORS.accentAreaBottom },
                     ],
                 },
             },
@@ -107,13 +97,5 @@ export function configureLineChart(chart) {
         }]
     };
 
-    // Use notMerge: true to clear any previous chart configuration
-    chart.echart.setOption(option, { notMerge: true });
-
-    // Re-enable drag-to-zoom after clearing the chart
-    chart.echart.dispatchAction({
-        type: 'takeGlobalCursor',
-        key: 'dataZoomSelect',
-        dataZoomSelectActive: true,
-    });
+    applyChartOption(chart, option);
 }
