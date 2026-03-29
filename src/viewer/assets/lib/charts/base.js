@@ -51,10 +51,11 @@ export function getNoDataOption(title, description) {
         xAxis: { show: false },
         yAxis: { show: false },
         grid: {
-            left: '42',
+            left: '12',
             right: '17',
             top: hasDescription ? '62' : '50',
             bottom: '35',
+            containLabel: true,
         },
     };
 }
@@ -137,11 +138,11 @@ export function getBaseOption(title, description) {
     const hasDescription = !!description;
     return {
         grid: {
-            left: '42',
+            left: '12',
             right: '17',
             top: hasDescription ? '62' : '50',
             bottom: '35',
-            containLabel: false,
+            containLabel: true,
         },
         xAxis: {
             type: 'time',
