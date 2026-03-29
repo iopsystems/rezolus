@@ -1,6 +1,7 @@
 // explorers.js - QueryExplorer and SingleChartView components
 
 import { ChartsState, Chart } from './charts/chart.js';
+import { executePromQLRangeQuery } from './data.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -146,28 +147,7 @@ export const QueryExplorer = {
             vnode.state.error = null;
 
             try {
-                const metadataResponse = await m.request({
-                    method: 'GET',
-                    url: '/api/v1/metadata',
-                    withCredentials: true,
-                });
-
-                if (metadataResponse.status !== 'success') {
-                    throw new Error('Failed to get metadata');
-                }
-
-                const { minTime, maxTime } = metadataResponse.data;
-                const duration = maxTime - minTime;
-                const windowDuration = Math.min(3600, duration);
-                const start = Math.max(minTime, maxTime - windowDuration);
-                const step = Math.max(1, Math.floor(windowDuration / 100));
-
-                const url = `/api/v1/query_range?query=${encodeURIComponent(vnode.state.query)}&start=${start}&end=${maxTime}&step=${step}`;
-                vnode.state.result = await m.request({
-                    method: 'GET',
-                    url,
-                    withCredentials: true,
-                });
+                vnode.state.result = await executePromQLRangeQuery(vnode.state.query);
             } catch (error) {
                 vnode.state.error = error.message || 'Query failed';
             }
@@ -338,12 +318,7 @@ export const SingleChartView = {
             st.error = null;
 
             try {
-                const meta = await m.request({ method: 'GET', url: '/api/v1/metadata', withCredentials: true });
-                const { minTime, maxTime } = meta.data;
-                const step = Math.max(1, Math.floor((maxTime - minTime) / 1000));
-
-                const url = `/api/v1/query_range?query=${encodeURIComponent(st.query)}&start=${minTime}&end=${maxTime}&step=${step}`;
-                const response = await m.request({ method: 'GET', url, withCredentials: true });
+                const response = await executePromQLRangeQuery(st.query);
 
                 if (response.status === 'success' && response.data && response.data.result) {
                     applyResultToPlot(plot, response);

@@ -1,3 +1,40 @@
+// ── Formatters ──────────────────────────────────────────────────────
+
+const formatTime = (ms) => {
+    const d = new Date(ms);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+};
+
+const formatDate = (ms) => {
+    const d = new Date(ms);
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
+
+/**
+ * Parse a user-entered time string and return ms since epoch, or null on failure.
+ * Accepts "HH:MM:SS" or "MMM DD HH:MM:SS" (e.g. "Mar 29 14:30:00").
+ */
+const parseTimeInput = (text, referenceMs) => {
+    const ref = new Date(referenceMs);
+    const timeOnly = text.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+    if (timeOnly) {
+        const d = new Date(ref);
+        d.setHours(parseInt(timeOnly[1], 10), parseInt(timeOnly[2], 10), parseInt(timeOnly[3], 10), 0);
+        return d.getTime();
+    }
+    const full = text.match(/^(\w+)\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+    if (full) {
+        const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+        const monthIdx = months.indexOf(full[1].toLowerCase());
+        if (monthIdx === -1) return null;
+        const d = new Date(ref);
+        d.setMonth(monthIdx, parseInt(full[2], 10));
+        d.setHours(parseInt(full[3], 10), parseInt(full[4], 10), parseInt(full[5], 10), 0);
+        return d.getTime();
+    }
+    return null;
+};
+
 // Global time range bar — interactive minimap for zoom selection.
 // Displays full experiment duration with a draggable selection window.
 const TimeRangeBar = {
@@ -114,15 +151,6 @@ const TimeRangeBar = {
         const startTime = vnode.attrs.start_time;
         const endTime = vnode.attrs.end_time;
 
-        const formatTime = (ms) => {
-            const d = new Date(ms);
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        };
-        const formatDate = (ms) => {
-            const d = new Date(ms);
-            return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-        };
-
         const totalDuration = endTime - startTime;
         const selectedStartMs = startTime + (start / 100) * totalDuration;
         const selectedEndMs = startTime + (end / 100) * totalDuration;
@@ -131,31 +159,6 @@ const TimeRangeBar = {
         const startDate = new Date(selectedStartMs);
         const endDate = new Date(selectedEndMs);
         const showDates = startDate.toDateString() !== endDate.toDateString();
-
-        // Parse a user-entered time string and return ms since epoch, or null on failure.
-        // Accepts "HH:MM:SS" or "MMM DD HH:MM:SS" (e.g. "Mar 29 14:30:00").
-        const parseTimeInput = (text, referenceMs) => {
-            const ref = new Date(referenceMs);
-            // Try "HH:MM:SS" — keep the date from the reference
-            const timeOnly = text.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
-            if (timeOnly) {
-                const d = new Date(ref);
-                d.setHours(parseInt(timeOnly[1], 10), parseInt(timeOnly[2], 10), parseInt(timeOnly[3], 10), 0);
-                return d.getTime();
-            }
-            // Try "MMM DD HH:MM:SS"
-            const full = text.match(/^(\w+)\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
-            if (full) {
-                const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-                const monthIdx = months.indexOf(full[1].toLowerCase());
-                if (monthIdx === -1) return null;
-                const d = new Date(ref);
-                d.setMonth(monthIdx, parseInt(full[2], 10));
-                d.setHours(parseInt(full[3], 10), parseInt(full[4], 10), parseInt(full[5], 10), 0);
-                return d.getTime();
-            }
-            return null;
-        };
 
         const commitEdit = (which) => {
             const text = vnode.state.editValue.trim();

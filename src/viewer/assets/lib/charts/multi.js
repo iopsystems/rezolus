@@ -41,7 +41,7 @@ export function configureMultiSeriesChart(chart) {
 
     let seriesNames = chart.spec.series_names;
     if (!seriesNames || seriesNames.length !== lineCount) {
-        console.log("series_names is missing or wrong length", seriesNames);
+        console.warn("series_names is missing or wrong length", seriesNames);
         seriesNames = Array.from(Array(lineCount).keys()).map(i => `Series ${i + 1}`);
     }
 
