@@ -54,6 +54,7 @@ export class ChartsState {
                 start: 0,
                 end: 100,
             });
+            chart._rescaleYAxis();
         });
     }
 
@@ -127,7 +128,6 @@ export class Chart {
 
         // If the chart is already initialized and data has changed, update it
         if (this.echart && oldSpec.data !== this.spec.data) {
-            // Instead of reinitializing, just update the chart configuration
             this.configureChartByType();
         }
     }
@@ -268,6 +268,7 @@ export class Chart {
                     startValue: this.chartsState.zoomLevel.startValue,
                     endValue: this.chartsState.zoomLevel.endValue,
                 });
+                this._rescaleYAxis();
             }
         }
 
@@ -319,6 +320,7 @@ export class Chart {
                     startValue,
                     endValue,
                 });
+                chart._rescaleYAxis();
             });
             m.redraw();
         });
@@ -360,6 +362,95 @@ export class Chart {
             this.chartsState.resetAll();
             m.redraw();
         })
+    }
+
+    /**
+     * Rescale Y-axis to fit visible data when zoomed in on X-axis.
+     * Called after every datazoom event and on zoom reset.
+     */
+    _rescaleYAxis() {
+        if (!this.echart) return;
+
+        const style = this.spec.opts.style;
+        // Only for chart types with a value/log Y-axis
+        if (style === 'heatmap' || style === 'histogram_heatmap') return;
+
+        const data = this.spec.data;
+        if (!data || data.length < 2 || !data[0] || data[0].length === 0) return;
+
+        const format = this.spec.opts.format || {};
+        const option = this.echart.getOption();
+        const isLog = option?.yAxis?.[0]?.type === 'log';
+
+        // If at default zoom, restore original bounds
+        if (this.chartsState.isDefaultZoom()) {
+            this.echart.setOption({
+                yAxis: { min: format.min ?? null, max: format.max ?? null }
+            });
+            return;
+        }
+
+        // Compute visible time range from zoom state
+        const timeData = data[0]; // seconds
+        const zoom = this.chartsState.zoomLevel;
+
+        let visibleMinMs, visibleMaxMs;
+        if (zoom.startValue !== undefined && zoom.endValue !== undefined) {
+            visibleMinMs = zoom.startValue;
+            visibleMaxMs = zoom.endValue;
+        } else {
+            const totalMinMs = timeData[0] * 1000;
+            const totalMaxMs = timeData[timeData.length - 1] * 1000;
+            const totalRange = totalMaxMs - totalMinMs;
+            visibleMinMs = totalMinMs + (zoom.start / 100) * totalRange;
+            visibleMaxMs = totalMinMs + (zoom.end / 100) * totalRange;
+        }
+
+        // Scan raw data for min/max Y in visible range
+        let yMin = Infinity;
+        let yMax = -Infinity;
+
+        for (let seriesIdx = 1; seriesIdx < data.length; seriesIdx++) {
+            const values = data[seriesIdx];
+            for (let i = 0; i < timeData.length; i++) {
+                const tMs = timeData[i] * 1000;
+                if (tMs < visibleMinMs) continue;
+                if (tMs > visibleMaxMs) break;
+                const y = values[i];
+                if (y !== null && y !== undefined && !isNaN(y)) {
+                    if (y < yMin) yMin = y;
+                    if (y > yMax) yMax = y;
+                }
+            }
+        }
+
+        if (yMin === Infinity || yMax === -Infinity) return;
+
+        // Handle flat line (all same value)
+        if (yMin === yMax) {
+            const pad = yMin !== 0 ? Math.abs(yMin * 0.1) : 1;
+            yMin -= pad;
+            yMax += pad;
+        }
+
+        // Add padding — multiplicative for log scale, additive for linear
+        let newMin, newMax;
+        if (isLog) {
+            newMin = yMin / 1.2;
+            newMax = yMax * 1.2;
+        } else {
+            const padding = (yMax - yMin) * 0.05;
+            newMin = yMin - padding;
+            newMax = yMax + padding;
+        }
+
+        // Respect explicit format bounds if configured
+        this.echart.setOption({
+            yAxis: {
+                min: format.min ?? newMin,
+                max: format.max ?? newMax,
+            }
+        });
     }
 
     configureChartByType() {

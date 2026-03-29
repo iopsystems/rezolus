@@ -62,6 +62,14 @@ const formatInterval = (secs) => {
     return secs.toFixed(0) + 's';
 };
 
+const formatDuration = (secs) => {
+    if (!secs && secs !== 0) return '';
+    if (secs < 60) return secs.toFixed(0) + 's';
+    if (secs < 3600) return (secs / 60).toFixed(1) + 'm';
+    if (secs < 86400) return (secs / 3600).toFixed(1) + 'h';
+    return (secs / 86400).toFixed(1) + 'd';
+};
+
 // Collapsible metadata state
 let metadataExpanded = false;
 
@@ -86,6 +94,10 @@ const TopNav = {
         if (attrs.version) metaEntries.push(['Version', attrs.version]);
         if (attrs.interval) metaEntries.push(['Interval', formatInterval(attrs.interval)]);
         if (!liveMode && attrs.filesize) metaEntries.push(['Size', formatSize(attrs.filesize)]);
+        if (attrs.start_time != null && attrs.end_time != null) {
+            metaEntries.push(['Duration', formatDuration((attrs.end_time - attrs.start_time) / 1000)]);
+        }
+        if (attrs.num_series != null) metaEntries.push(['Series', attrs.num_series.toLocaleString()]);
 
         return m('div#topnav', [
             m('div.logo', [
@@ -246,7 +258,7 @@ const StatusBar = {
 // Main component
 const Main = {
     view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize },
+        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series },
     }) {
         return m(
             'div',
@@ -258,6 +270,9 @@ const Main = {
                 version,
                 interval,
                 filesize,
+                start_time,
+                end_time,
+                num_series,
             }),
             m('main', [
                 m(Sidebar, {
@@ -846,13 +861,13 @@ const SectionContent = {
                     m(
                         'div.cgroup-column.cgroup-column-left',
                         leftGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval }),
+                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
                         ),
                     ),
                     m(
                         'div.cgroup-column.cgroup-column-right',
                         rightGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval }),
+                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
                         ),
                     ),
                 ]),
@@ -1036,10 +1051,9 @@ const CgroupSelector = {
                         originalQuery &&
                         originalQuery.includes('__SELECTED_CGROUPS__')
                     ) {
-                        // Replace the placeholder with actual selected cgroups
-                        const updatedQuery = originalQuery.replace(
-                            /__SELECTED_CGROUPS__/g,
-                            selectedPattern,
+                        const updatedQuery = substituteCgroupPattern(
+                            originalQuery,
+                            selectedPattern || null,
                         );
                         plotsToUpdate.push({
                             plot,
@@ -1167,12 +1181,6 @@ const CgroupSelector = {
 
         // Only redraw if this update is still current
         if (vnode.state.updateGeneration === updateGeneration) {
-            // Force a redraw of all charts
-            chartsState.charts.forEach((chart) => {
-                if (chart.isInitialized()) {
-                    chart.reinitialize();
-                }
-            });
             m.redraw();
         }
 
@@ -1181,15 +1189,11 @@ const CgroupSelector = {
 
     addCgroup(vnode, cgroup) {
         vnode.state.selectedCgroups.add(cgroup);
-        // Assign a color to this cgroup
-        chartsState.colorMapper.selectCgroup(cgroup);
         this.debouncedUpdateQueries(vnode);
     },
 
     removeCgroup(vnode, cgroup) {
         vnode.state.selectedCgroups.delete(cgroup);
-        // Remove color assignment for this cgroup
-        chartsState.colorMapper.deselectCgroup(cgroup);
         this.debouncedUpdateQueries(vnode);
     },
 
@@ -1265,7 +1269,7 @@ const CgroupSelector = {
                                 // Batch add cgroups
                                 vnode.state.leftSelected.forEach((cg) => {
                                     vnode.state.selectedCgroups.add(cg);
-                                    chartsState.colorMapper.selectCgroup(cg);
+
                                 });
                                 vnode.state.leftSelected.clear();
                                 // Single update for all additions
@@ -1283,7 +1287,7 @@ const CgroupSelector = {
                                 // Batch add all unselected cgroups
                                 unselectedCgroups.forEach((cg) => {
                                     vnode.state.selectedCgroups.add(cg);
-                                    chartsState.colorMapper.selectCgroup(cg);
+
                                 });
                                 vnode.state.leftSelected.clear();
                                 // Single update for all additions
@@ -1301,7 +1305,7 @@ const CgroupSelector = {
                                 // Batch remove all selected cgroups
                                 selectedCgroups.forEach((cg) => {
                                     vnode.state.selectedCgroups.delete(cg);
-                                    chartsState.colorMapper.deselectCgroup(cg);
+
                                 });
                                 vnode.state.rightSelected.clear();
                                 // Single update for all removals
@@ -1319,7 +1323,7 @@ const CgroupSelector = {
                                 // Batch remove cgroups
                                 vnode.state.rightSelected.forEach((cg) => {
                                     vnode.state.selectedCgroups.delete(cg);
-                                    chartsState.colorMapper.deselectCgroup(cg);
+
                                 });
                                 vnode.state.rightSelected.clear();
                                 // Single update for all removals
@@ -1487,7 +1491,7 @@ const Group = {
                             ]);
                         }
 
-                        const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts) };
+                        const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse: attrs.noCollapse };
                         return m('div.chart-wrapper', [
                             m(Chart, { spec: prefixedSpec, chartsState, interval }),
                         ]);
@@ -1527,6 +1531,30 @@ const fetchMetadata = async () => {
     }
 
     return metadataResponse.data;
+};
+
+/**
+ * Substitute __SELECTED_CGROUPS__ in a PromQL query.
+ *
+ * - For =~ (positive match): replaces the placeholder with the pattern.
+ * - For !~ (negative match): the PromQL engine doesn't support !~, so
+ *   the entire label matcher is stripped. This means aggregate charts
+ *   show the total rather than "total minus selected".
+ * - When pattern is null (no selection): =~ matchers are left as-is
+ *   (query will return empty), !~ matchers are stripped (query returns all).
+ */
+const substituteCgroupPattern = (query, pattern) => {
+    // Strip !~ matchers entirely — the engine can't handle them.
+    // Match patterns like: {name!~"..."} or ,name!~"..."  within braces.
+    query = query.replace(/,?\s*name!~"[^"]*"/g, '');
+    // Clean up empty braces left behind: metric{} -> metric
+    query = query.replace(/\{\s*\}/g, '');
+
+    if (pattern) {
+        // Substitute =~ matchers with the actual pattern
+        query = query.replace(/__SELECTED_CGROUPS__/g, pattern);
+    }
+    return query;
 };
 
 // Execute a PromQL range query using pre-fetched or cached metadata
@@ -1689,15 +1717,28 @@ const processDashboardData = async (data) => {
     for (const group of data.groups || []) {
         for (const plot of group.plots || []) {
             if (plot.promql_query) {
-                // For cgroup placeholder queries: if we have an active selection,
-                // substitute it so the refresh uses the current filter. Otherwise
-                // leave the placeholder (which won't match any cgroup name, giving
-                // correct initial state: aggregate=all, individual=empty).
-                if (plot.promql_query.includes('__SELECTED_CGROUPS__') && activeCgroupPattern) {
-                    plot.promql_query = plot.promql_query.replace(
-                        /__SELECTED_CGROUPS__/g,
-                        activeCgroupPattern,
-                    );
+                // Skip cgroup placeholder queries when there's no active
+                // selection — they'll either parse-error (!~) or return
+                // empty results (=~), wasting a round-trip.
+                if (plot.promql_query.includes('__SELECTED_CGROUPS__')) {
+                    if (activeCgroupPattern) {
+                        plot.promql_query = substituteCgroupPattern(
+                            plot.promql_query,
+                            activeCgroupPattern,
+                        );
+                    } else {
+                        // No selection: aggregate queries should show all
+                        // data (strip the !~ matcher), individual queries
+                        // (=~) have nothing to show.
+                        if (plot.promql_query.includes('!~')) {
+                            plot.promql_query = substituteCgroupPattern(
+                                plot.promql_query,
+                                null,
+                            );
+                        } else {
+                            continue;
+                        }
+                    }
                 }
                 queryPlots.push(plot);
             }

@@ -8,7 +8,7 @@ import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
-    getNoDataOption,
+    applyNoData,
     calculateMinZoomSpan,
     getDataZoomConfig,
     applyChartOption,
@@ -34,7 +34,7 @@ export function configureLineChart(chart) {
         !data[1] ||
         data[0].length === 0
     ) {
-        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
+        applyNoData(chart, opts);
         return;
     }
 

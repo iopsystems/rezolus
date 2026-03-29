@@ -144,8 +144,10 @@ pub fn run(config: Config) {
                 })
                 .unwrap();
 
+            let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
+
             info!("Generating dashboards...");
-            dashboard::generate(data)
+            dashboard::generate(data, filesize)
         }
         Source::Live(url) => {
             info!("Connecting to live agent at {url}...");
@@ -184,7 +186,7 @@ pub fn run(config: Config) {
             tsdb.set_source(source.clone());
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
-            let mut state = dashboard::generate(tsdb);
+            let mut state = dashboard::generate(tsdb, None);
             state.live = true;
 
             // Spawn the ingest loop

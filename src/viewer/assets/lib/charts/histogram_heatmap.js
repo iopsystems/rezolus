@@ -8,7 +8,7 @@ import {
 } from './util/units.js';
 import {
     getBaseOption,
-    getNoDataOption,
+    applyNoData,
     getTooltipFreezeFooter,
     calculateMinZoomSpan,
     getDataZoomConfig,
@@ -19,22 +19,8 @@ import {
 } from './base.js';
 import { infernoColor } from './util/colormap.js';
 
-/**
- * Format a latency bucket boundary for display
- * @param {number} nanoseconds - The bucket boundary in nanoseconds
- * @returns {string} Formatted latency string
- */
-function formatLatencyBucket(nanoseconds) {
-    if (nanoseconds < 1000) {
-        return `${nanoseconds}ns`;
-    } else if (nanoseconds < 1000000) {
-        return `${(nanoseconds / 1000).toFixed(1)}µs`;
-    } else if (nanoseconds < 1000000000) {
-        return `${(nanoseconds / 1000000).toFixed(1)}ms`;
-    } else {
-        return `${(nanoseconds / 1000000000).toFixed(2)}s`;
-    }
-}
+// Reuse the shared time formatter for latency bucket labels
+const formatLatencyBucket = createAxisLabelFormatter('time');
 
 /**
  * Build the gradient bar canvas for the heatmap legend (ECharts graphic).
@@ -111,7 +97,7 @@ export function configureHistogramHeatmap(chart) {
     } = chart.spec;
 
     if (!data || data.length === 0 || !timeData || timeData.length === 0) {
-        chart.echart.setOption(getNoDataOption(opts.title, opts.description));
+        applyNoData(chart, opts);
         return;
     }
 
@@ -131,9 +117,12 @@ export function configureHistogramHeatmap(chart) {
     minBucketIdx = Math.max(0, minBucketIdx - 1);
     maxBucketIdx = Math.min(bucketBounds.length - 1, maxBucketIdx + 1);
 
-    // Get the visible bucket bounds for log scale
-    const minBucketValue = minBucketIdx > 0 ? Math.max(1, bucketBounds[minBucketIdx - 1]) : 1;
-    const maxBucketValue = bucketBounds[maxBucketIdx];
+    // Get the visible bucket bounds for log scale, snapped to powers of 10
+    // so ECharts places ticks at clean decade boundaries (1ns, 10ns, 100ns, ...)
+    const rawMinBucket = minBucketIdx > 0 ? Math.max(1, bucketBounds[minBucketIdx - 1]) : 1;
+    const rawMaxBucket = bucketBounds[maxBucketIdx];
+    const minBucketValue = Math.pow(10, Math.floor(Math.log10(rawMinBucket)));
+    const maxBucketValue = Math.pow(10, Math.ceil(Math.log10(rawMaxBucket)));
 
     // Downsample along the time axis if there are too many data points.
     // Target roughly 500 time columns to keep rendering fast.
@@ -195,7 +184,7 @@ export function configureHistogramHeatmap(chart) {
             const lowerBound = bucketIdx > 0 ? Math.max(1, bucketBounds[bucketIdx - 1]) : 1;
             const upperBound = bucketBounds[bucketIdx];
 
-            allCellsData.push([timestampMs, lowerBound, upperBound, count, dt, bucketIdx]);
+            allCellsData.push([timestampMs, Math.log10(lowerBound), Math.log10(upperBound), count, dt, bucketIdx]);
         }
     }
 
@@ -220,9 +209,9 @@ export function configureHistogramHeatmap(chart) {
     // Tooltip reads display mode dynamically — no setOption needed on toggle
     const tooltipFormatter = function (params) {
         if (!params.data) return '';
-        const [timestampMs, lowerBound, , count, dt] = params.data;
+        const [timestampMs, logLowerBound, , count, dt] = params.data;
         const formattedTime = formatDateTime(timestampMs);
-        const bucketLabel = formatLatencyBucket(lowerBound);
+        const bucketLabel = formatLatencyBucket(Math.pow(10, logLowerBound));
         let formattedValue;
         if (chart.histogramDisplayMode === 'raw') {
             formattedValue = createAxisLabelFormatter('count')(count);
@@ -317,11 +306,11 @@ export function configureHistogramHeatmap(chart) {
     const option = {
         ...baseOption,
         grid: {
-            left: '56',
+            left: '12',
             right: '17',
             top: opts.description ? '62' : '50',
             bottom: '35',
-            containLabel: false,
+            containLabel: true,
         },
         dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
         xAxis: {
@@ -345,15 +334,16 @@ export function configureHistogramHeatmap(chart) {
             },
         },
         yAxis: {
-            type: 'log',
-            min: minBucketValue,
-            max: maxBucketValue,
+            type: 'value',
+            min: Math.log10(minBucketValue),
+            max: Math.log10(maxBucketValue),
+            interval: 1, // guaranteed one tick per decade in log10 space
             axisLine: { show: false },
             axisTick: { show: false },
             axisLabel: {
                 color: COLORS.fgSecondary,
                 ...FONTS.axisLabel,
-                formatter: (value) => formatLatencyBucket(value),
+                formatter: (logVal) => formatLatencyBucket(Math.pow(10, logVal)),
             },
             splitLine: {
                 show: false,
