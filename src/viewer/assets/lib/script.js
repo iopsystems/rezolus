@@ -2,11 +2,15 @@ import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
+import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
 let liveRefreshInterval = null;
+
+// System info data — fetched once at startup
+let systemInfoData = null;
 
 // Transport state for live mode (Wireshark-style)
 // Starts recording — data flows from agent into TSDB and UI refreshes
@@ -21,6 +25,11 @@ m.request({ method: 'GET', url: '/api/v1/mode', withCredentials: true })
         }
     })
     .catch(() => { /* ignore - assume file mode */ });
+
+// Fetch system info (available when parquet has embedded systeminfo metadata)
+m.request({ method: 'GET', url: '/api/v1/systeminfo', withCredentials: true })
+    .then((data) => { systemInfoData = data; })
+    .catch(() => { /* no systeminfo available */ });
 
 // Transport control actions
 const startRecording = async () => {
@@ -87,6 +96,7 @@ const Main = {
                     activeSection,
                     sections,
                     sectionResponseCache,
+                    hasSystemInfo: !!systemInfoData,
                 }),
                 m(SectionContent, {
                     section: activeSection,
@@ -108,6 +118,13 @@ const SectionContent = {
         if (sectionName === 'Query Explorer') {
             return m('div#section-content', [
                 m(QueryExplorer, { liveMode, isRecording: () => recording }),
+            ]);
+        }
+
+        // Special handling for System Info
+        if (sectionName === 'System Info') {
+            return m('div#section-content', [
+                m(SystemInfoView, { data: systemInfoData }),
             ]);
         }
 
@@ -185,6 +202,120 @@ const SectionContent = {
                 'div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
             ),
+        ]);
+    },
+};
+
+// System Info display component
+const formatBytes = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+};
+
+const SystemInfoView = {
+    view({ attrs }) {
+        const info = attrs.data;
+        if (!info) {
+            return m('div.systeminfo-section', [
+                m('h1.section-title', 'System Info'),
+                m('p.systeminfo-empty', 'No system information available in this recording.'),
+            ]);
+        }
+
+        const rows = (items) => items
+            .filter(([, v]) => v != null && v !== '')
+            .map(([label, value]) => m('tr', [
+                m('td.sysinfo-label', label),
+                m('td.sysinfo-value', String(value)),
+            ]));
+
+        const table = (title, items) => {
+            const filtered = items.filter(([, v]) => v != null && v !== '');
+            if (filtered.length === 0) return null;
+            return m('div.sysinfo-group', [
+                m('h2.sysinfo-group-title', title),
+                m('table.sysinfo-table', m('tbody', rows(items))),
+            ]);
+        };
+
+        return m('div.systeminfo-section', [
+            m('h1.section-title', 'System Info'),
+
+            // CPU Topology diagram
+            m(CpuTopology, { data: info }),
+
+            m('div.sysinfo-grid', [
+                table('System', [
+                    ['Hostname', info.hostname],
+                    ['OS', info.os],
+                    ['Kernel', info.kernel],
+                    ['Architecture', info.arch],
+                ]),
+                table('CPU', [
+                    ['Model', info.cpu_model],
+                    ['Vendor', info.cpu_vendor],
+                    ['Logical CPUs', info.cpus],
+                    ['Physical Cores', info.cores],
+                    ['Packages', info.packages],
+                    ['SMT', info.smt != null ? (info.smt ? 'Enabled' : 'Disabled') : null],
+                ]),
+                table('Memory', [
+                    ['Total', formatBytes(info.memory_total_bytes)],
+                    ['NUMA Nodes', info.numa_nodes],
+                ]),
+
+                // Caches
+                info.caches && info.caches.length > 0 && m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', 'Cache Topology'),
+                    m('table.sysinfo-table', m('tbody',
+                        info.caches.map((c) => m('tr', [
+                            m('td.sysinfo-label', c.level),
+                            m('td.sysinfo-value', [
+                                c.size || '',
+                                c.instances > 1 ? ` × ${c.instances}` : '',
+                            ].join('')),
+                        ])),
+                    )),
+                ]),
+
+                // NICs
+                info.nics && info.nics.length > 0 && m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', 'Network Interfaces'),
+                    m('table.sysinfo-table', m('tbody',
+                        info.nics.map((nic) => m('tr', [
+                            m('td.sysinfo-label', nic.name),
+                            m('td.sysinfo-value', [
+                                nic.speed ? `${nic.speed} Mbps` : '',
+                                nic.driver ? ` (${nic.driver})` : '',
+                                nic.numa_node != null ? ` NUMA ${nic.numa_node}` : '',
+                            ].join('')),
+                        ])),
+                    )),
+                ]),
+
+                // GPUs
+                info.gpus && info.gpus.length > 0 && m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', 'GPUs'),
+                    m('table.sysinfo-table', m('tbody',
+                        info.gpus.map((gpu) => m('tr', [
+                            m('td.sysinfo-label', gpu.name || gpu.vendor),
+                            m('td.sysinfo-value', [
+                                gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : '',
+                                gpu.driver ? ` (${gpu.driver})` : '',
+                            ].join('')),
+                        ])),
+                    )),
+                ]),
+            ]),
+
+            // Raw JSON
+            m('div.sysinfo-raw', [
+                m('h2.sysinfo-group-title', 'Raw JSON'),
+                m('pre.sysinfo-json', JSON.stringify(info, null, 2)),
+            ]),
         ]);
     },
 };
@@ -381,6 +512,9 @@ const startLiveRefresh = () => {
     liveRefreshInterval = setInterval(refreshCurrentSection, 5000);
 };
 
+// Synthetic section object for System Info (not a backend dashboard section)
+const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
+
 // Main application entry point
 m.route.prefix = ''; // use regular paths for navigation, eg. /overview
 m.route(document.body, '/overview', {
@@ -433,6 +567,30 @@ m.route(document.body, '/overview', {
                 // Reset scroll position.
                 window.scrollTo(0, 0);
 
+            }
+
+            // System Info is not a backend section — render directly
+            if (params.section === 'systeminfo') {
+                return {
+                    view() {
+                        // Use any cached section data to get sections list for sidebar
+                        const anyCached = Object.values(sectionResponseCache)[0];
+                        const sections = anyCached?.sections || [];
+                        return m(Main, {
+                            activeSection: systemInfoSection,
+                            groups: [],
+                            sections,
+                            source: anyCached?.source,
+                            version: anyCached?.version,
+                            filename: anyCached?.filename,
+                            interval: anyCached?.interval,
+                            filesize: anyCached?.filesize,
+                            start_time: anyCached?.start_time,
+                            end_time: anyCached?.end_time,
+                            num_series: anyCached?.num_series,
+                        });
+                    },
+                };
             }
 
             // In live mode, always read from cache dynamically so

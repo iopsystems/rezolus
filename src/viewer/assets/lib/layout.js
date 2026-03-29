@@ -176,6 +176,22 @@ const Sidebar = {
                     [m('span.arrow', '→'), ' ', queryExplorer.name],
                 ),
             ],
+
+            // System Info link (below Query Explorer)
+            attrs.hasSystemInfo && [
+                m('div.sidebar-separator'),
+                m(
+                    m.route.Link,
+                    {
+                        class:
+                            attrs.activeSection?.route === '/systeminfo'
+                                ? 'selected systeminfo-link'
+                                : 'systeminfo-link',
+                        href: '/systeminfo',
+                    },
+                    [m('span.arrow', '→'), ' System Info'],
+                ),
+            ],
         ]);
     },
 };
