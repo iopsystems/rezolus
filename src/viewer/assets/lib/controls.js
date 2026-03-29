@@ -2,7 +2,10 @@
 
 const formatTime = (ms) => {
     const d = new Date(ms);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
 };
 
 const formatDate = (ms) => {
@@ -79,6 +82,7 @@ const TimeRangeBar = {
 
         const onMouseDown = (e) => {
             if (e.button !== 0) return;
+            if (!track.contains(e.target)) return;
             e.preventDefault();
             const pct = getPercent(e.clientX);
             const zoom = getBarZoom();
