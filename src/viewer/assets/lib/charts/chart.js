@@ -14,7 +14,7 @@ import {
 import {
     configureMultiSeriesChart
 } from './multi.js';
-import globalColorMapper from './util/colormap.js';
+import globalColorMapper, { COLORS } from './util/colormap.js';
 
 
 export class ChartsState {
@@ -56,6 +56,24 @@ export class ChartsState {
             });
         });
     }
+
+    // Reset zoom and clear all pin selections and frozen tooltips
+    // (preserves heatmap/percentile toggle)
+    resetAll() {
+        this.resetZoom();
+        this.charts.forEach(chart => {
+            if (chart._tooltipFrozen) {
+                chart._toggleTooltipFreeze(false);
+            }
+            // Hide any visible tooltips and axis pointer lines
+            chart.dispatchAction({ type: 'hideTip' });
+            chart.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
+            if (chart.pinnedSet && chart.pinnedSet.size > 0) {
+                chart.pinnedSet.clear();
+                chart.configureChartByType();
+            }
+        });
+    }
 }
 
 // Chart component - uses echarts to render a chart
@@ -65,7 +83,8 @@ export class Chart {
         this.chartId = vnode.attrs.spec.opts.id;
         this.spec = vnode.attrs.spec;
         this.chartsState = vnode.attrs.chartsState;
-        this.resizeHandler = null;
+        this.interval = vnode.attrs.interval; // sampling interval in seconds
+        this.resizeObserver = null;
         this.observer = null;
         this.echart = null;
     }
@@ -90,21 +109,21 @@ export class Chart {
         // Start observing the chart element
         observer.observe(this.domNode);
 
-        // Add window resize handler
-        const resizeHandler = () => {
+        // Resize charts when their container size changes (window resize, zoom, etc.)
+        this.resizeObserver = new ResizeObserver(() => {
             if (this.echart) {
                 this.echart.resize();
             }
-        };
-        window.addEventListener('resize', resizeHandler);
-        this.resizeHandler = resizeHandler;
+        });
+        this.resizeObserver.observe(this.domNode);
         this.observer = observer;
     }
 
     onupdate(vnode) {
-        // Update the spec reference
+        // Update the spec and interval references
         const oldSpec = this.spec;
         this.spec = vnode.attrs.spec;
+        this.interval = vnode.attrs.interval;
 
         // If the chart is already initialized and data has changed, update it
         if (this.echart && oldSpec.data !== this.spec.data) {
@@ -119,8 +138,13 @@ export class Chart {
             this.observer.disconnect();
         }
 
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+        }
+
+        if (this._freezeKeyCleanup) this._freezeKeyCleanup();
+
         if (this.echart) {
-            window.removeEventListener('resize', this.resizeHandler);
             this.echart.dispose();
             this.echart = null;
         }
@@ -140,6 +164,37 @@ export class Chart {
     dispatchAction(action) {
         if (this.echart) {
             this.echart.dispatchAction(action);
+        }
+    }
+
+    /**
+     * Toggle tooltip freeze state. When frozen, the tooltip stays at its
+     * current position until unfrozen.
+     * @param {boolean} [force] - if provided, set frozen state explicitly
+     */
+    _toggleTooltipFreeze(force) {
+        if (!this.echart) return;
+        const freeze = force !== undefined ? force : !this._tooltipFrozen;
+        this._tooltipFrozen = freeze;
+
+        if (freeze) {
+            // Stop tooltip from following the mouse
+            this.echart.setOption({
+                tooltip: { triggerOn: 'none' },
+            });
+        } else {
+            // Restore normal tooltip behavior
+            this.echart.setOption({
+                tooltip: { triggerOn: 'mousemove|click' },
+            });
+        }
+
+        // Directly patch the tooltip footer DOM since the formatter won't
+        // re-run on an already-visible tooltip.
+        const footer = this.domNode.querySelector('.tooltip-freeze-footer');
+        if (footer) {
+            footer.textContent = freeze ? 'FROZEN \u00b7 click to unfreeze' : 'click to freeze';
+            footer.style.color = freeze ? COLORS.accent : COLORS.fgMuted;
         }
     }
 
@@ -276,21 +331,33 @@ export class Chart {
             dataZoomSelectActive: true,
         });
 
+        // Tooltip freeze: click on chart to freeze, click again to unfreeze.
+        // Escape also unfreezes.
+        this._tooltipFrozen = false;
+
+        this.echart.getZr().on('click', (e) => {
+            // Only freeze when clicking within the plot area, not on legend/title
+            if (this.echart.containPixel('grid', [e.offsetX, e.offsetY])) {
+                this._toggleTooltipFreeze();
+            }
+        });
+
+        const onEscKey = (e) => {
+            if (e.key === 'Escape' && this._tooltipFrozen) {
+                e.preventDefault();
+                this._toggleTooltipFreeze(false);
+            }
+        };
+        document.addEventListener('keydown', onEscKey, true);
+        this._freezeKeyCleanup = () => {
+            document.removeEventListener('keydown', onEscKey, true);
+        };
+
         // Double click on a chart -> reset zoom level
         // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
         // TODO: Add a visible interface element to reset zoom, too.
         this.echart.getZr().on('dblclick', () => {
-            this.chartsState.zoomLevel = {
-                start: 0,
-                end: 100,
-            };
-            this.chartsState.charts.forEach(chart => {
-                chart.dispatchAction({
-                    type: 'dataZoom',
-                    start: 0,
-                    end: 100,
-                });
-            });
+            this.chartsState.resetAll();
             m.redraw();
         })
     }
@@ -299,6 +366,13 @@ export class Chart {
         const {
             opts
         } = this.spec;
+
+        // Clean up histogram heatmap DOM overlays when switching to a different chart type
+        if (opts.style !== 'histogram_heatmap') {
+            for (const cls of ['histogram-toggle', 'heatmap-label-min', 'heatmap-label-max']) {
+                this.domNode?.querySelector('.' + cls)?.remove();
+            }
+        }
 
         // Handle different chart types by delegating to specialized modules
         if (opts.style === 'line') {

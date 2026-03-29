@@ -4,11 +4,16 @@ import {
     createAxisLabelFormatter,
 } from './util/units.js';
 import {
+    insertGapNulls,
+} from './util/utils.js';
+import {
     getBaseOption,
     getBaseYAxisOption,
     getTooltipFormatter,
     getNoDataOption,
-    CHART_PALETTE,
+    applyChartOption,
+    COLORS,
+    FONTS,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
 
@@ -51,19 +56,15 @@ export function configureMultiSeriesChart(chart) {
     // Create series configurations for each data series
     const series = [];
 
-    // Get colors only for selected cgroups (not for aggregate "Other")
-    const cgroupColors = seriesNames.map((name, index) => {
-        const color = globalColorMapper.getSelectedCgroupColor(name);
-        // If no color assigned (shouldn't happen for selected cgroups), fall back to palette
-        return color || CHART_PALETTE[index % CHART_PALETTE.length];
-    });
+    const cgroupColors = seriesNames.map(name => globalColorMapper.getColorByName(name));
 
     for (let i = 1; i < data.length; i++) {
         const name = seriesNames[i - 1];
         const isOtherCategory = name === "Other";
         const color = cgroupColors[i - 1];
 
-        const zippedData = timeData.map((t, j) => [t * 1000, data[i][j]]);
+        let zippedData = timeData.map((t, j) => [t * 1000, data[i][j]]);
+        zippedData = insertGapNulls(zippedData, chart.interval);
 
         series.push({
             name: name,
@@ -103,25 +104,31 @@ export function configureMultiSeriesChart(chart) {
 
     const option = {
         ...baseOption,
+        legend: {
+            show: true,
+            top: '12',
+            right: '16',
+            icon: 'roundRect',
+            itemWidth: 10,
+            itemHeight: 10,
+            itemGap: 12,
+            data: series.map(s => s.name),
+            textStyle: {
+                color: COLORS.fgSecondary,
+                ...FONTS.legend,
+            },
+        },
         yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
             formatter: getTooltipFormatter(unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
-                val => val),
+                val => val, null, chart),
         },
         series: series,
         // Use the curated color palette
         color: cgroupColors,
     };
 
-    // Use notMerge: true to clear any previous chart configuration
-    chart.echart.setOption(option, { notMerge: true });
-
-    // Re-enable drag-to-zoom after clearing the chart
-    chart.echart.dispatchAction({
-        type: 'takeGlobalCursor',
-        key: 'dataZoomSelect',
-        dataZoomSelectActive: true,
-    });
+    applyChartOption(chart, option);
 }

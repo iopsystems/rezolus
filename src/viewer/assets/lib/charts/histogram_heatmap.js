@@ -4,10 +4,20 @@ import {
     formatDateTime
 } from './util/utils.js';
 import {
+    createAxisLabelFormatter,
+} from './util/units.js';
+import {
     getBaseOption,
     getNoDataOption,
+    getTooltipFreezeFooter,
+    calculateMinZoomSpan,
+    getDataZoomConfig,
+    applyChartOption,
+    TIME_AXIS_FORMATTER,
     COLORS,
+    FONTS,
 } from './base.js';
+import { infernoColor } from './util/colormap.js';
 
 /**
  * Format a latency bucket boundary for display
@@ -27,41 +37,64 @@ function formatLatencyBucket(nanoseconds) {
 }
 
 /**
- * Inferno colormap - perceptually uniform, high contrast
- * Optimized for spotting hotspots in latency distributions
- * @param {number} t - Value from 0 to 1
- * @returns {string} RGB color string
+ * Build the gradient bar canvas for the heatmap legend (ECharts graphic).
+ * Labels are rendered as DOM elements so they can update without triggering a canvas redraw.
+ * @param {function} colorFn - maps 0..1 to an RGB color string
+ * @returns {Object} echarts graphic config (bar image only)
  */
-function heatmapColor(t) {
-    // Inferno colormap: black -> purple -> red -> orange -> yellow
-    const colors = [
-        [0, 0, 4],        // black
-        [27, 12, 65],     // dark purple
-        [74, 12, 107],    // purple
-        [120, 28, 109],   // magenta
-        [165, 44, 96],    // pink-red
-        [207, 68, 70],    // red
-        [237, 105, 37],   // orange
-        [251, 155, 6],    // yellow-orange
-        [247, 209, 61],   // yellow
-        [252, 255, 164],  // pale yellow
-    ];
+function buildHeatmapGradientBar(colorFn) {
+    const barWidth = 120;
+    const barHeight = 10;
 
-    const idx = t * (colors.length - 1);
-    const i = Math.floor(idx);
-    const f = idx - i;
-
-    if (i >= colors.length - 1) {
-        return `rgb(${colors[colors.length - 1].join(',')})`;
+    const canvas = document.createElement('canvas');
+    canvas.width = barWidth;
+    canvas.height = barHeight;
+    const ctx = canvas.getContext('2d');
+    for (let x = 0; x < barWidth; x++) {
+        ctx.fillStyle = colorFn(x / (barWidth - 1));
+        ctx.fillRect(x, 0, 1, barHeight);
     }
 
-    const c0 = colors[i];
-    const c1 = colors[i + 1];
-    const r = Math.round(c0[0] + f * (c1[0] - c0[0]));
-    const g = Math.round(c0[1] + f * (c1[1] - c0[1]));
-    const b = Math.round(c0[2] + f * (c1[2] - c0[2]));
+    return {
+        elements: [{
+            type: 'image',
+            id: 'heatmap-gradient-bar',
+            right: 24,
+            top: 13,
+            style: {
+                image: canvas,
+                width: barWidth,
+                height: barHeight,
+            },
+        }],
+    };
+}
 
-    return `rgb(${r},${g},${b})`;
+/**
+ * Create or update a DOM label element positioned over the chart.
+ * @param {HTMLElement} container - the chart DOM node
+ * @param {string} className - CSS class for querySelector
+ * @param {string} rightPx - CSS right position
+ * @returns {HTMLElement}
+ */
+function ensureDomLabel(container, className, rightPx) {
+    let el = container.querySelector('.' + className);
+    if (!el) {
+        el = document.createElement('span');
+        el.className = className;
+        el.style.cssText = `
+            position: absolute;
+            top: 35px;
+            right: ${rightPx};
+            transform: translateX(50%);
+            ${FONTS.cssFootnote}
+            color: ${COLORS.fgLabel};
+            z-index: 10;
+            pointer-events: none;
+        `;
+        container.appendChild(el);
+    }
+    return el;
 }
 
 /**
@@ -74,8 +107,6 @@ export function configureHistogramHeatmap(chart) {
         time_data: timeData,
         bucket_bounds: bucketBounds,
         data,
-        min_value: minValue,
-        max_value: maxValue,
         opts
     } = chart.spec;
 
@@ -140,6 +171,18 @@ export function configureHistogramHeatmap(chart) {
         }
     }
 
+    // Initialize display mode (default: percentage)
+    if (chart.histogramDisplayMode === undefined) {
+        chart.histogramDisplayMode = 'percentage';
+    }
+    // Compute total counts per downsampled time step (for percentage mode)
+    const totalCountPerTime = new Float64Array(dsTimeCount);
+    for (let dt = 0; dt < dsTimeCount; dt++) {
+        for (let bo = 0; bo < bucketRange; bo++) {
+            totalCountPerTime[dt] += aggMax[dt * bucketRange + bo];
+        }
+    }
+
     // Build the final cell data from the aggregated values
     const allCellsData = [];
     for (let dt = 0; dt < dsTimeCount; dt++) {
@@ -152,53 +195,56 @@ export function configureHistogramHeatmap(chart) {
             const lowerBound = bucketIdx > 0 ? Math.max(1, bucketBounds[bucketIdx - 1]) : 1;
             const upperBound = bucketBounds[bucketIdx];
 
-            // Normalize count by bucket width in log space to get density
-            const logWidth = Math.log(upperBound) - Math.log(lowerBound);
-            const normalizedCount = logWidth > 0 ? count / logWidth : count;
-
-            allCellsData.push([timestampMs, lowerBound, upperBound, normalizedCount, dt, bucketIdx]);
+            allCellsData.push([timestampMs, lowerBound, upperBound, count, dt, bucketIdx]);
         }
     }
 
-    // Calculate min/max of normalized values for color scaling
-    let normalizedMin = Infinity;
-    let normalizedMax = -Infinity;
+    // Calculate min/max values for color scaling
+    let colorMin = Infinity;
+    let colorMax = -Infinity;
     for (const cellData of allCellsData) {
-        const normalizedCount = cellData[3];
-        if (normalizedCount > 0) {
-            normalizedMin = Math.min(normalizedMin, normalizedCount);
-            normalizedMax = Math.max(normalizedMax, normalizedCount);
+        const val = cellData[3];
+        if (val > 0) {
+            colorMin = Math.min(colorMin, val);
+            colorMax = Math.max(colorMax, val);
         }
     }
-    if (normalizedMin === Infinity) normalizedMin = 0;
-    if (normalizedMax === -Infinity) normalizedMax = 1;
+    if (colorMin === Infinity) colorMin = 0;
+    if (colorMax === -Infinity) colorMax = 1;
 
     // Use log scale for color mapping
-    const logMin = Math.log1p(normalizedMin);
-    const logMax = Math.log1p(normalizedMax);
+    const logMin = Math.log1p(colorMin);
+    const logMax = Math.log1p(colorMax);
     const logRange = logMax - logMin || 1;
 
-    // Configure tooltip with new styling
+    // Tooltip reads display mode dynamically — no setOption needed on toggle
     const tooltipFormatter = function (params) {
-        if (!params.data) {
-            return '';
-        }
-        const [timestampMs, lowerBound, upperBound, count] = params.data;
+        if (!params.data) return '';
+        const [timestampMs, lowerBound, , count, dt] = params.data;
         const formattedTime = formatDateTime(timestampMs);
         const bucketLabel = formatLatencyBucket(lowerBound);
+        let formattedValue;
+        if (chart.histogramDisplayMode === 'raw') {
+            formattedValue = createAxisLabelFormatter('count')(count);
+        } else {
+            const total = totalCountPerTime[dt];
+            const pct = total > 0 ? (count / total) * 100 : 0;
+            formattedValue = pct.toFixed(1) + '%';
+        }
 
-        return `<div style="font-family: 'Inter', -apple-system, sans-serif;">
-            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
+        return `<div style="${FONTS.cssSans}">
+            <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                 ${formattedTime}
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
-                <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: ${COLORS.accent};">
+                <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
                     ${bucketLabel}
                 </span>
-                <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 12px; color: ${COLORS.fg};">
-                    Count: ${Math.round(count)}
+                <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">
+                    ${formattedValue}
                 </span>
             </div>
+            ${getTooltipFreezeFooter(chart)}
         </div>`;
     };
 
@@ -250,7 +296,7 @@ export function configureHistogramHeatmap(chart) {
         // Map count to color using log scale
         const logCount = Math.log1p(count);
         const normalizedValue = Math.min(1, Math.max(0, (logCount - logMin) / logRange));
-        const color = heatmapColor(normalizedValue);
+        const color = infernoColor(normalizedValue);
 
         return {
             type: 'rect',
@@ -268,32 +314,16 @@ export function configureHistogramHeatmap(chart) {
         };
     };
 
-    // Calculate minimum zoom span
-    const sampleInterval = timeData.length > 1 ? timeData[1] - timeData[0] : 1;
-    const totalDuration = timeData[timeData.length - 1] - timeData[0];
-    const minZoomSpan = Math.max(0.1, (sampleInterval * 5 / totalDuration) * 100);
-
     const option = {
         ...baseOption,
         grid: {
-            left: '80',
-            right: '24',
-            top: '50',
+            left: '56',
+            right: '17',
+            top: opts.description ? '62' : '50',
             bottom: '35',
             containLabel: false,
         },
-        dataZoom: [{
-            type: 'inside',
-            xAxisIndex: 0,
-            minSpan: minZoomSpan,
-            filterMode: 'none',
-        }, {
-            type: 'slider',
-            show: false,
-            xAxisIndex: 0,
-            minSpan: minZoomSpan,
-            filterMode: 'none',
-        }],
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
         xAxis: {
             type: 'time',
             min: 'dataMin',
@@ -303,18 +333,8 @@ export function configureHistogramHeatmap(chart) {
             axisTick: { show: false },
             axisLabel: {
                 color: COLORS.fgSecondary,
-                fontSize: 10,
-                fontFamily: '"JetBrains Mono", "SF Mono", monospace',
-                formatter: {
-                    year: '{yyyy}',
-                    month: '{MMM}',
-                    day: '{d}',
-                    hour: '{HH}:{mm}',
-                    minute: '{HH}:{mm}',
-                    second: '{HH}:{mm}:{ss}',
-                    millisecond: '{hh}:{mm}:{ss}.{SSS}',
-                    none: '{hh}:{mm}:{ss}.{SSS}'
-                }
+                ...FONTS.axisLabel,
+                formatter: TIME_AXIS_FORMATTER,
             },
             splitLine: {
                 show: true,
@@ -332,8 +352,7 @@ export function configureHistogramHeatmap(chart) {
             axisTick: { show: false },
             axisLabel: {
                 color: COLORS.fgSecondary,
-                fontSize: 10,
-                fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+                ...FONTS.axisLabel,
                 formatter: (value) => formatLatencyBucket(value),
             },
             splitLine: {
@@ -359,16 +378,78 @@ export function configureHistogramHeatmap(chart) {
             progressive: 5000,
             progressiveThreshold: 3000,
             animation: false,
-        }]
+        }],
+        graphic: buildHeatmapGradientBar(infernoColor),
     };
 
-    // Use notMerge: true to clear any previous chart configuration
-    chart.echart.setOption(option, { notMerge: true });
+    applyChartOption(chart, option);
 
-    // Re-enable drag-to-zoom after clearing the chart
-    chart.echart.dispatchAction({
-        type: 'takeGlobalCursor',
-        key: 'dataZoomSelect',
-        dataZoomSelectActive: true,
-    });
+    // Precompute percentage min/max for label display
+    let pctMin = Infinity;
+    let pctMax = -Infinity;
+    for (const cellData of allCellsData) {
+        const count = cellData[3];
+        const dt = cellData[4];
+        const total = totalCountPerTime[dt];
+        if (total > 0 && count > 0) {
+            const pct = (count / total) * 100;
+            pctMin = Math.min(pctMin, pct);
+            pctMax = Math.max(pctMax, pct);
+        }
+    }
+    if (pctMin === Infinity) pctMin = 0;
+    if (pctMax === -Infinity) pctMax = 100;
+
+    const countFormatter = createAxisLabelFormatter('count');
+    const rawMinLabel = countFormatter(colorMin);
+    const rawMaxLabel = countFormatter(colorMax);
+    const pctMinLabel = pctMin.toFixed(1) + '%';
+    const pctMaxLabel = pctMax.toFixed(1) + '%';
+
+    // DOM labels for gradient bar min/max — update without canvas redraw
+    chart.domNode.style.position = 'relative';
+    const minLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-min', '144px');
+    const maxLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-max', '24px');
+
+    const updateLabels = () => {
+        const isRaw = chart.histogramDisplayMode === 'raw';
+        minLabelEl.textContent = isRaw ? rawMinLabel : pctMinLabel;
+        maxLabelEl.textContent = isRaw ? rawMaxLabel : pctMaxLabel;
+    };
+    updateLabels();
+
+    // DOM checkbox overlay for percentage/raw count toggle.
+    // Lives outside ECharts so toggling never triggers a canvas redraw.
+    let checkboxEl = chart.domNode.querySelector('.histogram-toggle');
+    if (!checkboxEl) {
+        checkboxEl = document.createElement('span');
+        checkboxEl.className = 'histogram-toggle';
+        checkboxEl.style.cssText = `
+            position: absolute;
+            top: 24px;
+            right: 175px;
+            ${FONTS.cssControl}
+            cursor: pointer;
+            user-select: none;
+            z-index: 10;
+            transform: translateY(-50%);
+        `;
+        chart.domNode.appendChild(checkboxEl);
+    }
+
+    const updateCheckbox = () => {
+        const isRaw = chart.histogramDisplayMode === 'raw';
+        const color = isRaw ? COLORS.fg : COLORS.fgLabel;
+        checkboxEl.innerHTML =
+            `<span style="font-size: 16px; vertical-align: bottom;">${isRaw ? '☑' : '☐'}</span> Raw count`;
+        checkboxEl.style.color = color;
+    };
+    updateCheckbox();
+
+    checkboxEl.onclick = () => {
+        const isRaw = chart.histogramDisplayMode === 'raw';
+        chart.histogramDisplayMode = isRaw ? 'percentage' : 'raw';
+        updateCheckbox();
+        updateLabels();
+    };
 }
