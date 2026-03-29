@@ -723,6 +723,143 @@ main {
     overflow: hidden;
 }
 
+.chart-expand {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity var(--transition-base), color var(--transition-base);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    z-index: 10;
+}
+
+.chart-wrapper:hover .chart-expand {
+    opacity: 0.6;
+}
+
+.chart-expand:hover {
+    opacity: 1 !important;
+    color: var(--fg);
+}
+
+/* ==========================================================================
+   Single Chart View
+   ========================================================================== */
+
+.single-chart-main {
+    flex: 1;
+    padding: var(--content-padding);
+}
+
+.single-chart-view {
+    width: 70%;
+    margin: 0 auto;
+}
+
+.single-chart-header {
+    margin-bottom: 1rem;
+}
+
+.single-chart-header .section-title {
+    margin-bottom: 0.25rem;
+}
+
+.chart-description {
+    color: var(--fg-muted);
+    font-size: var(--font-size-sm);
+    margin: 0;
+}
+
+.single-chart-container .chart {
+    height: 500px;
+}
+
+.single-chart-fields {
+    margin-top: 1.5rem;
+    display: flex;
+    gap: 1rem;
+}
+
+.single-chart-field {
+    flex: 1;
+}
+
+.single-chart-field label,
+.single-chart-query label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--fg-muted);
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+}
+
+.field-input {
+    width: 100%;
+    padding: 1rem;
+    background: var(--bg-void);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    transition: all var(--transition-base);
+    box-sizing: border-box;
+}
+
+.field-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow:
+        0 0 0 3px var(--accent-subtle),
+        var(--shadow-glow);
+}
+
+.field-input::placeholder {
+    color: var(--fg-muted);
+}
+
+.field-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.field-input-row .field-input {
+    flex: 1;
+}
+
+.field-apply-btn {
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-tertiary);
+    color: var(--fg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: all var(--transition-base);
+}
+
+.field-apply-btn:hover {
+    background: var(--bg-card);
+    color: var(--fg);
+    border-color: var(--border-emphasis);
+}
+
+.single-chart-query {
+    margin-top: 1rem;
+}
+
 /* ==========================================================================
    Query Explorer
    ========================================================================== */

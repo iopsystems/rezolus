@@ -169,6 +169,21 @@ const TopNav = {
     },
 };
 
+// Count plots with non-empty data across groups.
+const countCharts = (groups) => {
+    let total = 0;
+    let withData = 0;
+    for (const group of groups || []) {
+        for (const plot of group.plots || []) {
+            total++;
+            if (plot.data && plot.data.length >= 1 && plot.data[0] && plot.data[0].length > 0) {
+                withData++;
+            }
+        }
+    }
+    return { total, withData };
+};
+
 // Sidebar component
 const Sidebar = {
     view({ attrs }) {
@@ -199,17 +214,21 @@ const Sidebar = {
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),
 
             // Sampler sections
-            samplerSections.map((section) =>
-                m(
+            samplerSections.map((section) => {
+                const sectionKey = section.route.replace(/^\//, '');
+                const cached = sectionResponseCache[sectionKey];
+                const count = cached ? countCharts(cached.groups) : null;
+                const label = count ? `${section.name} (${count.withData})` : section.name;
+                return m(
                     m.route.Link,
                     {
                         class:
                             attrs.activeSection === section ? 'selected' : '',
                         href: section.route,
                     },
-                    section.name,
-                ),
-            ),
+                    label,
+                );
+            }),
 
             // Separator and Query Explorer if it exists
             queryExplorer && [
@@ -845,6 +864,9 @@ const SectionContent = {
             ]);
         }
 
+        const { withData } = countCharts(attrs.groups);
+        const titleText = `${sectionName} (${withData})`;
+
         // Special handling for cgroups with selector and two-column layout
         if (attrs.section.route === '/cgroups') {
             const leftGroups = attrs.groups.filter(
@@ -855,7 +877,7 @@ const SectionContent = {
             );
 
             return m('div#section-content.cgroups-section', [
-                m('h1.section-title', sectionName),
+                m('h1.section-title', titleText),
                 m(CgroupSelector, { groups: attrs.groups }),
                 m('div.cgroup-columns', [
                     m(
@@ -875,7 +897,7 @@ const SectionContent = {
         }
 
         return m('div#section-content', [
-            m('h1.section-title', sectionName),
+            m('h1.section-title', titleText),
             m(
                 'div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
@@ -1458,6 +1480,20 @@ const Group = {
             ? { ...opts, title: `${titlePrefix} / ${opts.title}` }
             : opts;
 
+        const expandLink = (spec) => {
+            if (!spec.promql_query) return null;
+            const href = `${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
+            return m('a.chart-expand', {
+                href, target: '_blank', title: 'Open in new tab',
+                onclick: (e) => e.stopPropagation(),
+            }, [
+                'Expand ',
+                m('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'currentColor' },
+                    m('path', { d: 'M10 1h5v5h-1.5V3.56L9.78 7.28 8.72 6.22l3.72-3.72H10V1zM1 6V1h5v1.5H3.56l3.72 3.72-1.06 1.06L2.5 3.56V6H1zm5 4H1v5h5v-1.5H3.56l3.72-3.72-1.06-1.06L2.5 12.44V10zm4 0v1.5h2.44l-3.72 3.72 1.06 1.06 3.72-3.72V15H15v-5h-5z' }),
+                ),
+            ]);
+        };
+
         return m(
             'div.group',
             {
@@ -1488,12 +1524,14 @@ const Group = {
                             };
                             return m('div.chart-wrapper', [
                                 m(Chart, { spec: heatmapSpec, chartsState, interval }),
+                                expandLink(spec),
                             ]);
                         }
 
                         const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse: attrs.noCollapse };
                         return m('div.chart-wrapper', [
                             m(Chart, { spec: prefixedSpec, chartsState, interval }),
+                            expandLink(spec),
                         ]);
                     }),
                 ),
@@ -1790,67 +1828,15 @@ const preloadSection = async (section) => {
     sectionResponseCache[section] = processedData;
 };
 
-// Track active preloading to allow cancellation
-let preloadingTimeout = null;
-let activePreloadPromise = null;
-
-// Preload data for all sections in the background.
+// Preload all sections in parallel so sidebar chart counts appear eagerly.
 const preloadSections = (allSections) => {
-    // Cancel any existing preloading
-    if (preloadingTimeout) {
-        clearTimeout(preloadingTimeout);
-        preloadingTimeout = null;
+    const sectionsToPreload = allSections
+        .filter((section) => !sectionResponseCache[section.route])
+        .map((section) => section.route.substring(1));
+
+    for (const section of sectionsToPreload) {
+        preloadSection(section).then(() => m.redraw()).catch(() => {});
     }
-
-    // Wait longer before starting preloading to allow user to navigate
-    preloadingTimeout = setTimeout(() => {
-        // Create a queue of sections to preload
-        const sectionsToPreload = allSections
-            .filter((section) => !sectionResponseCache[section.route])
-            .map((section) => section.route.substring(1));
-
-        const preloadNext = () => {
-            if (sectionsToPreload.length === 0) {
-                preloadingTimeout = null;
-                return;
-            }
-
-            const nextSection = sectionsToPreload.shift();
-            activePreloadPromise = preloadSection(nextSection)
-                .then(() => {
-                    activePreloadPromise = null;
-                    // Schedule the next preload during idle time
-                    if (window.requestIdleCallback) {
-                        window.requestIdleCallback(preloadNext, {
-                            timeout: 5000,
-                        });
-                    } else {
-                        // Longer delay between preloads to minimize impact
-                        preloadingTimeout = setTimeout(preloadNext, 500);
-                    }
-                })
-                .catch(() => {
-                    // If preloading fails, continue with next section
-                    activePreloadPromise = null;
-                    if (window.requestIdleCallback) {
-                        window.requestIdleCallback(preloadNext, {
-                            timeout: 5000,
-                        });
-                    } else {
-                        preloadingTimeout = setTimeout(preloadNext, 500);
-                    }
-                });
-        };
-
-        // Start preloading the first section
-        // We use requestIdleCallback if available to minimize performance impact.
-        if (window.requestIdleCallback) {
-            window.requestIdleCallback(preloadNext, { timeout: 5000 });
-        } else {
-            // Fallback to a fixed delay if requestIdleCallback is not supported (e.g. Safari)
-            preloadingTimeout = setTimeout(preloadNext, 1000);
-        }
-    }, 5000); // Wait 5 seconds before starting any preloading
 };
 
 // Live mode: re-fetch section JSON and re-process PromQL queries.
@@ -1896,9 +1882,197 @@ const startLiveRefresh = () => {
     liveRefreshInterval = setInterval(refreshCurrentSection, 5000);
 };
 
+// Single-chart expanded view — opened in a new tab from the "Expand" link.
+// Shows one chart at full width with an editable PromQL query input below it.
+const SingleChartView = {
+    oninit(vnode) {
+        vnode.state.singleChartsState = new ChartsState();
+        vnode.state.query = '';
+        vnode.state.title = '';
+        vnode.state.description = '';
+        vnode.state.plot = null;
+        vnode.state.loading = false;
+        vnode.state.error = null;
+    },
+
+    onremove(vnode) {
+        vnode.state.singleChartsState.clear();
+    },
+
+    view(vnode) {
+        const data = vnode.attrs.data;
+        const chartId = vnode.attrs.chartId;
+        if (!data) return m('div', 'Loading...');
+
+        // Find the plot by chart ID across all groups
+        if (!vnode.state.plot) {
+            for (const group of data.groups || []) {
+                for (const plot of group.plots || []) {
+                    if (plot.opts.id === chartId) {
+                        vnode.state.plot = plot;
+                        vnode.state.query = plot.promql_query || '';
+                        vnode.state.title = plot.opts.title || '';
+                        vnode.state.description = plot.opts.description || '';
+                        break;
+                    }
+                }
+                if (vnode.state.plot) break;
+            }
+        }
+
+        const plot = vnode.state.plot;
+        if (!plot) return m('div.single-chart-view', m('p', `Chart "${chartId}" not found`));
+
+        const spec = {
+            ...plot,
+            opts: { ...plot.opts, title: vnode.state.title, description: vnode.state.description },
+        };
+
+        const executeQuery = async () => {
+            if (!vnode.state.query.trim()) return;
+            vnode.state.loading = true;
+            vnode.state.error = null;
+
+            try {
+                const meta = await m.request({ method: 'GET', url: '/api/v1/metadata', withCredentials: true });
+                const minTime = meta.data.minTime;
+                const maxTime = meta.data.maxTime;
+                const duration = maxTime - minTime;
+                const step = Math.max(1, Math.floor(duration / 1000));
+
+                const url = `/api/v1/query_range?query=${encodeURIComponent(vnode.state.query)}&start=${minTime}&end=${maxTime}&step=${step}`;
+                const response = await m.request({ method: 'GET', url, withCredentials: true });
+
+                if (response.status === 'success' && response.data && response.data.result) {
+                    applyResultToPlot(plot, response);
+                    // Force chart re-render by bumping the data reference
+                    vnode.state.singleChartsState.clear();
+                } else {
+                    vnode.state.error = response.error || 'Query returned no data';
+                }
+            } catch (e) {
+                vnode.state.error = e.message || 'Query failed';
+            }
+
+            vnode.state.loading = false;
+            m.redraw();
+        };
+
+        const applyFields = () => {
+            // Directly reconfigure every chart in this view so title/description update
+            vnode.state.singleChartsState.charts.forEach(chart => {
+                chart.spec = spec;
+                chart.configureChartByType();
+            });
+        };
+
+        return m('div.single-chart-view', [
+            m('div.single-chart-header', [
+                m('h1.section-title', 'Single Chart View'),
+            ]),
+            m('div.single-chart-container', [
+                m(Chart, { spec, chartsState: vnode.state.singleChartsState, interval: data.interval }),
+            ]),
+            m('div.single-chart-fields', [
+                m('div.single-chart-field', [
+                    m('label', 'Title'),
+                    m('div.field-input-row', [
+                        m('input.field-input', {
+                            type: 'text',
+                            value: vnode.state.title,
+                            oninput: (e) => { vnode.state.title = e.target.value; },
+                            onkeydown: (e) => {
+                                if (e.key === 'Enter') applyFields();
+                            },
+                        }),
+                        m('button.field-apply-btn', { onclick: applyFields }, 'Apply'),
+                    ]),
+                ]),
+                m('div.single-chart-field', [
+                    m('label', 'Description'),
+                    m('div.field-input-row', [
+                        m('input.field-input', {
+                            type: 'text',
+                            value: vnode.state.description,
+                            oninput: (e) => { vnode.state.description = e.target.value; },
+                            onkeydown: (e) => {
+                                if (e.key === 'Enter') applyFields();
+                            },
+                        }),
+                        m('button.field-apply-btn', { onclick: applyFields }, 'Apply'),
+                    ]),
+                ]),
+            ]),
+            m('div.single-chart-query', [
+                m('label', 'PromQL Query'),
+                m('div.query-input-wrapper', [
+                    m('textarea.query-input', {
+                        value: vnode.state.query,
+                        oninput: (e) => vnode.state.query = e.target.value,
+                        onkeydown: (e) => {
+                            if (e.key === 'Enter' && e.ctrlKey) executeQuery();
+                        },
+                        rows: 2,
+                    }),
+                    m('button.execute-btn', {
+                        onclick: executeQuery,
+                        disabled: vnode.state.loading,
+                    }, vnode.state.loading ? 'Running...' : 'Execute (Ctrl+Enter)'),
+                ]),
+                vnode.state.error && m('div.error-message', vnode.state.error),
+            ]),
+        ]);
+    },
+};
+
 // Main application entry point
 m.route.prefix = ''; // use regular paths for navigation, eg. /overview
 m.route(document.body, '/overview', {
+    '/:section/chart/:chartId': {
+        onmatch(params) {
+            const sectionKey = params.section;
+
+            const makeSingleChartView = () => ({
+                view() {
+                    const data = sectionResponseCache[sectionKey];
+                    if (!data) return m('div', 'Loading...');
+                    const activeSection = data.sections.find(s => s.route === `/${sectionKey}`);
+                    return m('div', [
+                        m(TopNav, {
+                            sectionRoute: activeSection?.route,
+                            groups: data.groups,
+                            filename: data.filename,
+                            source: data.source,
+                            version: data.version,
+                            interval: data.interval,
+                            filesize: data.filesize,
+                            start_time: data.start_time,
+                            end_time: data.end_time,
+                            num_series: data.num_series,
+                        }),
+                        m('main.single-chart-main', [
+                            m(SingleChartView, {
+                                data,
+                                chartId: decodeURIComponent(params.chartId),
+                            }),
+                        ]),
+                    ]);
+                },
+            });
+
+            if (sectionResponseCache[sectionKey]) {
+                return makeSingleChartView();
+            }
+
+            const url = `/data/${sectionKey}.json`;
+            return m.request({ method: 'GET', url, withCredentials: true })
+                .then(async (data) => {
+                    const processedData = await processDashboardData(data);
+                    sectionResponseCache[sectionKey] = processedData;
+                    return makeSingleChartView();
+                });
+        },
+    },
     '/:section': {
         onmatch(params, requestedPath) {
             // Prevent a route change if we're already on this route
@@ -1913,11 +2087,6 @@ m.route(document.body, '/overview', {
                 // Reset scroll position.
                 window.scrollTo(0, 0);
 
-                // Cancel any ongoing preloading to prioritize user navigation
-                if (preloadingTimeout) {
-                    clearTimeout(preloadingTimeout);
-                    preloadingTimeout = null;
-                }
             }
 
             // In live mode, always read from cache dynamically so
