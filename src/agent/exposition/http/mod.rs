@@ -72,17 +72,10 @@ async fn root() -> String {
 }
 
 async fn system_info() -> axum::response::Response {
+    use axum::response::IntoResponse;
+
     match systeminfo::summary() {
-        Some(info) => {
-            let json = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
-            axum::response::Response::builder()
-                .header("Content-Type", "application/json")
-                .body(axum::body::Body::from(json))
-                .unwrap()
-        }
-        None => axum::response::Response::builder()
-            .status(axum::http::StatusCode::NOT_FOUND)
-            .body(axum::body::Body::from("{}"))
-            .unwrap(),
+        Some(info) => axum::response::Json(info).into_response(),
+        None => axum::http::StatusCode::NOT_FOUND.into_response(),
     }
 }

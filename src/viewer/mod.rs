@@ -182,10 +182,16 @@ pub fn run(config: Config) {
                             let parts: Vec<&str> = first_line.split_whitespace().collect();
                             match parts.as_slice() {
                                 [name, ver, ..] => (name.to_string(), ver.to_string()),
-                                _ => ("rezolus".to_string(), String::new()),
+                                _ => {
+                                    warn!("unexpected agent banner: {first_line:?}");
+                                    ("rezolus".to_string(), String::new())
+                                }
                             }
                         }
-                        Err(_) => ("rezolus".to_string(), String::new()),
+                        Err(e) => {
+                            warn!("failed to read agent banner: {e}");
+                            ("rezolus".to_string(), String::new())
+                        }
                     },
                     Err(e) => {
                         eprintln!("failed to connect to agent at {url}: {e}");
@@ -460,15 +466,18 @@ async fn about() -> String {
 async fn data(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     axum::extract::Path(path): axum::extract::Path<String>,
-) -> (StatusCode, String) {
-    (
-        StatusCode::OK,
-        state
-            .sections
-            .get(&path)
-            .map(|v| v.to_string())
-            .unwrap_or("{ }".to_string()),
-    )
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    match state.sections.get(&path) {
+        Some(v) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            v.to_string(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Returns whether the viewer is in live or file mode.
@@ -484,16 +493,16 @@ async fn mode(
 async fn systeminfo_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
     match &state.systeminfo {
-        Some(json) => axum::response::Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from(json.clone()))
-            .unwrap(),
-        None => axum::response::Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(axum::body::Body::from("{}"))
-            .unwrap(),
+        Some(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json.clone(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

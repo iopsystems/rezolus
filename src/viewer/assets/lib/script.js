@@ -564,9 +564,11 @@ m.route(document.body, '/overview', {
                 // Clear chart instances (they'll be recreated), but preserve zoom.
                 chartsState.charts.clear();
 
+                // Reset cgroup pattern so it doesn't leak between sections.
+                activeCgroupPattern = null;
+
                 // Reset scroll position.
                 window.scrollTo(0, 0);
-
             }
 
             // System Info is not a backend section — render directly
