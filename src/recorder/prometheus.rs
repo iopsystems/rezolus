@@ -58,7 +58,8 @@ impl PrometheusConverter {
     }
 
     pub fn convert(&mut self, text: &str) -> Snapshot {
-        let lines = text.lines().map(|l| Ok(l.to_string()));
+        let sanitized = sanitize_metric_names(text);
+        let lines = sanitized.lines().map(|l| Ok(l.to_string()));
         let scrape = match prometheus_parse::Scrape::parse(lines) {
             Ok(s) => s,
             Err(e) => {
@@ -263,6 +264,53 @@ fn compute_generic_scale(buckets: &[&prometheus_parse::HistogramCount]) -> f64 {
         scale *= 10.0;
     }
     scale
+}
+
+/// Replace colons with underscores in metric names.
+///
+/// The prometheus-parse crate uses `\w+` regexes for metric names, which
+/// doesn't include colons. Prometheus allows colons in metric names (commonly
+/// used by recording rules and namespaced exporters like vLLM), so we
+/// normalize them to underscores before parsing.
+///
+/// Only the metric name portion of each line is modified - label values and
+/// HELP descriptions are left untouched.
+fn sanitize_metric_names(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            // For comment lines (HELP/TYPE), replace colons in the metric
+            // name token only (the word after HELP/TYPE keyword)
+            if let Some(rest) = trimmed
+                .strip_prefix("# HELP ")
+                .or(trimmed.strip_prefix("# TYPE "))
+            {
+                let prefix = &trimmed[..trimmed.len() - rest.len()];
+                // The metric name is the first token
+                let name_end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+                let name = &rest[..name_end];
+                let after = &rest[name_end..];
+                result.push_str(prefix);
+                result.push_str(&name.replace(':', "_"));
+                result.push_str(after);
+            } else {
+                result.push_str(trimmed);
+            }
+        } else {
+            // Sample line: metric_name{labels} value [timestamp]
+            // Replace colons only in the metric name (before '{' or whitespace)
+            let name_end = trimmed
+                .find(|c: char| c == '{' || c.is_whitespace())
+                .unwrap_or(trimmed.len());
+            let name = &trimmed[..name_end];
+            let after = &trimmed[name_end..];
+            result.push_str(&name.replace(':', "_"));
+            result.push_str(after);
+        }
+        result.push('\n');
+    }
+    result
 }
 
 fn empty_snapshot() -> Snapshot {
