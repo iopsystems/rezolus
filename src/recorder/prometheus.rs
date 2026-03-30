@@ -41,11 +41,18 @@ impl PrometheusConverter {
         id.to_string()
     }
 
-    fn build_metadata(name: &str, labels: &[(String, String)]) -> HashMap<String, String> {
+    fn build_metadata(
+        name: &str,
+        labels: &[(String, String)],
+        docs: &HashMap<String, String>,
+    ) -> HashMap<String, String> {
         let mut metadata = HashMap::new();
         metadata.insert("metric".to_string(), name.to_string());
         for (k, v) in labels {
             metadata.insert(k.clone(), v.clone());
+        }
+        if let Some(desc) = lookup_description(docs, name) {
+            metadata.insert("description".to_string(), desc.to_string());
         }
         metadata
     }
@@ -81,7 +88,7 @@ impl PrometheusConverter {
                     counters.push(Counter {
                         name: id,
                         value: v as u64,
-                        metadata: Self::build_metadata(&sample.metric, &labels),
+                        metadata: Self::build_metadata(&sample.metric, &labels, &scrape.docs),
                     });
                 }
                 prometheus_parse::Value::Gauge(v) => {
@@ -92,7 +99,7 @@ impl PrometheusConverter {
                     gauges.push(Gauge {
                         name: id,
                         value: v as i64,
-                        metadata: Self::build_metadata(&sample.metric, &labels),
+                        metadata: Self::build_metadata(&sample.metric, &labels, &scrape.docs),
                     });
                 }
                 prometheus_parse::Value::Untyped(v) => {
@@ -105,7 +112,7 @@ impl PrometheusConverter {
                     // gives the true mean for comparison against approximated
                     // histogram percentiles.
                     let id = self.get_or_assign_id(&sample.metric, &labels);
-                    let metadata = Self::build_metadata(&sample.metric, &labels);
+                    let metadata = Self::build_metadata(&sample.metric, &labels, &scrape.docs);
                     if sample.metric.ends_with("_total")
                         || sample.metric.ends_with("_sum")
                         || sample.metric.ends_with("_count")
@@ -124,7 +131,8 @@ impl PrometheusConverter {
                     }
                 }
                 prometheus_parse::Value::Histogram(ref buckets) => {
-                    if let Some((h, metadata)) = convert_histogram(buckets, &sample.metric, &labels)
+                    if let Some((h, metadata)) =
+                        convert_histogram(buckets, &sample.metric, &labels, &scrape.docs)
                     {
                         let id = self.get_or_assign_id(&sample.metric, &labels);
                         histograms.push(SnapshotHistogram {
@@ -147,7 +155,7 @@ impl PrometheusConverter {
                         gauges.push(Gauge {
                             name: id,
                             value: quantile.count as i64,
-                            metadata: Self::build_metadata(&sample.metric, &q_labels),
+                            metadata: Self::build_metadata(&sample.metric, &q_labels, &scrape.docs),
                         });
                     }
                 }
@@ -177,6 +185,7 @@ fn convert_histogram(
     buckets: &[prometheus_parse::HistogramCount],
     metric_name: &str,
     labels: &[(String, String)],
+    docs: &HashMap<String, String>,
 ) -> Option<(histogram::Histogram, HashMap<String, String>)> {
     // Filter to finite boundaries only (+Inf cannot be represented)
     let finite_buckets: Vec<_> = buckets
@@ -224,7 +233,7 @@ fn convert_histogram(
         prev_count = cum_count;
     }
 
-    let mut metadata = PrometheusConverter::build_metadata(metric_name, labels);
+    let mut metadata = PrometheusConverter::build_metadata(metric_name, labels, docs);
     metadata.insert("grouping_power".to_string(), grouping_power.to_string());
     metadata.insert("max_value_power".to_string(), max_value_power.to_string());
 
@@ -249,6 +258,22 @@ fn compute_generic_scale(buckets: &[&prometheus_parse::HistogramCount]) -> f64 {
         scale *= 10.0;
     }
     scale
+}
+
+/// Look up the HELP description for a metric. Tries the exact name first, then
+/// strips known suffixes (_total, _sum, _count, _bucket) to find the base name.
+fn lookup_description<'a>(docs: &'a HashMap<String, String>, metric: &str) -> Option<&'a str> {
+    if let Some(desc) = docs.get(metric) {
+        return Some(desc.as_str());
+    }
+    for suffix in &["_total", "_sum", "_count", "_bucket"] {
+        if let Some(base) = metric.strip_suffix(suffix) {
+            if let Some(desc) = docs.get(base) {
+                return Some(desc.as_str());
+            }
+        }
+    }
+    None
 }
 
 fn empty_snapshot() -> Snapshot {
