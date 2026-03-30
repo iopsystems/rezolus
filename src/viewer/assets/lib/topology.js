@@ -277,12 +277,15 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
         }, children);
     };
 
+    const numaChildren = [];
+    if (toggles.numa) {
+        numaChildren.push(m('div.topo-numa-header', `NUMA ${numaNode}`));
+    }
+    numaChildren.push(m('div.topo-llc-groups', llcGrouped.map(renderLLCGroup)));
+
     return m('div.topo-numa-box', {
         class: toggles.numa ? 'numa-highlighted' : '',
-    }, [
-        toggles.numa && m('div.topo-numa-header', `NUMA ${numaNode}`),
-        m('div.topo-llc-groups', llcGrouped.map(renderLLCGroup)),
-    ]);
+    }, numaChildren);
 };
 
 // ── Legend ────────────────────────────────────────────────────────────
@@ -327,13 +330,14 @@ const renderLegend = (cacheStructs, hasSMT) => {
         children.push(m('div.topo-core-row', { key: `cores-${si}` },
             Array.from({ length: coresPerGroup }, (_, ci) => {
                 const idx = si * coresPerGroup + ci;
-                return m('div.topo-core.legend-core', { style: `width:${boxPx};height:${boxPx}` }, [
-                    m('span.core-id', `C${idx}`),
-                    hasSMT ? m('div.topo-threads', [
+                const coreChildren = [m('span.core-id', `C${idx}`)];
+                if (hasSMT) {
+                    coreChildren.push(m('div.topo-threads', [
                         m('span.topo-thread', `T${idx * 2}`),
                         m('span.topo-thread', `T${idx * 2 + 1}`),
-                    ]) : null,
-                ].filter(Boolean));
+                    ]));
+                }
+                return m('div.topo-core.legend-core', { style: `width:${boxPx};height:${boxPx}` }, coreChildren);
             }),
         ));
 
@@ -422,6 +426,9 @@ const CpuTopology = {
         outer: for (const dieMap of packages.values()) {
             for (const cores of dieMap.values()) {
                 for (const cpus of cores.values()) {
+                    if (cpus.length > 2) {
+                        console.warn('[topo] unexpected: %d threads per core', cpus.length);
+                    }
                     if (cpus.length > 1) { hasSMT = true; break outer; }
                 }
             }
