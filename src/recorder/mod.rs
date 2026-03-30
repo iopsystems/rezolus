@@ -1,6 +1,8 @@
 use super::*;
 use clap::ArgMatches;
 
+mod prometheus;
+
 pub struct Config {
     interval: humantime::Duration,
     duration: Option<humantime::Duration>,
@@ -36,7 +38,7 @@ pub fn command() -> Command {
         .about("On-demand recording to a file")
         .arg(
             clap::Arg::new("URL")
-                .help("Rezolus HTTP endpoint")
+                .help("Metrics endpoint (Rezolus agent or Prometheus)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Url))
                 .required(true)
@@ -120,16 +122,6 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    // parse source address
-    let mut url = config.url.clone();
-
-    if url.path() != "/" {
-        eprintln!("URL should not have an non-root path: {url}");
-        std::process::exit(1);
-    }
-
-    url.set_path("/metrics/binary");
-
     // our http client
     let client = match Client::builder().http1_only().build() {
         Ok(c) => c,
@@ -165,45 +157,90 @@ pub fn run(config: Config) {
         }
     };
 
-    // test connectivity to the agent
+    // Auto-detect source type by probing the endpoint. For root-path URLs,
+    // try the Rezolus binary endpoint first; if it fails, try /metrics as
+    // Prometheus. For non-root URLs, use the path as-is.
+    let mut url = config.url.clone();
+    let prometheus_mode: bool;
+
     {
         let client = client.clone();
-        let url = url.clone();
 
-        rt.block_on(async move {
-            let start = Instant::now();
-
-            // sample rezolus to make sure:
-            // * we can reach it
-            // * we get a response
-            // * the sample interval is not too close to the sample latency
-            if let Ok(response) = client.get(url.clone()).send().await {
-                if let Ok(_body) = response.bytes().await {
-                    let latency = start.elapsed();
-
-                    if latency.as_nanos() >= config.interval.as_nanos() {
-                        let recommended = humantime::Duration::from(Duration::from_millis((latency * 2).as_nanos().div_ceil(1000000) as u64));
-
-                        eprintln!("sampling latency ({} us) exceeded the sample interval. Try setting the interval to: {}", latency.as_micros(), recommended);
-                        std::process::exit(1);
-                    } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
-                        warn!("sampling latency ({} us) is more that 75% of the sample interval. Consider increasing the interval", latency.as_micros());
-                    } else {
-                        debug!("sampling latency: {} us", latency.as_micros());
-                    }
-                } else {
-                    eprintln!("failed read response. Please check that the source address is correct");
-                    std::process::exit(1);
-                }
+        prometheus_mode = rt.block_on(async {
+            // Determine candidate URLs to try
+            let candidates: Vec<(Url, bool)> = if url.path() == "/" {
+                let mut rezolus_url = url.clone();
+                rezolus_url.set_path("/metrics/binary");
+                let mut prom_url = url.clone();
+                prom_url.set_path("/metrics");
+                vec![(rezolus_url, false), (prom_url, true)]
             } else {
-                eprintln!("failed to connect. Please check that the agent is running and that the source address is correct");
-                std::process::exit(1);
+                vec![(url.clone(), true)]
+            };
+
+            for (candidate_url, is_prom) in &candidates {
+                let start = Instant::now();
+
+                if let Ok(response) = client.get(candidate_url.clone()).send().await {
+                    if !response.status().is_success() {
+                        continue;
+                    }
+
+                    if let Ok(body) = response.bytes().await {
+                        let latency = start.elapsed();
+
+                        if latency.as_nanos() >= config.interval.as_nanos() {
+                            let recommended = humantime::Duration::from(Duration::from_millis(
+                                (latency * 2).as_nanos().div_ceil(1000000) as u64,
+                            ));
+                            eprintln!(
+                                "sampling latency ({} us) exceeded the sample interval. \
+                                 Try setting the interval to: {}",
+                                latency.as_micros(),
+                                recommended
+                            );
+                            std::process::exit(1);
+                        } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
+                            warn!(
+                                "sampling latency ({} us) is more that 75% of the sample interval. \
+                                 Consider increasing the interval",
+                                latency.as_micros()
+                            );
+                        } else {
+                            debug!("sampling latency: {} us", latency.as_micros());
+                        }
+
+                        if *is_prom {
+                            url = candidate_url.clone();
+                            info!("detected prometheus endpoint: {url}");
+                            return true;
+                        }
+
+                        // Try to deserialize as msgpack to confirm it's Rezolus
+                        if rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body).is_ok() {
+                            url = candidate_url.clone();
+                            info!("detected rezolus agent: {url}");
+                            return false;
+                        }
+
+                        // Got a response but it's not valid msgpack - try next
+                        continue;
+                    }
+                }
             }
+
+            eprintln!(
+                "failed to connect or unrecognized response. \
+                 Please check that the source is running and the address is correct"
+            );
+            std::process::exit(1);
         });
     }
 
     // Fetch the agent's systeminfo for embedding in parquet metadata
-    let agent_systeminfo: Option<String> = {
+    let agent_systeminfo: Option<String> = if prometheus_mode {
+        None
+    } else {
         let client = client.clone();
         let mut info_url = config.url.clone();
         info_url.set_path("/systeminfo");
@@ -221,6 +258,27 @@ pub fn run(config: Config) {
         debug!("agent systeminfo not available");
     }
 
+    // Fetch metric descriptions for embedding in parquet metadata
+    let descriptions: Option<String> = if prometheus_mode {
+        None // descriptions come from # HELP lines during recording
+    } else {
+        let client = client.clone();
+        let mut desc_url = config.url.clone();
+        desc_url.set_path("/metrics/descriptions");
+        rt.block_on(async move {
+            match client.get(desc_url).send().await {
+                Ok(response) if response.status().is_success() => response.text().await.ok(),
+                _ => None,
+            }
+        })
+    };
+
+    if descriptions.is_some() {
+        debug!("fetched descriptions from agent");
+    } else {
+        debug!("agent descriptions not available");
+    }
+
     if config.duration.is_some() {
         info!("recording metrics... ctrl-c to terminate early");
     } else {
@@ -234,6 +292,13 @@ pub fn run(config: Config) {
 
         // sampling interval
         let mut interval = crate::common::aligned_interval(interval);
+
+        // prometheus converter for parsing text format responses
+        let mut converter = if prometheus_mode {
+            Some(prometheus::PrometheusConverter::new())
+        } else {
+            None
+        };
 
         // sample in a loop until RUNNING is false or duration has completed
         while STATE.load(Ordering::Relaxed) == RUNNING {
@@ -249,9 +314,27 @@ pub fn run(config: Config) {
 
             let start = Instant::now();
 
-            // sample rezolus
+            // sample the metrics source
             if let Ok(response) = client.get(url.clone()).send().await {
-                if let Ok(body) = response.bytes().await {
+                let body: Option<Vec<u8>> = if let Some(ref mut converter) = converter {
+                    match response.text().await {
+                        Ok(text) => {
+                            let snapshot = converter.convert(&text);
+                            match rmp_serde::encode::to_vec(&snapshot) {
+                                Ok(bytes) => Some(bytes),
+                                Err(e) => {
+                                    error!("error serializing snapshot: {e}");
+                                    None
+                                }
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    response.bytes().await.ok().map(|b| b.to_vec())
+                };
+
+                if let Some(body) = body {
                     let latency = start.elapsed();
 
                     if latency.as_nanos() >= config.interval.as_nanos() {
@@ -267,7 +350,7 @@ pub fn run(config: Config) {
                         std::process::exit(1);
                     }
                 } else {
-                    eprintln!("failed read response. terminating early");
+                    eprintln!("failed to read response. terminating early");
                     break;
                 }
             } else {
@@ -278,6 +361,12 @@ pub fn run(config: Config) {
 
         debug!("flushing writer");
         let _ = writer.flush();
+
+        // Collect Prometheus descriptions accumulated during recording
+        let prom_descriptions = converter
+            .as_ref()
+            .filter(|c| !c.descriptions().is_empty())
+            .and_then(|c| serde_json::to_string(c.descriptions()).ok());
 
         // handle any output format specific transforms
         match config.format {
@@ -297,6 +386,11 @@ pub fn run(config: Config) {
 
                 if let Some(ref json) = agent_systeminfo {
                     converter = converter.metadata("systeminfo".to_string(), json.clone());
+                }
+
+                let desc_json = descriptions.or(prom_descriptions);
+                if let Some(ref json) = desc_json {
+                    converter = converter.metadata("descriptions".to_string(), json.clone());
                 }
 
                 if let Err(e) = converter.convert_file_handle(writer, destination.unwrap())
