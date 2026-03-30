@@ -155,10 +155,12 @@ pub fn run(config: Config) {
                     .and_then(|f| {
                         let reader = SerializedFileReader::new(f).ok()?;
                         let kv = reader.metadata().file_metadata().key_value_metadata()?;
-                        let sysinfo = kv.iter()
+                        let sysinfo = kv
+                            .iter()
                             .find(|kv| kv.key == "systeminfo")
                             .and_then(|kv| kv.value.clone());
-                        let sel = kv.iter()
+                        let sel = kv
+                            .iter()
                             .find(|kv| kv.key == "selection")
                             .and_then(|kv| kv.value.clone());
                         Some((sysinfo, sel))
@@ -171,13 +173,15 @@ pub fn run(config: Config) {
             // We hash only [0, file_size - 8 - footer_len) so the checksum is stable
             // regardless of key-value metadata changes (e.g. selection annotations).
             let file_checksum = {
-                use sha2::{Sha256, Digest};
+                use sha2::{Digest, Sha256};
                 use std::io::{Read, Seek, SeekFrom};
                 info!("Computing file checksum...");
                 (|| -> Option<String> {
                     let mut f = std::fs::File::open(path).ok()?;
                     let file_len = f.metadata().ok()?.len();
-                    if file_len < 12 { return None; } // too small to be valid parquet
+                    if file_len < 12 {
+                        return None;
+                    } // too small to be valid parquet
 
                     // Read footer length from last 8 bytes (4B footer_len + 4B magic)
                     f.seek(SeekFrom::End(-8)).ok()?;
@@ -479,7 +483,10 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/save", get(save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
-        .route("/save_with_selection", axum::routing::post(save_with_selection))
+        .route(
+            "/save_with_selection",
+            axum::routing::post(save_with_selection),
+        )
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -850,16 +857,14 @@ async fn save_with_selection(
             use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
             use parquet::arrow::ArrowWriter;
             use parquet::file::properties::WriterProperties;
-            use parquet::format::KeyValue;
             use parquet::file::reader::FileReader;
             use parquet::file::serialized_reader::SerializedFileReader;
+            use parquet::format::KeyValue;
 
             let file = std::fs::File::open(&path)?;
 
             // Read existing metadata to preserve and augment
-            let meta_reader = SerializedFileReader::new(
-                std::fs::File::open(&path)?,
-            )?;
+            let meta_reader = SerializedFileReader::new(std::fs::File::open(&path)?)?;
             let mut kv_meta: Vec<KeyValue> = meta_reader
                 .metadata()
                 .file_metadata()
@@ -882,11 +887,8 @@ async fn save_with_selection(
 
             let mut output = Vec::new();
             {
-                let mut writer = ArrowWriter::try_new(
-                    Cursor::new(&mut output),
-                    schema,
-                    Some(props),
-                )?;
+                let mut writer =
+                    ArrowWriter::try_new(Cursor::new(&mut output), schema, Some(props))?;
                 for batch in reader {
                     let batch = batch?;
                     writer.write(&batch)?;
