@@ -269,6 +269,24 @@ body::after {
     border-radius: 1px;
 }
 
+.time-handle-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--accent);
+}
+
+.time-handle-arrow-left {
+    right: calc(100% + 1px);
+}
+
+.time-handle-arrow-right {
+    left: calc(100% + 1px);
+}
+
 .time-handle-left {
     left: -2px;
 }

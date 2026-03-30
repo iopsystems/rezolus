@@ -42,8 +42,9 @@ const parseTimeInput = (text, referenceMs) => {
 // Displays full experiment duration with a draggable selection window.
 const TimeRangeBar = {
     oninit(vnode) {
-        vnode.state.barStart = 0;
-        vnode.state.barEnd = 100;
+        const zoom = vnode.attrs.chartsState?.zoomLevel;
+        vnode.state.barStart = zoom ? zoom.start : 0;
+        vnode.state.barEnd = zoom ? zoom.end : 100;
         vnode.state.editing = null; // 'start' | 'end' | null
         vnode.state.editValue = '';
     },
@@ -213,7 +214,11 @@ const TimeRangeBar = {
             ]);
         };
 
-        return m('div.time-range-bar', [
+        const hidden = vnode.attrs.hidden;
+
+        return m('div.time-range-bar', {
+            style: { visibility: hidden ? 'hidden' : '' },
+        }, [
             timeLabel('start', selectedStartMs),
             m('div.time-track', [
                 // Dimmed regions outside selection
@@ -223,8 +228,14 @@ const TimeRangeBar = {
                 m('div.time-selection', {
                     style: { left: `${start}%`, width: `${end - start}%` },
                 }, [
-                    m('div.time-handle.time-handle-left'),
-                    m('div.time-handle.time-handle-right'),
+                    m('div.time-handle.time-handle-left', [
+                        m('span.time-handle-arrow.time-handle-arrow-left', '←'),
+                        m('span.time-handle-arrow.time-handle-arrow-right', '→'),
+                    ]),
+                    m('div.time-handle.time-handle-right', [
+                        m('span.time-handle-arrow.time-handle-arrow-left', '←'),
+                        m('span.time-handle-arrow.time-handle-arrow-right', '→'),
+                    ]),
                 ]),
             ]),
             timeLabel('end', selectedEndMs),
@@ -237,7 +248,7 @@ const TimeRangeBar = {
                     m.redraw();
                 },
                 title: 'Reset to full time range',
-                style: { visibility: (start > 0.1 || end < 99.9) ? 'visible' : 'hidden' },
+                style: { visibility: (!hidden && (start > 0.1 || end < 99.9)) ? 'visible' : 'hidden' },
             }, 'Reset'),
         ]);
     },

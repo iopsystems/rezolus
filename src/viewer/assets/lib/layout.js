@@ -91,9 +91,14 @@ const TopNav = {
                 ]),
 
             ]),
-            // Global time range bar (right-aligned)
+            // Global time range bar (right-aligned, hidden on systeminfo)
             (attrs.start_time != null && attrs.end_time != null) &&
-                m(TimeRangeBar, { start_time: attrs.start_time, end_time: attrs.end_time, chartsState: attrs.chartsState }),
+                m(TimeRangeBar, {
+                    start_time: attrs.start_time,
+                    end_time: attrs.end_time,
+                    chartsState: attrs.chartsState,
+                    hidden: attrs.sectionRoute === '/systeminfo',
+                }),
         ]);
     },
 };
