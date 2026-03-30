@@ -1,6 +1,8 @@
 use super::*;
 use clap::ArgMatches;
 
+mod prometheus;
+
 pub struct Config {
     interval: humantime::Duration,
     duration: Option<humantime::Duration>,
@@ -8,6 +10,7 @@ pub struct Config {
     verbose: u8,
     url: Url,
     output: PathBuf,
+    prometheus: bool,
 }
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
@@ -27,6 +30,7 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<Format>("FORMAT")
                 .copied()
                 .unwrap_or(Format::Parquet),
+            prometheus: args.get_flag("PROMETHEUS"),
         })
     }
 }
@@ -83,6 +87,12 @@ pub fn command() -> Command {
                 .default_value("parquet")
                 .value_parser(value_parser!(Format)),
         )
+        .arg(
+            clap::Arg::new("PROMETHEUS")
+                .long("prometheus")
+                .help("Record from a Prometheus/OpenTelemetry metrics endpoint")
+                .action(clap::ArgAction::SetTrue),
+        )
 }
 
 /// Runs the Rezolus `recorder` which is a Rezolus client that pulls data from
@@ -123,12 +133,17 @@ pub fn run(config: Config) {
     // parse source address
     let mut url = config.url.clone();
 
-    if url.path() != "/" {
-        eprintln!("URL should not have an non-root path: {url}");
-        std::process::exit(1);
+    if config.prometheus {
+        if url.path() == "/" {
+            url.set_path("/metrics");
+        }
+    } else {
+        if url.path() != "/" {
+            eprintln!("URL should not have an non-root path: {url}");
+            std::process::exit(1);
+        }
+        url.set_path("/metrics/binary");
     }
-
-    url.set_path("/metrics/binary");
 
     // our http client
     let client = match Client::builder().http1_only().build() {
@@ -203,7 +218,9 @@ pub fn run(config: Config) {
     }
 
     // Fetch the agent's systeminfo for embedding in parquet metadata
-    let agent_systeminfo: Option<String> = {
+    let agent_systeminfo: Option<String> = if config.prometheus {
+        None
+    } else {
         let client = client.clone();
         let mut info_url = config.url.clone();
         info_url.set_path("/systeminfo");
@@ -235,6 +252,13 @@ pub fn run(config: Config) {
         // sampling interval
         let mut interval = crate::common::aligned_interval(interval);
 
+        // prometheus converter for parsing text format responses
+        let mut converter = if config.prometheus {
+            Some(prometheus::PrometheusConverter::new())
+        } else {
+            None
+        };
+
         // sample in a loop until RUNNING is false or duration has completed
         while STATE.load(Ordering::Relaxed) == RUNNING {
             // check if the duration has completed
@@ -249,9 +273,27 @@ pub fn run(config: Config) {
 
             let start = Instant::now();
 
-            // sample rezolus
+            // sample the metrics source
             if let Ok(response) = client.get(url.clone()).send().await {
-                if let Ok(body) = response.bytes().await {
+                let body: Option<Vec<u8>> = if let Some(ref mut converter) = converter {
+                    match response.text().await {
+                        Ok(text) => {
+                            let snapshot = converter.convert(&text);
+                            match rmp_serde::encode::to_vec(&snapshot) {
+                                Ok(bytes) => Some(bytes),
+                                Err(e) => {
+                                    error!("error serializing snapshot: {e}");
+                                    None
+                                }
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                } else {
+                    response.bytes().await.ok().map(|b| b.to_vec())
+                };
+
+                if let Some(body) = body {
                     let latency = start.elapsed();
 
                     if latency.as_nanos() >= config.interval.as_nanos() {
@@ -267,7 +309,7 @@ pub fn run(config: Config) {
                         std::process::exit(1);
                     }
                 } else {
-                    eprintln!("failed read response. terminating early");
+                    eprintln!("failed to read response. terminating early");
                     break;
                 }
             } else {
