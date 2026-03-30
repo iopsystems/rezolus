@@ -146,22 +146,79 @@ pub fn run(config: Config) {
 
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
-            // Extract systeminfo from parquet file-level metadata
-            let systeminfo = {
+            // Extract metadata from parquet file-level key-value pairs
+            let (systeminfo, selection) = {
                 use parquet::file::reader::FileReader;
                 use parquet::file::serialized_reader::SerializedFileReader;
-                std::fs::File::open(path).ok().and_then(|f| {
-                    let reader = SerializedFileReader::new(f).ok()?;
-                    let kv = reader.metadata().file_metadata().key_value_metadata()?;
-                    kv.iter()
-                        .find(|kv| kv.key == "systeminfo")
-                        .and_then(|kv| kv.value.clone())
-                })
+                std::fs::File::open(path)
+                    .ok()
+                    .and_then(|f| {
+                        let reader = SerializedFileReader::new(f).ok()?;
+                        let kv = reader.metadata().file_metadata().key_value_metadata()?;
+                        let sysinfo = kv
+                            .iter()
+                            .find(|kv| kv.key == "systeminfo")
+                            .and_then(|kv| kv.value.clone());
+                        let sel = kv
+                            .iter()
+                            .find(|kv| kv.key == "selection")
+                            .and_then(|kv| kv.value.clone());
+                        Some((sysinfo, sel))
+                    })
+                    .unwrap_or((None, None))
+            };
+
+            // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
+            // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
+            // We hash only [0, file_size - 8 - footer_len) so the checksum is stable
+            // regardless of key-value metadata changes (e.g. selection annotations).
+            let file_checksum = {
+                use sha2::{Digest, Sha256};
+                use std::io::{Read, Seek, SeekFrom};
+                info!("Computing file checksum...");
+                (|| -> Option<String> {
+                    let mut f = std::fs::File::open(path).ok()?;
+                    let file_len = f.metadata().ok()?.len();
+                    if file_len < 12 {
+                        return None;
+                    } // too small to be valid parquet
+
+                    // Read footer length from last 8 bytes (4B footer_len + 4B magic)
+                    f.seek(SeekFrom::End(-8)).ok()?;
+                    let mut tail = [0u8; 4];
+                    f.read_exact(&mut tail).ok()?;
+                    let footer_len = u32::from_le_bytes(tail) as u64;
+                    let data_end = file_len.checked_sub(8 + footer_len)?;
+
+                    // Hash only the data portion
+                    f.seek(SeekFrom::Start(0)).ok()?;
+                    let mut hasher = Sha256::new();
+                    let mut buf = [0u8; 64 * 1024];
+                    let mut remaining = data_end;
+                    while remaining > 0 {
+                        let to_read = (remaining as usize).min(buf.len());
+                        match f.read(&mut buf[..to_read]) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                hasher.update(&buf[..n]);
+                                remaining -= n as u64;
+                            }
+                            Err(e) => {
+                                warn!("failed to read file for checksum: {e}");
+                                return None;
+                            }
+                        }
+                    }
+                    Some(format!("{:x}", hasher.finalize()))
+                })()
             };
 
             info!("Generating dashboards...");
             let mut state = dashboard::generate(data, filesize);
+            state.parquet_path = Some(path.clone());
             state.systeminfo = systeminfo;
+            state.selection = selection;
+            state.file_checksum = file_checksum;
             state
         }
         Source::Live(url) => {
@@ -385,8 +442,14 @@ struct AppState {
     /// Raw msgpack snapshot bytes for parquet export (live mode only).
     snapshots: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
     live: bool,
+    /// Original parquet file path (file mode only).
+    parquet_path: Option<std::path::PathBuf>,
     /// Serialized SystemSummary JSON from parquet metadata or live system.
     systeminfo: Option<String>,
+    /// Serialized selection JSON from parquet metadata.
+    selection: Option<String>,
+    /// SHA-256 hex digest of the source parquet file (file mode only).
+    file_checksum: Option<String>,
 }
 
 impl AppState {
@@ -396,7 +459,10 @@ impl AppState {
             tsdb: Arc::new(parking_lot::RwLock::new(tsdb)),
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: false,
+            parquet_path: None,
             systeminfo: None,
+            selection: None,
+            file_checksum: None,
         }
     }
 }
@@ -416,6 +482,11 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/reset", axum::routing::post(reset_tsdb))
         .route("/save", get(save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
+        .route("/selection", get(selection_handler))
+        .route(
+            "/save_with_selection",
+            axum::routing::post(save_with_selection),
+        )
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -496,6 +567,22 @@ async fn systeminfo_handler(
     use axum::response::IntoResponse;
 
     match &state.systeminfo {
+        Some(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json.clone(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn selection_handler(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    match &state.selection {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -633,10 +720,13 @@ async fn metadata(
     let tsdb = state.tsdb.read();
     let engine = QueryEngine::new(&*tsdb);
     let time_range = engine.get_time_range();
-    let metadata = serde_json::json!({
+    let mut metadata = serde_json::json!({
         "minTime": time_range.0,
         "maxTime": time_range.1
     });
+    if let Some(checksum) = &state.file_checksum {
+        metadata["fileChecksum"] = serde_json::json!(checksum);
+    }
     axum::response::Json(ApiResponse::success(metadata))
 }
 
@@ -731,6 +821,162 @@ async fn save_parquet(
             .header(
                 header::CONTENT_DISPOSITION,
                 "attachment; filename=\"rezolus-capture.parquet\"",
+            )
+            .body(Body::from(output))
+            .unwrap(),
+        Ok(Err(e)) => {
+            error!("failed to convert to parquet: {e}");
+            axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("parquet conversion failed: {e}")))
+                .unwrap()
+        }
+        Err(e) => {
+            error!("parquet conversion task panicked: {e}");
+            axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("internal error"))
+                .unwrap()
+        }
+    }
+}
+
+async fn save_with_selection(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    body: String,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use std::io::Cursor;
+
+    let parquet_path = state.parquet_path.clone();
+    let selection_json = body;
+
+    // File mode: copy original parquet with selection metadata added
+    if let Some(path) = parquet_path {
+        let result = tokio::task::spawn_blocking(move || {
+            use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+            use parquet::arrow::ArrowWriter;
+            use parquet::file::properties::WriterProperties;
+            use parquet::file::reader::FileReader;
+            use parquet::file::serialized_reader::SerializedFileReader;
+            use parquet::format::KeyValue;
+
+            let file = std::fs::File::open(&path)?;
+
+            // Read existing metadata to preserve and augment
+            let meta_reader = SerializedFileReader::new(std::fs::File::open(&path)?)?;
+            let mut kv_meta: Vec<KeyValue> = meta_reader
+                .metadata()
+                .file_metadata()
+                .key_value_metadata()
+                .cloned()
+                .unwrap_or_default();
+            kv_meta.retain(|kv| kv.key != "selection");
+            kv_meta.push(KeyValue {
+                key: "selection".to_string(),
+                value: Some(selection_json),
+            });
+
+            let props = WriterProperties::builder()
+                .set_key_value_metadata(Some(kv_meta))
+                .build();
+
+            let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+            let schema = builder.schema().clone();
+            let reader = builder.build()?;
+
+            let mut output = Vec::new();
+            {
+                let mut writer =
+                    ArrowWriter::try_new(Cursor::new(&mut output), schema, Some(props))?;
+                for batch in reader {
+                    let batch = batch?;
+                    writer.write(&batch)?;
+                }
+                writer.close()?;
+            }
+
+            info!("saved annotated parquet ({} bytes)", output.len());
+            Ok::<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>(output)
+        })
+        .await;
+
+        return match result {
+            Ok(Ok(output)) => axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"rezolus-capture-annotated.parquet\"",
+                )
+                .body(Body::from(output))
+                .unwrap(),
+            Ok(Err(e)) => {
+                error!("failed to annotate parquet: {e}");
+                axum::response::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(format!("parquet annotation failed: {e}")))
+                    .unwrap()
+            }
+            Err(e) => {
+                error!("parquet annotation task panicked: {e}");
+                axum::response::Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from("internal error"))
+                    .unwrap()
+            }
+        };
+    }
+
+    // Live mode: convert snapshots to parquet with selection metadata
+    let snapshot_data: Vec<Vec<u8>> = state.snapshots.lock().iter().cloned().collect();
+
+    if snapshot_data.is_empty() {
+        return axum::response::Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(Body::empty())
+            .unwrap();
+    }
+
+    let sysinfo_json = state.systeminfo.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let total_size: usize = snapshot_data.iter().map(|s| s.len()).sum();
+        let mut raw = Vec::with_capacity(total_size);
+        for snapshot_bytes in &snapshot_data {
+            raw.extend_from_slice(snapshot_bytes);
+        }
+
+        let reader = Cursor::new(raw);
+        let mut output = Vec::new();
+
+        let mut converter = metriken_exposition::MsgpackToParquet::with_options(
+            metriken_exposition::ParquetOptions::new(),
+        )
+        .metadata("sampling_interval_ms".to_string(), "1000".to_string());
+
+        if let Some(json) = sysinfo_json {
+            converter = converter.metadata("systeminfo".to_string(), json);
+        }
+
+        converter = converter.metadata("selection".to_string(), selection_json);
+
+        converter
+            .convert_file_handle(reader, Cursor::new(&mut output))
+            .map(|rows| {
+                info!("saved annotated parquet with {rows} rows");
+                output
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(output)) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"rezolus-capture-annotated.parquet\"",
             )
             .body(Body::from(output))
             .unwrap(),
