@@ -166,32 +166,47 @@ pub fn run(config: Config) {
                     .unwrap_or((None, None))
             };
 
-            // Compute SHA-256 checksum of the source file
+            // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
+            // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
+            // We hash only [0, file_size - 8 - footer_len) so the checksum is stable
+            // regardless of key-value metadata changes (e.g. selection annotations).
             let file_checksum = {
                 use sha2::{Sha256, Digest};
-                use std::io::Read;
+                use std::io::{Read, Seek, SeekFrom};
                 info!("Computing file checksum...");
-                match std::fs::File::open(path) {
-                    Ok(mut f) => {
-                        let mut hasher = Sha256::new();
-                        let mut buf = [0u8; 64 * 1024];
-                        loop {
-                            match f.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => hasher.update(&buf[..n]),
-                                Err(e) => {
-                                    warn!("failed to read file for checksum: {e}");
-                                    break;
-                                }
+                (|| -> Option<String> {
+                    let mut f = std::fs::File::open(path).ok()?;
+                    let file_len = f.metadata().ok()?.len();
+                    if file_len < 12 { return None; } // too small to be valid parquet
+
+                    // Read footer length from last 8 bytes (4B footer_len + 4B magic)
+                    f.seek(SeekFrom::End(-8)).ok()?;
+                    let mut tail = [0u8; 4];
+                    f.read_exact(&mut tail).ok()?;
+                    let footer_len = u32::from_le_bytes(tail) as u64;
+                    let data_end = file_len.checked_sub(8 + footer_len)?;
+
+                    // Hash only the data portion
+                    f.seek(SeekFrom::Start(0)).ok()?;
+                    let mut hasher = Sha256::new();
+                    let mut buf = [0u8; 64 * 1024];
+                    let mut remaining = data_end;
+                    while remaining > 0 {
+                        let to_read = (remaining as usize).min(buf.len());
+                        match f.read(&mut buf[..to_read]) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                hasher.update(&buf[..n]);
+                                remaining -= n as u64;
+                            }
+                            Err(e) => {
+                                warn!("failed to read file for checksum: {e}");
+                                return None;
                             }
                         }
-                        Some(format!("{:x}", hasher.finalize()))
                     }
-                    Err(e) => {
-                        warn!("failed to open file for checksum: {e}");
-                        None
-                    }
-                }
+                    Some(format!("{:x}", hasher.finalize()))
+                })()
             };
 
             info!("Generating dashboards...");
