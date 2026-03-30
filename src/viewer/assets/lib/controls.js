@@ -229,12 +229,12 @@ const TimeRangeBar = {
                     style: { left: `${start}%`, width: `${end - start}%` },
                 }, [
                     m('div.time-handle.time-handle-left', [
-                        m.trust('<svg class="time-handle-arrow time-handle-arrow-left" width="10" height="10" viewBox="0 0 10 10"><line x1="9" y1="5" x2="2" y2="5" stroke="var(--accent-muted)" stroke-width="1.5" stroke-linecap="round"/><path d="M5 2L2 5L5 8" stroke="var(--accent-muted)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
-                        m.trust('<svg class="time-handle-arrow time-handle-arrow-right" width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="8" y2="5" stroke="var(--accent-muted)" stroke-width="1.5" stroke-linecap="round"/><path d="M5 2L8 5L5 8" stroke="var(--accent-muted)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+                        m('span.time-handle-arrow.time-handle-arrow-left', '←'),
+                        m('span.time-handle-arrow.time-handle-arrow-right', '→'),
                     ]),
                     m('div.time-handle.time-handle-right', [
-                        m.trust('<svg class="time-handle-arrow time-handle-arrow-left" width="10" height="10" viewBox="0 0 10 10"><line x1="9" y1="5" x2="2" y2="5" stroke="var(--accent-muted)" stroke-width="1.5" stroke-linecap="round"/><path d="M5 2L2 5L5 8" stroke="var(--accent-muted)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
-                        m.trust('<svg class="time-handle-arrow time-handle-arrow-right" width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="8" y2="5" stroke="var(--accent-muted)" stroke-width="1.5" stroke-linecap="round"/><path d="M5 2L8 5L5 8" stroke="var(--accent-muted)" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'),
+                        m('span.time-handle-arrow.time-handle-arrow-left', '←'),
+                        m('span.time-handle-arrow.time-handle-arrow-right', '→'),
                     ]),
                 ]),
             ]),

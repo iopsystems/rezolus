@@ -274,15 +274,17 @@ body::after {
     top: 50%;
     transform: translateY(-50%);
     pointer-events: none;
-    overflow: visible;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--accent);
 }
 
 .time-handle-arrow-left {
-    right: 100%;
+    right: calc(100% + 1px);
 }
 
 .time-handle-arrow-right {
-    left: 100%;
+    left: calc(100% + 1px);
 }
 
 .time-handle-left {
