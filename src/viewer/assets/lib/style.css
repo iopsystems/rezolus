@@ -269,6 +269,22 @@ body::after {
     border-radius: 1px;
 }
 
+.time-handle-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    overflow: visible;
+}
+
+.time-handle-arrow-left {
+    right: 100%;
+}
+
+.time-handle-arrow-right {
+    left: 100%;
+}
+
 .time-handle-left {
     left: -2px;
 }
