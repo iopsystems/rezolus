@@ -112,6 +112,10 @@ fn create(
         let mut metadata: HashMap<String, String> =
             [("metric".to_string(), name.to_string())].into();
 
+        if let Some(description) = metric.description() {
+            metadata.insert("description".to_string(), description.to_string());
+        }
+
         for (k, v) in metric.metadata().iter() {
             metadata.insert(k.to_string(), v.to_string());
         }
