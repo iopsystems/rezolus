@@ -238,6 +238,27 @@ pub fn run(config: Config) {
         debug!("agent systeminfo not available");
     }
 
+    // Fetch metric descriptions for embedding in parquet metadata
+    let descriptions: Option<String> = if config.prometheus {
+        None // descriptions come from # HELP lines during recording
+    } else {
+        let client = client.clone();
+        let mut desc_url = config.url.clone();
+        desc_url.set_path("/metrics/descriptions");
+        rt.block_on(async move {
+            match client.get(desc_url).send().await {
+                Ok(response) if response.status().is_success() => response.text().await.ok(),
+                _ => None,
+            }
+        })
+    };
+
+    if descriptions.is_some() {
+        debug!("fetched descriptions from agent");
+    } else {
+        debug!("agent descriptions not available");
+    }
+
     if config.duration.is_some() {
         info!("recording metrics... ctrl-c to terminate early");
     } else {
@@ -321,6 +342,12 @@ pub fn run(config: Config) {
         debug!("flushing writer");
         let _ = writer.flush();
 
+        // Collect Prometheus descriptions accumulated during recording
+        let prom_descriptions = converter
+            .as_ref()
+            .filter(|c| !c.descriptions().is_empty())
+            .and_then(|c| serde_json::to_string(c.descriptions()).ok());
+
         // handle any output format specific transforms
         match config.format {
             Format::Raw => {
@@ -339,6 +366,11 @@ pub fn run(config: Config) {
 
                 if let Some(ref json) = agent_systeminfo {
                     converter = converter.metadata("systeminfo".to_string(), json.clone());
+                }
+
+                let desc_json = descriptions.or(prom_descriptions);
+                if let Some(ref json) = desc_json {
+                    converter = converter.metadata("descriptions".to_string(), json.clone());
                 }
 
                 if let Err(e) = converter.convert_file_handle(writer, destination.unwrap())
