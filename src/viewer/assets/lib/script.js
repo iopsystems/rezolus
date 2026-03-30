@@ -4,6 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
+import { selectionStore, toggleSelection, isSelected, SelectionView } from './selection.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
@@ -11,6 +12,9 @@ let liveRefreshInterval = null;
 
 // System info data — fetched once at startup
 let systemInfoData = null;
+
+// File checksum (SHA-256) — fetched once at startup for parquet identity
+let fileChecksum = null;
 
 // Transport state for live mode (Wireshark-style)
 // Starts recording — data flows from agent into TSDB and UI refreshes
@@ -26,10 +30,38 @@ m.request({ method: 'GET', url: '/api/v1/mode', withCredentials: true })
     })
     .catch(() => { /* ignore - assume file mode */ });
 
+// Fetch file checksum from metadata endpoint
+m.request({ method: 'GET', url: '/api/v1/metadata', withCredentials: true })
+    .then((response) => {
+        if (response.status === 'success' && response.data?.fileChecksum) {
+            fileChecksum = response.data.fileChecksum;
+        }
+    })
+    .catch(() => { /* ignore */ });
+
 // Fetch system info (available when parquet has embedded systeminfo metadata)
 m.request({ method: 'GET', url: '/api/v1/systeminfo', withCredentials: true })
     .then((data) => { systemInfoData = data; })
     .catch(() => { /* no systeminfo available */ });
+
+// Fetch saved selection (available when parquet has embedded selection metadata)
+m.request({ method: 'GET', url: '/api/v1/selection', withCredentials: true })
+    .then((data) => {
+        if (data && Array.isArray(data.entries)) {
+            selectionStore.tagline = data.tagline || '';
+            selectionStore.zoom = data.zoom || null;
+            selectionStore.entries = data.entries.map(e => ({
+                id: crypto.randomUUID(),
+                chartId: e.chartId,
+                section: e.section,
+                sectionName: e.sectionName,
+                promql_query: e.promql_query,
+                note: e.note || '',
+                chartOpts: e.chartOpts,
+            }));
+        }
+    })
+    .catch(() => { /* no saved selection */ });
 
 // Transport control actions
 const startRecording = async () => {
@@ -126,6 +158,28 @@ const SectionContent = {
             return m('div#section-content', [
                 m(SystemInfoView, { data: systemInfoData }),
             ]);
+        }
+
+        // Special handling for Selection
+        if (sectionName === 'Selection') {
+            const anyCached = Object.values(sectionResponseCache)[0];
+            return m(SelectionView, {
+                interval: anyCached?.interval || interval,
+                version: anyCached?.version,
+                source: anyCached?.source,
+                filename: anyCached?.filename,
+                start_time: anyCached?.start_time,
+                end_time: anyCached?.end_time,
+                chartsState,
+                fileChecksum,
+                canSaveParquet: liveMode,
+                heatmapEnabled,
+                heatmapLoading,
+                onToggleHeatmap: async () => {
+                    heatmapEnabled = !heatmapEnabled;
+                    m.redraw();
+                },
+            });
         }
 
         const { withData } = countCharts(attrs.groups);
@@ -379,6 +433,21 @@ const Group = {
             ]);
         };
 
+        const selectButton = (spec) => {
+            if (!spec.promql_query) return null;
+            const sectionKey = sectionRoute.replace(/^\//, '');
+            const selected = isSelected(spec.opts.id);
+            return m('button.chart-select', {
+                class: selected ? 'chart-selected' : '',
+                onclick: (e) => {
+                    e.stopPropagation();
+                    toggleSelection(spec, sectionKey, sectionName);
+                    m.redraw();
+                },
+                title: selected ? 'Remove from selection' : 'Add to selection',
+            }, selected ? 'Selected' : 'Select');
+        };
+
         return m(
             'div.group',
             {
@@ -411,6 +480,7 @@ const Group = {
                                 chartHeader(heatmapSpec.opts),
                                 m(Chart, { spec: heatmapSpec, chartsState, interval }),
                                 expandLink(spec),
+                                selectButton(spec),
                             ]);
                         }
 
@@ -419,6 +489,7 @@ const Group = {
                             chartHeader(prefixedSpec.opts),
                             m(Chart, { spec: prefixedSpec, chartsState, interval }),
                             expandLink(spec),
+                            selectButton(spec),
                         ]);
                     }),
                 ),
@@ -514,6 +585,7 @@ const startLiveRefresh = () => {
 
 // Synthetic section object for System Info (not a backend dashboard section)
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
+const selectionSection = { name: 'Selection', route: '/selection' };
 
 // Main application entry point
 m.route.prefix = ''; // use regular paths for navigation, eg. /overview
@@ -573,13 +645,51 @@ m.route(document.body, '/overview', {
 
             // System Info is not a backend section — render directly
             if (params.section === 'systeminfo') {
+                // Bootstrap section cache if landing here directly
+                if (Object.keys(sectionResponseCache).length === 0) {
+                    preloadSection('overview').then(() => {
+                        const d = sectionResponseCache['overview'];
+                        if (d?.sections) preloadSections(d.sections);
+                        m.redraw();
+                    }).catch(() => {});
+                }
                 return {
                     view() {
-                        // Use any cached section data to get sections list for sidebar
                         const anyCached = Object.values(sectionResponseCache)[0];
                         const sections = anyCached?.sections || [];
                         return m(Main, {
                             activeSection: systemInfoSection,
+                            groups: [],
+                            sections,
+                            source: anyCached?.source,
+                            version: anyCached?.version,
+                            filename: anyCached?.filename,
+                            interval: anyCached?.interval,
+                            filesize: anyCached?.filesize,
+                            start_time: anyCached?.start_time,
+                            end_time: anyCached?.end_time,
+                            num_series: anyCached?.num_series,
+                        });
+                    },
+                };
+            }
+
+            // Selection is a client-only section — no backend data
+            if (params.section === 'selection') {
+                // Bootstrap section cache if landing here directly
+                if (Object.keys(sectionResponseCache).length === 0) {
+                    preloadSection('overview').then(() => {
+                        const d = sectionResponseCache['overview'];
+                        if (d?.sections) preloadSections(d.sections);
+                        m.redraw();
+                    }).catch(() => {});
+                }
+                return {
+                    view() {
+                        const anyCached = Object.values(sectionResponseCache)[0];
+                        const sections = anyCached?.sections || [];
+                        return m(Main, {
+                            activeSection: selectionSection,
                             groups: [],
                             sections,
                             source: anyCached?.source,

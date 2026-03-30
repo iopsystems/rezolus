@@ -1,4 +1,5 @@
 import { TimeRangeBar } from './controls.js';
+import { selectionStore } from './selection.js';
 
 // Format utilities
 const formatSize = (bytes) => {
@@ -136,6 +137,18 @@ const Sidebar = {
         const samplerSections = regularSections.filter((s) => s.name !== 'Overview');
 
         return m('div#sidebar', [
+            // Selection section (shown only when entries exist)
+            selectionStore.entries.length > 0 && m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection?.route === '/selection'
+                        ? 'selected selection-link'
+                        : 'selection-link',
+                    href: '/selection',
+                },
+                `Selection (${selectionStore.entries.length})`,
+            ),
+
             // Overview section first (if exists)
             overviewSection && m(
                 m.route.Link,

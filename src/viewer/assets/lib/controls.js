@@ -151,12 +151,22 @@ const TimeRangeBar = {
 
     view(vnode) {
         const chartsState = vnode.attrs.chartsState;
+
+        // Sync bar position if chartsState zoom was changed externally
+        // (e.g. restored from saved selection)
+        const zoom = chartsState?.zoomLevel;
+        if (zoom && (zoom.start !== vnode.state.barStart || zoom.end !== vnode.state.barEnd)) {
+            vnode.state.barStart = zoom.start;
+            vnode.state.barEnd = zoom.end;
+        }
+
         const start = vnode.state.barStart;
         const end = vnode.state.barEnd;
         const startTime = vnode.attrs.start_time;
         const endTime = vnode.attrs.end_time;
 
         const totalDuration = endTime - startTime;
+        if (!totalDuration || !isFinite(totalDuration)) return null;
         const selectedStartMs = startTime + (start / 100) * totalDuration;
         const selectedEndMs = startTime + (end / 100) * totalDuration;
 
