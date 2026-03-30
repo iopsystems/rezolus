@@ -1,5 +1,5 @@
 import { TimeRangeBar } from './controls.js';
-import { selectionStore } from './selection.js';
+import { selectionStore, reportStore, importJSON } from './selection.js';
 
 // Format utilities
 const formatSize = (bytes) => {
@@ -73,6 +73,17 @@ const TopNav = {
                 ]),
             ]),
             m('div.topnav-actions', [
+                // Import report JSON
+                m('button.transport-btn.import-btn', {
+                    onclick: () => importJSON(attrs.fileChecksum),
+                    title: reportStore.loadedFrom
+                        ? `Loaded: ${reportStore.loadedFrom} — click to replace`
+                        : 'Import report JSON',
+                }, [
+                    m('span', reportStore.loadedFrom || 'Load Report'),
+                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>'),
+                ]),
+
                 // Transport controls (live mode only)
                 liveMode && m('div.transport-controls', [
                     m('button.transport-btn.record-btn', {
@@ -90,7 +101,6 @@ const TopNav = {
                         title: 'Save capture as parquet',
                     }, m.trust('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8m0 0l-3-3m3 3l3-3"/><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/></svg>')),
                 ]),
-
             ]),
             // Global time range bar (right-aligned, hidden on systeminfo)
             (attrs.start_time != null && attrs.end_time != null) &&
@@ -98,7 +108,7 @@ const TopNav = {
                     start_time: attrs.start_time,
                     end_time: attrs.end_time,
                     chartsState: attrs.chartsState,
-                    hidden: attrs.sectionRoute === '/systeminfo',
+                    hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
         ]);
     },
@@ -137,6 +147,18 @@ const Sidebar = {
         const samplerSections = regularSections.filter((s) => s.name !== 'Overview');
 
         return m('div#sidebar', [
+            // Report (shown only when imported)
+            reportStore.entries.length > 0 && m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection?.route === '/report'
+                        ? 'selected selection-link'
+                        : 'selection-link',
+                    href: '/report',
+                },
+                `Report (${reportStore.entries.length})`,
+            ),
+
             // Selection section (shown only when entries exist)
             selectionStore.entries.length > 0 && m(
                 m.route.Link,

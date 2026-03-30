@@ -456,6 +456,34 @@ body::after {
     box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
 }
 
+#topnav .topnav-actions .transport-btn.import-btn {
+    width: auto;
+    max-width: 240px;
+    padding: 0 0.75rem;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    background: rgba(88, 166, 255, 0.15);
+    color: var(--accent);
+}
+
+#topnav .topnav-actions .transport-btn.import-btn span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#topnav .topnav-actions .transport-btn.import-btn svg {
+    flex-shrink: 0;
+}
+
+#topnav .topnav-actions .transport-btn.import-btn:hover {
+    background: rgba(88, 166, 255, 0.3);
+    color: var(--accent-emphasis);
+    box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+}
+
 #topnav .topnav-actions button {
     padding: 0.5rem 1rem;
     background: var(--bg-tertiary);
@@ -1952,6 +1980,22 @@ main {
 .selection-notes::placeholder {
     color: var(--fg-muted);
     opacity: 0.5;
+}
+
+.selection-tagline-text {
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+    margin: 0.25rem 0 0 0;
+    padding: 0;
+}
+
+.selection-notes-text {
+    color: var(--fg-default);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+    white-space: pre-wrap;
 }
 
 .selection-link {

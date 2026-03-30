@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
-import { selectionStore, toggleSelection, isSelected, SelectionView } from './selection.js';
+import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
@@ -44,21 +44,12 @@ m.request({ method: 'GET', url: '/api/v1/systeminfo', withCredentials: true })
     .then((data) => { systemInfoData = data; })
     .catch(() => { /* no systeminfo available */ });
 
-// Fetch saved selection (available when parquet has embedded selection metadata)
+// Fetch saved selection from parquet metadata → load into Report store
 m.request({ method: 'GET', url: '/api/v1/selection', withCredentials: true })
     .then((data) => {
         if (data && Array.isArray(data.entries)) {
-            selectionStore.tagline = data.tagline || '';
-            selectionStore.zoom = data.zoom || null;
-            selectionStore.entries = data.entries.map(e => ({
-                id: crypto.randomUUID(),
-                chartId: e.chartId,
-                section: e.section,
-                sectionName: e.sectionName,
-                promql_query: e.promql_query,
-                note: e.note || '',
-                chartOpts: e.chartOpts,
-            }));
+            loadPayloadIntoStore(reportStore, data);
+            reportStore.loadedFrom = 'embedded report';
         }
     })
     .catch(() => { /* no saved selection */ });
@@ -104,6 +95,7 @@ const topNavAttrs = (data, sectionRoute, extra) => ({
     num_series: data.num_series,
     liveMode,
     recording,
+    fileChecksum,
     onStartRecording: startRecording,
     onStopRecording: stopRecording,
     onSaveCapture: saveCapture,
@@ -164,6 +156,7 @@ const SectionContent = {
         if (sectionName === 'Selection') {
             const anyCached = Object.values(sectionResponseCache)[0];
             return m(SelectionView, {
+                title: 'Selection',
                 interval: anyCached?.interval || interval,
                 version: anyCached?.version,
                 source: anyCached?.source,
@@ -172,7 +165,28 @@ const SectionContent = {
                 end_time: anyCached?.end_time,
                 chartsState,
                 fileChecksum,
-                canSaveParquet: liveMode,
+                heatmapEnabled,
+                heatmapLoading,
+                onToggleHeatmap: async () => {
+                    heatmapEnabled = !heatmapEnabled;
+                    m.redraw();
+                },
+            });
+        }
+
+        // Special handling for Report
+        if (sectionName === 'Report') {
+            const anyCached = Object.values(sectionResponseCache)[0];
+            return m(ReportView, {
+                title: 'Report',
+                interval: anyCached?.interval || interval,
+                version: anyCached?.version,
+                source: anyCached?.source,
+                filename: anyCached?.filename,
+                start_time: anyCached?.start_time,
+                end_time: anyCached?.end_time,
+                chartsState,
+                fileChecksum,
                 heatmapEnabled,
                 heatmapLoading,
                 onToggleHeatmap: async () => {
@@ -586,6 +600,7 @@ const startLiveRefresh = () => {
 // Synthetic section object for System Info (not a backend dashboard section)
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
 const selectionSection = { name: 'Selection', route: '/selection' };
+const reportSection = { name: 'Report', route: '/report' };
 
 // Main application entry point
 m.route.prefix = ''; // use regular paths for navigation, eg. /overview
@@ -690,6 +705,36 @@ m.route(document.body, '/overview', {
                         const sections = anyCached?.sections || [];
                         return m(Main, {
                             activeSection: selectionSection,
+                            groups: [],
+                            sections,
+                            source: anyCached?.source,
+                            version: anyCached?.version,
+                            filename: anyCached?.filename,
+                            interval: anyCached?.interval,
+                            filesize: anyCached?.filesize,
+                            start_time: anyCached?.start_time,
+                            end_time: anyCached?.end_time,
+                            num_series: anyCached?.num_series,
+                        });
+                    },
+                };
+            }
+
+            // Report is a client-only section — loaded from JSON import or parquet metadata
+            if (params.section === 'report') {
+                if (Object.keys(sectionResponseCache).length === 0) {
+                    preloadSection('overview').then(() => {
+                        const d = sectionResponseCache['overview'];
+                        if (d?.sections) preloadSections(d.sections);
+                        m.redraw();
+                    }).catch(() => {});
+                }
+                return {
+                    view() {
+                        const anyCached = Object.values(sectionResponseCache)[0];
+                        const sections = anyCached?.sections || [];
+                        return m(Main, {
+                            activeSection: reportSection,
                             groups: [],
                             sections,
                             source: anyCached?.source,

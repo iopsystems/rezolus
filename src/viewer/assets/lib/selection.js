@@ -1,7 +1,11 @@
-// Selection store — curated collection of charts with annotations.
+// Selection & Report stores — curated collections of charts with annotations.
+// Selection: built interactively by selecting charts (write mode).
+// Report: loaded from JSON import or parquet metadata (read-only mode).
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { executePromQLRangeQuery, applyResultToPlot } from './data.js';
+
+// ── Stores ───────────────────────────────────────────────────────
 
 const selectionStore = {
     tagline: '',
@@ -9,17 +13,75 @@ const selectionStore = {
     zoom: null,
 };
 
-/**
- * Toggle a chart in/out of the selection.
- * @param {object} spec - The chart spec (with opts, promql_query, etc.)
- * @param {string} sectionKey - Section route key, e.g. 'cpu'
- * @param {string} sectionName - Display name, e.g. 'CPU'
- * @returns {boolean} true if added, false if removed
- */
+const reportStore = {
+    tagline: '',
+    entries: [],
+    zoom: null,
+    loadedFrom: null, // filename of the imported JSON
+};
+
+// ── LocalStorage persistence ─────────────────────────────────────
+
+const REPORT_STORAGE_KEY = 'rezolus_report';
+const SELECTION_STORAGE_KEY = 'rezolus_selection';
+
+const persistStore = (key, store) => {
+    try {
+        const data = {
+            tagline: store.tagline,
+            zoom: store.zoom,
+            loadedFrom: store.loadedFrom || undefined,
+            entries: store.entries.map(e => ({
+                chartId: e.chartId,
+                section: e.section,
+                sectionName: e.sectionName,
+                promql_query: e.promql_query,
+                note: e.note,
+                chartOpts: e.chartOpts,
+            })),
+        };
+        localStorage.setItem(key, JSON.stringify(data));
+    } catch (e) {
+        console.warn('[selection] failed to persist:', e);
+    }
+};
+
+const restoreStore = (key, store) => {
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (!data.entries || !Array.isArray(data.entries)) return;
+        store.tagline = data.tagline || '';
+        store.zoom = data.zoom || null;
+        if (data.loadedFrom !== undefined) store.loadedFrom = data.loadedFrom;
+        store.entries = data.entries.map(e => ({
+            id: crypto.randomUUID(),
+            chartId: e.chartId,
+            section: e.section,
+            sectionName: e.sectionName,
+            promql_query: e.promql_query,
+            note: e.note || '',
+            chartOpts: e.chartOpts,
+        }));
+    } catch (e) {
+        console.warn('[selection] failed to restore:', e);
+    }
+};
+
+const persistReport = () => persistStore(REPORT_STORAGE_KEY, reportStore);
+const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStore);
+
+restoreStore(REPORT_STORAGE_KEY, reportStore);
+restoreStore(SELECTION_STORAGE_KEY, selectionStore);
+
+// ── Selection API (write mode) ───────────────────────────────────
+
 const toggleSelection = (spec, sectionKey, sectionName) => {
     const idx = selectionStore.entries.findIndex(e => e.chartId === spec.opts.id);
     if (idx >= 0) {
         selectionStore.entries.splice(idx, 1);
+        persistSelection();
         return false;
     }
     selectionStore.entries.push({
@@ -31,24 +93,36 @@ const toggleSelection = (spec, sectionKey, sectionName) => {
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
     });
+    persistSelection();
     return true;
 };
 
 const isSelected = (chartId) => selectionStore.entries.some(e => e.chartId === chartId);
 
-const removeEntry = (id) => {
-    const idx = selectionStore.entries.findIndex(e => e.id === id);
-    if (idx >= 0) selectionStore.entries.splice(idx, 1);
+const removeEntry = (store, id) => {
+    const idx = store.entries.findIndex(e => e.id === id);
+    if (idx >= 0) {
+        store.entries.splice(idx, 1);
+        if (store === selectionStore) persistSelection();
+        else if (store === reportStore) persistReport();
+    }
 };
 
-const clearAll = () => {
-    selectionStore.entries.length = 0;
-    selectionStore.tagline = '';
+const clearStore = (store) => {
+    store.entries.length = 0;
+    store.tagline = '';
+    store.zoom = null;
+    if (store === reportStore) {
+        store.loadedFrom = null;
+        localStorage.removeItem(REPORT_STORAGE_KEY);
+    } else if (store === selectionStore) {
+        localStorage.removeItem(SELECTION_STORAGE_KEY);
+    }
 };
 
-// ── Export / Import / Print ─────────────────────────────────────
+// ── Export / Import / Parquet ─────────────────────────────────────
 
-const buildPayload = (attrs) => ({
+const buildPayload = (store, attrs) => ({
     rezolus_version: attrs.version || 'unknown',
     saved_at: new Date().toISOString(),
     source: attrs.source || '',
@@ -59,8 +133,8 @@ const buildPayload = (attrs) => ({
         end_ms: attrs.end_time || 0,
     },
     zoom: attrs.chartsState?.zoomLevel || null,
-    tagline: selectionStore.tagline,
-    entries: selectionStore.entries.map(e => ({
+    tagline: store.tagline,
+    entries: store.entries.map(e => ({
         chartId: e.chartId,
         section: e.section,
         sectionName: e.sectionName,
@@ -70,12 +144,11 @@ const buildPayload = (attrs) => ({
     })),
 });
 
-
-const exportJSON = (attrs) => {
+const exportJSON = (store, attrs) => {
     const defaultName = `selection-${Date.now()}.json`;
     const filename = prompt('File name:', defaultName);
     if (!filename) return;
-    const payload = buildPayload(attrs);
+    const payload = buildPayload(store, attrs);
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -85,6 +158,21 @@ const exportJSON = (attrs) => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+};
+
+const loadPayloadIntoStore = (store, payload) => {
+    store.tagline = payload.tagline || '';
+    store.zoom = payload.zoom || null;
+    store.entries = payload.entries.map(e => ({
+        id: crypto.randomUUID(),
+        chartId: e.chartId,
+        section: e.section,
+        sectionName: e.sectionName,
+        promql_query: e.promql_query,
+        note: e.note || '',
+        chartOpts: e.chartOpts,
+    }));
+    if (store === reportStore) persistReport();
 };
 
 const importJSON = (currentChecksum) => {
@@ -101,7 +189,6 @@ const importJSON = (currentChecksum) => {
                 console.error('[selection] invalid JSON: missing entries array');
                 return;
             }
-            // Warn if the selection was made against a different file
             if (payload.file_checksum && currentChecksum && payload.file_checksum !== currentChecksum) {
                 const ok = confirm(
                     `This selection was saved from a different parquet file` +
@@ -110,23 +197,14 @@ const importJSON = (currentChecksum) => {
                 );
                 if (!ok) return;
             }
-            selectionStore.tagline = payload.tagline || '';
-            selectionStore.zoom = payload.zoom || null;
-            selectionStore.entries = payload.entries.map(e => ({
-                id: crypto.randomUUID(),
-                chartId: e.chartId,
-                section: e.section,
-                sectionName: e.sectionName,
-                promql_query: e.promql_query,
-                note: e.note || '',
-                chartOpts: e.chartOpts,
-            }));
-            // Navigate to selection; use replace to force re-mount if already there
-            if (m.route.get() === '/selection') {
-                SelectionView._needsReload = true;
+            loadPayloadIntoStore(reportStore, payload);
+            reportStore.loadedFrom = file.name;
+            persistReport();
+            if (m.route.get() === '/report') {
+                ReportView._needsReload = true;
                 m.redraw();
             } else {
-                m.route.set('/selection');
+                m.route.set('/report');
             }
         } catch (e) {
             console.error('[selection] failed to import JSON:', e);
@@ -135,11 +213,11 @@ const importJSON = (currentChecksum) => {
     input.click();
 };
 
-const saveToParquet = async (attrs) => {
+const saveToParquet = async (store, attrs) => {
     const defaultName = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-annotated.parquet';
     const filename = prompt('File name:', defaultName);
     if (!filename) return;
-    const payload = buildPayload(attrs);
+    const payload = buildPayload(store, attrs);
     try {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/v1/save_with_selection', true);
@@ -166,12 +244,9 @@ const saveToParquet = async (attrs) => {
     }
 };
 
-// ── SelectionView component ─────────────────────────────────────
+// ── Shared chart loading logic ───────────────────────────────────
 
-// Dedicated ChartsState for selection section charts
-const selectionChartsState = new ChartsState();
-
-const SelectionView = {
+const chartLoaderMixin = (store, component) => ({
     oninit() {
         this.specs = new Map();
         this.loading = true;
@@ -180,7 +255,7 @@ const SelectionView = {
     },
 
     async _loadCharts() {
-        const promises = selectionStore.entries.map(async (entry) => {
+        const promises = store.entries.map(async (entry) => {
             if (!entry.promql_query) return;
             try {
                 const spec = {
@@ -202,20 +277,20 @@ const SelectionView = {
         m.redraw();
     },
 
-    view({ attrs }) {
-        // Reload charts if triggered by import
-        if (SelectionView._needsReload) {
-            SelectionView._needsReload = false;
+    _checkReload() {
+        if (component._needsReload) {
+            component._needsReload = false;
             this.specs = new Map();
             this.loading = true;
             this._zoomApplied = false;
             this._loadCharts();
         }
+    },
 
-        // Apply saved zoom once after charts load
-        if (!this._zoomApplied && !this.loading && selectionStore.zoom && attrs.chartsState) {
+    _applyZoom(attrs) {
+        if (!this._zoomApplied && !this.loading && store.zoom && attrs.chartsState) {
             this._zoomApplied = true;
-            const z = selectionStore.zoom;
+            const z = store.zoom;
             attrs.chartsState.zoomLevel = z;
             attrs.chartsState.zoomSource = 'global';
             attrs.chartsState.charts.forEach(chart => {
@@ -228,25 +303,34 @@ const SelectionView = {
                 });
             });
         }
+    },
+});
+
+// ── SelectionView (write mode) ───────────────────────────────────
+
+const SelectionView = {
+    _needsReload: false,
+};
+Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
+    view({ attrs }) {
+        this._checkReload();
+        this._applyZoom(attrs);
 
         const interval = attrs.interval || 1;
-
         const cs = attrs.chartsState;
         const hasLocalZoom = cs?.zoomSource === 'local' && !cs?.isDefaultZoom();
         const hasChartSelection = hasLocalZoom ||
             Array.from(cs?.charts?.values() || []).some(c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
+        const hasHistograms = selectionStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_percentiles'));
 
         const header = m('div.selection-header', [
             m('div.section-header-row', [
-                m('h1.section-title', 'Selection'),
+                m('h1.section-title', attrs.title || 'Selection'),
                 m('div.section-actions', [
                     hasChartSelection && m('button.section-action-btn', {
-                        onclick: () => {
-                            cs.resetAll();
-                            m.redraw();
-                        },
+                        onclick: () => { cs.resetAll(); m.redraw(); },
                     }, 'RESET SELECTION'),
-                    selectionStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_percentiles')) &&
+                    hasHistograms &&
                     m('button.section-action-btn', {
                         onclick: attrs.onToggleHeatmap,
                         disabled: attrs.heatmapLoading,
@@ -257,44 +341,34 @@ const SelectionView = {
                 type: 'text',
                 placeholder: 'Add a tagline\u2026',
                 value: selectionStore.tagline,
-                oninput: (e) => { selectionStore.tagline = e.target.value; },
+                oninput: (e) => { selectionStore.tagline = e.target.value; persistSelection(); },
             }),
         ]);
 
         if (this.loading) {
-            return m('div#section-content.selection-section', [
-                header,
-                m('p', 'Loading charts\u2026'),
-            ]);
+            return m('div#section-content.selection-section', [header, m('p', 'Loading charts\u2026')]);
         }
 
         return m('div#section-content.selection-section', [
             header,
 
-            // Action buttons
             m('div.selection-actions', [
-                m('button.selection-btn', { onclick: () => exportJSON(attrs) }, 'Export JSON'),
-                m('button.selection-btn', { onclick: () => importJSON(attrs.fileChecksum) }, 'Import JSON'),
-                m('button.selection-btn', {
-                    onclick: () => saveToParquet(attrs),
-                }, 'Annotate Parquet'),
+                m('button.selection-btn', { onclick: () => exportJSON(selectionStore, attrs) }, 'Export JSON'),
+                m('button.selection-btn', { onclick: () => saveToParquet(selectionStore, attrs) }, 'Annotate Parquet'),
                 m('button.selection-btn.selection-btn-danger', {
-                    onclick: () => { clearAll(); m.redraw(); },
+                    onclick: () => { clearStore(selectionStore); m.redraw(); },
                 }, 'Clear All'),
             ]),
 
-            // Chart entries
             selectionStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
-
                 return m('div.selection-card', [
-                    // Chart + notes side by side
                     m('div.selection-card-body', [
                         m('div.selection-card-chart', [
                             m('button.selection-card-remove', {
-                                onclick: () => { removeEntry(entry.id); m.redraw(); },
-                                title: 'Remove from selection',
+                                onclick: () => { removeEntry(selectionStore, entry.id); m.redraw(); },
+                                title: 'Remove',
                             }, 'X'),
                             m('div.chart-wrapper', [
                                 m('div.chart-header', [
@@ -309,15 +383,90 @@ const SelectionView = {
                             m('textarea.selection-notes', {
                                 placeholder: 'Add notes\u2026',
                                 value: entry.note,
-                                oninput: (e) => { entry.note = e.target.value; },
+                                oninput: (e) => { entry.note = e.target.value; persistSelection(); },
                             }),
                         ]),
                     ]),
                 ]);
             }),
-
         ]);
     },
-};
+});
 
-export { selectionStore, toggleSelection, isSelected, removeEntry, clearAll, SelectionView };
+// ── ReportView (read-only mode) ──────────────────────────────────
+
+const ReportView = {
+    _needsReload: false,
+};
+Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
+    view({ attrs }) {
+        this._checkReload();
+        this._applyZoom(attrs);
+
+        const interval = attrs.interval || 1;
+        const cs = attrs.chartsState;
+        const hasLocalZoom = cs?.zoomSource === 'local' && !cs?.isDefaultZoom();
+        const hasChartSelection = hasLocalZoom ||
+            Array.from(cs?.charts?.values() || []).some(c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
+        const hasHistograms = reportStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_percentiles'));
+
+        const header = m('div.selection-header', [
+            m('div.section-header-row', [
+                m('h1.section-title', attrs.title || 'Report'),
+                m('div.section-actions', [
+                    hasChartSelection && m('button.section-action-btn', {
+                        onclick: () => { cs.resetAll(); m.redraw(); },
+                    }, 'RESET SELECTION'),
+                    hasHistograms &&
+                    m('button.section-action-btn', {
+                        onclick: attrs.onToggleHeatmap,
+                        disabled: attrs.heatmapLoading,
+                    }, attrs.heatmapLoading ? 'LOADING...' : (attrs.heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
+                ]),
+            ]),
+            reportStore.tagline && m('p.selection-tagline-text', reportStore.tagline),
+        ]);
+
+        if (this.loading) {
+            return m('div#section-content.selection-section', [header, m('p', 'Loading charts\u2026')]);
+        }
+
+        return m('div#section-content.selection-section', [
+            header,
+
+            reportStore.entries.map((entry) => {
+                const spec = this.specs.get(entry.chartId);
+                if (!spec) return null;
+                return m('div.selection-card', [
+                    m('div.selection-card-body', [
+                        m('div.selection-card-chart', [
+                            m('div.chart-wrapper', [
+                                m('div.chart-header', [
+                                    m('span.chart-title', spec.opts.title),
+                                    spec.opts.description && m('span.chart-subtitle', spec.opts.description),
+                                ]),
+                                m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                            ]),
+                        ]),
+                        entry.note && m('div.selection-card-notes', [
+                            m('label.selection-notes-label', 'Notes'),
+                            m('p.selection-notes-text', entry.note),
+                        ]),
+                    ]),
+                ]);
+            }),
+        ]);
+    },
+});
+
+export {
+    selectionStore,
+    reportStore,
+    toggleSelection,
+    isSelected,
+    clearStore,
+    importJSON,
+    loadPayloadIntoStore,
+    SelectionView,
+    ReportView,
+};
