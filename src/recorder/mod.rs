@@ -10,6 +10,7 @@ pub struct Config {
     verbose: u8,
     url: Url,
     output: PathBuf,
+    metadata: Vec<(String, String)>,
 }
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
@@ -29,6 +30,14 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<Format>("FORMAT")
                 .copied()
                 .unwrap_or(Format::Parquet),
+            metadata: args
+                .get_many::<String>("METADATA")
+                .unwrap_or_default()
+                .filter_map(|s| {
+                    s.split_once('=')
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                })
+                .collect(),
         })
     }
 }
@@ -84,6 +93,13 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::Set)
                 .default_value("parquet")
                 .value_parser(value_parser!(Format)),
+        )
+        .arg(
+            clap::Arg::new("METADATA")
+                .long("metadata")
+                .short('m')
+                .help("Add file-level parquet metadata (key=value)")
+                .action(clap::ArgAction::Append),
         )
 }
 
@@ -383,6 +399,10 @@ pub fn run(config: Config) {
                         "sampling_interval_ms".to_string(),
                         config.interval.as_millis().to_string(),
                     );
+
+                for (key, value) in &config.metadata {
+                    converter = converter.metadata(key.clone(), value.clone());
+                }
 
                 if let Some(ref json) = agent_systeminfo {
                     converter = converter.metadata("systeminfo".to_string(), json.clone());
