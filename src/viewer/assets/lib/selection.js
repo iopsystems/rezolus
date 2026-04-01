@@ -4,6 +4,25 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { executePromQLRangeQuery, applyResultToPlot } from './data.js';
+import { notify, showSaveModal } from './overlays.js';
+
+// ── UUIDv7 (RFC 9562) ──────────────────────────────────────────────
+
+const uuidv7 = () => {
+    const ms = Date.now();
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[0] = (ms / 2**40) & 0xff;
+    bytes[1] = (ms / 2**32) & 0xff;
+    bytes[2] = (ms / 2**24) & 0xff;
+    bytes[3] = (ms / 2**16) & 0xff;
+    bytes[4] = (ms / 2**8) & 0xff;
+    bytes[5] = ms & 0xff;
+    bytes[6] = (bytes[6] & 0x0f) | 0x70; // version 7
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+    const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+};
 
 // ── Stores ───────────────────────────────────────────────────────
 
@@ -17,7 +36,13 @@ const reportStore = {
     tagline: '',
     entries: [],
     zoom: null,
-    loadedFrom: null, // filename of the imported JSON
+    loadedFrom: null,    // filename of the imported JSON
+    reportId: null,       // UUIDv7 from the imported report
+    savedAt: null,        // ISO timestamp
+    sourceFilename: null, // original parquet filename
+    fileChecksum: null,   // SHA-256 of the parquet
+    timeRange: null,      // { start_ms, end_ms }
+    rezolusVersion: null,
 };
 
 // ── LocalStorage persistence ─────────────────────────────────────
@@ -31,6 +56,12 @@ const persistStore = (key, store) => {
             tagline: store.tagline,
             zoom: store.zoom,
             loadedFrom: store.loadedFrom || undefined,
+            reportId: store.reportId || undefined,
+            savedAt: store.savedAt || undefined,
+            sourceFilename: store.sourceFilename || undefined,
+            fileChecksum: store.fileChecksum || undefined,
+            timeRange: store.timeRange || undefined,
+            rezolusVersion: store.rezolusVersion || undefined,
             entries: store.entries.map(e => ({
                 chartId: e.chartId,
                 section: e.section,
@@ -55,6 +86,12 @@ const restoreStore = (key, store) => {
         store.tagline = data.tagline || '';
         store.zoom = data.zoom || null;
         if (data.loadedFrom !== undefined) store.loadedFrom = data.loadedFrom;
+        if (data.reportId !== undefined) store.reportId = data.reportId;
+        if (data.savedAt !== undefined) store.savedAt = data.savedAt;
+        if (data.sourceFilename !== undefined) store.sourceFilename = data.sourceFilename;
+        if (data.fileChecksum !== undefined) store.fileChecksum = data.fileChecksum;
+        if (data.timeRange !== undefined) store.timeRange = data.timeRange;
+        if (data.rezolusVersion !== undefined) store.rezolusVersion = data.rezolusVersion;
         store.entries = data.entries.map(e => ({
             id: crypto.randomUUID(),
             chartId: e.chartId,
@@ -114,6 +151,12 @@ const clearStore = (store) => {
     store.zoom = null;
     if (store === reportStore) {
         store.loadedFrom = null;
+        store.reportId = null;
+        store.savedAt = null;
+        store.sourceFilename = null;
+        store.fileChecksum = null;
+        store.timeRange = null;
+        store.rezolusVersion = null;
         localStorage.removeItem(REPORT_STORAGE_KEY);
     } else if (store === selectionStore) {
         localStorage.removeItem(SELECTION_STORAGE_KEY);
@@ -123,6 +166,7 @@ const clearStore = (store) => {
 // ── Export / Import / Parquet ─────────────────────────────────────
 
 const buildPayload = (store, attrs) => ({
+    report_id: uuidv7(),
     rezolus_version: attrs.version || 'unknown',
     saved_at: new Date().toISOString(),
     source: attrs.source || '',
@@ -144,20 +188,21 @@ const buildPayload = (store, attrs) => ({
     })),
 });
 
-const exportJSON = (store, attrs) => {
-    const defaultName = `selection-${Date.now()}.json`;
-    const filename = prompt('File name:', defaultName);
+const exportJSON = async (store, attrs) => {
+    const defaultPrefix = `report-${Date.now()}`;
+    const filename = await showSaveModal(defaultPrefix, '.json');
     if (!filename) return;
     const payload = buildPayload(store, attrs);
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename.endsWith('.json') ? filename : filename + '.json';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    notify('info', `Exported ${store.entries.length} chart(s) to ${filename}`);
 };
 
 const loadPayloadIntoStore = (store, payload) => {
@@ -172,7 +217,15 @@ const loadPayloadIntoStore = (store, payload) => {
         note: e.note || '',
         chartOpts: e.chartOpts,
     }));
-    if (store === reportStore) persistReport();
+    if (store === reportStore) {
+        store.reportId = payload.report_id || null;
+        store.savedAt = payload.saved_at || null;
+        store.sourceFilename = payload.filename || null;
+        store.fileChecksum = payload.file_checksum || null;
+        store.timeRange = payload.time_range || null;
+        store.rezolusVersion = payload.rezolus_version || null;
+        persistReport();
+    }
 };
 
 const importJSON = (currentChecksum) => {
@@ -184,22 +237,29 @@ const importJSON = (currentChecksum) => {
         if (!file) return;
         try {
             const text = await file.text();
-            const payload = JSON.parse(text);
+            let payload;
+            try {
+                payload = JSON.parse(text);
+            } catch {
+                notify('error', 'Not a valid Rezolus report');
+                return;
+            }
             if (!payload.entries || !Array.isArray(payload.entries)) {
-                console.error('[selection] invalid JSON: missing entries array');
+                notify('error', 'Not a valid Rezolus report');
                 return;
             }
             if (payload.file_checksum && currentChecksum && payload.file_checksum !== currentChecksum) {
                 const ok = confirm(
-                    `This selection was saved from a different parquet file` +
+                    `This report was saved from a different parquet file` +
                     (payload.filename ? ` ("${payload.filename}")` : '') +
                     `. Charts may not render correctly. Load anyway?`
                 );
                 if (!ok) return;
+                notify('warn', 'Report was saved from a different parquet file');
             }
             loadPayloadIntoStore(reportStore, payload);
             reportStore.loadedFrom = file.name;
-            persistReport();
+            notify('info', `Loaded report (${reportStore.entries.length} charts)`);
             if (m.route.get() === '/report') {
                 ReportView._needsReload = true;
                 m.redraw();
@@ -207,6 +267,7 @@ const importJSON = (currentChecksum) => {
                 m.route.set('/report');
             }
         } catch (e) {
+            notify('error', 'Failed to import report');
             console.error('[selection] failed to import JSON:', e);
         }
     };
@@ -214,8 +275,8 @@ const importJSON = (currentChecksum) => {
 };
 
 const saveToParquet = async (store, attrs) => {
-    const defaultName = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-annotated.parquet';
-    const filename = prompt('File name:', defaultName);
+    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-annotated';
+    const filename = await showSaveModal(defaultPrefix, '.parquet');
     if (!filename) return;
     const payload = buildPayload(store, attrs);
     try {
@@ -225,21 +286,23 @@ const saveToParquet = async (store, attrs) => {
         xhr.responseType = 'blob';
         xhr.onload = () => {
             if (xhr.status !== 200) {
-                console.error('[selection] save failed:', xhr.status);
+                notify('error', `Failed to save parquet (HTTP ${xhr.status})`);
                 return;
             }
             const blob = xhr.response;
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = filename.endsWith('.parquet') ? filename : filename + '.parquet';
+            a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            notify('info', `Saved ${filename}`);
         };
         xhr.send(JSON.stringify(payload));
     } catch (e) {
+        notify('error', 'Failed to save parquet');
         console.error('[selection] failed to save to parquet:', e);
     }
 };
@@ -353,8 +416,14 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             header,
 
             m('div.selection-actions', [
-                m('button.selection-btn', { onclick: () => exportJSON(selectionStore, attrs) }, 'Export JSON'),
-                m('button.selection-btn', { onclick: () => saveToParquet(selectionStore, attrs) }, 'Annotate Parquet'),
+                m('button.selection-btn', { onclick: () => exportJSON(selectionStore, attrs) }, [
+                    'Export JSON ',
+                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
+                ]),
+                m('button.selection-btn', { onclick: () => saveToParquet(selectionStore, attrs) }, [
+                    'Annotate Parquet ',
+                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
+                ]),
                 m('button.selection-btn.selection-btn-danger', {
                     onclick: () => { clearStore(selectionStore); m.redraw(); },
                 }, 'Clear All'),
@@ -410,7 +479,31 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
             Array.from(cs?.charts?.values() || []).some(c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
         const hasHistograms = reportStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_percentiles'));
 
+        const fmtTs = (ms) => {
+            const d = new Date(ms);
+            return `${d.toISOString().slice(0, 10)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+        };
+
+        const meta = [];
+        if (reportStore.reportId) meta.push(['Report ID', reportStore.reportId]);
+        if (reportStore.savedAt) meta.push(['Saved', reportStore.savedAt.replace('T', ' ').replace(/\.\d+Z$/, ' UTC')]);
+        if (reportStore.sourceFilename) {
+            const name = reportStore.sourceFilename;
+            const cksum = reportStore.fileChecksum ? ` (${reportStore.fileChecksum.slice(0, 6)})` : '';
+            meta.push(['Source', name + cksum]);
+        }
+        if (reportStore.timeRange && reportStore.timeRange.start_ms && reportStore.timeRange.end_ms) {
+            meta.push(['Time Range', `${fmtTs(reportStore.timeRange.start_ms)} \u2013 ${fmtTs(reportStore.timeRange.end_ms)}`]);
+        }
+        if (reportStore.rezolusVersion) meta.push(['Rezolus', reportStore.rezolusVersion]);
+
         const header = m('div.selection-header', [
+            meta.length > 0 && m('div.report-meta', meta.map(([label, value]) =>
+                m('span.report-meta-item', [
+                    m('span.report-meta-label', label + ': '),
+                    value,
+                ]),
+            )),
             m('div.section-header-row', [
                 m('h1.section-title', attrs.title || 'Report'),
                 m('div.section-actions', [

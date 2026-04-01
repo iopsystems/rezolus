@@ -53,7 +53,6 @@
     --content-padding: 24px;
     --card-radius: 8px;
     --card-radius-lg: 12px;
-    --status-bar-height: 32px;
 
     /* Typography scale */
     --font-mono: "Berkeley Mono", "JetBrains Mono", "Fira Code", "SF Mono", monospace;
@@ -1723,41 +1722,6 @@ main {
 }
 
 /* ==========================================================================
-   Status Bar
-   ========================================================================== */
-
-#status-bar {
-    position: fixed;
-    bottom: 0;
-    left: var(--sidebar-width);
-    right: 0;
-    height: var(--status-bar-height);
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border-subtle);
-    display: flex;
-    align-items: center;
-    padding: 0 var(--content-padding);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    color: var(--fg-secondary);
-    gap: 2rem;
-    z-index: 100;
-}
-
-#status-bar .status-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-#status-bar .status-label {
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 600;
-}
-
-/* ==========================================================================
    Scrollbar Styling
    ========================================================================== */
 
@@ -1832,6 +1796,9 @@ main {
 }
 
 .selection-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 4px 12px;
     background: var(--accent-subtle);
     color: var(--accent);
@@ -1983,8 +1950,8 @@ main {
 }
 
 .selection-tagline-text {
-    color: var(--fg-muted);
-    font-size: 0.9rem;
+    color: var(--fg-secondary);
+    font-size: 1rem;
     margin: 0.25rem 0 0 0;
     padding: 0;
 }
@@ -2000,6 +1967,190 @@ main {
 
 .selection-link {
     font-weight: 600 !important;
+}
+
+/* Report metadata */
+.report-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.5rem;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    color: var(--fg-secondary);
+    margin: 0.25rem 0 0.5rem;
+    line-height: 1.6;
+}
+
+.report-meta-label {
+    color: var(--fg-muted);
+}
+
+/* ==========================================================================
+   Toast Notifications
+   ========================================================================== */
+
+#toast-container {
+    position: fixed;
+    top: calc(var(--header-height) + 8px);
+    right: 16px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
+    background: var(--bg-elevated);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transform: translateX(20px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    max-width: 400px;
+}
+
+.toast-visible {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.toast-info   { border-left: 3px solid var(--info); }
+.toast-warn   { border-left: 3px solid var(--warning); }
+.toast-error  { border-left: 3px solid var(--danger); }
+
+.toast-dismiss {
+    background: none;
+    border: none;
+    color: var(--fg-muted);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 2px;
+    margin-left: auto;
+    line-height: 1;
+}
+
+.toast-dismiss:hover {
+    color: var(--fg);
+}
+
+/* ==========================================================================
+   Save-As Modal
+   ========================================================================== */
+
+.save-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.save-modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius-lg);
+    padding: 1.5rem;
+    min-width: 380px;
+    max-width: 500px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.save-modal-title {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 1rem;
+}
+
+.save-modal-input-row {
+    display: flex;
+    align-items: center;
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+}
+
+.save-modal-input-row:focus-within {
+    border-color: var(--accent-muted);
+}
+
+.save-modal-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    padding: 8px 10px;
+    outline: none;
+    min-width: 0;
+}
+
+.save-modal-suffix {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--fg-muted);
+    padding: 8px 10px 8px 0;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.save-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.save-modal-btn {
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border-default);
+    transition: all var(--transition-base);
+}
+
+.save-modal-cancel {
+    background: transparent;
+    color: var(--fg-secondary);
+}
+
+.save-modal-cancel:hover {
+    background: var(--bg-tertiary);
+    color: var(--fg);
+}
+
+.save-modal-confirm {
+    background: var(--accent-subtle);
+    color: var(--accent);
+    border-color: var(--accent-muted);
+}
+
+.save-modal-confirm:hover:not(:disabled) {
+    background: var(--accent-muted);
+    color: var(--fg);
+}
+
+.save-modal-confirm:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 /* Print-only header (hidden on screen) */
