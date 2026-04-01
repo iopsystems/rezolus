@@ -1,7 +1,7 @@
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
-import { TopNav, Sidebar, countCharts } from './layout.js';
+import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
@@ -280,14 +280,6 @@ const SectionContent = {
 };
 
 // System Info display component
-const formatBytes = (bytes) => {
-    if (!bytes) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-};
-
 const SystemInfoView = {
     view({ attrs }) {
         const info = attrs.data;
@@ -336,7 +328,7 @@ const SystemInfoView = {
                     ['SMT', info.smt != null ? (info.smt ? 'Enabled' : 'Disabled') : null],
                 ]),
                 table('Memory', [
-                    ['Total', formatBytes(info.memory_total_bytes)],
+                    ['Total', formatSize(info.memory_total_bytes)],
                     ['NUMA Nodes', info.numa_nodes],
                 ]),
 
@@ -376,7 +368,7 @@ const SystemInfoView = {
                         info.gpus.map((gpu) => m('tr', [
                             m('td.sysinfo-label', gpu.name || gpu.vendor),
                             m('td.sysinfo-value', [
-                                gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : '',
+                                gpu.memory_bytes ? formatSize(gpu.memory_bytes) : '',
                                 gpu.driver ? ` (${gpu.driver})` : '',
                             ].join('')),
                         ])),

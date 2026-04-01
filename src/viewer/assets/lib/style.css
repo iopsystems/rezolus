@@ -53,7 +53,6 @@
     --content-padding: 24px;
     --card-radius: 8px;
     --card-radius-lg: 12px;
-    --status-bar-height: 32px;
 
     /* Typography scale */
     --font-mono: "Berkeley Mono", "JetBrains Mono", "Fira Code", "SF Mono", monospace;
@@ -1723,41 +1722,6 @@ main {
 }
 
 /* ==========================================================================
-   Status Bar
-   ========================================================================== */
-
-#status-bar {
-    position: fixed;
-    bottom: 0;
-    left: var(--sidebar-width);
-    right: 0;
-    height: var(--status-bar-height);
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border-subtle);
-    display: flex;
-    align-items: center;
-    padding: 0 var(--content-padding);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    color: var(--fg-secondary);
-    gap: 2rem;
-    z-index: 100;
-}
-
-#status-bar .status-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-#status-bar .status-label {
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 600;
-}
-
-/* ==========================================================================
    Scrollbar Styling
    ========================================================================== */
 
@@ -1832,6 +1796,9 @@ main {
 }
 
 .selection-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 4px 12px;
     background: var(--accent-subtle);
     color: var(--accent);

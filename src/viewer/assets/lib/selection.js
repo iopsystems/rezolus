@@ -416,8 +416,14 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             header,
 
             m('div.selection-actions', [
-                m('button.selection-btn', { onclick: () => exportJSON(selectionStore, attrs) }, 'Export JSON'),
-                m('button.selection-btn', { onclick: () => saveToParquet(selectionStore, attrs) }, 'Annotate Parquet'),
+                m('button.selection-btn', { onclick: () => exportJSON(selectionStore, attrs) }, [
+                    'Export JSON ',
+                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
+                ]),
+                m('button.selection-btn', { onclick: () => saveToParquet(selectionStore, attrs) }, [
+                    'Annotate Parquet ',
+                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
+                ]),
                 m('button.selection-btn.selection-btn-danger', {
                     onclick: () => { clearStore(selectionStore); m.redraw(); },
                 }, 'Clear All'),

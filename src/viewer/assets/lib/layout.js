@@ -6,7 +6,8 @@ const formatSize = (bytes) => {
     if (!bytes) return '';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 };
 
 const formatInterval = (secs) => {
@@ -236,37 +237,9 @@ const Sidebar = {
     },
 };
 
-// Status bar component
-const StatusBar = {
-    view({ attrs }) {
-        const { source, version, interval, filesize, liveMode } = attrs;
-        return m('div#status-bar', [
-            source && m('span.status-item', [
-                m('span.status-label', 'Source'),
-                source,
-            ]),
-            version && m('span.status-item', [
-                m('span.status-label', 'Version'),
-                version,
-            ]),
-            interval && m('span.status-item', [
-                m('span.status-label', 'Interval'),
-                formatInterval(interval),
-            ]),
-            !liveMode && filesize && m('span.status-item', [
-                m('span.status-label', 'Size'),
-                formatSize(filesize),
-            ]),
-        ]);
-    },
-};
-
 export {
     TopNav,
     Sidebar,
-    StatusBar,
     countCharts,
     formatSize,
-    formatInterval,
-    formatDuration,
 };
