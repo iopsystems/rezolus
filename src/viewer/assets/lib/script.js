@@ -5,6 +5,7 @@ import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { notify, showSaveModal, SaveModal } from './overlays.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
@@ -74,13 +75,16 @@ const stopRecording = () => {
     recording = false;
 };
 
-const saveCapture = () => {
+const saveCapture = async () => {
+    const filename = await showSaveModal('rezolus-capture', '.parquet');
+    if (!filename) return;
     const a = document.createElement('a');
     a.href = '/api/v1/save';
-    a.download = 'rezolus-capture.parquet';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    notify('info', `Saved ${filename}`);
 };
 
 // Build common TopNav attrs from section data. Pass extra to override/add fields.
@@ -128,6 +132,7 @@ const Main = {
                     interval,
                 }),
             ]),
+            m(SaveModal),
         );
     },
 };
