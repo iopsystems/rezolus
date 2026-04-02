@@ -1,0 +1,26 @@
+{
+  "name": "rezolus-webview",
+  "type": "module",
+  "collaborators": [
+    "Brian Martin <brian@iop.systems>"
+  ],
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iopsystems/rezolus-webview"
+  },
+  "files": [
+    "rezolus_webview_bg.wasm",
+    "rezolus_webview.js",
+    "rezolus_webview.d.ts",
+    "LICENSE-APACHE",
+    "LICENSE-MIT"
+  ],
+  "main": "rezolus_webview.js",
+  "homepage": "https://github.com/iopsystems/rezolus-webview",
+  "types": "rezolus_webview.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
