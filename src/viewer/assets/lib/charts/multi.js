@@ -5,6 +5,7 @@ import {
 } from './util/units.js';
 import {
     insertGapNulls,
+    clampToRange,
 } from './util/utils.js';
 import {
     getBaseOption,
@@ -50,8 +51,7 @@ export function configureMultiSeriesChart(chart) {
     const format = opts.format || {};
     const unitSystem = format.unit_system;
     const logScale = format.log_scale;
-    const minValue = format.min;
-    const maxValue = format.max;
+    const range = format.range;
 
     // Create series configurations for each data series
     const series = [];
@@ -63,7 +63,10 @@ export function configureMultiSeriesChart(chart) {
         const isOtherCategory = name === "Other";
         const color = cgroupColors[i - 1];
 
-        let zippedData = timeData.map((t, j) => [t * 1000, data[i][j]]);
+        let zippedData = timeData.map((t, j) => {
+            const [v, raw] = clampToRange(data[i][j], range);
+            return [t * 1000, v, raw];
+        });
         zippedData = insertGapNulls(zippedData, chart.interval);
 
         series.push({
@@ -119,7 +122,7 @@ export function configureMultiSeriesChart(chart) {
                 ...FONTS.legend,
             },
         },
-        yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
+        yAxis: getBaseYAxisOption(logScale, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
             formatter: getTooltipFormatter(unitSystem ?

@@ -12,19 +12,19 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // GPU compute utilization (average across all GPUs)
     // NVML returns 0-100, divide by 100 for 0-1 ratio expected by Unit::Percentage
     utilization.plot_promql(
-        PlotOpts::line("GPU %", "gpu-pct", Unit::Percentage),
+        PlotOpts::line("GPU %", "gpu-pct", Unit::Percentage).range(0.0, 1.0),
         "avg(gpu_utilization) / 100".to_string(),
     );
 
     // Per-GPU utilization heatmap
     utilization.plot_promql(
-        PlotOpts::heatmap("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage),
+        PlotOpts::heatmap("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage).range(0.0, 1.0),
         "sum by (id) (gpu_utilization) / 100".to_string(),
     );
 
     // Memory controller utilization (average)
     utilization.plot_promql(
-        PlotOpts::line("Memory Controller %", "mem-ctrl-pct", Unit::Percentage),
+        PlotOpts::line("Memory Controller %", "mem-ctrl-pct", Unit::Percentage).range(0.0, 1.0),
         "avg(gpu_memory_utilization) / 100".to_string(),
     );
 
@@ -34,7 +34,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "Memory Controller % (Per-GPU)",
             "mem-ctrl-pct-per-gpu",
             Unit::Percentage,
-        ),
+        )
+        .range(0.0, 1.0),
         "sum by (id) (gpu_memory_utilization) / 100".to_string(),
     );
 
@@ -72,7 +73,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Memory utilization percentage (calculated)
     memory.plot_promql(
-        PlotOpts::line("Utilization %", "mem-util-pct", Unit::Percentage),
+        PlotOpts::line("Utilization %", "mem-util-pct", Unit::Percentage).range(0.0, 1.0),
         "sum(gpu_memory{state=\"used\"}) / (sum(gpu_memory{state=\"used\"}) + sum(gpu_memory{state=\"free\"}))".to_string(),
     );
 

@@ -54,6 +54,7 @@ export const COLORS = {
     chartYellow: '#fbbf24',
     chartOrange: '#f97316',
     chartRed: '#f85149',
+    clamped: '#f85149',        // clamped/out-of-range indicator (same red)
     chartPink: '#f472b6',
     chartPurple: '#a78bfa',
 };

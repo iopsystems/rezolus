@@ -11,14 +11,14 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Average CPU busy percentage across all cores
     utilization.plot_promql(
-        PlotOpts::line("Busy %", "busy-pct", Unit::Percentage),
+        PlotOpts::line("Busy %", "busy-pct", Unit::Percentage).range(0.0, 1.0),
         "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU busy percentage heatmap
     // cpu_heatmap("cpu_usage", ()) becomes: sum by (id) (irate(cpu_usage[5m])) / 1e9
     utilization.plot_promql(
-        PlotOpts::heatmap("Busy % (Per-CPU)", "busy-pct-per-cpu", Unit::Percentage),
+        PlotOpts::heatmap("Busy % (Per-CPU)", "busy-pct-per-cpu", Unit::Percentage).range(0.0, 1.0),
         "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
     );
 
@@ -32,7 +32,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
                 format!("{capitalized} %"),
                 format!("{state}-pct"),
                 Unit::Percentage,
-            ),
+            )
+            .range(0.0, 1.0),
             format!("sum(irate(cpu_usage{{state=\"{state}\"}}[5m])) / cpu_cores / 1000000000"),
         );
 
@@ -42,7 +43,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
                 format!("{capitalized} % (Per-CPU)"),
                 format!("{state}-pct-per-cpu"),
                 Unit::Percentage,
-            ),
+            )
+            .range(0.0, 1.0),
             format!("sum by (id) (irate(cpu_usage{{state=\"{state}\"}}[5m])) / 1000000000"),
         );
     }
@@ -83,13 +85,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // L3 Cache Hit Rate
     performance.plot_promql(
-        PlotOpts::line("L3 Hit %", "l3-hit", Unit::Percentage),
+        PlotOpts::line("L3 Hit %", "l3-hit", Unit::Percentage).range(0.0, 1.0),
         "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))".to_string(),
     );
 
     // Per-CPU L3 Hit Rate
     performance.plot_promql(
-        PlotOpts::heatmap("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage),
+        PlotOpts::heatmap("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage).range(0.0, 1.0),
         "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))"
             .to_string(),
     );
@@ -116,7 +118,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Branch Misprediction Rate %
     branch.plot_promql(
-        PlotOpts::line("Misprediction Rate %", "branch-miss-rate", Unit::Percentage),
+        PlotOpts::line("Misprediction Rate %", "branch-miss-rate", Unit::Percentage).range(0.0, 1.0),
         "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))".to_string(),
     );
 
@@ -126,7 +128,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "Misprediction Rate % (Per-CPU)",
             "branch-miss-rate-per-cpu",
             Unit::Percentage,
-        ),
+        )
+        .range(0.0, 1.0),
         "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))"
             .to_string(),
     );

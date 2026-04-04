@@ -64,7 +64,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         latency.plot_promql(
             PlotOpts::scatter(*op, format!("latency-{op_lower}"), Unit::Time)
-                .with_log_scale(true),
+                .with_log_scale(true)
+                .range(0.0, 100_000_000_000.0),
             format!("histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{{op=\"{op_lower}\"}})"),
         );
     }

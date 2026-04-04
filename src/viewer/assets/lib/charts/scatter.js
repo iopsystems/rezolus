@@ -5,6 +5,7 @@ import {
 } from './util/units.js';
 import {
     insertGapNulls,
+    clampToRange,
 } from './util/utils.js';
 import {
     getBaseOption,
@@ -42,8 +43,7 @@ export function configureScatterChart(chart) {
     const format = opts.format || {};
     const unitSystem = format.unit_system;
     const logScale = format.log_scale;
-    const minValue = format.min;
-    const maxValue = format.max;
+    const range = format.range;
 
     // For percentile data, the format is [times, percentile1Values, percentile2Values, ...]
     const timeData = data[0];
@@ -55,14 +55,27 @@ export function configureScatterChart(chart) {
 
     const scatterColors = SCATTER_PALETTE;
 
+    let hasClamped = false;
+
     for (let i = 1; i < data.length; i++) {
         const percentileValues = data[i];
         const percentileData = [];
+        const lineOnlyData = [];  // line breaks at clamped points
 
-        // Create data points in the format [time, value, original_index]
         for (let j = 0; j < timeData.length; j++) {
-            if (percentileValues[j] !== undefined && !isNaN(percentileValues[j])) {
-                percentileData.push([timeData[j] * 1000, percentileValues[j], j]); // Store original index
+            const rawInput = percentileValues[j];
+            if (rawInput !== undefined && !isNaN(rawInput)) {
+                const [v, raw] = clampToRange(rawInput, range);
+                const isClamped = raw != null;
+                if (isClamped) {
+                    hasClamped = true;
+                    // y-value will be repositioned to OOB band after the loop
+                    percentileData.push({ value: [timeData[j] * 1000, v, raw], itemStyle: { color: COLORS.clamped } });
+                    lineOnlyData.push([timeData[j] * 1000, null]);
+                } else {
+                    percentileData.push([timeData[j] * 1000, v, null]);
+                    lineOnlyData.push([timeData[j] * 1000, v, null]);
+                }
             }
         }
 
@@ -70,7 +83,8 @@ export function configureScatterChart(chart) {
         const name = percentileLabels[i - 1] || `Percentile ${i}`;
 
         // Line series underneath for visual continuity (with gap breaks)
-        const lineData = insertGapNulls(percentileData, chart.interval);
+        // Uses lineOnlyData which has nulls at clamped points so the line breaks there
+        const lineData = insertGapNulls(lineOnlyData, chart.interval);
         series.push({
             name: name,
             type: 'line',
@@ -109,6 +123,33 @@ export function configureScatterChart(chart) {
         });
     }
 
+    // OOB band: move clamped dots above the main chart area
+    chart._oobAxisMax = null;
+    if (hasClamped && range && range.max != null) {
+        let oobCenter, oobMax;
+        if (logScale) {
+            const logMax = Math.log10(range.max);
+            oobCenter = Math.pow(10, logMax + 0.15);
+            oobMax = Math.pow(10, logMax + 0.3);
+        } else {
+            const span = range.max - (range.min || 0);
+            const band = Math.max(span * 0.05, 1e-9);
+            oobCenter = range.max + band * 0.5;
+            oobMax = range.max + band;
+        }
+
+        // Reposition clamped dots to OOB center
+        for (const s of series) {
+            if (s.type !== 'scatter') continue;
+            for (const item of s.data) {
+                if (item && item.value && item.value[2] != null) {
+                    item.value[1] = oobCenter;
+                }
+            }
+        }
+        chart._oobAxisMax = oobMax;
+    }
+
     // Ensure pinnedSet exists early so the tooltip formatter can reference it
     if (!chart.pinnedSet) {
         chart.pinnedSet = new Set();
@@ -118,6 +159,29 @@ export function configureScatterChart(chart) {
 
     const uniqueNamesForLayout = [...new Set(series.map(s => s.name))];
     const hasTwoRowLegend = uniqueNamesForLayout.some(n => n.includes('.'));
+
+    // Build yAxis config — when OOB is active, skip the last label at range.max
+    const baseYAxis = getBaseYAxisOption(logScale, unitSystem);
+    let yAxisConfig;
+    if (chart._oobAxisMax) {
+        const baseFormatter = baseYAxis.axisLabel.formatter;
+        const rangeMax = range.max;
+        yAxisConfig = {
+            ...baseYAxis,
+            max: chart._oobAxisMax,
+            axisLabel: {
+                ...baseYAxis.axisLabel,
+                rich: { oob: { color: 'rgba(248, 81, 73, 0.65)' } },
+                formatter: function (value) {
+                    // Replace the tick at range.max with "OOB" to label the band
+                    if (rangeMax != null && Math.abs(value - rangeMax) / rangeMax < 0.01) return '{oob|OOB}';
+                    return typeof baseFormatter === 'function' ? baseFormatter(value) : value;
+                },
+            },
+        };
+    } else {
+        yAxisConfig = baseYAxis;
+    }
 
     const option = {
         ...baseOption,
@@ -177,16 +241,36 @@ export function configureScatterChart(chart) {
             ];
         })(),
         dataZoom: getDataZoomConfig(minZoomSpan),
-        yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
+        yAxis: yAxisConfig,
         tooltip: {
             ...baseOption.tooltip,
             formatter: getTooltipFormatter(unitSystem ?
                 createAxisLabelFormatter(unitSystem) :
-                val => val, chart.pinnedSet, chart),
+                val => val, chart.pinnedSet, chart, 'scatter'),
         },
         series: series,
         color: scatterColors,
     };
+
+    // Add OOB band visual separator and background
+    if (hasClamped && range && range.max != null) {
+        const firstScatter = option.series.find(s => s.type === 'scatter');
+        if (firstScatter) {
+            firstScatter.markLine = {
+                silent: true,
+                symbol: 'none',
+                data: [{ yAxis: range.max }],
+                lineStyle: { color: COLORS.fgMuted, type: 'dashed', width: 1 },
+                label: { show: false },
+            };
+            firstScatter.markArea = {
+                silent: true,
+                data: [[{ yAxis: range.max }, { yAxis: chart._oobAxisMax }]],
+                itemStyle: { color: 'rgba(248, 81, 73, 0.06)' },
+                label: { show: false },
+            };
+        }
+    }
 
     applyChartOption(chart, option);
 

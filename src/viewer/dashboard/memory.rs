@@ -47,7 +47,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Memory utilization percentage
     usage.plot_promql(
-        PlotOpts::line("Utilization %", "utilization-pct", Unit::Percentage),
+        PlotOpts::line("Utilization %", "utilization-pct", Unit::Percentage).range(0.0, 1.0),
         "(memory_total - memory_available) / memory_total".to_string(),
     );
 

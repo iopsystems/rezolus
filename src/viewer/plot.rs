@@ -280,6 +280,14 @@ pub struct PlotOpts {
     description: Option<String>,
 }
 
+#[derive(Default, Clone, Serialize)]
+pub struct Range {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+}
+
 #[derive(Serialize, Clone)]
 pub struct FormatConfig {
     // Axis labels
@@ -292,8 +300,10 @@ pub struct FormatConfig {
 
     // Scale configuration
     log_scale: Option<bool>, // Whether to use log scale for y-axis
-    min: Option<f64>,        // Min value for y-axis
-    max: Option<f64>,        // Max value for y-axis
+
+    // Expected data range — values outside are clamped at render time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    range: Option<Range>,
 
     // Additional customization
     value_label: Option<String>, // Label used in tooltips for the value
@@ -365,6 +375,16 @@ impl PlotOpts {
 
         self
     }
+
+    pub fn range(mut self, min: f64, max: f64) -> Self {
+        if let Some(ref mut format) = self.format {
+            format.range = Some(Range {
+                min: Some(min),
+                max: Some(max),
+            });
+        }
+        self
+    }
 }
 
 impl FormatConfig {
@@ -375,8 +395,7 @@ impl FormatConfig {
             unit_system: Some(unit.to_string()),
             precision: Some(2),
             log_scale: None,
-            min: None,
-            max: None,
+            range: None,
             value_label: None,
         }
     }
