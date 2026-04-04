@@ -118,7 +118,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Branch Misprediction Rate %
     branch.plot_promql(
-        PlotOpts::line("Misprediction Rate %", "branch-miss-rate", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::line("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
+            .range(0.0, 1.0),
         "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))".to_string(),
     );
 

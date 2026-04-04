@@ -67,7 +67,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         // Average CPU % for this softirq kind
         group.plot_promql(
-            PlotOpts::line("CPU %", format!("softirq-{kind}-time"), Unit::Percentage).range(0.0, 1.0),
+            PlotOpts::line("CPU %", format!("softirq-{kind}-time"), Unit::Percentage)
+                .range(0.0, 1.0),
             format!("sum(irate(softirq_time{{kind=\"{kind}\"}}[5m])) / cpu_cores / 1000000000"),
         );
 
