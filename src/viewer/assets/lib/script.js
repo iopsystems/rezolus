@@ -215,14 +215,24 @@ const SectionContent = {
                 (g) => g.metadata?.side === 'right',
             );
 
-            // Build paired rows: each pair has the aggregate (left) and individual (right) chart
-            // for the same metric, so they sit side-by-side on desktop and stacked on mobile.
+            // Build paired rows by matching on chart title so pairs stay correct
+            // even if left/right groups differ in ordering or have missing metrics.
             const leftPlots = leftGroups.flatMap((g) => g.plots || []);
             const rightPlots = rightGroups.flatMap((g) => g.plots || []);
-            const pairCount = Math.max(leftPlots.length, rightPlots.length);
+            const rightByTitle = new Map(rightPlots.map((p) => [p.opts?.title, p]));
+            const paired = new Set();
             const pairs = [];
-            for (let i = 0; i < pairCount; i++) {
-                pairs.push({ left: leftPlots[i], right: rightPlots[i] });
+            for (const left of leftPlots) {
+                const title = left.opts?.title;
+                const right = rightByTitle.get(title);
+                if (right) paired.add(title);
+                pairs.push({ left, right: right || null });
+            }
+            // Append any right-side plots that had no left match
+            for (const right of rightPlots) {
+                if (!paired.has(right.opts?.title)) {
+                    pairs.push({ left: null, right });
+                }
             }
 
             const renderCgroupChart = (spec, label, legend) => {
