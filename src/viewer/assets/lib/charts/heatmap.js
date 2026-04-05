@@ -2,7 +2,8 @@ import {
     createAxisLabelFormatter
 } from './util/units.js';
 import {
-    formatDateTime
+    formatDateTime,
+    clampToRange,
 } from './util/utils.js';
 import {
     getBaseOption,
@@ -121,6 +122,7 @@ export function configureHeatmap(chart) {
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
+    const range = format.range;
     const yAxisLabel = format.y_axis_label || format.axis_label;
     const valueLabel = format.value_label;
 
@@ -135,18 +137,29 @@ export function configureHeatmap(chart) {
 
         const formattedTime = formatDateTime(time);
 
-        let label, formattedValue, formattedMinValue;
-        if (unitSystem) {
-            const formatter = createAxisLabelFormatter(unitSystem);
-            label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
-            formattedValue = formatter(value);
-            formattedMinValue = minVal === null ? '' : formatter(minVal);
+        const fmt = unitSystem
+            ? createAxisLabelFormatter(unitSystem)
+            : (v) => v.toFixed(6);
+        const label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
+
+        const [clampedVal, rawVal] = clampToRange(value, range);
+        const isClamped = rawVal != null;
+
+        let valueString;
+        if (minVal === null) {
+            valueString = fmt(clampedVal);
+            if (isClamped) {
+                valueString += ` <span style="color: ${COLORS.fgMuted};">(raw: ${fmt(rawVal)})</span>`;
+            }
         } else {
-            label = '';
-            formattedValue = value.toFixed(6);
-            formattedMinValue = minVal === null ? '' : minVal.toFixed(6);
+            const [clampedMin, rawMin] = clampToRange(minVal, range);
+            const isMinClamped = rawMin != null;
+            valueString = `${fmt(clampedMin)} - ${fmt(clampedVal)}`;
+            if (isClamped || isMinClamped) {
+                valueString += ` <span style="color: ${COLORS.fgMuted};">(raw: ${fmt(isMinClamped ? rawMin : clampedMin)} - ${fmt(isClamped ? rawVal : clampedVal)})</span>`;
+            }
         }
-        const valueString = minVal === null ? formattedValue : `${formattedMinValue} - ${formattedValue}`;
+
         return `<div style="${FONTS.cssSans}">
                     <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                         ${formattedTime}
@@ -189,6 +202,8 @@ export function configureHeatmap(chart) {
         }
     };
 
+    const effectiveMax = range?.max != null ? Math.min(maxValue, range.max) : maxValue;
+
     const option = {
         ...baseOption,
         grid: { ...baseOption.grid, top: '56' },
@@ -225,7 +240,7 @@ export function configureHeatmap(chart) {
         visualMap: {
             type: 'continuous',
             min: minValue,
-            max: maxValue,
+            max: effectiveMax,
             calculable: false,
             show: true,
             orient: 'horizontal',
@@ -254,7 +269,7 @@ export function configureHeatmap(chart) {
                 right: 16,
                 top: 35,
                 style: {
-                    text: createAxisLabelFormatter(unitSystem || 'count')(maxValue),
+                    text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
                     fill: COLORS.fgLabel,
                     font: FONTS.footnoteFont,
                     textAlign: 'center',

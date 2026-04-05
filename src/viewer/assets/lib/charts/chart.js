@@ -147,6 +147,7 @@ export class Chart {
         }
 
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
+        if (this._pinCleanup) this._pinCleanup();
 
         if (this.echart) {
             this.echart.dispose();
@@ -389,7 +390,7 @@ export class Chart {
         // If at default zoom, restore original bounds
         if (this.chartsState.isDefaultZoom()) {
             this.echart.setOption({
-                yAxis: { min: format.min ?? null, max: format.max ?? null }
+                yAxis: { min: null, max: this._oobAxisMax ?? null }
             });
             return;
         }
@@ -448,11 +449,19 @@ export class Chart {
             newMax = yMax + padding;
         }
 
-        // Respect explicit format bounds if configured
+        // Cap axis max: OOB band takes priority, then range ceiling, then padded max
+        let yAxisMax;
+        if (this._oobAxisMax) {
+            yAxisMax = this._oobAxisMax;
+        } else if (format.range?.max != null) {
+            yAxisMax = Math.min(newMax, format.range.max);
+        } else {
+            yAxisMax = newMax;
+        }
         this.echart.setOption({
             yAxis: {
-                min: format.min ?? newMin,
-                max: format.max ?? newMax,
+                min: newMin,
+                max: yAxisMax,
             }
         });
     }

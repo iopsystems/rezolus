@@ -70,7 +70,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::scatter("TCP Packet Latency", "tcp-packet-latency", Unit::Time)
             .with_axis_label("Latency")
             .with_unit_system("time")
-            .with_log_scale(true),
+            .with_log_scale(true)
+            .range(0.0, 100_000_000_000.0),
         "histogram_percentiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)".to_string(),
     );
 

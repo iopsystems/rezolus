@@ -10,15 +10,32 @@ export function insertGapNulls(zippedData, intervalSec) {
     if (!zippedData || zippedData.length < 2 || !intervalSec || intervalSec <= 0) {
         return zippedData;
     }
+    // Items may be plain arrays or echarts object-form { value: [...], ... }
+    const ts = (item) => Array.isArray(item) ? item[0] : item.value[0];
     const thresholdMs = intervalSec * 1500; // 1.5x interval in ms
     const result = [zippedData[0]];
     for (let i = 1; i < zippedData.length; i++) {
-        if (zippedData[i][0] - zippedData[i - 1][0] > thresholdMs) {
-            result.push([zippedData[i - 1][0] + intervalSec * 1000, null]);
+        if (ts(zippedData[i]) - ts(zippedData[i - 1]) > thresholdMs) {
+            result.push([ts(zippedData[i - 1]) + intervalSec * 1000, null]);
         }
         result.push(zippedData[i]);
     }
     return result;
+}
+
+/**
+ * Clamp a value to range bounds.
+ * @param {number} v - the raw value
+ * @param {{ min?: number, max?: number }} [range] - optional range bounds
+ * @returns {[number, number|null]} [clamped, rawOrNull] — second element is the
+ *   original value when clamping occurred, null otherwise.
+ */
+export function clampToRange(v, range) {
+    if (!range) return [v, null];
+    let clamped = v;
+    if (range.max != null && clamped > range.max) clamped = range.max;
+    if (range.min != null && clamped < range.min) clamped = range.min;
+    return [clamped, clamped !== v ? v : null];
 }
 
 /**

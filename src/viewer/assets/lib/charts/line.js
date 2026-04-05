@@ -3,6 +3,7 @@ import {
 } from './util/units.js';
 import {
     insertGapNulls,
+    clampToRange,
 } from './util/utils.js';
 import {
     getBaseOption,
@@ -42,20 +43,22 @@ export function configureLineChart(chart) {
 
     const [timeData, valueData] = data;
 
-    let zippedData = timeData.map((t, i) => [t * 1000, valueData[i]]);
-    zippedData = insertGapNulls(zippedData, chart.interval);
-
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
     const unitSystem = format.unit_system;
     const logScale = format.log_scale;
-    const minValue = format.min;
-    const maxValue = format.max;
+    const range = format.range;
+
+    let zippedData = timeData.map((t, i) => {
+        const [v, raw] = clampToRange(valueData[i], range);
+        return [t * 1000, v, raw];
+    });
+    zippedData = insertGapNulls(zippedData, chart.interval);
 
     const option = {
         ...baseOption,
         dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
-        yAxis: getBaseYAxisOption(logScale, minValue, maxValue, unitSystem),
+        yAxis: getBaseYAxisOption(logScale, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
             formatter: getTooltipFormatter(unitSystem ?

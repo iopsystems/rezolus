@@ -49,7 +49,7 @@ export function getTooltipFreezeFooter(chart) {
  * Approximates echarts' built-in tooltip formatter, but with our own x axis formatting
  * (using formatDateTime) and our own value formatting (using valueFormatter).
  */
-export function getTooltipFormatter(valueFormatter, pinnedSet, chart) {
+export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
     return (paramsArray) => {
         const hasPins = pinnedSet && pinnedSet.size > 0;
 
@@ -74,7 +74,8 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart) {
             } else if (bHasId) {
                 return 1;
             } else {
-                return aName.localeCompare(bName, undefined, { numeric: true });
+                // Descending so higher percentiles (p99.99) appear above lower (p50)
+                return bName.localeCompare(aName, undefined, { numeric: true });
             }
         });
 
@@ -86,16 +87,33 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart) {
                 <div style="display: flex; flex-direction: column; gap: 4px;">
                     ${sortedParams.map(p => {
                         const faded = hasPins && !pinnedSet.has(p.seriesName);
+                        const isClamped = p.value[2] != null;
                         const nameColor = faded ? COLORS.fgMuted : COLORS.fgSecondary;
-                        const valColor = faded ? COLORS.fgMuted : COLORS.fg;
                         const opacity = faded ? 'opacity: 0.5;' : '';
+                        let marker, valColor, displayValue;
+                        if (style === 'scatter') {
+                            // Scatter/percentile: red dot marker, red text, show raw value
+                            valColor = faded ? COLORS.fgMuted : (isClamped ? COLORS.clamped : COLORS.fg);
+                            marker = isClamped && !faded
+                                ? `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${COLORS.clamped};"></span>`
+                                : p.marker;
+                            displayValue = valueFormatter(isClamped ? p.value[2] : p.value[1]);
+                        } else {
+                            // Line/multi: normal color, (raw: value) annotation
+                            valColor = faded ? COLORS.fgMuted : COLORS.fg;
+                            marker = p.marker;
+                            displayValue = valueFormatter(p.value[1]);
+                            if (isClamped) {
+                                displayValue += ` <span style="color: ${COLORS.fgMuted};">(raw: ${valueFormatter(p.value[2])})</span>`;
+                            }
+                        }
                         return `<div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; ${opacity}">
                         <span style="display: flex; align-items: center; gap: 6px;">
-                            ${p.marker}
+                            ${marker}
                             <span style="color: ${nameColor}; font-size: ${FONTS.tooltipLabel.fontSize}px;">${p.seriesName}</span>
                         </span>
                         <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${valColor};">
-                            ${valueFormatter(p.value[1])}
+                            ${displayValue}
                         </span>
                     </div>`;
                     }).join('')}
@@ -192,13 +210,13 @@ export function getBaseOption() {
     };
 }
 
-export function getBaseYAxisOption(logScale, minValue, maxValue, unitSystem) {
+export function getBaseYAxisOption(logScale, unitSystem) {
     return {
         type: logScale ? 'log' : 'value',
         logBase: 10,
         scale: true,
-        min: minValue,
-        max: maxValue,
+        min: null,
+        max: null,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {

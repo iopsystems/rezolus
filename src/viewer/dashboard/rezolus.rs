@@ -11,7 +11,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Rezolus CPU usage percentage
     rezolus.plot_promql(
-        PlotOpts::line("CPU %", "cpu", Unit::Percentage),
+        PlotOpts::line("CPU %", "cpu", Unit::Percentage).range(0.0, 1.0),
         "sum(irate(rezolus_cpu_usage[5m])) / 1000000000".to_string(),
     );
 

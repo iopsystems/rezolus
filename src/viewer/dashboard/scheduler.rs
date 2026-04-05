@@ -14,7 +14,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency", Unit::Time)
             .with_axis_label("Latency")
             .with_unit_system("time")
-            .with_log_scale(true),
+            .with_log_scale(true)
+            .range(0.0, 100_000_000_000.0),
         "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
             .to_string(),
     );
@@ -24,7 +25,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::scatter("Off CPU Time", "off-cpu-time", Unit::Time)
             .with_axis_label("Time")
             .with_unit_system("time")
-            .with_log_scale(true),
+            .with_log_scale(true)
+            .range(0.0, 100_000_000_000.0),
         "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_offcpu)".to_string(),
     );
 
@@ -35,7 +37,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::scatter("Running Time", "running-time", Unit::Time)
             .with_axis_label("Time")
             .with_unit_system("time")
-            .with_log_scale(true),
+            .with_log_scale(true)
+            .range(0.0, 100_000_000_000.0),
         "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_running)".to_string(),
     );
 
