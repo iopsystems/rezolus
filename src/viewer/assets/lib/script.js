@@ -1,6 +1,7 @@
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
+import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
@@ -214,6 +215,28 @@ const SectionContent = {
                 (g) => g.metadata?.side === 'right',
             );
 
+            // Build paired rows: each pair has the aggregate (left) and individual (right) chart
+            // for the same metric, so they sit side-by-side on desktop and stacked on mobile.
+            const leftPlots = leftGroups.flatMap((g) => g.plots || []);
+            const rightPlots = rightGroups.flatMap((g) => g.plots || []);
+            const pairCount = Math.max(leftPlots.length, rightPlots.length);
+            const pairs = [];
+            for (let i = 0; i < pairCount; i++) {
+                pairs.push({ left: leftPlots[i], right: rightPlots[i] });
+            }
+
+            const renderCgroupChart = (spec, label, legend) => {
+                if (!spec) return null;
+                const prefixedSpec = { ...spec, opts: { ...spec.opts }, noCollapse: true, compactGrid: true };
+                return m('div.cgroup-chart', [
+                    m('span.cgroup-chart-label', label),
+                    m('div.chart-wrapper', [
+                        m(Chart, { spec: prefixedSpec, chartsState, interval }),
+                    ]),
+                    legend,
+                ]);
+            };
+
             return m('div#section-content.cgroups-section', [
                 m('h1.section-title', titleText),
                 m(CgroupSelector, {
@@ -223,20 +246,34 @@ const SectionContent = {
                     substitutePattern: substituteCgroupPattern,
                     setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
                 }),
-                m('div.cgroup-columns', [
-                    m(
-                        'div.cgroup-column.cgroup-column-left',
-                        leftGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
-                        ),
-                    ),
-                    m(
-                        'div.cgroup-column.cgroup-column-right',
-                        rightGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
-                        ),
-                    ),
-                ]),
+                m('div.cgroup-pairs',
+                    pairs.map((pair) => {
+                        const title = pair.left?.opts?.title || pair.right?.opts?.title || '';
+                        const description = pair.left?.opts?.description || pair.right?.opts?.description;
+                        // Extract series names from the individual (multi) chart for the legend
+                        const seriesNames = pair.right?.series_names || [];
+                        const legend = seriesNames.length > 0 && m('div.cgroup-pair-legend',
+                            seriesNames.map((name) =>
+                                m('span.cgroup-legend-item', [
+                                    m('span.cgroup-legend-swatch', {
+                                        style: { background: globalColorMapper.getColorByName(name) },
+                                    }),
+                                    name,
+                                ]),
+                            ),
+                        );
+                        return m('div.cgroup-pair', [
+                            m('div.cgroup-pair-header', [
+                                m('span.chart-title', title),
+                                description && m('span.chart-subtitle', description),
+                            ]),
+                            m('div.cgroup-pair-charts', [
+                                renderCgroupChart(pair.left, 'Aggregate'),
+                                renderCgroupChart(pair.right, 'Individual', legend),
+                            ]),
+                        ]);
+                    }),
+                ),
             ]);
         }
 

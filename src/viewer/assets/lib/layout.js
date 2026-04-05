@@ -28,6 +28,9 @@ const formatDuration = (secs) => {
 // Collapsible metadata state (private to TopNav)
 let metadataExpanded = false;
 
+// Mobile sidebar drawer state
+let sidebarOpen = false;
+
 document.addEventListener('click', (e) => {
     if (metadataExpanded && !e.target.closest('.topnav-source')) {
         metadataExpanded = false;
@@ -53,6 +56,10 @@ const TopNav = {
         if (attrs.num_series != null) metaEntries.push(['Series', attrs.num_series.toLocaleString()]);
 
         return m('div#topnav', [
+            m('button.hamburger-btn', {
+                onclick: () => { sidebarOpen = !sidebarOpen; },
+                title: 'Toggle navigation',
+            }, m.trust('<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><rect x="2" y="4" width="16" height="2" rx="1"/><rect x="2" y="9" width="16" height="2" rx="1"/><rect x="2" y="14" width="16" height="2" rx="1"/></svg>')),
             m('div.logo', [
                 'REZOLUS',
                 liveMode && m('span.live-indicator', {
@@ -147,7 +154,19 @@ const Sidebar = {
         const overviewSection = regularSections.find((s) => s.name === 'Overview');
         const samplerSections = regularSections.filter((s) => s.name !== 'Overview');
 
-        return m('div#sidebar', [
+        return [
+        // Backdrop overlay for mobile drawer
+        m('div.sidebar-backdrop', {
+            class: sidebarOpen ? 'visible' : '',
+            onclick: () => { sidebarOpen = false; },
+        }),
+        m('div#sidebar', {
+            class: sidebarOpen ? 'open' : '',
+            onclick: (e) => {
+                // Close drawer when a link is clicked (mobile navigation)
+                if (e.target.closest('a')) sidebarOpen = false;
+            },
+        }, [
             // Report (shown only when imported)
             reportStore.entries.length > 0 && m(
                 m.route.Link,
@@ -233,7 +252,7 @@ const Sidebar = {
                     [m('span.arrow', '→'), ' System Info'],
                 ),
             ],
-        ]);
+        ])];
     },
 };
 

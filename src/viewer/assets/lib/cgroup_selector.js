@@ -38,7 +38,7 @@ const selectList = (title, items, selectionSet, onchange, emptyLabel) =>
     m('div.selector-column', [
         m('h4', title),
         m('select.cgroup-select[multiple]', {
-            size: 10,
+            size: Math.max(2, Math.min(10, items.length || 1)),
             onchange,
         }, items.length === 0
             ? [m('option[disabled]', emptyLabel)]
@@ -48,9 +48,12 @@ const selectList = (title, items, selectionSet, onchange, emptyLabel) =>
         ),
     ]);
 
-/** Render a transfer button. */
-const transferBtn = (label, title, disabled, onclick) =>
-    m('button', { title, disabled, onclick }, label);
+/** Render a transfer button with directional arrows (horizontal on desktop, vertical on mobile). */
+const transferBtn = (lrLabel, udLabel, title, disabled, onclick) =>
+    m('button', { title, disabled, onclick }, [
+        m('span.arrow-lr', lrLabel),
+        m('span.arrow-ud', udLabel),
+    ]);
 
 // ── Component ───────────────────────────────────────────────────────
 
@@ -222,16 +225,16 @@ export const CgroupSelector = {
 
                 // Transfer buttons
                 m('div.selector-controls', [
-                    transferBtn('>', 'Move selected to individual',
+                    transferBtn('>', '↓', 'Move selected to individual',
                         st.leftSelected.size === 0,
                         () => this.transfer(vnode, st.leftSelected, 'add')),
-                    transferBtn('>>', 'Move all to individual',
+                    transferBtn('>>', '⇊', 'Move all to individual',
                         unselected.length === 0,
                         () => this.transfer(vnode, unselected, 'add')),
-                    transferBtn('<<', 'Move all to aggregate',
+                    transferBtn('<<', '⇈', 'Move all to aggregate',
                         selected.length === 0,
                         () => this.transfer(vnode, selected, 'remove')),
-                    transferBtn('<', 'Move selected to aggregate',
+                    transferBtn('<', '↑', 'Move selected to aggregate',
                         st.rightSelected.size === 0,
                         () => this.transfer(vnode, st.rightSelected, 'remove')),
                 ]),

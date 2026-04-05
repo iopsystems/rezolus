@@ -494,5 +494,13 @@ export class Chart {
         } else {
             throw new Error(`Unknown chart style: ${opts.style}`);
         }
+
+        // Compact layout for cgroup paired charts: same grid for both, hide echarts legend
+        if (this.spec.compactGrid && this.echart) {
+            this.echart.setOption({
+                grid: { top: '20' },
+                legend: { show: false },
+            });
+        }
     }
 }

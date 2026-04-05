@@ -1173,19 +1173,70 @@ main {
     width: 100%;
 }
 
-.cgroup-columns {
+.cgroup-pairs {
+    display: flex;
+    flex-direction: column;
+    gap: 2.5rem;
+}
+
+.cgroup-pair-header {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0.75rem;
+}
+
+.cgroup-pair-header .chart-title {
+    font-size: var(--font-size-base);
+    font-weight: 600;
+}
+
+.cgroup-pair-header .chart-subtitle {
+    font-size: var(--font-size-xs);
+    color: var(--fg-muted);
+}
+
+.cgroup-pair-charts {
     display: flex;
     gap: 1.5rem;
 }
 
-.cgroup-column {
+.cgroup-chart {
     flex: 1;
     min-width: 0;
 }
 
-/* Single-column charts within each cgroup column since each column is half-width */
-.cgroup-column .group .charts {
-    grid-template-columns: 1fr;
+.cgroup-chart-label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    color: var(--fg-muted);
+    margin: 0.25rem 0 0 0.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.cgroup-pair-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    padding: 0.25rem 0.5rem;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    color: var(--fg-secondary);
+}
+
+.cgroup-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.cgroup-legend-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
 }
 
 .cgroup-selector {
@@ -1230,7 +1281,6 @@ main {
 
 .selector-column {
     flex: 1;
-    min-height: 280px;
 }
 
 .selector-column h4 {
@@ -1239,6 +1289,7 @@ main {
 
 .cgroup-select {
     width: 100%;
+    min-height: 8.5rem;
     background: var(--bg-card);
     color: var(--fg);
     border: 1px solid var(--border-default);
@@ -1266,13 +1317,14 @@ main {
 .selector-controls {
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 0.375rem;
-    padding: 0 0.5rem;
+    padding: 1.85rem 0.5rem 0;
+    align-self: stretch;
 }
 
 .selector-controls button {
-    padding: 0.5rem 0.75rem;
+    padding: 0.25rem 0.75rem;
     background: var(--bg-tertiary);
     color: var(--fg);
     border: 1px solid var(--border-default);
@@ -1295,6 +1347,11 @@ main {
 .selector-controls button:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+}
+
+/* Arrow direction toggling: show horizontal by default, vertical on mobile */
+.selector-controls button .arrow-ud {
+    display: none;
 }
 
 .selector-info {
@@ -2155,3 +2212,206 @@ main {
 
 /* Print-only header (hidden on screen) */
 
+/* ==========================================================================
+   Mobile hamburger button (hidden on desktop)
+   ========================================================================== */
+
+.hamburger-btn {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--fg-secondary);
+    padding: 0.5rem;
+    cursor: pointer;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.hamburger-btn:hover {
+    color: var(--fg);
+}
+
+/* Sidebar backdrop overlay (mobile only) */
+.sidebar-backdrop {
+    display: none;
+}
+
+/* ==========================================================================
+   Mobile / Responsive (<768px)
+   ========================================================================== */
+
+@media (max-width: 767px) {
+    :root {
+        --content-padding: 12px;
+    }
+
+    /* ── Top navigation ── */
+    #topnav {
+        flex-wrap: wrap;
+        height: auto;
+        min-height: var(--header-height);
+        padding: 0.5rem 0.75rem;
+        gap: 0.5rem;
+    }
+
+    .hamburger-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        order: -1;
+    }
+
+    #topnav .logo {
+        font-size: var(--font-size-base);
+    }
+
+    /* Show filename but hide expandable metadata on mobile */
+    .topnav-source {
+        pointer-events: none;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+        flex: 1;
+    }
+
+    .topnav-source-chevron,
+    .topnav-meta-table {
+        display: none;
+    }
+
+    /* Shrink transport buttons */
+    #topnav .topnav-actions {
+        gap: 0.375rem;
+    }
+
+    #topnav .topnav-actions .transport-btn.import-btn span {
+        display: none;
+    }
+
+    #topnav .topnav-actions .transport-btn.import-btn {
+        width: 32px;
+        padding: 0;
+    }
+
+    /* Hide time range bar on mobile */
+    .time-range-bar {
+        display: none;
+    }
+
+    /* ── Sidebar as slide-out drawer ── */
+    #sidebar {
+        transform: translateX(-100%);
+        transition: transform var(--transition-slow);
+        z-index: 200;
+        box-shadow: none;
+    }
+
+    #sidebar.open {
+        transform: translateX(0);
+        box-shadow: var(--shadow-lg);
+    }
+
+    .sidebar-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 199;
+    }
+
+    .sidebar-backdrop.visible {
+        display: block;
+    }
+
+    /* ── Main content full-width ── */
+    #section-content {
+        margin-left: 0;
+        max-width: 100vw;
+    }
+
+    /* ── Section header stacks vertically ── */
+    .section-header-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
+    /* ── Cgroup pairs: stack charts vertically on mobile ── */
+    .cgroup-pair-charts {
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    /* ── Cgroup selector: stack vertically, horizontal controls ── */
+    .selector-container {
+        flex-direction: column;
+    }
+
+
+    .selector-controls {
+        flex-direction: row;
+        justify-content: center;
+        padding: 0;
+    }
+
+    .selector-controls button .arrow-lr {
+        display: none;
+    }
+
+    .selector-controls button .arrow-ud {
+        display: inline;
+    }
+
+    /* ── Charts: single column ── */
+    .group .charts {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+
+    /* Larger touch targets for chart action buttons */
+    .chart-expand,
+    .chart-select {
+        min-width: 44px;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* ── Single chart (expanded) view ── */
+    .single-chart-view {
+        width: 100%;
+    }
+
+    /* ── Hide Query Explorer on mobile ── */
+    .query-explorer {
+        display: none;
+    }
+
+    #sidebar .query-explorer-link {
+        display: none;
+    }
+
+    /* ── System Info grid: single column ── */
+    .sysinfo-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .sysinfo-table {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* ── Selection cards: stack vertically ── */
+    .selection-card-body {
+        flex-direction: column;
+    }
+
+    .selection-card-chart {
+        flex: 1 1 100%;
+        max-width: 100%;
+    }
+
+    .selection-card-notes {
+        flex: 1 1 auto;
+    }
+}
