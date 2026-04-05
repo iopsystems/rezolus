@@ -62,6 +62,23 @@ const Main = {
     },
 };
 
+const toggleGlobalHeatmap = async () => {
+    heatmapEnabled = !heatmapEnabled;
+    m.redraw();
+};
+
+const getCachedSectionMeta = (interval) => {
+    const anyCached = Object.values(sectionResponseCache)[0];
+    return {
+        interval: anyCached?.interval || interval,
+        version: anyCached?.version,
+        source: anyCached?.source,
+        filename: anyCached?.filename,
+        start_time: anyCached?.start_time,
+        end_time: anyCached?.end_time,
+    };
+};
+
 const SectionContent = {
     view({ attrs }) {
         const sectionRoute = attrs.section.route;
@@ -81,44 +98,28 @@ const SectionContent = {
         }
 
         if (sectionName === 'Selection') {
-            const anyCached = Object.values(sectionResponseCache)[0];
+            const sectionMeta = getCachedSectionMeta(interval);
             return m(SelectionView, {
                 title: 'Selection',
-                interval: anyCached?.interval || interval,
-                version: anyCached?.version,
-                source: anyCached?.source,
-                filename: anyCached?.filename,
-                start_time: anyCached?.start_time,
-                end_time: anyCached?.end_time,
+                ...sectionMeta,
                 chartsState,
                 fileChecksum,
                 heatmapEnabled,
                 heatmapLoading,
-                onToggleHeatmap: async () => {
-                    heatmapEnabled = !heatmapEnabled;
-                    m.redraw();
-                },
+                onToggleHeatmap: toggleGlobalHeatmap,
             });
         }
 
         if (sectionName === 'Report') {
-            const anyCached = Object.values(sectionResponseCache)[0];
+            const sectionMeta = getCachedSectionMeta(interval);
             return m(ReportView, {
                 title: 'Report',
-                interval: anyCached?.interval || interval,
-                version: anyCached?.version,
-                source: anyCached?.source,
-                filename: anyCached?.filename,
-                start_time: anyCached?.start_time,
-                end_time: anyCached?.end_time,
+                ...sectionMeta,
                 chartsState,
                 fileChecksum,
                 heatmapEnabled,
                 heatmapLoading,
-                onToggleHeatmap: async () => {
-                    heatmapEnabled = !heatmapEnabled;
-                    m.redraw();
-                },
+                onToggleHeatmap: toggleGlobalHeatmap,
             });
         }
 
@@ -433,6 +434,35 @@ const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
 
+const bootstrapCacheIfNeeded = () => {
+    if (Object.keys(sectionResponseCache).length > 0) return;
+
+    loadSection('overview').then((data) => {
+        if (data?.sections) preloadSections(data.sections);
+        m.redraw();
+    }).catch(() => {});
+};
+
+const buildClientOnlySectionView = (activeSection) => ({
+    view() {
+        const anyCached = Object.values(sectionResponseCache)[0];
+        const sections = anyCached?.sections || [];
+        return m(Main, {
+            activeSection,
+            groups: [],
+            sections,
+            source: anyCached?.source,
+            version: anyCached?.version,
+            filename: anyCached?.filename,
+            interval: anyCached?.interval,
+            filesize: anyCached?.filesize,
+            start_time: anyCached?.start_time,
+            end_time: anyCached?.end_time,
+            num_series: anyCached?.num_series,
+        });
+    },
+});
+
 // ---- File Upload Landing Page ----
 
 const FileUpload = {
@@ -620,90 +650,18 @@ function initDashboardRouter() {
                 }
 
                 if (params.section === 'systeminfo') {
-                    if (Object.keys(sectionResponseCache).length === 0) {
-                        loadSection('overview').then(() => {
-                            const d = sectionResponseCache['overview'];
-                            if (d?.sections) preloadSections(d.sections);
-                            m.redraw();
-                        }).catch(() => {});
-                    }
-                    return {
-                        view() {
-                            const anyCached = Object.values(sectionResponseCache)[0];
-                            const sections = anyCached?.sections || [];
-                            return m(Main, {
-                                activeSection: systemInfoSection,
-                                groups: [],
-                                sections,
-                                source: anyCached?.source,
-                                version: anyCached?.version,
-                                filename: anyCached?.filename,
-                                interval: anyCached?.interval,
-                                filesize: anyCached?.filesize,
-                                start_time: anyCached?.start_time,
-                                end_time: anyCached?.end_time,
-                                num_series: anyCached?.num_series,
-                            });
-                        },
-                    };
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(systemInfoSection);
                 }
 
                 if (params.section === 'selection') {
-                    if (Object.keys(sectionResponseCache).length === 0) {
-                        loadSection('overview').then(() => {
-                            const d = sectionResponseCache['overview'];
-                            if (d?.sections) preloadSections(d.sections);
-                            m.redraw();
-                        }).catch(() => {});
-                    }
-                    return {
-                        view() {
-                            const anyCached = Object.values(sectionResponseCache)[0];
-                            const sections = anyCached?.sections || [];
-                            return m(Main, {
-                                activeSection: selectionSection,
-                                groups: [],
-                                sections,
-                                source: anyCached?.source,
-                                version: anyCached?.version,
-                                filename: anyCached?.filename,
-                                interval: anyCached?.interval,
-                                filesize: anyCached?.filesize,
-                                start_time: anyCached?.start_time,
-                                end_time: anyCached?.end_time,
-                                num_series: anyCached?.num_series,
-                            });
-                        },
-                    };
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(selectionSection);
                 }
 
                 if (params.section === 'report') {
-                    if (Object.keys(sectionResponseCache).length === 0) {
-                        loadSection('overview').then(() => {
-                            const d = sectionResponseCache['overview'];
-                            if (d?.sections) preloadSections(d.sections);
-                            m.redraw();
-                        }).catch(() => {});
-                    }
-                    return {
-                        view() {
-                            const anyCached = Object.values(sectionResponseCache)[0];
-                            const sections = anyCached?.sections || [];
-                            return m(Main, {
-                                activeSection: reportSection,
-                                groups: [],
-                                sections,
-                                source: anyCached?.source,
-                                version: anyCached?.version,
-                                filename: anyCached?.filename,
-                                interval: anyCached?.interval,
-                                filesize: anyCached?.filesize,
-                                start_time: anyCached?.start_time,
-                                end_time: anyCached?.end_time,
-                                num_series: anyCached?.num_series,
-                            });
-                        },
-                    };
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(reportSection);
                 }
 
                 const cachedView = (sectionKey, path) => ({
