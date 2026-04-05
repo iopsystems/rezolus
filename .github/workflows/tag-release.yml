@@ -17,8 +17,8 @@ jobs:
   tag-release:
     name: Tag release and bump dev version
     runs-on: ubuntu-latest
-    # Only run if the commit message starts with "release: prepare v"
-    if: "${{ startsWith(github.event.head_commit.message, 'release: prepare v') }}"
+    # Only run on the upstream repo when the commit message starts with "release: prepare v"
+    if: "${{ github.repository == 'iopsystems/rezolus' && startsWith(github.event.head_commit.message, 'release: prepare v') }}"
 
     steps:
       - uses: actions/checkout@v4
