@@ -31,7 +31,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
 ];
 
 pub fn generate(data: Tsdb, filesize: Option<u64>) -> AppState {
-    let mut state = AppState::new(data);
+    let state = AppState::new(data);
 
     let all_sections: Vec<Section> = SECTION_META
         .iter()

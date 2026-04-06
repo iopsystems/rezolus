@@ -156,7 +156,7 @@ pub fn run(config: Config) {
             let file_checksum = compute_file_checksum(path);
 
             info!("Generating dashboards...");
-            let mut state = dashboard::generate(data, filesize);
+            let state = dashboard::generate(data, filesize);
             *state.parquet_path.write() = Some(path.clone());
             *state.systeminfo.write() = systeminfo;
             *state.selection.write() = selection;
@@ -792,7 +792,10 @@ async fn upload_parquet(
 
     {
         let mut tsdb = state.tsdb.write();
-        *tsdb = new_state.tsdb.into_inner();
+        *tsdb = Arc::try_unwrap(new_state.tsdb)
+            .ok()
+            .expect("no other references to new tsdb")
+            .into_inner();
     }
     {
         let mut sections = state.sections.write();
