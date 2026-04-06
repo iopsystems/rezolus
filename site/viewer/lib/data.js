@@ -1,7 +1,7 @@
 // Site viewer data wrapper.
 // Reuses src viewer data pipeline and overrides only transport/runtime behavior.
 
-import { createDataApi } from '../../../src/viewer/assets/lib/data.js';
+import { createDataApi } from './data_base.js';
 import { ViewerApi } from './viewer_api.js';
 
 const siteDataApi = createDataApi({
