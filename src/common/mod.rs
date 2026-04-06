@@ -11,11 +11,10 @@ include!(concat!(env!("OUT_DIR"), "/metric_descriptions.rs"));
 /// Uses the build-time extracted descriptions (platform-independent) as the
 /// base, then overlays any additional descriptions from the runtime registry.
 pub fn metric_descriptions() -> std::collections::HashMap<String, String> {
-    let mut descriptions: std::collections::HashMap<String, String> =
-        static_metric_descriptions()
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
+    let mut descriptions: std::collections::HashMap<String, String> = static_metric_descriptions()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     // Overlay runtime descriptions (may add metrics not in stats.rs files)
     for metric in metriken::metrics().iter() {
         if let Some(description) = metric.description() {
