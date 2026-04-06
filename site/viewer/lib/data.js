@@ -1,11 +1,11 @@
 // WASM-backed data layer — replaces HTTP fetch calls with direct WASM function calls.
 // The global `viewer` is set by script.js after parquet load.
+import { ViewerApi } from './viewer_api.js';
 
 let cachedMetadata = null;
 
 const fetchMetadata = async () => {
-    if (!window.viewer) throw new Error('No parquet file loaded');
-    const response = JSON.parse(window.viewer.metadata());
+    const response = await ViewerApi.getMetadata();
     if (response.status !== 'success') {
         throw new Error('Failed to get metadata');
     }
@@ -33,7 +33,6 @@ const substituteCgroupPattern = (query, pattern) => {
 
 // Execute a PromQL range query via WASM
 const executePromQLRangeQuery = async (query, metadata) => {
-    if (!window.viewer) throw new Error('No parquet file loaded');
     const meta = metadata || cachedMetadata || await fetchMetadata();
 
     const minTime = meta.minTime;
@@ -44,8 +43,7 @@ const executePromQLRangeQuery = async (query, metadata) => {
     const start = Math.max(minTime, maxTime - windowDuration);
     const step = Math.max(1, Math.floor(windowDuration / 500));
 
-    const result = JSON.parse(window.viewer.query_range(query, start, maxTime, step));
-    return result;
+    return ViewerApi.queryRange(query, start, maxTime, step);
 };
 
 // Apply a PromQL result to its plot, transforming into the chart data format.

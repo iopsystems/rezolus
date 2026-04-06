@@ -1,11 +1,13 @@
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
+import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
-import { generateSectionData, SECTIONS } from './dashboards.js';
+import { SaveModal } from './overlays.js';
+import { ViewerApi } from './viewer_api.js';
 
 // Viewer info — set after WASM parquet load
 let viewerInfo = null;
@@ -58,6 +60,7 @@ const Main = {
                     interval,
                 }),
             ]),
+            m(SaveModal),
         );
     },
 };
@@ -130,6 +133,38 @@ const SectionContent = {
             const leftGroups = attrs.groups.filter((g) => g.metadata?.side === 'left');
             const rightGroups = attrs.groups.filter((g) => g.metadata?.side === 'right');
 
+            // Pair cgroup charts by title so Aggregate and Individual stay aligned
+            // even if left/right groups differ in ordering or have missing metrics.
+            const leftPlots = leftGroups.flatMap((g) => g.plots || []);
+            const rightPlots = rightGroups.flatMap((g) => g.plots || []);
+            const rightByTitle = new Map(rightPlots.map((p) => [p.opts?.title, p]));
+            const paired = new Set();
+            const pairs = [];
+            for (const left of leftPlots) {
+                const title = left.opts?.title;
+                const right = rightByTitle.get(title);
+                if (right) paired.add(title);
+                pairs.push({ left, right: right || null });
+            }
+            // Append any right-side plots that had no left match
+            for (const right of rightPlots) {
+                if (!paired.has(right.opts?.title)) {
+                    pairs.push({ left: null, right });
+                }
+            }
+
+            const renderCgroupChart = (spec, label, legend) => {
+                if (!spec) return null;
+                const prefixedSpec = { ...spec, opts: { ...spec.opts }, noCollapse: true, compactGrid: true };
+                return m('div.cgroup-chart', [
+                    m('span.cgroup-chart-label', label),
+                    m('div.chart-wrapper', [
+                        m(Chart, { spec: prefixedSpec, chartsState, interval }),
+                    ]),
+                    legend,
+                ]);
+            };
+
             return m('div#section-content.cgroups-section', [
                 m('h1.section-title', titleText),
                 m(CgroupSelector, {
@@ -139,18 +174,34 @@ const SectionContent = {
                     substitutePattern: substituteCgroupPattern,
                     setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
                 }),
-                m('div.cgroup-columns', [
-                    m('div.cgroup-column.cgroup-column-left',
-                        leftGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
-                        ),
-                    ),
-                    m('div.cgroup-column.cgroup-column-right',
-                        rightGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
-                        ),
-                    ),
-                ]),
+                m('div.cgroup-pairs',
+                    pairs.map((pair) => {
+                        const title = pair.left?.opts?.title || pair.right?.opts?.title || '';
+                        const description = pair.left?.opts?.description || pair.right?.opts?.description;
+                        // Extract series names from the individual (multi) chart for the legend
+                        const seriesNames = pair.right?.series_names || [];
+                        const legend = seriesNames.length > 0 && m('div.cgroup-pair-legend',
+                            seriesNames.map((name) =>
+                                m('span.cgroup-legend-item', [
+                                    m('span.cgroup-legend-swatch', {
+                                        style: { background: globalColorMapper.getColorByName(name) },
+                                    }),
+                                    name,
+                                ]),
+                            ),
+                        );
+                        return m('div.cgroup-pair', [
+                            m('div.cgroup-pair-header', [
+                                m('span.chart-title', title),
+                                description && m('span.chart-subtitle', description),
+                            ]),
+                            m('div.cgroup-pair-charts', [
+                                renderCgroupChart(pair.left, 'Aggregate'),
+                                renderCgroupChart(pair.right, 'Individual', legend),
+                            ]),
+                        ]);
+                    }),
+                ),
             ]);
         }
 
@@ -411,7 +462,7 @@ const loadSection = async (sectionKey) => {
     if (sectionResponseCache[sectionKey]) return sectionResponseCache[sectionKey];
     if (!viewerInfo) return null;
 
-    const data = generateSectionData(sectionKey, viewerInfo);
+    const data = await ViewerApi.getSection(sectionKey);
     if (!data) return null;
 
     const processedData = await processDashboardData(data, activeCgroupPattern);
@@ -536,24 +587,20 @@ async function loadDemo() {
         const wasmModule = await import('../pkg/wasm_viewer.js');
         await wasmModule.default();
         window.viewer = new wasmModule.Viewer(data, 'demo.parquet');
+        ViewerApi.setViewer(window.viewer);
 
         viewerInfo = JSON.parse(window.viewer.info());
+        ViewerApi.setViewerInfo(viewerInfo);
 
-        const sysinfo = window.viewer.systeminfo();
-        if (sysinfo) {
-            try { systemInfoData = JSON.parse(sysinfo); } catch { /* ignore */ }
-        }
+        try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
 
-        const selection = window.viewer.selection();
-        if (selection) {
-            try {
-                const parsed = JSON.parse(selection);
-                if (parsed && Array.isArray(parsed.entries)) {
-                    loadPayloadIntoStore(reportStore, parsed);
-                    reportStore.loadedFrom = 'embedded report';
-                }
-            } catch { /* ignore */ }
-        }
+        try {
+            const parsed = await ViewerApi.getSelection();
+            if (parsed && Array.isArray(parsed.entries)) {
+                loadPayloadIntoStore(reportStore, parsed);
+                reportStore.loadedFrom = 'embedded report';
+            }
+        } catch { /* ignore */ }
 
         window._loading = false;
         initDashboardRouter();
@@ -576,24 +623,20 @@ async function loadFile(file) {
         const wasmModule = await import('../pkg/wasm_viewer.js');
         await wasmModule.default(); // load the WASM binary
         window.viewer = new wasmModule.Viewer(data, file.name);
+        ViewerApi.setViewer(window.viewer);
 
         viewerInfo = JSON.parse(window.viewer.info());
+        ViewerApi.setViewerInfo(viewerInfo);
 
-        const sysinfo = window.viewer.systeminfo();
-        if (sysinfo) {
-            try { systemInfoData = JSON.parse(sysinfo); } catch { /* ignore */ }
-        }
+        try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
 
-        const selection = window.viewer.selection();
-        if (selection) {
-            try {
-                const parsed = JSON.parse(selection);
-                if (parsed && Array.isArray(parsed.entries)) {
-                    loadPayloadIntoStore(reportStore, parsed);
-                    reportStore.loadedFrom = 'embedded report';
-                }
-            } catch { /* ignore */ }
-        }
+        try {
+            const parsed = await ViewerApi.getSelection();
+            if (parsed && Array.isArray(parsed.entries)) {
+                loadPayloadIntoStore(reportStore, parsed);
+                reportStore.loadedFrom = 'embedded report';
+            }
+        } catch { /* ignore */ }
 
         window._loading = false;
 

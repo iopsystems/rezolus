@@ -7,6 +7,7 @@ import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
+import { ViewerApi } from './viewer_api.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
@@ -23,7 +24,7 @@ let fileChecksum = null;
 let recording = true;
 
 // Detect live mode on startup
-m.request({ method: 'GET', url: '/api/v1/mode', withCredentials: true })
+ViewerApi.getMode()
     .then((response) => {
         liveMode = response.live === true;
         if (liveMode) {
@@ -33,7 +34,7 @@ m.request({ method: 'GET', url: '/api/v1/mode', withCredentials: true })
     .catch(() => { /* ignore - assume file mode */ });
 
 // Fetch file checksum from metadata endpoint
-m.request({ method: 'GET', url: '/api/v1/metadata', withCredentials: true })
+ViewerApi.getMetadata()
     .then((response) => {
         if (response.status === 'success' && response.data?.fileChecksum) {
             fileChecksum = response.data.fileChecksum;
@@ -42,12 +43,12 @@ m.request({ method: 'GET', url: '/api/v1/metadata', withCredentials: true })
     .catch(() => { /* ignore */ });
 
 // Fetch system info (available when parquet has embedded systeminfo metadata)
-m.request({ method: 'GET', url: '/api/v1/systeminfo', withCredentials: true })
+ViewerApi.getSystemInfo()
     .then((data) => { systemInfoData = data; })
     .catch(() => { /* no systeminfo available */ });
 
 // Fetch saved selection from parquet metadata → load into Report store
-m.request({ method: 'GET', url: '/api/v1/selection', withCredentials: true })
+ViewerApi.getSelection()
     .then((data) => {
         if (data && Array.isArray(data.entries)) {
             loadPayloadIntoStore(reportStore, data);
@@ -60,7 +61,7 @@ m.request({ method: 'GET', url: '/api/v1/selection', withCredentials: true })
 const startRecording = async () => {
     try {
         // Clear TSDB so the new recording has no gaps
-        await m.request({ method: 'POST', url: '/api/v1/reset', withCredentials: true, background: true });
+        await ViewerApi.reset();
         // Clear frontend caches
         Object.keys(sectionResponseCache).forEach(k => delete sectionResponseCache[k]);
         heatmapDataCache.clear();
@@ -80,7 +81,7 @@ const saveCapture = async () => {
     const filename = await showSaveModal('rezolus-capture', '.parquet');
     if (!filename) return;
     const a = document.createElement('a');
-    a.href = '/api/v1/save';
+    a.href = ViewerApi.saveUrl();
     a.download = filename;
     document.body.appendChild(a);
     a.click();
@@ -577,12 +578,7 @@ const preloadSection = async (section) => {
         return Promise.resolve();
     }
 
-    const url = `/data/${section}.json`;
-    const data = await m.request({
-        method: 'GET',
-        url,
-        withCredentials: true,
-    });
+    const data = await ViewerApi.getSection(section);
 
     const processedData = await processDashboardData(data, activeCgroupPattern);
     sectionResponseCache[section] = processedData;
@@ -618,8 +614,7 @@ const refreshCurrentSection = async () => {
 
     liveRefreshInProgress = true;
     try {
-        const url = `/data/${section}.json`;
-        const data = await m.request({ method: 'GET', url, withCredentials: true, background: true });
+        const data = await ViewerApi.getSection(section, true);
 
         // Run regular queries and histogram heatmap queries concurrently
         const promises = [processDashboardData(data, activeCgroupPattern)];
@@ -708,8 +703,7 @@ m.route(document.body, '/overview', {
                 return makeSingleChartView();
             }
 
-            const url = `/data/${sectionKey}.json`;
-            return m.request({ method: 'GET', url, withCredentials: true })
+            return ViewerApi.getSection(sectionKey)
                 .then(async (data) => {
                     const processedData = await processDashboardData(data, activeCgroupPattern);
                     sectionResponseCache[sectionKey] = processedData;
@@ -774,13 +768,7 @@ m.route(document.body, '/overview', {
                 return cachedView(params.section, requestedPath);
             }
 
-            const url = `/data/${params.section}.json`;
-            return m
-                .request({
-                    method: 'GET',
-                    url,
-                    withCredentials: true,
-                })
+            return ViewerApi.getSection(params.section)
                 .then(async (data) => {
 
                     // Process PromQL queries for this section

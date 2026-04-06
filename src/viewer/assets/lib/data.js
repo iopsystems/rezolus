@@ -1,13 +1,10 @@
+import { ViewerApi } from './viewer_api.js';
+
 // Fetch time range metadata from the backend (cached per refresh cycle)
 let cachedMetadata = null;
 
 const fetchMetadata = async () => {
-    const metadataResponse = await m.request({
-        method: 'GET',
-        url: '/api/v1/metadata',
-        withCredentials: true,
-        background: true, // Prevent auto-redraw during refresh
-    });
+    const metadataResponse = await ViewerApi.getMetadata();
 
     if (metadataResponse.status !== 'success') {
         throw new Error('Failed to get metadata');
@@ -55,14 +52,7 @@ const executePromQLRangeQuery = async (query, metadata) => {
     // Target ~500 data points for good LTTB downsampling in the frontend
     const step = Math.max(1, Math.floor(windowDuration / 500));
 
-    const url = `/api/v1/query_range?query=${encodeURIComponent(query)}&start=${start}&end=${maxTime}&step=${step}`;
-
-    return m.request({
-        method: 'GET',
-        url,
-        withCredentials: true,
-        background: true, // Prevent auto-redraw during refresh
-    });
+    return ViewerApi.queryRange(query, start, maxTime, step);
 };
 
 // Apply a PromQL result to its plot, transforming into the chart data format.
