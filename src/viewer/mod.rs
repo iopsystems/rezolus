@@ -1143,7 +1143,7 @@ pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::
 
     // Extract the shared sections list from the first entry and write it once.
     let mut sections_written = false;
-    for (key, json) in &state.sections {
+    for (key, json) in state.sections.read().iter() {
         let mut value: serde_json::Value = serde_json::from_str(json)?;
 
         if !sections_written {
