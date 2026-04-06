@@ -105,15 +105,7 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     extra,
 });
 
-const Main = createMainComponent({
-    TopNav,
-    Sidebar,
-    SaveModal,
-    SectionContent,
-    sectionResponseCache,
-    getHasSystemInfo: () => systemInfoData,
-    buildAttrs: topNavAttrs,
-});
+let Main;
 
 const toggleGlobalHeatmap = async () => {
     heatmapEnabled = !heatmapEnabled;
@@ -239,6 +231,16 @@ const SectionContent = {
     },
 };
 
+
+Main = createMainComponent({
+    TopNav,
+    Sidebar,
+    SaveModal,
+    SectionContent,
+    sectionResponseCache,
+    getHasSystemInfo: () => systemInfoData,
+    buildAttrs: topNavAttrs,
+});
 const SystemInfoView = createSystemInfoView({
     CpuTopology,
     formatBytes: formatSize,
