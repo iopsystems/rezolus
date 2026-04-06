@@ -9,6 +9,7 @@ import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIn
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, renderCgroupSection } from './script_shared.js';
+import { buildTopNavAttrs, createMainComponent } from './navigation_shared.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
@@ -91,54 +92,28 @@ const saveCapture = async () => {
 };
 
 // Build common TopNav attrs from section data. Pass extra to override/add fields.
-const topNavAttrs = (data, sectionRoute, extra) => ({
+const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
+    data,
     sectionRoute,
-    groups: data.groups,
-    filename: data.filename,
-    source: data.source,
-    version: data.version,
-    interval: data.interval,
-    filesize: data.filesize,
-    num_series: data.num_series,
+    chartsState,
+    fileChecksum,
     liveMode,
     recording,
-    fileChecksum,
     onStartRecording: startRecording,
     onStopRecording: stopRecording,
     onSaveCapture: saveCapture,
-    chartsState,
-    ...extra,
+    extra,
 });
 
-// Main component
-const Main = {
-    view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series },
-    }) {
-        return m(
-            'div',
-            m(TopNav, topNavAttrs(
-                { groups, filename, source, version, interval, filesize, num_series },
-                activeSection?.route,
-                { start_time, end_time },
-            )),
-            m('main', [
-                m(Sidebar, {
-                    activeSection,
-                    sections,
-                    sectionResponseCache,
-                    hasSystemInfo: !!systemInfoData,
-                }),
-                m(SectionContent, {
-                    section: activeSection,
-                    groups,
-                    interval,
-                }),
-            ]),
-            m(SaveModal),
-        );
-    },
-};
+const Main = createMainComponent({
+    TopNav,
+    Sidebar,
+    SaveModal,
+    SectionContent,
+    sectionResponseCache,
+    getHasSystemInfo: () => systemInfoData,
+    buildAttrs: topNavAttrs,
+});
 
 const toggleGlobalHeatmap = async () => {
     heatmapEnabled = !heatmapEnabled;

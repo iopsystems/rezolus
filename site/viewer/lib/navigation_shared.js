@@ -1,0 +1,1 @@
+../../../src/viewer/assets/lib/navigation_shared.js
