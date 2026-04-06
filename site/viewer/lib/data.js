@@ -15,18 +15,20 @@ const fetchMetadata = async () => {
 /**
  * Substitute __SELECTED_CGROUPS__ in a PromQL query.
  *
- * When a pattern is provided, both =~ and !~ matchers get the pattern
- * substituted — the PromQL engine supports !~ natively.
- *
- * When no pattern is provided (no selection), !~ matchers are stripped
- * so aggregate queries show all data.
+ * - For =~ (positive match): replaces the placeholder with the pattern.
+ * - For !~ (negative match): strip the entire matcher so aggregate charts
+ *   show total data rather than "total minus selected".
+ * - When pattern is null (no selection): =~ matchers remain and yield empty
+ *   (for individual charts), while stripped !~ paths continue to show aggregate.
  */
 const substituteCgroupPattern = (query, pattern) => {
+    // Strip !~ matchers entirely.
+    query = query.replace(/,?\s*name!~"[^"]*"/g, '');
+    // Clean up empty braces left behind: metric{} -> metric
+    query = query.replace(/\{\s*\}/g, '');
+
     if (pattern) {
         query = query.replace(/__SELECTED_CGROUPS__/g, pattern);
-    } else {
-        query = query.replace(/,?\s*name!~"[^"]*"/g, '');
-        query = query.replace(/\{\s*\}/g, '');
     }
     return query;
 };

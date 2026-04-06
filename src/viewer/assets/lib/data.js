@@ -17,15 +17,13 @@ const fetchMetadata = async () => {
  * Substitute __SELECTED_CGROUPS__ in a PromQL query.
  *
  * - For =~ (positive match): replaces the placeholder with the pattern.
- * - For !~ (negative match): the PromQL engine doesn't support !~, so
- *   the entire label matcher is stripped. This means aggregate charts
- *   show the total rather than "total minus selected".
- * - When pattern is null (no selection): =~ matchers are left as-is
- *   (query will return empty), !~ matchers are stripped (query returns all).
+ * - For !~ (negative match): strip the entire matcher so aggregate charts
+ *   show total data rather than "total minus selected".
+ * - When pattern is null (no selection): =~ matchers remain and yield empty
+ *   (for individual charts), while stripped !~ paths continue to show aggregate.
  */
 const substituteCgroupPattern = (query, pattern) => {
-    // Strip !~ matchers entirely — the engine can't handle them.
-    // Match patterns like: {name!~"..."} or ,name!~"..."  within braces.
+    // Strip !~ matchers entirely.
     query = query.replace(/,?\s*name!~"[^"]*"/g, '');
     // Clean up empty braces left behind: metric{} -> metric
     query = query.replace(/\{\s*\}/g, '');
@@ -194,9 +192,10 @@ const processDashboardData = async (data, activeCgroupPattern) => {
                 // Skip cgroup placeholder queries when there's no active
                 // selection — they'll either parse-error (!~) or return
                 // empty results (=~), wasting a round-trip.
+                let queryToRun = plot.promql_query;
                 if (plot.promql_query.includes('__SELECTED_CGROUPS__')) {
                     if (activeCgroupPattern) {
-                        plot.promql_query = substituteCgroupPattern(
+                        queryToRun = substituteCgroupPattern(
                             plot.promql_query,
                             activeCgroupPattern,
                         );
@@ -205,7 +204,7 @@ const processDashboardData = async (data, activeCgroupPattern) => {
                         // data (strip the !~ matcher), individual queries
                         // (=~) have nothing to show.
                         if (plot.promql_query.includes('!~')) {
-                            plot.promql_query = substituteCgroupPattern(
+                            queryToRun = substituteCgroupPattern(
                                 plot.promql_query,
                                 null,
                             );
@@ -214,21 +213,21 @@ const processDashboardData = async (data, activeCgroupPattern) => {
                         }
                     }
                 }
-                queryPlots.push(plot);
+                queryPlots.push({ plot, query: queryToRun });
             }
         }
     }
 
     // Fire all queries concurrently
     const results = await Promise.allSettled(
-        queryPlots.map((plot) =>
-            executePromQLRangeQuery(plot.promql_query, metadata),
+        queryPlots.map(({ query }) =>
+            executePromQLRangeQuery(query, metadata),
         ),
     );
 
     // Apply results to their plots
     for (let i = 0; i < queryPlots.length; i++) {
-        const plot = queryPlots[i];
+        const { plot } = queryPlots[i];
         const outcome = results[i];
         if (outcome.status === 'fulfilled') {
             applyResultToPlot(plot, outcome.value);
