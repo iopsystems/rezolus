@@ -1,11 +1,15 @@
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
+import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
-import { generateSectionData, SECTIONS } from './dashboards.js';
+import { SaveModal } from './overlays.js';
+import { ViewerApi } from './viewer_api.js';
+import { createSystemInfoView, renderCgroupSection } from './section_views.js';
+import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 
 // Viewer info — set after WASM parquet load
 let viewerInfo = null;
@@ -17,50 +21,17 @@ let systemInfoData = null;
 let fileChecksum = null;
 
 // Build TopNav attrs from section data.
-const topNavAttrs = (data, sectionRoute, extra) => ({
+const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
+    data,
     sectionRoute,
-    groups: data.groups,
-    filename: data.filename,
-    source: data.source,
-    version: data.version,
-    interval: data.interval,
-    filesize: data.filesize,
-    num_series: data.num_series,
+    chartsState,
+    fileChecksum,
     liveMode: false,
     recording: false,
-    fileChecksum,
-    chartsState,
-    ...extra,
+    extra,
 });
 
-// Main component
-const Main = {
-    view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series },
-    }) {
-        return m(
-            'div',
-            m(TopNav, topNavAttrs(
-                { groups, filename, source, version, interval, filesize, num_series },
-                activeSection?.route,
-                { start_time, end_time },
-            )),
-            m('main', [
-                m(Sidebar, {
-                    activeSection,
-                    sections,
-                    sectionResponseCache,
-                    hasSystemInfo: !!systemInfoData,
-                }),
-                m(SectionContent, {
-                    section: activeSection,
-                    groups,
-                    interval,
-                }),
-            ]),
-        );
-    },
-};
+let Main;
 
 const toggleGlobalHeatmap = async () => {
     heatmapEnabled = !heatmapEnabled;
@@ -127,31 +98,19 @@ const SectionContent = {
         const titleText = `${sectionName} (${withData})`;
 
         if (attrs.section.route === '/cgroups') {
-            const leftGroups = attrs.groups.filter((g) => g.metadata?.side === 'left');
-            const rightGroups = attrs.groups.filter((g) => g.metadata?.side === 'right');
-
-            return m('div#section-content.cgroups-section', [
-                m('h1.section-title', titleText),
-                m(CgroupSelector, {
-                    groups: attrs.groups,
-                    executeQuery: executePromQLRangeQuery,
-                    applyResultToPlot: applyResultToPlot,
-                    substitutePattern: substituteCgroupPattern,
-                    setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
-                }),
-                m('div.cgroup-columns', [
-                    m('div.cgroup-column.cgroup-column-left',
-                        leftGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
-                        ),
-                    ),
-                    m('div.cgroup-column.cgroup-column-right',
-                        rightGroups.map((group) =>
-                            m(Group, { ...group, sectionRoute, sectionName, interval, noCollapse: true }),
-                        ),
-                    ),
-                ]),
-            ]);
+            return renderCgroupSection({
+                attrs,
+                titleText,
+                interval,
+                chartsState,
+                Chart,
+                CgroupSelector,
+                executePromQLRangeQuery,
+                applyResultToPlot,
+                substituteCgroupPattern,
+                setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
+                globalColorMapper,
+            });
         }
 
         const hasLocalZoom = chartsState.zoomSource === 'local' && !chartsState.isDefaultZoom();
@@ -193,6 +152,18 @@ const SectionContent = {
     },
 };
 
+
+const sectionResponseCache = {};
+
+Main = createMainComponent({
+    TopNav,
+    Sidebar,
+    SaveModal,
+    SectionContent,
+    sectionResponseCache,
+    getHasSystemInfo: () => systemInfoData,
+    buildAttrs: topNavAttrs,
+});
 // System Info display component
 const formatBytes = (bytes) => {
     if (!bytes) return '';
@@ -202,96 +173,10 @@ const formatBytes = (bytes) => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 };
 
-const SystemInfoView = {
-    view({ attrs }) {
-        const info = attrs.data;
-        if (!info) {
-            return m('div.systeminfo-section', [
-                m('h1.section-title', 'System Info'),
-                m('p.systeminfo-empty', 'No system information available in this recording.'),
-            ]);
-        }
-
-        const rows = (items) => items
-            .filter(([, v]) => v != null && v !== '')
-            .map(([label, value]) => m('tr', [
-                m('td.sysinfo-label', label),
-                m('td.sysinfo-value', String(value)),
-            ]));
-
-        const table = (title, items) => {
-            const filtered = items.filter(([, v]) => v != null && v !== '');
-            if (filtered.length === 0) return null;
-            return m('div.sysinfo-group', [
-                m('h2.sysinfo-group-title', title),
-                m('table.sysinfo-table', m('tbody', rows(items))),
-            ]);
-        };
-
-        return m('div.systeminfo-section', [
-            m('h1.section-title', 'System Info'),
-            m(CpuTopology, { data: info }),
-            m('div.sysinfo-grid', [
-                table('System', [
-                    ['Hostname', info.hostname],
-                    ['OS', info.os],
-                    ['Kernel', info.kernel],
-                    ['Architecture', info.arch],
-                ]),
-                table('CPU', [
-                    ['Model', info.cpu_model],
-                    ['Vendor', info.cpu_vendor],
-                    ['Logical CPUs', info.cpus],
-                    ['Physical Cores', info.cores],
-                    ['Packages', info.packages],
-                    ['SMT', info.smt != null ? (info.smt ? 'Enabled' : 'Disabled') : null],
-                ]),
-                table('Memory', [
-                    ['Total', formatBytes(info.memory_total_bytes)],
-                    ['NUMA Nodes', info.numa_nodes],
-                ]),
-                info.caches && info.caches.length > 0 && m('div.sysinfo-group', [
-                    m('h2.sysinfo-group-title', 'Cache Topology'),
-                    m('table.sysinfo-table', m('tbody',
-                        info.caches.map((c) => m('tr', [
-                            m('td.sysinfo-label', c.level),
-                            m('td.sysinfo-value', [c.size || '', c.instances > 1 ? ` x ${c.instances}` : ''].join('')),
-                        ])),
-                    )),
-                ]),
-                info.nics && info.nics.length > 0 && m('div.sysinfo-group', [
-                    m('h2.sysinfo-group-title', 'Network Interfaces'),
-                    m('table.sysinfo-table', m('tbody',
-                        info.nics.map((nic) => m('tr', [
-                            m('td.sysinfo-label', nic.name),
-                            m('td.sysinfo-value', [
-                                nic.speed ? `${nic.speed} Mbps` : '',
-                                nic.driver ? ` (${nic.driver})` : '',
-                                nic.numa_node != null ? ` NUMA ${nic.numa_node}` : '',
-                            ].join('')),
-                        ])),
-                    )),
-                ]),
-                info.gpus && info.gpus.length > 0 && m('div.sysinfo-group', [
-                    m('h2.sysinfo-group-title', 'GPUs'),
-                    m('table.sysinfo-table', m('tbody',
-                        info.gpus.map((gpu) => m('tr', [
-                            m('td.sysinfo-label', gpu.name || gpu.vendor),
-                            m('td.sysinfo-value', [
-                                gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : '',
-                                gpu.driver ? ` (${gpu.driver})` : '',
-                            ].join('')),
-                        ])),
-                    )),
-                ]),
-            ]),
-            m('div.sysinfo-raw', [
-                m('h2.sysinfo-group-title', 'Raw JSON'),
-                m('pre.sysinfo-json', JSON.stringify(info, null, 2)),
-            ]),
-        ]);
-    },
-};
+const SystemInfoView = createSystemInfoView({
+    CpuTopology,
+    formatBytes,
+});
 
 let activeCgroupPattern = null;
 let heatmapEnabled = false;
@@ -404,14 +289,13 @@ document.addEventListener('dblclick', () => {
     }
 });
 
-const sectionResponseCache = {};
 
 // Load a section: generate dashboard data from JS definitions, then run PromQL via WASM.
 const loadSection = async (sectionKey) => {
     if (sectionResponseCache[sectionKey]) return sectionResponseCache[sectionKey];
     if (!viewerInfo) return null;
 
-    const data = generateSectionData(sectionKey, viewerInfo);
+    const data = await ViewerApi.getSection(sectionKey);
     if (!data) return null;
 
     const processedData = await processDashboardData(data, activeCgroupPattern);
@@ -536,24 +420,20 @@ async function loadDemo() {
         const wasmModule = await import('../pkg/wasm_viewer.js');
         await wasmModule.default();
         window.viewer = new wasmModule.Viewer(data, 'demo.parquet');
+        ViewerApi.setViewer(window.viewer);
 
         viewerInfo = JSON.parse(window.viewer.info());
+        ViewerApi.setViewerInfo(viewerInfo);
 
-        const sysinfo = window.viewer.systeminfo();
-        if (sysinfo) {
-            try { systemInfoData = JSON.parse(sysinfo); } catch { /* ignore */ }
-        }
+        try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
 
-        const selection = window.viewer.selection();
-        if (selection) {
-            try {
-                const parsed = JSON.parse(selection);
-                if (parsed && Array.isArray(parsed.entries)) {
-                    loadPayloadIntoStore(reportStore, parsed);
-                    reportStore.loadedFrom = 'embedded report';
-                }
-            } catch { /* ignore */ }
-        }
+        try {
+            const parsed = await ViewerApi.getSelection();
+            if (parsed && Array.isArray(parsed.entries)) {
+                loadPayloadIntoStore(reportStore, parsed);
+                reportStore.loadedFrom = 'embedded report';
+            }
+        } catch { /* ignore */ }
 
         window._loading = false;
         initDashboardRouter();
@@ -576,24 +456,20 @@ async function loadFile(file) {
         const wasmModule = await import('../pkg/wasm_viewer.js');
         await wasmModule.default(); // load the WASM binary
         window.viewer = new wasmModule.Viewer(data, file.name);
+        ViewerApi.setViewer(window.viewer);
 
         viewerInfo = JSON.parse(window.viewer.info());
+        ViewerApi.setViewerInfo(viewerInfo);
 
-        const sysinfo = window.viewer.systeminfo();
-        if (sysinfo) {
-            try { systemInfoData = JSON.parse(sysinfo); } catch { /* ignore */ }
-        }
+        try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
 
-        const selection = window.viewer.selection();
-        if (selection) {
-            try {
-                const parsed = JSON.parse(selection);
-                if (parsed && Array.isArray(parsed.entries)) {
-                    loadPayloadIntoStore(reportStore, parsed);
-                    reportStore.loadedFrom = 'embedded report';
-                }
-            } catch { /* ignore */ }
-        }
+        try {
+            const parsed = await ViewerApi.getSelection();
+            if (parsed && Array.isArray(parsed.entries)) {
+                loadPayloadIntoStore(reportStore, parsed);
+                reportStore.loadedFrom = 'embedded report';
+            }
+        } catch { /* ignore */ }
 
         window._loading = false;
 
