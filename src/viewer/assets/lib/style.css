@@ -467,6 +467,27 @@ body::after {
     color: var(--accent);
 }
 
+#topnav .transport-btn.upload-btn {
+    width: auto;
+    height: 32px;
+    padding: 0 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    border: 1px solid var(--border-default);
+    background: var(--bg-tertiary);
+    color: var(--fg-secondary);
+}
+
+#topnav .transport-btn.upload-btn {
+    margin-left: 0.5rem;
+}
+
+#topnav .transport-btn.upload-btn:hover {
+    color: var(--fg);
+    border-color: var(--accent-muted);
+}
+
 #topnav .topnav-actions .transport-btn.import-btn span {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -601,6 +622,7 @@ main {
     color: var(--fg-secondary);
     display: flex;
     align-items: center;
+    margin-left: 0.75rem;
 }
 
 #sidebar .query-explorer-link .arrow {
@@ -2024,6 +2046,10 @@ main {
 
 .selection-link {
     font-weight: 600 !important;
+}
+
+.report-link {
+    color: var(--success) !important;
 }
 
 /* Report metadata */

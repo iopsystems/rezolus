@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(not(feature = "developer-mode"))]
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
@@ -20,6 +19,7 @@ use tower_livereload::LiveReloadLayer;
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::Path;
 
 #[cfg(feature = "developer-mode")]
 use notify::Watcher;
@@ -146,79 +146,21 @@ pub fn run(config: Config) {
 
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
-            // Extract metadata from parquet file-level key-value pairs
-            let (systeminfo, selection) = {
-                use parquet::file::reader::FileReader;
-                use parquet::file::serialized_reader::SerializedFileReader;
-                std::fs::File::open(path)
-                    .ok()
-                    .and_then(|f| {
-                        let reader = SerializedFileReader::new(f).ok()?;
-                        let kv = reader.metadata().file_metadata().key_value_metadata()?;
-                        let sysinfo = kv
-                            .iter()
-                            .find(|kv| kv.key == "systeminfo")
-                            .and_then(|kv| kv.value.clone());
-                        let sel = kv
-                            .iter()
-                            .find(|kv| kv.key == "selection")
-                            .and_then(|kv| kv.value.clone());
-                        Some((sysinfo, sel))
-                    })
-                    .unwrap_or((None, None))
-            };
+            let (systeminfo, selection) = extract_parquet_metadata(path);
 
             // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
             // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
             // We hash only [0, file_size - 8 - footer_len) so the checksum is stable
             // regardless of key-value metadata changes (e.g. selection annotations).
-            let file_checksum = {
-                use sha2::{Digest, Sha256};
-                use std::io::{Read, Seek, SeekFrom};
-                info!("Computing file checksum...");
-                (|| -> Option<String> {
-                    let mut f = std::fs::File::open(path).ok()?;
-                    let file_len = f.metadata().ok()?.len();
-                    if file_len < 12 {
-                        return None;
-                    } // too small to be valid parquet
-
-                    // Read footer length from last 8 bytes (4B footer_len + 4B magic)
-                    f.seek(SeekFrom::End(-8)).ok()?;
-                    let mut tail = [0u8; 4];
-                    f.read_exact(&mut tail).ok()?;
-                    let footer_len = u32::from_le_bytes(tail) as u64;
-                    let data_end = file_len.checked_sub(8 + footer_len)?;
-
-                    // Hash only the data portion
-                    f.seek(SeekFrom::Start(0)).ok()?;
-                    let mut hasher = Sha256::new();
-                    let mut buf = [0u8; 64 * 1024];
-                    let mut remaining = data_end;
-                    while remaining > 0 {
-                        let to_read = (remaining as usize).min(buf.len());
-                        match f.read(&mut buf[..to_read]) {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                hasher.update(&buf[..n]);
-                                remaining -= n as u64;
-                            }
-                            Err(e) => {
-                                warn!("failed to read file for checksum: {e}");
-                                return None;
-                            }
-                        }
-                    }
-                    Some(format!("{:x}", hasher.finalize()))
-                })()
-            };
+            info!("Computing file checksum...");
+            let file_checksum = compute_file_checksum(path);
 
             info!("Generating dashboards...");
             let mut state = dashboard::generate(data, filesize);
-            state.parquet_path = Some(path.clone());
-            state.systeminfo = systeminfo;
-            state.selection = selection;
-            state.file_checksum = file_checksum;
+            *state.parquet_path.write() = Some(path.clone());
+            *state.systeminfo.write() = systeminfo;
+            *state.selection.write() = selection;
+            *state.file_checksum.write() = file_checksum;
             state
         }
         Source::Live(url) => {
@@ -278,7 +220,7 @@ pub fn run(config: Config) {
             let mut state = dashboard::generate(tsdb, None);
             state.live = true;
 
-            state.systeminfo = agent_systeminfo;
+            *state.systeminfo.write() = agent_systeminfo;
 
             // Spawn the ingest loop
             let ingest_tsdb = state.tsdb.clone();
@@ -437,19 +379,19 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
 }
 
 struct AppState {
-    sections: HashMap<String, String>,
+    sections: parking_lot::RwLock<HashMap<String, String>>,
     tsdb: Arc<parking_lot::RwLock<Tsdb>>,
     /// Raw msgpack snapshot bytes for parquet export (live mode only).
     snapshots: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
     live: bool,
     /// Original parquet file path (file mode only).
-    parquet_path: Option<std::path::PathBuf>,
+    parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
     /// Serialized SystemSummary JSON from parquet metadata or live system.
-    systeminfo: Option<String>,
+    systeminfo: parking_lot::RwLock<Option<String>>,
     /// Serialized selection JSON from parquet metadata.
-    selection: Option<String>,
+    selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
-    file_checksum: Option<String>,
+    file_checksum: parking_lot::RwLock<Option<String>>,
 }
 
 impl AppState {
@@ -459,12 +401,69 @@ impl AppState {
             tsdb: Arc::new(parking_lot::RwLock::new(tsdb)),
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: false,
-            parquet_path: None,
-            systeminfo: None,
-            selection: None,
-            file_checksum: None,
+            parquet_path: parking_lot::RwLock::new(None),
+            systeminfo: parking_lot::RwLock::new(None),
+            selection: parking_lot::RwLock::new(None),
+            file_checksum: parking_lot::RwLock::new(None),
         }
     }
+}
+
+fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    std::fs::File::open(path)
+        .ok()
+        .and_then(|f| {
+            let reader = SerializedFileReader::new(f).ok()?;
+            let kv = reader.metadata().file_metadata().key_value_metadata()?;
+            let sysinfo = kv
+                .iter()
+                .find(|kv| kv.key == "systeminfo")
+                .and_then(|kv| kv.value.clone());
+            let sel = kv
+                .iter()
+                .find(|kv| kv.key == "selection")
+                .and_then(|kv| kv.value.clone());
+            Some((sysinfo, sel))
+        })
+        .unwrap_or((None, None))
+}
+
+fn compute_file_checksum(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom};
+    (|| -> Option<String> {
+        let mut f = std::fs::File::open(path).ok()?;
+        let file_len = f.metadata().ok()?.len();
+        if file_len < 12 {
+            return None;
+        }
+        f.seek(SeekFrom::End(-8)).ok()?;
+        let mut tail = [0u8; 4];
+        f.read_exact(&mut tail).ok()?;
+        let footer_len = u32::from_le_bytes(tail) as u64;
+        let data_end = file_len.checked_sub(8 + footer_len)?;
+        f.seek(SeekFrom::Start(0)).ok()?;
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 64 * 1024];
+        let mut remaining = data_end;
+        while remaining > 0 {
+            let to_read = (remaining as usize).min(buf.len());
+            match f.read(&mut buf[..to_read]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    hasher.update(&buf[..n]);
+                    remaining -= n as u64;
+                }
+                Err(e) => {
+                    warn!("failed to read file for checksum: {e}");
+                    return None;
+                }
+            }
+        }
+        Some(format!("{:x}", hasher.finalize()))
+    })()
 }
 
 fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
@@ -483,6 +482,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/save", get(save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
+        .route("/upload", axum::routing::post(upload_parquet))
         .route(
             "/save_with_selection",
             axum::routing::post(save_with_selection),
@@ -540,7 +540,8 @@ async fn data(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    match state.sections.get(&path) {
+    let sections = state.sections.read();
+    match sections.get(&path) {
         Some(v) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -566,7 +567,7 @@ async fn systeminfo_handler(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    match &state.systeminfo {
+    match &*state.systeminfo.read() {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -582,7 +583,7 @@ async fn selection_handler(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    match &state.selection {
+    match &*state.selection.read() {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -724,10 +725,92 @@ async fn metadata(
         "minTime": time_range.0,
         "maxTime": time_range.1
     });
-    if let Some(checksum) = &state.file_checksum {
+    if let Some(checksum) = &*state.file_checksum.read() {
         metadata["fileChecksum"] = serde_json::json!(checksum);
     }
     axum::response::Json(ApiResponse::success(metadata))
+}
+
+/// Upload and load a parquet file into file-mode viewer state.
+async fn upload_parquet(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Json<ApiResponse<serde_json::Value>> {
+    if state.live {
+        return axum::response::Json(ApiResponse::error(
+            "upload is only available in file mode".to_string(),
+            "bad_request".to_string(),
+        ));
+    }
+
+    if body.is_empty() {
+        return axum::response::Json(ApiResponse::error(
+            "missing parquet bytes".to_string(),
+            "bad_request".to_string(),
+        ));
+    }
+
+    let filename = headers
+        .get("x-rezolus-filename")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "upload.parquet".to_string());
+
+    let temp_suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let temp_path = std::env::temp_dir().join(format!(
+        "rezolus-viewer-{}-{}",
+        std::process::id(),
+        temp_suffix
+    ));
+    if let Err(e) = std::fs::write(&temp_path, &body) {
+        return axum::response::Json(ApiResponse::error(
+            format!("failed to store upload: {e}"),
+            "io_error".to_string(),
+        ));
+    }
+
+    let loaded = Tsdb::load(&temp_path);
+    let data = match loaded {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_path);
+            return axum::response::Json(ApiResponse::error(
+                format!("failed to load parquet: {e}"),
+                "invalid_parquet".to_string(),
+            ));
+        }
+    };
+
+    let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
+    let new_state = dashboard::generate(data, filesize);
+    let (systeminfo, selection) = extract_parquet_metadata(&temp_path);
+    let file_checksum = compute_file_checksum(&temp_path);
+
+    {
+        let mut tsdb = state.tsdb.write();
+        *tsdb = new_state.tsdb.into_inner();
+    }
+    {
+        let mut sections = state.sections.write();
+        *sections = new_state.sections.into_inner();
+    }
+    *state.parquet_path.write() = Some(temp_path);
+    *state.systeminfo.write() = systeminfo;
+    *state.selection.write() = selection;
+    *state.file_checksum.write() = file_checksum;
+
+    {
+        let mut tsdb = state.tsdb.write();
+        tsdb.set_filename(filename.clone());
+    }
+
+    axum::response::Json(ApiResponse::success(serde_json::json!({
+        "filename": filename,
+    })))
 }
 
 /// Reset the TSDB — clears all data and buffered snapshots.
@@ -783,7 +866,7 @@ async fn save_parquet(
     }
 
     // Grab the stored systeminfo (from agent or local) for parquet metadata
-    let sysinfo_json = state.systeminfo.clone();
+    let sysinfo_json = state.systeminfo.read().clone();
 
     // Run the synchronous parquet conversion off the async runtime
     let result = tokio::task::spawn_blocking(move || {
@@ -848,7 +931,7 @@ async fn save_with_selection(
     use axum::body::Body;
     use std::io::Cursor;
 
-    let parquet_path = state.parquet_path.clone();
+    let parquet_path = state.parquet_path.read().clone();
     let selection_json = body;
 
     // File mode: copy original parquet with selection metadata added
@@ -938,7 +1021,7 @@ async fn save_with_selection(
             .unwrap();
     }
 
-    let sysinfo_json = state.systeminfo.clone();
+    let sysinfo_json = state.systeminfo.read().clone();
 
     let result = tokio::task::spawn_blocking(move || {
         let total_size: usize = snapshot_data.iter().map(|s| s.len()).sum();
