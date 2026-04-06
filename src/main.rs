@@ -66,6 +66,18 @@ fn main() {
         .subcommand(mcp::command())
         .subcommand(recorder::command())
         .subcommand(viewer::command())
+        .subcommand(
+            Command::new("dump-dashboards")
+                .about("Dump dashboard JSON definitions to a directory")
+                .arg(
+                    clap::Arg::new("OUTPUT_DIR")
+                        .help("Output directory for generated JSON files")
+                        .action(clap::ArgAction::Set)
+                        .value_parser(value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                ),
+        )
         .get_matches();
 
     match cli.subcommand() {
@@ -98,6 +110,13 @@ fn main() {
             let config = viewer::Config::try_from(args.clone()).expect("failed to configure");
 
             viewer::run(config)
+        }
+        Some(("dump-dashboards", args)) => {
+            let output_dir = args
+                .get_one::<PathBuf>("OUTPUT_DIR")
+                .expect("OUTPUT_DIR is required");
+
+            viewer::dump_dashboards(output_dir).expect("failed to dump dashboards");
         }
         _ => {
             unimplemented!()

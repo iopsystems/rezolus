@@ -1050,3 +1050,45 @@ async fn lib(uri: Uri) -> impl IntoResponse {
         )
     }
 }
+
+/// Dump all dashboard definitions as JSON files to the given directory.
+/// Used by `cargo xtask generate-dashboards` to keep site viewer in sync.
+pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(output_dir)?;
+
+    let state = dashboard::generate(Tsdb::default(), None);
+    for (key, json) in &state.sections {
+        let path = output_dir.join(key);
+        let mut value: serde_json::Value = serde_json::from_str(json)?;
+        // Strip `description` fields from plots — they come from the runtime
+        // metric registry which varies by platform (Linux has eBPF metrics
+        // that macOS doesn't). The embedded viewer still auto-fills these at
+        // runtime.
+        strip_descriptions(&mut value);
+        let pretty = serde_json::to_string_pretty(&value)?;
+        std::fs::write(&path, pretty)?;
+        eprintln!("wrote {}", path.display());
+    }
+    Ok(())
+}
+
+/// Recursively remove `description` fields from plot opts in the JSON.
+fn strip_descriptions(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Remove description from plot opts objects
+            if map.contains_key("title") && map.contains_key("style") {
+                map.remove("description");
+            }
+            for v in map.values_mut() {
+                strip_descriptions(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                strip_descriptions(v);
+            }
+        }
+        _ => {}
+    }
+}

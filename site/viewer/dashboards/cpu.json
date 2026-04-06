@@ -1,0 +1,781 @@
+{
+  "filename": "",
+  "groups": [
+    {
+      "id": "utilization",
+      "name": "Utilization",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "busy-pct",
+            "style": "line",
+            "title": "Busy %"
+          },
+          "promql_query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "busy-pct-per-cpu",
+            "style": "heatmap",
+            "title": "Busy % (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "user-pct",
+            "style": "line",
+            "title": "User %"
+          },
+          "promql_query": "sum(irate(cpu_usage{state=\"user\"}[5m])) / cpu_cores / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "user-pct-per-cpu",
+            "style": "heatmap",
+            "title": "User % (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_usage{state=\"user\"}[5m])) / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "system-pct",
+            "style": "line",
+            "title": "System %"
+          },
+          "promql_query": "sum(irate(cpu_usage{state=\"system\"}[5m])) / cpu_cores / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "system-pct-per-cpu",
+            "style": "heatmap",
+            "title": "System % (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_usage{state=\"system\"}[5m])) / 1000000000"
+        }
+      ]
+    },
+    {
+      "id": "performance",
+      "name": "Performance",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "ipc",
+            "style": "line",
+            "title": "Instructions per Cycle (IPC)"
+          },
+          "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "ipc-per-cpu",
+            "style": "heatmap",
+            "title": "IPC (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "ipns",
+            "style": "line",
+            "title": "Instructions per Nanosecond (IPNS)"
+          },
+          "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "ipns-per-cpu",
+            "style": "heatmap",
+            "title": "IPNS (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "l3-hit",
+            "style": "line",
+            "title": "L3 Hit %"
+          },
+          "promql_query": "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "l3-hit-per-cpu",
+            "style": "heatmap",
+            "title": "L3 Hit % (Per-CPU)"
+          },
+          "promql_query": "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "frequency",
+            "style": "line",
+            "title": "Frequency"
+          },
+          "promql_query": "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "frequency-per-cpu",
+            "style": "heatmap",
+            "title": "Frequency (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))"
+        }
+      ]
+    },
+    {
+      "id": "branch-prediction",
+      "name": "Branch Prediction",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "branch-miss-rate",
+            "style": "line",
+            "title": "Misprediction Rate %"
+          },
+          "promql_query": "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "branch-miss-rate-per-cpu",
+            "style": "heatmap",
+            "title": "Misprediction Rate % (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "branch-instructions",
+            "style": "line",
+            "title": "Instructions"
+          },
+          "promql_query": "sum(irate(cpu_branch_instructions[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "branch-instructions-per-cpu",
+            "style": "heatmap",
+            "title": "Instructions (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_branch_instructions[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "branch-misses",
+            "style": "line",
+            "title": "Misses"
+          },
+          "promql_query": "sum(irate(cpu_branch_misses[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "branch-misses-per-cpu",
+            "style": "heatmap",
+            "title": "Misses (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_branch_misses[5m]))"
+        }
+      ]
+    },
+    {
+      "id": "dtlb",
+      "name": "DTLB",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "dtlb-misses",
+            "style": "line",
+            "title": "Misses"
+          },
+          "promql_query": "sum(irate(cpu_dtlb_miss[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "dtlb-misses-per-cpu",
+            "style": "heatmap",
+            "title": "Misses (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_dtlb_miss[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "dtlb-mpki",
+            "style": "line",
+            "title": "MPKI"
+          },
+          "promql_query": "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "dtlb-mpki-per-cpu",
+            "style": "heatmap",
+            "title": "MPKI (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_dtlb_miss[5m])) / sum by (id) (irate(cpu_instructions[5m])) * 1000"
+        }
+      ]
+    },
+    {
+      "id": "migrations",
+      "name": "Migrations",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cpu-migrations-to",
+            "style": "line",
+            "title": "To"
+          },
+          "promql_query": "sum(irate(cpu_migrations{direction=\"to\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cpu-migrations-to-per-cpu",
+            "style": "heatmap",
+            "title": "To (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_migrations{direction=\"to\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cpu-migrations-from",
+            "style": "line",
+            "title": "From"
+          },
+          "promql_query": "sum(irate(cpu_migrations{direction=\"from\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cpu-migrations-from-per-cpu",
+            "style": "heatmap",
+            "title": "From (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_migrations{direction=\"from\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": "tlb-flush",
+      "name": "TLB Flush",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-total",
+            "style": "line",
+            "title": "Total"
+          },
+          "promql_query": "sum(irate(cpu_tlb_flush[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-total-per-cpu",
+            "style": "heatmap",
+            "title": "Total (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_tlb_flush[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-local-mm-shootdown",
+            "style": "line",
+            "title": "Local MM Shootdown"
+          },
+          "promql_query": "sum(irate(cpu_tlb_flush{reason=\"local_mm_shootdown\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-local-mm-shootdown-per-cpu",
+            "style": "heatmap",
+            "title": "Local MM Shootdown (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"local_mm_shootdown\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-remote-send-ipi",
+            "style": "line",
+            "title": "Remote Send IPI"
+          },
+          "promql_query": "sum(irate(cpu_tlb_flush{reason=\"remote_send_ipi\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-remote-send-ipi-per-cpu",
+            "style": "heatmap",
+            "title": "Remote Send IPI (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"remote_send_ipi\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-remote-shootdown",
+            "style": "line",
+            "title": "Remote Shootdown"
+          },
+          "promql_query": "sum(irate(cpu_tlb_flush{reason=\"remote_shootdown\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-remote-shootdown-per-cpu",
+            "style": "heatmap",
+            "title": "Remote Shootdown (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"remote_shootdown\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-task-switch",
+            "style": "line",
+            "title": "Task Switch"
+          },
+          "promql_query": "sum(irate(cpu_tlb_flush{reason=\"task_switch\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "tlb-task-switch-per-cpu",
+            "style": "heatmap",
+            "title": "Task Switch (Per-CPU)"
+          },
+          "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"task_switch\"}[5m]))"
+        }
+      ]
+    }
+  ],
+  "interval": 0.0,
+  "num_series": 0,
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ],
+  "source": "",
+  "version": ""
+}

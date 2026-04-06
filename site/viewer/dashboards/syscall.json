@@ -1,0 +1,711 @@
+{
+  "filename": "",
+  "groups": [
+    {
+      "id": "syscall",
+      "name": "Syscall",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-total",
+            "style": "line",
+            "title": "Total"
+          },
+          "promql_query": "sum(irate(syscall[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-total-latency",
+            "style": "scatter",
+            "title": "Total"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Read",
+            "style": "line",
+            "title": "Read"
+          },
+          "promql_query": "sum(irate(syscall{op=\"read\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Read-latency",
+            "style": "scatter",
+            "title": "Read"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"read\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Write",
+            "style": "line",
+            "title": "Write"
+          },
+          "promql_query": "sum(irate(syscall{op=\"write\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Write-latency",
+            "style": "scatter",
+            "title": "Write"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"write\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Poll",
+            "style": "line",
+            "title": "Poll"
+          },
+          "promql_query": "sum(irate(syscall{op=\"poll\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Poll-latency",
+            "style": "scatter",
+            "title": "Poll"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"poll\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Socket",
+            "style": "line",
+            "title": "Socket"
+          },
+          "promql_query": "sum(irate(syscall{op=\"socket\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Socket-latency",
+            "style": "scatter",
+            "title": "Socket"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"socket\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Lock",
+            "style": "line",
+            "title": "Lock"
+          },
+          "promql_query": "sum(irate(syscall{op=\"lock\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Lock-latency",
+            "style": "scatter",
+            "title": "Lock"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"lock\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Time",
+            "style": "line",
+            "title": "Time"
+          },
+          "promql_query": "sum(irate(syscall{op=\"time\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Time-latency",
+            "style": "scatter",
+            "title": "Time"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"time\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Sleep",
+            "style": "line",
+            "title": "Sleep"
+          },
+          "promql_query": "sum(irate(syscall{op=\"sleep\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Sleep-latency",
+            "style": "scatter",
+            "title": "Sleep"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"sleep\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Yield",
+            "style": "line",
+            "title": "Yield"
+          },
+          "promql_query": "sum(irate(syscall{op=\"yield\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Yield-latency",
+            "style": "scatter",
+            "title": "Yield"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"yield\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Filesystem",
+            "style": "line",
+            "title": "Filesystem"
+          },
+          "promql_query": "sum(irate(syscall{op=\"filesystem\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Filesystem-latency",
+            "style": "scatter",
+            "title": "Filesystem"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"filesystem\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Memory",
+            "style": "line",
+            "title": "Memory"
+          },
+          "promql_query": "sum(irate(syscall{op=\"memory\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Memory-latency",
+            "style": "scatter",
+            "title": "Memory"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"memory\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Process",
+            "style": "line",
+            "title": "Process"
+          },
+          "promql_query": "sum(irate(syscall{op=\"process\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Process-latency",
+            "style": "scatter",
+            "title": "Process"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"process\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Query",
+            "style": "line",
+            "title": "Query"
+          },
+          "promql_query": "sum(irate(syscall{op=\"query\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Query-latency",
+            "style": "scatter",
+            "title": "Query"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"query\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-IPC",
+            "style": "line",
+            "title": "IPC"
+          },
+          "promql_query": "sum(irate(syscall{op=\"ipc\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-IPC-latency",
+            "style": "scatter",
+            "title": "IPC"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"ipc\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Timer",
+            "style": "line",
+            "title": "Timer"
+          },
+          "promql_query": "sum(irate(syscall{op=\"timer\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Timer-latency",
+            "style": "scatter",
+            "title": "Timer"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"timer\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Event",
+            "style": "line",
+            "title": "Event"
+          },
+          "promql_query": "sum(irate(syscall{op=\"event\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Event-latency",
+            "style": "scatter",
+            "title": "Event"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"event\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Other",
+            "style": "line",
+            "title": "Other"
+          },
+          "promql_query": "sum(irate(syscall{op=\"other\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-Other-latency",
+            "style": "scatter",
+            "title": "Other"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"other\"})"
+        }
+      ]
+    }
+  ],
+  "interval": 0.0,
+  "num_series": 0,
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ],
+  "source": "",
+  "version": ""
+}

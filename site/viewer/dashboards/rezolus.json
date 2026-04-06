@@ -1,0 +1,188 @@
+{
+  "filename": "",
+  "groups": [
+    {
+      "id": "rezolus",
+      "name": "Rezolus",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cpu",
+            "style": "line",
+            "title": "CPU %"
+          },
+          "promql_query": "sum(irate(rezolus_cpu_usage[5m])) / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "bytes",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "memory",
+            "style": "line",
+            "title": "Memory (RSS)"
+          },
+          "promql_query": "sum(rezolus_memory_usage_resident_set_size)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "ipc",
+            "style": "line",
+            "title": "IPC"
+          },
+          "promql_query": "sum(irate(cgroup_cpu_instructions{name=\"/system.slice/rezolus.service\"}[5m])) / sum(irate(cgroup_cpu_cycles{name=\"/system.slice/rezolus.service\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscalls",
+            "style": "line",
+            "title": "Syscalls"
+          },
+          "promql_query": "sum(irate(cgroup_syscall{name=\"/system.slice/rezolus.service\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "bpf-overhead",
+            "style": "line",
+            "title": "Total BPF Overhead"
+          },
+          "promql_query": "sum(irate(rezolus_bpf_run_time[5m])) / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "bpf-sampler-overhead",
+            "style": "multi",
+            "title": "BPF Per-Sampler Overhead"
+          },
+          "promql_query": "sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "bpf-execution-time",
+            "style": "multi",
+            "title": "BPF Per-Sampler Execution Time"
+          },
+          "promql_query": "(sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / sum by (sampler) (irate(rezolus_bpf_run_count[5m]))) / 1000000000"
+        }
+      ]
+    }
+  ],
+  "interval": 0.0,
+  "num_series": 0,
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ],
+  "source": "",
+  "version": ""
+}
