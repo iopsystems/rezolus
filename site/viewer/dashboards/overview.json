@@ -1,0 +1,397 @@
+{
+  "filename": "",
+  "groups": [
+    {
+      "id": "cpu",
+      "name": "CPU",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The amount of CPU time spent in each state",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cpu-busy",
+            "style": "line",
+            "title": "Busy %"
+          },
+          "promql_query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The amount of CPU time spent in each state",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cpu-busy-heatmap",
+            "style": "heatmap",
+            "title": "Busy %"
+          },
+          "promql_query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000"
+        }
+      ]
+    },
+    {
+      "id": "network",
+      "name": "Network",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of bytes transferred over the network",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "bitrate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "network-transmit-bandwidth",
+            "style": "line",
+            "title": "Transmit Bandwidth"
+          },
+          "promql_query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of bytes transferred over the network",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "bitrate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "network-receive-bandwidth",
+            "style": "line",
+            "title": "Receive Bandwidth"
+          },
+          "promql_query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of packets transferred over the network",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "network-transmit-packets",
+            "style": "line",
+            "title": "Transmit Packets"
+          },
+          "promql_query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of packets transferred over the network",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "network-receive-packets",
+            "style": "line",
+            "title": "Receive Packets"
+          },
+          "promql_query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of latency from a socket becoming readable until a userspace read",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Latency"
+            },
+            "id": "tcp-packet-latency",
+            "style": "scatter",
+            "title": "TCP Packet Latency"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], tcp_packet_latency)"
+        }
+      ]
+    },
+    {
+      "id": "scheduler",
+      "name": "Scheduler",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of the amount of time tasks were waiting in the runqueue",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Latency"
+            },
+            "id": "scheduler-runqueue-latency",
+            "style": "scatter",
+            "title": "Runqueue Latency"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
+        }
+      ]
+    },
+    {
+      "id": "syscall",
+      "name": "Syscall",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of syscalls",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-total",
+            "style": "line",
+            "title": "Total"
+          },
+          "promql_query": "sum(irate(syscall[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of syscall latencies",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "syscall-total-latency",
+            "style": "scatter",
+            "title": "Total"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)"
+        }
+      ]
+    },
+    {
+      "id": "softirq",
+      "name": "Softirq",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The count of softirqs",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "softirq-total-rate",
+            "style": "line",
+            "title": "Rate"
+          },
+          "promql_query": "sum(irate(softirq[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The count of softirqs",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "softirq-total-rate-heatmap",
+            "style": "heatmap",
+            "title": "Rate"
+          },
+          "promql_query": "sum by (id) (irate(softirq[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The time spent in softirq handlers",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "softirq-total-time",
+            "style": "line",
+            "title": "CPU %"
+          },
+          "promql_query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The time spent in softirq handlers",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "softirq-total-time-heatmap",
+            "style": "heatmap",
+            "title": "CPU %"
+          },
+          "promql_query": "sum by (id) (irate(softirq_time[5m])) / 1000000000"
+        }
+      ]
+    },
+    {
+      "id": "blockio",
+      "name": "BlockIO",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of bytes transferred for block device operations",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "blockio-throughput-read",
+            "style": "line",
+            "title": "Read Throughput"
+          },
+          "promql_query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of bytes transferred for block device operations",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "blockio-throughput-write",
+            "style": "line",
+            "title": "Write Throughput"
+          },
+          "promql_query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of completed operations for block devices",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "blockio-iops-read",
+            "style": "line",
+            "title": "Read IOPS"
+          },
+          "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of completed operations for block devices",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "blockio-iops-write",
+            "style": "line",
+            "title": "Write IOPS"
+          },
+          "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+        }
+      ]
+    }
+  ],
+  "interval": 0.0,
+  "num_series": 0,
+  "source": "",
+  "version": ""
+}

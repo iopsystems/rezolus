@@ -1,0 +1,99 @@
+{
+  "filename": "",
+  "groups": [
+    {
+      "id": "scheduler",
+      "name": "Scheduler",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of the amount of time tasks were waiting in the runqueue",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Latency"
+            },
+            "id": "scheduler-runqueue-latency",
+            "style": "scatter",
+            "title": "Runqueue Latency"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of the amount of time tasks were off-CPU",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Time"
+            },
+            "id": "off-cpu-time",
+            "style": "scatter",
+            "title": "Off CPU Time"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_offcpu)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of the amount of time tasks were on-CPU",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Time"
+            },
+            "id": "running-time",
+            "style": "scatter",
+            "title": "Running Time"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_running)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of involuntary context switches",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "rate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "cswitch",
+            "style": "line",
+            "title": "Context Switch"
+          },
+          "promql_query": "sum(irate(scheduler_context_switch[5m]))"
+        }
+      ]
+    }
+  ],
+  "interval": 0.0,
+  "num_series": 0,
+  "source": "",
+  "version": ""
+}

@@ -1050,3 +1050,38 @@ async fn lib(uri: Uri) -> impl IntoResponse {
         )
     }
 }
+
+/// Dump all dashboard definitions as JSON files to the given directory.
+/// Used by `cargo xtask generate-dashboards` to keep site viewer in sync.
+pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(output_dir)?;
+
+    let state = dashboard::generate(Tsdb::default(), None);
+
+    // Extract the shared sections list from the first entry and write it once.
+    let mut sections_written = false;
+    for (key, json) in &state.sections {
+        let mut value: serde_json::Value = serde_json::from_str(json)?;
+
+        if !sections_written {
+            if let Some(sections) = value.get("sections") {
+                let path = output_dir.join("sections.json");
+                let pretty = serde_json::to_string_pretty(sections)?;
+                std::fs::write(&path, pretty)?;
+                eprintln!("wrote {}", path.display());
+                sections_written = true;
+            }
+        }
+
+        // Remove sections from per-dashboard files to avoid duplication.
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("sections");
+        }
+
+        let path = output_dir.join(key);
+        let pretty = serde_json::to_string_pretty(&value)?;
+        std::fs::write(&path, pretty)?;
+        eprintln!("wrote {}", path.display());
+    }
+    Ok(())
+}
