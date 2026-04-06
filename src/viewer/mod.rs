@@ -27,9 +27,6 @@ use notify::Watcher;
 #[cfg(feature = "developer-mode")]
 use tower_http::services::{ServeDir, ServeFile};
 
-#[cfg(feature = "developer-mode")]
-use std::path::Path;
-
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
