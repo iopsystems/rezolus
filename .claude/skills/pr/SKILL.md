@@ -75,6 +75,18 @@ The skill accepts an optional branch name argument:
 
 7. **Report the PR URL** to the user.
 
+## Version bumps
+
+Non-release PRs must **never** bump the major, minor, or patch version. Instead, bump only the pre-release revision number in `Cargo.toml`:
+
+- Format: `<major>.<minor>.<patch>-alpha.<revision>`
+- Example: `5.8.3-alpha.0` → `5.8.3-alpha.1` → `5.8.3-alpha.2`
+- Increment the revision (`-alpha.N`) by 1 from the current `main` branch version
+- Check the current main branch version before committing:
+  ```bash
+  git show main:Cargo.toml | grep '^version'
+  ```
+
 ## Notes
 
 - Keep PR titles under 70 characters
