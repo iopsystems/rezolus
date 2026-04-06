@@ -1,0 +1,1 @@
+../../../src/viewer/assets/lib/script_shared.js
