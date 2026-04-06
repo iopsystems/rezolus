@@ -232,6 +232,8 @@ const SectionContent = {
 };
 
 
+const sectionResponseCache = {};
+
 Main = createMainComponent({
     TopNav,
     Sidebar,
@@ -381,7 +383,6 @@ document.addEventListener('dblclick', () => {
     }
 });
 
-const sectionResponseCache = {};
 
 // Fetch data for a section and cache it.
 const preloadSection = async (section) => {

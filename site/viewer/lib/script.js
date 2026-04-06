@@ -153,6 +153,8 @@ const SectionContent = {
 };
 
 
+const sectionResponseCache = {};
+
 Main = createMainComponent({
     TopNav,
     Sidebar,
@@ -287,7 +289,6 @@ document.addEventListener('dblclick', () => {
     }
 });
 
-const sectionResponseCache = {};
 
 // Load a section: generate dashboard data from JS definitions, then run PromQL via WASM.
 const loadSection = async (sectionKey) => {
