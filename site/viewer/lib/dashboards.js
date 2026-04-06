@@ -2,6 +2,15 @@
 // Do not edit manually. Run `cargo xtask generate-dashboards` to update.
 
 const cache = {};
+let sectionsCache = null;
+
+async function loadSections() {
+    if (sectionsCache) return sectionsCache;
+    const resp = await fetch('dashboards/sections.json');
+    if (!resp.ok) throw new Error('Failed to load sections');
+    sectionsCache = await resp.json();
+    return sectionsCache;
+}
 
 async function loadDashboard(sectionKey) {
     if (cache[sectionKey]) return cache[sectionKey];
@@ -16,10 +25,14 @@ async function loadDashboard(sectionKey) {
  * Loads pre-generated JSON and merges in runtime viewer info.
  */
 export async function generateSectionData(sectionKey, viewerInfo) {
-    const dashboard = await loadDashboard(sectionKey);
+    const [dashboard, sections] = await Promise.all([
+        loadDashboard(sectionKey),
+        loadSections(),
+    ]);
 
     return {
         ...dashboard,
+        sections,
         // Override runtime fields from viewerInfo
         interval: viewerInfo.interval,
         source: viewerInfo.source,

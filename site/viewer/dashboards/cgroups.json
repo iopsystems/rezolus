@@ -901,56 +901,6 @@
     }
   },
   "num_series": 0,
-  "sections": [
-    {
-      "name": "Overview",
-      "route": "/overview"
-    },
-    {
-      "name": "Query Explorer",
-      "route": "/query"
-    },
-    {
-      "name": "CPU",
-      "route": "/cpu"
-    },
-    {
-      "name": "GPU",
-      "route": "/gpu"
-    },
-    {
-      "name": "Memory",
-      "route": "/memory"
-    },
-    {
-      "name": "Network",
-      "route": "/network"
-    },
-    {
-      "name": "Scheduler",
-      "route": "/scheduler"
-    },
-    {
-      "name": "Syscall",
-      "route": "/syscall"
-    },
-    {
-      "name": "Softirq",
-      "route": "/softirq"
-    },
-    {
-      "name": "BlockIO",
-      "route": "/blockio"
-    },
-    {
-      "name": "cgroups",
-      "route": "/cgroups"
-    },
-    {
-      "name": "Rezolus",
-      "route": "/rezolus"
-    }
-  ],
   "source": "",
   "version": ""
 }
