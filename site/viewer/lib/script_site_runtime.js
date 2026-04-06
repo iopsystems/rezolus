@@ -1,1 +1,0 @@
-../../../src/viewer/assets/lib/script_site_runtime.js

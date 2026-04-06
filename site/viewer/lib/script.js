@@ -1,1 +1,1 @@
-import './script_site_runtime.js';
+import './runtime.js';
