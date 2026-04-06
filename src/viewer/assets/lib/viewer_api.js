@@ -29,6 +29,19 @@ const ViewerApi = {
         return backendRequest({ method: 'POST', url: '/api/v1/reset', background: true });
     },
 
+    async uploadParquet(file) {
+        const data = await file.arrayBuffer();
+        return backendRequest({
+            method: 'POST',
+            url: '/api/v1/upload',
+            body: data,
+            config: (xhr) => {
+                xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                xhr.setRequestHeader('x-rezolus-filename', file.name || 'upload.parquet');
+            },
+        });
+    },
+
     saveUrl() {
         return '/api/v1/save';
     },

@@ -26,38 +26,36 @@ let fileChecksum = null;
 let recording = true;
 
 // Detect live mode on startup
-ViewerApi.getMode()
-    .then((response) => {
+const initializeFromBackend = async () => {
+    try {
+        const response = await ViewerApi.getMode();
         liveMode = response.live === true;
         if (liveMode) {
             startLiveRefresh();
         }
-    })
-    .catch(() => { /* ignore - assume file mode */ });
+    } catch (_) { /* ignore - assume file mode */ }
 
-// Fetch file checksum from metadata endpoint
-ViewerApi.getMetadata()
-    .then((response) => {
+    try {
+        const response = await ViewerApi.getMetadata();
         if (response.status === 'success' && response.data?.fileChecksum) {
             fileChecksum = response.data.fileChecksum;
         }
-    })
-    .catch(() => { /* ignore */ });
+    } catch (_) { /* ignore */ }
 
-// Fetch system info (available when parquet has embedded systeminfo metadata)
-ViewerApi.getSystemInfo()
-    .then((data) => { systemInfoData = data; })
-    .catch(() => { /* no systeminfo available */ });
+    try {
+        systemInfoData = await ViewerApi.getSystemInfo();
+    } catch (_) { /* no systeminfo available */ }
 
-// Fetch saved selection from parquet metadata → load into Report store
-ViewerApi.getSelection()
-    .then((data) => {
+    try {
+        const data = await ViewerApi.getSelection();
         if (data && Array.isArray(data.entries)) {
             loadPayloadIntoStore(reportStore, data);
             reportStore.loadedFrom = 'embedded report';
         }
-    })
-    .catch(() => { /* no saved selection */ });
+    } catch (_) { /* no saved selection */ }
+};
+
+initializeFromBackend();
 
 // Transport control actions
 const startRecording = async () => {
@@ -91,6 +89,24 @@ const saveCapture = async () => {
     notify('info', `Saved ${filename}`);
 };
 
+const clearViewerCaches = () => {
+    Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
+    heatmapDataCache.clear();
+    chartsState.clear();
+};
+
+const uploadParquet = async (file) => {
+    try {
+        await ViewerApi.uploadParquet(file);
+        clearViewerCaches();
+        await initializeFromBackend();
+        m.route.set('/overview');
+        m.redraw();
+    } catch (e) {
+        notify('error', `Failed to upload parquet: ${e.message || e}`);
+    }
+};
+
 // Build common TopNav attrs from section data. Pass extra to override/add fields.
 const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     data,
@@ -102,6 +118,7 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onStartRecording: startRecording,
     onStopRecording: stopRecording,
     onSaveCapture: saveCapture,
+    onUploadParquet: uploadParquet,
     extra,
 });
 

@@ -33,7 +33,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
 pub fn generate(data: Tsdb, filesize: Option<u64>) -> AppState {
     let mut state = AppState::new(data);
 
-    let sections: Vec<Section> = SECTION_META
+    let all_sections: Vec<Section> = SECTION_META
         .iter()
         .map(|(name, route, _)| Section {
             name: (*name).to_string(),
@@ -42,16 +42,16 @@ pub fn generate(data: Tsdb, filesize: Option<u64>) -> AppState {
         .collect();
 
     let tsdb = state.tsdb.read();
+    let mut rendered_sections = state.sections.write();
     for (_, route, generator) in SECTION_META {
         let key = format!("{}.json", &route[1..]);
-        let mut view = generator(&tsdb, sections.clone());
+        let mut view = generator(&tsdb, all_sections.clone());
         if let Some(size) = filesize {
             view.set_filesize(size);
         }
-        state
-            .sections
-            .insert(key, serde_json::to_string(&view).unwrap());
+        rendered_sections.insert(key, serde_json::to_string(&view).unwrap());
     }
+    drop(rendered_sections);
     drop(tsdb);
 
     state
@@ -66,7 +66,7 @@ mod tests {
         let data = Tsdb::default();
         let state = generate(data, None);
 
-        let mut keys: Vec<_> = state.sections.keys().cloned().collect();
+        let mut keys: Vec<_> = state.sections.read().keys().cloned().collect();
         keys.sort();
 
         assert_eq!(
