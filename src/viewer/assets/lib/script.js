@@ -8,7 +8,7 @@ import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, sub
 import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
-import { createSystemInfoView, renderCgroupSection } from './script_shared.js';
+import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 
 // Live mode state - detected at startup
