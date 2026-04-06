@@ -19,6 +19,7 @@ env:
 
 jobs:
   build-deb:
+    if: github.repository == 'iopsystems/rezolus'
     name: "deb ${{ matrix.distro }}:${{ matrix.release }} (${{ matrix.arch }})"
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
@@ -62,6 +63,7 @@ jobs:
           name: deb_${{ matrix.distro }}_${{ matrix.release }}_${{ matrix.arch }}
 
   build-rpm:
+    if: github.repository == 'iopsystems/rezolus'
     name: "rpm ${{ matrix.distro }}:${{ matrix.version }} (${{ matrix.arch }})"
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     container: "${{ matrix.distro }}:${{ matrix.version }}"
@@ -214,6 +216,7 @@ jobs:
           name: rpm_${{ matrix.distro }}_${{ matrix.version }}_${{ matrix.arch }}
 
   publish:
+    if: github.repository == 'iopsystems/rezolus'
     name: Publish release artifacts
     runs-on: ubuntu-latest
     needs:
