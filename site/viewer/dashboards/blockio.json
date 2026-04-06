@@ -1,0 +1,215 @@
+{
+  "filename": "",
+  "groups": [
+    {
+      "id": "operations",
+      "name": "Operations",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of bytes transferred for block device operations",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "blockio-throughput-total",
+            "style": "line",
+            "title": "Total Throughput"
+          },
+          "promql_query": "sum(irate(blockio_bytes[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of completed operations for block devices",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "blockio-iops-total",
+            "style": "line",
+            "title": "Total IOPS"
+          },
+          "promql_query": "sum(irate(blockio_operations[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of bytes transferred for block device operations",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "throughput-read",
+            "style": "line",
+            "title": "Read Throughput"
+          },
+          "promql_query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of completed operations for block devices",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "iops-read",
+            "style": "line",
+            "title": "Read IOPS"
+          },
+          "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of bytes transferred for block device operations",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "throughput-write",
+            "style": "line",
+            "title": "Write Throughput"
+          },
+          "promql_query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The number of completed operations for block devices",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "iops-write",
+            "style": "line",
+            "title": "Write IOPS"
+          },
+          "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": "latency",
+      "name": "Latency",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of blockio operation latency in nanoseconds",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "latency-read",
+            "style": "scatter",
+            "title": "Read"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"read\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of blockio operation latency in nanoseconds",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "range": {
+                "max": 100000000000.0,
+                "min": 0.0
+              },
+              "unit_system": "time",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "latency-write",
+            "style": "scatter",
+            "title": "Write"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"write\"})"
+        }
+      ]
+    },
+    {
+      "id": "size",
+      "name": "Size",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of blockio operation sizes in bytes",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "unit_system": "bytes",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "size-read",
+            "style": "scatter",
+            "title": "Read"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"read\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "Distribution of blockio operation sizes in bytes",
+            "format": {
+              "log_scale": true,
+              "precision": 2,
+              "unit_system": "bytes",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "size-write",
+            "style": "scatter",
+            "title": "Write"
+          },
+          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"write\"})"
+        }
+      ]
+    }
+  ],
+  "interval": 0.0,
+  "num_series": 0,
+  "source": "",
+  "version": ""
+}

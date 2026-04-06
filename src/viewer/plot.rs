@@ -219,19 +219,25 @@ impl Group {
                 OnceLock::new();
             let descriptions = DESCRIPTIONS.get_or_init(crate::common::metric_descriptions);
 
-            // Find the longest matching metric name in the query to avoid
-            // shorter names matching incorrectly (e.g. "syscall" matching
-            // a query for "syscall_latency")
-            let mut best_match: Option<(&str, &str)> = None;
+            // Find the best matching metric name in the query: prefer longest
+            // match first (e.g. "syscall_latency" over "syscall"), then
+            // earliest position in the query, then lexicographic order for
+            // deterministic results.
+            let mut best_match: Option<(usize, &str, &str)> = None;
             for (name, desc) in descriptions {
-                if promql_query.contains(name.as_str())
-                    && best_match
-                        .is_none_or(|(best_name, _): (&str, _)| name.len() > best_name.len())
-                {
-                    best_match = Some((name.as_str(), desc.as_str()));
+                if let Some(pos) = promql_query.find(name.as_str()) {
+                    let dominated = best_match.is_some_and(|(best_pos, best_name, _)| {
+                        name.len() < best_name.len()
+                            || (name.len() == best_name.len()
+                                && (pos > best_pos
+                                    || (pos == best_pos && name.as_str() > best_name)))
+                    });
+                    if !dominated {
+                        best_match = Some((pos, name.as_str(), desc.as_str()));
+                    }
                 }
             }
-            if let Some((_, desc)) = best_match {
+            if let Some((_, _, desc)) = best_match {
                 opts.description = Some(desc.to_string());
             }
         }

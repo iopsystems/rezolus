@@ -42,7 +42,7 @@ const ViewerApi = {
 
     async getSection(section) {
         if (!viewerInfo) throw new Error('Viewer info not initialized');
-        const data = generateSectionData(section, viewerInfo);
+        const data = await generateSectionData(section, viewerInfo);
         if (!data) throw new Error(`Unknown section: ${section}`);
         return data;
     },

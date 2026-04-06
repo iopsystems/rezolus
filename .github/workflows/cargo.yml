@@ -88,6 +88,24 @@ jobs:
       - run: |
           cargo audit
 
+  dashboard-drift:
+    name: dashboard-drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check-ubuntu-latest
+          save-if: false
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt-get -y install libelf-dev
+      - name: Check dashboard JSON is up to date
+        run: cargo xtask generate-dashboards --check
+
   rustfmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -169,6 +187,7 @@ jobs:
     needs:
       - build
       - check
+      - dashboard-drift
       - rustfmt
       - clippy
       - clippy-upload

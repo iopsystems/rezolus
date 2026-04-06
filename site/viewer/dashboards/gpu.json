@@ -1,0 +1,533 @@
+{
+  "filename": "",
+  "groups": [
+    {
+      "id": "utilization",
+      "name": "Utilization",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The running average percentage of time the GPU was executing one or more kernels. (0-100).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-pct",
+            "style": "line",
+            "title": "GPU %"
+          },
+          "promql_query": "avg(gpu_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The running average percentage of time the GPU was executing one or more kernels. (0-100).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-pct-per-gpu",
+            "style": "heatmap",
+            "title": "GPU % (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The running average percentage of time that GPU memory was being read from or written to. (0-100).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "mem-ctrl-pct",
+            "style": "line",
+            "title": "Memory Controller %"
+          },
+          "promql_query": "avg(gpu_memory_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The running average percentage of time that GPU memory was being read from or written to. (0-100).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "mem-ctrl-pct-per-gpu",
+            "style": "heatmap",
+            "title": "Memory Controller % (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_memory_utilization) / 100"
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "name": "Memory",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The amount of GPU memory free.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "bytes",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "mem-used",
+            "style": "line",
+            "title": "Used"
+          },
+          "promql_query": "sum(gpu_memory{state=\"used\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The amount of GPU memory free.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "bytes",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "mem-used-per-gpu",
+            "style": "heatmap",
+            "title": "Used (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_memory{state=\"used\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The amount of GPU memory free.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "bytes",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "mem-free",
+            "style": "line",
+            "title": "Free"
+          },
+          "promql_query": "sum(gpu_memory{state=\"free\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The amount of GPU memory free.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "bytes",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "mem-free-per-gpu",
+            "style": "heatmap",
+            "title": "Free (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_memory{state=\"free\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The amount of GPU memory free.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "mem-util-pct",
+            "style": "line",
+            "title": "Utilization %"
+          },
+          "promql_query": "sum(gpu_memory{state=\"used\"}) / (sum(gpu_memory{state=\"used\"}) + sum(gpu_memory{state=\"free\"}))"
+        }
+      ]
+    },
+    {
+      "id": "power",
+      "name": "Power",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The current power usage in milliwatts (mW).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Watts"
+            },
+            "id": "power-watts",
+            "style": "line",
+            "title": "Power (W)"
+          },
+          "promql_query": "sum(gpu_power_usage) / 1000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current power usage in milliwatts (mW).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Watts"
+            },
+            "id": "power-watts-per-gpu",
+            "style": "heatmap",
+            "title": "Power (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_power_usage) / 1000"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The energy consumption in milliJoules (mJ).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "Watts"
+            },
+            "id": "energy-rate",
+            "style": "line",
+            "title": "Energy Rate (W)"
+          },
+          "promql_query": "sum(rate(gpu_energy_consumption[5m])) / 1000"
+        }
+      ]
+    },
+    {
+      "id": "temperature",
+      "name": "Temperature",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The current temperature in degrees Celsius (C).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "°C"
+            },
+            "id": "temp-avg",
+            "style": "line",
+            "title": "Average (°C)"
+          },
+          "promql_query": "avg(gpu_temperature)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current temperature in degrees Celsius (C).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "°C"
+            },
+            "id": "temp-max",
+            "style": "line",
+            "title": "Max (°C)"
+          },
+          "promql_query": "max(gpu_temperature)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current temperature in degrees Celsius (C).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "count",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": "°C"
+            },
+            "id": "temp-per-gpu",
+            "style": "heatmap",
+            "title": "Temperature (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_temperature)"
+        }
+      ]
+    },
+    {
+      "id": "clocks",
+      "name": "Clocks",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "clock-graphics",
+            "style": "line",
+            "title": "Graphics"
+          },
+          "promql_query": "avg(gpu_clock{clock=\"graphics\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "clock-graphics-per-gpu",
+            "style": "heatmap",
+            "title": "Graphics (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_clock{clock=\"graphics\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "clock-memory",
+            "style": "line",
+            "title": "Memory"
+          },
+          "promql_query": "avg(gpu_clock{clock=\"memory\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "clock-memory-per-gpu",
+            "style": "heatmap",
+            "title": "Memory (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_clock{clock=\"memory\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "clock-compute",
+            "style": "line",
+            "title": "Compute"
+          },
+          "promql_query": "avg(gpu_clock{clock=\"compute\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "frequency",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "clock-video",
+            "style": "line",
+            "title": "Video"
+          },
+          "promql_query": "avg(gpu_clock{clock=\"video\"})"
+        }
+      ]
+    },
+    {
+      "id": "pcie",
+      "name": "PCIe",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The PCIe bandwidth in Bytes/s.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "pcie-bandwidth",
+            "style": "line",
+            "title": "Bandwidth"
+          },
+          "promql_query": "sum(gpu_pcie_bandwidth)"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "pcie-rx",
+            "style": "line",
+            "title": "Receive"
+          },
+          "promql_query": "sum(gpu_pcie_throughput{direction=\"receive\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "pcie-rx-per-gpu",
+            "style": "heatmap",
+            "title": "Receive (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_pcie_throughput{direction=\"receive\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "pcie-tx",
+            "style": "line",
+            "title": "Transmit"
+          },
+          "promql_query": "sum(gpu_pcie_throughput{direction=\"transmit\"})"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "unit_system": "datarate",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "pcie-tx-per-gpu",
+            "style": "heatmap",
+            "title": "Transmit (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_pcie_throughput{direction=\"transmit\"})"
+        }
+      ]
+    }
+  ],
+  "interval": 0.0,
+  "num_series": 0,
+  "source": "",
+  "version": ""
+}
