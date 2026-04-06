@@ -8,6 +8,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of the amount of time tasks were waiting in the runqueue",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -29,6 +30,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of the amount of time tasks were off-CPU",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -50,6 +52,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of the amount of time tasks were on-CPU",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -71,6 +74,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of involuntary context switches",
             "format": {
               "log_scale": null,
               "precision": 2,

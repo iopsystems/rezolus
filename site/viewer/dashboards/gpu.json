@@ -8,6 +8,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The running average percentage of time the GPU was executing one or more kernels. (0-100).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -29,6 +30,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The running average percentage of time the GPU was executing one or more kernels. (0-100).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -50,6 +52,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The running average percentage of time that GPU memory was being read from or written to. (0-100).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -71,6 +74,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The running average percentage of time that GPU memory was being read from or written to. (0-100).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -98,6 +102,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of GPU memory free.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -115,6 +120,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of GPU memory free.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -132,6 +138,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of GPU memory free.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -149,6 +156,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of GPU memory free.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -166,6 +174,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of GPU memory free.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -193,6 +202,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current power usage in milliwatts (mW).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -210,6 +220,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current power usage in milliwatts (mW).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -227,6 +238,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The energy consumption in milliJoules (mJ).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -250,6 +262,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current temperature in degrees Celsius (C).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -267,6 +280,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current temperature in degrees Celsius (C).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -284,6 +298,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current temperature in degrees Celsius (C).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -307,6 +322,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -324,6 +340,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -341,6 +358,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -358,6 +376,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -375,6 +394,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -392,6 +412,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current clock speed in Hertz (Hz).",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -415,6 +436,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The PCIe bandwidth in Bytes/s.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -432,6 +454,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -449,6 +472,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -466,6 +490,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -483,6 +508,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The current PCIe receive throughput in Bytes/s.",
             "format": {
               "log_scale": null,
               "precision": 2,

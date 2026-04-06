@@ -8,6 +8,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of bytes transferred for block device operations",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -25,6 +26,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of completed operations for block devices",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -42,6 +44,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of bytes transferred for block device operations",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -59,6 +62,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of completed operations for block devices",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -76,6 +80,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of bytes transferred for block device operations",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -93,6 +98,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of completed operations for block devices",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -116,6 +122,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of blockio operation latency in nanoseconds",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -137,6 +144,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of blockio operation latency in nanoseconds",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -164,6 +172,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of blockio operation sizes in bytes",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -181,6 +190,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of blockio operation sizes in bytes",
             "format": {
               "log_scale": true,
               "precision": 2,

@@ -8,6 +8,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time Rezolus was executing",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -29,6 +30,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The total amount of memory allocated by Rezolus",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -46,6 +48,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of instructions retired on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -63,6 +66,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -80,6 +84,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of time Rezolus BPF programs have been executing",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -97,6 +102,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of time Rezolus BPF programs have been executing",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -114,6 +120,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of times Rezolus BPF programs have been run",
             "format": {
               "log_scale": null,
               "precision": 2,

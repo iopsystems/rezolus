@@ -11,6 +11,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -28,6 +29,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -45,6 +47,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -62,6 +65,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of times a process in a cgroup migrated from one CPU to another",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -79,6 +83,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The total time all runqueues in a cgroup throttled by the CPU controller in nanoseconds",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -96,6 +101,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of instructions retired on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -113,6 +119,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of tlb_flush events on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -130,6 +137,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -147,6 +155,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -164,6 +173,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -181,6 +191,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -198,6 +209,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -215,6 +227,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -232,6 +245,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -249,6 +263,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -266,6 +281,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -283,6 +299,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -300,6 +317,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -317,6 +335,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -334,6 +353,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -351,6 +371,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -368,6 +389,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -385,6 +407,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -402,6 +425,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -428,6 +452,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -445,6 +470,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -462,6 +488,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -479,6 +506,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of times a process in a cgroup migrated from one CPU to another",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -496,6 +524,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The total time all runqueues in a cgroup throttled by the CPU controller in nanoseconds",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -513,6 +542,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of instructions retired on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -530,6 +560,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of tlb_flush events on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -547,6 +578,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -564,6 +596,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -581,6 +614,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -598,6 +632,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -615,6 +650,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -632,6 +668,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -649,6 +686,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -666,6 +704,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -683,6 +722,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -700,6 +740,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -717,6 +758,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -734,6 +776,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -751,6 +794,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -768,6 +812,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -785,6 +830,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -802,6 +848,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -819,6 +866,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls on a per-cgroup basis",
             "format": {
               "log_scale": null,
               "precision": 2,

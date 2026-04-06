@@ -8,6 +8,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -25,6 +26,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -46,6 +48,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -63,6 +66,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -84,6 +88,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -101,6 +106,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -122,6 +128,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -139,6 +146,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -160,6 +168,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -177,6 +186,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -198,6 +208,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -215,6 +226,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -236,6 +248,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -253,6 +266,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -274,6 +288,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -291,6 +306,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -312,6 +328,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -329,6 +346,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -350,6 +368,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -367,6 +386,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -388,6 +408,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -405,6 +426,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -426,6 +448,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -443,6 +466,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -464,6 +488,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -481,6 +506,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -502,6 +528,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -519,6 +546,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -540,6 +568,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -557,6 +586,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -578,6 +608,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -595,6 +626,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -616,6 +648,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -633,6 +666,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,

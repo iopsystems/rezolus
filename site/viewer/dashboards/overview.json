@@ -8,6 +8,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -29,6 +30,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The amount of CPU time spent in each state",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -56,6 +58,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of bytes transferred over the network",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -73,6 +76,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of bytes transferred over the network",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -90,6 +94,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of packets transferred over the network",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -107,6 +112,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of packets transferred over the network",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -124,6 +130,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of latency from a socket becoming readable until a userspace read",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -151,6 +158,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of the amount of time tasks were waiting in the runqueue",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -178,6 +186,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of syscalls",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -195,6 +204,7 @@
         {
           "data": [],
           "opts": {
+            "description": "Distribution of syscall latencies",
             "format": {
               "log_scale": true,
               "precision": 2,
@@ -222,6 +232,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The count of softirqs",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -239,6 +250,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The count of softirqs",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -256,6 +268,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The time spent in softirq handlers",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -277,6 +290,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The time spent in softirq handlers",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -304,6 +318,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of bytes transferred for block device operations",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -321,6 +336,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of bytes transferred for block device operations",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -338,6 +354,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of completed operations for block devices",
             "format": {
               "log_scale": null,
               "precision": 2,
@@ -355,6 +372,7 @@
         {
           "data": [],
           "opts": {
+            "description": "The number of completed operations for block devices",
             "format": {
               "log_scale": null,
               "precision": 2,
