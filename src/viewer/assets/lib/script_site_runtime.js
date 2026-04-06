@@ -9,7 +9,7 @@ import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIn
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, renderCgroupSection } from './script_shared.js';
-import { buildTopNavAttrs, createMainComponent } from './navigation_shared.js';
+import { buildTopNavAttrs, createMainComponent } from './navigation_wrapper.js';
 
 // Viewer info — set after WASM parquet load
 let viewerInfo = null;

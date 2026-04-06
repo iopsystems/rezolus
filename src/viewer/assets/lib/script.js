@@ -9,7 +9,7 @@ import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIn
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, renderCgroupSection } from './script_shared.js';
-import { buildTopNavAttrs, createMainComponent } from './navigation_shared.js';
+import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 
 // Live mode state - detected at startup
 let liveMode = false;
