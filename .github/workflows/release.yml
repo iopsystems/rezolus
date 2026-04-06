@@ -176,11 +176,14 @@ jobs:
           done
 
       - name: sign RPM packages
-        if: ${{ secrets.GPG_SIGNING_KEY != '' }}
         shell: bash
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
         run: |
+          if [ -z "$GPG_SIGNING_KEY" ]; then
+            echo "No GPG signing key configured, skipping."
+            exit 0
+          fi
           # Import the GPG signing key
           echo "$GPG_SIGNING_KEY" | base64 -d | gpg --batch --import
 
