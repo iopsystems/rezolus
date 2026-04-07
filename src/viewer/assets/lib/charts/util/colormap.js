@@ -116,24 +116,6 @@ export const VIRIDIS_COLORS = [
     '#7ad151', '#fde725',
 ];
 
-/** Viridis RGB ramp for custom renderItem (darkest stops removed) */
-const VIRIDIS_RGB = [
-    [65, 68, 135],
-    [42, 120, 142],
-    [34, 168, 132],
-    [122, 209, 81],
-    [253, 231, 37],
-];
-
-/**
- * Viridis colormap — interpolates through the RGB ramp.
- * @param {number} t - 0..1
- * @returns {string} `rgb(r,g,b)`
- */
-export function viridisColor(t) {
-    return interpolateRamp(VIRIDIS_RGB, t);
-}
-
 /** Inferno hex ramp for echarts visualMap (darkest stops removed for visibility on dark bg) */
 export const INFERNO_COLORS = [
     '#4a0c6b', '#781c6d', '#a52c60',
