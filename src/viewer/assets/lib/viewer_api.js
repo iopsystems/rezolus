@@ -35,9 +35,22 @@ const ViewerApi = {
             method: 'POST',
             url: '/api/v1/upload',
             body: data,
-            config: (xhr) => {
-                xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-                xhr.setRequestHeader('x-rezolus-filename', file.name || 'upload.parquet');
+            serialize: (v) => v,
+            headers: {
+                'Content-Type': 'application/octet-stream',
+                'x-rezolus-filename': file.name || 'upload.parquet',
+            },
+        });
+    },
+
+    async connectAgent(url) {
+        return backendRequest({
+            method: 'POST',
+            url: '/api/v1/connect',
+            body: url,
+            serialize: (v) => v,
+            headers: {
+                'Content-Type': 'text/plain',
             },
         });
     },

@@ -80,30 +80,38 @@ const TopNav = {
                     ),
                 ]),
             ]),
-            !liveMode && m('button.transport-btn.upload-btn', {
-                onclick: () => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = '.parquet,application/octet-stream';
-                    input.onchange = async () => {
-                        const file = input.files && input.files[0];
-                        if (file && attrs.onUploadParquet) {
-                            await attrs.onUploadParquet(file);
-                        }
-                    };
-                    input.click();
-                },
-                title: 'Upload parquet file',
-            }, 'Upload'),
             m('div.topnav-actions', [
+                // Upload parquet (file mode only)
+                !liveMode && m('button.transport-btn.import-btn', {
+                    onclick: () => {
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = '.parquet,application/octet-stream';
+                        input.onchange = async () => {
+                            const file = input.files && input.files[0];
+                            if (file && attrs.onUploadParquet) {
+                                await attrs.onUploadParquet(file);
+                            }
+                        };
+                        input.click();
+                    },
+                    title: 'Upload parquet file',
+                }, [
+                    m('span', 'Load Parquet'),
+                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>'),
+                ]),
                 // Import report JSON
                 m('button.transport-btn.import-btn', {
+                    class: attrs.filename ? 'parquet-loaded' : '',
+                    disabled: !attrs.filename,
                     onclick: () => importJSON(attrs.fileChecksum),
-                    title: reportStore.loadedFrom
-                        ? `Loaded: ${reportStore.loadedFrom} — click to replace`
-                        : 'Import report JSON',
+                    title: attrs.filename
+                        ? (reportStore.loadedFrom
+                            ? `Loaded: ${reportStore.loadedFrom} — click to replace`
+                            : 'Import report JSON')
+                        : 'Load a parquet file first',
                 }, [
-                    m('span', reportStore.loadedFrom || 'Load Report'),
+                    m('span', 'Load Report'),
                     m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>'),
                 ]),
                 // Transport controls (live mode only)

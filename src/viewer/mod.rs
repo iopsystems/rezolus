@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(not(feature = "developer-mode"))]
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
@@ -20,6 +21,7 @@ use tower_livereload::LiveReloadLayer;
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "developer-mode")]
 use notify::Watcher;
@@ -47,6 +49,8 @@ enum Source {
     File(PathBuf),
     /// A live Rezolus agent URL.
     Live(Url),
+    /// No input — upload-only mode.
+    Empty,
 }
 
 pub fn command() -> Command {
@@ -56,7 +60,7 @@ pub fn command() -> Command {
             clap::Arg::new("INPUT")
                 .help("Rezolus parquet file or agent URL (e.g. http://localhost:4241)")
                 .action(clap::ArgAction::Set)
-                .required(true)
+                .required(false)
                 .index(1),
         )
         .arg(
@@ -87,19 +91,19 @@ impl TryFrom<ArgMatches> for Config {
     fn try_from(
         args: ArgMatches,
     ) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
-        let input = args
-            .get_one::<String>("INPUT")
-            .expect("INPUT is required")
-            .clone();
-
-        let source = if input.starts_with("http://") || input.starts_with("https://") {
-            Source::Live(
-                input
-                    .parse::<Url>()
-                    .map_err(|e| format!("invalid URL: {e}"))?,
-            )
-        } else {
-            Source::File(PathBuf::from(input))
+        let source = match args.get_one::<String>("INPUT") {
+            Some(input) => {
+                if input.starts_with("http://") || input.starts_with("https://") {
+                    Source::Live(
+                        input
+                            .parse::<Url>()
+                            .map_err(|e| format!("invalid URL: {e}"))?,
+                    )
+                } else {
+                    Source::File(PathBuf::from(input))
+                }
+            }
+            None => Source::Empty,
         };
 
         Ok(Config {
@@ -214,8 +218,8 @@ pub fn run(config: Config) {
             tsdb.set_source(source.clone());
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
-            let mut state = dashboard::generate(tsdb, None);
-            state.live = true;
+            let state = dashboard::generate(tsdb, None);
+            state.live.store(true, Ordering::Relaxed);
 
             *state.systeminfo.write() = agent_systeminfo;
 
@@ -234,6 +238,10 @@ pub fn run(config: Config) {
             ));
 
             state
+        }
+        Source::Empty => {
+            info!("No input file — starting in upload-only mode");
+            AppState::new(Tsdb::default())
         }
     };
 
@@ -380,7 +388,7 @@ struct AppState {
     tsdb: Arc<parking_lot::RwLock<Tsdb>>,
     /// Raw msgpack snapshot bytes for parquet export (live mode only).
     snapshots: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
-    live: bool,
+    live: AtomicBool,
     /// Original parquet file path (file mode only).
     parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
     /// Serialized SystemSummary JSON from parquet metadata or live system.
@@ -397,7 +405,7 @@ impl AppState {
             sections: Default::default(),
             tsdb: Arc::new(parking_lot::RwLock::new(tsdb)),
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
-            live: false,
+            live: AtomicBool::new(false),
             parquet_path: parking_lot::RwLock::new(None),
             systeminfo: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
@@ -480,6 +488,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
         .route("/upload", axum::routing::post(upload_parquet))
+        .route("/connect", axum::routing::post(connect_agent))
         .route(
             "/save_with_selection",
             axum::routing::post(save_with_selection),
@@ -553,8 +562,10 @@ async fn data(
 async fn mode(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<serde_json::Value> {
+    let loaded = !state.sections.read().is_empty();
     axum::response::Json(serde_json::json!({
-        "live": state.live,
+        "live": state.live.load(Ordering::Relaxed),
+        "loaded": loaded,
     }))
 }
 
@@ -734,7 +745,7 @@ async fn upload_parquet(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> axum::response::Json<ApiResponse<serde_json::Value>> {
-    if state.live {
+    if state.live.load(Ordering::Relaxed) {
         return axum::response::Json(ApiResponse::error(
             "upload is only available in file mode".to_string(),
             "bad_request".to_string(),
@@ -771,7 +782,7 @@ async fn upload_parquet(
     }
 
     let loaded = Tsdb::load(&temp_path);
-    let data = match loaded {
+    let mut data = match loaded {
         Ok(d) => d,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
@@ -783,6 +794,11 @@ async fn upload_parquet(
     };
 
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
+
+    // Set the real filename before generating dashboards so the section JSON
+    // embeds the original name instead of the temp path.
+    data.set_filename(filename.clone());
+
     let new_state = dashboard::generate(data, filesize);
     let (systeminfo, selection) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
@@ -803,13 +819,127 @@ async fn upload_parquet(
     *state.selection.write() = selection;
     *state.file_checksum.write() = file_checksum;
 
-    {
-        let mut tsdb = state.tsdb.write();
-        tsdb.set_filename(filename.clone());
-    }
-
     axum::response::Json(ApiResponse::success(serde_json::json!({
         "filename": filename,
+    })))
+}
+
+/// Connect to a live Rezolus agent at runtime.
+/// Fetches agent metadata, generates dashboards, spawns the ingest loop,
+/// and flips the viewer into live mode.
+async fn connect_agent(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> axum::response::Json<ApiResponse<serde_json::Value>> {
+    if state.live.load(Ordering::Relaxed) {
+        return axum::response::Json(ApiResponse::error(
+            "already connected to a live agent".to_string(),
+            "bad_request".to_string(),
+        ));
+    }
+
+    let url_str = match std::str::from_utf8(&body) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => {
+            return axum::response::Json(ApiResponse::error(
+                "invalid UTF-8 in URL".to_string(),
+                "bad_request".to_string(),
+            ));
+        }
+    };
+
+    let url: Url = match url_str.parse() {
+        Ok(u) => u,
+        Err(e) => {
+            return axum::response::Json(ApiResponse::error(
+                format!("invalid URL: {e}"),
+                "bad_request".to_string(),
+            ));
+        }
+    };
+
+    let client = match Client::builder().http1_only().build() {
+        Ok(c) => c,
+        Err(e) => {
+            return axum::response::Json(ApiResponse::error(
+                format!("failed to create HTTP client: {e}"),
+                "internal_error".to_string(),
+            ));
+        }
+    };
+
+    // Fetch agent version from root endpoint
+    let (source, version) = match client.get(url.clone()).send().await {
+        Ok(response) => match response.text().await {
+            Ok(body) => {
+                let first_line = body.lines().next().unwrap_or("");
+                let parts: Vec<&str> = first_line.split_whitespace().collect();
+                match parts.as_slice() {
+                    [name, ver, ..] => (name.to_string(), ver.to_string()),
+                    _ => ("rezolus".to_string(), String::new()),
+                }
+            }
+            Err(_) => ("rezolus".to_string(), String::new()),
+        },
+        Err(e) => {
+            return axum::response::Json(ApiResponse::error(
+                format!("failed to connect to agent at {url}: {e}"),
+                "connection_error".to_string(),
+            ));
+        }
+    };
+
+    // Fetch systeminfo from agent
+    let mut info_url = url.clone();
+    info_url.set_path("/systeminfo");
+    let agent_systeminfo = match client.get(info_url).send().await {
+        Ok(response) if response.status().is_success() => response.text().await.ok(),
+        _ => None,
+    };
+
+    // Generate dashboards with live metadata
+    let mut tsdb = Tsdb::default();
+    tsdb.set_sampling_interval_ms(1000);
+    tsdb.set_source(source.clone());
+    tsdb.set_version(version.clone());
+    tsdb.set_filename(url.to_string());
+    let new_state = dashboard::generate(tsdb, None);
+
+    // Update shared state
+    {
+        let mut tsdb = state.tsdb.write();
+        *tsdb = Arc::try_unwrap(new_state.tsdb)
+            .ok()
+            .expect("no other references to new tsdb")
+            .into_inner();
+    }
+    {
+        let mut sections = state.sections.write();
+        *sections = new_state.sections.into_inner();
+    }
+    *state.systeminfo.write() = agent_systeminfo;
+    state.live.store(true, Ordering::Relaxed);
+
+    // Spawn the ingest loop
+    let ingest_tsdb = state.tsdb.clone();
+    let ingest_snapshots = state.snapshots.clone();
+    let mut ingest_url = url.clone();
+    ingest_url.set_path("/metrics/binary");
+
+    tokio::spawn(ingest_loop(
+        ingest_url,
+        ingest_tsdb,
+        ingest_snapshots,
+        source.clone(),
+        version.clone(),
+    ));
+
+    info!("Connected to {source} {version} at {url}");
+
+    axum::response::Json(ApiResponse::success(serde_json::json!({
+        "source": source,
+        "version": version,
+        "url": url.to_string(),
     })))
 }
 
@@ -817,7 +947,7 @@ async fn upload_parquet(
 async fn reset_tsdb(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<serde_json::Value>> {
-    if !state.live {
+    if !state.live.load(Ordering::Relaxed) {
         return axum::response::Json(ApiResponse::error(
             "reset is only available in live mode".to_string(),
             "bad_request".to_string(),

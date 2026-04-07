@@ -467,26 +467,6 @@ body::after {
     color: var(--accent);
 }
 
-#topnav .transport-btn.upload-btn {
-    width: auto;
-    height: 32px;
-    padding: 0 0.75rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-    border: 1px solid var(--border-default);
-    background: var(--bg-tertiary);
-    color: var(--fg-secondary);
-}
-
-#topnav .transport-btn.upload-btn {
-    margin-left: 0.5rem;
-}
-
-#topnav .transport-btn.upload-btn:hover {
-    color: var(--fg);
-    border-color: var(--accent-muted);
-}
 
 #topnav .topnav-actions .transport-btn.import-btn span {
     overflow: hidden;
@@ -502,6 +482,17 @@ body::after {
     background: rgba(88, 166, 255, 0.3);
     color: var(--accent-emphasis);
     box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+}
+
+#topnav .topnav-actions .transport-btn.import-btn.parquet-loaded {
+    color: #3fb950;
+    border-color: rgba(63, 185, 80, 0.4);
+}
+
+#topnav .topnav-actions .transport-btn.import-btn.parquet-loaded:hover {
+    background: rgba(63, 185, 80, 0.15);
+    color: #56d364;
+    box-shadow: 0 0 12px rgba(63, 185, 80, 0.2);
 }
 
 #topnav .topnav-actions button {
@@ -1325,8 +1316,7 @@ main {
     padding: 0.375rem 0.5rem;
 }
 
-.cgroup-select option:checked,
-.cgroup-select option:selected {
+.cgroup-select option:checked {
     background: var(--accent);
     color: var(--bg-void);
 }
@@ -2440,4 +2430,143 @@ main {
     .selection-card-notes {
         flex: 1 1 auto;
     }
+}
+
+/* ---- Landing / File Upload Page ---- */
+
+.upload-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 2rem;
+}
+
+.upload-card {
+    background: var(--bg-secondary, #141820);
+    border: 1px solid var(--border-default, #2a2e3a);
+    border-radius: 12px;
+    padding: 3rem;
+    max-width: 520px;
+    width: 100%;
+    text-align: center;
+}
+
+.upload-title {
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+    color: var(--fg, #e0e0e0);
+}
+
+.upload-subtitle {
+    color: var(--fg-secondary, #b0b4c0);
+    margin: 0 0 0.25rem;
+    font-size: 0.95rem;
+}
+
+.upload-privacy {
+    color: var(--accent, #5b9bd5);
+    margin: 0 0 2rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.upload-dropzone {
+    border: 2px dashed var(--border-default, #2a2e3a);
+    border-radius: 8px;
+    padding: 2.5rem 1.5rem;
+    transition: border-color 0.15s, background 0.15s;
+    cursor: pointer;
+}
+
+.upload-dropzone.dragover {
+    border-color: var(--accent, #5b9bd5);
+    background: rgba(91, 155, 213, 0.05);
+}
+
+.upload-icon {
+    color: var(--fg-muted, #8b8fa3);
+    margin-bottom: 1rem;
+}
+
+.upload-dropzone p {
+    margin: 0.25rem 0;
+    color: var(--fg-secondary, #b0b4c0);
+    font-size: 0.9rem;
+}
+
+.upload-or {
+    font-size: 0.8rem !important;
+    color: var(--fg-secondary, #b0b4c0);
+    opacity: 0.6;
+}
+
+.upload-btn {
+    display: inline-block;
+    margin-top: 0.75rem;
+    padding: 0.5rem 1.5rem;
+    background: var(--accent, #5b9bd5);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.upload-btn:hover {
+    opacity: 0.85;
+}
+
+.upload-error {
+    color: #e05252;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+}
+
+.upload-loading {
+    color: var(--accent, #5b9bd5);
+    margin-top: 1rem;
+    font-size: 0.85rem;
+}
+
+/* ---- Connect to Live Agent ---- */
+
+.upload-connect {
+    margin-top: 1.5rem;
+    text-align: center;
+}
+
+.upload-connect-label {
+    color: var(--fg-secondary, #b0b4c0);
+    font-size: 0.9rem;
+    margin: 0 0 0.25rem;
+}
+
+.connect-input {
+    display: block;
+    width: 100%;
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-primary, #0a0e14);
+    color: var(--fg, #e0e0e0);
+    border: 1px solid var(--border-default, #2a2e3a);
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: 'JetBrains Mono', monospace;
+    outline: none;
+    transition: border-color 0.15s;
+    box-sizing: border-box;
+    text-align: center;
+}
+
+.connect-input:focus {
+    border-color: var(--accent, #5b9bd5);
+}
+
+.connect-input::placeholder {
+    color: var(--fg-muted, #8b8fa3);
+    opacity: 0.6;
 }

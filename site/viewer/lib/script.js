@@ -10,6 +10,7 @@ import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
+import { FileUpload } from './landing.js';
 
 // Viewer info — set after WASM parquet load
 let viewerInfo = null;
@@ -347,65 +348,6 @@ const buildClientOnlySectionView = (activeSection) => ({
     },
 });
 
-// ---- File Upload Landing Page ----
-
-const FileUpload = {
-    view() {
-        return m('div.upload-container', [
-            m('div.upload-card', [
-                m('h1.upload-title', 'Rezolus Viewer'),
-                m('p.upload-subtitle', 'Drop a parquet file to explore system performance metrics.'),
-                m('p.upload-privacy', 'Your data never leaves the browser.'),
-                m('div.upload-dropzone', {
-                    id: 'dropzone',
-                    ondragover: (e) => {
-                        e.preventDefault();
-                        e.currentTarget.classList.add('dragover');
-                    },
-                    ondragleave: (e) => {
-                        e.currentTarget.classList.remove('dragover');
-                    },
-                    ondrop: (e) => {
-                        e.preventDefault();
-                        e.currentTarget.classList.remove('dragover');
-                        const file = e.dataTransfer.files[0];
-                        if (file) loadFile(file);
-                    },
-                }, [
-                    m('svg.upload-icon', { width: 48, height: 48, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }, [
-                        m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
-                        m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
-                    ]),
-                    m('p', 'Drag & drop a .parquet file here'),
-                    m('p.upload-or', 'or'),
-                    m('label.upload-btn', [
-                        'Choose File',
-                        m('input', {
-                            type: 'file',
-                            accept: '.parquet',
-                            style: 'display:none',
-                            onchange: (e) => {
-                                const file = e.target.files[0];
-                                if (file) loadFile(file);
-                            },
-                        }),
-                    ]),
-                ]),
-                m('div', { style: 'margin-top: 1.5rem' }, [
-                    m('p.upload-or', 'or'),
-                    m('button.upload-btn', {
-                        style: 'margin-top: 0.75rem; background: #6c757d',
-                        onclick: loadDemo,
-                        disabled: window._loading,
-                    }, 'Try Demo'),
-                ]),
-                window._loadError && m('p.upload-error', window._loadError),
-                window._loading && m('p.upload-loading', 'Loading parquet file...'),
-            ]),
-        ]);
-    },
-};
-
 async function loadDemo() {
     window._loading = true;
     window._loadError = null;
@@ -572,5 +514,12 @@ function initDashboardRouter() {
 if (new URLSearchParams(window.location.search).has('demo')) {
     loadDemo();
 } else {
-    m.mount(document.body, FileUpload);
+    m.mount(document.body, {
+        view: () => m(FileUpload, {
+            onFile: loadFile,
+            onDemo: loadDemo,
+            loading: window._loading,
+            error: window._loadError,
+        }),
+    });
 }
