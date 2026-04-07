@@ -2363,9 +2363,16 @@ main {
         padding: 0;
     }
 
-    /* Hide time range bar on mobile */
+    /* Time range bar wraps to its own row on mobile */
     .time-range-bar {
-        display: none;
+        width: 100%;
+        margin-left: 0;
+        margin-right: 0;
+        justify-content: center;
+    }
+
+    .time-track {
+        width: 120px;
     }
 
     /* ── Sidebar as slide-out drawer ── */
