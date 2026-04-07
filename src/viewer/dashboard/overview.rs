@@ -70,7 +70,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .with_unit_system("time")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], tcp_packet_latency)".to_string(),
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], tcp_packet_latency, filtered)".to_string(),
     );
 
     view.group(network);
@@ -88,7 +88,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .with_unit_system("time")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency, filtered)"
             .to_string(),
     );
 
@@ -111,7 +111,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time)
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)".to_string(),
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency, filtered)".to_string(),
     );
 
     view.group(syscall);

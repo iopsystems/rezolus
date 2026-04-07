@@ -210,9 +210,9 @@ const createDataApi = ({
 
     const fetchHeatmapForPlot = async (plot) => {
         const query = plot.promql_query;
-        if (!query || !query.includes('histogram_percentiles')) return null;
+        if (!query || !query.includes('histogram_quantiles')) return null;
 
-        const match = query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
+        const match = query.match(/histogram_quantiles\s*\(\s*\[[^\]]*\]\s*,\s*([^,)]+)/);
         if (!match) return null;
 
         const metricSelector = match[1].trim();
@@ -238,7 +238,7 @@ const createDataApi = ({
         const plots = [];
         for (const group of groups || []) {
             for (const plot of group.plots || []) {
-                if (plot.promql_query && plot.promql_query.includes('histogram_percentiles')) {
+                if (plot.promql_query && plot.promql_query.includes('histogram_quantiles')) {
                     plots.push(plot);
                 }
             }

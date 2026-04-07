@@ -123,6 +123,31 @@ export function configureScatterChart(chart) {
         });
     }
 
+    // Detect series that were fully suppressed by server-side filtering
+    // (all data points removed because total_count was too low).
+    const allSuppressed = new Set();
+    for (let i = 1; i < data.length; i++) {
+        const name = percentileLabels[i - 1] || `Percentile ${i}`;
+        const vals = data[i];
+        if (!vals || vals.every(v => v === undefined || v === null || isNaN(v))) {
+            allSuppressed.add(name);
+        }
+    }
+
+    // For suppressed series, make them invisible but keep legend entries
+    if (allSuppressed.size > 0) {
+        for (const s of series) {
+            if (allSuppressed.has(s.name)) {
+                if (s.type === 'line') {
+                    s.lineStyle = { ...s.lineStyle, opacity: 0 };
+                    s.itemStyle = { ...s.itemStyle, opacity: 0 };
+                } else {
+                    s.itemStyle = { ...s.itemStyle, opacity: 0 };
+                }
+            }
+        }
+    }
+
     // OOB band: move clamped dots above the main chart area
     chart._oobAxisMax = null;
     if (hasClamped && range && range.max != null) {
@@ -211,7 +236,7 @@ export function configureScatterChart(chart) {
         name,
         itemStyle: { borderColor: 'transparent', borderWidth: 2 },
         textStyle: {
-            color: COLORS.fgSecondary,
+            color: allSuppressed.has(name) ? COLORS.fgMuted : COLORS.fgSecondary,
             backgroundColor: 'transparent',
             borderColor: 'transparent',
             borderWidth: 1,
@@ -345,6 +370,22 @@ export function configureScatterChart(chart) {
         // bordered swatch + background highlight on text.
         // Padding is always the same so layout doesn't shift on pin/unpin.
         const makeLegendData = (names) => names.map(name => {
+            // Suppressed quantiles stay grayed regardless of pin state
+            if (allSuppressed.has(name)) {
+                return {
+                    name,
+                    itemStyle: { borderColor: 'transparent', borderWidth: 2 },
+                    textStyle: {
+                        color: COLORS.fgMuted,
+                        backgroundColor: 'transparent',
+                        borderColor: 'transparent',
+                        borderWidth: 1,
+                        borderRadius: 3,
+                        padding: [2, 4],
+                        width: 56,
+                    },
+                };
+            }
             const isPinned = pinned.has(name);
             const color = colorByName[name];
             return {
@@ -387,6 +428,8 @@ export function configureScatterChart(chart) {
         }
 
         const name = params.name;
+        // Don't allow pinning suppressed quantiles
+        if (allSuppressed.has(name)) return;
         if (ctrlHeld) {
             // Ctrl/Cmd+click: toggle this series in the multi-select set
             if (chart.pinnedSet.has(name)) {

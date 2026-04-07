@@ -344,7 +344,7 @@ export const SingleChartView = {
             });
         };
 
-        const isHistogram = plot.promql_query && plot.promql_query.includes('histogram_percentiles');
+        const isHistogram = plot.promql_query && plot.promql_query.includes('histogram_quantiles');
 
         const toggleHeatmap = async () => {
             if (st.heatmapMode) {

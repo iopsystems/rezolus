@@ -66,7 +66,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             PlotOpts::scatter(*op, format!("latency-{op_lower}"), Unit::Time)
                 .with_log_scale(true)
                 .range(0.0, 100_000_000_000.0),
-            format!("histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{{op=\"{op_lower}\"}})"),
+            format!("histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{{op=\"{op_lower}\"}}, filtered)"),
         );
     }
 
@@ -85,7 +85,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         size.plot_promql(
             PlotOpts::scatter(*op, format!("size-{op_lower}"), Unit::Bytes).with_log_scale(true),
             format!(
-                "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{{op=\"{op_lower}\"}})"
+                "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{{op=\"{op_lower}\"}}, filtered)"
             ),
         );
     }
