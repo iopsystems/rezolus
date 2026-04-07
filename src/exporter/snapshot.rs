@@ -92,8 +92,7 @@ pub fn snapshot(
                 for (quantile, bucket) in result.entries() {
                     if let Ok(value) = bucket.end().try_into() {
                         let mut metadata = metadata.clone();
-                        metadata
-                            .insert("percentile".to_string(), quantile.as_f64().to_string());
+                        metadata.insert("percentile".to_string(), quantile.as_f64().to_string());
 
                         snapshot.gauges.push(Gauge {
                             name: name.clone(),
