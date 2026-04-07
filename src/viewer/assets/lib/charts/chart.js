@@ -159,10 +159,6 @@ export class Chart {
         return m('div.chart');
     }
 
-    isInitialized() {
-        return this.echart !== null;
-    }
-
     /**
      * Dispatch an action to the echart instance if it is initialized.
      */
@@ -203,17 +199,6 @@ export class Chart {
         }
     }
 
-    /**
-     * If the echart instance is already initialized, dispose and reinitialize it.
-     */
-    reinitialize() {
-        if (this.isInitialized()) {
-            this.echart.dispose();
-            this.echart = null;
-            this.initEchart();
-        }
-    }
-
     initEchart() {
         if (this.echart) {
             return;
@@ -230,18 +215,13 @@ export class Chart {
             });
         }
 
-        // Store original time data for human-friendly tick calculation
         let timeData = null;
         if (this.spec.data && this.spec.data.length > 0) {
             if (this.spec.data[0] && Array.isArray(this.spec.data[0])) {
-                // For line and scatter charts, time is in the first row
                 timeData = this.spec.data[0];
-                this.echart.originalTimeData = timeData;
             }
         } else if (this.spec.time_data) {
-            // For heatmaps, time is in time_data property
             timeData = this.spec.time_data;
-            this.echart.originalTimeData = timeData;
         }
 
         // Calculate sample interval and minimum zoom percentage

@@ -5,7 +5,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
-import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
@@ -26,34 +26,30 @@ let fileChecksum = null;
 // Starts recording — data flows from agent into TSDB and UI refreshes
 let recording = true;
 
-// Detect live mode on startup
-const initializeFromBackend = async () => {
-    try {
-        const response = await ViewerApi.getMode();
-        liveMode = response.live === true;
-        if (liveMode) {
-            startLiveRefresh();
+// Fetch metadata, system info, and selection in parallel.
+// Used by both bootstrap() and uploadParquet().
+const fetchBackendState = async () => {
+    const [metaResult, sysResult, selResult] = await Promise.allSettled([
+        ViewerApi.getMetadata(),
+        ViewerApi.getSystemInfo(),
+        ViewerApi.getSelection(),
+    ]);
+    if (metaResult.status === 'fulfilled') {
+        const r = metaResult.value;
+        if (r.status === 'success' && r.data?.fileChecksum) {
+            fileChecksum = r.data.fileChecksum;
         }
-    } catch (_) { /* ignore - assume file mode */ }
-
-    try {
-        const response = await ViewerApi.getMetadata();
-        if (response.status === 'success' && response.data?.fileChecksum) {
-            fileChecksum = response.data.fileChecksum;
-        }
-    } catch (_) { /* ignore */ }
-
-    try {
-        systemInfoData = await ViewerApi.getSystemInfo();
-    } catch (_) { /* no systeminfo available */ }
-
-    try {
-        const data = await ViewerApi.getSelection();
+    }
+    if (sysResult.status === 'fulfilled') {
+        systemInfoData = sysResult.value;
+    }
+    if (selResult.status === 'fulfilled') {
+        const data = selResult.value;
         if (data && Array.isArray(data.entries)) {
             loadPayloadIntoStore(reportStore, data);
             reportStore.loadedFrom = 'embedded report';
         }
-    } catch (_) { /* no saved selection */ }
+    }
 };
 
 // Transport control actions
@@ -61,10 +57,7 @@ const startRecording = async () => {
     try {
         // Clear TSDB so the new recording has no gaps
         await ViewerApi.reset();
-        // Clear frontend caches
-        Object.keys(sectionResponseCache).forEach(k => delete sectionResponseCache[k]);
-        heatmapDataCache.clear();
-        chartsState.clear();
+        clearViewerCaches();
         recording = true;
         m.redraw();
     } catch (e) {
@@ -99,7 +92,7 @@ const uploadParquet = async (file) => {
         await ViewerApi.uploadParquet(file);
         clearViewerCaches();
         chartsState.resetAll();
-        await initializeFromBackend();
+        await fetchBackendState();
         // Re-fetch overview so the view has data to render immediately.
         // m.route.set('/overview') is a no-op when already on /overview
         // (the route guard returns a never-resolving promise), so we must
@@ -566,27 +559,8 @@ const bootstrap = async () => {
         if (liveMode) startLiveRefresh();
     } catch (_) { /* assume loaded file mode */ }
 
-    // Fetch metadata
-    try {
-        const response = await ViewerApi.getMetadata();
-        if (response.status === 'success' && response.data?.fileChecksum) {
-            fileChecksum = response.data.fileChecksum;
-        }
-    } catch (_) {}
-
-    // Fetch system info
-    try {
-        systemInfoData = await ViewerApi.getSystemInfo();
-    } catch (_) {}
-
-    // Load embedded report selection
-    try {
-        const data = await ViewerApi.getSelection();
-        if (data && Array.isArray(data.entries)) {
-            loadPayloadIntoStore(reportStore, data);
-            reportStore.loadedFrom = 'embedded report';
-        }
-    } catch (_) {}
+    // Fetch metadata, system info, and selection in parallel
+    await fetchBackendState();
 
     // Set up the router now that data is loaded
     m.route.prefix = ''; // use regular paths for navigation, eg. /overview

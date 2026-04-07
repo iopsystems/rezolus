@@ -157,7 +157,7 @@ const createDataApi = ({
     };
 
     const processDashboardData = async (data, activeCgroupPattern) => {
-        const metadata = await fetchMetadata();
+        const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
 
         const queryPlots = [];
