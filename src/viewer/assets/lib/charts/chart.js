@@ -19,15 +19,18 @@ import globalColorMapper, { COLORS } from './util/colormap.js';
 
 export class ChartsState {
     // Zoom state for synchronization across charts
-    // { 
+    // {
     //     start?: number, // 0-100
     //     end?: number, // 0-100
-    //     startValue?: number, // raw x axis data value
-    //     endValue?: number,  // raw x axis data value
+    //     startValue?: number, // raw x axis data value (ms)
+    //     endValue?: number,   // raw x axis data value (ms)
     // }
     zoomLevel = null;
-    // 'global' (time bar) | 'local' (chart drag) | null
+    // 'global' (time bar) | 'local' (chart drag/scroll) | null
     zoomSource = null;
+    // Global zoom — always percentage-based { start, end } (0-100).
+    // Tracks what the time bar shows. Never updated by local chart zooms.
+    globalZoom = null;
     // All `Chart` instances, mapped by id
     charts = new Map();
     // Global color mapper - for consistent cgroup colors
@@ -38,6 +41,7 @@ export class ChartsState {
     clear() {
         this.zoomLevel = null;
         this.zoomSource = null;
+        this.globalZoom = null;
         this.charts.clear();
     }
 
@@ -47,11 +51,9 @@ export class ChartsState {
 
     // Reset zoom level on all charts
     resetZoom() {
-        this.zoomLevel = {
-            start: 0,
-            end: 100,
-        };
+        this.zoomLevel = { start: 0, end: 100 };
         this.zoomSource = null;
+        this.globalZoom = { start: 0, end: 100 };
         this.charts.forEach(chart => {
             chart.dispatchAction({
                 type: 'dataZoom',

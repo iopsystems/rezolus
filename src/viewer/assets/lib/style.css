@@ -316,6 +316,26 @@ body::after {
     box-shadow: 0 0 8px var(--accent-glow);
 }
 
+.time-match-btn {
+    padding: 2px 8px;
+    background: transparent;
+    color: var(--fg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: all var(--transition-base);
+}
+
+.time-match-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--fg);
+    border-color: var(--border-emphasis);
+}
+
 #topnav .topnav-actions {
     display: flex;
     align-items: center;
