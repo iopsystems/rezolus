@@ -1,5 +1,44 @@
 ## [Unreleased]
 
+## [5.9.0] - 2026-04-06
+
+### Added
+
+- Viewer landing page with drag-and-drop file upload and live agent connect. (#753)
+- Auto-generate dashboard JSON from Rust definitions. (#751)
+- Interactive WASM viewer with demo on project site. (#739 #740)
+- Save-as modal, toast notifications, and report metadata in viewer. (#738)
+- Recorder `--metadata key=value` option for parquet metadata. (#737)
+- Recorder support for recording from Prometheus endpoints. (#736)
+- Selection section for curated chart collections in viewer. (#735)
+- Interactive CPU topology diagram in viewer System Info. (#731)
+- Serve and fetch systeminfo from agent. (#730)
+- Embed system hardware summary in parquet metadata. (#724)
+- GPG signing for RPM packages and release checksums. (#721)
+- Integration tests for BPF samplers. (#720)
+- Unit tests for metric group types. (#719)
+- Project site. (#712)
+
+### Changed
+
+- Replace ringlog with tracing ecosystem. (#715)
+- Replace duplicated viewer lib files with symlinks to src/viewer/assets/lib. (#746)
+- Viewer improvements: per-chart range clamping with OOB band (#741), time range
+  bar UX (#733), Y-axis rescaling, no-data collapse, metadata, cgroup selector
+  fix (#728), two-column layout for cgroups (#725), chart navigation and layout
+  (#729), mobile-responsive layout and cgroup paired charts, API responses and
+  topology rendering (#732), UI layout and descriptions (#713).
+
+### Fixed
+
+- Replace out-of-tree import with local symlink in site. (#750)
+- Pair cgroup charts by title instead of array index in viewer.
+- Reduce memory footprint for per-task CPU usage metrics. (#718)
+- Serve packed counter values directly from BPF mmap. (#722)
+- CI: skip release/pages/tag workflows on forks (#744), dereference symlinks
+  for GitHub Pages (#748), move GPG key check to shell guard (#749).
+- Use tarball URL for Homebrew formula updates. (#723)
+
 ## [5.8.2] - 2026-03-19
 
 ### Fixed
@@ -525,7 +564,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.8.2...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.9.0...HEAD
+[5.9.0]: https://github.com/iopsystems/rezolus/compare/v5.8.2...v5.9.0
 [5.8.2]: https://github.com/iopsystems/rezolus/compare/v5.8.1...v5.8.2
 [5.8.1]: https://github.com/iopsystems/rezolus/compare/v5.8.0...v5.8.1
 [5.8.0]: https://github.com/iopsystems/rezolus/compare/v5.7.0...v5.8.0
