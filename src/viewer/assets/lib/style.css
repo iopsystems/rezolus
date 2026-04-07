@@ -2271,6 +2271,20 @@ main {
     }
 }
 
+/* Touch / mobile devices: hide chart action buttons and add scroll gutter */
+@media (pointer: coarse) {
+    .chart-expand,
+    .chart-select {
+        display: none;
+    }
+
+    /* Extra right padding so users can scroll without accidentally
+       triggering chart zoom on the dataZoom drag area */
+    #section-content {
+        padding-right: 40px;
+    }
+}
+
 /* ==========================================================================
    Mobile / Responsive (<768px)
    ========================================================================== */
