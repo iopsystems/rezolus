@@ -1,3 +1,5 @@
+use histogram::SampleQuantiles;
+
 use super::*;
 
 /// Produces a snapshot from a previous and current snapshot
@@ -86,11 +88,11 @@ pub fn snapshot(
                 }
             }
 
-            if let Ok(Some(percentiles)) = delta.percentiles(&[0.5, 0.9, 0.99, 0.999, 0.9999]) {
-                for (percentile, value) in percentiles.into_iter().map(|(p, b)| (p, b.end())) {
-                    if let Ok(value) = value.try_into() {
+            if let Ok(Some(result)) = delta.quantiles(&[0.5, 0.9, 0.99, 0.999, 0.9999]) {
+                for (quantile, bucket) in result.entries() {
+                    if let Ok(value) = bucket.end().try_into() {
                         let mut metadata = metadata.clone();
-                        metadata.insert("percentile".to_string(), percentile.to_string());
+                        metadata.insert("percentile".to_string(), quantile.as_f64().to_string());
 
                         snapshot.gauges.push(Gauge {
                             name: name.clone(),

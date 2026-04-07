@@ -93,7 +93,8 @@ export function configureHistogramHeatmap(chart) {
         time_data: timeData,
         bucket_bounds: bucketBounds,
         data,
-        opts
+        opts,
+        total_counts: serverTotalCounts,
     } = chart.spec;
 
     if (!data || data.length === 0 || !timeData || timeData.length === 0) {
@@ -164,11 +165,20 @@ export function configureHistogramHeatmap(chart) {
     if (chart.histogramDisplayMode === undefined) {
         chart.histogramDisplayMode = 'percentage';
     }
-    // Compute total counts per downsampled time step (for percentage mode)
+    // Compute total counts per downsampled time step (for percentage mode).
+    // Prefer server-provided total_counts (authoritative from histogram) over
+    // summing visible bucket counts, which undercounts when buckets are trimmed.
     const totalCountPerTime = new Float64Array(dsTimeCount);
-    for (let dt = 0; dt < dsTimeCount; dt++) {
-        for (let bo = 0; bo < bucketRange; bo++) {
-            totalCountPerTime[dt] += aggMax[dt * bucketRange + bo];
+    if (serverTotalCounts && serverTotalCounts.length > 0) {
+        for (let dt = 0; dt < dsTimeCount; dt++) {
+            const origIdx = dt * factor;
+            totalCountPerTime[dt] = serverTotalCounts[origIdx] || 0;
+        }
+    } else {
+        for (let dt = 0; dt < dsTimeCount; dt++) {
+            for (let bo = 0; bo < bucketRange; bo++) {
+                totalCountPerTime[dt] += aggMax[dt * bucketRange + bo];
+            }
         }
     }
 

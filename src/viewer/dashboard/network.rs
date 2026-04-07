@@ -64,15 +64,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut tcp = Group::new("TCP", "tcp");
 
     // TCP Packet Latency percentiles - p50, p90, p99, p99.9
-    // Use the efficient histogram_percentiles() function to compute all percentiles in one pass
-    // Note: histogram_percentiles works directly on histogram data, not on irate() results
     tcp.plot_promql(
         PlotOpts::scatter("TCP Packet Latency", "tcp-packet-latency", Unit::Time)
             .with_axis_label("Latency")
             .with_unit_system("time")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)".to_string(),
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)".to_string(),
     );
 
     view.group(tcp);

@@ -139,7 +139,7 @@
             "style": "scatter",
             "title": "Read"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"read\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"read\"})"
         },
         {
           "data": [],
@@ -161,7 +161,7 @@
             "style": "scatter",
             "title": "Write"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"write\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"write\"})"
         }
       ]
     },
@@ -185,7 +185,7 @@
             "style": "scatter",
             "title": "Read"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"read\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"read\"})"
         },
         {
           "data": [],
@@ -203,7 +203,7 @@
             "style": "scatter",
             "title": "Write"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"write\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"write\"})"
         }
       ]
     }

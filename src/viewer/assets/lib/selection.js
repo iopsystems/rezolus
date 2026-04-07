@@ -384,7 +384,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
         const hasLocalZoom = cs?.zoomSource === 'local' && !cs?.isDefaultZoom();
         const hasChartSelection = hasLocalZoom ||
             Array.from(cs?.charts?.values() || []).some(c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
-        const hasHistograms = selectionStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_percentiles'));
+        const hasHistograms = selectionStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_quantiles'));
 
         const header = m('div.selection-header', [
             m('div.section-header-row', [
@@ -477,7 +477,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
         const hasLocalZoom = cs?.zoomSource === 'local' && !cs?.isDefaultZoom();
         const hasChartSelection = hasLocalZoom ||
             Array.from(cs?.charts?.values() || []).some(c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
-        const hasHistograms = reportStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_percentiles'));
+        const hasHistograms = reportStore.entries.some(e => e.promql_query && e.promql_query.includes('histogram_quantiles'));
 
         const fmtTs = (ms) => {
             const d = new Date(ms);

@@ -115,7 +115,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -126,7 +126,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1216,7 +1216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1528,9 +1528,9 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "histogram"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "496e8d7bf5d092f03dd57ca671cc0d4f401a95c156522f8ea5c79e4ada79dd9c"
+checksum = "12e53e81ca5f30edbe74ce380afa4c3572954aa615fd5b83b787b21f012743b8"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -2237,8 +2237,6 @@ dependencies = [
 [[package]]
 name = "metriken"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "625cf66223be6d306db71b8bec24e8ae6b18bce095d41b8b696fe7b87ccdfd1a"
 dependencies = [
  "histogram",
  "metriken-core",
@@ -2250,8 +2248,6 @@ dependencies = [
 [[package]]
 name = "metriken-core"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a51491c61573eefe01aff38c3ab258f182c596e29362caffb108c10585fdf6cc"
 dependencies = [
  "linkme",
  "parking_lot",
@@ -2261,8 +2257,6 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3643374c9873e69a27e50404db6006ad09f0c1ee944e8ce928d586df077b71db"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2273,8 +2267,6 @@ dependencies = [
 [[package]]
 name = "metriken-exposition"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e552ebc179eeaab2fbc52ed7575cb8d69f4b409bc9e7925c2ecb93504a6f7db"
 dependencies = [
  "arrow 56.2.0",
  "chrono",
@@ -2287,12 +2279,11 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73c7622b45019bfa1bf5e0a4257d4e806e6e2bc6a51311df0475a03922c14f94"
+version = "0.7.0"
 dependencies = [
  "arrow 56.2.0",
  "axum",
+ "bytes",
  "histogram",
  "metriken-exposition",
  "parquet 56.2.0",
@@ -2409,7 +2400,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3202,7 +3193,7 @@ dependencies = [
  "errno 0.3.14",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3364,7 +3355,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.2.8",
+ "errno 0.3.14",
  "libc",
 ]
 
@@ -3411,7 +3402,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3533,7 +3524,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4221,7 +4212,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

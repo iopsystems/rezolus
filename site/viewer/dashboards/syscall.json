@@ -43,7 +43,7 @@
             "style": "scatter",
             "title": "Total"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)"
         },
         {
           "data": [],
@@ -83,7 +83,7 @@
             "style": "scatter",
             "title": "Read"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"read\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"read\"})"
         },
         {
           "data": [],
@@ -123,7 +123,7 @@
             "style": "scatter",
             "title": "Write"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"write\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"write\"})"
         },
         {
           "data": [],
@@ -163,7 +163,7 @@
             "style": "scatter",
             "title": "Poll"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"poll\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"poll\"})"
         },
         {
           "data": [],
@@ -203,7 +203,7 @@
             "style": "scatter",
             "title": "Socket"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"socket\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"socket\"})"
         },
         {
           "data": [],
@@ -243,7 +243,7 @@
             "style": "scatter",
             "title": "Lock"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"lock\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"lock\"})"
         },
         {
           "data": [],
@@ -283,7 +283,7 @@
             "style": "scatter",
             "title": "Time"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"time\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"time\"})"
         },
         {
           "data": [],
@@ -323,7 +323,7 @@
             "style": "scatter",
             "title": "Sleep"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"sleep\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"sleep\"})"
         },
         {
           "data": [],
@@ -363,7 +363,7 @@
             "style": "scatter",
             "title": "Yield"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"yield\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"yield\"})"
         },
         {
           "data": [],
@@ -403,7 +403,7 @@
             "style": "scatter",
             "title": "Filesystem"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"filesystem\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"filesystem\"})"
         },
         {
           "data": [],
@@ -443,7 +443,7 @@
             "style": "scatter",
             "title": "Memory"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"memory\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"memory\"})"
         },
         {
           "data": [],
@@ -483,7 +483,7 @@
             "style": "scatter",
             "title": "Process"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"process\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"process\"})"
         },
         {
           "data": [],
@@ -523,7 +523,7 @@
             "style": "scatter",
             "title": "Query"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"query\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"query\"})"
         },
         {
           "data": [],
@@ -563,7 +563,7 @@
             "style": "scatter",
             "title": "IPC"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"ipc\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"ipc\"})"
         },
         {
           "data": [],
@@ -603,7 +603,7 @@
             "style": "scatter",
             "title": "Timer"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"timer\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"timer\"})"
         },
         {
           "data": [],
@@ -643,7 +643,7 @@
             "style": "scatter",
             "title": "Event"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"event\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"event\"})"
         },
         {
           "data": [],
@@ -683,7 +683,7 @@
             "style": "scatter",
             "title": "Other"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"other\"})"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"other\"})"
         }
       ]
     }
