@@ -2275,7 +2275,8 @@ main {
 @media (pointer: coarse) {
     .chart-expand,
     .chart-select {
-        display: none;
+        display: none !important;
+        pointer-events: none;
     }
 
     /* Extra right padding so users can scroll without accidentally
@@ -2416,15 +2417,7 @@ main {
         gap: 1rem;
     }
 
-    /* Larger touch targets for chart action buttons */
-    .chart-expand,
-    .chart-select {
-        min-width: 44px;
-        min-height: 44px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
+    /* Chart action buttons already hidden by pointer:coarse rule */
 
     /* ── Single chart (expanded) view ── */
     .single-chart-view {
