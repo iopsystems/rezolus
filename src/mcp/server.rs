@@ -741,6 +741,9 @@ mod tests {
             result: vec![MatrixSample {
                 metric,
                 values: vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
+                total_counts: None,
+                min_bucket_upperbounds: None,
+                max_bucket_upperbounds: None,
             }],
         };
         let json = serde_json::to_string(&result).unwrap();

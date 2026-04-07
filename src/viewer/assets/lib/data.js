@@ -226,6 +226,9 @@ const createDataApi = ({
                 data: hr.data,
                 min_value: hr.min_value,
                 max_value: hr.max_value,
+                total_counts: hr.total_counts || null,
+                min_bucket_upperbounds: hr.min_bucket_upperbounds || null,
+                max_bucket_upperbounds: hr.max_bucket_upperbounds || null,
             };
         }
         return null;

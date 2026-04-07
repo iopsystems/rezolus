@@ -258,6 +258,9 @@ const Group = {
                             data: heatmapData.data,
                             min_value: heatmapData.min_value,
                             max_value: heatmapData.max_value,
+                            total_counts: heatmapData.total_counts,
+                            min_bucket_upperbounds: heatmapData.min_bucket_upperbounds,
+                            max_bucket_upperbounds: heatmapData.max_bucket_upperbounds,
                         };
                         return m('div.chart-wrapper', [
                             chartHeader(heatmapSpec.opts),
