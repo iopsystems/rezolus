@@ -147,7 +147,7 @@
             "style": "scatter",
             "title": "TCP Packet Latency"
           },
-          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], tcp_packet_latency, filtered)"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], tcp_packet_latency)"
         }
       ]
     },
@@ -175,7 +175,7 @@
             "style": "scatter",
             "title": "Runqueue Latency"
           },
-          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency, filtered)"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
         }
       ]
     },
@@ -221,7 +221,7 @@
             "style": "scatter",
             "title": "Total"
           },
-          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency, filtered)"
+          "promql_query": "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)"
         }
       ]
     },

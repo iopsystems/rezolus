@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, fetchTotalCountsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
 import { reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -84,6 +84,7 @@ const saveCapture = async () => {
 const clearViewerCaches = () => {
     Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
     heatmapDataCache.clear();
+    totalCountCache.clear();
     chartsState.clear();
 };
 
@@ -279,6 +280,15 @@ let heatmapLoading = false;
 // Cache of fetched heatmap data per section: sectionRoute -> Map<chartId, data>
 const heatmapDataCache = new Map();
 
+// Cache of fetched total_count data per section: sectionRoute -> Map<chartId, Map<ts, count>>
+const totalCountCache = new Map();
+
+// Fetch total_count data for all histogram charts in a section.
+const fetchSectionTotalCountData = async (sectionRoute, groups) => {
+    const totalCountData = await fetchTotalCountsForGroups(groups);
+    totalCountCache.set(sectionRoute, totalCountData);
+};
+
 // Fetch heatmap data for all histogram charts in a section.
 const fetchSectionHeatmapData = async (sectionRoute, groups) => {
     heatmapLoading = true;
@@ -298,6 +308,7 @@ const Group = {
         const sectionName = attrs.sectionName;
         const interval = attrs.interval;
         const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
+        const sectionTotalCountData = totalCountCache.get(sectionRoute);
         const isHeatmapMode = heatmapEnabled && !heatmapLoading;
 
         // Prefix plot titles for self-contained chart labels.
@@ -382,6 +393,15 @@ const Group = {
                             ]);
                         }
 
+                        // Attach total_count data for client-side quantile filtering
+                        if (isHistogramChart && sectionTotalCountData?.has(spec.opts.id)) {
+                            spec.total_count_by_time = sectionTotalCountData.get(spec.opts.id);
+                            const qMatch = spec.promql_query.match(/\[([^\]]*)\]/);
+                            if (qMatch) {
+                                spec.quantile_values = qMatch[1].split(',').map(s => parseFloat(s.trim()));
+                            }
+                        }
+
                         const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse: attrs.noCollapse };
                         return m('div.chart-wrapper', [
                             chartHeader(prefixedSpec.opts),
@@ -453,8 +473,11 @@ const refreshCurrentSection = async () => {
     try {
         const data = await ViewerApi.getSection(section, true);
 
-        // Run regular queries and histogram heatmap queries concurrently
-        const promises = [processDashboardData(data, activeCgroupPattern)];
+        // Run regular queries, total_count, and histogram heatmap queries concurrently
+        const promises = [
+            processDashboardData(data, activeCgroupPattern),
+            fetchSectionTotalCountData(currentRoute, data.groups),
+        ];
         if (heatmapEnabled) {
             promises.push(fetchSectionHeatmapData(currentRoute, data.groups));
         }
@@ -652,6 +675,10 @@ const bootstrap = async () => {
                 });
 
                 if (sectionResponseCache[params.section]) {
+                    // Fetch total_count data if not cached for this section
+                    if (!totalCountCache.has(requestedPath)) {
+                        fetchSectionTotalCountData(requestedPath, sectionResponseCache[params.section].groups);
+                    }
                     // Fetch heatmap data if globally enabled and not cached for this section
                     if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
                         fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
@@ -662,9 +689,10 @@ const bootstrap = async () => {
                 return ViewerApi.getSection(params.section)
                     .then(async (data) => {
 
-                        // Process PromQL queries for this section
+                        // Process PromQL queries and fetch total_count data for this section
                         const processedData = await processDashboardData(data, activeCgroupPattern);
                         sectionResponseCache[params.section] = processedData;
+                        await fetchSectionTotalCountData(requestedPath, processedData.groups);
 
                         // Fetch heatmap data if globally enabled and not cached for this section
                         if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {

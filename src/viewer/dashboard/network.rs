@@ -70,7 +70,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .with_unit_system("time")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_quantiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency, filtered)".to_string(),
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)".to_string(),
     );
 
     view.group(tcp);

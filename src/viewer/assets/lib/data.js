@@ -257,11 +257,56 @@ const createDataApi = ({
         return heatmapData;
     };
 
+    const fetchTotalCountForPlot = async (plot) => {
+        const query = plot.promql_query;
+        if (!query || !query.includes('histogram_quantiles')) return null;
+
+        const match = query.match(/histogram_quantiles\s*\(\s*\[[^\]]*\]\s*,\s*([^,)]+)/);
+        if (!match) return null;
+
+        const metricSelector = match[1].trim();
+        const result = await executePromQLRangeQuery(`histogram_total_count(${metricSelector})`);
+
+        if (result.status === 'success' && result.data?.result?.length > 0) {
+            const sample = result.data.result[0];
+            if (sample.values && Array.isArray(sample.values)) {
+                const countByTime = new Map();
+                for (const [ts, val] of sample.values) {
+                    countByTime.set(ts, parseFloat(val));
+                }
+                return countByTime;
+            }
+        }
+        return null;
+    };
+
+    const fetchTotalCountsForGroups = async (groups) => {
+        const plots = [];
+        for (const group of groups || []) {
+            for (const plot of group.plots || []) {
+                if (plot.promql_query?.includes('histogram_quantiles')) {
+                    plots.push(plot);
+                }
+            }
+        }
+
+        const results = await Promise.allSettled(plots.map(p => fetchTotalCountForPlot(p)));
+
+        const totalCountData = new Map();
+        for (let i = 0; i < plots.length; i++) {
+            if (results[i].status === 'fulfilled' && results[i].value) {
+                totalCountData.set(plots[i].opts.id, results[i].value);
+            }
+        }
+        return totalCountData;
+    };
+
     return {
         executePromQLRangeQuery,
         applyResultToPlot,
         fetchHeatmapForPlot,
         fetchHeatmapsForGroups,
+        fetchTotalCountsForGroups,
         substituteCgroupPattern,
         processDashboardData,
     };
@@ -273,6 +318,7 @@ const {
     executePromQLRangeQuery,
     fetchHeatmapForPlot,
     fetchHeatmapsForGroups,
+    fetchTotalCountsForGroups,
     processDashboardData,
 } = defaultDataApi;
 
@@ -281,6 +327,7 @@ export {
     applyResultToPlot,
     fetchHeatmapForPlot,
     fetchHeatmapsForGroups,
+    fetchTotalCountsForGroups,
     substituteCgroupPattern,
     processDashboardData,
     createDataApi,

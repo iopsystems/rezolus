@@ -55,6 +55,28 @@ export function configureScatterChart(chart) {
 
     const scatterColors = SCATTER_PALETTE;
 
+    // Client-side quantile suppression: null out data points where
+    // total_count is too low for the quantile to be meaningfully distinct.
+    const totalCountByTime = chart.spec.total_count_by_time;
+    const quantileValues = chart.spec.quantile_values;
+
+    if (totalCountByTime && quantileValues && quantileValues.length === data.length - 1) {
+        const thresholds = quantileValues.map((_, i) => {
+            if (i === 0) return 2;
+            return Math.ceil(1 / (1 - quantileValues[i - 1]));
+        });
+
+        for (let i = 1; i < data.length; i++) {
+            const threshold = thresholds[i - 1];
+            for (let j = 0; j < timeData.length; j++) {
+                const count = totalCountByTime.get(timeData[j]);
+                if (count === undefined || count < threshold) {
+                    data[i][j] = undefined;
+                }
+            }
+        }
+    }
+
     let hasClamped = false;
 
     for (let i = 1; i < data.length; i++) {

@@ -16,7 +16,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .with_unit_system("time")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency, filtered)"
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
             .to_string(),
     );
 
@@ -27,7 +27,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .with_unit_system("time")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_offcpu, filtered)".to_string(),
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_offcpu)".to_string(),
     );
 
     // Running Time percentiles
@@ -39,7 +39,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .with_unit_system("time")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_running, filtered)".to_string(),
+        "histogram_quantiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_running)".to_string(),
     );
 
     // Context Switch rate
