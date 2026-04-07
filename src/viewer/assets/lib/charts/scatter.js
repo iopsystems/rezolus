@@ -183,61 +183,56 @@ export function configureScatterChart(chart) {
         yAxisConfig = baseYAxis;
     }
 
+    // Build legend config — will be adjusted for narrow charts after first render
+    const legendItemW = 56;
+    const legendShared = {
+        show: true,
+        right: '16',
+        icon: 'circle',
+        itemWidth: 8,
+        itemHeight: 8,
+        itemGap: 0,
+        tooltip: {
+            show: true,
+            formatter: () => 'Click to pin, ⌘/Ctrl+click to multi-select',
+        },
+        formatter: (name) => name.padEnd(6),
+        textStyle: {
+            color: COLORS.fgSecondary,
+            ...FONTS.legend,
+            width: legendItemW,
+            borderColor: 'transparent',
+            borderWidth: 1,
+            borderRadius: 3,
+            padding: [2, 4],
+        },
+    };
+    const legendInitData = (names) => names.map(name => ({
+        name,
+        itemStyle: { borderColor: 'transparent', borderWidth: 2 },
+        textStyle: {
+            color: COLORS.fgSecondary,
+            backgroundColor: 'transparent',
+            borderColor: 'transparent',
+            borderWidth: 1,
+            borderRadius: 3,
+            padding: [2, 4],
+            width: legendItemW,
+        },
+    }));
+    const legendRow1 = uniqueNamesForLayout.filter(n => !n.includes('.'));
+    const legendRow2 = uniqueNamesForLayout.filter(n => n.includes('.'));
+
     const option = {
         ...baseOption,
         grid: { ...baseOption.grid, top: hasTwoRowLegend ? '68' : '60' },
         legend: (() => {
-            const uniqueNames = uniqueNamesForLayout;
-            const row1 = uniqueNames.filter(n => !n.includes('.'));
-            const row2 = uniqueNames.filter(n => n.includes('.'));
-            // Fixed item width so swatches align across rows into a grid
-            const itemW = 56;
-            const shared = {
-                show: true,
-                right: '16',
-                icon: 'circle',
-                itemWidth: 8,
-                itemHeight: 8,
-                itemGap: 0,
-                tooltip: {
-                    show: true,
-                    formatter: () => 'Click to pin, ⌘/Ctrl+click to multi-select',
-                },
-                formatter: (name) => {
-                    // Pad names to equal width using monospace spaces
-                    return name.padEnd(6);
-                },
-                textStyle: {
-                    color: COLORS.fgSecondary,
-                    ...FONTS.legend,
-                    width: itemW,
-                    borderColor: 'transparent',
-                    borderWidth: 1,
-                    borderRadius: 3,
-                    padding: [2, 4],
-                },
-            };
-            // Use rich data objects matching the exact shape applyPinState produces,
-            // so the first click doesn't cause a layout recalculation.
-            const initData = (names) => names.map(name => ({
-                name,
-                itemStyle: { borderColor: 'transparent', borderWidth: 2 },
-                textStyle: {
-                    color: COLORS.fgSecondary,
-                    backgroundColor: 'transparent',
-                    borderColor: 'transparent',
-                    borderWidth: 1,
-                    borderRadius: 3,
-                    padding: [2, 4],
-                    width: itemW,
-                },
-            }));
-            if (row2.length === 0) {
-                return { ...shared, top: '10', data: initData(row1) };
+            if (legendRow2.length === 0) {
+                return { ...legendShared, top: '10', data: legendInitData(legendRow1) };
             }
             return [
-                { ...shared, top: '4', data: initData(row1) },
-                { ...shared, top: '20', data: initData(row2) },
+                { ...legendShared, top: '4', data: legendInitData(legendRow1) },
+                { ...legendShared, top: '20', data: legendInitData(legendRow2) },
             ];
         })(),
         dataZoom: getDataZoomConfig(minZoomSpan),
@@ -273,6 +268,23 @@ export function configureScatterChart(chart) {
     }
 
     applyChartOption(chart, option);
+
+    // Narrow charts: move legend below the title/description instead of beside it
+    const NARROW_THRESHOLD = 480;
+    const chartWidth = chart.echart.getWidth();
+    if (chartWidth && chartWidth < NARROW_THRESHOLD) {
+        // Legend drops below header; push grid down to make room
+        const legendTop = hasTwoRowLegend ? '38' : '34';
+        const legendTop2 = '54';
+        const gridTop = hasTwoRowLegend ? '86' : '76';
+        const narrowLegend = legendRow2.length === 0
+            ? { ...legendShared, top: legendTop, right: '16', data: legendInitData(legendRow1) }
+            : [
+                { ...legendShared, top: legendTop, right: '16', data: legendInitData(legendRow1) },
+                { ...legendShared, top: legendTop2, right: '16', data: legendInitData(legendRow2) },
+            ];
+        chart.echart.setOption({ legend: narrowLegend, grid: { top: gridTop } });
+    }
 
     // Pin feature: click a legend item to keep it highlighted.
     // Ctrl/Cmd+click to multi-select. Click again to unpin.

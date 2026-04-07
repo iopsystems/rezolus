@@ -613,7 +613,7 @@ main {
     color: var(--fg-secondary);
     display: flex;
     align-items: center;
-    margin-left: 0.75rem;
+    margin-left: 0;
 }
 
 #sidebar .query-explorer-link .arrow {
@@ -2250,6 +2250,25 @@ main {
 /* Sidebar backdrop overlay (mobile only) */
 .sidebar-backdrop {
     display: none;
+}
+
+/* ==========================================================================
+   Narrow viewport — single-column charts, sidebar stays (<1200px)
+   ========================================================================== */
+
+@media (max-width: 1199px) {
+    .group .charts {
+        grid-template-columns: 1fr;
+    }
+
+    .sysinfo-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .cgroup-pair-charts {
+        flex-direction: column;
+        gap: 1rem;
+    }
 }
 
 /* ==========================================================================
