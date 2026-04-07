@@ -306,12 +306,12 @@ export function configureHeatmap(chart) {
     const chartWidth = chart.echart.getWidth();
     if (chartWidth && chartWidth < NARROW_THRESHOLD) {
         chart.echart.setOption({
-            visualMap: { top: 34 },
+            visualMap: { top: 54 },
             graphic: {
                 elements: [{
                     type: 'text',
                     right: 136,
-                    top: 56,
+                    top: 76,
                     style: {
                         text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
                         fill: COLORS.fgLabel,
@@ -321,7 +321,7 @@ export function configureHeatmap(chart) {
                 }, {
                     type: 'text',
                     right: 16,
-                    top: 56,
+                    top: 76,
                     style: {
                         text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
                         fill: COLORS.fgLabel,
@@ -330,7 +330,7 @@ export function configureHeatmap(chart) {
                     },
                 }],
             },
-            grid: { top: '80' },
+            grid: { top: '100' },
         });
     }
 
