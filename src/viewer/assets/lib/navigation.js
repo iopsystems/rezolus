@@ -8,6 +8,7 @@ const buildTopNavAttrs = ({
     onStartRecording,
     onStopRecording,
     onSaveCapture,
+    onUploadParquet,
     extra = {},
 }) => ({
     sectionRoute,
@@ -24,6 +25,7 @@ const buildTopNavAttrs = ({
     onStartRecording,
     onStopRecording,
     onSaveCapture,
+    onUploadParquet,
     chartsState,
     ...extra,
 });

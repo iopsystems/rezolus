@@ -8,6 +8,7 @@ import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, sub
 import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
+import { FileUpload } from './landing.js';
 import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 
@@ -26,38 +27,34 @@ let fileChecksum = null;
 let recording = true;
 
 // Detect live mode on startup
-ViewerApi.getMode()
-    .then((response) => {
+const initializeFromBackend = async () => {
+    try {
+        const response = await ViewerApi.getMode();
         liveMode = response.live === true;
         if (liveMode) {
             startLiveRefresh();
         }
-    })
-    .catch(() => { /* ignore - assume file mode */ });
+    } catch (_) { /* ignore - assume file mode */ }
 
-// Fetch file checksum from metadata endpoint
-ViewerApi.getMetadata()
-    .then((response) => {
+    try {
+        const response = await ViewerApi.getMetadata();
         if (response.status === 'success' && response.data?.fileChecksum) {
             fileChecksum = response.data.fileChecksum;
         }
-    })
-    .catch(() => { /* ignore */ });
+    } catch (_) { /* ignore */ }
 
-// Fetch system info (available when parquet has embedded systeminfo metadata)
-ViewerApi.getSystemInfo()
-    .then((data) => { systemInfoData = data; })
-    .catch(() => { /* no systeminfo available */ });
+    try {
+        systemInfoData = await ViewerApi.getSystemInfo();
+    } catch (_) { /* no systeminfo available */ }
 
-// Fetch saved selection from parquet metadata → load into Report store
-ViewerApi.getSelection()
-    .then((data) => {
+    try {
+        const data = await ViewerApi.getSelection();
         if (data && Array.isArray(data.entries)) {
             loadPayloadIntoStore(reportStore, data);
             reportStore.loadedFrom = 'embedded report';
         }
-    })
-    .catch(() => { /* no saved selection */ });
+    } catch (_) { /* no saved selection */ }
+};
 
 // Transport control actions
 const startRecording = async () => {
@@ -91,6 +88,36 @@ const saveCapture = async () => {
     notify('info', `Saved ${filename}`);
 };
 
+const clearViewerCaches = () => {
+    Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
+    heatmapDataCache.clear();
+    chartsState.clear();
+};
+
+const uploadParquet = async (file) => {
+    try {
+        await ViewerApi.uploadParquet(file);
+        clearViewerCaches();
+        chartsState.resetAll();
+        await initializeFromBackend();
+        // Re-fetch overview so the view has data to render immediately.
+        // m.route.set('/overview') is a no-op when already on /overview
+        // (the route guard returns a never-resolving promise), so we must
+        // populate the cache before triggering a redraw.
+        const data = await ViewerApi.getSection('overview');
+        const processed = await processDashboardData(data, null);
+        sectionResponseCache['overview'] = processed;
+        if (processed.sections) preloadSections(processed.sections);
+        // Navigate to overview if on a different route; otherwise just redraw.
+        if (m.route.get() !== '/overview') {
+            m.route.set('/overview');
+        }
+        m.redraw();
+    } catch (e) {
+        notify('error', `Failed to upload parquet: ${e.message || e}`);
+    }
+};
+
 // Build common TopNav attrs from section data. Pass extra to override/add fields.
 const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     data,
@@ -102,6 +129,7 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onStartRecording: startRecording,
     onStopRecording: stopRecording,
     onSaveCapture: saveCapture,
+    onUploadParquet: uploadParquet,
     extra,
 });
 
@@ -487,117 +515,193 @@ const buildClientOnlySectionView = (activeSection) => ({
     },
 });
 
-// Main application entry point
-m.route.prefix = ''; // use regular paths for navigation, eg. /overview
-m.route(document.body, '/overview', {
-    '/:section/chart/:chartId': {
-        onmatch(params) {
-            const sectionKey = params.section;
+// Landing page state
+let landingState = { loading: false, error: null };
 
-            const makeSingleChartView = () => ({
-                view() {
-                    const data = sectionResponseCache[sectionKey];
-                    if (!data) return m('div', 'Loading...');
-                    const activeSection = data.sections.find(s => s.route === `/${sectionKey}`);
-                    return m('div', [
-                        m(TopNav, topNavAttrs(data, activeSection?.route)),
-                        m('main.single-chart-main', [
-                            m(SingleChartView, {
-                                data,
-                                chartId: decodeURIComponent(params.chartId),
-                                applyResultToPlot,
-                            }),
-                        ]),
-                    ]);
-                },
-            });
-
-            if (sectionResponseCache[sectionKey]) {
-                return makeSingleChartView();
-            }
-
-            return ViewerApi.getSection(sectionKey)
-                .then(async (data) => {
-                    const processedData = await processDashboardData(data, activeCgroupPattern);
-                    sectionResponseCache[sectionKey] = processedData;
-                    return makeSingleChartView();
-                });
-        },
-    },
-    '/:section': {
-        onmatch(params, requestedPath) {
-            // Prevent a route change if we're already on this route
-            if (m.route.get() === requestedPath) {
-                return new Promise(function () {});
-            }
-
-            if (requestedPath !== m.route.get()) {
-                // Clear chart instances (they'll be recreated), but preserve zoom.
-                chartsState.charts.clear();
-
-                // Reset cgroup pattern so it doesn't leak between sections.
-                activeCgroupPattern = null;
-
-                // Reset scroll position.
-                window.scrollTo(0, 0);
-            }
-
-            // System Info is not a backend section — render directly
-            if (params.section === 'systeminfo') {
-                bootstrapCacheIfNeeded();
-                return buildClientOnlySectionView(systemInfoSection);
-            }
-
-            // Selection is a client-only section — no backend data
-            if (params.section === 'selection') {
-                bootstrapCacheIfNeeded();
-                return buildClientOnlySectionView(selectionSection);
-            }
-
-            // Report is a client-only section — loaded from JSON import or parquet metadata
-            if (params.section === 'report') {
-                bootstrapCacheIfNeeded();
-                return buildClientOnlySectionView(reportSection);
-            }
-
-            // In live mode, always read from cache dynamically so
-            // refreshes flow through to the rendered view.
-            const cachedView = (sectionKey, path) => ({
-                view() {
-                    const data = sectionResponseCache[sectionKey];
-                    if (!data) return m('div', 'Loading...');
-                    const activeSection = data.sections.find(
-                        (section) => section.route === path,
-                    );
-                    return m(Main, { ...data, activeSection });
-                },
-            });
-
-            if (sectionResponseCache[params.section]) {
-                // Fetch heatmap data if globally enabled and not cached for this section
-                if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
-                    fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
+const showLanding = () => {
+    m.mount(document.body, {
+        view: () => m(FileUpload, {
+            onFile: async (file) => {
+                landingState.loading = true;
+                landingState.error = null;
+                m.redraw();
+                try {
+                    await ViewerApi.uploadParquet(file);
+                    window.location.reload();
+                } catch (e) {
+                    landingState.loading = false;
+                    landingState.error = `Failed to load file: ${e.message || e}`;
+                    m.redraw();
                 }
-                return cachedView(params.section, requestedPath);
-            }
+            },
+            onConnect: async (url) => {
+                landingState.loading = true;
+                landingState.error = null;
+                m.redraw();
+                try {
+                    await ViewerApi.connectAgent(url);
+                    window.location.reload();
+                } catch (e) {
+                    landingState.loading = false;
+                    landingState.error = `Failed to connect: ${e.message || e}`;
+                    m.redraw();
+                }
+            },
+            loading: landingState.loading,
+            error: landingState.error,
+        }),
+    });
+};
 
-            return ViewerApi.getSection(params.section)
-                .then(async (data) => {
+// Main application entry point
+const bootstrap = async () => {
+    // Check backend mode first
+    try {
+        const response = await ViewerApi.getMode();
+        if (!response.loaded && !response.live) {
+            showLanding();
+            return;
+        }
+        liveMode = response.live === true;
+        if (liveMode) startLiveRefresh();
+    } catch (_) { /* assume loaded file mode */ }
 
-                    // Process PromQL queries for this section
-                    const processedData = await processDashboardData(data, activeCgroupPattern);
-                    sectionResponseCache[params.section] = processedData;
+    // Fetch metadata
+    try {
+        const response = await ViewerApi.getMetadata();
+        if (response.status === 'success' && response.data?.fileChecksum) {
+            fileChecksum = response.data.fileChecksum;
+        }
+    } catch (_) {}
 
+    // Fetch system info
+    try {
+        systemInfoData = await ViewerApi.getSystemInfo();
+    } catch (_) {}
+
+    // Load embedded report selection
+    try {
+        const data = await ViewerApi.getSelection();
+        if (data && Array.isArray(data.entries)) {
+            loadPayloadIntoStore(reportStore, data);
+            reportStore.loadedFrom = 'embedded report';
+        }
+    } catch (_) {}
+
+    // Set up the router now that data is loaded
+    m.route.prefix = ''; // use regular paths for navigation, eg. /overview
+    m.route(document.body, '/overview', {
+        '/:section/chart/:chartId': {
+            onmatch(params) {
+                const sectionKey = params.section;
+
+                const makeSingleChartView = () => ({
+                    view() {
+                        const data = sectionResponseCache[sectionKey];
+                        if (!data) return m('div', 'Loading...');
+                        const activeSection = data.sections.find(s => s.route === `/${sectionKey}`);
+                        return m('div', [
+                            m(TopNav, topNavAttrs(data, activeSection?.route)),
+                            m('main.single-chart-main', [
+                                m(SingleChartView, {
+                                    data,
+                                    chartId: decodeURIComponent(params.chartId),
+                                    applyResultToPlot,
+                                }),
+                            ]),
+                        ]);
+                    },
+                });
+
+                if (sectionResponseCache[sectionKey]) {
+                    return makeSingleChartView();
+                }
+
+                return ViewerApi.getSection(sectionKey)
+                    .then(async (data) => {
+                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        sectionResponseCache[sectionKey] = processedData;
+                        return makeSingleChartView();
+                    });
+            },
+        },
+        '/:section': {
+            onmatch(params, requestedPath) {
+                // Prevent a route change if we're already on this route
+                if (m.route.get() === requestedPath) {
+                    return new Promise(function () {});
+                }
+
+                if (requestedPath !== m.route.get()) {
+                    // Clear chart instances (they'll be recreated), but preserve zoom.
+                    chartsState.charts.clear();
+
+                    // Reset cgroup pattern so it doesn't leak between sections.
+                    activeCgroupPattern = null;
+
+                    // Reset scroll position.
+                    window.scrollTo(0, 0);
+                }
+
+                // System Info is not a backend section — render directly
+                if (params.section === 'systeminfo') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(systemInfoSection);
+                }
+
+                // Selection is a client-only section — no backend data
+                if (params.section === 'selection') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(selectionSection);
+                }
+
+                // Report is a client-only section — loaded from JSON import or parquet metadata
+                if (params.section === 'report') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(reportSection);
+                }
+
+                // In live mode, always read from cache dynamically so
+                // refreshes flow through to the rendered view.
+                const cachedView = (sectionKey, path) => ({
+                    view() {
+                        const data = sectionResponseCache[sectionKey];
+                        if (!data) return m('div', 'Loading...');
+                        const activeSection = data.sections.find(
+                            (section) => section.route === path,
+                        );
+                        return m(Main, { ...data, activeSection });
+                    },
+                });
+
+                if (sectionResponseCache[params.section]) {
                     // Fetch heatmap data if globally enabled and not cached for this section
                     if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
-                        fetchSectionHeatmapData(requestedPath, processedData.groups);
+                        fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
                     }
-
-                    // Preload other sections after initial load
-                    preloadSections(processedData.sections);
-
                     return cachedView(params.section, requestedPath);
-                });
+                }
+
+                return ViewerApi.getSection(params.section)
+                    .then(async (data) => {
+
+                        // Process PromQL queries for this section
+                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        sectionResponseCache[params.section] = processedData;
+
+                        // Fetch heatmap data if globally enabled and not cached for this section
+                        if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                            fetchSectionHeatmapData(requestedPath, processedData.groups);
+                        }
+
+                        // Preload other sections after initial load
+                        preloadSections(processedData.sections);
+
+                        return cachedView(params.section, requestedPath);
+                    });
+            },
         },
-    },
-});
+    });
+};
+
+bootstrap();
