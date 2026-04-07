@@ -5,10 +5,6 @@ import { formatDateTime } from './util/utils.js';
 import { COLORS, CHART_PALETTE } from './util/colormap.js';
 import { FONTS } from './util/fonts.js';
 
-function isDarkTheme() {
-    return document.documentElement.getAttribute('data-theme') !== 'light';
-}
-
 // Shared x-axis time label format used by all chart types
 export const TIME_AXIS_FORMATTER = {
     year: '{yyyy}',
@@ -208,7 +204,7 @@ export function getBaseOption() {
             color: COLORS.fg,
             fontFamily: FONTS.sans,
         },
-        darkMode: isDarkTheme(),
+        darkMode: true,
         backgroundColor: 'transparent',
         color: CHART_PALETTE,
     };
