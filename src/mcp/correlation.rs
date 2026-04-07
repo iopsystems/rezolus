@@ -435,9 +435,6 @@ fn extract_matrix_samples(
                 .map(|s| MatrixSample {
                     metric: s.metric.clone(),
                     values: vec![s.value],
-                    total_counts: None,
-                    min_bucket_upperbounds: None,
-                    max_bucket_upperbounds: None,
                 })
                 .collect())
         }
@@ -446,9 +443,6 @@ fn extract_matrix_samples(
             Ok(vec![MatrixSample {
                 metric: HashMap::new(),
                 values: vec![*result],
-                total_counts: None,
-                min_bucket_upperbounds: None,
-                max_bucket_upperbounds: None,
             }])
         }
         QueryResult::HistogramHeatmap { .. } => {
