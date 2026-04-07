@@ -15,6 +15,7 @@ import {
     configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
+import { themeVersion } from '../theme.js';
 
 
 export class ChartsState {
@@ -92,6 +93,7 @@ export class Chart {
         this.resizeObserver = null;
         this.observer = null;
         this.echart = null;
+        this._themeVersion = themeVersion;
     }
 
     oncreate(vnode) {
@@ -130,8 +132,10 @@ export class Chart {
         this.spec = vnode.attrs.spec;
         this.interval = vnode.attrs.interval;
 
-        // If the chart is already initialized and data has changed, update it
-        if (this.echart && oldSpec.data !== this.spec.data) {
+        // Re-render if data changed or theme was toggled
+        const themeChanged = this._themeVersion !== themeVersion;
+        if (this.echart && (oldSpec.data !== this.spec.data || themeChanged)) {
+            this._themeVersion = themeVersion;
             this.configureChartByType();
         }
     }

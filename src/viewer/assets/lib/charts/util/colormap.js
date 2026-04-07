@@ -3,61 +3,70 @@
  *
  * Every color literal used in chart rendering should be defined here
  * with a meaningful name. No raw hex/rgba strings in charting code.
+ *
+ * Theme-sensitive tokens (fg, bg, borders) are read from CSS custom properties
+ * at access time so they automatically reflect the active light/dark theme.
  */
+
+// ── CSS variable reader ──────────────────────────────────────────────
+
+function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 
 // ── Design tokens ────────────────────────────────────────────────────
 
-export const COLORS = {
-    // Foreground hierarchy (text, labels)
-    fg: '#e6edf3',
-    fgSecondary: '#8b949e',
-    fgLabel: '#6a7b8f',       // subtitles, gradient bar labels, inactive toggles
-    fgMuted: '#484f58',
-    fgSubtle: '#30363d',
-
-    // Accent colors (electric blue family)
-    accent: '#58a6ff',
-    accentEmphasis: '#79c0ff',
-    accentMuted: 'rgba(56, 139, 253, 0.4)',
-    accentSubtle: 'rgba(56, 139, 253, 0.15)',
-    accentGlow: 'rgba(56, 139, 253, 0.25)',
-
-    // Line chart area fill gradient (accent blue at decreasing opacity)
-    accentAreaTop: 'rgba(88, 166, 255, 0.2)',
-    accentAreaMid: 'rgba(88, 166, 255, 0.08)',
-    accentAreaBottom: 'rgba(88, 166, 255, 0.01)',
-
-    // Backgrounds
-    bgVoid: '#05080d',
-    bgCard: '#0d1117',
-    bgTertiary: '#161b22',
-    bgElevated: '#1c2128',
-
-    // Borders
-    borderSubtle: 'rgba(48, 54, 61, 0.4)',
-    borderMuted: 'rgba(48, 54, 61, 0.6)',   // tooltip footer separator
-    borderDefault: 'rgba(48, 54, 61, 0.7)',
-
-    // Grid lines
-    gridLine: 'rgba(48, 54, 61, 0.5)',
-
-    // Shadows
-    shadow: 'rgba(0, 0, 0, 0.4)',           // tooltip box shadow
-    shadowStrong: 'rgba(0, 0, 0, 0.5)',     // heatmap hover emphasis
-
-    // Chart series colors — curated palette
-    chartBlue: '#58a6ff',
-    chartCyan: '#39d5ff',
-    chartTeal: '#2dd4bf',
-    chartGreen: '#3fb950',
-    chartLime: '#a3e635',
-    chartYellow: '#fbbf24',
+// Chart series colors are theme-invariant (same vivid colors on both themes).
+const SERIES_COLORS = {
+    chartBlue: '#3b82f6',
+    chartCyan: '#06b6d4',
+    chartTeal: '#14b8a6',
+    chartGreen: '#22c55e',
+    chartLime: '#84cc16',
+    chartYellow: '#eab308',
     chartOrange: '#f97316',
-    chartRed: '#f85149',
-    clamped: '#f85149',        // clamped/out-of-range indicator (same red)
-    chartPink: '#f472b6',
-    chartPurple: '#a78bfa',
+    chartRed: '#ef4444',
+    clamped: '#ef4444',
+    chartPink: '#ec4899',
+    chartPurple: '#8b5cf6',
 };
+
+export const COLORS = new Proxy(SERIES_COLORS, {
+    get(target, prop) {
+        // Return series colors directly (theme-invariant)
+        if (prop in target) return target[prop];
+
+        // Map property names to CSS custom properties
+        const cssMap = {
+            fg:               '--fg',
+            fgSecondary:      '--fg-secondary',
+            fgLabel:          '--fg-muted',
+            fgMuted:          '--fg-muted',
+            fgSubtle:         '--fg-subtle',
+            accent:           '--accent',
+            accentEmphasis:   '--accent-emphasis',
+            accentMuted:      '--accent-muted',
+            accentSubtle:     '--accent-subtle',
+            accentGlow:       '--accent-glow',
+            accentAreaTop:    '--chart-area-top',
+            accentAreaMid:    '--chart-area-mid',
+            accentAreaBottom: '--chart-area-bottom',
+            bgVoid:           '--bg-void',
+            bgCard:           '--bg-card',
+            bgTertiary:       '--bg-tertiary',
+            bgElevated:       '--bg-elevated',
+            borderSubtle:     '--border-subtle',
+            borderMuted:      '--border-default',
+            borderDefault:    '--border-default',
+            gridLine:         '--chart-grid-line',
+            shadow:           '--chart-shadow',
+            shadowStrong:     '--chart-shadow-strong',
+        };
+
+        if (cssMap[prop]) return cssVar(cssMap[prop]);
+        return undefined;
+    },
+});
 
 // ── Palettes ─────────────────────────────────────────────────────────
 
