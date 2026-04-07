@@ -306,7 +306,7 @@ const Group = {
         const isOverview = sectionRoute === '/overview';
         const titlePrefix = isOverview ? attrs.name : sectionName;
         const prefixTitle = (opts) => titlePrefix
-            ? { ...opts, title: `${titlePrefix} / ${opts.title}` }
+            ? { ...opts, title: `${titlePrefix}: ${opts.title}` }
             : opts;
 
         const chartHeader = (opts) => m('div.chart-header', [

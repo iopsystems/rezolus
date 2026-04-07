@@ -372,6 +372,34 @@ export function configureHistogramHeatmap(chart) {
         graphic: buildHeatmapGradientBar(infernoColor),
     };
 
+    // Narrow charts: move color legend below the title/description instead of beside it
+    const NARROW_THRESHOLD = 480;
+    const chartWidth = chart.echart.getWidth();
+    const isNarrow = chartWidth && chartWidth < NARROW_THRESHOLD;
+
+    if (isNarrow) {
+        option.graphic = {
+            elements: [{
+                type: 'image',
+                id: 'heatmap-gradient-bar',
+                right: 24,
+                top: 34,
+                style: {
+                    image: option.graphic.elements[0].style.image,
+                    width: 120,
+                    height: 10,
+                },
+            }],
+        };
+        option.grid = {
+            left: '12',
+            right: '17',
+            top: '80',
+            bottom: '24',
+            containLabel: true,
+        };
+    }
+
     applyChartOption(chart, option);
 
     // Precompute percentage min/max for label display
@@ -400,6 +428,10 @@ export function configureHistogramHeatmap(chart) {
     chart.domNode.style.position = 'relative';
     const minLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-min', '144px');
     const maxLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-max', '24px');
+    if (isNarrow) {
+        minLabelEl.style.top = '56px';
+        maxLabelEl.style.top = '56px';
+    }
 
     const updateLabels = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
@@ -415,17 +447,17 @@ export function configureHistogramHeatmap(chart) {
     if (!checkboxEl) {
         checkboxEl = document.createElement('span');
         checkboxEl.className = 'histogram-toggle';
-        checkboxEl.style.cssText = `
-            position: absolute;
-            top: 10px;
-            right: 180px;
-            ${FONTS.cssControl}
-            cursor: pointer;
-            user-select: none;
-            z-index: 3;
-        `;
         wrapper.appendChild(checkboxEl);
     }
+    checkboxEl.style.cssText = `
+        position: absolute;
+        top: ${isNarrow ? '32px' : '10px'};
+        right: 180px;
+        ${FONTS.cssControl}
+        cursor: pointer;
+        user-select: none;
+        z-index: 3;
+    `;
 
     const updateCheckbox = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
