@@ -457,8 +457,8 @@ export class Chart {
             opts
         } = this.spec;
 
-        // Clean up histogram heatmap DOM overlays when switching to a different chart type
-        if (opts.style !== 'histogram_heatmap') {
+        // Clean up heatmap DOM legend bar when switching to a different chart type
+        if (opts.style !== 'histogram_heatmap' && opts.style !== 'heatmap') {
             this.domNode?.parentNode?.querySelector('.heatmap-legend-bar')?.remove();
         }
 
