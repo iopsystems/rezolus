@@ -22,81 +22,7 @@ import { infernoColor } from './util/colormap.js';
 // Reuse the shared time formatter for latency bucket labels
 const formatLatencyBucket = createAxisLabelFormatter('time');
 
-// Color bar geometry — shared between the bar graphic, DOM labels, and checkbox
-const BAR_RIGHT = 32;
-const BAR_WIDTH = 120;
-const BAR_HEIGHT = 10;
-const BAR_TOP = 42;
-const LABEL_GAP = 4;
-
-/**
- * Build the gradient bar as a canvas element for the DOM legend container.
- * @param {function} colorFn - maps 0..1 to an RGB color string
- * @returns {HTMLCanvasElement}
- */
-function buildHeatmapGradientCanvas(colorFn) {
-    const canvas = document.createElement('canvas');
-    canvas.width = BAR_WIDTH;
-    canvas.height = BAR_HEIGHT;
-    const ctx = canvas.getContext('2d');
-    for (let x = 0; x < BAR_WIDTH; x++) {
-        ctx.fillStyle = colorFn(x / (BAR_WIDTH - 1));
-        ctx.fillRect(x, 0, 1, BAR_HEIGHT);
-    }
-    return canvas;
-}
-
-/**
- * Create or reuse the legend bar container (min label, color bar, max label, checkbox).
- * Returns an object with references to the updatable elements.
- */
-function ensureLegendBar(wrapper, barCanvas) {
-    let container = wrapper.querySelector('.heatmap-legend-bar');
-    if (container) {
-        return {
-            minLabel: container.querySelector('.heatmap-label-min'),
-            maxLabel: container.querySelector('.heatmap-label-max'),
-            checkbox: container.querySelector('.histogram-toggle'),
-        };
-    }
-    container = document.createElement('div');
-    container.className = 'heatmap-legend-bar';
-    container.style.cssText = `
-        position: absolute;
-        top: ${BAR_TOP}px;
-        right: 16px;
-        display: flex;
-        align-items: center;
-        gap: ${LABEL_GAP}px;
-        z-index: 10;
-    `;
-
-    const minLabel = document.createElement('span');
-    minLabel.className = 'heatmap-label-min';
-    minLabel.style.cssText = `${FONTS.cssFootnote} color: ${COLORS.fgSecondary}; pointer-events: none;`;
-
-    const bar = document.createElement('canvas');
-    bar.width = barCanvas.width;
-    bar.height = barCanvas.height;
-    bar.style.cssText = `width: ${BAR_WIDTH}px; height: ${BAR_HEIGHT}px; display: block;`;
-    bar.getContext('2d').drawImage(barCanvas, 0, 0);
-
-    const maxLabel = document.createElement('span');
-    maxLabel.className = 'heatmap-label-max';
-    maxLabel.style.cssText = `${FONTS.cssFootnote} color: ${COLORS.fgSecondary}; pointer-events: none;`;
-
-    const checkbox = document.createElement('span');
-    checkbox.className = 'histogram-toggle';
-    checkbox.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px; margin-top: -2px;`;
-
-    container.appendChild(minLabel);
-    container.appendChild(bar);
-    container.appendChild(maxLabel);
-    container.appendChild(checkbox);
-    wrapper.appendChild(container);
-
-    return { minLabel, maxLabel, checkbox };
-}
+import { buildGradientCanvas, ensureLegendBar, LABEL_GAP } from './color_legend.js';
 
 /**
  * Configures the Chart for histogram heatmap visualization
@@ -412,9 +338,20 @@ export function configureHistogramHeatmap(chart) {
 
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row
     const wrapper = chart.domNode.parentNode;
-    const barCanvas = buildHeatmapGradientCanvas(infernoColor);
-    const { minLabel: minLabelEl, maxLabel: maxLabelEl, checkbox: checkboxEl } =
-        ensureLegendBar(wrapper, barCanvas);
+    const barCanvas = buildGradientCanvas(infernoColor);
+
+    // Build the checkbox element to pass as an extra element into the shared legend bar
+    let checkboxEl = wrapper.querySelector('.heatmap-legend-bar .histogram-toggle');
+    const checkboxExtra = [];
+    if (!checkboxEl) {
+        checkboxEl = document.createElement('span');
+        checkboxEl.className = 'histogram-toggle';
+        checkboxEl.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px; margin-top: -2px;`;
+        checkboxExtra.push(checkboxEl);
+    }
+
+    const { minLabel: minLabelEl, maxLabel: maxLabelEl } =
+        ensureLegendBar(wrapper, barCanvas, checkboxExtra);
 
     const updateLabels = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';

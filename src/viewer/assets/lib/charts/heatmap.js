@@ -14,77 +14,7 @@ import {
     FONTS,
 } from './base.js';
 import { VIRIDIS_COLORS } from './util/colormap.js';
-
-// Color bar geometry — shared between the bar, labels, and container
-const BAR_WIDTH = 120;
-const BAR_HEIGHT = 10;
-const BAR_TOP = 42;
-const LABEL_GAP = 4;
-
-/**
- * Build a gradient bar canvas from an array of color stops.
- * @param {string[]} colors - array of CSS color strings
- * @returns {HTMLCanvasElement}
- */
-function buildGradientCanvas(colors) {
-    const canvas = document.createElement('canvas');
-    canvas.width = BAR_WIDTH;
-    canvas.height = BAR_HEIGHT;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, BAR_WIDTH, 0);
-    for (let i = 0; i < colors.length; i++) {
-        grad.addColorStop(i / (colors.length - 1), colors[i]);
-    }
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, BAR_WIDTH, BAR_HEIGHT);
-    return canvas;
-}
-
-/**
- * Create or reuse the legend bar container (min label, color bar, max label).
- * Returns references to the updatable label elements.
- */
-function ensureLegendBar(wrapper, barCanvas) {
-    let container = wrapper.querySelector('.heatmap-legend-bar');
-    if (container) {
-        return {
-            minLabel: container.querySelector('.heatmap-label-min'),
-            maxLabel: container.querySelector('.heatmap-label-max'),
-        };
-    }
-    container = document.createElement('div');
-    container.className = 'heatmap-legend-bar';
-    container.style.cssText = `
-        position: absolute;
-        top: ${BAR_TOP}px;
-        right: 16px;
-        display: flex;
-        align-items: center;
-        gap: ${LABEL_GAP}px;
-        z-index: 10;
-    `;
-
-    const minLabel = document.createElement('span');
-    minLabel.className = 'heatmap-label-min';
-    minLabel.style.cssText = `${FONTS.cssFootnote} color: ${COLORS.fgSecondary}; pointer-events: none;`;
-
-    const bar = document.createElement('canvas');
-    bar.width = barCanvas.width;
-    bar.height = barCanvas.height;
-    bar.style.cssText = `width: ${BAR_WIDTH}px; height: ${BAR_HEIGHT}px; display: block;`;
-    bar.getContext('2d').drawImage(barCanvas, 0, 0);
-
-    const maxLabel = document.createElement('span');
-    maxLabel.className = 'heatmap-label-max';
-    maxLabel.style.cssText = `${FONTS.cssFootnote} color: ${COLORS.fgSecondary}; pointer-events: none;`;
-
-    container.appendChild(minLabel);
-    container.appendChild(bar);
-    container.appendChild(maxLabel);
-    wrapper.appendChild(container);
-
-    return { minLabel, maxLabel };
-}
+import { colorArrayToFn, buildGradientCanvas, ensureLegendBar } from './color_legend.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -346,7 +276,7 @@ export function configureHeatmap(chart) {
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row
     const formatter = createAxisLabelFormatter(unitSystem || 'count');
     const wrapper = chart.domNode.parentNode;
-    const barCanvas = buildGradientCanvas(VIRIDIS_COLORS);
+    const barCanvas = buildGradientCanvas(colorArrayToFn(VIRIDIS_COLORS));
     const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
     minLabel.textContent = formatter(minValue);
     maxLabel.textContent = formatter(effectiveMax);
