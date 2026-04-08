@@ -152,6 +152,31 @@ export function infernoColor(t) {
     return interpolateRamp(INFERNO_RGB, t);
 }
 
+/**
+ * Turn an array of CSS color strings into a color function (0..1 → color)
+ * by building a tiny canvas gradient and sampling it.
+ * @param {string[]} colors - array of CSS color stops
+ * @returns {function} maps 0..1 to a CSS color string
+ */
+export function colorArrayToFn(colors) {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, size, 0);
+    for (let i = 0; i < colors.length; i++) {
+        grad.addColorStop(i / (colors.length - 1), colors[i]);
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, 1);
+    const imageData = ctx.getImageData(0, 0, size, 1).data;
+    return (t) => {
+        const idx = Math.min(size - 1, Math.max(0, Math.round(t * (size - 1)))) * 4;
+        return `rgb(${imageData[idx]},${imageData[idx + 1]},${imageData[idx + 2]})`;
+    };
+}
+
 // ── Cgroup color mapper ──────────────────────────────────────────────
 
 /**

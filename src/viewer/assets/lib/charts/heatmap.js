@@ -13,8 +13,8 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
-import { VIRIDIS_COLORS } from './util/colormap.js';
-import { colorArrayToFn, buildGradientCanvas, ensureLegendBar } from './color_legend.js';
+import { VIRIDIS_COLORS, colorArrayToFn } from './util/colormap.js';
+import { buildGradientCanvas, ensureLegendBar } from './color_legend.js';
 
 /**
  * Configures the Chart based on Chart.spec
