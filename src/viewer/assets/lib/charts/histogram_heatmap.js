@@ -30,12 +30,11 @@ const BAR_TOP = 44;
 const LABEL_GAP = 4;
 
 /**
- * Build the gradient bar canvas for the heatmap legend (ECharts graphic).
- * Labels are rendered as DOM elements so they can update without triggering a canvas redraw.
+ * Build the gradient bar as a canvas element for the DOM legend container.
  * @param {function} colorFn - maps 0..1 to an RGB color string
- * @returns {Object} echarts graphic config (bar image only)
+ * @returns {HTMLCanvasElement}
  */
-function buildHeatmapGradientBar(colorFn) {
+function buildHeatmapGradientCanvas(colorFn) {
     const canvas = document.createElement('canvas');
     canvas.width = BAR_WIDTH;
     canvas.height = BAR_HEIGHT;
@@ -44,47 +43,59 @@ function buildHeatmapGradientBar(colorFn) {
         ctx.fillStyle = colorFn(x / (BAR_WIDTH - 1));
         ctx.fillRect(x, 0, 1, BAR_HEIGHT);
     }
-
-    return {
-        elements: [{
-            type: 'image',
-            id: 'heatmap-gradient-bar',
-            right: BAR_RIGHT,
-            top: BAR_TOP,
-            style: {
-                image: canvas,
-                width: BAR_WIDTH,
-                height: BAR_HEIGHT,
-            },
-        }],
-    };
+    return canvas;
 }
 
 /**
- * Create or update a DOM label element positioned over the chart.
- * @param {HTMLElement} container - the chart DOM node
- * @param {string} className - CSS class for querySelector
- * @param {string} rightPx - CSS right position
- * @returns {HTMLElement}
+ * Create or reuse the legend bar container (min label, color bar, max label, checkbox).
+ * Returns an object with references to the updatable elements.
  */
-function ensureDomLabel(container, className, rightPx, transform) {
-    let el = container.querySelector('.' + className);
-    if (!el) {
-        el = document.createElement('span');
-        el.className = className;
-        el.style.cssText = `
-            position: absolute;
-            top: ${BAR_TOP - 1}px;
-            right: ${rightPx}px;
-            ${transform ? `transform: ${transform};` : ''}
-            ${FONTS.cssFootnote}
-            color: ${COLORS.fgSecondary};
-            z-index: 10;
-            pointer-events: none;
-        `;
-        container.appendChild(el);
+function ensureLegendBar(wrapper, barCanvas) {
+    let container = wrapper.querySelector('.heatmap-legend-bar');
+    if (container) {
+        return {
+            minLabel: container.querySelector('.heatmap-label-min'),
+            maxLabel: container.querySelector('.heatmap-label-max'),
+            checkbox: container.querySelector('.histogram-toggle'),
+        };
     }
-    return el;
+    container = document.createElement('div');
+    container.className = 'heatmap-legend-bar';
+    container.style.cssText = `
+        position: absolute;
+        top: ${BAR_TOP}px;
+        right: 16px;
+        display: flex;
+        align-items: center;
+        gap: ${LABEL_GAP}px;
+        z-index: 10;
+    `;
+
+    const minLabel = document.createElement('span');
+    minLabel.className = 'heatmap-label-min';
+    minLabel.style.cssText = `${FONTS.cssFootnote} color: ${COLORS.fgSecondary}; pointer-events: none;`;
+
+    const bar = document.createElement('canvas');
+    bar.width = barCanvas.width;
+    bar.height = barCanvas.height;
+    bar.style.cssText = `width: ${BAR_WIDTH}px; height: ${BAR_HEIGHT}px; display: block;`;
+    bar.getContext('2d').drawImage(barCanvas, 0, 0);
+
+    const maxLabel = document.createElement('span');
+    maxLabel.className = 'heatmap-label-max';
+    maxLabel.style.cssText = `${FONTS.cssFootnote} color: ${COLORS.fgSecondary}; pointer-events: none;`;
+
+    const checkbox = document.createElement('span');
+    checkbox.className = 'histogram-toggle';
+    checkbox.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px;`;
+
+    container.appendChild(minLabel);
+    container.appendChild(bar);
+    container.appendChild(maxLabel);
+    container.appendChild(checkbox);
+    wrapper.appendChild(container);
+
+    return { minLabel, maxLabel, checkbox };
 }
 
 /**
@@ -373,7 +384,6 @@ export function configureHistogramHeatmap(chart) {
             progressiveThreshold: 3000,
             animation: false,
         }],
-        graphic: buildHeatmapGradientBar(infernoColor),
     };
 
     applyChartOption(chart, option);
@@ -400,10 +410,11 @@ export function configureHistogramHeatmap(chart) {
     const pctMinLabel = pctMin.toFixed(1) + '%';
     const pctMaxLabel = pctMax.toFixed(1) + '%';
 
-    // DOM labels for gradient bar min/max — update without canvas redraw
-    chart.domNode.style.position = 'relative';
-    const minLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-min', BAR_RIGHT + BAR_WIDTH + LABEL_GAP);
-    const maxLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-max', BAR_RIGHT - LABEL_GAP, 'translateX(100%)');
+    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row
+    const wrapper = chart.domNode.parentNode;
+    const barCanvas = buildHeatmapGradientCanvas(infernoColor);
+    const { minLabel: minLabelEl, maxLabel: maxLabelEl, checkbox: checkboxEl } =
+        ensureLegendBar(wrapper, barCanvas);
 
     const updateLabels = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
@@ -411,25 +422,6 @@ export function configureHistogramHeatmap(chart) {
         maxLabelEl.textContent = isRaw ? rawMaxLabel : pctMaxLabel;
     };
     updateLabels();
-
-    // DOM checkbox overlay for percentage/raw count toggle.
-    // Lives in the chart-wrapper (parent of canvas) so it aligns with the DOM title row.
-    const wrapper = chart.domNode.parentNode;
-    let checkboxEl = wrapper.querySelector('.histogram-toggle');
-    if (!checkboxEl) {
-        checkboxEl = document.createElement('span');
-        checkboxEl.className = 'histogram-toggle';
-        wrapper.appendChild(checkboxEl);
-    }
-    checkboxEl.style.cssText = `
-        position: absolute;
-        top: ${BAR_TOP - 1}px;
-        right: 4px;
-        ${FONTS.cssControl}
-        cursor: pointer;
-        user-select: none;
-        z-index: 3;
-    `;
 
     const updateCheckbox = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
