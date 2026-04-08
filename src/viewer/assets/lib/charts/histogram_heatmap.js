@@ -46,7 +46,7 @@ function buildHeatmapGradientBar(colorFn) {
             type: 'image',
             id: 'heatmap-gradient-bar',
             right: 24,
-            top: 13,
+            top: 34,
             style: {
                 image: canvas,
                 width: barWidth,
@@ -308,7 +308,7 @@ export function configureHistogramHeatmap(chart) {
         grid: {
             left: '12',
             right: '17',
-            top: '56',
+            top: '76',
             bottom: '24',
             containLabel: true,
         },
@@ -371,34 +371,6 @@ export function configureHistogramHeatmap(chart) {
         }],
         graphic: buildHeatmapGradientBar(infernoColor),
     };
-
-    // Narrow charts: move color legend below the title/description instead of beside it
-    const NARROW_THRESHOLD = 480;
-    const chartWidth = chart.echart.getWidth();
-    const isNarrow = chartWidth && chartWidth < NARROW_THRESHOLD;
-
-    if (isNarrow) {
-        option.graphic = {
-            elements: [{
-                type: 'image',
-                id: 'heatmap-gradient-bar',
-                right: 24,
-                top: 54,
-                style: {
-                    image: option.graphic.elements[0].style.image,
-                    width: 120,
-                    height: 10,
-                },
-            }],
-        };
-        option.grid = {
-            left: '12',
-            right: '17',
-            top: '100',
-            bottom: '24',
-            containLabel: true,
-        };
-    }
 
     applyChartOption(chart, option);
 

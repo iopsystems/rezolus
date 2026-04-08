@@ -206,7 +206,7 @@ export function configureHeatmap(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '56' },
+        grid: { ...baseOption.grid, top: '76' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.
@@ -244,7 +244,7 @@ export function configureHeatmap(chart) {
             calculable: false,
             show: true,
             orient: 'horizontal',
-            top: 13,
+            top: 34,
             right: 16,
             itemWidth: 10,
             itemHeight: 120,
@@ -257,7 +257,7 @@ export function configureHeatmap(chart) {
             elements: [{
                 type: 'text',
                 right: 136,
-                top: 35,
+                top: 56,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
                     fill: COLORS.fgLabel,
@@ -267,7 +267,7 @@ export function configureHeatmap(chart) {
             }, {
                 type: 'text',
                 right: 16,
-                top: 35,
+                top: 56,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
                     fill: COLORS.fgLabel,
@@ -300,39 +300,6 @@ export function configureHeatmap(chart) {
     };
 
     applyChartOption(chart, option);
-
-    // Narrow charts: move color legend below the title/description instead of beside it
-    const NARROW_THRESHOLD = 480;
-    const chartWidth = chart.echart.getWidth();
-    if (chartWidth && chartWidth < NARROW_THRESHOLD) {
-        chart.echart.setOption({
-            visualMap: { top: 54 },
-            graphic: {
-                elements: [{
-                    type: 'text',
-                    right: 136,
-                    top: 76,
-                    style: {
-                        text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
-                        fill: COLORS.fgLabel,
-                        font: FONTS.footnoteFont,
-                        textAlign: 'center',
-                    },
-                }, {
-                    type: 'text',
-                    right: 16,
-                    top: 76,
-                    style: {
-                        text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
-                        fill: COLORS.fgLabel,
-                        font: FONTS.footnoteFont,
-                        textAlign: 'center',
-                    },
-                }],
-            },
-            grid: { top: '100' },
-        });
-    }
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {

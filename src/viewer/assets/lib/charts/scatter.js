@@ -225,14 +225,14 @@ export function configureScatterChart(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: hasTwoRowLegend ? '68' : '60' },
+        grid: { ...baseOption.grid, top: hasTwoRowLegend ? '86' : '76' },
         legend: (() => {
             if (legendRow2.length === 0) {
-                return { ...legendShared, top: '10', data: legendInitData(legendRow1) };
+                return { ...legendShared, top: '34', data: legendInitData(legendRow1) };
             }
             return [
-                { ...legendShared, top: '4', data: legendInitData(legendRow1) },
-                { ...legendShared, top: '20', data: legendInitData(legendRow2) },
+                { ...legendShared, top: '34', data: legendInitData(legendRow1) },
+                { ...legendShared, top: '50', data: legendInitData(legendRow2) },
             ];
         })(),
         dataZoom: getDataZoomConfig(minZoomSpan),
@@ -268,23 +268,6 @@ export function configureScatterChart(chart) {
     }
 
     applyChartOption(chart, option);
-
-    // Narrow charts: move legend below the title/description instead of beside it
-    const NARROW_THRESHOLD = 480;
-    const chartWidth = chart.echart.getWidth();
-    if (chartWidth && chartWidth < NARROW_THRESHOLD) {
-        // Legend drops below header; push grid down to make room
-        const legendTop = hasTwoRowLegend ? '38' : '34';
-        const legendTop2 = '54';
-        const gridTop = hasTwoRowLegend ? '86' : '76';
-        const narrowLegend = legendRow2.length === 0
-            ? { ...legendShared, top: legendTop, right: '16', data: legendInitData(legendRow1) }
-            : [
-                { ...legendShared, top: legendTop, right: '16', data: legendInitData(legendRow1) },
-                { ...legendShared, top: legendTop2, right: '16', data: legendInitData(legendRow2) },
-            ];
-        chart.echart.setOption({ legend: narrowLegend, grid: { top: gridTop } });
-    }
 
     // Pin feature: click a legend item to keep it highlighted.
     // Ctrl/Cmd+click to multi-select. Click again to unpin.
