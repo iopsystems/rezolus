@@ -15,6 +15,12 @@ import {
 } from './base.js';
 import { VIRIDIS_COLORS } from './util/colormap.js';
 
+// Color bar geometry — shared between visualMap and graphic labels
+const BAR_RIGHT = 24;
+const BAR_WIDTH = 120;
+const BAR_TOP = 44;
+const LABEL_GAP = 4;
+
 /**
  * Configures the Chart based on Chart.spec
  * Responsible for calling setOption on the echart instance, and for setting up any
@@ -244,10 +250,10 @@ export function configureHeatmap(chart) {
             calculable: false,
             show: true,
             orient: 'horizontal',
-            top: 44,
-            right: 16,
+            top: BAR_TOP,
+            right: BAR_RIGHT,
             itemWidth: 10,
-            itemHeight: 120,
+            itemHeight: BAR_WIDTH,
             text: ['', ''],
             inRange: {
                 color: VIRIDIS_COLORS,
@@ -256,8 +262,8 @@ export function configureHeatmap(chart) {
         graphic: {
             elements: [{
                 type: 'text',
-                right: 142,
-                top: 46,
+                right: BAR_RIGHT + BAR_WIDTH + LABEL_GAP,
+                top: BAR_TOP + 6,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
                     fill: COLORS.fgLabel,
@@ -266,8 +272,8 @@ export function configureHeatmap(chart) {
                 },
             }, {
                 type: 'text',
-                right: 10,
-                top: 46,
+                right: BAR_RIGHT - LABEL_GAP,
+                top: BAR_TOP + 6,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
                     fill: COLORS.fgLabel,

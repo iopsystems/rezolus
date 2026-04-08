@@ -22,6 +22,13 @@ import { infernoColor } from './util/colormap.js';
 // Reuse the shared time formatter for latency bucket labels
 const formatLatencyBucket = createAxisLabelFormatter('time');
 
+// Color bar geometry — shared between the bar graphic, DOM labels, and checkbox
+const BAR_RIGHT = 32;
+const BAR_WIDTH = 120;
+const BAR_HEIGHT = 10;
+const BAR_TOP = 44;
+const LABEL_GAP = 4;
+
 /**
  * Build the gradient bar canvas for the heatmap legend (ECharts graphic).
  * Labels are rendered as DOM elements so they can update without triggering a canvas redraw.
@@ -29,28 +36,25 @@ const formatLatencyBucket = createAxisLabelFormatter('time');
  * @returns {Object} echarts graphic config (bar image only)
  */
 function buildHeatmapGradientBar(colorFn) {
-    const barWidth = 120;
-    const barHeight = 10;
-
     const canvas = document.createElement('canvas');
-    canvas.width = barWidth;
-    canvas.height = barHeight;
+    canvas.width = BAR_WIDTH;
+    canvas.height = BAR_HEIGHT;
     const ctx = canvas.getContext('2d');
-    for (let x = 0; x < barWidth; x++) {
-        ctx.fillStyle = colorFn(x / (barWidth - 1));
-        ctx.fillRect(x, 0, 1, barHeight);
+    for (let x = 0; x < BAR_WIDTH; x++) {
+        ctx.fillStyle = colorFn(x / (BAR_WIDTH - 1));
+        ctx.fillRect(x, 0, 1, BAR_HEIGHT);
     }
 
     return {
         elements: [{
             type: 'image',
             id: 'heatmap-gradient-bar',
-            right: 24,
-            top: 44,
+            right: BAR_RIGHT,
+            top: BAR_TOP,
             style: {
                 image: canvas,
-                width: barWidth,
-                height: barHeight,
+                width: BAR_WIDTH,
+                height: BAR_HEIGHT,
             },
         }],
     };
@@ -63,16 +67,16 @@ function buildHeatmapGradientBar(colorFn) {
  * @param {string} rightPx - CSS right position
  * @returns {HTMLElement}
  */
-function ensureDomLabel(container, className, rightPx) {
+function ensureDomLabel(container, className, rightPx, transform) {
     let el = container.querySelector('.' + className);
     if (!el) {
         el = document.createElement('span');
         el.className = className;
         el.style.cssText = `
             position: absolute;
-            top: 45px;
-            right: ${rightPx};
-            transform: translateX(50%);
+            top: ${BAR_TOP - 1}px;
+            right: ${rightPx}px;
+            ${transform ? `transform: ${transform};` : ''}
             ${FONTS.cssFootnote}
             color: ${COLORS.fgLabel};
             z-index: 10;
@@ -398,8 +402,8 @@ export function configureHistogramHeatmap(chart) {
 
     // DOM labels for gradient bar min/max — update without canvas redraw
     chart.domNode.style.position = 'relative';
-    const minLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-min', '144px');
-    const maxLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-max', '24px');
+    const minLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-min', BAR_RIGHT + BAR_WIDTH + LABEL_GAP);
+    const maxLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-max', BAR_RIGHT - LABEL_GAP, 'translateX(100%)');
 
     const updateLabels = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
@@ -419,8 +423,8 @@ export function configureHistogramHeatmap(chart) {
     }
     checkboxEl.style.cssText = `
         position: absolute;
-        top: 42px;
-        right: 180px;
+        top: ${BAR_TOP - 2}px;
+        right: ${BAR_RIGHT + BAR_WIDTH + LABEL_GAP + 50}px;
         ${FONTS.cssControl}
         cursor: pointer;
         user-select: none;
