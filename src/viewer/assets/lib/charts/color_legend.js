@@ -8,7 +8,7 @@ import { COLORS, FONTS } from './base.js';
 // Bar geometry constants
 export const BAR_WIDTH = 120;
 export const BAR_HEIGHT = 10;
-export const BAR_TOP = 42;
+export const BAR_TOP = 45;
 export const LABEL_GAP = 4;
 
 /**
