@@ -78,7 +78,7 @@ function ensureDomLabel(container, className, rightPx, transform) {
             right: ${rightPx}px;
             ${transform ? `transform: ${transform};` : ''}
             ${FONTS.cssFootnote}
-            color: ${COLORS.fgLabel};
+            color: ${COLORS.fgSecondary};
             z-index: 10;
             pointer-events: none;
         `;

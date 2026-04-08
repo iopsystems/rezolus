@@ -266,7 +266,7 @@ export function configureHeatmap(chart) {
                 top: BAR_TOP + 6,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
-                    fill: COLORS.fgLabel,
+                    fill: COLORS.fgSecondary,
                     font: FONTS.footnoteFont,
                     textAlign: 'right',
                 },
@@ -276,7 +276,7 @@ export function configureHeatmap(chart) {
                 top: BAR_TOP + 6,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
-                    fill: COLORS.fgLabel,
+                    fill: COLORS.fgSecondary,
                     font: FONTS.footnoteFont,
                     textAlign: 'left',
                 },
