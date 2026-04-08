@@ -1,1 +1,1 @@
-../../src/viewer/assets/lib/theme.js
+../../../src/viewer/assets/lib/theme.js
