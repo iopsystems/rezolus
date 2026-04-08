@@ -951,7 +951,7 @@ main {
 
 .chart-expand {
     position: absolute;
-    bottom: 12px;
+    bottom: 2px;
     left: 16px;
     font-family: var(--font-mono);
     font-size: 11px;
@@ -976,7 +976,7 @@ main {
 
 .chart-select {
     position: absolute;
-    bottom: 12px;
+    bottom: 2px;
     right: 16px;
     font-family: var(--font-mono);
     font-size: 10px;

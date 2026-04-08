@@ -226,6 +226,8 @@ const SectionContent = {
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
                 globalColorMapper,
+                isSelected,
+                toggleSelection,
             });
         }
 
@@ -627,8 +629,11 @@ const bootstrap = async () => {
                     // Clear chart instances (they'll be recreated), but preserve zoom.
                     chartsState.charts.clear();
 
-                    // Reset cgroup pattern so it doesn't leak between sections.
-                    activeCgroupPattern = null;
+                    // Reset cgroup pattern so it doesn't leak between sections,
+                    // but preserve it when navigating back to cgroups.
+                    if (params.section !== 'cgroups') {
+                        activeCgroupPattern = null;
+                    }
 
                     // Reset scroll position.
                     window.scrollTo(0, 0);

@@ -55,16 +55,22 @@ const transferBtn = (lrLabel, udLabel, title, disabled, onclick) =>
         m('span.arrow-ud', udLabel),
     ]);
 
+// ── Persisted state (survives component remount across navigations) ─
+
+let persistedSelectedCgroups = new Set();
+let persistedOriginalQueries = null; // Map<string, string>
+
 // ── Component ───────────────────────────────────────────────────────
 
 export const CgroupSelector = {
     oninit(vnode) {
-        vnode.state.selectedCgroups = new Set();
+        vnode.state.selectedCgroups = new Set(persistedSelectedCgroups);
         vnode.state.availableCgroups = new Set();
         vnode.state.loading = true;
         vnode.state.error = null;
         vnode.state.leftSelected = new Set();
         vnode.state.rightSelected = new Set();
+        vnode.state.originalQueries = persistedOriginalQueries;
 
         this.fetchAvailableCgroups(vnode);
     },
@@ -135,6 +141,7 @@ export const CgroupSelector = {
                     }
                 }
             }
+            persistedOriginalQueries = vnode.state.originalQueries;
         }
 
         const generation = ++vnode.state.updateGeneration || 1;
@@ -194,6 +201,7 @@ export const CgroupSelector = {
         for (const cg of items) {
             vnode.state.selectedCgroups[op](cg);
         }
+        persistedSelectedCgroups = new Set(vnode.state.selectedCgroups);
         vnode.state.leftSelected.clear();
         vnode.state.rightSelected.clear();
         this.debouncedUpdateQueries(vnode);
