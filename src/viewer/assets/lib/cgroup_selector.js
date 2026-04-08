@@ -179,6 +179,7 @@ export const CgroupSelector = {
                 } catch (error) {
                     console.error(`Failed query for ${plot.opts.title}:`, error);
                     plot.data = [];
+                    plot.series_names = [];
                 }
             }));
         }
