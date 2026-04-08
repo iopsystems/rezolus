@@ -423,8 +423,8 @@ export function configureHistogramHeatmap(chart) {
     }
     checkboxEl.style.cssText = `
         position: absolute;
-        top: ${BAR_TOP - 2}px;
-        right: ${BAR_RIGHT + BAR_WIDTH + LABEL_GAP + 50}px;
+        top: ${BAR_TOP - 1}px;
+        right: 4px;
         ${FONTS.cssControl}
         cursor: pointer;
         user-select: none;
