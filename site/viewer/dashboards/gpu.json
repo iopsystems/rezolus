@@ -96,6 +96,188 @@
       ]
     },
     {
+      "id": "activity",
+      "name": "Activity",
+      "plots": [
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of time the GPU's SMs were doing any tensor operations. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-tensor-act",
+            "style": "line",
+            "title": "GPU Tensor Activity %"
+          },
+          "promql_query": "avg(gpu_tensor_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of time the GPU's SMs were doing any tensor operations. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-tensor-act-per-gpu",
+            "style": "heatmap",
+            "title": "GPU Tensor Activity % (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_tensor_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of DRAM (HBM) bandwidth used. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-dram-act",
+            "style": "line",
+            "title": "GPU DRAM Activity %"
+          },
+          "promql_query": "avg(gpu_dram_bandwidth_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of DRAM (HBM) bandwidth used. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-dram-act-per-gpu",
+            "style": "heatmap",
+            "title": "GPU DRAM Activity % (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_dram_bandwidth_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of time each SM had at least 1 warp assigned, averaged over all SMs. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-sm-act",
+            "style": "line",
+            "title": "GPU SM Activity %"
+          },
+          "promql_query": "avg(gpu_sm_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of time each SM had at least 1 warp assigned, averaged over all SMs. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-sm-act-per-gpu",
+            "style": "heatmap",
+            "title": "GPU SM Activity % (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_sm_utilization) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of warps that were active vs theoretical maximum, averaged over all SMs. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-sm-ocp",
+            "style": "line",
+            "title": "GPU SM Occupancy %"
+          },
+          "promql_query": "avg(gpu_sm_occupancy) / 100"
+        },
+        {
+          "data": [],
+          "opts": {
+            "description": "The percentage of warps that were active vs theoretical maximum, averaged over all SMs. (0-100). Requires Hopper+ GPU.",
+            "format": {
+              "log_scale": null,
+              "precision": 2,
+              "range": {
+                "max": 1.0,
+                "min": 0.0
+              },
+              "unit_system": "percentage",
+              "value_label": null,
+              "x_axis_label": null,
+              "y_axis_label": null
+            },
+            "id": "gpu-sm-ocp-per-gpu",
+            "style": "heatmap",
+            "title": "GPU SM Occupancy % (Per-GPU)"
+          },
+          "promql_query": "sum by (id) (gpu_sm_occupancy) / 100"
+        }
+      ]
+    },
+    {
       "id": "memory",
       "name": "Memory",
       "plots": [
