@@ -1,0 +1,1 @@
+../../../src/viewer/assets/lib/chart_controls.js

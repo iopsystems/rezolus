@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/charts/color_legend.js
