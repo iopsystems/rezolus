@@ -44,11 +44,17 @@ export function configureHistogramHeatmap(chart) {
 
     const baseOption = getBaseOption();
 
+    // Access format properties using snake_case naming to match Rust serialization
+    const format = opts.format || {};
+    const range = format.range;
+
     // Find the range of buckets that actually have data
     let minBucketIdx = Infinity;
     let maxBucketIdx = -Infinity;
     for (const [_, bucketIdx, count] of data) {
         if (count > 0) {
+            // Skip buckets above the configured range max (OOB values are ignored)
+            if (range?.max != null && bucketBounds[bucketIdx] > range.max) continue;
             minBucketIdx = Math.min(minBucketIdx, bucketIdx);
             maxBucketIdx = Math.max(maxBucketIdx, bucketIdx);
         }
@@ -61,7 +67,8 @@ export function configureHistogramHeatmap(chart) {
     // Get the visible bucket bounds for log scale, snapped to powers of 10
     // so ECharts places ticks at clean decade boundaries (1ns, 10ns, 100ns, ...)
     const rawMinBucket = minBucketIdx > 0 ? Math.max(1, bucketBounds[minBucketIdx - 1]) : 1;
-    const rawMaxBucket = bucketBounds[maxBucketIdx];
+    let rawMaxBucket = bucketBounds[maxBucketIdx];
+    if (range?.max != null) rawMaxBucket = Math.min(rawMaxBucket, range.max);
     const minBucketValue = Math.pow(10, Math.floor(Math.log10(rawMinBucket)));
     const maxBucketValue = Math.pow(10, Math.ceil(Math.log10(rawMaxBucket)));
 
@@ -113,7 +120,7 @@ export function configureHistogramHeatmap(chart) {
         }
     }
 
-    // Build the final cell data from the aggregated values
+    // Build the final cell data from the aggregated values, skipping OOB buckets
     const allCellsData = [];
     for (let dt = 0; dt < dsTimeCount; dt++) {
         const timestampMs = dsTimeData[dt] * 1000;
@@ -122,6 +129,7 @@ export function configureHistogramHeatmap(chart) {
             if (count === 0) continue;
 
             const bucketIdx = bo + minBucketIdx;
+            if (range?.max != null && bucketBounds[bucketIdx] > range.max) continue;
             const lowerBound = bucketIdx > 0 ? Math.max(1, bucketBounds[bucketIdx - 1]) : 1;
             const upperBound = bucketBounds[bucketIdx];
 
