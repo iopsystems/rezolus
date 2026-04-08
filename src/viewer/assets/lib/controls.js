@@ -42,7 +42,7 @@ const parseTimeInput = (text, referenceMs) => {
 // Displays full experiment duration with a draggable selection window.
 const TimeRangeBar = {
     oninit(vnode) {
-        const zoom = vnode.attrs.chartsState?.zoomLevel;
+        const zoom = vnode.attrs.chartsState?.globalZoom;
         vnode.state.barStart = zoom ? zoom.start : 0;
         vnode.state.barEnd = zoom ? zoom.end : 100;
         vnode.state.editing = null; // 'start' | 'end' | null
@@ -72,6 +72,7 @@ const TimeRangeBar = {
             vnode.state.barEnd = end;
             chartsState.zoomLevel = { start, end };
             chartsState.zoomSource = 'global';
+            chartsState.globalZoom = { start, end };
             chartsState.charts.forEach(chart => {
                 chart.dispatchAction({ type: 'dataZoom', start, end });
                 chart._rescaleYAxis();
@@ -152,9 +153,9 @@ const TimeRangeBar = {
     view(vnode) {
         const chartsState = vnode.attrs.chartsState;
 
-        // Sync bar position if chartsState zoom was changed externally
-        // (e.g. restored from saved selection)
-        const zoom = chartsState?.zoomLevel;
+        // Sync bar position from globalZoom only (not from local chart zoom,
+        // which can carry undefined/NaN start/end when zooming by raw value).
+        const zoom = chartsState?.globalZoom;
         if (zoom && (zoom.start !== vnode.state.barStart || zoom.end !== vnode.state.barEnd)) {
             vnode.state.barStart = zoom.start;
             vnode.state.barEnd = zoom.end;
@@ -225,6 +226,7 @@ const TimeRangeBar = {
         };
 
         const hidden = vnode.attrs.hidden;
+        const hasLocalZoom = !hidden && chartsState?.zoomSource === 'local';
 
         return m('div.time-range-bar', {
             style: { visibility: hidden ? 'hidden' : '' },
@@ -249,6 +251,26 @@ const TimeRangeBar = {
                 ]),
             ]),
             timeLabel('end', selectedEndMs),
+            // "Match Selection" — appears when charts have a local zoom that differs from
+            // the global time bar. Clicking snaps the global range to the chart zoom.
+            hasLocalZoom && m('button.time-match-btn', {
+                onclick: (e) => {
+                    e.stopPropagation();
+                    const localZoom = chartsState.zoomLevel;
+                    let s = localZoom?.start;
+                    let e2 = localZoom?.end;
+                    // Local zoom via scroll gives raw ms values, not percentages
+                    if ((s === undefined || isNaN(s)) && localZoom?.startValue !== undefined) {
+                        const total = endTime - startTime;
+                        s = Math.max(0, Math.min(100, ((localZoom.startValue - startTime) / total) * 100));
+                        e2 = Math.max(0, Math.min(100, ((localZoom.endValue - startTime) / total) * 100));
+                    }
+                    if (s !== undefined && !isNaN(s)) {
+                        vnode.state.applyZoom(s, e2);
+                    }
+                },
+                title: 'Snap global time range to current chart zoom',
+            }, 'Match Selection'),
             m('button.time-reset-btn', {
                 onclick: (e) => {
                     e.stopPropagation();

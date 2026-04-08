@@ -12,6 +12,9 @@ import { FileUpload } from './landing.js';
 import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 
+// Tracks the active section route to detect section switches
+let activeSectionRoute = null;
+
 // Live mode state - detected at startup
 let liveMode = false;
 let liveRefreshInterval = null;
@@ -150,6 +153,17 @@ const SectionContent = {
         const sectionRoute = attrs.section.route;
         const sectionName = attrs.section.name;
         const interval = attrs.interval;
+
+        // When switching sections, reset local zoom to global so new charts start
+        // from the globally selected time range rather than the previous local zoom.
+        if (sectionRoute !== activeSectionRoute) {
+            activeSectionRoute = sectionRoute;
+            if (chartsState.zoomSource === 'local') {
+                const gz = chartsState.globalZoom || { start: 0, end: 100 };
+                chartsState.zoomLevel = gz;
+                chartsState.zoomSource = gz.start === 0 && gz.end === 100 ? null : 'global';
+            }
+        }
 
         // Special handling for Query Explorer
         if (sectionName === 'Query Explorer') {
@@ -306,7 +320,7 @@ const Group = {
         const isOverview = sectionRoute === '/overview';
         const titlePrefix = isOverview ? attrs.name : sectionName;
         const prefixTitle = (opts) => titlePrefix
-            ? { ...opts, title: `${titlePrefix} / ${opts.title}` }
+            ? { ...opts, title: `${titlePrefix}: ${opts.title}` }
             : opts;
 
         const chartHeader = (opts) => m('div.chart-header', [

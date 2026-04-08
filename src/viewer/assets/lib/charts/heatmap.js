@@ -301,6 +301,39 @@ export function configureHeatmap(chart) {
 
     applyChartOption(chart, option);
 
+    // Narrow charts: move color legend below the title/description instead of beside it
+    const NARROW_THRESHOLD = 480;
+    const chartWidth = chart.echart.getWidth();
+    if (chartWidth && chartWidth < NARROW_THRESHOLD) {
+        chart.echart.setOption({
+            visualMap: { top: 54 },
+            graphic: {
+                elements: [{
+                    type: 'text',
+                    right: 136,
+                    top: 76,
+                    style: {
+                        text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
+                        fill: COLORS.fgLabel,
+                        font: FONTS.footnoteFont,
+                        textAlign: 'center',
+                    },
+                }, {
+                    type: 'text',
+                    right: 16,
+                    top: 76,
+                    style: {
+                        text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
+                        fill: COLORS.fgLabel,
+                        font: FONTS.footnoteFont,
+                        textAlign: 'center',
+                    },
+                }],
+            },
+            grid: { top: '100' },
+        });
+    }
+
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {
         // 'datazoom' events triggered by the user vs dispatched by us have different formats:

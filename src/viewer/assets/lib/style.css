@@ -316,6 +316,26 @@ body::after {
     box-shadow: 0 0 8px var(--accent-glow);
 }
 
+.time-match-btn {
+    padding: 2px 8px;
+    background: transparent;
+    color: var(--fg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: all var(--transition-base);
+}
+
+.time-match-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--fg);
+    border-color: var(--border-emphasis);
+}
+
 #topnav .topnav-actions {
     display: flex;
     align-items: center;
@@ -2343,9 +2363,16 @@ main {
         padding: 0;
     }
 
-    /* Hide time range bar on mobile */
+    /* Time range bar wraps to its own row on mobile */
     .time-range-bar {
-        display: none;
+        width: 100%;
+        margin-left: 0;
+        margin-right: 0;
+        justify-content: center;
+    }
+
+    .time-track {
+        width: 120px;
     }
 
     /* ── Sidebar as slide-out drawer ── */
