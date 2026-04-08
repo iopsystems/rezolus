@@ -11,6 +11,9 @@ import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
 import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
+import { initTheme } from './theme.js';
+
+initTheme();
 
 // Tracks the active section route to detect section switches
 let activeSectionRoute = null;

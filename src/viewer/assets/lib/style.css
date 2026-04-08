@@ -73,6 +73,78 @@
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
     --shadow-glow: 0 0 20px var(--accent-glow);
+
+    /* Chart-specific tokens (used by colormap.js via CSS variable reads) */
+    --chart-area-top: rgba(88, 166, 255, 0.2);
+    --chart-area-mid: rgba(88, 166, 255, 0.08);
+    --chart-area-bottom: rgba(88, 166, 255, 0.01);
+    --chart-grid-line: rgba(48, 54, 61, 0.5);
+    --chart-shadow: rgba(0, 0, 0, 0.4);
+    --chart-shadow-strong: rgba(0, 0, 0, 0.5);
+}
+
+/* ==========================================================================
+   Light Theme
+   ========================================================================== */
+
+[data-theme="light"] {
+    /* Background layers */
+    --bg-void: #eaeef2;
+    --bg: #f6f8fa;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f0f2f5;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f3f5f8;
+    --bg-elevated: #ffffff;
+
+    /* Border hierarchy */
+    --border-subtle: rgba(31, 35, 40, 0.12);
+    --border-default: rgba(31, 35, 40, 0.2);
+    --border-emphasis: rgba(9, 105, 218, 0.35);
+
+    /* Foreground */
+    --fg: #1f2328;
+    --fg-secondary: #57606a;
+    --fg-muted: #8c959f;
+    --fg-subtle: #b0bbc5;
+
+    /* Accent palette */
+    --accent: #0969da;
+    --accent-emphasis: #0550ae;
+    --accent-muted: rgba(9, 105, 218, 0.3);
+    --accent-subtle: rgba(9, 105, 218, 0.1);
+    --accent-glow: rgba(9, 105, 218, 0.2);
+
+    /* Status colors */
+    --success: #1a7f37;
+    --warning: #9a6700;
+    --danger: #cf222e;
+    --info: #0969da;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.08);
+    --shadow-md: 0 4px 12px rgba(31, 35, 40, 0.12);
+    --shadow-lg: 0 8px 24px rgba(31, 35, 40, 0.16);
+    --shadow-glow: 0 0 20px var(--accent-glow);
+
+    /* Chart-specific tokens */
+    --chart-area-top: rgba(9, 105, 218, 0.15);
+    --chart-area-mid: rgba(9, 105, 218, 0.06);
+    --chart-area-bottom: rgba(9, 105, 218, 0.0);
+    --chart-grid-line: rgba(31, 35, 40, 0.12);
+    --chart-shadow: rgba(31, 35, 40, 0.15);
+    --chart-shadow-strong: rgba(31, 35, 40, 0.25);
+}
+
+/* In light theme, replace the subtle grid overlay with a lighter tint */
+[data-theme="light"] body::before {
+    background-image:
+        linear-gradient(rgba(9, 105, 218, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(9, 105, 218, 0.025) 1px, transparent 1px);
+}
+
+[data-theme="light"] body::after {
+    opacity: 0.015;
 }
 
 /* ==========================================================================
@@ -513,6 +585,17 @@ body::after {
     background: rgba(63, 185, 80, 0.15);
     color: #56d364;
     box-shadow: 0 0 12px rgba(63, 185, 80, 0.2);
+}
+
+#topnav .topnav-actions .theme-toggle-btn {
+    padding: 0.4rem;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: 0.5rem;
 }
 
 #topnav .topnav-actions button {
