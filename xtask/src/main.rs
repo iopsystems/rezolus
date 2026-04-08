@@ -51,7 +51,7 @@ fn generate_dashboards(args: impl Iterator<Item = String>) -> Result<()> {
     };
 
     run(Command::new("cargo")
-        .args(["run", "--", "dump-dashboards"])
+        .args(["run", "--features", "xtask-commands", "--", "dump-dashboards"])
         .arg(&output_dir))?;
 
     if check {
