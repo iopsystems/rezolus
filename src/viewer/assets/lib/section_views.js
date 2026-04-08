@@ -1,3 +1,5 @@
+import { expandLink, selectButton } from './chart_controls.js';
+
 const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
     view({ attrs }) {
         const info = attrs.data;
@@ -101,8 +103,6 @@ const renderCgroupSection = ({
     substituteCgroupPattern,
     setActiveCgroupPattern,
     globalColorMapper,
-    isSelected,
-    toggleSelection,
 }) => {
     const sectionRoute = '/cgroups';
     const sectionName = 'Cgroups';
@@ -127,35 +127,6 @@ const renderCgroupSection = ({
         }
     }
 
-    const expandLink = (spec) => {
-        if (!spec.promql_query) return null;
-        const href = `${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
-        return m('a.chart-expand', {
-            href, target: '_blank', title: 'Open in new tab',
-            onclick: (e) => e.stopPropagation(),
-        }, [
-            'Expand ',
-            m('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'currentColor' },
-                m('path', { d: 'M10 1h5v5h-1.5V3.56L9.78 7.28 8.72 6.22l3.72-3.72H10V1zM1 6V1h5v1.5H3.56l3.72 3.72-1.06 1.06L2.5 3.56V6H1zm5 4H1v5h5v-1.5H3.56l3.72-3.72-1.06-1.06L2.5 12.44V10zm4 0v1.5h2.44l-3.72 3.72 1.06 1.06 3.72-3.72V15H15v-5h-5z' }),
-            ),
-        ]);
-    };
-
-    const selectButton = (spec) => {
-        if (!spec.promql_query) return null;
-        const sectionKey = sectionRoute.replace(/^\//, '');
-        const selected = isSelected(spec.opts.id);
-        return m('button.chart-select', {
-            class: selected ? 'chart-selected' : '',
-            onclick: (e) => {
-                e.stopPropagation();
-                toggleSelection(spec, sectionKey, sectionName);
-                m.redraw();
-            },
-            title: selected ? 'Remove from selection' : 'Add to selection',
-        }, selected ? 'Selected' : 'Select');
-    };
-
     const renderCgroupChart = (spec, label, legend) => {
         if (!spec) return null;
         const prefixedSpec = { ...spec, opts: { ...spec.opts }, noCollapse: true, compactGrid: true };
@@ -163,8 +134,8 @@ const renderCgroupSection = ({
             m('span.cgroup-chart-label', label),
             m('div.chart-wrapper', [
                 m(Chart, { spec: prefixedSpec, chartsState, interval }),
-                expandLink(spec),
-                selectButton(spec),
+                expandLink(spec, sectionRoute),
+                selectButton(spec, sectionRoute, sectionName),
             ]),
             legend,
         ]);

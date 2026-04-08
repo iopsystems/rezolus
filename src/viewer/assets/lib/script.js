@@ -5,7 +5,8 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
-import { reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { reportStore, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
@@ -226,8 +227,6 @@ const SectionContent = {
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
                 globalColorMapper,
-                isSelected,
-                toggleSelection,
             });
         }
 
@@ -333,35 +332,6 @@ const Group = {
             opts.description && m('span.chart-subtitle', opts.description),
         ]);
 
-        const expandLink = (spec) => {
-            if (!spec.promql_query) return null;
-            const href = `${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
-            return m('a.chart-expand', {
-                href, target: '_blank', title: 'Open in new tab',
-                onclick: (e) => e.stopPropagation(),
-            }, [
-                'Expand ',
-                m('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'currentColor' },
-                    m('path', { d: 'M10 1h5v5h-1.5V3.56L9.78 7.28 8.72 6.22l3.72-3.72H10V1zM1 6V1h5v1.5H3.56l3.72 3.72-1.06 1.06L2.5 3.56V6H1zm5 4H1v5h5v-1.5H3.56l3.72-3.72-1.06-1.06L2.5 12.44V10zm4 0v1.5h2.44l-3.72 3.72 1.06 1.06 3.72-3.72V15H15v-5h-5z' }),
-                ),
-            ]);
-        };
-
-        const selectButton = (spec) => {
-            if (!spec.promql_query) return null;
-            const sectionKey = sectionRoute.replace(/^\//, '');
-            const selected = isSelected(spec.opts.id);
-            return m('button.chart-select', {
-                class: selected ? 'chart-selected' : '',
-                onclick: (e) => {
-                    e.stopPropagation();
-                    toggleSelection(spec, sectionKey, sectionName);
-                    m.redraw();
-                },
-                title: selected ? 'Remove from selection' : 'Add to selection',
-            }, selected ? 'Selected' : 'Select');
-        };
-
         return m(
             'div.group',
             {
@@ -393,8 +363,8 @@ const Group = {
                             return m('div.chart-wrapper', [
                                 chartHeader(heatmapSpec.opts),
                                 m(Chart, { spec: heatmapSpec, chartsState, interval }),
-                                expandLink(spec),
-                                selectButton(spec),
+                                expandLink(spec, sectionRoute),
+                                selectButton(spec, sectionRoute, sectionName),
                             ]);
                         }
 
@@ -402,8 +372,8 @@ const Group = {
                         return m('div.chart-wrapper', [
                             chartHeader(prefixedSpec.opts),
                             m(Chart, { spec: prefixedSpec, chartsState, interval }),
-                            expandLink(spec),
-                            selectButton(spec),
+                            expandLink(spec, sectionRoute),
+                            selectButton(spec, sectionRoute, sectionName),
                         ]);
                     }),
                 ),

@@ -47,6 +47,9 @@
     --danger: #f85149;
     --info: #58a6ff;
 
+    /* Gradients */
+    --bg-card-gradient: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+
     /* Layout dimensions */
     --sidebar-width: 180px;
     --header-height: 56px;
@@ -231,9 +234,6 @@ body::after {
     mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
     mask-size: contain;
     mask-repeat: no-repeat;
-    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
-    -webkit-mask-size: contain;
-    -webkit-mask-repeat: no-repeat;
 }
 
 #topnav .logo .live-indicator {
@@ -921,7 +921,7 @@ main {
     position: relative;
     min-width: 0;
     overflow: hidden;
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    background: var(--bg-card-gradient);
     border: 1px solid var(--border-default);
     border-radius: var(--card-radius);
     transition: all var(--transition-base);
@@ -1064,7 +1064,6 @@ main {
     font-size: var(--font-size-sm);
     line-height: 1.6;
     transition: all var(--transition-base);
-    box-sizing: border-box;
 }
 
 .field-input:focus,
@@ -1242,7 +1241,7 @@ main {
 }
 
 .query-chart {
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    background: var(--bg-card-gradient);
     border: 1px solid var(--border-default);
     border-radius: var(--card-radius);
     height: 336px;
@@ -1251,7 +1250,7 @@ main {
 .example-queries {
     margin-top: 1.5rem;
     padding: 1.25rem;
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    background: var(--bg-card-gradient);
     border: 1px solid var(--border-subtle);
     border-radius: var(--card-radius);
 }
@@ -1369,7 +1368,7 @@ main {
 }
 
 .cgroup-selector {
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    background: var(--bg-card-gradient);
     border: 1px solid var(--border-subtle);
     border-radius: var(--card-radius);
     padding: 1.25rem;
@@ -1513,7 +1512,7 @@ main {
 }
 
 .sysinfo-group {
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    background: var(--bg-card-gradient);
     border: 1px solid var(--border-default);
     border-radius: var(--card-radius);
     padding: 1.25rem;
@@ -1624,7 +1623,7 @@ main {
 
 .topo-canvas {
     margin-top: 1.5rem;
-    background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
+    background: var(--bg-card-gradient);
     border: 1px solid var(--border-default);
     border-radius: var(--card-radius);
     padding: 1.25rem;
@@ -1736,7 +1735,6 @@ main {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    box-sizing: border-box;
     min-height: 8px;
     min-width: 0;
     padding: 4px 2px;
@@ -1782,7 +1780,6 @@ main {
     border: var(--topo-border, 2px) solid rgba(249, 115, 22, 0.6);
     border-radius: 3px;
     padding: 3px 4px;
-    box-sizing: border-box;
     min-width: 0;
     overflow: hidden;
 }
@@ -1816,7 +1813,6 @@ main {
     justify-content: center;
     gap: 1px;
     padding: 3px 6px;
-    box-sizing: border-box;
     min-width: 0;
     overflow: hidden;
 }
@@ -2563,7 +2559,6 @@ main {
 
     .sysinfo-table {
         overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
     }
 
     /* ── Selection cards: stack vertically ── */
@@ -2592,8 +2587,8 @@ main {
 }
 
 .upload-card {
-    background: var(--bg-secondary, #141820);
-    border: 1px solid var(--border-default, #2a2e3a);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
     border-radius: 12px;
     padding: 3rem;
     max-width: 520px;
@@ -2605,24 +2600,24 @@ main {
     font-size: 2rem;
     font-weight: 700;
     margin: 0 0 0.5rem;
-    color: var(--fg, #e0e0e0);
+    color: var(--fg);
 }
 
 .upload-subtitle {
-    color: var(--fg-secondary, #b0b4c0);
+    color: var(--fg-secondary);
     margin: 0 0 0.25rem;
     font-size: 0.95rem;
 }
 
 .upload-privacy {
-    color: var(--accent, #5b9bd5);
+    color: var(--accent);
     margin: 0 0 2rem;
     font-size: 0.85rem;
     font-weight: 500;
 }
 
 .upload-dropzone {
-    border: 2px dashed var(--border-default, #2a2e3a);
+    border: 2px dashed var(--border-default);
     border-radius: 8px;
     padding: 2.5rem 1.5rem;
     transition: border-color 0.15s, background 0.15s;
@@ -2630,24 +2625,24 @@ main {
 }
 
 .upload-dropzone.dragover {
-    border-color: var(--accent, #5b9bd5);
+    border-color: var(--accent);
     background: rgba(91, 155, 213, 0.05);
 }
 
 .upload-icon {
-    color: var(--fg-muted, #8b8fa3);
+    color: var(--fg-muted);
     margin-bottom: 1rem;
 }
 
 .upload-dropzone p {
     margin: 0.25rem 0;
-    color: var(--fg-secondary, #b0b4c0);
+    color: var(--fg-secondary);
     font-size: 0.9rem;
 }
 
 .upload-or {
-    font-size: 0.8rem !important;
-    color: var(--fg-secondary, #b0b4c0);
+    font-size: 0.8rem;
+    color: var(--fg-secondary);
     opacity: 0.6;
 }
 
@@ -2655,7 +2650,7 @@ main {
     display: inline-block;
     margin-top: 0.75rem;
     padding: 0.5rem 1.5rem;
-    background: var(--accent, #5b9bd5);
+    background: var(--accent);
     color: #fff;
     border: none;
     border-radius: 6px;
@@ -2676,7 +2671,7 @@ main {
 }
 
 .upload-loading {
-    color: var(--accent, #5b9bd5);
+    color: var(--accent);
     margin-top: 1rem;
     font-size: 0.85rem;
 }
@@ -2689,7 +2684,7 @@ main {
 }
 
 .upload-connect-label {
-    color: var(--fg-secondary, #b0b4c0);
+    color: var(--fg-secondary);
     font-size: 0.9rem;
     margin: 0 0 0.25rem;
 }
@@ -2699,23 +2694,22 @@ main {
     width: 100%;
     margin-top: 0.75rem;
     padding: 0.5rem 0.75rem;
-    background: var(--bg-primary, #0a0e14);
-    color: var(--fg, #e0e0e0);
-    border: 1px solid var(--border-default, #2a2e3a);
+    background: var(--bg-void);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
     border-radius: 6px;
     font-size: 0.9rem;
     font-family: 'JetBrains Mono', monospace;
     outline: none;
     transition: border-color 0.15s;
-    box-sizing: border-box;
     text-align: center;
 }
 
 .connect-input:focus {
-    border-color: var(--accent, #5b9bd5);
+    border-color: var(--accent);
 }
 
 .connect-input::placeholder {
-    color: var(--fg-muted, #8b8fa3);
+    color: var(--fg-muted);
     opacity: 0.6;
 }
