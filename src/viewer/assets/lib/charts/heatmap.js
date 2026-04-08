@@ -13,7 +13,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
-import { VIRIDIS_COLORS, colorArrayToFn } from './util/colormap.js';
+import { VIRIDIS_COLORS, viridisColor } from './util/colormap.js';
 import { buildGradientCanvas, ensureLegendBar } from './color_legend.js';
 
 /**
@@ -276,7 +276,7 @@ export function configureHeatmap(chart) {
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row
     const formatter = createAxisLabelFormatter(unitSystem || 'count');
     const wrapper = chart.domNode.parentNode;
-    const barCanvas = buildGradientCanvas(colorArrayToFn(VIRIDIS_COLORS));
+    const barCanvas = buildGradientCanvas(viridisColor);
     const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
     minLabel.textContent = formatter(minValue);
     maxLabel.textContent = formatter(effectiveMax);

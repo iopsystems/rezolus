@@ -119,19 +119,33 @@ function interpolateRamp(ramp, t) {
     return `rgb(${r},${g},${b})`;
 }
 
-/** Viridis hex ramp for echarts visualMap (darkest stops removed for visibility on dark bg) */
-export const VIRIDIS_COLORS = [
-    '#414487', '#2a788e', '#22a884',
-    '#7ad151', '#fde725',
+/** Viridis RGB ramp (darkest stops removed for visibility on dark bg) */
+const VIRIDIS_RGB = [
+    [71, 45, 123],
+    [59, 82, 139],
+    [44, 114, 142],
+    [35, 137, 142],
+    [42, 176, 127],
+    [78, 195, 107],
+    [162, 218, 55],
+    [253, 231, 37],
 ];
 
-/** Inferno hex ramp for echarts visualMap (darkest stops removed for visibility on dark bg) */
-export const INFERNO_COLORS = [
-    '#4a0c6b', '#781c6d', '#a52c60',
-    '#cf4446', '#ed6925', '#fb9b06', '#f7d13d', '#fcffa4',
-];
+/**
+ * Viridis colormap — interpolates through the RGB ramp.
+ * @param {number} t - 0..1
+ * @returns {string} `rgb(r,g,b)`
+ */
+export function viridisColor(t) {
+    return interpolateRamp(VIRIDIS_RGB, t);
+}
 
-/** Inferno RGB ramp for custom renderItem (darkest stops removed) */
+/** Viridis hex ramp for echarts visualMap inRange */
+export const VIRIDIS_COLORS = VIRIDIS_RGB.map(([r, g, b]) =>
+    '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join(''),
+);
+
+/** Inferno RGB ramp (darkest stops removed for visibility on dark bg) */
 const INFERNO_RGB = [
     [74, 12, 107],
     [120, 28, 109],
@@ -150,31 +164,6 @@ const INFERNO_RGB = [
  */
 export function infernoColor(t) {
     return interpolateRamp(INFERNO_RGB, t);
-}
-
-/**
- * Turn an array of CSS color strings into a color function (0..1 → color)
- * by building a tiny canvas gradient and sampling it.
- * @param {string[]} colors - array of CSS color stops
- * @returns {function} maps 0..1 to a CSS color string
- */
-export function colorArrayToFn(colors) {
-    const size = 256;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = 1;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, size, 0);
-    for (let i = 0; i < colors.length; i++) {
-        grad.addColorStop(i / (colors.length - 1), colors[i]);
-    }
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, 1);
-    const imageData = ctx.getImageData(0, 0, size, 1).data;
-    return (t) => {
-        const idx = Math.min(size - 1, Math.max(0, Math.round(t * (size - 1)))) * 4;
-        return `rgb(${imageData[idx]},${imageData[idx + 1]},${imageData[idx + 2]})`;
-    };
 }
 
 // ── Cgroup color mapper ──────────────────────────────────────────────
