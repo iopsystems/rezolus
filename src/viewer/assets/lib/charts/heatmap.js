@@ -244,7 +244,7 @@ export function configureHeatmap(chart) {
             calculable: false,
             show: true,
             orient: 'horizontal',
-            top: 42,
+            top: 44,
             right: 16,
             itemWidth: 10,
             itemHeight: 120,
@@ -257,7 +257,7 @@ export function configureHeatmap(chart) {
             elements: [{
                 type: 'text',
                 right: 142,
-                top: 43,
+                top: 46,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
                     fill: COLORS.fgLabel,
@@ -267,7 +267,7 @@ export function configureHeatmap(chart) {
             }, {
                 type: 'text',
                 right: 10,
-                top: 43,
+                top: 46,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
                     fill: COLORS.fgLabel,

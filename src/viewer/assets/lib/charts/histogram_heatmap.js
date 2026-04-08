@@ -46,7 +46,7 @@ function buildHeatmapGradientBar(colorFn) {
             type: 'image',
             id: 'heatmap-gradient-bar',
             right: 24,
-            top: 42,
+            top: 44,
             style: {
                 image: canvas,
                 width: barWidth,
@@ -70,7 +70,7 @@ function ensureDomLabel(container, className, rightPx) {
         el.className = className;
         el.style.cssText = `
             position: absolute;
-            top: 43px;
+            top: 45px;
             right: ${rightPx};
             transform: translateX(50%);
             ${FONTS.cssFootnote}
@@ -419,7 +419,7 @@ export function configureHistogramHeatmap(chart) {
     }
     checkboxEl.style.cssText = `
         position: absolute;
-        top: 10px;
+        top: 42px;
         right: 180px;
         ${FONTS.cssControl}
         cursor: pointer;
