@@ -206,7 +206,7 @@ export function configureHeatmap(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '76' },
+        grid: { ...baseOption.grid, top: '82' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.
@@ -244,7 +244,7 @@ export function configureHeatmap(chart) {
             calculable: false,
             show: true,
             orient: 'horizontal',
-            top: 34,
+            top: 42,
             right: 16,
             itemWidth: 10,
             itemHeight: 120,
@@ -256,23 +256,23 @@ export function configureHeatmap(chart) {
         graphic: {
             elements: [{
                 type: 'text',
-                right: 136,
-                top: 56,
+                right: 142,
+                top: 43,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
                     fill: COLORS.fgLabel,
                     font: FONTS.footnoteFont,
-                    textAlign: 'center',
+                    textAlign: 'right',
                 },
             }, {
                 type: 'text',
-                right: 16,
-                top: 56,
+                right: 10,
+                top: 43,
                 style: {
                     text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
                     fill: COLORS.fgLabel,
                     font: FONTS.footnoteFont,
-                    textAlign: 'center',
+                    textAlign: 'left',
                 },
             }],
         },

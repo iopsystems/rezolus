@@ -158,7 +158,6 @@ export function configureScatterChart(chart) {
     const minZoomSpan = calculateMinZoomSpan(timeData);
 
     const uniqueNamesForLayout = [...new Set(series.map(s => s.name))];
-    const hasTwoRowLegend = uniqueNamesForLayout.some(n => n.includes('.'));
 
     // Build yAxis config — when OOB is active, skip the last label at range.max
     const baseYAxis = getBaseYAxisOption(logScale, unitSystem);
@@ -220,21 +219,10 @@ export function configureScatterChart(chart) {
             width: legendItemW,
         },
     }));
-    const legendRow1 = uniqueNamesForLayout.filter(n => !n.includes('.'));
-    const legendRow2 = uniqueNamesForLayout.filter(n => n.includes('.'));
-
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: hasTwoRowLegend ? '86' : '76' },
-        legend: (() => {
-            if (legendRow2.length === 0) {
-                return { ...legendShared, top: '34', data: legendInitData(legendRow1) };
-            }
-            return [
-                { ...legendShared, top: '34', data: legendInitData(legendRow1) },
-                { ...legendShared, top: '50', data: legendInitData(legendRow2) },
-            ];
-        })(),
+        grid: { ...baseOption.grid, top: '82' },
+        legend: { ...legendShared, top: '42', data: legendInitData(uniqueNamesForLayout) },
         dataZoom: getDataZoomConfig(minZoomSpan),
         yAxis: yAxisConfig,
         tooltip: {
@@ -348,11 +336,7 @@ export function configureScatterChart(chart) {
             };
         });
 
-        const row1 = uniqueNames.filter(n => !n.includes('.'));
-        const row2 = uniqueNames.filter(n => n.includes('.'));
-        const legendUpdate = row2.length === 0
-            ? { data: makeLegendData(row1) }
-            : [{ data: makeLegendData(row1) }, { data: makeLegendData(row2) }];
+        const legendUpdate = { data: makeLegendData(uniqueNames) };
 
         chart.echart.setOption({ series: updatedSeries, legend: legendUpdate });
     };
@@ -363,11 +347,7 @@ export function configureScatterChart(chart) {
         // Undo the default toggle — re-select all series
         const selected = {};
         uniqueNames.forEach(name => { selected[name] = true; });
-        if (Array.isArray(option.legend)) {
-            chart.echart.setOption({ legend: option.legend.map(() => ({ selected })) });
-        } else {
-            chart.echart.setOption({ legend: { selected } });
-        }
+        chart.echart.setOption({ legend: { selected } });
 
         const name = params.name;
         if (ctrlHeld) {

@@ -107,10 +107,10 @@ export function configureMultiSeriesChart(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '76' },
+        grid: { ...baseOption.grid, top: '82' },
         legend: {
             show: true,
-            top: '34',
+            top: '42',
             right: '16',
             icon: 'roundRect',
             itemWidth: 10,
