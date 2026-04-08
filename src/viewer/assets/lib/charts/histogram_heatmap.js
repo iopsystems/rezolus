@@ -22,66 +22,7 @@ import { infernoColor } from './util/colormap.js';
 // Reuse the shared time formatter for latency bucket labels
 const formatLatencyBucket = createAxisLabelFormatter('time');
 
-/**
- * Build the gradient bar canvas for the heatmap legend (ECharts graphic).
- * Labels are rendered as DOM elements so they can update without triggering a canvas redraw.
- * @param {function} colorFn - maps 0..1 to an RGB color string
- * @returns {Object} echarts graphic config (bar image only)
- */
-function buildHeatmapGradientBar(colorFn) {
-    const barWidth = 120;
-    const barHeight = 10;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = barWidth;
-    canvas.height = barHeight;
-    const ctx = canvas.getContext('2d');
-    for (let x = 0; x < barWidth; x++) {
-        ctx.fillStyle = colorFn(x / (barWidth - 1));
-        ctx.fillRect(x, 0, 1, barHeight);
-    }
-
-    return {
-        elements: [{
-            type: 'image',
-            id: 'heatmap-gradient-bar',
-            right: 24,
-            top: 13,
-            style: {
-                image: canvas,
-                width: barWidth,
-                height: barHeight,
-            },
-        }],
-    };
-}
-
-/**
- * Create or update a DOM label element positioned over the chart.
- * @param {HTMLElement} container - the chart DOM node
- * @param {string} className - CSS class for querySelector
- * @param {string} rightPx - CSS right position
- * @returns {HTMLElement}
- */
-function ensureDomLabel(container, className, rightPx) {
-    let el = container.querySelector('.' + className);
-    if (!el) {
-        el = document.createElement('span');
-        el.className = className;
-        el.style.cssText = `
-            position: absolute;
-            top: 35px;
-            right: ${rightPx};
-            transform: translateX(50%);
-            ${FONTS.cssFootnote}
-            color: ${COLORS.fgLabel};
-            z-index: 10;
-            pointer-events: none;
-        `;
-        container.appendChild(el);
-    }
-    return el;
-}
+import { buildGradientCanvas, ensureLegendBar, LABEL_GAP } from './color_legend.js';
 
 /**
  * Configures the Chart for histogram heatmap visualization
@@ -103,11 +44,17 @@ export function configureHistogramHeatmap(chart) {
 
     const baseOption = getBaseOption();
 
+    // Access format properties using snake_case naming to match Rust serialization
+    const format = opts.format || {};
+    const range = format.range;
+
     // Find the range of buckets that actually have data
     let minBucketIdx = Infinity;
     let maxBucketIdx = -Infinity;
     for (const [_, bucketIdx, count] of data) {
         if (count > 0) {
+            // Skip buckets above the configured range max (OOB values are ignored)
+            if (range?.max != null && bucketBounds[bucketIdx] > range.max) continue;
             minBucketIdx = Math.min(minBucketIdx, bucketIdx);
             maxBucketIdx = Math.max(maxBucketIdx, bucketIdx);
         }
@@ -120,7 +67,8 @@ export function configureHistogramHeatmap(chart) {
     // Get the visible bucket bounds for log scale, snapped to powers of 10
     // so ECharts places ticks at clean decade boundaries (1ns, 10ns, 100ns, ...)
     const rawMinBucket = minBucketIdx > 0 ? Math.max(1, bucketBounds[minBucketIdx - 1]) : 1;
-    const rawMaxBucket = bucketBounds[maxBucketIdx];
+    let rawMaxBucket = bucketBounds[maxBucketIdx];
+    if (range?.max != null) rawMaxBucket = Math.min(rawMaxBucket, range.max);
     const minBucketValue = Math.pow(10, Math.floor(Math.log10(rawMinBucket)));
     const maxBucketValue = Math.pow(10, Math.ceil(Math.log10(rawMaxBucket)));
 
@@ -172,7 +120,7 @@ export function configureHistogramHeatmap(chart) {
         }
     }
 
-    // Build the final cell data from the aggregated values
+    // Build the final cell data from the aggregated values, skipping OOB buckets
     const allCellsData = [];
     for (let dt = 0; dt < dsTimeCount; dt++) {
         const timestampMs = dsTimeData[dt] * 1000;
@@ -181,6 +129,7 @@ export function configureHistogramHeatmap(chart) {
             if (count === 0) continue;
 
             const bucketIdx = bo + minBucketIdx;
+            if (range?.max != null && bucketBounds[bucketIdx] > range.max) continue;
             const lowerBound = bucketIdx > 0 ? Math.max(1, bucketBounds[bucketIdx - 1]) : 1;
             const upperBound = bucketBounds[bucketIdx];
 
@@ -308,7 +257,7 @@ export function configureHistogramHeatmap(chart) {
         grid: {
             left: '12',
             right: '17',
-            top: '56',
+            top: '71',
             bottom: '24',
             containLabel: true,
         },
@@ -369,36 +318,7 @@ export function configureHistogramHeatmap(chart) {
             progressiveThreshold: 3000,
             animation: false,
         }],
-        graphic: buildHeatmapGradientBar(infernoColor),
     };
-
-    // Narrow charts: move color legend below the title/description instead of beside it
-    const NARROW_THRESHOLD = 480;
-    const chartWidth = chart.echart.getWidth();
-    const isNarrow = chartWidth && chartWidth < NARROW_THRESHOLD;
-
-    if (isNarrow) {
-        option.graphic = {
-            elements: [{
-                type: 'image',
-                id: 'heatmap-gradient-bar',
-                right: 24,
-                top: 54,
-                style: {
-                    image: option.graphic.elements[0].style.image,
-                    width: 120,
-                    height: 10,
-                },
-            }],
-        };
-        option.grid = {
-            left: '12',
-            right: '17',
-            top: '100',
-            bottom: '24',
-            containLabel: true,
-        };
-    }
 
     applyChartOption(chart, option);
 
@@ -424,14 +344,22 @@ export function configureHistogramHeatmap(chart) {
     const pctMinLabel = pctMin.toFixed(1) + '%';
     const pctMaxLabel = pctMax.toFixed(1) + '%';
 
-    // DOM labels for gradient bar min/max — update without canvas redraw
-    chart.domNode.style.position = 'relative';
-    const minLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-min', '144px');
-    const maxLabelEl = ensureDomLabel(chart.domNode, 'heatmap-label-max', '24px');
-    if (isNarrow) {
-        minLabelEl.style.top = '76px';
-        maxLabelEl.style.top = '76px';
+    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row
+    const wrapper = chart.domNode.parentNode;
+    const barCanvas = buildGradientCanvas(infernoColor);
+
+    // Build the checkbox element to pass as an extra element into the shared legend bar
+    let checkboxEl = wrapper.querySelector('.heatmap-legend-bar .histogram-toggle');
+    const checkboxExtra = [];
+    if (!checkboxEl) {
+        checkboxEl = document.createElement('span');
+        checkboxEl.className = 'histogram-toggle';
+        checkboxEl.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px; margin-top: -2px;`;
+        checkboxExtra.push(checkboxEl);
     }
+
+    const { minLabel: minLabelEl, maxLabel: maxLabelEl } =
+        ensureLegendBar(wrapper, barCanvas, checkboxExtra);
 
     const updateLabels = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
@@ -439,25 +367,6 @@ export function configureHistogramHeatmap(chart) {
         maxLabelEl.textContent = isRaw ? rawMaxLabel : pctMaxLabel;
     };
     updateLabels();
-
-    // DOM checkbox overlay for percentage/raw count toggle.
-    // Lives in the chart-wrapper (parent of canvas) so it aligns with the DOM title row.
-    const wrapper = chart.domNode.parentNode;
-    let checkboxEl = wrapper.querySelector('.histogram-toggle');
-    if (!checkboxEl) {
-        checkboxEl = document.createElement('span');
-        checkboxEl.className = 'histogram-toggle';
-        wrapper.appendChild(checkboxEl);
-    }
-    checkboxEl.style.cssText = `
-        position: absolute;
-        top: ${isNarrow ? '52px' : '10px'};
-        right: 180px;
-        ${FONTS.cssControl}
-        cursor: pointer;
-        user-select: none;
-        z-index: 3;
-    `;
 
     const updateCheckbox = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';

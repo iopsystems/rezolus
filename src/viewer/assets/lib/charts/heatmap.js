@@ -13,7 +13,8 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
-import { VIRIDIS_COLORS } from './util/colormap.js';
+import { VIRIDIS_COLORS, viridisColor } from './util/colormap.js';
+import { buildGradientCanvas, ensureLegendBar } from './color_legend.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -206,7 +207,7 @@ export function configureHeatmap(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '56' },
+        grid: { ...baseOption.grid, top: '71' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.
@@ -242,39 +243,10 @@ export function configureHeatmap(chart) {
             min: minValue,
             max: effectiveMax,
             calculable: false,
-            show: true,
-            orient: 'horizontal',
-            top: 13,
-            right: 16,
-            itemWidth: 10,
-            itemHeight: 120,
-            text: ['', ''],
+            show: false,
             inRange: {
                 color: VIRIDIS_COLORS,
             }
-        },
-        graphic: {
-            elements: [{
-                type: 'text',
-                right: 136,
-                top: 35,
-                style: {
-                    text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
-                    fill: COLORS.fgLabel,
-                    font: FONTS.footnoteFont,
-                    textAlign: 'center',
-                },
-            }, {
-                type: 'text',
-                right: 16,
-                top: 35,
-                style: {
-                    text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
-                    fill: COLORS.fgLabel,
-                    font: FONTS.footnoteFont,
-                    textAlign: 'center',
-                },
-            }],
         },
         series: [{
             name: chart.spec.opts.title,
@@ -301,38 +273,13 @@ export function configureHeatmap(chart) {
 
     applyChartOption(chart, option);
 
-    // Narrow charts: move color legend below the title/description instead of beside it
-    const NARROW_THRESHOLD = 480;
-    const chartWidth = chart.echart.getWidth();
-    if (chartWidth && chartWidth < NARROW_THRESHOLD) {
-        chart.echart.setOption({
-            visualMap: { top: 54 },
-            graphic: {
-                elements: [{
-                    type: 'text',
-                    right: 136,
-                    top: 76,
-                    style: {
-                        text: createAxisLabelFormatter(unitSystem || 'count')(minValue),
-                        fill: COLORS.fgLabel,
-                        font: FONTS.footnoteFont,
-                        textAlign: 'center',
-                    },
-                }, {
-                    type: 'text',
-                    right: 16,
-                    top: 76,
-                    style: {
-                        text: createAxisLabelFormatter(unitSystem || 'count')(effectiveMax),
-                        fill: COLORS.fgLabel,
-                        font: FONTS.footnoteFont,
-                        textAlign: 'center',
-                    },
-                }],
-            },
-            grid: { top: '100' },
-        });
-    }
+    // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row
+    const formatter = createAxisLabelFormatter(unitSystem || 'count');
+    const wrapper = chart.domNode.parentNode;
+    const barCanvas = buildGradientCanvas(viridisColor);
+    const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
+    minLabel.textContent = formatter(minValue);
+    maxLabel.textContent = formatter(effectiveMax);
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {

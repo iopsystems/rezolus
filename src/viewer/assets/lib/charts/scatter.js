@@ -158,7 +158,6 @@ export function configureScatterChart(chart) {
     const minZoomSpan = calculateMinZoomSpan(timeData);
 
     const uniqueNamesForLayout = [...new Set(series.map(s => s.name))];
-    const hasTwoRowLegend = uniqueNamesForLayout.some(n => n.includes('.'));
 
     // Build yAxis config — when OOB is active, skip the last label at range.max
     const baseYAxis = getBaseYAxisOption(logScale, unitSystem);
@@ -220,21 +219,10 @@ export function configureScatterChart(chart) {
             width: legendItemW,
         },
     }));
-    const legendRow1 = uniqueNamesForLayout.filter(n => !n.includes('.'));
-    const legendRow2 = uniqueNamesForLayout.filter(n => n.includes('.'));
-
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: hasTwoRowLegend ? '68' : '60' },
-        legend: (() => {
-            if (legendRow2.length === 0) {
-                return { ...legendShared, top: '10', data: legendInitData(legendRow1) };
-            }
-            return [
-                { ...legendShared, top: '4', data: legendInitData(legendRow1) },
-                { ...legendShared, top: '20', data: legendInitData(legendRow2) },
-            ];
-        })(),
+        grid: { ...baseOption.grid, top: '71' },
+        legend: { ...legendShared, top: '42', data: legendInitData(uniqueNamesForLayout) },
         dataZoom: getDataZoomConfig(minZoomSpan),
         yAxis: yAxisConfig,
         tooltip: {
@@ -268,23 +256,6 @@ export function configureScatterChart(chart) {
     }
 
     applyChartOption(chart, option);
-
-    // Narrow charts: move legend below the title/description instead of beside it
-    const NARROW_THRESHOLD = 480;
-    const chartWidth = chart.echart.getWidth();
-    if (chartWidth && chartWidth < NARROW_THRESHOLD) {
-        // Legend drops below header; push grid down to make room
-        const legendTop = hasTwoRowLegend ? '38' : '34';
-        const legendTop2 = '54';
-        const gridTop = hasTwoRowLegend ? '86' : '76';
-        const narrowLegend = legendRow2.length === 0
-            ? { ...legendShared, top: legendTop, right: '16', data: legendInitData(legendRow1) }
-            : [
-                { ...legendShared, top: legendTop, right: '16', data: legendInitData(legendRow1) },
-                { ...legendShared, top: legendTop2, right: '16', data: legendInitData(legendRow2) },
-            ];
-        chart.echart.setOption({ legend: narrowLegend, grid: { top: gridTop } });
-    }
 
     // Pin feature: click a legend item to keep it highlighted.
     // Ctrl/Cmd+click to multi-select. Click again to unpin.
@@ -365,11 +336,7 @@ export function configureScatterChart(chart) {
             };
         });
 
-        const row1 = uniqueNames.filter(n => !n.includes('.'));
-        const row2 = uniqueNames.filter(n => n.includes('.'));
-        const legendUpdate = row2.length === 0
-            ? { data: makeLegendData(row1) }
-            : [{ data: makeLegendData(row1) }, { data: makeLegendData(row2) }];
+        const legendUpdate = { data: makeLegendData(uniqueNames) };
 
         chart.echart.setOption({ series: updatedSeries, legend: legendUpdate });
     };
@@ -380,11 +347,7 @@ export function configureScatterChart(chart) {
         // Undo the default toggle — re-select all series
         const selected = {};
         uniqueNames.forEach(name => { selected[name] = true; });
-        if (Array.isArray(option.legend)) {
-            chart.echart.setOption({ legend: option.legend.map(() => ({ selected })) });
-        } else {
-            chart.echart.setOption({ legend: { selected } });
-        }
+        chart.echart.setOption({ legend: { selected } });
 
         const name = params.name;
         if (ctrlHeld) {

@@ -134,7 +134,7 @@ export function getBaseOption() {
         grid: {
             left: '12',
             right: '17',
-            top: '56',
+            top: '62',
             bottom: '24',
             containLabel: true,
         },

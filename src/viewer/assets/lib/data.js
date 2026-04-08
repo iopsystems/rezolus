@@ -108,6 +108,7 @@ const applyResultToPlot = (plot, result) => {
                     plot.series_names = seriesNames;
                 } else {
                     plot.data = [];
+                    plot.series_names = [];
                 }
             }
         } else {
@@ -122,6 +123,7 @@ const applyResultToPlot = (plot, result) => {
         }
     } else {
         plot.data = [];
+        plot.series_names = [];
     }
 };
 

@@ -457,13 +457,9 @@ export class Chart {
             opts
         } = this.spec;
 
-        // Clean up histogram heatmap DOM overlays when switching to a different chart type
-        if (opts.style !== 'histogram_heatmap') {
-            for (const cls of ['heatmap-label-min', 'heatmap-label-max']) {
-                this.domNode?.querySelector('.' + cls)?.remove();
-            }
-            // Toggle lives in the wrapper (parent), not the canvas container
-            this.domNode?.parentNode?.querySelector('.histogram-toggle')?.remove();
+        // Clean up heatmap DOM legend bar when switching to a different chart type
+        if (opts.style !== 'histogram_heatmap' && opts.style !== 'heatmap') {
+            this.domNode?.parentNode?.querySelector('.heatmap-legend-bar')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules

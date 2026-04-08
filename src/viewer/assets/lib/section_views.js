@@ -1,3 +1,5 @@
+import { expandLink, selectButton } from './chart_controls.js';
+
 const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
     view({ attrs }) {
         const info = attrs.data;
@@ -102,6 +104,9 @@ const renderCgroupSection = ({
     setActiveCgroupPattern,
     globalColorMapper,
 }) => {
+    const sectionRoute = '/cgroups';
+    const sectionName = 'Cgroups';
+
     const leftGroups = attrs.groups.filter((g) => g.metadata?.side === 'left');
     const rightGroups = attrs.groups.filter((g) => g.metadata?.side === 'right');
 
@@ -129,6 +134,8 @@ const renderCgroupSection = ({
             m('span.cgroup-chart-label', label),
             m('div.chart-wrapper', [
                 m(Chart, { spec: prefixedSpec, chartsState, interval }),
+                expandLink(spec, sectionRoute),
+                selectButton(spec, sectionRoute, sectionName),
             ]),
             legend,
         ]);

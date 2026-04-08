@@ -119,29 +119,40 @@ function interpolateRamp(ramp, t) {
     return `rgb(${r},${g},${b})`;
 }
 
-/** Viridis hex ramp for echarts visualMap (darkest stops removed for visibility on dark bg) */
+/** Parse a hex color array into an RGB ramp for interpolateRamp. */
+function hexToRgbRamp(colors) {
+    return colors.map(hex => [
+        parseInt(hex.slice(1, 3), 16),
+        parseInt(hex.slice(3, 5), 16),
+        parseInt(hex.slice(5, 7), 16),
+    ]);
+}
+
+/** Viridis hex ramp (darkest stops removed for visibility on dark bg) */
 export const VIRIDIS_COLORS = [
-    '#414487', '#2a788e', '#22a884',
-    '#7ad151', '#fde725',
+    '#472d7b', '#3b528b', '#2c728e',
+    '#23898e', '#2ab07f', '#4ec36b',
+    '#a2da37', '#fde725',
 ];
 
-/** Inferno hex ramp for echarts visualMap (darkest stops removed for visibility on dark bg) */
-export const INFERNO_COLORS = [
+const VIRIDIS_RGB = hexToRgbRamp(VIRIDIS_COLORS);
+
+/**
+ * Viridis colormap — interpolates through the RGB ramp.
+ * @param {number} t - 0..1
+ * @returns {string} `rgb(r,g,b)`
+ */
+export function viridisColor(t) {
+    return interpolateRamp(VIRIDIS_RGB, t);
+}
+
+/** Inferno hex ramp (darkest stops removed for visibility on dark bg) */
+const INFERNO_COLORS = [
     '#4a0c6b', '#781c6d', '#a52c60',
     '#cf4446', '#ed6925', '#fb9b06', '#f7d13d', '#fcffa4',
 ];
 
-/** Inferno RGB ramp for custom renderItem (darkest stops removed) */
-const INFERNO_RGB = [
-    [74, 12, 107],
-    [120, 28, 109],
-    [165, 44, 96],
-    [207, 68, 70],
-    [237, 105, 37],
-    [251, 155, 6],
-    [247, 209, 61],
-    [252, 255, 164],
-];
+const INFERNO_RGB = hexToRgbRamp(INFERNO_COLORS);
 
 /**
  * Inferno colormap — interpolates through the RGB ramp.
