@@ -378,6 +378,14 @@ async function loadDemo() {
         } catch { /* ignore */ }
 
         window._loading = false;
+
+        // Ensure ?demo is in the URL so bookmarks/refreshes auto-load the demo
+        if (!new URLSearchParams(window.location.search).has('demo')) {
+            const url = new URL(window.location);
+            url.searchParams.set('demo', '');
+            window.history.replaceState(null, '', url);
+        }
+
         initDashboardRouter();
     } catch (e) {
         window._loading = false;
