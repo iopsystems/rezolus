@@ -82,6 +82,7 @@ libbpf-cargo = { version = "0.25.0" }
 [features]
 default = []
 developer-mode = []
+xtask-commands = []
 
 [profile.bench]
 debug = true

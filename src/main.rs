@@ -69,6 +69,7 @@ fn main() {
         .subcommand(
             Command::new("dump-dashboards")
                 .about("Dump dashboard JSON definitions to a directory")
+                .hide(!cfg!(feature = "xtask-commands"))
                 .arg(
                     clap::Arg::new("OUTPUT_DIR")
                         .help("Output directory for generated JSON files")
@@ -111,6 +112,7 @@ fn main() {
 
             viewer::run(config)
         }
+        #[cfg(feature = "xtask-commands")]
         Some(("dump-dashboards", args)) => {
             let output_dir = args
                 .get_one::<PathBuf>("OUTPUT_DIR")
