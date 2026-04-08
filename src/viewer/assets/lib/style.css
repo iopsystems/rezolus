@@ -587,7 +587,7 @@ body::after {
     box-shadow: 0 0 12px rgba(63, 185, 80, 0.2);
 }
 
-#topnav .topnav-actions .theme-toggle-btn {
+#topnav .theme-toggle-btn {
     padding: 0.4rem;
     width: 32px;
     height: 32px;
@@ -596,6 +596,19 @@ body::after {
     justify-content: center;
     flex-shrink: 0;
     margin-left: 0.5rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    color: var(--fg-secondary);
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+#topnav .theme-toggle-btn:hover {
+    background: var(--bg-elevated);
+    border-color: var(--accent-muted);
+    color: var(--fg);
+    box-shadow: var(--shadow-glow);
 }
 
 #topnav .topnav-actions button {
