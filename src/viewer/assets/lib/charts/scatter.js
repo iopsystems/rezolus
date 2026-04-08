@@ -221,7 +221,7 @@ export function configureScatterChart(chart) {
     }));
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '82' },
+        grid: { ...baseOption.grid, top: '71' },
         legend: { ...legendShared, top: '42', data: legendInitData(uniqueNamesForLayout) },
         dataZoom: getDataZoomConfig(minZoomSpan),
         yAxis: yAxisConfig,

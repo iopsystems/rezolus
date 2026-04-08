@@ -206,7 +206,7 @@ export function configureHeatmap(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '82' },
+        grid: { ...baseOption.grid, top: '71' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.

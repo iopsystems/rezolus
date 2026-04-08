@@ -308,7 +308,7 @@ export function configureHistogramHeatmap(chart) {
         grid: {
             left: '12',
             right: '17',
-            top: '82',
+            top: '71',
             bottom: '24',
             containLabel: true,
         },
