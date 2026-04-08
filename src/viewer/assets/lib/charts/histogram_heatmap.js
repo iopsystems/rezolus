@@ -26,7 +26,7 @@ const formatLatencyBucket = createAxisLabelFormatter('time');
 const BAR_RIGHT = 32;
 const BAR_WIDTH = 120;
 const BAR_HEIGHT = 10;
-const BAR_TOP = 44;
+const BAR_TOP = 42;
 const LABEL_GAP = 4;
 
 /**
