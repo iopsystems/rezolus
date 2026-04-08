@@ -41,6 +41,78 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     view.group(utilization);
 
+    let mut activity = Group::new("Activity", "activity");
+
+    // GPU tensor activity
+    activity.plot_promql(
+        PlotOpts::line("GPU Tensor Activity %", "gpu-tensor-act", Unit::Percentage).range(0.0, 1.0),
+        "avg(gpu_tensor_utilization) / 100".to_string(),
+    );
+
+    // Per-GPU GPU tensor activity
+    activity.plot_promql(
+        PlotOpts::heatmap(
+            "GPU Tensor Activity % (Per-GPU)",
+            "gpu-tensor-act-per-gpu",
+            Unit::Percentage,
+        )
+        .range(0.0, 1.0),
+        "sum by (id) (gpu_tensor_utilization) / 100".to_string(),
+    );
+
+    // GPU DRAM activity
+    activity.plot_promql(
+        PlotOpts::line("GPU DRAM Activity %", "gpu-dram-act", Unit::Percentage).range(0.0, 1.0),
+        "avg(gpu_dram_bandwidth_utilization) / 100".to_string(),
+    );
+
+    // Per-GPU GPU DRAM activity
+    activity.plot_promql(
+        PlotOpts::heatmap(
+            "GPU DRAM Activity % (Per-GPU)",
+            "gpu-dram-act-per-gpu",
+            Unit::Percentage,
+        )
+        .range(0.0, 1.0),
+        "sum by (id) (gpu_dram_bandwidth_utilization) / 100".to_string(),
+    );
+
+    // GPU SM activity
+    activity.plot_promql(
+        PlotOpts::line("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).range(0.0, 1.0),
+        "avg(gpu_sm_utilization) / 100".to_string(),
+    );
+
+    // Per-GPU GPU SM activity
+    activity.plot_promql(
+        PlotOpts::heatmap(
+            "GPU SM Activity % (Per-GPU)",
+            "gpu-sm-act-per-gpu",
+            Unit::Percentage,
+        )
+        .range(0.0, 1.0),
+        "sum by (id) (gpu_sm_utilization) / 100".to_string(),
+    );
+
+    // GPU SM occupancy (active warps / max warps, average across all GPUs)
+    activity.plot_promql(
+        PlotOpts::line("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage).range(0.0, 1.0),
+        "avg(gpu_sm_occupancy) / 100".to_string(),
+    );
+
+    // Per-GPU GPU SM occupancy
+    activity.plot_promql(
+        PlotOpts::heatmap(
+            "GPU SM Occupancy % (Per-GPU)",
+            "gpu-sm-ocp-per-gpu",
+            Unit::Percentage,
+        )
+        .range(0.0, 1.0),
+        "sum by (id) (gpu_sm_occupancy) / 100".to_string(),
+    );
+
+    view.group(activity);
+
     /*
      * Memory
      */
