@@ -87,7 +87,7 @@ function ensureLegendBar(wrapper, barCanvas) {
 
     const checkbox = document.createElement('span');
     checkbox.className = 'histogram-toggle';
-    checkbox.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px;`;
+    checkbox.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px; margin-top: -2px;`;
 
     container.appendChild(minLabel);
     container.appendChild(bar);
