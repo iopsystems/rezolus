@@ -13,6 +13,7 @@ import { FileUpload } from './landing.js';
 import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 import { initTheme } from './theme.js';
+import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
 
 initTheme();
 
@@ -230,13 +231,10 @@ const SectionContent = {
             });
         }
 
-        const hasLocalZoom = chartsState.zoomSource === 'local' && !chartsState.isDefaultZoom();
-        const hasSelection = hasLocalZoom ||
-            Array.from(chartsState.charts.values()).some(c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
+        const hasSelection = chartsState.hasActiveSelection();
 
         const hasHistogramCharts = (attrs.groups || []).some(g =>
-            (g.plots || []).some(p => p.opts.type === 'histogram' ||
-                (p.promql_query && p.promql_query.includes('histogram_percentiles')))
+            (g.plots || []).some(p => isHistogramPlot(p))
         );
 
         return m('div#section-content', [
@@ -344,24 +342,12 @@ const Group = {
                     'div.charts',
                     attrs.plots.map((spec) => {
                         // Check if this is a histogram chart and we're in heatmap mode
-                        const isHistogramChart = spec.opts.type === 'histogram' ||
-                            (spec.promql_query && spec.promql_query.includes('histogram_percentiles'));
+                        const isHistogramChart = isHistogramPlot(spec);
 
                         if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
                             // Create heatmap spec from the fetched data
                             const heatmapData = sectionHeatmapData.get(spec.opts.id);
-                            const heatmapSpec = {
-                                ...spec,
-                                opts: {
-                                    ...prefixTitle(spec.opts),
-                                    style: 'histogram_heatmap',
-                                },
-                                time_data: heatmapData.time_data,
-                                bucket_bounds: heatmapData.bucket_bounds,
-                                data: heatmapData.data,
-                                min_value: heatmapData.min_value,
-                                max_value: heatmapData.max_value,
-                            };
+                            const heatmapSpec = buildHistogramHeatmapSpec(spec, heatmapData, prefixTitle(spec.opts));
                             return m('div.chart-wrapper', [
                                 chartHeader(heatmapSpec.opts),
                                 m(Chart, { spec: heatmapSpec, chartsState, interval }),

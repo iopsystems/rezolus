@@ -12,19 +12,19 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // GPU compute utilization (average across all GPUs)
     // NVML returns 0-100, divide by 100 for 0-1 ratio expected by Unit::Percentage
     utilization.plot_promql(
-        PlotOpts::gauge("GPU %", "gpu-pct", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::gauge("GPU %", "gpu-pct", Unit::Percentage).percentage_range(),
         "avg(gpu_utilization) / 100".to_string(),
     );
 
     // Per-GPU utilization heatmap
     utilization.plot_promql(
-        PlotOpts::gauge("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::gauge("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage).percentage_range(),
         "sum by (id) (gpu_utilization) / 100".to_string(),
     );
 
     // Memory controller utilization (average)
     utilization.plot_promql(
-        PlotOpts::gauge("Memory Controller %", "mem-ctrl-pct", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::gauge("Memory Controller %", "mem-ctrl-pct", Unit::Percentage).percentage_range(),
         "avg(gpu_memory_utilization) / 100".to_string(),
     );
 
@@ -35,7 +35,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "mem-ctrl-pct-per-gpu",
             Unit::Percentage,
         )
-        .range(0.0, 1.0),
+        .percentage_range(),
         "sum by (id) (gpu_memory_utilization) / 100".to_string(),
     );
 
@@ -46,7 +46,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // GPU tensor activity
     activity.plot_promql(
         PlotOpts::gauge("GPU Tensor Activity %", "gpu-tensor-act", Unit::Percentage)
-            .range(0.0, 1.0),
+            .percentage_range(),
         "avg(gpu_tensor_utilization) / 100".to_string(),
     );
 
@@ -57,13 +57,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "gpu-tensor-act-per-gpu",
             Unit::Percentage,
         )
-        .range(0.0, 1.0),
+        .percentage_range(),
         "sum by (id) (gpu_tensor_utilization) / 100".to_string(),
     );
 
     // GPU DRAM activity
     activity.plot_promql(
-        PlotOpts::gauge("GPU DRAM Activity %", "gpu-dram-act", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::gauge("GPU DRAM Activity %", "gpu-dram-act", Unit::Percentage).percentage_range(),
         "avg(gpu_dram_bandwidth_utilization) / 100".to_string(),
     );
 
@@ -74,13 +74,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "gpu-dram-act-per-gpu",
             Unit::Percentage,
         )
-        .range(0.0, 1.0),
+        .percentage_range(),
         "sum by (id) (gpu_dram_bandwidth_utilization) / 100".to_string(),
     );
 
     // GPU SM activity
     activity.plot_promql(
-        PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
         "avg(gpu_sm_utilization) / 100".to_string(),
     );
 
@@ -91,13 +91,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "gpu-sm-act-per-gpu",
             Unit::Percentage,
         )
-        .range(0.0, 1.0),
+        .percentage_range(),
         "sum by (id) (gpu_sm_utilization) / 100".to_string(),
     );
 
     // GPU SM occupancy (active warps / max warps, average across all GPUs)
     activity.plot_promql(
-        PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage).percentage_range(),
         "avg(gpu_sm_occupancy) / 100".to_string(),
     );
 
@@ -108,7 +108,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "gpu-sm-ocp-per-gpu",
             Unit::Percentage,
         )
-        .range(0.0, 1.0),
+        .percentage_range(),
         "sum by (id) (gpu_sm_occupancy) / 100".to_string(),
     );
 
@@ -146,7 +146,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Memory utilization percentage (calculated)
     memory.plot_promql(
-        PlotOpts::gauge("Utilization %", "mem-util-pct", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::gauge("Utilization %", "mem-util-pct", Unit::Percentage).percentage_range(),
         "sum(gpu_memory{state=\"used\"}) / (sum(gpu_memory{state=\"used\"}) + sum(gpu_memory{state=\"free\"}))".to_string(),
     );
 

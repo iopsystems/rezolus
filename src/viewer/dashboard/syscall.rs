@@ -17,9 +17,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Total syscall latency percentiles
     syscall.plot_promql(
-        PlotOpts::histogram("Total", "syscall-total-latency", Unit::Time, "percentiles")
-            .with_log_scale(true)
-            .range(0.0, 100_000_000_000.0),
+        PlotOpts::histogram_latency("Total", "syscall-total-latency"),
         "syscall_latency".to_string(),
     );
 
@@ -52,14 +50,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         // Latency percentiles for this operation
         syscall.plot_promql(
-            PlotOpts::histogram(
-                *op,
-                format!("syscall-{op}-latency"),
-                Unit::Time,
-                "percentiles",
-            )
-            .with_log_scale(true)
-            .range(0.0, 100_000_000_000.0),
+            PlotOpts::histogram_latency(*op, format!("syscall-{op}-latency")),
             format!("syscall_latency{{op=\"{op_lower}\"}}"),
         );
     }

@@ -50,6 +50,14 @@ export class ChartsState {
         return !this.zoomLevel || (this.zoomLevel.start === 0 && this.zoomLevel.end === 100);
     }
 
+    /** Returns true when any chart has a local zoom, frozen tooltip, or pinned series. */
+    hasActiveSelection() {
+        const hasLocalZoom = this.zoomSource === 'local' && !this.isDefaultZoom();
+        return hasLocalZoom ||
+            Array.from(this.charts.values()).some(
+                c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
+    }
+
     // Reset zoom level on all charts
     resetZoom() {
         this.zoomLevel = { start: 0, end: 100 };

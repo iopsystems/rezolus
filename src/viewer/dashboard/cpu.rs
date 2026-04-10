@@ -11,13 +11,14 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Average CPU busy percentage across all cores
     utilization.plot_promql(
-        PlotOpts::counter("Busy %", "busy-pct", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("Busy %", "busy-pct", Unit::Percentage).percentage_range(),
         "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU busy percentage heatmap
     utilization.plot_promql(
-        PlotOpts::counter("Busy % (Per-CPU)", "busy-pct-per-cpu", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("Busy % (Per-CPU)", "busy-pct-per-cpu", Unit::Percentage)
+            .percentage_range(),
         "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
     );
 
@@ -32,7 +33,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
                 format!("{state}-pct"),
                 Unit::Percentage,
             )
-            .range(0.0, 1.0),
+            .percentage_range(),
             format!("sum(irate(cpu_usage{{state=\"{state}\"}}[5m])) / cpu_cores / 1000000000"),
         );
 
@@ -43,7 +44,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
                 format!("{state}-pct-per-cpu"),
                 Unit::Percentage,
             )
-            .range(0.0, 1.0),
+            .percentage_range(),
             format!("sum by (id) (irate(cpu_usage{{state=\"{state}\"}}[5m])) / 1000000000"),
         );
     }
@@ -84,13 +85,14 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // L3 Cache Hit Rate
     performance.plot_promql(
-        PlotOpts::counter("L3 Hit %", "l3-hit", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("L3 Hit %", "l3-hit", Unit::Percentage).percentage_range(),
         "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))".to_string(),
     );
 
     // Per-CPU L3 Hit Rate
     performance.plot_promql(
-        PlotOpts::counter("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage)
+            .percentage_range(),
         "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))"
             .to_string(),
     );
@@ -118,7 +120,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // Branch Misprediction Rate %
     branch.plot_promql(
         PlotOpts::counter("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
-            .range(0.0, 1.0),
+            .percentage_range(),
         "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))".to_string(),
     );
 
@@ -129,7 +131,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             "branch-miss-rate-per-cpu",
             Unit::Percentage,
         )
-        .range(0.0, 1.0),
+        .percentage_range(),
         "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))"
             .to_string(),
     );

@@ -1,5 +1,5 @@
 import { ViewerApi } from './viewer_api.js';
-import { resolveStyle, buildHistogramQuery } from './charts/metric_types.js';
+import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
 const defaultQueryRange = (query, start, end, step) =>
@@ -261,10 +261,7 @@ const createDataApi = ({
         const plots = [];
         for (const group of groups || []) {
             for (const plot of group.plots || []) {
-                if (plot.promql_query && (
-                    plot.opts.type === 'histogram' ||
-                    plot.promql_query.includes('histogram_percentiles')
-                )) {
+                if (plot.promql_query && isHistogramPlot(plot)) {
                     plots.push(plot);
                 }
             }

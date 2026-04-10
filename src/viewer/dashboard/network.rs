@@ -65,16 +65,9 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // TCP Packet Latency percentiles - p50, p90, p99, p99.9
     tcp.plot_promql(
-        PlotOpts::histogram(
-            "TCP Packet Latency",
-            "tcp-packet-latency",
-            Unit::Time,
-            "percentiles",
-        )
-        .with_axis_label("Latency")
-        .with_unit_system("time")
-        .with_log_scale(true)
-        .range(0.0, 100_000_000_000.0),
+        PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+            .with_axis_label("Latency")
+            .with_unit_system("time"),
         "tcp_packet_latency".to_string(),
     );
 

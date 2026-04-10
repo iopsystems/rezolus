@@ -11,13 +11,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Average CPU busy percentage
     cpu.plot_promql(
-        PlotOpts::counter("Busy %", "cpu-busy", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("Busy %", "cpu-busy", Unit::Percentage).percentage_range(),
         "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU busy percentage heatmap
     cpu.plot_promql(
-        PlotOpts::counter("Busy %", "cpu-busy-heatmap", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("Busy %", "cpu-busy-heatmap", Unit::Percentage).percentage_range(),
         "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
     );
 
@@ -65,16 +65,9 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // TCP packet latency percentiles
     network.plot_promql(
-        PlotOpts::histogram(
-            "TCP Packet Latency",
-            "tcp-packet-latency",
-            Unit::Time,
-            "percentiles",
-        )
-        .with_axis_label("Latency")
-        .with_unit_system("time")
-        .with_log_scale(true)
-        .range(0.0, 100_000_000_000.0),
+        PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+            .with_axis_label("Latency")
+            .with_unit_system("time"),
         "tcp_packet_latency".to_string(),
     );
 
@@ -88,16 +81,9 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Runqueue latency percentiles
     scheduler.plot_promql(
-        PlotOpts::histogram(
-            "Runqueue Latency",
-            "scheduler-runqueue-latency",
-            Unit::Time,
-            "percentiles",
-        )
-        .with_axis_label("Latency")
-        .with_unit_system("time")
-        .with_log_scale(true)
-        .range(0.0, 100_000_000_000.0),
+        PlotOpts::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
+            .with_axis_label("Latency")
+            .with_unit_system("time"),
         "scheduler_runqueue_latency".to_string(),
     );
 
@@ -117,9 +103,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Syscall latency percentiles
     syscall.plot_promql(
-        PlotOpts::histogram("Total", "syscall-total-latency", Unit::Time, "percentiles")
-            .with_log_scale(true)
-            .range(0.0, 100_000_000_000.0),
+        PlotOpts::histogram_latency("Total", "syscall-total-latency"),
         "syscall_latency".to_string(),
     );
 
@@ -145,13 +129,14 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Average CPU % spent in softirq
     softirq.plot_promql(
-        PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
         "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU % spent in softirq heatmap
     softirq.plot_promql(
-        PlotOpts::counter("CPU %", "softirq-total-time-heatmap", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("CPU %", "softirq-total-time-heatmap", Unit::Percentage)
+            .percentage_range(),
         "sum by (id) (irate(softirq_time[5m])) / 1000000000".to_string(),
     );
 

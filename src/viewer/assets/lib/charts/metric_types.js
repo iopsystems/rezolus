@@ -72,3 +72,40 @@ export function buildHistogramQuery(baseQuery, subtype) {
     // Default to percentiles
     return `histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], ${baseQuery})`;
 }
+
+/**
+ * Returns true if the given plot spec represents a histogram chart.
+ * Checks the semantic type first, with a legacy fallback for specs that
+ * still use the old histogram_percentiles query format.
+ *
+ * @param {object} plot - A plot spec with opts and optional promql_query
+ * @returns {boolean}
+ */
+export function isHistogramPlot(plot) {
+    return plot.opts?.type === 'histogram' ||
+        (plot.promql_query && plot.promql_query.includes('histogram_percentiles'));
+}
+
+/**
+ * Builds a histogram_heatmap chart spec by merging heatmap data into a base
+ * scatter plot spec.
+ *
+ * @param {object} spec - The original scatter plot spec
+ * @param {object} heatmapData - Data from fetchHeatmapForPlot()
+ * @param {object} [optsOverrides] - Additional opts to merge (e.g. prefixed title)
+ * @returns {object} A new spec configured for histogram_heatmap rendering
+ */
+export function buildHistogramHeatmapSpec(spec, heatmapData, optsOverrides) {
+    return {
+        ...spec,
+        opts: {
+            ...(optsOverrides || spec.opts),
+            style: 'histogram_heatmap',
+        },
+        time_data: heatmapData.time_data,
+        bucket_bounds: heatmapData.bucket_bounds,
+        data: heatmapData.data,
+        min_value: heatmapData.min_value,
+        max_value: heatmapData.max_value,
+    };
+}
