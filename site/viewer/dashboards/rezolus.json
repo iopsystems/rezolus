@@ -22,8 +22,8 @@
               "y_axis_label": null
             },
             "id": "cpu",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(rezolus_cpu_usage[5m])) / 1000000000"
         },
@@ -40,8 +40,8 @@
               "y_axis_label": null
             },
             "id": "memory",
-            "style": "line",
-            "title": "Memory (RSS)"
+            "title": "Memory (RSS)",
+            "type": "gauge"
           },
           "promql_query": "sum(rezolus_memory_usage_resident_set_size)"
         },
@@ -58,8 +58,8 @@
               "y_axis_label": null
             },
             "id": "ipc",
-            "style": "line",
-            "title": "IPC"
+            "title": "IPC",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_instructions{name=\"/system.slice/rezolus.service\"}[5m])) / sum(irate(cgroup_cpu_cycles{name=\"/system.slice/rezolus.service\"}[5m]))"
         },
@@ -76,8 +76,8 @@
               "y_axis_label": null
             },
             "id": "syscalls",
-            "style": "line",
-            "title": "Syscalls"
+            "title": "Syscalls",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{name=\"/system.slice/rezolus.service\"}[5m]))"
         },
@@ -94,8 +94,8 @@
               "y_axis_label": null
             },
             "id": "bpf-overhead",
-            "style": "line",
-            "title": "Total BPF Overhead"
+            "title": "Total BPF Overhead",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(rezolus_bpf_run_time[5m])) / 1000000000"
         },
@@ -112,8 +112,8 @@
               "y_axis_label": null
             },
             "id": "bpf-sampler-overhead",
-            "style": "multi",
-            "title": "BPF Per-Sampler Overhead"
+            "title": "BPF Per-Sampler Overhead",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / 1000000000"
         },
@@ -130,8 +130,8 @@
               "y_axis_label": null
             },
             "id": "bpf-execution-time",
-            "style": "multi",
-            "title": "BPF Per-Sampler Execution Time"
+            "title": "BPF Per-Sampler Execution Time",
+            "type": "delta_counter"
           },
           "promql_query": "(sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / sum by (sampler) (irate(rezolus_bpf_run_count[5m]))) / 1000000000"
         }

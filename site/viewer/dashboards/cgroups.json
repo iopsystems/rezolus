@@ -21,8 +21,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-total-cores",
-            "style": "line",
-            "title": "Total CPU Cores"
+            "title": "Total CPU Cores",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_usage{name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
         },
@@ -39,8 +39,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-user-cores",
-            "style": "line",
-            "title": "User CPU Cores"
+            "title": "User CPU Cores",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_usage{state=\"user\",name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
         },
@@ -57,8 +57,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-system-cores",
-            "style": "line",
-            "title": "System CPU Cores"
+            "title": "System CPU Cores",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_usage{state=\"system\",name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
         },
@@ -75,8 +75,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-cpu-migrations",
-            "style": "line",
-            "title": "CPU Migrations"
+            "title": "CPU Migrations",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_migrations{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -93,8 +93,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-cpu-throttled-time",
-            "style": "line",
-            "title": "CPU Throttled Time"
+            "title": "CPU Throttled Time",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_throttled_time{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -111,8 +111,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-ipc",
-            "style": "line",
-            "title": "IPC"
+            "title": "IPC",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_instructions{name!~\"__SELECTED_CGROUPS__\"}[5m])) / sum(irate(cgroup_cpu_cycles{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -129,8 +129,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-tlb-flush",
-            "style": "line",
-            "title": "TLB Flushes"
+            "title": "TLB Flushes",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_cpu_tlb_flush{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -147,8 +147,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall",
-            "style": "line",
-            "title": "Syscalls"
+            "title": "Syscalls",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -165,8 +165,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-read",
-            "style": "line",
-            "title": "Syscall Read"
+            "title": "Syscall Read",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"read\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -183,8 +183,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-write",
-            "style": "line",
-            "title": "Syscall Write"
+            "title": "Syscall Write",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"write\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -201,8 +201,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-poll",
-            "style": "line",
-            "title": "Syscall Poll"
+            "title": "Syscall Poll",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"poll\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -219,8 +219,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-socket",
-            "style": "line",
-            "title": "Syscall Socket"
+            "title": "Syscall Socket",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"socket\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -237,8 +237,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-lock",
-            "style": "line",
-            "title": "Syscall Lock"
+            "title": "Syscall Lock",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"lock\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -255,8 +255,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-time",
-            "style": "line",
-            "title": "Syscall Time"
+            "title": "Syscall Time",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"time\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -273,8 +273,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-sleep",
-            "style": "line",
-            "title": "Syscall Sleep"
+            "title": "Syscall Sleep",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"sleep\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -291,8 +291,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-yield",
-            "style": "line",
-            "title": "Syscall Yield"
+            "title": "Syscall Yield",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"yield\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -309,8 +309,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-filesystem",
-            "style": "line",
-            "title": "Syscall Filesystem"
+            "title": "Syscall Filesystem",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"filesystem\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -327,8 +327,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-memory",
-            "style": "line",
-            "title": "Syscall Memory"
+            "title": "Syscall Memory",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"memory\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -345,8 +345,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-process",
-            "style": "line",
-            "title": "Syscall Process"
+            "title": "Syscall Process",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"process\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -363,8 +363,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-query",
-            "style": "line",
-            "title": "Syscall Query"
+            "title": "Syscall Query",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"query\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -381,8 +381,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-ipc",
-            "style": "line",
-            "title": "Syscall IPC"
+            "title": "Syscall IPC",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"ipc\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -399,8 +399,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-timer",
-            "style": "line",
-            "title": "Syscall Timer"
+            "title": "Syscall Timer",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"timer\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -417,8 +417,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-event",
-            "style": "line",
-            "title": "Syscall Event"
+            "title": "Syscall Event",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"event\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -435,8 +435,8 @@
               "y_axis_label": null
             },
             "id": "aggregate-syscall-other",
-            "style": "line",
-            "title": "Syscall Other"
+            "title": "Syscall Other",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cgroup_syscall{op=\"other\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
         }
@@ -462,8 +462,8 @@
               "y_axis_label": null
             },
             "id": "individual-total-cores",
-            "style": "multi",
-            "title": "Total CPU Cores"
+            "title": "Total CPU Cores",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_cpu_usage{name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
         },
@@ -480,8 +480,8 @@
               "y_axis_label": null
             },
             "id": "individual-user-cores",
-            "style": "multi",
-            "title": "User CPU Cores"
+            "title": "User CPU Cores",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_cpu_usage{state=\"user\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
         },
@@ -498,8 +498,8 @@
               "y_axis_label": null
             },
             "id": "individual-system-cores",
-            "style": "multi",
-            "title": "System CPU Cores"
+            "title": "System CPU Cores",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_cpu_usage{state=\"system\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
         },
@@ -516,8 +516,8 @@
               "y_axis_label": null
             },
             "id": "individual-cpu-migrations",
-            "style": "multi",
-            "title": "CPU Migrations"
+            "title": "CPU Migrations",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_cpu_migrations{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -534,8 +534,8 @@
               "y_axis_label": null
             },
             "id": "individual-cpu-throttled-time",
-            "style": "multi",
-            "title": "CPU Throttled Time"
+            "title": "CPU Throttled Time",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -552,8 +552,8 @@
               "y_axis_label": null
             },
             "id": "individual-ipc",
-            "style": "multi",
-            "title": "IPC"
+            "title": "IPC",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_cpu_instructions{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -570,8 +570,8 @@
               "y_axis_label": null
             },
             "id": "individual-tlb-flush",
-            "style": "multi",
-            "title": "TLB Flushes"
+            "title": "TLB Flushes",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_cpu_tlb_flush{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -588,8 +588,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall",
-            "style": "multi",
-            "title": "Syscalls"
+            "title": "Syscalls",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -606,8 +606,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-read",
-            "style": "multi",
-            "title": "Syscall Read"
+            "title": "Syscall Read",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"read\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -624,8 +624,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-write",
-            "style": "multi",
-            "title": "Syscall Write"
+            "title": "Syscall Write",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"write\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -642,8 +642,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-poll",
-            "style": "multi",
-            "title": "Syscall Poll"
+            "title": "Syscall Poll",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"poll\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -660,8 +660,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-socket",
-            "style": "multi",
-            "title": "Syscall Socket"
+            "title": "Syscall Socket",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"socket\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -678,8 +678,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-lock",
-            "style": "multi",
-            "title": "Syscall Lock"
+            "title": "Syscall Lock",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"lock\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -696,8 +696,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-time",
-            "style": "multi",
-            "title": "Syscall Time"
+            "title": "Syscall Time",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"time\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -714,8 +714,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-sleep",
-            "style": "multi",
-            "title": "Syscall Sleep"
+            "title": "Syscall Sleep",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"sleep\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -732,8 +732,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-yield",
-            "style": "multi",
-            "title": "Syscall Yield"
+            "title": "Syscall Yield",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"yield\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -750,8 +750,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-filesystem",
-            "style": "multi",
-            "title": "Syscall Filesystem"
+            "title": "Syscall Filesystem",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"filesystem\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -768,8 +768,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-memory",
-            "style": "multi",
-            "title": "Syscall Memory"
+            "title": "Syscall Memory",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"memory\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -786,8 +786,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-process",
-            "style": "multi",
-            "title": "Syscall Process"
+            "title": "Syscall Process",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"process\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -804,8 +804,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-query",
-            "style": "multi",
-            "title": "Syscall Query"
+            "title": "Syscall Query",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"query\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -822,8 +822,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-ipc",
-            "style": "multi",
-            "title": "Syscall IPC"
+            "title": "Syscall IPC",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"ipc\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -840,8 +840,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-timer",
-            "style": "multi",
-            "title": "Syscall Timer"
+            "title": "Syscall Timer",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"timer\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -858,8 +858,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-event",
-            "style": "multi",
-            "title": "Syscall Event"
+            "title": "Syscall Event",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"event\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         },
@@ -876,8 +876,8 @@
               "y_axis_label": null
             },
             "id": "individual-syscall-other",
-            "style": "multi",
-            "title": "Syscall Other"
+            "title": "Syscall Other",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"other\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
         }

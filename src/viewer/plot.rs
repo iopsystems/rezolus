@@ -276,10 +276,21 @@ pub struct Plot {
 impl Plot {}
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricType {
+    Gauge,
+    DeltaCounter,
+    Histogram,
+}
+
+#[derive(Serialize, Clone)]
 pub struct PlotOpts {
     title: String,
     id: String,
-    style: String,
+    #[serde(rename = "type")]
+    metric_type: MetricType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subtype: Option<String>,
     // Unified configuration for value formatting, axis labels, etc.
     format: Option<FormatConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -316,42 +327,48 @@ pub struct FormatConfig {
 }
 
 impl PlotOpts {
-    // Basic constructors without formatting
-    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
+    // Constructors based on metric type
+
+    /// A gauge metric represents a point-in-time value (e.g., memory usage, temperature).
+    pub fn gauge<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
-            style: "line".to_string(),
+            metric_type: MetricType::Gauge,
+            subtype: None,
             format: Some(FormatConfig::new(unit)),
             description: None,
         }
     }
 
-    pub fn multi<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
+    /// A delta counter metric represents the rate of change of a cumulative counter
+    /// (e.g., CPU usage rate, packet rate).
+    pub fn counter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
-            style: "multi".to_string(),
+            metric_type: MetricType::DeltaCounter,
+            subtype: None,
             format: Some(FormatConfig::new(unit)),
             description: None,
         }
     }
 
-    pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
+    /// A histogram metric represents a distribution (e.g., latency, IO size).
+    /// The subtype determines the visualization and query wrapping:
+    /// - "percentiles": shows percentile scatter plot, wraps query with histogram_percentiles()
+    /// - "buckets": shows bucket heatmap, wraps query with histogram_heatmap()
+    pub fn histogram<T: Into<String>, U: Into<String>>(
+        title: T,
+        id: U,
+        unit: Unit,
+        subtype: &str,
+    ) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
-            style: "scatter".to_string(),
-            format: Some(FormatConfig::new(unit)),
-            description: None,
-        }
-    }
-
-    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            style: "heatmap".to_string(),
+            metric_type: MetricType::Histogram,
+            subtype: Some(subtype.to_string()),
             format: Some(FormatConfig::new(unit)),
             description: None,
         }

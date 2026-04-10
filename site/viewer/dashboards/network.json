@@ -18,8 +18,8 @@
               "y_axis_label": null
             },
             "id": "bandwidth-tx",
-            "style": "line",
-            "title": "Bandwidth Transmit"
+            "title": "Bandwidth Transmit",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8"
         },
@@ -36,8 +36,8 @@
               "y_axis_label": null
             },
             "id": "bandwidth-rx",
-            "style": "line",
-            "title": "Bandwidth Receive"
+            "title": "Bandwidth Receive",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8"
         },
@@ -54,8 +54,8 @@
               "y_axis_label": null
             },
             "id": "packets-tx",
-            "style": "line",
-            "title": "Packets Transmit"
+            "title": "Packets Transmit",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
         },
@@ -72,8 +72,8 @@
               "y_axis_label": null
             },
             "id": "packets-rx",
-            "style": "line",
-            "title": "Packets Receive"
+            "title": "Packets Receive",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
         }
@@ -96,8 +96,8 @@
               "y_axis_label": null
             },
             "id": "packet-drops",
-            "style": "line",
-            "title": "Packet Drops"
+            "title": "Packet Drops",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_drop[5m]))"
         },
@@ -114,8 +114,8 @@
               "y_axis_label": null
             },
             "id": "tcp-retransmits",
-            "style": "line",
-            "title": "TCP Retransmits"
+            "title": "TCP Retransmits",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(tcp_retransmit[5m]))"
         }
@@ -142,10 +142,11 @@
               "y_axis_label": "Latency"
             },
             "id": "tcp-packet-latency",
-            "style": "scatter",
-            "title": "TCP Packet Latency"
+            "subtype": "percentiles",
+            "title": "TCP Packet Latency",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)"
+          "promql_query": "tcp_packet_latency"
         }
       ]
     }

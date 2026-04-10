@@ -18,8 +18,8 @@
               "y_axis_label": null
             },
             "id": "blockio-throughput-total",
-            "style": "line",
-            "title": "Total Throughput"
+            "title": "Total Throughput",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_bytes[5m]))"
         },
@@ -36,8 +36,8 @@
               "y_axis_label": null
             },
             "id": "blockio-iops-total",
-            "style": "line",
-            "title": "Total IOPS"
+            "title": "Total IOPS",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_operations[5m]))"
         },
@@ -54,8 +54,8 @@
               "y_axis_label": null
             },
             "id": "throughput-read",
-            "style": "line",
-            "title": "Read Throughput"
+            "title": "Read Throughput",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
         },
@@ -72,8 +72,8 @@
               "y_axis_label": null
             },
             "id": "iops-read",
-            "style": "line",
-            "title": "Read IOPS"
+            "title": "Read IOPS",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
         },
@@ -90,8 +90,8 @@
               "y_axis_label": null
             },
             "id": "throughput-write",
-            "style": "line",
-            "title": "Write Throughput"
+            "title": "Write Throughput",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
         },
@@ -108,8 +108,8 @@
               "y_axis_label": null
             },
             "id": "iops-write",
-            "style": "line",
-            "title": "Write IOPS"
+            "title": "Write IOPS",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
         }
@@ -136,10 +136,11 @@
               "y_axis_label": null
             },
             "id": "latency-read",
-            "style": "scatter",
-            "title": "Read"
+            "subtype": "percentiles",
+            "title": "Read",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"read\"})"
+          "promql_query": "blockio_latency{op=\"read\"}"
         },
         {
           "data": [],
@@ -158,10 +159,11 @@
               "y_axis_label": null
             },
             "id": "latency-write",
-            "style": "scatter",
-            "title": "Write"
+            "subtype": "percentiles",
+            "title": "Write",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{op=\"write\"})"
+          "promql_query": "blockio_latency{op=\"write\"}"
         }
       ]
     },
@@ -182,10 +184,11 @@
               "y_axis_label": null
             },
             "id": "size-read",
-            "style": "scatter",
-            "title": "Read"
+            "subtype": "percentiles",
+            "title": "Read",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"read\"})"
+          "promql_query": "blockio_size{op=\"read\"}"
         },
         {
           "data": [],
@@ -200,10 +203,11 @@
               "y_axis_label": null
             },
             "id": "size-write",
-            "style": "scatter",
-            "title": "Write"
+            "subtype": "percentiles",
+            "title": "Write",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{op=\"write\"})"
+          "promql_query": "blockio_size{op=\"write\"}"
         }
       ]
     }

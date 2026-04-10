@@ -11,13 +11,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Average CPU busy percentage
     cpu.plot_promql(
-        PlotOpts::line("Busy %", "cpu-busy", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("Busy %", "cpu-busy", Unit::Percentage).range(0.0, 1.0),
         "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU busy percentage heatmap
     cpu.plot_promql(
-        PlotOpts::heatmap("Busy %", "cpu-busy-heatmap", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("Busy %", "cpu-busy-heatmap", Unit::Percentage).range(0.0, 1.0),
         "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
     );
 
@@ -31,7 +31,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Transmit bandwidth
     network.plot_promql(
-        PlotOpts::line(
+        PlotOpts::counter(
             "Transmit Bandwidth",
             "network-transmit-bandwidth",
             Unit::Bitrate,
@@ -42,7 +42,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Receive bandwidth
     network.plot_promql(
-        PlotOpts::line(
+        PlotOpts::counter(
             "Receive Bandwidth",
             "network-receive-bandwidth",
             Unit::Bitrate,
@@ -53,24 +53,29 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Transmit packets
     network.plot_promql(
-        PlotOpts::line("Transmit Packets", "network-transmit-packets", Unit::Rate),
+        PlotOpts::counter("Transmit Packets", "network-transmit-packets", Unit::Rate),
         "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
     );
 
     // Receive packets
     network.plot_promql(
-        PlotOpts::line("Receive Packets", "network-receive-packets", Unit::Rate),
+        PlotOpts::counter("Receive Packets", "network-receive-packets", Unit::Rate),
         "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
     );
 
     // TCP packet latency percentiles
     network.plot_promql(
-        PlotOpts::scatter("TCP Packet Latency", "tcp-packet-latency", Unit::Time)
-            .with_axis_label("Latency")
-            .with_unit_system("time")
-            .with_log_scale(true)
-            .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], tcp_packet_latency)".to_string(),
+        PlotOpts::histogram(
+            "TCP Packet Latency",
+            "tcp-packet-latency",
+            Unit::Time,
+            "percentiles",
+        )
+        .with_axis_label("Latency")
+        .with_unit_system("time")
+        .with_log_scale(true)
+        .range(0.0, 100_000_000_000.0),
+        "tcp_packet_latency".to_string(),
     );
 
     view.group(network);
@@ -83,13 +88,17 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Runqueue latency percentiles
     scheduler.plot_promql(
-        PlotOpts::scatter("Runqueue Latency", "scheduler-runqueue-latency", Unit::Time)
-            .with_axis_label("Latency")
-            .with_unit_system("time")
-            .with_log_scale(true)
-            .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
-            .to_string(),
+        PlotOpts::histogram(
+            "Runqueue Latency",
+            "scheduler-runqueue-latency",
+            Unit::Time,
+            "percentiles",
+        )
+        .with_axis_label("Latency")
+        .with_unit_system("time")
+        .with_log_scale(true)
+        .range(0.0, 100_000_000_000.0),
+        "scheduler_runqueue_latency".to_string(),
     );
 
     view.group(scheduler);
@@ -102,16 +111,16 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Total syscall rate
     syscall.plot_promql(
-        PlotOpts::line("Total", "syscall-total", Unit::Rate),
+        PlotOpts::counter("Total", "syscall-total", Unit::Rate),
         "sum(irate(syscall[5m]))".to_string(),
     );
 
     // Syscall latency percentiles
     syscall.plot_promql(
-        PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time)
+        PlotOpts::histogram("Total", "syscall-total-latency", Unit::Time, "percentiles")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)".to_string(),
+        "syscall_latency".to_string(),
     );
 
     view.group(syscall);
@@ -124,25 +133,25 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Total softirq rate
     softirq.plot_promql(
-        PlotOpts::line("Rate", "softirq-total-rate", Unit::Rate),
+        PlotOpts::counter("Rate", "softirq-total-rate", Unit::Rate),
         "sum(irate(softirq[5m]))".to_string(),
     );
 
     // Per-CPU softirq rate heatmap
     softirq.plot_promql(
-        PlotOpts::heatmap("Rate", "softirq-total-rate-heatmap", Unit::Rate),
+        PlotOpts::counter("Rate", "softirq-total-rate-heatmap", Unit::Rate),
         "sum by (id) (irate(softirq[5m]))".to_string(),
     );
 
     // Average CPU % spent in softirq
     softirq.plot_promql(
-        PlotOpts::line("CPU %", "softirq-total-time", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).range(0.0, 1.0),
         "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU % spent in softirq heatmap
     softirq.plot_promql(
-        PlotOpts::heatmap("CPU %", "softirq-total-time-heatmap", Unit::Percentage).range(0.0, 1.0),
+        PlotOpts::counter("CPU %", "softirq-total-time-heatmap", Unit::Percentage).range(0.0, 1.0),
         "sum by (id) (irate(softirq_time[5m])) / 1000000000".to_string(),
     );
 
@@ -156,13 +165,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Read throughput
     blockio.plot_promql(
-        PlotOpts::line("Read Throughput", "blockio-throughput-read", Unit::Datarate),
+        PlotOpts::counter("Read Throughput", "blockio-throughput-read", Unit::Datarate),
         "sum(irate(blockio_bytes{op=\"read\"}[5m]))".to_string(),
     );
 
     // Write throughput
     blockio.plot_promql(
-        PlotOpts::line(
+        PlotOpts::counter(
             "Write Throughput",
             "blockio-throughput-write",
             Unit::Datarate,
@@ -172,13 +181,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Read IOPS
     blockio.plot_promql(
-        PlotOpts::line("Read IOPS", "blockio-iops-read", Unit::Count),
+        PlotOpts::counter("Read IOPS", "blockio-iops-read", Unit::Count),
         "sum(irate(blockio_operations{op=\"read\"}[5m]))".to_string(),
     );
 
     // Write IOPS
     blockio.plot_promql(
-        PlotOpts::line("Write IOPS", "blockio-iops-write", Unit::Count),
+        PlotOpts::counter("Write IOPS", "blockio-iops-write", Unit::Count),
         "sum(irate(blockio_operations{op=\"write\"}[5m]))".to_string(),
     );
 

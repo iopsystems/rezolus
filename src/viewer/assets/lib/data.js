@@ -1,4 +1,5 @@
 import { ViewerApi } from './viewer_api.js';
+import { resolveStyle, buildHistogramQuery } from './charts/metric_types.js';
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
 const defaultQueryRange = (query, start, end, step) =>
@@ -21,15 +22,23 @@ const applyResultToPlot = (plot, result) => {
         result.data.result &&
         result.data.result.length > 0
     ) {
+        // Resolve chart style from metric type (if present) or fall back to
+        // explicit style (used by query explorer dynamic specs).
+        const style = plot.opts.style || resolveStyle(
+            plot.opts.type,
+            plot.opts.subtype,
+            result,
+        );
+        plot._resolvedStyle = style;
+
         const hasMultipleSeries =
             result.data.result.length > 1 ||
-            (plot.opts &&
-                (plot.opts.style === 'multi' ||
-                    plot.opts.style === 'scatter' ||
-                    plot.opts.style === 'heatmap'));
+            (style === 'multi' ||
+                style === 'scatter' ||
+                style === 'heatmap');
 
         if (hasMultipleSeries) {
-            if (plot.opts && plot.opts.style === 'heatmap') {
+            if (style === 'heatmap') {
                 const heatmapData = [];
                 const timeSet = new Set();
 
@@ -167,15 +176,21 @@ const createDataApi = ({
             for (const plot of group.plots || []) {
                 if (plot.promql_query) {
                     let queryToRun = plot.promql_query;
-                    if (plot.promql_query.includes('__SELECTED_CGROUPS__')) {
+
+                    // Wrap histogram queries with the appropriate function
+                    if (plot.opts.type === 'histogram') {
+                        queryToRun = buildHistogramQuery(queryToRun, plot.opts.subtype);
+                    }
+
+                    if (queryToRun.includes('__SELECTED_CGROUPS__')) {
                         if (activeCgroupPattern) {
                             queryToRun = substituteCgroupPattern(
-                                plot.promql_query,
+                                queryToRun,
                                 activeCgroupPattern,
                             );
-                        } else if (plot.promql_query.includes('!~')) {
+                        } else if (queryToRun.includes('!~')) {
                             queryToRun = substituteCgroupPattern(
-                                plot.promql_query,
+                                queryToRun,
                                 null,
                             );
                         } else {
@@ -212,12 +227,21 @@ const createDataApi = ({
 
     const fetchHeatmapForPlot = async (plot) => {
         const query = plot.promql_query;
-        if (!query || !query.includes('histogram_percentiles')) return null;
+        if (!query) return null;
 
-        const match = query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
-        if (!match) return null;
+        // For typed histogram specs, promql_query is already the base metric selector
+        let metricSelector;
+        if (plot.opts.type === 'histogram') {
+            metricSelector = query;
+        } else if (query.includes('histogram_percentiles')) {
+            // Legacy fallback: extract base metric from wrapped query
+            const match = query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
+            if (!match) return null;
+            metricSelector = match[1].trim();
+        } else {
+            return null;
+        }
 
-        const metricSelector = match[1].trim();
         const result = await executePromQLRangeQuery(`histogram_heatmap(${metricSelector})`);
 
         if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
@@ -237,7 +261,10 @@ const createDataApi = ({
         const plots = [];
         for (const group of groups || []) {
             for (const plot of group.plots || []) {
-                if (plot.promql_query && plot.promql_query.includes('histogram_percentiles')) {
+                if (plot.promql_query && (
+                    plot.opts.type === 'histogram' ||
+                    plot.promql_query.includes('histogram_percentiles')
+                )) {
                     plots.push(plot);
                 }
             }

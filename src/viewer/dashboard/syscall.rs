@@ -11,16 +11,16 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Total syscall rate
     syscall.plot_promql(
-        PlotOpts::line("Total", "syscall-total", Unit::Rate),
+        PlotOpts::counter("Total", "syscall-total", Unit::Rate),
         "sum(irate(syscall[5m]))".to_string(),
     );
 
     // Total syscall latency percentiles
     syscall.plot_promql(
-        PlotOpts::scatter("Total", "syscall-total-latency", Unit::Time)
+        PlotOpts::histogram("Total", "syscall-total-latency", Unit::Time, "percentiles")
             .with_log_scale(true)
             .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)".to_string(),
+        "syscall_latency".to_string(),
     );
 
     // Per-operation syscall metrics
@@ -46,16 +46,21 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         // Rate for this operation
         syscall.plot_promql(
-            PlotOpts::line(*op, format!("syscall-{op}"), Unit::Rate),
+            PlotOpts::counter(*op, format!("syscall-{op}"), Unit::Rate),
             format!("sum(irate(syscall{{op=\"{op_lower}\"}}[5m]))"),
         );
 
         // Latency percentiles for this operation
         syscall.plot_promql(
-            PlotOpts::scatter(*op, format!("syscall-{op}-latency"), Unit::Time)
-                .with_log_scale(true)
-                .range(0.0, 100_000_000_000.0),
-            format!("histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{{op=\"{op_lower}\"}})"),
+            PlotOpts::histogram(
+                *op,
+                format!("syscall-{op}-latency"),
+                Unit::Time,
+                "percentiles",
+            )
+            .with_log_scale(true)
+            .range(0.0, 100_000_000_000.0),
+            format!("syscall_latency{{op=\"{op_lower}\"}}"),
         );
     }
 

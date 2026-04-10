@@ -235,7 +235,8 @@ const SectionContent = {
             Array.from(chartsState.charts.values()).some(c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
 
         const hasHistogramCharts = (attrs.groups || []).some(g =>
-            (g.plots || []).some(p => p.promql_query && p.promql_query.includes('histogram_percentiles'))
+            (g.plots || []).some(p => p.opts.type === 'histogram' ||
+                (p.promql_query && p.promql_query.includes('histogram_percentiles')))
         );
 
         return m('div#section-content', [
@@ -343,7 +344,8 @@ const Group = {
                     'div.charts',
                     attrs.plots.map((spec) => {
                         // Check if this is a histogram chart and we're in heatmap mode
-                        const isHistogramChart = spec.promql_query && spec.promql_query.includes('histogram_percentiles');
+                        const isHistogramChart = spec.opts.type === 'histogram' ||
+                            (spec.promql_query && spec.promql_query.includes('histogram_percentiles'));
 
                         if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
                             // Create heatmap spec from the fetched data

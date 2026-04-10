@@ -362,7 +362,7 @@ export class Chart {
     _rescaleYAxis() {
         if (!this.echart) return;
 
-        const style = this.spec.opts.style;
+        const style = this.spec.opts.style || this.spec._resolvedStyle;
         // Only for chart types with a value/log Y-axis
         if (style === 'heatmap' || style === 'histogram_heatmap') return;
 
@@ -453,28 +453,27 @@ export class Chart {
     }
 
     configureChartByType() {
-        const {
-            opts
-        } = this.spec;
+        // Use explicit style (query explorer) or resolved style (from metric type)
+        const style = this.spec.opts.style || this.spec._resolvedStyle;
 
         // Clean up heatmap DOM legend bar when switching to a different chart type
-        if (opts.style !== 'histogram_heatmap' && opts.style !== 'heatmap') {
+        if (style !== 'histogram_heatmap' && style !== 'heatmap') {
             this.domNode?.parentNode?.querySelector('.heatmap-legend-bar')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules
-        if (opts.style === 'line') {
+        if (style === 'line') {
             configureLineChart(this, this.spec, this.chartsState);
-        } else if (opts.style === 'heatmap') {
+        } else if (style === 'heatmap') {
             configureHeatmap(this, this.spec, this.chartsState);
-        } else if (opts.style === 'histogram_heatmap') {
+        } else if (style === 'histogram_heatmap') {
             configureHistogramHeatmap(this, this.spec, this.chartsState);
-        } else if (opts.style === 'scatter') {
+        } else if (style === 'scatter') {
             configureScatterChart(this, this.spec, this.chartsState);
-        } else if (opts.style === 'multi') {
+        } else if (style === 'multi') {
             configureMultiSeriesChart(this, this.spec, this.chartsState);
         } else {
-            throw new Error(`Unknown chart style: ${opts.style}`);
+            throw new Error(`Unknown chart style: ${style}`);
         }
 
         // Compact layout for cgroup paired charts: same grid for both, hide echarts legend

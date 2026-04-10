@@ -18,8 +18,8 @@
               "y_axis_label": null
             },
             "id": "syscall-total",
-            "style": "line",
-            "title": "Total"
+            "title": "Total",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall[5m]))"
         },
@@ -40,10 +40,11 @@
               "y_axis_label": null
             },
             "id": "syscall-total-latency",
-            "style": "scatter",
-            "title": "Total"
+            "subtype": "percentiles",
+            "title": "Total",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)"
+          "promql_query": "syscall_latency"
         },
         {
           "data": [],
@@ -58,8 +59,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Read",
-            "style": "line",
-            "title": "Read"
+            "title": "Read",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"read\"}[5m]))"
         },
@@ -80,10 +81,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Read-latency",
-            "style": "scatter",
-            "title": "Read"
+            "subtype": "percentiles",
+            "title": "Read",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"read\"})"
+          "promql_query": "syscall_latency{op=\"read\"}"
         },
         {
           "data": [],
@@ -98,8 +100,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Write",
-            "style": "line",
-            "title": "Write"
+            "title": "Write",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"write\"}[5m]))"
         },
@@ -120,10 +122,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Write-latency",
-            "style": "scatter",
-            "title": "Write"
+            "subtype": "percentiles",
+            "title": "Write",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"write\"})"
+          "promql_query": "syscall_latency{op=\"write\"}"
         },
         {
           "data": [],
@@ -138,8 +141,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Poll",
-            "style": "line",
-            "title": "Poll"
+            "title": "Poll",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"poll\"}[5m]))"
         },
@@ -160,10 +163,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Poll-latency",
-            "style": "scatter",
-            "title": "Poll"
+            "subtype": "percentiles",
+            "title": "Poll",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"poll\"})"
+          "promql_query": "syscall_latency{op=\"poll\"}"
         },
         {
           "data": [],
@@ -178,8 +182,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Socket",
-            "style": "line",
-            "title": "Socket"
+            "title": "Socket",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"socket\"}[5m]))"
         },
@@ -200,10 +204,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Socket-latency",
-            "style": "scatter",
-            "title": "Socket"
+            "subtype": "percentiles",
+            "title": "Socket",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"socket\"})"
+          "promql_query": "syscall_latency{op=\"socket\"}"
         },
         {
           "data": [],
@@ -218,8 +223,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Lock",
-            "style": "line",
-            "title": "Lock"
+            "title": "Lock",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"lock\"}[5m]))"
         },
@@ -240,10 +245,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Lock-latency",
-            "style": "scatter",
-            "title": "Lock"
+            "subtype": "percentiles",
+            "title": "Lock",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"lock\"})"
+          "promql_query": "syscall_latency{op=\"lock\"}"
         },
         {
           "data": [],
@@ -258,8 +264,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Time",
-            "style": "line",
-            "title": "Time"
+            "title": "Time",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"time\"}[5m]))"
         },
@@ -280,10 +286,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Time-latency",
-            "style": "scatter",
-            "title": "Time"
+            "subtype": "percentiles",
+            "title": "Time",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"time\"})"
+          "promql_query": "syscall_latency{op=\"time\"}"
         },
         {
           "data": [],
@@ -298,8 +305,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Sleep",
-            "style": "line",
-            "title": "Sleep"
+            "title": "Sleep",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"sleep\"}[5m]))"
         },
@@ -320,10 +327,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Sleep-latency",
-            "style": "scatter",
-            "title": "Sleep"
+            "subtype": "percentiles",
+            "title": "Sleep",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"sleep\"})"
+          "promql_query": "syscall_latency{op=\"sleep\"}"
         },
         {
           "data": [],
@@ -338,8 +346,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Yield",
-            "style": "line",
-            "title": "Yield"
+            "title": "Yield",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"yield\"}[5m]))"
         },
@@ -360,10 +368,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Yield-latency",
-            "style": "scatter",
-            "title": "Yield"
+            "subtype": "percentiles",
+            "title": "Yield",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"yield\"})"
+          "promql_query": "syscall_latency{op=\"yield\"}"
         },
         {
           "data": [],
@@ -378,8 +387,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Filesystem",
-            "style": "line",
-            "title": "Filesystem"
+            "title": "Filesystem",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"filesystem\"}[5m]))"
         },
@@ -400,10 +409,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Filesystem-latency",
-            "style": "scatter",
-            "title": "Filesystem"
+            "subtype": "percentiles",
+            "title": "Filesystem",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"filesystem\"})"
+          "promql_query": "syscall_latency{op=\"filesystem\"}"
         },
         {
           "data": [],
@@ -418,8 +428,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Memory",
-            "style": "line",
-            "title": "Memory"
+            "title": "Memory",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"memory\"}[5m]))"
         },
@@ -440,10 +450,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Memory-latency",
-            "style": "scatter",
-            "title": "Memory"
+            "subtype": "percentiles",
+            "title": "Memory",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"memory\"})"
+          "promql_query": "syscall_latency{op=\"memory\"}"
         },
         {
           "data": [],
@@ -458,8 +469,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Process",
-            "style": "line",
-            "title": "Process"
+            "title": "Process",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"process\"}[5m]))"
         },
@@ -480,10 +491,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Process-latency",
-            "style": "scatter",
-            "title": "Process"
+            "subtype": "percentiles",
+            "title": "Process",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"process\"})"
+          "promql_query": "syscall_latency{op=\"process\"}"
         },
         {
           "data": [],
@@ -498,8 +510,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Query",
-            "style": "line",
-            "title": "Query"
+            "title": "Query",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"query\"}[5m]))"
         },
@@ -520,10 +532,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Query-latency",
-            "style": "scatter",
-            "title": "Query"
+            "subtype": "percentiles",
+            "title": "Query",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"query\"})"
+          "promql_query": "syscall_latency{op=\"query\"}"
         },
         {
           "data": [],
@@ -538,8 +551,8 @@
               "y_axis_label": null
             },
             "id": "syscall-IPC",
-            "style": "line",
-            "title": "IPC"
+            "title": "IPC",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"ipc\"}[5m]))"
         },
@@ -560,10 +573,11 @@
               "y_axis_label": null
             },
             "id": "syscall-IPC-latency",
-            "style": "scatter",
-            "title": "IPC"
+            "subtype": "percentiles",
+            "title": "IPC",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"ipc\"})"
+          "promql_query": "syscall_latency{op=\"ipc\"}"
         },
         {
           "data": [],
@@ -578,8 +592,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Timer",
-            "style": "line",
-            "title": "Timer"
+            "title": "Timer",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"timer\"}[5m]))"
         },
@@ -600,10 +614,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Timer-latency",
-            "style": "scatter",
-            "title": "Timer"
+            "subtype": "percentiles",
+            "title": "Timer",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"timer\"})"
+          "promql_query": "syscall_latency{op=\"timer\"}"
         },
         {
           "data": [],
@@ -618,8 +633,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Event",
-            "style": "line",
-            "title": "Event"
+            "title": "Event",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"event\"}[5m]))"
         },
@@ -640,10 +655,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Event-latency",
-            "style": "scatter",
-            "title": "Event"
+            "subtype": "percentiles",
+            "title": "Event",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"event\"})"
+          "promql_query": "syscall_latency{op=\"event\"}"
         },
         {
           "data": [],
@@ -658,8 +674,8 @@
               "y_axis_label": null
             },
             "id": "syscall-Other",
-            "style": "line",
-            "title": "Other"
+            "title": "Other",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall{op=\"other\"}[5m]))"
         },
@@ -680,10 +696,11 @@
               "y_axis_label": null
             },
             "id": "syscall-Other-latency",
-            "style": "scatter",
-            "title": "Other"
+            "subtype": "percentiles",
+            "title": "Other",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency{op=\"other\"})"
+          "promql_query": "syscall_latency{op=\"other\"}"
         }
       ]
     }

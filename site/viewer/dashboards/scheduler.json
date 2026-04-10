@@ -22,10 +22,11 @@
               "y_axis_label": "Latency"
             },
             "id": "scheduler-runqueue-latency",
-            "style": "scatter",
-            "title": "Runqueue Latency"
+            "subtype": "percentiles",
+            "title": "Runqueue Latency",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
+          "promql_query": "scheduler_runqueue_latency"
         },
         {
           "data": [],
@@ -44,10 +45,11 @@
               "y_axis_label": "Time"
             },
             "id": "off-cpu-time",
-            "style": "scatter",
-            "title": "Off CPU Time"
+            "subtype": "percentiles",
+            "title": "Off CPU Time",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_offcpu)"
+          "promql_query": "scheduler_offcpu"
         },
         {
           "data": [],
@@ -66,10 +68,11 @@
               "y_axis_label": "Time"
             },
             "id": "running-time",
-            "style": "scatter",
-            "title": "Running Time"
+            "subtype": "percentiles",
+            "title": "Running Time",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_running)"
+          "promql_query": "scheduler_running"
         },
         {
           "data": [],
@@ -84,8 +87,8 @@
               "y_axis_label": null
             },
             "id": "cswitch",
-            "style": "line",
-            "title": "Context Switch"
+            "title": "Context Switch",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(scheduler_context_switch[5m]))"
         }
