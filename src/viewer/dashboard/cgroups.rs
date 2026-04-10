@@ -11,11 +11,10 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         "aggregate"
     };
 
-    // Build the query templates: aggregate uses sum(...{name!~}), individual uses sum by (name) (...{name=~})
-    let (agg_fn, filter) = if individual {
-        ("sum by (name) ", "name=~\"__SELECTED_CGROUPS__\"")
+    let filter = if individual {
+        "name=~\"__SELECTED_CGROUPS__\""
     } else {
-        ("sum", "name!~\"__SELECTED_CGROUPS__\"")
+        "name!~\"__SELECTED_CGROUPS__\""
     };
 
     let rate = |metric: &str| {
