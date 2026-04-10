@@ -2,6 +2,7 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { executePromQLRangeQuery, fetchHeatmapForPlot } from './data.js';
+import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -344,7 +345,7 @@ export const SingleChartView = {
             });
         };
 
-        const isHistogram = plot.promql_query && plot.promql_query.includes('histogram_percentiles');
+        const isHistogram = isHistogramPlot(plot);
 
         const toggleHeatmap = async () => {
             if (st.heatmapMode) {
@@ -368,22 +369,11 @@ export const SingleChartView = {
             m.redraw();
         };
 
-        const hasLocalZoom = st.singleChartsState.zoomSource === 'local' && !st.singleChartsState.isDefaultZoom();
-        const hasSelection = hasLocalZoom ||
-            Array.from(st.singleChartsState.charts.values()).some(
-                c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
+        const hasSelection = st.singleChartsState.hasActiveSelection();
 
         let chartSpec = spec;
         if (st.heatmapMode && st.heatmapData) {
-            chartSpec = {
-                ...spec,
-                opts: { ...spec.opts, style: 'histogram_heatmap' },
-                time_data: st.heatmapData.time_data,
-                bucket_bounds: st.heatmapData.bucket_bounds,
-                data: st.heatmapData.data,
-                min_value: st.heatmapData.min_value,
-                max_value: st.heatmapData.max_value,
-            };
+            chartSpec = buildHistogramHeatmapSpec(spec, st.heatmapData);
         }
 
         return m('div.single-chart-view', [

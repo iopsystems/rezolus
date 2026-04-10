@@ -37,13 +37,11 @@ struct task_exit {
  *
  * Populates the task_info with pid, tgid, comm, and cgroup hierarchy.
  */
-static __always_inline void populate_task_info(struct task_struct* task,
-                                                struct task_info* info) {
+static __always_inline void populate_task_info(struct task_struct* task, struct task_info* info) {
     info->pid = BPF_CORE_READ(task, pid);
     info->tgid = BPF_CORE_READ(task, tgid);
 
-    bpf_probe_read_kernel_str(&info->comm, TASK_COMM_LEN,
-                              BPF_CORE_READ(task, comm));
+    bpf_probe_read_kernel_str(&info->comm, TASK_COMM_LEN, BPF_CORE_READ(task, comm));
 
     // Read cgroup info if available
     struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
@@ -58,9 +56,8 @@ static __always_inline void populate_task_info(struct task_struct* task,
         if (info->cgroup_level > 0) {
             struct kernfs_node* kn = BPF_CORE_READ(tg, css.cgroup, kn);
             struct kernfs_node* parent = get_kernfs_node_parent(kn);
-            bpf_probe_read_kernel_str(
-                &info->cgroup_pname, TASK_CGROUP_NAME_LEN,
-                BPF_CORE_READ(parent, name));
+            bpf_probe_read_kernel_str(&info->cgroup_pname, TASK_CGROUP_NAME_LEN,
+                                      BPF_CORE_READ(parent, name));
         }
 
         // Read grandparent cgroup name
@@ -68,9 +65,8 @@ static __always_inline void populate_task_info(struct task_struct* task,
             struct kernfs_node* kn = BPF_CORE_READ(tg, css.cgroup, kn);
             struct kernfs_node* parent = get_kernfs_node_parent(kn);
             struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
-            bpf_probe_read_kernel_str(
-                &info->cgroup_gpname, TASK_CGROUP_NAME_LEN,
-                BPF_CORE_READ(grandparent, name));
+            bpf_probe_read_kernel_str(&info->cgroup_gpname, TASK_CGROUP_NAME_LEN,
+                                      BPF_CORE_READ(grandparent, name));
         }
     }
 }

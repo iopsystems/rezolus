@@ -101,116 +101,6 @@ impl Group {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn push(&mut self, plot: Option<Plot>) {
-        if let Some(plot) = plot {
-            self.plots.push(plot);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn plot(&mut self, opts: PlotOpts, series: Option<UntypedSeries>) {
-        if let Some(data) = series.map(|v| v.as_data()) {
-            self.plots.push(Plot {
-                opts,
-                data,
-                min_value: None,
-                max_value: None,
-                time_data: None,
-                formatted_time_data: None,
-                series_names: None,
-                promql_query: None,
-            })
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn heatmap(&mut self, opts: PlotOpts, series: Option<Heatmap>) {
-        if let Some(heatmap) = series {
-            let echarts_data = heatmap.as_data();
-
-            if !echarts_data.data.is_empty() {
-                self.plots.push(Plot {
-                    opts,
-                    data: echarts_data.data,
-                    min_value: Some(echarts_data.min_value),
-                    max_value: Some(echarts_data.max_value),
-                    time_data: Some(echarts_data.time),
-                    formatted_time_data: Some(echarts_data.formatted_time),
-                    series_names: None,
-                    promql_query: None,
-                })
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn scatter(&mut self, opts: PlotOpts, data: Option<Vec<UntypedSeries>>) {
-        if data.is_none() {
-            return;
-        }
-
-        let d = data.unwrap();
-
-        let mut data = Vec::new();
-
-        for series in &d {
-            let d = series.as_data();
-
-            if data.is_empty() {
-                data.push(d[0].clone());
-            }
-
-            data.push(d[1].clone());
-        }
-
-        self.plots.push(Plot {
-            opts,
-            data,
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: None,
-            promql_query: None,
-        })
-    }
-
-    // New method to add a multi-series plot
-    #[allow(dead_code)]
-    pub fn multi(&mut self, opts: PlotOpts, cgroup_data: Option<Vec<(String, UntypedSeries)>>) {
-        if cgroup_data.is_none() {
-            return;
-        }
-
-        let mut cgroup_data = cgroup_data.unwrap();
-
-        let mut data = Vec::new();
-        let mut labels = Vec::new();
-
-        for (label, series) in cgroup_data.drain(..) {
-            labels.push(label);
-            let d = series.as_data();
-
-            if data.is_empty() {
-                data.push(d[0].clone());
-            }
-
-            data.push(d[1].clone());
-        }
-
-        self.plots.push(Plot {
-            opts,
-            data,
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: Some(labels),
-            promql_query: None,
-        });
-    }
-
     pub fn plot_promql(&mut self, mut opts: PlotOpts, promql_query: String) {
         // Auto-fill description from metric registry if not already set
         if opts.description.is_none() {
@@ -276,12 +166,22 @@ pub struct Plot {
 impl Plot {}
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricType {
+    Gauge,
+    DeltaCounter,
+    Histogram,
+}
+
+#[derive(Serialize, Clone)]
 pub struct PlotOpts {
     title: String,
     id: String,
-    style: String,
-    // Unified configuration for value formatting, axis labels, etc.
-    format: Option<FormatConfig>,
+    #[serde(rename = "type")]
+    metric_type: MetricType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subtype: Option<String>,
+    format: FormatConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
 }
@@ -316,79 +216,87 @@ pub struct FormatConfig {
 }
 
 impl PlotOpts {
-    // Basic constructors without formatting
-    pub fn line<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
+    // Constructors based on metric type
+
+    /// A gauge metric represents a point-in-time value (e.g., memory usage, temperature).
+    pub fn gauge<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
-            style: "line".to_string(),
-            format: Some(FormatConfig::new(unit)),
+            metric_type: MetricType::Gauge,
+            subtype: None,
+            format: FormatConfig::new(unit),
             description: None,
         }
     }
 
-    pub fn multi<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
+    /// A delta counter metric represents the rate of change of a cumulative counter
+    /// (e.g., CPU usage rate, packet rate).
+    pub fn counter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
-            style: "multi".to_string(),
-            format: Some(FormatConfig::new(unit)),
+            metric_type: MetricType::DeltaCounter,
+            subtype: None,
+            format: FormatConfig::new(unit),
             description: None,
         }
     }
 
-    pub fn scatter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
+    /// A histogram metric represents a distribution (e.g., latency, IO size).
+    /// The subtype determines the visualization and query wrapping:
+    /// - "percentiles": shows percentile scatter plot, wraps query with histogram_percentiles()
+    /// - "buckets": shows bucket heatmap, wraps query with histogram_heatmap()
+    pub fn histogram<T: Into<String>, U: Into<String>>(
+        title: T,
+        id: U,
+        unit: Unit,
+        subtype: &str,
+    ) -> Self {
         Self {
             title: title.into(),
             id: id.into(),
-            style: "scatter".to_string(),
-            format: Some(FormatConfig::new(unit)),
+            metric_type: MetricType::Histogram,
+            subtype: Some(subtype.to_string()),
+            format: FormatConfig::new(unit),
             description: None,
         }
     }
 
-    pub fn heatmap<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            style: "heatmap".to_string(),
-            format: Some(FormatConfig::new(unit)),
-            description: None,
-        }
+    /// Convenience: a histogram metric for latency distributions with standard
+    /// defaults (log scale, 100s range).
+    pub fn histogram_latency<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
+        Self::histogram(title, id, Unit::Time, "percentiles")
+            .with_log_scale(true)
+            .range(0.0, 100_000_000_000.0)
     }
 
-    // Convenience methods
+    /// Convenience: sets the standard 0..1 range used for percentage metrics.
+    pub fn percentage_range(self) -> Self {
+        self.range(0.0, 1.0)
+    }
+
+    // Builder methods
     pub fn with_unit_system<T: Into<String>>(mut self, unit_system: T) -> Self {
-        if let Some(ref mut format) = self.format {
-            format.unit_system = Some(unit_system.into());
-        }
-
+        self.format.unit_system = Some(unit_system.into());
         self
     }
 
     pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
-        if let Some(ref mut format) = self.format {
-            format.y_axis_label = Some(y_label.into());
-        }
-
+        self.format.y_axis_label = Some(y_label.into());
         self
     }
 
     pub fn with_log_scale(mut self, log_scale: bool) -> Self {
-        if let Some(ref mut format) = self.format {
-            format.log_scale = Some(log_scale);
-        }
-
+        self.format.log_scale = Some(log_scale);
         self
     }
 
     pub fn range(mut self, min: f64, max: f64) -> Self {
-        if let Some(ref mut format) = self.format {
-            format.range = Some(Range {
-                min: Some(min),
-                max: Some(max),
-            });
-        }
+        self.format.range = Some(Range {
+            min: Some(min),
+            max: Some(max),
+        });
         self
     }
 }

@@ -18,8 +18,8 @@
               "y_axis_label": null
             },
             "id": "total",
-            "style": "line",
-            "title": "Total"
+            "title": "Total",
+            "type": "gauge"
           },
           "promql_query": "memory_total"
         },
@@ -36,8 +36,8 @@
               "y_axis_label": null
             },
             "id": "available",
-            "style": "line",
-            "title": "Available"
+            "title": "Available",
+            "type": "gauge"
           },
           "promql_query": "memory_available"
         },
@@ -54,8 +54,8 @@
               "y_axis_label": null
             },
             "id": "free",
-            "style": "line",
-            "title": "Free"
+            "title": "Free",
+            "type": "gauge"
           },
           "promql_query": "memory_free"
         },
@@ -72,8 +72,8 @@
               "y_axis_label": null
             },
             "id": "buffers",
-            "style": "line",
-            "title": "Buffers"
+            "title": "Buffers",
+            "type": "gauge"
           },
           "promql_query": "memory_buffers"
         },
@@ -90,8 +90,8 @@
               "y_axis_label": null
             },
             "id": "cached",
-            "style": "line",
-            "title": "Cached"
+            "title": "Cached",
+            "type": "gauge"
           },
           "promql_query": "memory_cached"
         },
@@ -108,8 +108,8 @@
               "y_axis_label": null
             },
             "id": "used",
-            "style": "line",
-            "title": "Used"
+            "title": "Used",
+            "type": "gauge"
           },
           "promql_query": "memory_total - memory_available"
         },
@@ -130,8 +130,8 @@
               "y_axis_label": null
             },
             "id": "utilization-pct",
-            "style": "line",
-            "title": "Utilization %"
+            "title": "Utilization %",
+            "type": "gauge"
           },
           "promql_query": "(memory_total - memory_available) / memory_total"
         }
@@ -154,8 +154,8 @@
               "y_axis_label": null
             },
             "id": "numa-local-rate",
-            "style": "line",
-            "title": "Local Rate"
+            "title": "Local Rate",
+            "type": "delta_counter"
           },
           "promql_query": "rate(memory_numa_local[5m])"
         },
@@ -172,8 +172,8 @@
               "y_axis_label": null
             },
             "id": "numa-remote-rate",
-            "style": "line",
-            "title": "Remote Rate"
+            "title": "Remote Rate",
+            "type": "delta_counter"
           },
           "promql_query": "rate(memory_numa_foreign[5m])"
         }

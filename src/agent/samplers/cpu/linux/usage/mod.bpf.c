@@ -221,7 +221,7 @@ static __noinline int handle_new_task(struct task_struct* task) {
     bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
 
     // Populate and send task info (use ringbuf_reserve to avoid stack allocation)
-    struct task_info *info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
+    struct task_info* info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
     if (!info)
         return 0;
 
@@ -312,7 +312,7 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     }
 
     // Additional accounting on a per-cgroup basis
-    struct task_group *tg = BPF_CORE_READ(task, sched_task_group);
+    struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
     if (!tg)
         return 0;
 
@@ -359,7 +359,7 @@ int handle__sched_process_exit(u64* ctx) {
     bpf_map_update_elem(&task_start_times, &pid, &zero, BPF_ANY);
 
     // Notify userspace to clear metadata
-    struct task_exit *exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
+    struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
     if (exit_event) {
         exit_event->pid = pid;
         bpf_ringbuf_submit(exit_event, 0);

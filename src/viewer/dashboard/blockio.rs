@@ -11,7 +11,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Total throughput (bytes/sec)
     operations.plot_promql(
-        PlotOpts::line(
+        PlotOpts::counter(
             "Total Throughput",
             "blockio-throughput-total",
             Unit::Datarate,
@@ -21,7 +21,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Total IOPS
     operations.plot_promql(
-        PlotOpts::line("Total IOPS", "blockio-iops-total", Unit::Count),
+        PlotOpts::counter("Total IOPS", "blockio-iops-total", Unit::Count),
         "sum(irate(blockio_operations[5m]))".to_string(),
     );
 
@@ -31,7 +31,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         // Throughput for this operation
         operations.plot_promql(
-            PlotOpts::line(
+            PlotOpts::counter(
                 format!("{op} Throughput"),
                 format!("throughput-{op_lower}"),
                 Unit::Datarate,
@@ -41,7 +41,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         // IOPS for this operation
         operations.plot_promql(
-            PlotOpts::line(
+            PlotOpts::counter(
                 format!("{op} IOPS"),
                 format!("iops-{op_lower}"),
                 Unit::Count,
@@ -63,10 +63,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         let op_lower = op.to_lowercase();
 
         latency.plot_promql(
-            PlotOpts::scatter(*op, format!("latency-{op_lower}"), Unit::Time)
-                .with_log_scale(true)
-                .range(0.0, 100_000_000_000.0),
-            format!("histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_latency{{op=\"{op_lower}\"}})"),
+            PlotOpts::histogram_latency(*op, format!("latency-{op_lower}")),
+            format!("blockio_latency{{op=\"{op_lower}\"}}"),
         );
     }
 
@@ -83,10 +81,9 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         let op_lower = op.to_lowercase();
 
         size.plot_promql(
-            PlotOpts::scatter(*op, format!("size-{op_lower}"), Unit::Bytes).with_log_scale(true),
-            format!(
-                "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], blockio_size{{op=\"{op_lower}\"}})"
-            ),
+            PlotOpts::histogram(*op, format!("size-{op_lower}"), Unit::Bytes, "percentiles")
+                .with_log_scale(true),
+            format!("blockio_size{{op=\"{op_lower}\"}}"),
         );
     }
 

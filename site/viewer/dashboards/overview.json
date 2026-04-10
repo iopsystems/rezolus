@@ -22,8 +22,8 @@
               "y_axis_label": null
             },
             "id": "cpu-busy",
-            "style": "line",
-            "title": "Busy %"
+            "title": "Busy %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000"
         },
@@ -44,8 +44,8 @@
               "y_axis_label": null
             },
             "id": "cpu-busy-heatmap",
-            "style": "heatmap",
-            "title": "Busy %"
+            "title": "Busy %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000"
         }
@@ -68,8 +68,8 @@
               "y_axis_label": null
             },
             "id": "network-transmit-bandwidth",
-            "style": "line",
-            "title": "Transmit Bandwidth"
+            "title": "Transmit Bandwidth",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8"
         },
@@ -86,8 +86,8 @@
               "y_axis_label": null
             },
             "id": "network-receive-bandwidth",
-            "style": "line",
-            "title": "Receive Bandwidth"
+            "title": "Receive Bandwidth",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8"
         },
@@ -104,8 +104,8 @@
               "y_axis_label": null
             },
             "id": "network-transmit-packets",
-            "style": "line",
-            "title": "Transmit Packets"
+            "title": "Transmit Packets",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
         },
@@ -122,8 +122,8 @@
               "y_axis_label": null
             },
             "id": "network-receive-packets",
-            "style": "line",
-            "title": "Receive Packets"
+            "title": "Receive Packets",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
         },
@@ -144,10 +144,11 @@
               "y_axis_label": "Latency"
             },
             "id": "tcp-packet-latency",
-            "style": "scatter",
-            "title": "TCP Packet Latency"
+            "subtype": "percentiles",
+            "title": "TCP Packet Latency",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], tcp_packet_latency)"
+          "promql_query": "tcp_packet_latency"
         }
       ]
     },
@@ -172,10 +173,11 @@
               "y_axis_label": "Latency"
             },
             "id": "scheduler-runqueue-latency",
-            "style": "scatter",
-            "title": "Runqueue Latency"
+            "subtype": "percentiles",
+            "title": "Runqueue Latency",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], scheduler_runqueue_latency)"
+          "promql_query": "scheduler_runqueue_latency"
         }
       ]
     },
@@ -196,8 +198,8 @@
               "y_axis_label": null
             },
             "id": "syscall-total",
-            "style": "line",
-            "title": "Total"
+            "title": "Total",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(syscall[5m]))"
         },
@@ -218,10 +220,11 @@
               "y_axis_label": null
             },
             "id": "syscall-total-latency",
-            "style": "scatter",
-            "title": "Total"
+            "subtype": "percentiles",
+            "title": "Total",
+            "type": "histogram"
           },
-          "promql_query": "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], syscall_latency)"
+          "promql_query": "syscall_latency"
         }
       ]
     },
@@ -242,8 +245,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq[5m]))"
         },
@@ -260,8 +263,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq[5m]))"
         },
@@ -282,8 +285,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000"
         },
@@ -304,8 +307,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time[5m])) / 1000000000"
         }
@@ -328,8 +331,8 @@
               "y_axis_label": null
             },
             "id": "blockio-throughput-read",
-            "style": "line",
-            "title": "Read Throughput"
+            "title": "Read Throughput",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
         },
@@ -346,8 +349,8 @@
               "y_axis_label": null
             },
             "id": "blockio-throughput-write",
-            "style": "line",
-            "title": "Write Throughput"
+            "title": "Write Throughput",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
         },
@@ -364,8 +367,8 @@
               "y_axis_label": null
             },
             "id": "blockio-iops-read",
-            "style": "line",
-            "title": "Read IOPS"
+            "title": "Read IOPS",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
         },
@@ -382,8 +385,8 @@
               "y_axis_label": null
             },
             "id": "blockio-iops-write",
-            "style": "line",
-            "title": "Write IOPS"
+            "title": "Write IOPS",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
         }

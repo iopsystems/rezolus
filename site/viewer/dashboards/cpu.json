@@ -22,8 +22,8 @@
               "y_axis_label": null
             },
             "id": "busy-pct",
-            "style": "line",
-            "title": "Busy %"
+            "title": "Busy %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000"
         },
@@ -44,8 +44,8 @@
               "y_axis_label": null
             },
             "id": "busy-pct-per-cpu",
-            "style": "heatmap",
-            "title": "Busy % (Per-CPU)"
+            "title": "Busy % (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000"
         },
@@ -66,8 +66,8 @@
               "y_axis_label": null
             },
             "id": "user-pct",
-            "style": "line",
-            "title": "User %"
+            "title": "User %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_usage{state=\"user\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -88,8 +88,8 @@
               "y_axis_label": null
             },
             "id": "user-pct-per-cpu",
-            "style": "heatmap",
-            "title": "User % (Per-CPU)"
+            "title": "User % (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_usage{state=\"user\"}[5m])) / 1000000000"
         },
@@ -110,8 +110,8 @@
               "y_axis_label": null
             },
             "id": "system-pct",
-            "style": "line",
-            "title": "System %"
+            "title": "System %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_usage{state=\"system\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -132,8 +132,8 @@
               "y_axis_label": null
             },
             "id": "system-pct-per-cpu",
-            "style": "heatmap",
-            "title": "System % (Per-CPU)"
+            "title": "System % (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_usage{state=\"system\"}[5m])) / 1000000000"
         }
@@ -156,8 +156,8 @@
               "y_axis_label": null
             },
             "id": "ipc",
-            "style": "line",
-            "title": "Instructions per Cycle (IPC)"
+            "title": "Instructions per Cycle (IPC)",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))"
         },
@@ -174,8 +174,8 @@
               "y_axis_label": null
             },
             "id": "ipc-per-cpu",
-            "style": "heatmap",
-            "title": "IPC (Per-CPU)"
+            "title": "IPC (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m]))"
         },
@@ -192,8 +192,8 @@
               "y_axis_label": null
             },
             "id": "ipns",
-            "style": "line",
-            "title": "Instructions per Nanosecond (IPNS)"
+            "title": "Instructions per Nanosecond (IPNS)",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores"
         },
@@ -210,8 +210,8 @@
               "y_axis_label": null
             },
             "id": "ipns-per-cpu",
-            "style": "heatmap",
-            "title": "IPNS (Per-CPU)"
+            "title": "IPNS (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000"
         },
@@ -232,8 +232,8 @@
               "y_axis_label": null
             },
             "id": "l3-hit",
-            "style": "line",
-            "title": "L3 Hit %"
+            "title": "L3 Hit %",
+            "type": "delta_counter"
           },
           "promql_query": "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))"
         },
@@ -254,8 +254,8 @@
               "y_axis_label": null
             },
             "id": "l3-hit-per-cpu",
-            "style": "heatmap",
-            "title": "L3 Hit % (Per-CPU)"
+            "title": "L3 Hit % (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))"
         },
@@ -272,8 +272,8 @@
               "y_axis_label": null
             },
             "id": "frequency",
-            "style": "line",
-            "title": "Frequency"
+            "title": "Frequency",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores"
         },
@@ -289,8 +289,8 @@
               "y_axis_label": null
             },
             "id": "frequency-per-cpu",
-            "style": "heatmap",
-            "title": "Frequency (Per-CPU)"
+            "title": "Frequency (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))"
         }
@@ -317,8 +317,8 @@
               "y_axis_label": null
             },
             "id": "branch-miss-rate",
-            "style": "line",
-            "title": "Misprediction Rate %"
+            "title": "Misprediction Rate %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))"
         },
@@ -339,8 +339,8 @@
               "y_axis_label": null
             },
             "id": "branch-miss-rate-per-cpu",
-            "style": "heatmap",
-            "title": "Misprediction Rate % (Per-CPU)"
+            "title": "Misprediction Rate % (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))"
         },
@@ -357,8 +357,8 @@
               "y_axis_label": null
             },
             "id": "branch-instructions",
-            "style": "line",
-            "title": "Instructions"
+            "title": "Instructions",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_branch_instructions[5m]))"
         },
@@ -375,8 +375,8 @@
               "y_axis_label": null
             },
             "id": "branch-instructions-per-cpu",
-            "style": "heatmap",
-            "title": "Instructions (Per-CPU)"
+            "title": "Instructions (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_branch_instructions[5m]))"
         },
@@ -393,8 +393,8 @@
               "y_axis_label": null
             },
             "id": "branch-misses",
-            "style": "line",
-            "title": "Misses"
+            "title": "Misses",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_branch_misses[5m]))"
         },
@@ -411,8 +411,8 @@
               "y_axis_label": null
             },
             "id": "branch-misses-per-cpu",
-            "style": "heatmap",
-            "title": "Misses (Per-CPU)"
+            "title": "Misses (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_branch_misses[5m]))"
         }
@@ -435,8 +435,8 @@
               "y_axis_label": null
             },
             "id": "dtlb-misses",
-            "style": "line",
-            "title": "Misses"
+            "title": "Misses",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_dtlb_miss[5m]))"
         },
@@ -453,8 +453,8 @@
               "y_axis_label": null
             },
             "id": "dtlb-misses-per-cpu",
-            "style": "heatmap",
-            "title": "Misses (Per-CPU)"
+            "title": "Misses (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_dtlb_miss[5m]))"
         },
@@ -471,8 +471,8 @@
               "y_axis_label": null
             },
             "id": "dtlb-mpki",
-            "style": "line",
-            "title": "MPKI"
+            "title": "MPKI",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000"
         },
@@ -489,8 +489,8 @@
               "y_axis_label": null
             },
             "id": "dtlb-mpki-per-cpu",
-            "style": "heatmap",
-            "title": "MPKI (Per-CPU)"
+            "title": "MPKI (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_dtlb_miss[5m])) / sum by (id) (irate(cpu_instructions[5m])) * 1000"
         }
@@ -513,8 +513,8 @@
               "y_axis_label": null
             },
             "id": "cpu-migrations-to",
-            "style": "line",
-            "title": "To"
+            "title": "To",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_migrations{direction=\"to\"}[5m]))"
         },
@@ -531,8 +531,8 @@
               "y_axis_label": null
             },
             "id": "cpu-migrations-to-per-cpu",
-            "style": "heatmap",
-            "title": "To (Per-CPU)"
+            "title": "To (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_migrations{direction=\"to\"}[5m]))"
         },
@@ -549,8 +549,8 @@
               "y_axis_label": null
             },
             "id": "cpu-migrations-from",
-            "style": "line",
-            "title": "From"
+            "title": "From",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_migrations{direction=\"from\"}[5m]))"
         },
@@ -567,8 +567,8 @@
               "y_axis_label": null
             },
             "id": "cpu-migrations-from-per-cpu",
-            "style": "heatmap",
-            "title": "From (Per-CPU)"
+            "title": "From (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_migrations{direction=\"from\"}[5m]))"
         }
@@ -591,8 +591,8 @@
               "y_axis_label": null
             },
             "id": "tlb-total",
-            "style": "line",
-            "title": "Total"
+            "title": "Total",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_tlb_flush[5m]))"
         },
@@ -609,8 +609,8 @@
               "y_axis_label": null
             },
             "id": "tlb-total-per-cpu",
-            "style": "heatmap",
-            "title": "Total (Per-CPU)"
+            "title": "Total (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_tlb_flush[5m]))"
         },
@@ -627,8 +627,8 @@
               "y_axis_label": null
             },
             "id": "tlb-local-mm-shootdown",
-            "style": "line",
-            "title": "Local MM Shootdown"
+            "title": "Local MM Shootdown",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_tlb_flush{reason=\"local_mm_shootdown\"}[5m]))"
         },
@@ -645,8 +645,8 @@
               "y_axis_label": null
             },
             "id": "tlb-local-mm-shootdown-per-cpu",
-            "style": "heatmap",
-            "title": "Local MM Shootdown (Per-CPU)"
+            "title": "Local MM Shootdown (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"local_mm_shootdown\"}[5m]))"
         },
@@ -663,8 +663,8 @@
               "y_axis_label": null
             },
             "id": "tlb-remote-send-ipi",
-            "style": "line",
-            "title": "Remote Send IPI"
+            "title": "Remote Send IPI",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_tlb_flush{reason=\"remote_send_ipi\"}[5m]))"
         },
@@ -681,8 +681,8 @@
               "y_axis_label": null
             },
             "id": "tlb-remote-send-ipi-per-cpu",
-            "style": "heatmap",
-            "title": "Remote Send IPI (Per-CPU)"
+            "title": "Remote Send IPI (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"remote_send_ipi\"}[5m]))"
         },
@@ -699,8 +699,8 @@
               "y_axis_label": null
             },
             "id": "tlb-remote-shootdown",
-            "style": "line",
-            "title": "Remote Shootdown"
+            "title": "Remote Shootdown",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_tlb_flush{reason=\"remote_shootdown\"}[5m]))"
         },
@@ -717,8 +717,8 @@
               "y_axis_label": null
             },
             "id": "tlb-remote-shootdown-per-cpu",
-            "style": "heatmap",
-            "title": "Remote Shootdown (Per-CPU)"
+            "title": "Remote Shootdown (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"remote_shootdown\"}[5m]))"
         },
@@ -735,8 +735,8 @@
               "y_axis_label": null
             },
             "id": "tlb-task-switch",
-            "style": "line",
-            "title": "Task Switch"
+            "title": "Task Switch",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(cpu_tlb_flush{reason=\"task_switch\"}[5m]))"
         },
@@ -753,8 +753,8 @@
               "y_axis_label": null
             },
             "id": "tlb-task-switch-per-cpu",
-            "style": "heatmap",
-            "title": "Task Switch (Per-CPU)"
+            "title": "Task Switch (Per-CPU)",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"task_switch\"}[5m]))"
         }

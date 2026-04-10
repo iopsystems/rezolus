@@ -18,8 +18,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq[5m]))"
         },
@@ -36,8 +36,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq[5m]))"
         },
@@ -58,8 +58,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000"
         },
@@ -80,8 +80,8 @@
               "y_axis_label": null
             },
             "id": "softirq-total-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time[5m])) / 1000000000"
         }
@@ -104,8 +104,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hi-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"hi\"}[5m]))"
         },
@@ -122,8 +122,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hi-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"hi\"}[5m]))"
         },
@@ -144,8 +144,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hi-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"hi\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -166,8 +166,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hi-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"hi\"}[5m])) / 1000000000"
         }
@@ -190,8 +190,8 @@
               "y_axis_label": null
             },
             "id": "softirq-irq_poll-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"irq_poll\"}[5m]))"
         },
@@ -208,8 +208,8 @@
               "y_axis_label": null
             },
             "id": "softirq-irq_poll-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"irq_poll\"}[5m]))"
         },
@@ -230,8 +230,8 @@
               "y_axis_label": null
             },
             "id": "softirq-irq_poll-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"irq_poll\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -252,8 +252,8 @@
               "y_axis_label": null
             },
             "id": "softirq-irq_poll-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"irq_poll\"}[5m])) / 1000000000"
         }
@@ -276,8 +276,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_tx-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"net_tx\"}[5m]))"
         },
@@ -294,8 +294,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_tx-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"net_tx\"}[5m]))"
         },
@@ -316,8 +316,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_tx-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"net_tx\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -338,8 +338,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_tx-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"net_tx\"}[5m])) / 1000000000"
         }
@@ -362,8 +362,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_rx-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"net_rx\"}[5m]))"
         },
@@ -380,8 +380,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_rx-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"net_rx\"}[5m]))"
         },
@@ -402,8 +402,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_rx-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"net_rx\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -424,8 +424,8 @@
               "y_axis_label": null
             },
             "id": "softirq-net_rx-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"net_rx\"}[5m])) / 1000000000"
         }
@@ -448,8 +448,8 @@
               "y_axis_label": null
             },
             "id": "softirq-rcu-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"rcu\"}[5m]))"
         },
@@ -466,8 +466,8 @@
               "y_axis_label": null
             },
             "id": "softirq-rcu-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"rcu\"}[5m]))"
         },
@@ -488,8 +488,8 @@
               "y_axis_label": null
             },
             "id": "softirq-rcu-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"rcu\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -510,8 +510,8 @@
               "y_axis_label": null
             },
             "id": "softirq-rcu-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"rcu\"}[5m])) / 1000000000"
         }
@@ -534,8 +534,8 @@
               "y_axis_label": null
             },
             "id": "softirq-sched-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"sched\"}[5m]))"
         },
@@ -552,8 +552,8 @@
               "y_axis_label": null
             },
             "id": "softirq-sched-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"sched\"}[5m]))"
         },
@@ -574,8 +574,8 @@
               "y_axis_label": null
             },
             "id": "softirq-sched-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"sched\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -596,8 +596,8 @@
               "y_axis_label": null
             },
             "id": "softirq-sched-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"sched\"}[5m])) / 1000000000"
         }
@@ -620,8 +620,8 @@
               "y_axis_label": null
             },
             "id": "softirq-tasklet-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"tasklet\"}[5m]))"
         },
@@ -638,8 +638,8 @@
               "y_axis_label": null
             },
             "id": "softirq-tasklet-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"tasklet\"}[5m]))"
         },
@@ -660,8 +660,8 @@
               "y_axis_label": null
             },
             "id": "softirq-tasklet-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"tasklet\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -682,8 +682,8 @@
               "y_axis_label": null
             },
             "id": "softirq-tasklet-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"tasklet\"}[5m])) / 1000000000"
         }
@@ -706,8 +706,8 @@
               "y_axis_label": null
             },
             "id": "softirq-timer-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"timer\"}[5m]))"
         },
@@ -724,8 +724,8 @@
               "y_axis_label": null
             },
             "id": "softirq-timer-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"timer\"}[5m]))"
         },
@@ -746,8 +746,8 @@
               "y_axis_label": null
             },
             "id": "softirq-timer-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"timer\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -768,8 +768,8 @@
               "y_axis_label": null
             },
             "id": "softirq-timer-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"timer\"}[5m])) / 1000000000"
         }
@@ -792,8 +792,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hrtimer-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"hrtimer\"}[5m]))"
         },
@@ -810,8 +810,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hrtimer-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"hrtimer\"}[5m]))"
         },
@@ -832,8 +832,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hrtimer-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"hrtimer\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -854,8 +854,8 @@
               "y_axis_label": null
             },
             "id": "softirq-hrtimer-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"hrtimer\"}[5m])) / 1000000000"
         }
@@ -878,8 +878,8 @@
               "y_axis_label": null
             },
             "id": "softirq-block-rate",
-            "style": "line",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq{kind=\"block\"}[5m]))"
         },
@@ -896,8 +896,8 @@
               "y_axis_label": null
             },
             "id": "softirq-block-rate-heatmap",
-            "style": "heatmap",
-            "title": "Rate"
+            "title": "Rate",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq{kind=\"block\"}[5m]))"
         },
@@ -918,8 +918,8 @@
               "y_axis_label": null
             },
             "id": "softirq-block-time",
-            "style": "line",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum(irate(softirq_time{kind=\"block\"}[5m])) / cpu_cores / 1000000000"
         },
@@ -940,8 +940,8 @@
               "y_axis_label": null
             },
             "id": "softirq-block-time-heatmap",
-            "style": "heatmap",
-            "title": "CPU %"
+            "title": "CPU %",
+            "type": "delta_counter"
           },
           "promql_query": "sum by (id) (irate(softirq_time{kind=\"block\"}[5m])) / 1000000000"
         }

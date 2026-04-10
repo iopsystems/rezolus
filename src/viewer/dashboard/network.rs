@@ -11,27 +11,27 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Bandwidth Transmit (convert bytes/sec to bits/sec)
     traffic.plot_promql(
-        PlotOpts::line("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
+        PlotOpts::counter("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
             .with_unit_system("bitrate"),
         "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
     );
 
     // Bandwidth Receive (convert bytes/sec to bits/sec)
     traffic.plot_promql(
-        PlotOpts::line("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
+        PlotOpts::counter("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
             .with_unit_system("bitrate"),
         "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
     );
 
     // Packets Transmit
     traffic.plot_promql(
-        PlotOpts::line("Packets Transmit", "packets-tx", Unit::Rate),
+        PlotOpts::counter("Packets Transmit", "packets-tx", Unit::Rate),
         "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
     );
 
     // Packets Receive
     traffic.plot_promql(
-        PlotOpts::line("Packets Receive", "packets-rx", Unit::Rate),
+        PlotOpts::counter("Packets Receive", "packets-rx", Unit::Rate),
         "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
     );
 
@@ -45,13 +45,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     // Network packet drops - dropped packets at network layer
     errors.plot_promql(
-        PlotOpts::line("Packet Drops", "packet-drops", Unit::Rate),
+        PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
         "sum(irate(network_drop[5m]))".to_string(),
     );
 
     // TCP retransmits - retransmitted TCP packets (key health indicator)
     errors.plot_promql(
-        PlotOpts::line("TCP Retransmits", "tcp-retransmits", Unit::Rate),
+        PlotOpts::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
         "sum(irate(tcp_retransmit[5m]))".to_string(),
     );
 
@@ -64,15 +64,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut tcp = Group::new("TCP", "tcp");
 
     // TCP Packet Latency percentiles - p50, p90, p99, p99.9
-    // Use the efficient histogram_percentiles() function to compute all percentiles in one pass
-    // Note: histogram_percentiles works directly on histogram data, not on irate() results
     tcp.plot_promql(
-        PlotOpts::scatter("TCP Packet Latency", "tcp-packet-latency", Unit::Time)
+        PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
             .with_axis_label("Latency")
-            .with_unit_system("time")
-            .with_log_scale(true)
-            .range(0.0, 100_000_000_000.0),
-        "histogram_percentiles([0.5, 0.9, 0.99, 0.999], tcp_packet_latency)".to_string(),
+            .with_unit_system("time"),
+        "tcp_packet_latency".to_string(),
     );
 
     view.group(tcp);

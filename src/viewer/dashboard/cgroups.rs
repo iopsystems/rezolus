@@ -1,10 +1,145 @@
 use super::*;
 
+/// Adds the standard cgroup metric plots for either aggregate or individual mode.
+///
+/// In aggregate mode, metrics are summed across non-selected cgroups.
+/// In individual mode, metrics are broken down by cgroup name.
+fn add_cgroup_metrics(group: &mut Group, individual: bool) {
+    let prefix = if individual {
+        "individual"
+    } else {
+        "aggregate"
+    };
+
+    let filter = if individual {
+        "name=~\"__SELECTED_CGROUPS__\""
+    } else {
+        "name!~\"__SELECTED_CGROUPS__\""
+    };
+
+    let rate = |metric: &str| {
+        if individual {
+            format!("sum by (name) (irate({metric}{{{filter}}}[5m]))")
+        } else {
+            format!("sum(irate({metric}{{{filter}}}[5m]))")
+        }
+    };
+
+    // CPU Total Cores
+    group.plot_promql(
+        PlotOpts::counter(
+            "Total CPU Cores",
+            format!("{prefix}-total-cores"),
+            Unit::Count,
+        ),
+        format!("{} / 1000000000", rate("cgroup_cpu_usage")),
+    );
+
+    // CPU User Cores
+    group.plot_promql(
+        PlotOpts::counter("User CPU Cores", format!("{prefix}-user-cores"), Unit::Count),
+        if individual {
+            format!("sum by (name) (irate(cgroup_cpu_usage{{state=\"user\",{filter}}}[5m])) / 1000000000")
+        } else {
+            format!("sum(irate(cgroup_cpu_usage{{state=\"user\",{filter}}}[5m])) / 1000000000")
+        },
+    );
+
+    // CPU System Cores
+    group.plot_promql(
+        PlotOpts::counter(
+            "System CPU Cores",
+            format!("{prefix}-system-cores"),
+            Unit::Count,
+        ),
+        if individual {
+            format!("sum by (name) (irate(cgroup_cpu_usage{{state=\"system\",{filter}}}[5m])) / 1000000000")
+        } else {
+            format!("sum(irate(cgroup_cpu_usage{{state=\"system\",{filter}}}[5m])) / 1000000000")
+        },
+    );
+
+    // CPU Migrations
+    group.plot_promql(
+        PlotOpts::counter(
+            "CPU Migrations",
+            format!("{prefix}-cpu-migrations"),
+            Unit::Rate,
+        ),
+        rate("cgroup_cpu_migrations"),
+    );
+
+    // CPU Throttled Time
+    group.plot_promql(
+        PlotOpts::counter(
+            "CPU Throttled Time",
+            format!("{prefix}-cpu-throttled-time"),
+            Unit::Time,
+        ),
+        rate("cgroup_cpu_throttled_time"),
+    );
+
+    // IPC
+    group.plot_promql(
+        PlotOpts::counter("IPC", format!("{prefix}-ipc"), Unit::Count),
+        if individual {
+            format!("sum by (name) (irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{{{filter}}}[5m]))")
+        } else {
+            format!("sum(irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum(irate(cgroup_cpu_cycles{{{filter}}}[5m]))")
+        },
+    );
+
+    // TLB Flushes
+    group.plot_promql(
+        PlotOpts::counter("TLB Flushes", format!("{prefix}-tlb-flush"), Unit::Rate),
+        rate("cgroup_cpu_tlb_flush"),
+    );
+
+    // Syscalls
+    group.plot_promql(
+        PlotOpts::counter("Syscalls", format!("{prefix}-syscall"), Unit::Rate),
+        rate("cgroup_syscall"),
+    );
+
+    // Per-syscall operation breakdown
+    for op in &[
+        "Read",
+        "Write",
+        "Poll",
+        "Socket",
+        "Lock",
+        "Time",
+        "Sleep",
+        "Yield",
+        "Filesystem",
+        "Memory",
+        "Process",
+        "Query",
+        "IPC",
+        "Timer",
+        "Event",
+        "Other",
+    ] {
+        let op_lower = op.to_lowercase();
+        group.plot_promql(
+            PlotOpts::counter(
+                format!("Syscall {op}"),
+                format!("{prefix}-syscall-{op_lower}"),
+                Unit::Rate,
+            ),
+            if individual {
+                format!("sum by (name) (irate(cgroup_syscall{{op=\"{op_lower}\",{filter}}}[5m]))")
+            } else {
+                format!("sum(irate(cgroup_syscall{{op=\"{op_lower}\",{filter}}}[5m]))")
+            },
+        );
+    }
+}
+
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections.clone());
 
     // Add metadata for cgroup selection UI
-    // This will be used by the frontend to build the selection interface
     view.metadata.insert(
         "cgroup_selector".to_string(),
         serde_json::json!({
@@ -22,191 +157,20 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         }),
     );
 
-    /*
-     * Aggregate (Left Side) - Sum of non-selected cgroups
-     */
-
+    // Aggregate (Left Side) - Sum of non-selected cgroups
     let mut aggregate = Group::new("Aggregate Cgroups", "aggregate");
     aggregate
         .metadata
         .insert("side".to_string(), serde_json::json!("left"));
-
-    // CPU Total Cores - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line("Total CPU Cores", "aggregate-total-cores", Unit::Count),
-        "sum(irate(cgroup_cpu_usage{name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000".to_string(),
-    );
-
-    // CPU User Cores - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line("User CPU Cores", "aggregate-user-cores", Unit::Count),
-        "sum(irate(cgroup_cpu_usage{state=\"user\",name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000".to_string(),
-    );
-
-    // CPU System Cores - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line("System CPU Cores", "aggregate-system-cores", Unit::Count),
-        "sum(irate(cgroup_cpu_usage{state=\"system\",name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000".to_string(),
-    );
-
-    // CPU Migrations - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line("CPU Migrations", "aggregate-cpu-migrations", Unit::Rate),
-        "sum(irate(cgroup_cpu_migrations{name!~\"__SELECTED_CGROUPS__\"}[5m]))".to_string(),
-    );
-
-    // CPU Throttled Time - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line(
-            "CPU Throttled Time",
-            "aggregate-cpu-throttled-time",
-            Unit::Time,
-        ),
-        "sum(irate(cgroup_cpu_throttled_time{name!~\"__SELECTED_CGROUPS__\"}[5m]))".to_string(),
-    );
-
-    // IPC - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line("IPC", "aggregate-ipc", Unit::Count),
-        "sum(irate(cgroup_cpu_instructions{name!~\"__SELECTED_CGROUPS__\"}[5m])) / sum(irate(cgroup_cpu_cycles{name!~\"__SELECTED_CGROUPS__\"}[5m]))".to_string(),
-    );
-
-    // TLB Flushes - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line("TLB Flushes", "aggregate-tlb-flush", Unit::Rate),
-        "sum(irate(cgroup_cpu_tlb_flush{name!~\"__SELECTED_CGROUPS__\"}[5m]))".to_string(),
-    );
-
-    // Syscalls - aggregate of non-selected
-    aggregate.plot_promql(
-        PlotOpts::line("Syscalls", "aggregate-syscall", Unit::Rate),
-        "sum(irate(cgroup_syscall{name!~\"__SELECTED_CGROUPS__\"}[5m]))".to_string(),
-    );
-
-    // Per-syscall operation breakdown for aggregate (non-selected) cgroups
-    for op in &[
-        "Read",
-        "Write",
-        "Poll",
-        "Socket",
-        "Lock",
-        "Time",
-        "Sleep",
-        "Yield",
-        "Filesystem",
-        "Memory",
-        "Process",
-        "Query",
-        "IPC",
-        "Timer",
-        "Event",
-        "Other",
-    ] {
-        aggregate.plot_promql(
-            PlotOpts::line(
-                format!("Syscall {op}"),
-                format!("aggregate-syscall-{}", op.to_lowercase()),
-                Unit::Rate,
-            ),
-            format!(
-                "sum(irate(cgroup_syscall{{op=\"{}\",name!~\"__SELECTED_CGROUPS__\"}}[5m]))",
-                op.to_lowercase()
-            ),
-        );
-    }
-
+    add_cgroup_metrics(&mut aggregate, false);
     view.group(aggregate);
 
-    /*
-     * Individual (Right Side) - Selected cgroups with one line per cgroup
-     */
-
+    // Individual (Right Side) - Selected cgroups with one line per cgroup
     let mut individual = Group::new("Individual Cgroups", "individual");
     individual
         .metadata
         .insert("side".to_string(), serde_json::json!("right"));
-
-    // CPU Total Cores - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi("Total CPU Cores", "individual-total-cores", Unit::Count),
-        "sum by (name) (irate(cgroup_cpu_usage{name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
-            .to_string(),
-    );
-
-    // CPU User Cores - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi("User CPU Cores", "individual-user-cores", Unit::Count),
-        "sum by (name) (irate(cgroup_cpu_usage{state=\"user\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000".to_string(),
-    );
-
-    // CPU System Cores - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi("System CPU Cores", "individual-system-cores", Unit::Count),
-        "sum by (name) (irate(cgroup_cpu_usage{state=\"system\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000".to_string(),
-    );
-
-    // CPU Migrations - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi("CPU Migrations", "individual-cpu-migrations", Unit::Rate),
-        "sum by (name) (irate(cgroup_cpu_migrations{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
-            .to_string(),
-    );
-
-    // CPU Throttled Time - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi(
-            "CPU Throttled Time",
-            "individual-cpu-throttled-time",
-            Unit::Time,
-        ),
-        "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
-            .to_string(),
-    );
-
-    // IPC - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi("IPC", "individual-ipc", Unit::Count),
-        "sum by (name) (irate(cgroup_cpu_instructions{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{name=~\"__SELECTED_CGROUPS__\"}[5m]))".to_string(),
-    );
-
-    // TLB Flushes - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi("TLB Flushes", "individual-tlb-flush", Unit::Rate),
-        "sum by (name) (irate(cgroup_cpu_tlb_flush{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
-            .to_string(),
-    );
-
-    // Syscalls - per selected cgroup
-    individual.plot_promql(
-        PlotOpts::multi("Syscalls", "individual-syscall", Unit::Rate),
-        "sum by (name) (irate(cgroup_syscall{name=~\"__SELECTED_CGROUPS__\"}[5m]))".to_string(),
-    );
-
-    // Per-syscall operation breakdown for selected cgroups
-    for op in &[
-        "Read",
-        "Write",
-        "Poll",
-        "Socket",
-        "Lock",
-        "Time",
-        "Sleep",
-        "Yield",
-        "Filesystem",
-        "Memory",
-        "Process",
-        "Query",
-        "IPC",
-        "Timer",
-        "Event",
-        "Other",
-    ] {
-        individual.plot_promql(
-            PlotOpts::multi(format!("Syscall {op}"), format!("individual-syscall-{}", op.to_lowercase()), Unit::Rate),
-            format!("sum by (name) (irate(cgroup_syscall{{op=\"{}\",name=~\"__SELECTED_CGROUPS__\"}}[5m]))", op.to_lowercase()),
-        );
-    }
-
+    add_cgroup_metrics(&mut individual, true);
     view.group(individual);
 
     view

@@ -55,7 +55,8 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
     }
 
     // Reserve ringbuf space to avoid stack allocation of cgroup_info
-    struct cgroup_info *cginfo = bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
+    struct cgroup_info* cginfo =
+        bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
     if (!cginfo) {
         // Still update serial number even if ringbuf is full
         bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
@@ -80,9 +81,7 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
     if (cginfo->level > 0) {
         struct kernfs_node* kn = BPF_CORE_READ(task, sched_task_group, css.cgroup, kn);
         struct kernfs_node* parent = get_kernfs_node_parent(kn);
-        bpf_probe_read_kernel_str(
-            &cginfo->pname, CGROUP_NAME_LEN,
-            BPF_CORE_READ(parent, name));
+        bpf_probe_read_kernel_str(&cginfo->pname, CGROUP_NAME_LEN, BPF_CORE_READ(parent, name));
     }
 
     // For cgroups at level 2 or higher, read grandparent
@@ -90,9 +89,8 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
         struct kernfs_node* kn = BPF_CORE_READ(task, sched_task_group, css.cgroup, kn);
         struct kernfs_node* parent = get_kernfs_node_parent(kn);
         struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
-        bpf_probe_read_kernel_str(
-            &cginfo->gpname, CGROUP_NAME_LEN,
-            BPF_CORE_READ(grandparent, name));
+        bpf_probe_read_kernel_str(&cginfo->gpname, CGROUP_NAME_LEN,
+                                  BPF_CORE_READ(grandparent, name));
     }
 
     // Submit the cgroup info
@@ -141,7 +139,8 @@ static __always_inline int handle_new_cgroup_from_css(struct cgroup_subsys_state
     }
 
     // Reserve ringbuf space to avoid stack allocation of cgroup_info
-    struct cgroup_info *cginfo = bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
+    struct cgroup_info* cginfo =
+        bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
     if (!cginfo) {
         // Still update serial number even if ringbuf is full
         bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
@@ -166,8 +165,7 @@ static __always_inline int handle_new_cgroup_from_css(struct cgroup_subsys_state
     if (cginfo->level > 0) {
         struct kernfs_node* kn = BPF_CORE_READ(css, cgroup, kn);
         struct kernfs_node* parent = get_kernfs_node_parent(kn);
-        bpf_probe_read_kernel_str(&cginfo->pname, CGROUP_NAME_LEN,
-                                  BPF_CORE_READ(parent, name));
+        bpf_probe_read_kernel_str(&cginfo->pname, CGROUP_NAME_LEN, BPF_CORE_READ(parent, name));
     }
 
     // For cgroups at level 2 or higher, read grandparent

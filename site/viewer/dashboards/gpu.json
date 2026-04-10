@@ -22,8 +22,8 @@
               "y_axis_label": null
             },
             "id": "gpu-pct",
-            "style": "line",
-            "title": "GPU %"
+            "title": "GPU %",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_utilization) / 100"
         },
@@ -44,8 +44,8 @@
               "y_axis_label": null
             },
             "id": "gpu-pct-per-gpu",
-            "style": "heatmap",
-            "title": "GPU % (Per-GPU)"
+            "title": "GPU % (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_utilization) / 100"
         },
@@ -66,8 +66,8 @@
               "y_axis_label": null
             },
             "id": "mem-ctrl-pct",
-            "style": "line",
-            "title": "Memory Controller %"
+            "title": "Memory Controller %",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_memory_utilization) / 100"
         },
@@ -88,8 +88,8 @@
               "y_axis_label": null
             },
             "id": "mem-ctrl-pct-per-gpu",
-            "style": "heatmap",
-            "title": "Memory Controller % (Per-GPU)"
+            "title": "Memory Controller % (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_memory_utilization) / 100"
         }
@@ -116,8 +116,8 @@
               "y_axis_label": null
             },
             "id": "gpu-tensor-act",
-            "style": "line",
-            "title": "GPU Tensor Activity %"
+            "title": "GPU Tensor Activity %",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_tensor_utilization) / 100"
         },
@@ -138,8 +138,8 @@
               "y_axis_label": null
             },
             "id": "gpu-tensor-act-per-gpu",
-            "style": "heatmap",
-            "title": "GPU Tensor Activity % (Per-GPU)"
+            "title": "GPU Tensor Activity % (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_tensor_utilization) / 100"
         },
@@ -160,8 +160,8 @@
               "y_axis_label": null
             },
             "id": "gpu-dram-act",
-            "style": "line",
-            "title": "GPU DRAM Activity %"
+            "title": "GPU DRAM Activity %",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_dram_bandwidth_utilization) / 100"
         },
@@ -182,8 +182,8 @@
               "y_axis_label": null
             },
             "id": "gpu-dram-act-per-gpu",
-            "style": "heatmap",
-            "title": "GPU DRAM Activity % (Per-GPU)"
+            "title": "GPU DRAM Activity % (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_dram_bandwidth_utilization) / 100"
         },
@@ -204,8 +204,8 @@
               "y_axis_label": null
             },
             "id": "gpu-sm-act",
-            "style": "line",
-            "title": "GPU SM Activity %"
+            "title": "GPU SM Activity %",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_sm_utilization) / 100"
         },
@@ -226,8 +226,8 @@
               "y_axis_label": null
             },
             "id": "gpu-sm-act-per-gpu",
-            "style": "heatmap",
-            "title": "GPU SM Activity % (Per-GPU)"
+            "title": "GPU SM Activity % (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_sm_utilization) / 100"
         },
@@ -248,8 +248,8 @@
               "y_axis_label": null
             },
             "id": "gpu-sm-ocp",
-            "style": "line",
-            "title": "GPU SM Occupancy %"
+            "title": "GPU SM Occupancy %",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_sm_occupancy) / 100"
         },
@@ -270,8 +270,8 @@
               "y_axis_label": null
             },
             "id": "gpu-sm-ocp-per-gpu",
-            "style": "heatmap",
-            "title": "GPU SM Occupancy % (Per-GPU)"
+            "title": "GPU SM Occupancy % (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_sm_occupancy) / 100"
         }
@@ -294,8 +294,8 @@
               "y_axis_label": null
             },
             "id": "mem-used",
-            "style": "line",
-            "title": "Used"
+            "title": "Used",
+            "type": "gauge"
           },
           "promql_query": "sum(gpu_memory{state=\"used\"})"
         },
@@ -312,8 +312,8 @@
               "y_axis_label": null
             },
             "id": "mem-used-per-gpu",
-            "style": "heatmap",
-            "title": "Used (Per-GPU)"
+            "title": "Used (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_memory{state=\"used\"})"
         },
@@ -330,8 +330,8 @@
               "y_axis_label": null
             },
             "id": "mem-free",
-            "style": "line",
-            "title": "Free"
+            "title": "Free",
+            "type": "gauge"
           },
           "promql_query": "sum(gpu_memory{state=\"free\"})"
         },
@@ -348,8 +348,8 @@
               "y_axis_label": null
             },
             "id": "mem-free-per-gpu",
-            "style": "heatmap",
-            "title": "Free (Per-GPU)"
+            "title": "Free (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_memory{state=\"free\"})"
         },
@@ -370,8 +370,8 @@
               "y_axis_label": null
             },
             "id": "mem-util-pct",
-            "style": "line",
-            "title": "Utilization %"
+            "title": "Utilization %",
+            "type": "gauge"
           },
           "promql_query": "sum(gpu_memory{state=\"used\"}) / (sum(gpu_memory{state=\"used\"}) + sum(gpu_memory{state=\"free\"}))"
         }
@@ -394,8 +394,8 @@
               "y_axis_label": "Watts"
             },
             "id": "power-watts",
-            "style": "line",
-            "title": "Power (W)"
+            "title": "Power (W)",
+            "type": "gauge"
           },
           "promql_query": "sum(gpu_power_usage) / 1000"
         },
@@ -412,8 +412,8 @@
               "y_axis_label": "Watts"
             },
             "id": "power-watts-per-gpu",
-            "style": "heatmap",
-            "title": "Power (Per-GPU)"
+            "title": "Power (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_power_usage) / 1000"
         },
@@ -430,8 +430,8 @@
               "y_axis_label": "Watts"
             },
             "id": "energy-rate",
-            "style": "line",
-            "title": "Energy Rate (W)"
+            "title": "Energy Rate (W)",
+            "type": "delta_counter"
           },
           "promql_query": "sum(rate(gpu_energy_consumption[5m])) / 1000"
         }
@@ -454,8 +454,8 @@
               "y_axis_label": "°C"
             },
             "id": "temp-avg",
-            "style": "line",
-            "title": "Average (°C)"
+            "title": "Average (°C)",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_temperature)"
         },
@@ -472,8 +472,8 @@
               "y_axis_label": "°C"
             },
             "id": "temp-max",
-            "style": "line",
-            "title": "Max (°C)"
+            "title": "Max (°C)",
+            "type": "gauge"
           },
           "promql_query": "max(gpu_temperature)"
         },
@@ -490,8 +490,8 @@
               "y_axis_label": "°C"
             },
             "id": "temp-per-gpu",
-            "style": "heatmap",
-            "title": "Temperature (Per-GPU)"
+            "title": "Temperature (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_temperature)"
         }
@@ -514,8 +514,8 @@
               "y_axis_label": null
             },
             "id": "clock-graphics",
-            "style": "line",
-            "title": "Graphics"
+            "title": "Graphics",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_clock{clock=\"graphics\"})"
         },
@@ -532,8 +532,8 @@
               "y_axis_label": null
             },
             "id": "clock-graphics-per-gpu",
-            "style": "heatmap",
-            "title": "Graphics (Per-GPU)"
+            "title": "Graphics (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_clock{clock=\"graphics\"})"
         },
@@ -550,8 +550,8 @@
               "y_axis_label": null
             },
             "id": "clock-memory",
-            "style": "line",
-            "title": "Memory"
+            "title": "Memory",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_clock{clock=\"memory\"})"
         },
@@ -568,8 +568,8 @@
               "y_axis_label": null
             },
             "id": "clock-memory-per-gpu",
-            "style": "heatmap",
-            "title": "Memory (Per-GPU)"
+            "title": "Memory (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_clock{clock=\"memory\"})"
         },
@@ -586,8 +586,8 @@
               "y_axis_label": null
             },
             "id": "clock-compute",
-            "style": "line",
-            "title": "Compute"
+            "title": "Compute",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_clock{clock=\"compute\"})"
         },
@@ -604,8 +604,8 @@
               "y_axis_label": null
             },
             "id": "clock-video",
-            "style": "line",
-            "title": "Video"
+            "title": "Video",
+            "type": "gauge"
           },
           "promql_query": "avg(gpu_clock{clock=\"video\"})"
         }
@@ -628,8 +628,8 @@
               "y_axis_label": null
             },
             "id": "pcie-bandwidth",
-            "style": "line",
-            "title": "Bandwidth"
+            "title": "Bandwidth",
+            "type": "gauge"
           },
           "promql_query": "sum(gpu_pcie_bandwidth)"
         },
@@ -646,8 +646,8 @@
               "y_axis_label": null
             },
             "id": "pcie-rx",
-            "style": "line",
-            "title": "Receive"
+            "title": "Receive",
+            "type": "gauge"
           },
           "promql_query": "sum(gpu_pcie_throughput{direction=\"receive\"})"
         },
@@ -664,8 +664,8 @@
               "y_axis_label": null
             },
             "id": "pcie-rx-per-gpu",
-            "style": "heatmap",
-            "title": "Receive (Per-GPU)"
+            "title": "Receive (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_pcie_throughput{direction=\"receive\"})"
         },
@@ -682,8 +682,8 @@
               "y_axis_label": null
             },
             "id": "pcie-tx",
-            "style": "line",
-            "title": "Transmit"
+            "title": "Transmit",
+            "type": "gauge"
           },
           "promql_query": "sum(gpu_pcie_throughput{direction=\"transmit\"})"
         },
@@ -700,8 +700,8 @@
               "y_axis_label": null
             },
             "id": "pcie-tx-per-gpu",
-            "style": "heatmap",
-            "title": "Transmit (Per-GPU)"
+            "title": "Transmit (Per-GPU)",
+            "type": "gauge"
           },
           "promql_query": "sum by (id) (gpu_pcie_throughput{direction=\"transmit\"})"
         }
