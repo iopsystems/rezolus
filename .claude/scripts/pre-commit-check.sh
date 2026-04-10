@@ -2,8 +2,9 @@
 # Pre-commit validation for the Rezolus viewer.
 # Checks:
 #   1. Rust formatting (cargo fmt --check)
-#   2. site/viewer symlinks are in sync with src/viewer/assets
-#   3. Generated dashboard JSON is up to date with Rust definitions
+#   2. Clippy (warnings are errors)
+#   3. site/viewer symlinks are in sync with src/viewer/assets
+#   4. Generated dashboard JSON is up to date with Rust definitions
 #
 # Exit 0  = all good
 # Exit 2  = blocking failure (outputs JSON to deny the commit)
@@ -38,7 +39,25 @@ check_formatting() {
     fi
 }
 
-# ── 2. Check symlinks ───────────────────────────────────────────────
+# ── 2. Clippy (deny warnings) ───────────────────────────────────────
+
+check_clippy() {
+    staged=$(git diff --cached --name-only 2>/dev/null || true)
+    has_rust=false
+    while IFS= read -r f; do
+        case "$f" in
+            *.rs) has_rust=true ;;
+        esac
+    done <<< "$staged"
+
+    if $has_rust; then
+        if ! cargo clippy -- -D warnings >/dev/null 2>&1; then
+            errors+=("clippy warnings found — run: cargo clippy -- -D warnings")
+        fi
+    fi
+}
+
+# ── 3. Check symlinks ───────────────────────────────────────────────
 
 check_symlinks() {
     # Walk every .js and .css file under src/viewer/assets/lib/
@@ -72,7 +91,7 @@ check_symlinks() {
     done < <(find "$SRC" -type f \( -name '*.js' -o -name '*.css' \))
 }
 
-# ── 3. Check dashboard JSON is up to date ────────────────────────────
+# ── 4. Check dashboard JSON is up to date ────────────────────────────
 
 check_dashboards() {
     # Only check if any dashboard-related Rust files are staged
@@ -95,6 +114,7 @@ check_dashboards() {
 # ── Run checks ───────────────────────────────────────────────────────
 
 check_formatting
+check_clippy
 check_symlinks
 check_dashboards
 
