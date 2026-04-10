@@ -205,7 +205,8 @@ int handle__sched_switch(u64* ctx) {
                 bpf_map_update_elem(&cgroup_offcpu, &cgroup_id, &zero, BPF_ANY);
 
                 // reserve ringbuf space to avoid stack allocation of cgroup_info
-                struct cgroup_info *cginfo = bpf_ringbuf_reserve(&cgroup_info, sizeof(struct cgroup_info), 0);
+                struct cgroup_info* cginfo =
+                    bpf_ringbuf_reserve(&cgroup_info, sizeof(struct cgroup_info), 0);
                 if (!cginfo) {
                     bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
                 } else {
@@ -221,15 +222,13 @@ int handle__sched_switch(u64* ctx) {
                     // read the cgroup parent name
                     struct kernfs_node* kn = BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn);
                     struct kernfs_node* parent = get_kernfs_node_parent(kn);
-                    bpf_probe_read_kernel_str(
-                        &cginfo->pname, CGROUP_NAME_LEN,
-                        BPF_CORE_READ(parent, name));
+                    bpf_probe_read_kernel_str(&cginfo->pname, CGROUP_NAME_LEN,
+                                              BPF_CORE_READ(parent, name));
 
                     // read the cgroup grandparent name
                     struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
-                    bpf_probe_read_kernel_str(
-                        &cginfo->gpname, CGROUP_NAME_LEN,
-                        BPF_CORE_READ(grandparent, name));
+                    bpf_probe_read_kernel_str(&cginfo->gpname, CGROUP_NAME_LEN,
+                                              BPF_CORE_READ(grandparent, name));
 
                     // submit the cgroup info
                     bpf_ringbuf_submit(cginfo, 0);

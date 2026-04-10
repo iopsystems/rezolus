@@ -134,7 +134,8 @@ int tg_set_cfs_bandwidth(struct pt_regs* ctx) {
     }
 
     // get the bandwidth info and send to userspace
-    struct bandwidth_info *bw_info = bpf_ringbuf_reserve(&bandwidth_info, sizeof(struct bandwidth_info), 0);
+    struct bandwidth_info* bw_info =
+        bpf_ringbuf_reserve(&bandwidth_info, sizeof(struct bandwidth_info), 0);
     if (bw_info) {
         bw_info->id = cgroup_id;
         bw_info->quota = BPF_CORE_READ(cfs_b, quota);
@@ -173,7 +174,8 @@ int throttle_cfs_rq(struct pt_regs* ctx) {
         bpf_map_update_elem(&throttled_count, &cgroup_id, &zero, BPF_ANY);
 
         // get the bandwidth info and send to userspace
-        struct bandwidth_info *bw_info = bpf_ringbuf_reserve(&bandwidth_info, sizeof(struct bandwidth_info), 0);
+        struct bandwidth_info* bw_info =
+            bpf_ringbuf_reserve(&bandwidth_info, sizeof(struct bandwidth_info), 0);
         if (bw_info) {
             bw_info->id = cgroup_id;
             bw_info->quota = BPF_CORE_READ(tg, cfs_bandwidth.quota);

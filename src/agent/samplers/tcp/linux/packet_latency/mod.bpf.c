@@ -61,7 +61,7 @@ static int handle_tcp_probe(struct sock* sk, struct sk_buff* skb) {
 
 static int handle_tcp_rcv_space_adjust(void* ctx, struct sock* sk) {
     u64 sock_ident = get_sock_ident(sk);
-    u64 *tsp;
+    u64* tsp;
     u64 now, delta_ns;
 
     tsp = bpf_map_lookup_elem(&start, &sock_ident);
