@@ -59,3 +59,38 @@ with symlinks:
 
 7. **Report** a summary: how many symlinks checked, how many created, any
    stale links found.
+
+## Pre-commit hook
+
+A Claude Code hook at `.claude/settings.json` runs
+`.claude/scripts/pre-commit-check.sh` before every `git commit`. It blocks
+the commit if:
+
+- Any expected symlinks are missing in `site/viewer/lib/`
+- Dashboard JSON is out of date with Rust definitions (only when
+  `src/viewer/dashboard/` or `src/viewer/plot.rs` files are staged)
+
+Both files are git-ignored (`.claude/*` excluding skills). To set up the
+hook on a fresh checkout, create `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(git commit*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/scripts/pre-commit-check.sh",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+And copy or recreate `.claude/scripts/pre-commit-check.sh` (see the
+existing copy in this repo's working tree for reference).
