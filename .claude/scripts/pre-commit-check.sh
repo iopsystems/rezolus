@@ -1,8 +1,9 @@
 #!/bin/bash
 # Pre-commit validation for the Rezolus viewer.
 # Checks:
-#   1. site/viewer symlinks are in sync with src/viewer/assets
-#   2. Generated dashboard JSON is up to date with Rust definitions
+#   1. Rust formatting (cargo fmt --check)
+#   2. site/viewer symlinks are in sync with src/viewer/assets
+#   3. Generated dashboard JSON is up to date with Rust definitions
 #
 # Exit 0  = all good
 # Exit 2  = blocking failure (outputs JSON to deny the commit)
@@ -18,7 +19,26 @@ STANDALONE_TOP="data.js script.js dashboards.js viewer_api.js"
 
 errors=()
 
-# ── 1. Check symlinks ───────────────────────────────────────────────
+# ── 1. Check Rust formatting ────────────────────────────────────────
+
+check_formatting() {
+    # Only check if any Rust files are staged
+    staged=$(git diff --cached --name-only 2>/dev/null || true)
+    has_rust=false
+    while IFS= read -r f; do
+        case "$f" in
+            *.rs) has_rust=true ;;
+        esac
+    done <<< "$staged"
+
+    if $has_rust; then
+        if ! cargo fmt --check >/dev/null 2>&1; then
+            errors+=("Rust code is not formatted — run: cargo xtask fmt")
+        fi
+    fi
+}
+
+# ── 2. Check symlinks ───────────────────────────────────────────────
 
 check_symlinks() {
     # Walk every .js and .css file under src/viewer/assets/lib/
@@ -52,7 +72,7 @@ check_symlinks() {
     done < <(find "$SRC" -type f \( -name '*.js' -o -name '*.css' \))
 }
 
-# ── 2. Check dashboard JSON is up to date ────────────────────────────
+# ── 3. Check dashboard JSON is up to date ────────────────────────────
 
 check_dashboards() {
     # Only check if any dashboard-related Rust files are staged
@@ -74,6 +94,7 @@ check_dashboards() {
 
 # ── Run checks ───────────────────────────────────────────────────────
 
+check_formatting
 check_symlinks
 check_dashboards
 
