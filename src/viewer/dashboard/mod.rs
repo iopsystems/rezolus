@@ -68,8 +68,7 @@ pub fn generate(
         .and_then(|e| e.throughput_query())
         .map(str::to_string);
     {
-        let mut view =
-            overview::generate(&tsdb, all_sections.clone(), throughput_query.as_deref());
+        let mut view = overview::generate(&tsdb, all_sections.clone(), throughput_query.as_deref());
         if let Some(size) = filesize {
             view.set_filesize(size);
         }
