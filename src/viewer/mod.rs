@@ -34,6 +34,8 @@ static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
 mod dashboard;
 mod plot;
+mod service_extension;
+pub use service_extension::ServiceExtension;
 
 // Re-export from metriken-query crate
 pub use metriken_query::promql;
@@ -148,6 +150,7 @@ pub fn run(config: Config) {
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
             let (systeminfo, selection) = extract_parquet_metadata(path);
+            let service_ext = extract_service_extension_metadata(path);
 
             // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
             // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
@@ -156,8 +159,16 @@ pub fn run(config: Config) {
             info!("Computing file checksum...");
             let file_checksum = compute_file_checksum(path);
 
+            if let Some(ref ext) = service_ext {
+                info!(
+                    "Found service extension for {:?} ({} KPIs)",
+                    ext.service_name,
+                    ext.kpis.len()
+                );
+            }
+
             info!("Generating dashboards...");
-            let state = dashboard::generate(data, filesize);
+            let state = dashboard::generate(data, filesize, service_ext.as_ref());
             *state.parquet_path.write() = Some(path.clone());
             *state.systeminfo.write() = systeminfo;
             *state.selection.write() = selection;
@@ -218,7 +229,7 @@ pub fn run(config: Config) {
             tsdb.set_source(source.clone());
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
-            let state = dashboard::generate(tsdb, None);
+            let state = dashboard::generate(tsdb, None, None);
             state.live.store(true, Ordering::Relaxed);
 
             *state.systeminfo.write() = agent_systeminfo;
@@ -433,6 +444,29 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
             Some((sysinfo, sel))
         })
         .unwrap_or((None, None))
+}
+
+fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+
+    let f = std::fs::File::open(path).ok()?;
+    let reader = SerializedFileReader::new(f).ok()?;
+    let kv = reader.metadata().file_metadata().key_value_metadata()?;
+
+    let metric_type = kv
+        .iter()
+        .find(|kv| kv.key == "metric_type")
+        .and_then(|kv| kv.value.as_deref())?;
+    if metric_type != "rezolus:service-extension" {
+        return None;
+    }
+
+    let json = kv
+        .iter()
+        .find(|kv| kv.key == "service_extension")
+        .and_then(|kv| kv.value.as_deref())?;
+    ServiceExtension::from_json(json)
 }
 
 fn compute_file_checksum(path: &Path) -> Option<String> {
@@ -799,7 +833,8 @@ async fn upload_parquet(
     // embeds the original name instead of the temp path.
     data.set_filename(filename.clone());
 
-    let new_state = dashboard::generate(data, filesize);
+    let service_ext = extract_service_extension_metadata(&temp_path);
+    let new_state = dashboard::generate(data, filesize, service_ext.as_ref());
     let (systeminfo, selection) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
@@ -903,7 +938,7 @@ async fn connect_agent(
     tsdb.set_source(source.clone());
     tsdb.set_version(version.clone());
     tsdb.set_filename(url.to_string());
-    let new_state = dashboard::generate(tsdb, None);
+    let new_state = dashboard::generate(tsdb, None, None);
 
     // Update shared state
     {
@@ -1269,7 +1304,7 @@ async fn lib(uri: Uri) -> impl IntoResponse {
 pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(output_dir)?;
 
-    let state = dashboard::generate(Tsdb::default(), None);
+    let state = dashboard::generate(Tsdb::default(), None, None);
 
     // Extract the shared sections list from the first entry and write it once.
     let mut sections_written = false;

@@ -1,6 +1,6 @@
 use super::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&str>) -> View {
     let mut view = View::new(data, sections);
 
     /*
@@ -177,6 +177,42 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     );
 
     view.group(blockio);
+
+    /*
+     * Normalized by Throughput (only when service extension provides throughput KPI)
+     */
+    if let Some(tq) = throughput_query {
+        let mut normalized = Group::new("Normalized by Throughput", "normalized-throughput");
+
+        normalized.plot_promql(
+            PlotOpts::counter(
+                "CPU Busy % / Throughput",
+                "normalized-cpu-busy",
+                Unit::Count,
+            ),
+            format!("(sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000) / ({tq})"),
+        );
+
+        normalized.plot_promql(
+            PlotOpts::counter(
+                "Network TX / Throughput",
+                "normalized-network-tx",
+                Unit::Count,
+            ),
+            format!("(sum(irate(network_bytes{{direction=\"transmit\"}}[5m])) * 8) / ({tq})"),
+        );
+
+        normalized.plot_promql(
+            PlotOpts::counter(
+                "Network RX / Throughput",
+                "normalized-network-rx",
+                Unit::Count,
+            ),
+            format!("(sum(irate(network_bytes{{direction=\"receive\"}}[5m])) * 8) / ({tq})"),
+        );
+
+        view.group(normalized);
+    }
 
     view
 }
