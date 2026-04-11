@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
-use crate::viewer::promql::{QueryEngine, QueryError};
+use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::ServiceExtension;
 
@@ -141,40 +141,22 @@ fn validate_kpis(path: &PathBuf, ext: &mut ServiceExtension) {
     let step = 1.0;
 
     let mut matched = 0;
-    let mut missing_kpis = Vec::new();
     let mut missing_metrics = BTreeSet::new();
 
     for kpi in &mut ext.kpis {
         let query = effective_query(kpi);
         let has_data = match engine.query_range(&query, start, end, step) {
             Ok(result) => !query_result_is_empty(&result),
-            Err(QueryError::MetricNotFound(name)) => {
-                missing_metrics.insert(name);
-                false
-            }
-            Err(_) => {
-                // Parse error or other failure — extract metric names from query
-                for name in extract_metric_names(&kpi.query) {
-                    missing_metrics.insert(name);
-                }
-                false
-            }
+            Err(_) => false,
         };
+        if !has_data {
+            for sel in extract_metric_selectors(&kpi.query) {
+                missing_metrics.insert(sel);
+            }
+        }
         kpi.available = has_data;
         if has_data {
             matched += 1;
-        } else {
-            missing_kpis.push(kpi.title.clone());
-        }
-    }
-
-    if !missing_kpis.is_empty() {
-        eprintln!(
-            "warning: {} KPI(s) returned no data from this parquet file:",
-            missing_kpis.len()
-        );
-        for title in &missing_kpis {
-            eprintln!("  - {title}");
         }
     }
 
@@ -196,10 +178,11 @@ fn validate_kpis(path: &PathBuf, ext: &mut ServiceExtension) {
     );
 }
 
-/// Extract metric selector names from a PromQL query string.
-/// Finds identifiers that are followed by `{`, `[`, `)`, or end-of-string,
-/// excluding known PromQL functions.
-fn extract_metric_names(query: &str) -> Vec<String> {
+/// Extract metric selectors (name + labels) from a PromQL query string.
+///
+/// Returns selectors like `tokens{direction="output"}` or `requests_inflight`,
+/// excluding known PromQL function names.
+fn extract_metric_selectors(query: &str) -> Vec<String> {
     static PROMQL_FUNCTIONS: &[&str] = &[
         "sum",
         "avg",
@@ -233,13 +216,12 @@ fn extract_metric_names(query: &str) -> Vec<String> {
         "histogram_heatmap",
     ];
 
-    let mut names = Vec::new();
+    let mut selectors = Vec::new();
     let chars: Vec<char> = query.chars().collect();
     let len = chars.len();
     let mut i = 0;
 
     while i < len {
-        // Find start of an identifier
         if chars[i].is_ascii_alphabetic() || chars[i] == '_' {
             let start = i;
             while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
@@ -247,30 +229,45 @@ fn extract_metric_names(query: &str) -> Vec<String> {
             }
             let ident: String = chars[start..i].iter().collect();
 
-            // Skip whitespace after identifier
+            // Skip whitespace
             let mut j = i;
             while j < len && chars[j].is_ascii_whitespace() {
                 j += 1;
             }
 
-            // If followed by '(', it's a function call — skip it
-            if j < len && chars[j] == '(' {
-                if PROMQL_FUNCTIONS.contains(&ident.as_str()) {
-                    i = j;
-                    continue;
-                }
+            // If followed by '(', it's a function call — skip
+            if j < len && chars[j] == '(' && PROMQL_FUNCTIONS.contains(&ident.as_str()) {
+                i = j;
+                continue;
             }
 
-            // Otherwise it's a metric name
-            names.push(ident);
+            // If followed by '{', include the label matchers
+            if j < len && chars[j] == '{' {
+                let brace_start = j;
+                let mut depth = 1;
+                j += 1;
+                while j < len && depth > 0 {
+                    if chars[j] == '{' {
+                        depth += 1;
+                    } else if chars[j] == '}' {
+                        depth -= 1;
+                    }
+                    j += 1;
+                }
+                let selector: String = chars[start..j].iter().collect();
+                selectors.push(selector);
+                i = j;
+            } else {
+                selectors.push(ident);
+            }
         } else {
             i += 1;
         }
     }
 
-    names.sort();
-    names.dedup();
-    names
+    selectors.sort();
+    selectors.dedup();
+    selectors
 }
 
 fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
