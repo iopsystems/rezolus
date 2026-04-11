@@ -1,8 +1,11 @@
 use clap::{value_parser, ArgMatches, Command};
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::info;
 
+use crate::viewer::promql::QueryEngine;
+use crate::viewer::tsdb::Tsdb;
 use crate::viewer::ServiceExtension;
 
 static TEMPLATES: &[(&str, &str)] = &[("llm-perf", include_str!("templates/llm_perf.json"))];
@@ -80,9 +83,13 @@ fn run_annotate(args: &ArgMatches) {
         }
     };
 
+    let ext: ServiceExtension = serde_json::from_str(&json).unwrap();
+
+    // Validate KPI queries against the parquet data
+    validate_kpis(path, &ext);
+
     annotate_parquet(path, &json).expect("failed to annotate parquet file");
 
-    let ext: ServiceExtension = serde_json::from_str(&json).unwrap();
     info!(
         "annotated {:?} with service extension for {:?} ({} KPIs)",
         path,
@@ -95,6 +102,89 @@ fn run_annotate(args: &ArgMatches) {
         ext.service_name,
         ext.kpis.len()
     );
+}
+
+/// Build the effective PromQL query for a KPI, accounting for histogram wrapping.
+fn effective_query(kpi: &crate::viewer::Kpi) -> String {
+    if kpi.metric_type == "histogram" {
+        let subtype = kpi.subtype.as_deref().unwrap_or("percentiles");
+        if subtype == "buckets" {
+            format!("histogram_heatmap({})", kpi.query)
+        } else {
+            format!(
+                "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], {})",
+                kpi.query
+            )
+        }
+    } else {
+        kpi.query.clone()
+    }
+}
+
+/// Validate that each KPI query returns data from the parquet file.
+/// Prints warnings for KPIs with no matching data and exits with an error
+/// if none of the queries match.
+fn validate_kpis(path: &PathBuf, ext: &ServiceExtension) {
+    let tsdb = match Tsdb::load(path) {
+        Ok(tsdb) => Arc::new(tsdb),
+        Err(e) => {
+            eprintln!("warning: could not load parquet for validation: {e}");
+            return;
+        }
+    };
+
+    let engine = QueryEngine::new(tsdb);
+    let (start, end) = engine.get_time_range();
+    let step = 1.0;
+
+    let mut matched = 0;
+    let mut missing = Vec::new();
+
+    for kpi in &ext.kpis {
+        let query = effective_query(kpi);
+        match engine.query_range(&query, start, end, step) {
+            Ok(result) => {
+                if query_result_is_empty(&result) {
+                    missing.push(&kpi.title);
+                } else {
+                    matched += 1;
+                }
+            }
+            Err(_) => {
+                missing.push(&kpi.title);
+            }
+        }
+    }
+
+    if !missing.is_empty() {
+        eprintln!(
+            "warning: {} KPI(s) returned no data from this parquet file:",
+            missing.len()
+        );
+        for title in &missing {
+            eprintln!("  - {title}");
+        }
+    }
+
+    if matched == 0 {
+        eprintln!("error: no KPI queries matched any data in the parquet file");
+        std::process::exit(1);
+    }
+
+    println!(
+        "Validated: {matched}/{} KPIs have matching data",
+        ext.kpis.len()
+    );
+}
+
+fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
+    use crate::viewer::promql::QueryResult;
+    match result {
+        QueryResult::Vector { result } => result.is_empty(),
+        QueryResult::Matrix { result } => result.is_empty(),
+        QueryResult::Scalar { .. } => false,
+        QueryResult::HistogramHeatmap { result } => result.data.is_empty(),
+    }
 }
 
 fn read_source_metadata(path: &PathBuf) -> Option<String> {

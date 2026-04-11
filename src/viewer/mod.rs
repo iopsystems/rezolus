@@ -35,7 +35,7 @@ static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 mod dashboard;
 mod plot;
 mod service_extension;
-pub use service_extension::ServiceExtension;
+pub use service_extension::{Kpi, ServiceExtension};
 
 // Re-export from metriken-query crate
 pub use metriken_query::promql;
