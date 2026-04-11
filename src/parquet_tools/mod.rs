@@ -83,12 +83,14 @@ fn run_annotate(args: &ArgMatches) {
         }
     };
 
-    let ext: ServiceExtension = serde_json::from_str(&json).unwrap();
+    let mut ext: ServiceExtension = serde_json::from_str(&json).unwrap();
 
-    // Validate KPI queries against the parquet data
-    validate_kpis(path, &ext);
+    // Validate KPI queries against the parquet data and set available flags
+    validate_kpis(path, &mut ext);
 
-    annotate_parquet(path, &json).expect("failed to annotate parquet file");
+    let annotated_json =
+        serde_json::to_string(&ext).expect("failed to serialize service extension");
+    annotate_parquet(path, &annotated_json).expect("failed to annotate parquet file");
 
     info!(
         "annotated {:?} with service extension for {:?} ({} KPIs)",
@@ -122,9 +124,9 @@ fn effective_query(kpi: &crate::viewer::Kpi) -> String {
 }
 
 /// Validate that each KPI query returns data from the parquet file.
-/// Prints warnings for KPIs with no matching data and exits with an error
-/// if none of the queries match.
-fn validate_kpis(path: &PathBuf, ext: &ServiceExtension) {
+/// Sets `available` on each KPI based on whether its query returns data.
+/// Prints warnings for unavailable KPIs and exits if none match.
+fn validate_kpis(path: &PathBuf, ext: &mut ServiceExtension) {
     let tsdb = match Tsdb::load(path) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
@@ -140,19 +142,17 @@ fn validate_kpis(path: &PathBuf, ext: &ServiceExtension) {
     let mut matched = 0;
     let mut missing = Vec::new();
 
-    for kpi in &ext.kpis {
+    for kpi in &mut ext.kpis {
         let query = effective_query(kpi);
-        match engine.query_range(&query, start, end, step) {
-            Ok(result) => {
-                if query_result_is_empty(&result) {
-                    missing.push(&kpi.title);
-                } else {
-                    matched += 1;
-                }
-            }
-            Err(_) => {
-                missing.push(&kpi.title);
-            }
+        let has_data = match engine.query_range(&query, start, end, step) {
+            Ok(result) => !query_result_is_empty(&result),
+            Err(_) => false,
+        };
+        kpi.available = has_data;
+        if has_data {
+            matched += 1;
+        } else {
+            missing.push(kpi.title.clone());
         }
     }
 

@@ -24,6 +24,14 @@ pub struct Kpi {
     pub subtype: Option<String>,
     #[serde(default)]
     pub unit_system: Option<String>,
+    /// Whether the parquet file contains data for this KPI's query.
+    /// Set by `rezolus parquet annotate` during validation.
+    #[serde(default = "default_available")]
+    pub available: bool,
+}
+
+fn default_available() -> bool {
+    true
 }
 
 impl ServiceExtension {
