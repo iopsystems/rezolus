@@ -1,7 +1,7 @@
 use clap::{value_parser, ArgMatches, Command};
 use std::collections::BTreeSet;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
 
@@ -127,7 +127,7 @@ fn effective_query(kpi: &crate::viewer::Kpi) -> String {
 /// Validate that each KPI query returns data from the parquet file.
 /// Sets `available` on each KPI based on whether its query returns data.
 /// Prints warnings for unavailable KPIs and exits if none match.
-fn validate_kpis(path: &PathBuf, ext: &mut ServiceExtension) {
+fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
     let tsdb = match Tsdb::load(path) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
@@ -243,7 +243,6 @@ fn extract_metric_selectors(query: &str) -> Vec<String> {
 
             // If followed by '{', include the label matchers
             if j < len && chars[j] == '{' {
-                let brace_start = j;
                 let mut depth = 1;
                 j += 1;
                 while j < len && depth > 0 {
@@ -280,7 +279,7 @@ fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
     }
 }
 
-fn read_source_metadata(path: &PathBuf) -> Option<String> {
+fn read_source_metadata(path: &Path) -> Option<String> {
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
 
@@ -294,7 +293,7 @@ fn read_source_metadata(path: &PathBuf) -> Option<String> {
 }
 
 fn annotate_parquet(
-    path: &PathBuf,
+    path: &Path,
     service_extension_json: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
