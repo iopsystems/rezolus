@@ -186,6 +186,9 @@ jobs:
             echo "No GPG signing key configured, skipping."
             exit 0
           fi
+          # Install GPG agent and pinentry (not present in minimal container images)
+          yum install -y gnupg2 pinentry
+
           # Import the GPG signing key
           echo "$GPG_SIGNING_KEY" | base64 -d | gpg --batch --import
 
