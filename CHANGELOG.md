@@ -1,9 +1,11 @@
 ## [Unreleased]
 
-## [5.9.0] - 2026-04-06
+## [5.9.0] - 2026-04-10
 
 ### Added
 
+- Light theme with automatic dark/light toggle. (#762)
+- GPU Activity section showing GPM metrics. (#760)
 - Viewer landing page with drag-and-drop file upload and live agent connect. (#753)
 - Auto-generate dashboard JSON from Rust definitions. (#751)
 - Interactive WASM viewer with demo on project site. (#739 #740)
@@ -13,6 +15,7 @@
 - Selection section for curated chart collections in viewer. (#735)
 - Interactive CPU topology diagram in viewer System Info. (#731)
 - Serve and fetch systeminfo from agent. (#730)
+- CPU topology, NIC summary, and NUMA locality in systeminfo. (#726)
 - Embed system hardware summary in parquet metadata. (#724)
 - GPG signing for RPM packages and release checksums. (#721)
 - Integration tests for BPF samplers. (#720)
@@ -21,6 +24,8 @@
 
 ### Changed
 
+- Refactor metric types from style-based to semantic type system. (#766)
+- Gate dump-dashboards behind xtask-commands feature flag. (#764)
 - Replace ringlog with tracing ecosystem. (#715)
 - Replace duplicated viewer lib files with symlinks to src/viewer/assets/lib. (#746)
 - Viewer improvements: per-chart range clamping with OOB band (#741), time range
@@ -31,6 +36,11 @@
 
 ### Fixed
 
+- Viewer: cgroup fixes, legend layout overhaul, and chart cleanup. (#765)
+- Viewer: theme toggle placement and icon polish. (#763)
+- Viewer: narrow-screen legend for heatmap charts and colon title. (#759)
+- Viewer: hide chart buttons and add scroll gutter on touch devices. (#756)
+- Viewer: responsive layout for narrow viewports. (#755)
 - Replace out-of-tree import with local symlink in site. (#750)
 - Pair cgroup charts by title instead of array index in viewer.
 - Reduce memory footprint for per-task CPU usage metrics. (#718)
