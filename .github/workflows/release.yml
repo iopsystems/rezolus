@@ -199,6 +199,9 @@ jobs:
           %__gpg_sign_cmd %{__gpg} gpg --batch --pinentry-mode loopback --no-verbose --no-armor --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}
           MACROS
 
+          # Install rpm-sign (provides rpmsign binary needed by rpm --addsign)
+          yum install -y rpm-sign
+
           # Sign each RPM
           for rpm in target/generate-rpm/*.rpm; do
             echo "Signing $(basename $rpm)..."
