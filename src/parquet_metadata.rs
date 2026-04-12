@@ -8,7 +8,7 @@
 pub const KEY_SOURCE: &str = "source";
 
 /// Agent/tool version string (single-source files only; for combined files
-/// the per-source version lives under `metadata.<source>.version`).
+/// the per-source version lives under `per_source_metadata.<source>.version`).
 pub const KEY_VERSION: &str = "version";
 
 /// Sampling interval in milliseconds, e.g. `"1000"`. Must be identical
@@ -33,9 +33,9 @@ pub const KEY_SELECTION: &str = "selection";
 ///   "rezolus":  { "version": "5.8.3", "role": "service" }
 /// }
 /// ```
-pub const KEY_METADATA: &str = "metadata";
+pub const KEY_PER_SOURCE_METADATA: &str = "per_source_metadata";
 
-// ── Keys nested under `metadata.<source>` ────────────────────────────
+// ── Keys nested under `per_source_metadata.<source>` ─────────────────
 
 /// Per-source version string.
 pub const NESTED_VERSION: &str = "version";

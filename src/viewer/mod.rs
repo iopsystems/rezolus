@@ -449,7 +449,7 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
 /// Search for service_queries inside the nested `metadata` map.
 /// Scans all sources and returns the first ServiceExtension found.
 fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
-    use crate::parquet_metadata::{KEY_METADATA, NESTED_SERVICE_QUERIES};
+    use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, NESTED_SERVICE_QUERIES};
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
 
@@ -459,7 +459,7 @@ fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
 
     let metadata_json = kv
         .iter()
-        .find(|kv| kv.key == KEY_METADATA)
+        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
         .and_then(|kv| kv.value.as_deref())?;
 
     let metadata_map: serde_json::Map<String, serde_json::Value> =

@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::parquet_metadata::{KEY_METADATA, KEY_SOURCE, NESTED_SERVICE_QUERIES};
+use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, KEY_SOURCE, NESTED_SERVICE_QUERIES};
 use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::ServiceExtension;
@@ -235,7 +235,7 @@ fn annotate_parquet(
     // Build or update the nested metadata map
     let mut metadata_map: serde_json::Map<String, serde_json::Value> = kv_meta
         .iter()
-        .find(|kv| kv.key == KEY_METADATA)
+        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
         .and_then(|kv| kv.value.as_deref())
         .and_then(|v| serde_json::from_str(v).ok())
         .unwrap_or_default();
@@ -249,9 +249,9 @@ fn annotate_parquet(
         map.insert(NESTED_SERVICE_QUERIES.to_string(), service_queries);
     }
 
-    kv_meta.retain(|kv| kv.key != KEY_METADATA);
+    kv_meta.retain(|kv| kv.key != KEY_PER_SOURCE_METADATA);
     kv_meta.push(KeyValue {
-        key: KEY_METADATA.to_string(),
+        key: KEY_PER_SOURCE_METADATA.to_string(),
         value: Some(serde_json::to_string(&metadata_map)?),
     });
 
