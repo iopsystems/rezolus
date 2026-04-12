@@ -61,6 +61,19 @@ pub fn command() -> Command {
                         .long("geometry")
                         .help("Show only table geometry (shape and row group layout)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("field")
+                        .long("field")
+                        .help("Print the value of a specific file-level metadata key")
+                        .value_name("KEY")
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("json")
+                        .long("json")
+                        .help("Output in JSON format (for programmatic use)")
+                        .action(clap::ArgAction::SetTrue),
                 ),
         )
         .subcommand(
