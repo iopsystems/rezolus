@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [5.9.1] - 2026-04-12
+
+### Fixed
+
+- CI: install gnupg2 and pinentry for RPM signing in containers.
+
 ## [5.9.0] - 2026-04-10
 
 ### Added

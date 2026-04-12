@@ -187,7 +187,7 @@ jobs:
             exit 0
           fi
           # Install GPG agent and pinentry (not present in minimal container images)
-          yum install -y gnupg2 pinentry
+          yum install -y --allowerasing gnupg2 pinentry
 
           # Import the GPG signing key
           echo "$GPG_SIGNING_KEY" | base64 -d | gpg --batch --import
@@ -210,6 +210,10 @@ jobs:
             echo "Signing $(basename $rpm)..."
             rpm --addsign "$rpm"
           done
+
+          # Import public key into RPM's keyring for verification
+          gpg --export -a "$GPG_KEY_ID" > /tmp/rpm-signing-key.pub
+          rpm --import /tmp/rpm-signing-key.pub
 
           # Verify signatures
           echo ""
