@@ -51,6 +51,12 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::SetTrue),
                 )
                 .arg(
+                    clap::Arg::new("file")
+                        .long("file")
+                        .help("Show only file-level metadata")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
                     clap::Arg::new("geometry")
                         .long("geometry")
                         .help("Show only table geometry (shape and row group layout)")

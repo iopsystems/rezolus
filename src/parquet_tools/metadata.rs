@@ -7,12 +7,13 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let input = args.get_one::<PathBuf>("input").unwrap();
     let schema_only = args.get_flag("schema");
     let geometry_only = args.get_flag("geometry");
-    let show_all = !schema_only && !geometry_only;
+    let file_only = args.get_flag("file");
+    let show_all = !schema_only && !geometry_only && !file_only;
 
     let (metadata, schema, _) = read_parquet_footer(input)?;
 
     // File-level metadata
-    if show_all {
+    if show_all || file_only {
         if let Some(kv) = metadata.file_metadata().key_value_metadata() {
             println!("File Metadata:");
             for entry in kv {
