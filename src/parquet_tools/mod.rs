@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::info;
 
 use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
@@ -64,24 +63,20 @@ fn run_annotate(args: &ArgMatches) {
     } else {
         // Look up built-in template from parquet source metadata
         let source = read_source_metadata(path);
-        match source.as_deref() {
-            Some(name) => match lookup_template(name) {
-                Some(template) => template.to_string(),
-                None => {
-                    eprintln!(
-                        "error: no built-in template for source {:?}. Use --file to provide one.",
-                        name
-                    );
-                    std::process::exit(1);
-                }
-            },
-            None => {
-                eprintln!(
-                    "error: parquet file has no 'source' metadata. Use --file to provide a template."
-                );
-                std::process::exit(1);
-            }
-        }
+        let name = source.as_deref().unwrap_or_else(|| {
+            eprintln!(
+                "error: parquet file has no 'source' metadata. Use --file to provide a template."
+            );
+            std::process::exit(1);
+        });
+        let template = lookup_template(name).unwrap_or_else(|| {
+            eprintln!(
+                "error: no built-in template for source {:?}. Use --file to provide one.",
+                name
+            );
+            std::process::exit(1);
+        });
+        template.to_string()
     };
 
     let mut ext: ServiceExtension = serde_json::from_str(&json).unwrap();
@@ -93,12 +88,6 @@ fn run_annotate(args: &ArgMatches) {
         serde_json::to_string(&ext).expect("failed to serialize service extension");
     annotate_parquet(path, &annotated_json).expect("failed to annotate parquet file");
 
-    info!(
-        "annotated {:?} with service extension for {:?} ({} KPIs)",
-        path,
-        ext.service_name,
-        ext.kpis.len()
-    );
     println!(
         "Annotated {:?} with {:?} service extension ({} KPIs)",
         path,
@@ -150,9 +139,7 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
             Err(_) => false,
         };
         if !has_data {
-            for sel in extract_metric_selectors(&kpi.query) {
-                missing_metrics.insert(sel);
-            }
+            missing_metrics.extend(extract_metric_selectors(&kpi.query));
         }
         kpi.available = has_data;
         if has_data {
@@ -182,91 +169,83 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 ///
 /// Returns selectors like `tokens{direction="output"}` or `requests_inflight`,
 /// excluding known PromQL function names.
-fn extract_metric_selectors(query: &str) -> Vec<String> {
-    static PROMQL_FUNCTIONS: &[&str] = &[
-        "sum",
-        "avg",
-        "min",
-        "max",
-        "count",
-        "rate",
-        "irate",
-        "increase",
-        "delta",
-        "idelta",
-        "abs",
-        "ceil",
-        "floor",
-        "round",
-        "clamp",
-        "clamp_min",
-        "clamp_max",
-        "ln",
-        "log2",
-        "log10",
-        "exp",
-        "sqrt",
-        "sgn",
-        "sort",
-        "sort_desc",
-        "label_replace",
-        "label_join",
-        "histogram_quantile",
-        "histogram_percentiles",
-        "histogram_heatmap",
-    ];
-
-    let mut selectors = Vec::new();
-    let chars: Vec<char> = query.chars().collect();
-    let len = chars.len();
+fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
+    let bytes = query.as_bytes();
+    let len = bytes.len();
+    let mut selectors = BTreeSet::new();
     let mut i = 0;
 
     while i < len {
-        if chars[i].is_ascii_alphabetic() || chars[i] == '_' {
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
             let start = i;
-            while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            let ident: String = chars[start..i].iter().collect();
+            let ident = &query[start..i];
 
-            // Skip whitespace
-            let mut j = i;
-            while j < len && chars[j].is_ascii_whitespace() {
-                j += 1;
-            }
+            // Skip whitespace, then check what follows
+            let rest = query[i..].trim_start();
+            let next = rest.as_bytes().first().copied();
 
-            // If followed by '(', it's a function call — skip
-            if j < len && chars[j] == '(' && PROMQL_FUNCTIONS.contains(&ident.as_str()) {
-                i = j;
+            // function call — skip
+            if next == Some(b'(') && is_promql_function(ident) {
+                i = query.len() - rest.len();
                 continue;
             }
 
-            // If followed by '{', include the label matchers
-            if j < len && chars[j] == '{' {
-                let mut depth = 1;
-                j += 1;
-                while j < len && depth > 0 {
-                    if chars[j] == '{' {
-                        depth += 1;
-                    } else if chars[j] == '}' {
-                        depth -= 1;
-                    }
-                    j += 1;
+            // metric{labels} — include the braces
+            if next == Some(b'{') {
+                if let Some(close) = rest.find('}') {
+                    let sel_end = query.len() - rest.len() + close + 1;
+                    selectors.insert(query[start..sel_end].to_string());
+                    i = sel_end;
+                    continue;
                 }
-                let selector: String = chars[start..j].iter().collect();
-                selectors.push(selector);
-                i = j;
-            } else {
-                selectors.push(ident);
             }
+
+            selectors.insert(ident.to_string());
         } else {
             i += 1;
         }
     }
 
-    selectors.sort();
-    selectors.dedup();
     selectors
+}
+
+fn is_promql_function(name: &str) -> bool {
+    matches!(
+        name,
+        "sum"
+            | "avg"
+            | "min"
+            | "max"
+            | "count"
+            | "rate"
+            | "irate"
+            | "increase"
+            | "delta"
+            | "idelta"
+            | "abs"
+            | "ceil"
+            | "floor"
+            | "round"
+            | "clamp"
+            | "clamp_min"
+            | "clamp_max"
+            | "ln"
+            | "log2"
+            | "log10"
+            | "exp"
+            | "sqrt"
+            | "sgn"
+            | "sort"
+            | "sort_desc"
+            | "label_replace"
+            | "label_join"
+            | "histogram_quantile"
+            | "histogram_percentiles"
+            | "histogram_heatmap"
+    )
 }
 
 fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
@@ -303,8 +282,6 @@ fn annotate_parquet(
     use parquet::file::serialized_reader::SerializedFileReader;
     use parquet::format::KeyValue;
 
-    let file = std::fs::File::open(path)?;
-
     // Read existing metadata
     let meta_reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
     let mut kv_meta: Vec<KeyValue> = meta_reader
@@ -332,7 +309,7 @@ fn annotate_parquet(
         .build();
 
     // Read all record batches
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
     let schema = builder.schema().clone();
     let reader = builder.build()?;
 
