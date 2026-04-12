@@ -117,3 +117,7 @@ TOML configs in `config/`:
 - **Linux**: Full support including eBPF (kernel 5.8+)
 - **macOS**: Limited (CPU usage only, no eBPF)
 - **Architectures**: x86_64 and ARM64
+
+## Git Conventions
+
+Do not append claude.ai session links to commit messages.
