@@ -29,8 +29,8 @@ pub const KEY_SELECTION: &str = "selection";
 ///
 /// ```json
 /// {
-///   "llm-perf": { "version": "0.1.0", "service_queries": { ... } },
-///   "rezolus":  { "version": "5.8.3" }
+///   "llm-perf": { "version": "0.1.0", "role": "loadgen", "service_queries": { ... } },
+///   "rezolus":  { "version": "5.8.3", "role": "service" }
 /// }
 /// ```
 pub const KEY_METADATA: &str = "metadata";
@@ -42,3 +42,8 @@ pub const NESTED_VERSION: &str = "version";
 
 /// Service KPI query definitions (ServiceExtension JSON).
 pub const NESTED_SERVICE_QUERIES: &str = "service_queries";
+
+/// The role this source plays in the recording. Known values:
+/// - `"service"` — the system under test (e.g. an LLM inference server)
+/// - `"loadgen"` — the load generator / benchmark tool (e.g. llm-perf)
+pub const NESTED_ROLE: &str = "role";
