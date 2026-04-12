@@ -20,6 +20,7 @@ mod agent;
 mod exporter;
 mod hindsight;
 mod mcp;
+mod parquet_metadata;
 mod parquet_tools;
 mod recorder;
 mod viewer;

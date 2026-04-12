@@ -35,10 +35,6 @@ fn default_available() -> bool {
 }
 
 impl ServiceExtension {
-    pub fn from_json(json: &str) -> Option<Self> {
-        serde_json::from_str(json).ok()
-    }
-
     pub fn throughput_query(&self) -> Option<&str> {
         self.kpis
             .iter()
