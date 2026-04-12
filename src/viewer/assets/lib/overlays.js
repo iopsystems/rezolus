@@ -46,14 +46,16 @@ const modalState = {
     prefix: '',
     suffix: '',
     onConfirm: null,
+    checkboxes: [],  // [{key, label, checked}]
 };
 
-const showSaveModal = (defaultPrefix, suffix) => {
+const showSaveModal = (defaultPrefix, suffix, checkboxes) => {
     return new Promise((resolve) => {
         modalState.visible = true;
         modalState.prefix = defaultPrefix;
         modalState.suffix = suffix;
-        modalState.onConfirm = (filename) => resolve(filename);
+        modalState.checkboxes = (checkboxes || []).map(cb => ({ ...cb }));
+        modalState.onConfirm = (result) => resolve(result);
         m.redraw();
     });
 };
@@ -63,9 +65,18 @@ const _closeModal = (result) => {
     modalState.visible = false;
     modalState.prefix = '';
     modalState.suffix = '';
+    modalState.checkboxes = [];
     modalState.onConfirm = null;
     m.redraw();
     if (cb) cb(result);
+};
+
+const _buildResult = () => {
+    const filename = modalState.prefix.trim() + modalState.suffix;
+    if (modalState.checkboxes.length === 0) return filename;
+    const opts = {};
+    for (const cb of modalState.checkboxes) opts[cb.key] = cb.checked;
+    return { filename, ...opts };
 };
 
 const SaveModal = {
@@ -94,7 +105,7 @@ const SaveModal = {
                         onkeydown: (e) => {
                             if (e.key === 'Enter' && modalState.prefix.trim()) {
                                 e.preventDefault();
-                                _closeModal(modalState.prefix.trim() + modalState.suffix);
+                                _closeModal(_buildResult());
                             }
                             if (e.key === 'Escape') {
                                 e.preventDefault();
@@ -104,6 +115,18 @@ const SaveModal = {
                     }),
                     m('span.save-modal-suffix', modalState.suffix),
                 ]),
+                modalState.checkboxes.length > 0 && m('div.save-modal-options',
+                    modalState.checkboxes.map(cb =>
+                        m('label.save-modal-checkbox', [
+                            m('input', {
+                                type: 'checkbox',
+                                checked: cb.checked,
+                                onchange: (e) => { cb.checked = e.target.checked; },
+                            }),
+                            ' ', cb.label,
+                        ]),
+                    ),
+                ),
                 m('div.save-modal-actions', [
                     m('button.save-modal-btn.save-modal-cancel', {
                         onclick: () => _closeModal(null),
@@ -111,7 +134,7 @@ const SaveModal = {
                     m('button.save-modal-btn.save-modal-confirm', {
                         onclick: () => {
                             if (modalState.prefix.trim()) {
-                                _closeModal(modalState.prefix.trim() + modalState.suffix);
+                                _closeModal(_buildResult());
                             }
                         },
                         disabled: !modalState.prefix.trim(),

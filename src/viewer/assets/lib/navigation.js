@@ -37,10 +37,11 @@ const createMainComponent = ({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo,
+    getHasServiceExtension,
     buildAttrs,
 }) => ({
     view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series },
+        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series, metadata },
     }) {
         return m(
             'div',
@@ -55,11 +56,13 @@ const createMainComponent = ({
                     sections,
                     sectionResponseCache,
                     hasSystemInfo: !!getHasSystemInfo(),
+                    hasServiceExtension: !!getHasServiceExtension(),
                 }),
                 m(SectionContent, {
                     section: activeSection,
                     groups,
                     interval,
+                    metadata,
                 }),
             ]),
             m(SaveModal),

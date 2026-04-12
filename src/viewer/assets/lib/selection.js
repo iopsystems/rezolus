@@ -277,9 +277,29 @@ const importJSON = (currentChecksum) => {
 
 const saveToParquet = async (store, attrs) => {
     const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-annotated';
-    const filename = await showSaveModal(defaultPrefix, '.parquet');
-    if (!filename) return;
+    const cs = attrs.chartsState;
+    const hasZoom = cs && !cs.isDefaultZoom();
+    const checkboxes = hasZoom
+        ? [{ key: 'trim', label: 'Trim to selected time range', checked: false }]
+        : [];
+    const result = await showSaveModal(defaultPrefix, '.parquet', checkboxes);
+    if (!result) return;
+    const filename = typeof result === 'string' ? result : result.filename;
+    const trimToSelection = typeof result === 'object' && result.trim;
     const payload = buildPayload(store, attrs);
+
+    // When trimming, compute the absolute time range (ms) from the zoom percentage
+    if (trimToSelection) {
+        const zoom = cs?.globalZoom || cs?.zoomLevel;
+        if (zoom && attrs.start_time != null && attrs.end_time != null) {
+            const total = attrs.end_time - attrs.start_time;
+            payload.trim_range_ms = {
+                start: attrs.start_time + (zoom.start / 100) * total,
+                end: attrs.start_time + (zoom.end / 100) * total,
+            };
+        }
+    }
+
     try {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/v1/save_with_selection', true);
@@ -419,7 +439,9 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                     'Export JSON ',
                     m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
                 ]),
-                m('button.selection-btn', { onclick: () => saveToParquet(selectionStore, attrs) }, [
+                m('button.selection-btn', {
+                    onclick: () => saveToParquet(selectionStore, attrs),
+                }, [
                     'Annotate Parquet ',
                     m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
                 ]),

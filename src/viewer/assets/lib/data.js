@@ -179,7 +179,7 @@ const createDataApi = ({
 
                     // Wrap histogram queries with the appropriate function
                     if (plot.opts.type === 'histogram') {
-                        queryToRun = buildHistogramQuery(queryToRun, plot.opts.subtype);
+                        queryToRun = buildHistogramQuery(queryToRun, plot.opts.subtype, plot.opts.percentiles);
                     }
 
                     if (queryToRun.includes('__SELECTED_CGROUPS__')) {
@@ -280,6 +280,10 @@ const createDataApi = ({
         return heatmapData;
     };
 
+    const clearMetadataCache = () => {
+        cachedMetadata = null;
+    };
+
     return {
         executePromQLRangeQuery,
         applyResultToPlot,
@@ -287,6 +291,7 @@ const createDataApi = ({
         fetchHeatmapsForGroups,
         substituteCgroupPattern,
         processDashboardData,
+        clearMetadataCache,
     };
 };
 
@@ -297,6 +302,7 @@ const {
     fetchHeatmapForPlot,
     fetchHeatmapsForGroups,
     processDashboardData,
+    clearMetadataCache,
 } = defaultDataApi;
 
 export {
@@ -306,5 +312,6 @@ export {
     fetchHeatmapsForGroups,
     substituteCgroupPattern,
     processDashboardData,
+    clearMetadataCache,
     createDataApi,
 };

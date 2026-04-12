@@ -65,6 +65,7 @@
       "query": "ttft",
       "type": "histogram",
       "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
       "unit_system": "time"
     },
     {
@@ -73,6 +74,7 @@
       "query": "tpot",
       "type": "histogram",
       "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
       "unit_system": "time"
     },
     {
@@ -81,6 +83,7 @@
       "query": "itl",
       "type": "histogram",
       "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
       "unit_system": "time"
     },
     {
@@ -89,6 +92,7 @@
       "query": "request_latency",
       "type": "histogram",
       "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
       "unit_system": "time"
     },
     {
@@ -97,6 +101,7 @@
       "query": "think_duration",
       "type": "histogram",
       "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
       "unit_system": "time"
     }
   ]

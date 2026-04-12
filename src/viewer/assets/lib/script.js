@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache } from './data.js';
 import { reportStore, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
@@ -99,6 +99,7 @@ const uploadParquet = async (file) => {
     try {
         await ViewerApi.uploadParquet(file);
         clearViewerCaches();
+        clearMetadataCache();
         chartsState.resetAll();
         await fetchBackendState();
         // Re-fetch overview so the view has data to render immediately.
@@ -212,6 +213,28 @@ const SectionContent = {
             });
         }
 
+        // Special handling for Service extension
+        if (sectionName === 'Service') {
+            const meta = attrs.metadata || {};
+            const serviceName = meta.service_name || 'Service';
+            const serviceMeta = meta.service_metadata || {};
+            return m('div#section-content', [
+                m('h1', serviceName),
+                Object.keys(serviceMeta).length > 0
+                    ? m('table.sysinfo-table', [
+                        m('tbody', Object.entries(serviceMeta).map(([k, v]) =>
+                            m('tr', [m('td.sysinfo-key', k), m('td', v)])
+                        )),
+                    ])
+                    : null,
+                m('div#groups',
+                    (attrs.groups || []).map((group) =>
+                        m(Group, { ...group, sectionRoute, sectionName, interval })
+                    )
+                ),
+            ]);
+        }
+
         const { withData } = countCharts(attrs.groups);
         const titleText = `${sectionName} (${withData})`;
 
@@ -279,6 +302,10 @@ Main = createMainComponent({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo: () => systemInfoData,
+    getHasServiceExtension: () => {
+        const anyCached = Object.values(sectionResponseCache)[0];
+        return anyCached?.sections?.some(s => s.route === '/service');
+    },
     buildAttrs: topNavAttrs,
 });
 const SystemInfoView = createSystemInfoView({
@@ -614,6 +641,8 @@ const bootstrap = async () => {
                     bootstrapCacheIfNeeded();
                     return buildClientOnlySectionView(reportSection);
                 }
+
+                // Service section is fetched from backend like any other section
 
                 // In live mode, always read from cache dynamically so
                 // refreshes flow through to the rendered view.

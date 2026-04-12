@@ -51,7 +51,11 @@ export function configureScatterChart(chart) {
     // Create series for each percentile
     const series = [];
 
-    const percentileLabels = format.percentile_labels || ['p50', 'p90', 'p99', 'p99.9', 'p99.99'];
+    // Derive labels from query result series names (set by the PromQL engine's
+    // percentile label), falling back to opts.percentiles for pre-data render.
+    const percentileLabels = (chart.spec.series_names && chart.spec.series_names.length > 0)
+        ? chart.spec.series_names.map(v => `p${parseFloat(v) * 100}`)
+        : (opts.percentiles || [0.5, 0.9, 0.99, 0.999, 0.9999]).map(v => `p${v * 100}`);
 
     const scatterColors = SCATTER_PALETTE;
 
@@ -85,6 +89,10 @@ export function configureScatterChart(chart) {
         // Line series underneath for visual continuity (with gap breaks)
         // Uses lineOnlyData which has nulls at clamped points so the line breaks there
         const lineData = insertGapNulls(lineOnlyData, chart.interval);
+        // Lower quantiles (earlier in array) get higher z so they draw on top
+        // when values overlap with higher quantiles.
+        const lineZ = (data.length - i) * 2;
+        const scatterZ = lineZ + 1;
         series.push({
             name: name,
             type: 'line',
@@ -97,11 +105,11 @@ export function configureScatterChart(chart) {
             },
             itemStyle: { color: color },
             tooltip: { show: false },
-            z: 1,
+            z: lineZ,
             animation: false,
         });
 
-        // Scatter series on top
+        // Scatter series on top of its own line
         series.push({
             name: name,
             type: 'scatter',
@@ -110,7 +118,7 @@ export function configureScatterChart(chart) {
             itemStyle: {
                 color: color,
             },
-            z: 2,
+            z: scatterZ,
             emphasis: {
                 focus: 'series',
                 scale: false,

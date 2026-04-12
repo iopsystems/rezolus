@@ -24,6 +24,10 @@ pub struct Kpi {
     pub subtype: Option<String>,
     #[serde(default)]
     pub unit_system: Option<String>,
+    /// Custom percentile quantiles for histogram KPIs (e.g. [0.5, 0.95]).
+    /// When absent, the default set [0.5, 0.9, 0.99, 0.999, 0.9999] is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percentiles: Option<Vec<f64>>,
     /// Whether the parquet file contains data for this KPI's query.
     /// Set by `rezolus parquet annotate` during validation.
     #[serde(default = "default_available")]

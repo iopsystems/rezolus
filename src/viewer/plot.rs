@@ -181,6 +181,8 @@ pub struct PlotOpts {
     metric_type: MetricType,
     #[serde(skip_serializing_if = "Option::is_none")]
     subtype: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    percentiles: Option<Vec<f64>>,
     format: FormatConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
@@ -225,6 +227,7 @@ impl PlotOpts {
             id: id.into(),
             metric_type: MetricType::Gauge,
             subtype: None,
+            percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
         }
@@ -238,6 +241,7 @@ impl PlotOpts {
             id: id.into(),
             metric_type: MetricType::DeltaCounter,
             subtype: None,
+            percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
         }
@@ -258,6 +262,7 @@ impl PlotOpts {
             id: id.into(),
             metric_type: MetricType::Histogram,
             subtype: Some(subtype.to_string()),
+            percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
         }
@@ -287,6 +292,11 @@ impl PlotOpts {
             Some(u) => self.with_unit_system(u),
             None => self,
         }
+    }
+
+    pub fn with_percentiles(mut self, percentiles: Vec<f64>) -> Self {
+        self.percentiles = Some(percentiles);
+        self
     }
 
     pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {

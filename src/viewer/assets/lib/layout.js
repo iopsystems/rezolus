@@ -232,6 +232,16 @@ const Sidebar = {
                 overviewSection.name,
             ),
 
+            // Service section (shown only when service extension data is present)
+            attrs.hasServiceExtension && m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection?.route === '/service' ? 'selected' : '',
+                    href: '/service',
+                },
+                'Service',
+            ),
+
             // Samplers label
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),
 

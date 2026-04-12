@@ -75,6 +75,7 @@ const ViewerApi = {
             background: true,
         });
     },
+
 };
 
 export { ViewerApi };

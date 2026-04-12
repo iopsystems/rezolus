@@ -11,10 +11,18 @@ use crate::viewer::ServiceExtension;
 
 static TEMPLATES: &[(&str, &str)] = &[("llm-perf", include_str!("templates/llm_perf.json"))];
 
+/// Source name aliases for renamed projects (old name → canonical name).
+static SOURCE_ALIASES: &[(&str, &str)] = &[("llm-bench", "llm-perf")];
+
 fn lookup_template(source: &str) -> Option<&'static str> {
+    let canonical = SOURCE_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == source)
+        .map(|(_, canon)| *canon)
+        .unwrap_or(source);
     TEMPLATES
         .iter()
-        .find(|(name, _)| *name == source)
+        .find(|(name, _)| *name == canonical)
         .map(|(_, json)| *json)
 }
 
@@ -70,10 +78,17 @@ fn effective_query(kpi: &crate::viewer::Kpi) -> String {
         if subtype == "buckets" {
             format!("histogram_heatmap({})", kpi.query)
         } else {
-            format!(
-                "histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], {})",
-                kpi.query
-            )
+            let quantiles = match &kpi.percentiles {
+                Some(p) => format!(
+                    "[{}]",
+                    p.iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                None => "[0.5, 0.9, 0.99, 0.999, 0.9999]".to_string(),
+            };
+            format!("histogram_percentiles({}, {})", quantiles, kpi.query)
         }
     } else {
         kpi.query.clone()
