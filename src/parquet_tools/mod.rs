@@ -49,6 +49,12 @@ pub fn command() -> Command {
                         .long("schema")
                         .help("Show only column-level metadata (schema)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("geometry")
+                        .long("geometry")
+                        .help("Show only table geometry (shape and row group layout)")
+                        .action(clap::ArgAction::SetTrue),
                 ),
         )
         .subcommand(
