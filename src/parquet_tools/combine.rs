@@ -235,8 +235,13 @@ fn combine_and_write(
     let (primary_idx, merged_schema) = build_merged_schema(inputs);
 
     // Step 4: Build output record batch with aligned rows
-    let output_batch =
-        build_output_batch(inputs, &ts_maps, &common_timestamps, primary_idx, &merged_schema)?;
+    let output_batch = build_output_batch(
+        inputs,
+        &ts_maps,
+        &common_timestamps,
+        primary_idx,
+        &merged_schema,
+    )?;
 
     // Step 5: Merge metadata and write
     let merged_kv = merge_metadata(inputs)?;
@@ -248,9 +253,10 @@ fn combine_and_write(
 fn build_timestamp_map(
     input: &InputFile,
 ) -> Result<HashMap<u64, usize>, Box<dyn std::error::Error>> {
-    let ts_idx = input.schema.index_of("timestamp").map_err(|_| {
-        format!("{:?}: missing 'timestamp' column", input.path)
-    })?;
+    let ts_idx = input
+        .schema
+        .index_of("timestamp")
+        .map_err(|_| format!("{:?}: missing 'timestamp' column", input.path))?;
 
     let mut map = HashMap::new();
     let mut global_row = 0usize;
@@ -353,14 +359,8 @@ fn build_output_batch(
     let mut output_columns: Vec<ArrayRef> = Vec::new();
 
     // timestamp and duration from primary file
-    let ts_idx = inputs[primary_idx]
-        .schema
-        .index_of("timestamp")
-        .unwrap();
-    let dur_idx = inputs[primary_idx]
-        .schema
-        .index_of("duration")
-        .unwrap();
+    let ts_idx = inputs[primary_idx].schema.index_of("timestamp").unwrap();
+    let dur_idx = inputs[primary_idx].schema.index_of("duration").unwrap();
     output_columns.push(compute::take(
         concatenated[primary_idx][ts_idx].as_ref(),
         &selection_indices[primary_idx],
@@ -606,8 +606,9 @@ mod tests {
                 ("metric_type".to_string(), "duration".to_string()),
                 ("unit".to_string(), "nanoseconds".to_string()),
             ]));
-        let metric_field = Field::new(metric_name, DataType::Int64, true)
-            .with_metadata(HashMap::from([("metric_type".to_string(), "gauge".to_string())]));
+        let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
+            HashMap::from([("metric_type".to_string(), "gauge".to_string())]),
+        );
 
         let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
 
@@ -664,8 +665,7 @@ mod tests {
     #[test]
     fn test_validate_sources_allows_one_rezolus() {
         let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) =
-            make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
         let inputs = vec![load(&p1), load(&p2)];
         assert!(validate_sources(&inputs).is_ok());
     }
@@ -673,18 +673,27 @@ mod tests {
     #[test]
     fn test_validate_sampling_interval_mismatch() {
         let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) =
-            make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "500");
+        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "500");
         let inputs = vec![load(&p1), load(&p2)];
         assert!(validate_sampling_interval(&inputs).is_err());
     }
 
     #[test]
     fn test_validate_column_conflicts() {
-        let (_t1, p1) =
-            make_test_file(&[100, 200], "same_name", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) =
-            make_test_file(&[100, 200], "same_name", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t1, p1) = make_test_file(
+            &[100, 200],
+            "same_name",
+            &[Some(1), Some(2)],
+            "rezolus",
+            "1000",
+        );
+        let (_t2, p2) = make_test_file(
+            &[100, 200],
+            "same_name",
+            &[Some(3), Some(4)],
+            "llm-perf",
+            "1000",
+        );
         let inputs = vec![load(&p1), load(&p2)];
         assert!(validate_no_column_conflicts(&inputs).is_err());
     }
@@ -693,8 +702,7 @@ mod tests {
     fn test_validate_column_shared_ok() {
         // timestamp and duration are shared and should not conflict
         let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) =
-            make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
         let inputs = vec![load(&p1), load(&p2)];
         assert!(validate_no_column_conflicts(&inputs).is_ok());
     }
@@ -702,16 +710,20 @@ mod tests {
     #[test]
     fn test_validate_time_overlap_none() {
         let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) =
-            make_test_file(&[300, 400], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t2, p2) = make_test_file(&[300, 400], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
         let inputs = vec![load(&p1), load(&p2)];
         assert!(validate_time_overlap(&inputs).is_err());
     }
 
     #[test]
     fn test_validate_time_overlap_partial() {
-        let (_t1, p1) =
-            make_test_file(&[100, 200, 300], "m1", &[Some(1), Some(2), Some(3)], "rezolus", "1000");
+        let (_t1, p1) = make_test_file(
+            &[100, 200, 300],
+            "m1",
+            &[Some(1), Some(2), Some(3)],
+            "rezolus",
+            "1000",
+        );
         let (_t2, p2) = make_test_file(
             &[200, 300, 400],
             "m2",
@@ -725,8 +737,13 @@ mod tests {
 
     #[test]
     fn test_combine_trims_to_overlap() {
-        let (_t1, p1) =
-            make_test_file(&[100, 200, 300], "m1", &[Some(1), Some(2), Some(3)], "rezolus", "1000");
+        let (_t1, p1) = make_test_file(
+            &[100, 200, 300],
+            "m1",
+            &[Some(1), Some(2), Some(3)],
+            "rezolus",
+            "1000",
+        );
         let (_t2, p2) = make_test_file(
             &[200, 300, 400],
             "m2",
@@ -780,8 +797,13 @@ mod tests {
 
     #[test]
     fn test_combine_end_to_end() {
-        let (_t1, p1) =
-            make_test_file(&[100, 200, 300], "cpu", &[Some(10), Some(20), Some(30)], "rezolus", "1000");
+        let (_t1, p1) = make_test_file(
+            &[100, 200, 300],
+            "cpu",
+            &[Some(10), Some(20), Some(30)],
+            "rezolus",
+            "1000",
+        );
         let (_t2, p2) = make_test_file(
             &[200, 300, 400],
             "tokens",
@@ -809,7 +831,8 @@ mod tests {
         assert_eq!(field_names, vec!["timestamp", "duration", "cpu", "tokens"]);
 
         // Verify metadata
-        let meta_reader = SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
+        let meta_reader =
+            SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
         let kv = meta_reader
             .metadata()
             .file_metadata()
@@ -835,8 +858,7 @@ mod tests {
     #[test]
     fn test_combine_preserves_field_metadata() {
         let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) =
-            make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
 
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
@@ -863,8 +885,13 @@ mod tests {
     #[test]
     fn test_combine_empty_intersection() {
         // Same time range but no matching timestamps
-        let (_t1, p1) =
-            make_test_file(&[100, 300, 500], "m1", &[Some(1), Some(2), Some(3)], "rezolus", "1000");
+        let (_t1, p1) = make_test_file(
+            &[100, 300, 500],
+            "m1",
+            &[Some(1), Some(2), Some(3)],
+            "rezolus",
+            "1000",
+        );
         let (_t2, p2) = make_test_file(
             &[200, 400, 600],
             "m2",
