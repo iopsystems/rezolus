@@ -446,6 +446,8 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
         .unwrap_or((None, None))
 }
 
+/// Search for service_queries inside the nested `metadata` map.
+/// Scans all sources and returns the first ServiceExtension found.
 fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
@@ -454,11 +456,23 @@ fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
     let reader = SerializedFileReader::new(f).ok()?;
     let kv = reader.metadata().file_metadata().key_value_metadata()?;
 
-    let json = kv
+    let metadata_json = kv
         .iter()
-        .find(|kv| kv.key == "service_queries")
+        .find(|kv| kv.key == "metadata")
         .and_then(|kv| kv.value.as_deref())?;
-    ServiceExtension::from_json(json)
+
+    let metadata_map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(metadata_json).ok()?;
+
+    for (_source, value) in &metadata_map {
+        if let Some(sq) = value.get("service_queries") {
+            if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
+                return Some(ext);
+            }
+        }
+    }
+
+    None
 }
 
 fn compute_file_checksum(path: &Path) -> Option<String> {

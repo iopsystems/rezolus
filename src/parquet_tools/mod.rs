@@ -53,26 +53,24 @@ fn run_annotate(args: &ArgMatches) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
     let custom_file = args.get_one::<PathBuf>("service-extension");
 
+    let source = read_source_metadata(path).unwrap_or_else(|| {
+        eprintln!(
+            "error: parquet file has no 'source' metadata. Use --file to provide a template."
+        );
+        std::process::exit(1);
+    });
+
     let json = if let Some(custom_path) = custom_file {
         let content =
             std::fs::read_to_string(custom_path).expect("failed to read service extension file");
-        // Validate the JSON parses correctly
         let _: ServiceExtension =
             serde_json::from_str(&content).expect("invalid service extension JSON");
         content
     } else {
-        // Look up built-in template from parquet source metadata
-        let source = read_source_metadata(path);
-        let name = source.as_deref().unwrap_or_else(|| {
-            eprintln!(
-                "error: parquet file has no 'source' metadata. Use --file to provide a template."
-            );
-            std::process::exit(1);
-        });
-        let template = lookup_template(name).unwrap_or_else(|| {
+        let template = lookup_template(&source).unwrap_or_else(|| {
             eprintln!(
                 "error: no built-in template for source {:?}. Use --file to provide one.",
-                name
+                source
             );
             std::process::exit(1);
         });
@@ -86,10 +84,10 @@ fn run_annotate(args: &ArgMatches) {
 
     let annotated_json =
         serde_json::to_string(&ext).expect("failed to serialize service extension");
-    annotate_parquet(path, &annotated_json).expect("failed to annotate parquet file");
+    annotate_parquet(path, &source, &annotated_json).expect("failed to annotate parquet file");
 
     println!(
-        "Annotated {:?} with {:?} service extension ({} KPIs)",
+        "Annotated {:?} with {:?} service queries ({} KPIs)",
         path,
         ext.service_name,
         ext.kpis.len()
@@ -214,7 +212,8 @@ fn read_source_metadata(path: &Path) -> Option<String> {
 
 fn annotate_parquet(
     path: &Path,
-    service_extension_json: &str,
+    source: &str,
+    service_queries_json: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::ArrowWriter;
@@ -232,12 +231,27 @@ fn annotate_parquet(
         .cloned()
         .unwrap_or_default();
 
-    // Remove any existing service queries key
-    kv_meta.retain(|kv| kv.key != "service_queries");
+    // Build or update the nested metadata map
+    let mut metadata_map: serde_json::Map<String, serde_json::Value> = kv_meta
+        .iter()
+        .find(|kv| kv.key == "metadata")
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|v| serde_json::from_str(v).ok())
+        .unwrap_or_default();
 
+    // Nest service_queries under this source
+    let service_queries: serde_json::Value = serde_json::from_str(service_queries_json)?;
+    let source_entry = metadata_map
+        .entry(source.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if let serde_json::Value::Object(map) = source_entry {
+        map.insert("service_queries".to_string(), service_queries);
+    }
+
+    kv_meta.retain(|kv| kv.key != "metadata");
     kv_meta.push(KeyValue {
-        key: "service_queries".to_string(),
-        value: Some(service_extension_json.to_string()),
+        key: "metadata".to_string(),
+        value: Some(serde_json::to_string(&metadata_map)?),
     });
 
     let props = WriterProperties::builder()
