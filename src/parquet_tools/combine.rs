@@ -567,6 +567,7 @@ fn write_parquet(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let props = WriterProperties::builder()
         .set_key_value_metadata(Some(kv_metadata))
+        .set_max_row_group_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE)
         .build();
 
     let file = std::fs::File::create(output)?;

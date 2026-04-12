@@ -1,5 +1,16 @@
 #![allow(dead_code)]
 
+// ── Parquet writer settings ─────────────────────────────────────────────
+
+/// Maximum number of rows per row group. Matches the value used by
+/// `metriken-exposition`'s `ParquetWriter` (`DEFAULT_MAX_BATCH_SIZE`).
+/// All rezolus tools that write parquet files should use this constant
+/// so that row group sizing is consistent across recordings and combined
+/// files.
+pub const MAX_ROW_GROUP_SIZE: usize = 50_000;
+
+// ── Top-level parquet footer keys ───────────────────────────────────────
+
 /// Top-level parquet footer keys. These are read by `Tsdb::load` or shared
 /// infrastructure and must remain flat strings in both single-source and
 /// combined files.
