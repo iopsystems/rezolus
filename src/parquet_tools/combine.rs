@@ -219,17 +219,23 @@ fn combine_and_write(
     inputs: &[InputFile],
     output: &PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Step 1: Build timestamp → row-index maps
+    let interval_ns = resolve_interval_ns(inputs)?;
+
+    // Step 1: Build quantized-timestamp → row-index maps
     let ts_maps: Vec<HashMap<u64, usize>> = inputs
         .iter()
-        .map(build_timestamp_map)
+        .map(|input| build_timestamp_map(input, interval_ns))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Step 2: Compute intersection of all timestamp sets (sorted)
+    // Step 2: Compute intersection of all quantized timestamp sets (sorted)
     let common_timestamps = compute_common_timestamps(&ts_maps);
     if common_timestamps.is_empty() {
         return Err("no common timestamps across all input files".into());
     }
+
+    // Step 2b: Validate alignment quality — at least 95% of matched
+    // timestamps must have raw values within 10% of the interval.
+    validate_alignment_quality(inputs, &common_timestamps, interval_ns)?;
 
     // Step 3: Build merged schema
     let (primary_idx, merged_schema) = build_merged_schema(inputs);
@@ -250,15 +256,111 @@ fn combine_and_write(
     Ok(())
 }
 
+/// Parse the (already-validated-identical) sampling interval as nanoseconds.
+fn resolve_interval_ns(inputs: &[InputFile]) -> Result<u64, Box<dyn std::error::Error>> {
+    let ms_str = inputs
+        .iter()
+        .find_map(|i| i.sampling_interval_ms.as_deref())
+        .ok_or("no sampling_interval_ms metadata in any input file")?;
+    let ms: u64 = ms_str.parse().map_err(|_| {
+        format!("sampling_interval_ms {:?} is not a valid integer", ms_str)
+    })?;
+    Ok(ms * 1_000_000) // ms → ns
+}
+
+/// Round a nanosecond timestamp to the nearest interval boundary.
+fn quantize(ts: u64, interval_ns: u64) -> u64 {
+    let half = interval_ns / 2;
+    ((ts + half) / interval_ns) * interval_ns
+}
+
+/// Validate that aligned timestamps are close enough across files.
+///
+/// For each quantized bucket in the common set, collect the raw timestamps
+/// from every file that mapped to that bucket. At least 95% of these buckets
+/// must have all raw timestamps within 10% of the interval of each other.
+fn validate_alignment_quality(
+    inputs: &[InputFile],
+    common_quantized: &[u64],
+    interval_ns: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tolerance = interval_ns / 10; // 10% of interval
+    let threshold = 0.95;
+
+    // Build quantized → raw timestamp maps for each file
+    let raw_maps: Vec<HashMap<u64, u64>> = inputs
+        .iter()
+        .map(|input| {
+            let ts_idx = input.schema.index_of("timestamp").unwrap();
+            let mut map = HashMap::new();
+            for batch in &input.batches {
+                let ts_col = batch
+                    .column(ts_idx)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap();
+                for i in 0..ts_col.len() {
+                    let raw = ts_col.value(i);
+                    let q = quantize(raw, interval_ns);
+                    // Keep the value closest to the bucket center
+                    map.entry(q)
+                        .and_modify(|existing: &mut u64| {
+                            if raw.abs_diff(q) < existing.abs_diff(q) {
+                                *existing = raw;
+                            }
+                        })
+                        .or_insert(raw);
+                }
+            }
+            map
+        })
+        .collect();
+
+    let mut aligned = 0usize;
+    for &qts in common_quantized {
+        let raws: Vec<u64> = raw_maps.iter().filter_map(|m| m.get(&qts).copied()).collect();
+        if raws.len() < 2 {
+            aligned += 1;
+            continue;
+        }
+        let min_raw = *raws.iter().min().unwrap();
+        let max_raw = *raws.iter().max().unwrap();
+        if max_raw - min_raw <= tolerance {
+            aligned += 1;
+        }
+    }
+
+    let ratio = aligned as f64 / common_quantized.len() as f64;
+    if ratio < threshold {
+        return Err(format!(
+            "timestamp alignment too poor: only {:.1}% of matched timestamps are within \
+             10% of the sampling interval (need ≥95%)",
+            ratio * 100.0
+        )
+        .into());
+    }
+
+    if ratio < 1.0 {
+        let misaligned = common_quantized.len() - aligned;
+        eprintln!(
+            "warning: {misaligned}/{} timestamps have phase offset >10% of interval",
+            common_quantized.len()
+        );
+    }
+
+    Ok(())
+}
+
 fn build_timestamp_map(
     input: &InputFile,
+    interval_ns: u64,
 ) -> Result<HashMap<u64, usize>, Box<dyn std::error::Error>> {
     let ts_idx = input
         .schema
         .index_of("timestamp")
         .map_err(|_| format!("{:?}: missing 'timestamp' column", input.path))?;
 
-    let mut map = HashMap::new();
+    let mut map: HashMap<u64, (usize, u64)> = HashMap::new(); // quantized → (row_idx, raw_ts)
     let mut global_row = 0usize;
 
     for batch in &input.batches {
@@ -269,12 +371,23 @@ fn build_timestamp_map(
             .ok_or("timestamp column is not UInt64")?;
 
         for i in 0..ts_col.len() {
-            map.insert(ts_col.value(i), global_row + i);
+            let raw = ts_col.value(i);
+            let q = quantize(raw, interval_ns);
+            let row = global_row + i;
+            map.entry(q)
+                .and_modify(|(existing_row, existing_raw)| {
+                    // Keep the row whose raw timestamp is closest to the bucket center
+                    if raw.abs_diff(q) < existing_raw.abs_diff(q) {
+                        *existing_row = row;
+                        *existing_raw = raw;
+                    }
+                })
+                .or_insert((row, raw));
         }
         global_row += batch.num_rows();
     }
 
-    Ok(map)
+    Ok(map.into_iter().map(|(q, (row, _))| (q, row)).collect())
 }
 
 fn compute_common_timestamps(ts_maps: &[HashMap<u64, usize>]) -> Vec<u64> {
@@ -358,14 +471,12 @@ fn build_output_batch(
 
     let mut output_columns: Vec<ArrayRef> = Vec::new();
 
-    // timestamp and duration from primary file
-    let ts_idx = inputs[primary_idx].schema.index_of("timestamp").unwrap();
+    // Timestamp column: use quantized (bucket-center) values for a clean,
+    // uniform time grid regardless of per-file phase offsets.
+    output_columns.push(Arc::new(UInt64Array::from(common_timestamps.to_vec())));
+
+    // Duration from primary file
     let dur_idx = inputs[primary_idx].schema.index_of("duration").unwrap();
-    output_columns.push(compute::take(
-        concatenated[primary_idx][ts_idx].as_ref(),
-        &selection_indices[primary_idx],
-        None,
-    )?);
     output_columns.push(compute::take(
         concatenated[primary_idx][dur_idx].as_ref(),
         &selection_indices[primary_idx],
@@ -587,6 +698,10 @@ mod tests {
     use arrow::datatypes::DataType;
     use tempfile::NamedTempFile;
 
+    /// 1 second in nanoseconds — use as a multiplier so test timestamps
+    /// are at a realistic scale relative to the sampling interval.
+    const SEC: u64 = 1_000_000_000;
+
     /// Create a test parquet file with a timestamp column, duration column,
     /// and one gauge metric column.
     fn make_test_file(
@@ -738,14 +853,14 @@ mod tests {
     #[test]
     fn test_combine_trims_to_overlap() {
         let (_t1, p1) = make_test_file(
-            &[100, 200, 300],
+            &[1 * SEC, 2 * SEC, 3 * SEC],
             "m1",
             &[Some(1), Some(2), Some(3)],
             "rezolus",
             "1000",
         );
         let (_t2, p2) = make_test_file(
-            &[200, 300, 400],
+            &[2 * SEC, 3 * SEC, 4 * SEC],
             "m2",
             &[Some(4), Some(5), Some(6)],
             "llm-perf",
@@ -765,7 +880,7 @@ mod tests {
         let mut reader = builder.build().unwrap();
         let batch = reader.next().unwrap().unwrap();
 
-        // Only timestamps 200 and 300 should be present
+        // Only timestamps at 2s and 3s should be present
         assert_eq!(batch.num_rows(), 2);
 
         let ts_col = batch
@@ -773,10 +888,10 @@ mod tests {
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
-        assert_eq!(ts_col.value(0), 200);
-        assert_eq!(ts_col.value(1), 300);
+        assert_eq!(ts_col.value(0), 2 * SEC);
+        assert_eq!(ts_col.value(1), 3 * SEC);
 
-        // m1 values for timestamps 200, 300 are 2, 3
+        // m1 values for timestamps 2s, 3s are 2, 3
         let m1_col = batch
             .column(schema.index_of("m1").unwrap())
             .as_any()
@@ -785,7 +900,7 @@ mod tests {
         assert_eq!(m1_col.value(0), 2);
         assert_eq!(m1_col.value(1), 3);
 
-        // m2 values for timestamps 200, 300 are 4, 5
+        // m2 values for timestamps 2s, 3s are 4, 5
         let m2_col = batch
             .column(schema.index_of("m2").unwrap())
             .as_any()
@@ -798,14 +913,14 @@ mod tests {
     #[test]
     fn test_combine_end_to_end() {
         let (_t1, p1) = make_test_file(
-            &[100, 200, 300],
+            &[1 * SEC, 2 * SEC, 3 * SEC],
             "cpu",
             &[Some(10), Some(20), Some(30)],
             "rezolus",
             "1000",
         );
         let (_t2, p2) = make_test_file(
-            &[200, 300, 400],
+            &[2 * SEC, 3 * SEC, 4 * SEC],
             "tokens",
             &[Some(40), Some(50), Some(60)],
             "llm-perf",
@@ -857,8 +972,8 @@ mod tests {
 
     #[test]
     fn test_combine_preserves_field_metadata() {
-        let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t1, p1) = make_test_file(&[1 * SEC, 2 * SEC], "m1", &[Some(1), Some(2)], "rezolus", "1000");
+        let (_t2, p2) = make_test_file(&[1 * SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
 
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
@@ -884,16 +999,90 @@ mod tests {
 
     #[test]
     fn test_combine_empty_intersection() {
-        // Same time range but no matching timestamps
+        // Overlapping time range but timestamps land in different buckets
+        // (offset by a full interval so they never share a quantized bucket)
         let (_t1, p1) = make_test_file(
-            &[100, 300, 500],
+            &[1 * SEC, 3 * SEC, 5 * SEC],
+            "m1",
+            &[Some(1), Some(2), Some(3)],
+            "rezolus",
+            "2000", // 2s interval
+        );
+        let (_t2, p2) = make_test_file(
+            &[2 * SEC, 4 * SEC, 6 * SEC],
+            "m2",
+            &[Some(4), Some(5), Some(6)],
+            "llm-perf",
+            "2000",
+        );
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+
+        let inputs = vec![load(&p1), load(&p2)];
+        let result = combine_and_write(&inputs, &out_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_combine_fuzzy_timestamp_matching() {
+        // Two files with a small phase offset (5ms) on a 1s interval.
+        // Quantization should snap them to the same bucket.
+        let offset = 5_000_000; // 5ms in ns
+        let (_t1, p1) = make_test_file(
+            &[1 * SEC, 2 * SEC, 3 * SEC],
+            "m1",
+            &[Some(10), Some(20), Some(30)],
+            "rezolus",
+            "1000",
+        );
+        let (_t2, p2) = make_test_file(
+            &[1 * SEC + offset, 2 * SEC + offset, 3 * SEC + offset],
+            "m2",
+            &[Some(40), Some(50), Some(60)],
+            "llm-perf",
+            "1000",
+        );
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+
+        let inputs = vec![load(&p1), load(&p2)];
+        combine_and_write(&inputs, &out_path).unwrap();
+
+        let file = std::fs::File::open(&out_path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+        let mut reader = builder.build().unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        // All 3 timestamps should match
+        assert_eq!(batch.num_rows(), 3);
+
+        let m2_col = batch
+            .column(schema.index_of("m2").unwrap())
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(m2_col.value(0), 40);
+        assert_eq!(m2_col.value(1), 50);
+        assert_eq!(m2_col.value(2), 60);
+    }
+
+    #[test]
+    fn test_combine_rejects_poor_alignment() {
+        // Two files where >5% of timestamps have phase offset >10% of interval.
+        // With a 1s interval, 150ms offset exceeds the 100ms (10%) tolerance.
+        let bad_offset = 150_000_000; // 150ms in ns
+        let (_t1, p1) = make_test_file(
+            &[1 * SEC, 2 * SEC, 3 * SEC],
             "m1",
             &[Some(1), Some(2), Some(3)],
             "rezolus",
             "1000",
         );
         let (_t2, p2) = make_test_file(
-            &[200, 400, 600],
+            &[1 * SEC + bad_offset, 2 * SEC + bad_offset, 3 * SEC + bad_offset],
             "m2",
             &[Some(4), Some(5), Some(6)],
             "llm-perf",
@@ -906,5 +1095,20 @@ mod tests {
         let inputs = vec![load(&p1), load(&p2)];
         let result = combine_and_write(&inputs, &out_path);
         assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("alignment too poor"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_quantize_rounds_to_nearest() {
+        let interval = 1_000_000_000; // 1s
+        // Exact boundary
+        assert_eq!(quantize(2 * interval, interval), 2 * interval);
+        // Slightly after boundary
+        assert_eq!(quantize(2 * interval + 1000, interval), 2 * interval);
+        // Just before next boundary (rounds up)
+        assert_eq!(quantize(3 * interval - 1000, interval), 3 * interval);
+        // Exactly at midpoint (rounds up)
+        assert_eq!(quantize(2 * interval + interval / 2, interval), 3 * interval);
     }
 }
