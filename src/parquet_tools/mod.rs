@@ -1,4 +1,5 @@
 mod annotate;
+mod combine;
 mod metadata;
 
 use arrow::datatypes::SchemaRef;
@@ -30,6 +31,26 @@ pub fn command() -> Command {
                         .help("Custom service extension JSON file (overrides built-in template)")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
+                ),
+        )
+        .subcommand(
+            Command::new("combine")
+                .about("Combine a rezolus parquet file with service-level parquet files")
+                .arg(
+                    clap::Arg::new("FILES")
+                        .help("Input parquet files (one rezolus + one or more service files)")
+                        .value_parser(value_parser!(PathBuf))
+                        .required(true)
+                        .num_args(2..)
+                        .index(1),
+                )
+                .arg(
+                    clap::Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .help("Output parquet file path")
+                        .value_parser(value_parser!(PathBuf))
+                        .required(true),
                 ),
         )
         .subcommand(
@@ -83,6 +104,7 @@ pub fn run(args: ArgMatches) {
             annotate::run(sub_args);
             return;
         }
+        Some(("combine", sub_args)) => combine::run(sub_args),
         Some(("metadata", sub_args)) => metadata::run(sub_args),
         _ => unreachable!(),
     };
