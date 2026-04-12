@@ -64,6 +64,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     if show_all || geometry_only {
         let row_groups = metadata.row_groups();
         let total_rows: i64 = row_groups.iter().map(|rg| rg.num_rows()).sum();
+        let total_bytes: i64 = row_groups.iter().map(|rg| rg.total_byte_size()).sum();
         let num_columns = schema.fields().len();
 
         println!("Geometry:");
@@ -71,15 +72,50 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             "  Logical Table: {} columns x {} rows",
             num_columns, total_rows
         );
-        println!("  Row Groups: {}", row_groups.len());
+        println!();
+
+        // Compute column widths for row group table
+        let idx_w = row_groups.len().to_string().len().max(5);
+        let rows_w = row_groups
+            .iter()
+            .map(|rg| rg.num_rows().to_string().len())
+            .max()
+            .unwrap_or(4)
+            .max(4);
+        let bytes_w = row_groups
+            .iter()
+            .map(|rg| format_bytes(rg.total_byte_size()).len())
+            .max()
+            .unwrap_or(5)
+            .max(5);
+
+        println!(
+            "  {:<idx_w$} | {:>rows_w$} | {:>bytes_w$}",
+            "Group", "Rows", "Bytes",
+        );
+        println!(
+            "  {:-<idx_w$}-+-{:->rows_w$}-+-{:->bytes_w$}",
+            "", "", "",
+        );
         for (i, rg) in row_groups.iter().enumerate() {
             println!(
-                "    Group {}: {} rows, {} bytes",
+                "  {:<idx_w$} | {:>rows_w$} | {:>bytes_w$}",
                 i,
                 rg.num_rows(),
-                rg.total_byte_size()
+                format_bytes(rg.total_byte_size()),
             );
         }
+        println!(
+            "  {:-<idx_w$}-+-{:->rows_w$}-+-{:->bytes_w$}",
+            "", "", "",
+        );
+        println!(
+            "  {:<idx_w$} | {:>rows_w$} | {:>bytes_w$}",
+            "Total",
+            total_rows,
+            format_bytes(total_bytes),
+        );
+
         if show_all {
             println!();
         }
@@ -227,4 +263,21 @@ fn run_json(
 
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
+}
+
+fn format_bytes(bytes: i64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+    let b = bytes as f64;
+    if b >= GIB {
+        format!("{:.1} GiB", b / GIB)
+    } else if b >= MIB {
+        format!("{:.1} MiB", b / MIB)
+    } else if b >= KIB {
+        format!("{:.1} KiB", b / KIB)
+    } else {
+        format!("{} B", bytes)
+    }
 }
