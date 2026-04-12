@@ -165,87 +165,28 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
     );
 }
 
-/// Extract metric selectors (name + labels) from a PromQL query string.
+/// Extract metric selectors (name + optional labels) from a PromQL query.
 ///
-/// Returns selectors like `tokens{direction="output"}` or `requests_inflight`,
-/// excluding known PromQL function names.
+/// Matches `metric_name` or `metric_name{labels...}`, skipping anything
+/// followed by `(` (i.e. function calls like `sum(`, `irate(`).
 fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
-    let bytes = query.as_bytes();
-    let len = bytes.len();
-    let mut selectors = BTreeSet::new();
-    let mut i = 0;
+    use regex::Regex;
+    use std::sync::LazyLock;
 
-    while i < len {
-        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
-            let start = i;
-            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"[a-zA-Z_][a-zA-Z0-9_]*(\{[^}]*\})?").unwrap());
+
+    RE.find_iter(query)
+        .filter(|m| {
+            // Skip duration suffixes like 5s, 1m, 1h (preceded by a digit)
+            if m.start() > 0 && query.as_bytes()[m.start() - 1].is_ascii_digit() {
+                return false;
             }
-            let ident = &query[start..i];
-
-            // Skip whitespace, then check what follows
-            let rest = query[i..].trim_start();
-            let next = rest.as_bytes().first().copied();
-
-            // function call — skip
-            if next == Some(b'(') && is_promql_function(ident) {
-                i = query.len() - rest.len();
-                continue;
-            }
-
-            // metric{labels} — include the braces
-            if next == Some(b'{') {
-                if let Some(close) = rest.find('}') {
-                    let sel_end = query.len() - rest.len() + close + 1;
-                    selectors.insert(query[start..sel_end].to_string());
-                    i = sel_end;
-                    continue;
-                }
-            }
-
-            selectors.insert(ident.to_string());
-        } else {
-            i += 1;
-        }
-    }
-
-    selectors
-}
-
-fn is_promql_function(name: &str) -> bool {
-    matches!(
-        name,
-        "sum"
-            | "avg"
-            | "min"
-            | "max"
-            | "count"
-            | "rate"
-            | "irate"
-            | "increase"
-            | "delta"
-            | "idelta"
-            | "abs"
-            | "ceil"
-            | "floor"
-            | "round"
-            | "clamp"
-            | "clamp_min"
-            | "clamp_max"
-            | "ln"
-            | "log2"
-            | "log10"
-            | "exp"
-            | "sqrt"
-            | "sgn"
-            | "sort"
-            | "sort_desc"
-            | "label_replace"
-            | "label_join"
-            | "histogram_quantile"
-            | "histogram_percentiles"
-            | "histogram_heatmap"
-    )
+            // Skip function calls: next non-whitespace char after match is '('
+            query[m.end()..].trim_start().as_bytes().first() != Some(&b'(')
+        })
+        .map(|m| m.as_str().to_string())
+        .collect()
 }
 
 fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
@@ -327,4 +268,41 @@ fn annotate_parquet(
     std::fs::write(path, &output)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_selectors_from_counter_query() {
+        let q = r#"sum(irate(tokens{direction="output"}[5s]))"#;
+        let sel: Vec<_> = extract_metric_selectors(q).into_iter().collect();
+        assert_eq!(sel, vec![r#"tokens{direction="output"}"#]);
+    }
+
+    #[test]
+    fn extract_selectors_from_ratio_query() {
+        let q =
+            r#"sum(irate(requests{status="error"}[5s])) / sum(irate(requests{status="sent"}[5s]))"#;
+        let sel: Vec<_> = extract_metric_selectors(q).into_iter().collect();
+        assert_eq!(
+            sel,
+            vec![r#"requests{status="error"}"#, r#"requests{status="sent"}"#]
+        );
+    }
+
+    #[test]
+    fn extract_selectors_from_bare_metric() {
+        let sel: Vec<_> = extract_metric_selectors("requests_inflight")
+            .into_iter()
+            .collect();
+        assert_eq!(sel, vec!["requests_inflight"]);
+    }
+
+    #[test]
+    fn extract_selectors_from_histogram() {
+        let sel: Vec<_> = extract_metric_selectors("ttft").into_iter().collect();
+        assert_eq!(sel, vec!["ttft"]);
+    }
 }
