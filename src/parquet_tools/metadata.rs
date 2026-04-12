@@ -164,11 +164,11 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
         println!("Schema ({} fields):", schema.fields().len());
         println!(
-            "  {:<name_w$} | {:<type_w$} | {:<mt_w$} | Metadata",
+            "  {:<name_w$} | {:<type_w$} | {:<mt_w$} | Other Metadata",
             "Name", "Type", "Metric Type",
         );
         println!(
-            "  {:-<name_w$}-+-{:-<type_w$}-+-{:-<mt_w$}-+---------",
+            "  {:-<name_w$}-+-{:-<type_w$}-+-{:-<mt_w$}-+---------------",
             "", "", "",
         );
         for row in &rows {
