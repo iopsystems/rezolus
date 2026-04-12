@@ -51,32 +51,49 @@ sudo target/release/rezolus exporter config/exporter.toml
 
 # Recorder - capture metrics to parquet
 target/release/rezolus record http://localhost:4241 output.parquet
+target/release/rezolus record --metadata source=llm-perf http://host:9090/metrics output.parquet
+# Auto-detects Rezolus agent vs Prometheus endpoints. Supports --format {parquet|raw},
+# --metadata key=value (repeatable), --interval, --duration.
 
-# Viewer - web dashboard for parquet files
+# Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [listen_address]
+target/release/rezolus view http://localhost:4241 [listen_address]  # live agent connection
+target/release/rezolus view [listen_address]                        # upload-only mode (no file)
 
 # Hindsight - rolling ring buffer for incident analysis
 target/release/rezolus hindsight config/hindsight.toml
 
+# Parquet tools - file operations on parquet recordings
+target/release/rezolus parquet metadata -i file.parquet             # show file/column metadata
+target/release/rezolus parquet metadata -i file.parquet --json      # JSON output
+target/release/rezolus parquet metadata -i file.parquet --field source
+target/release/rezolus parquet annotate file.parquet                # add service extension KPIs
+target/release/rezolus parquet annotate file.parquet --file ext.json
+target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet
+
 # MCP - AI analysis server or CLI commands
-target/release/rezolus mcp                                    # stdio server
-target/release/rezolus mcp describe-recording file.parquet    # describe recording
-target/release/rezolus mcp detect-anomalies file.parquet      # exhaustive anomaly detection
-target/release/rezolus mcp query file.parquet "sum(rate(cpu_cycles[1m]))"
+target/release/rezolus mcp                                                    # stdio server
+target/release/rezolus mcp describe-recording file.parquet                    # describe recording
+target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
+target/release/rezolus mcp detect-anomalies file.parquet                      # exhaustive anomaly detection
+target/release/rezolus mcp detect-anomalies file.parquet "cpu_usage"          # targeted anomaly detection
+target/release/rezolus mcp query file.parquet "sum(rate(cpu_cycles[1m]))"     # PromQL query
+target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
 ```
 
 ## Architecture
 
 ### Operating Modes
 
-The binary operates in six modes via subcommands:
+The binary operates in seven modes via subcommands:
 
 1. **Agent** (`src/agent/`) - Default. Collects system metrics via samplers.
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
-3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files.
+3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files. Auto-detects Rezolus vs Prometheus sources. Supports `--metadata key=value` and `--format {parquet|raw}`.
 4. **Hindsight** (`src/hindsight/`) - Maintains rolling ring buffer on disk for post-incident snapshots.
-5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine (`promql/`) and TSDB (`tsdb/`).
-6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries).
+5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
+6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries). Runs as stdio server or one-shot CLI commands.
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect), `annotate` (add service extension KPIs), `combine` (merge multi-source files).
 
 ### Sampler Architecture
 
@@ -96,14 +113,34 @@ BPF-enabled samplers: `blockio/{latency,requests}`, `cpu/{bandwidth,migrations,p
 - Output skeletons go to `$OUT_DIR/{sampler}_{program}.bpf.rs`
 - Requires clang for BPF compilation
 
+### Parquet File Format
+
+Parquet files produced by the recorder/hindsight use a columnar layout from `metriken-exposition`:
+- **`timestamp`** (UInt64) - Nanoseconds since Unix epoch. Present in every file.
+- **`duration`** (UInt64, nullable) - Snapshot collection duration in nanoseconds.
+- **Metric columns** - One per metric: counters (UInt64), gauges (Int64), histograms (List&lt;UInt64&gt;).
+- **Column metadata** - Each field carries `metric_type` ("counter"/"gauge"/"histogram"/"timestamp"/"duration") and metric labels.
+
+File-level metadata keys are defined in `src/parquet_metadata.rs`:
+- `source` - Recording source: `"rezolus"` (single) or `["rezolus","llm-perf"]` (combined).
+- `sampling_interval_ms` - Collection interval in milliseconds.
+- `systeminfo` - JSON hardware summary from agent.
+- `descriptions` - JSON map of metric name to help text.
+- `per_source_metadata` - Per-source map with `version`, `role` ("service"/"loadgen"), and `service_queries` (ServiceExtension KPI definitions).
+
+### Service Extensions
+
+Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.
+
 ### Key Dependencies
 
 - `metriken` - Metrics registration and exposition
+- `metriken-exposition` - Snapshot serialization and msgpack-to-parquet conversion
+- `metriken-query` - TSDB, PromQL query engine (re-exported in `src/viewer/mod.rs`)
 - `libbpf-rs` / `libbpf-cargo` - eBPF program management (Linux)
 - `axum` - HTTP server
 - `tokio` - Async runtime
 - `parquet` / `arrow` - Parquet file I/O
-- `promql-parser` - PromQL parsing for viewer
 
 ### Configuration
 

@@ -34,7 +34,9 @@ Transforms collected metrics for Prometheus compatibility:
 
 ### Recorder
 Enables on-demand metric collection:
-- Write metrics directly to file
+- Write metrics directly to parquet or raw msgpack files
+- Auto-detects Rezolus agent vs Prometheus endpoints
+- Supports custom file-level metadata via `--metadata key=value`
 - Flexible, targeted performance analysis
 
 ### Hindsight
@@ -46,12 +48,25 @@ Provides after-the-fact artifacts for incident investigation:
 ### Viewer
 Open a Parquet artifact in a web-based dashboard:
 - View your Rezolus Recorder and Hindsight artifacts
+- Connect to a live Rezolus agent for real-time dashboards
+- Start in upload-only mode with no file argument
 - Interactive dashboard using a local web server
+- Service KPI dashboards from annotated parquet files
+- Export/download parquet files from the viewer
+
+### Parquet Tools
+File operations for parquet recordings:
+- **Metadata** - Inspect file-level and column-level metadata, geometry, and schema
+- **Annotate** - Embed service extension KPI definitions for custom viewer dashboards
+- **Combine** - Merge a Rezolus parquet with service-level parquet files, joining on
+  timestamps and producing a unified multi-source recording
 
 ### MCP Server
 Provides tools for AI-guided analysis of recordings:
 - Allows a model to interact with a Rezolus recording
-- Tool calls for analysis including anomaly detection and correlation
+- Tool calls for analysis including anomaly detection, metric correlation, and PromQL queries
+- Runs as a stdio MCP server or as one-shot CLI commands (`describe-recording`,
+  `describe-metrics`, `detect-anomalies`, `query`, `analyze-correlation`)
 
 ## Use Cases
 We believe that Rezolus is useful for:
@@ -251,6 +266,14 @@ target/release/rezolus record http://localhost:4241 rezolus.parquet
 
 # to run the hindsight
 target/release/rezolus hindsight config/hindsight.toml
+
+# to view a recording (or connect to a live agent)
+target/release/rezolus view rezolus.parquet
+target/release/rezolus view http://localhost:4241
+
+# parquet file operations
+target/release/rezolus parquet metadata -i rezolus.parquet
+target/release/rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
 ```
 
 ## Contributing
