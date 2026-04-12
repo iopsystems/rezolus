@@ -123,49 +123,68 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
     // Column-level metadata (schema) - human-readable table
     if show_all || schema_only {
-        // Compute column widths
+        // Pre-compute rows: (name, type, metric_type, other_metadata)
+        struct SchemaRow {
+            name: String,
+            dtype: String,
+            metric_type: String,
+            other_meta: String,
+        }
+
+        let mut rows: Vec<SchemaRow> = Vec::new();
         let mut name_w = 4; // "Name"
         let mut type_w = 4; // "Type"
-        let mut meta_entries: Vec<(&str, &str, String)> = Vec::new();
+        let mut mt_w = 11; // "Metric Type"
 
         for field in schema.fields() {
-            let name = field.name().as_str();
+            let name = field.name().clone();
             let dtype = format!("{}", field.data_type());
             let meta = field.metadata();
-            let meta_str = if meta.is_empty() {
-                String::new()
-            } else {
-                meta.iter()
-                    .map(|(k, v)| {
-                        if v.len() > 40 {
-                            format!("{k}={{...}}")
-                        } else {
-                            format!("{k}={v}")
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+
+            let metric_type = meta
+                .get("metric_type")
+                .cloned()
+                .unwrap_or_default();
+
+            let other_meta = meta
+                .iter()
+                .filter(|(k, _)| *k != "metric_type")
+                .map(|(k, v)| {
+                    if v.len() > 60 {
+                        format!("{k}={{...}}")
+                    } else {
+                        format!("{k}={v}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
 
             name_w = name_w.max(name.len());
             type_w = type_w.max(dtype.len());
-            meta_entries.push((name, Box::leak(dtype.into_boxed_str()), meta_str));
+            mt_w = mt_w.max(metric_type.len());
+
+            rows.push(SchemaRow {
+                name,
+                dtype,
+                metric_type,
+                other_meta,
+            });
         }
 
+        println!("Schema ({} fields):", schema.fields().len());
         println!(
-            "Schema ({} fields):",
-            schema.fields().len()
+            "  {:<name_w$} | {:<type_w$} | {:<mt_w$} | Metadata",
+            "Name", "Type", "Metric Type",
         );
         println!(
-            "  {:<name_w$}  {:<type_w$}  Metadata",
-            "Name", "Type"
+            "  {:-<name_w$}-+-{:-<type_w$}-+-{:-<mt_w$}-+---------",
+            "", "", "",
         );
-        println!(
-            "  {:<name_w$}  {:<type_w$}  --------",
-            "----", "----"
-        );
-        for (name, dtype, meta_str) in &meta_entries {
-            println!("  {:<name_w$}  {:<type_w$}  {}", name, dtype, meta_str);
+        for row in &rows {
+            println!(
+                "  {:<name_w$} | {:<type_w$} | {:<mt_w$} | {}",
+                row.name, row.dtype, row.metric_type, row.other_meta,
+            );
         }
     }
 
