@@ -3121,6 +3121,7 @@ dependencies = [
  "plist",
  "prometheus-parse",
  "rayon",
+ "regex",
  "reqwest",
  "rmp-serde",
  "rustfft",
