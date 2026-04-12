@@ -73,7 +73,6 @@ const _closeModal = (result) => {
 
 const _buildResult = () => {
     const filename = modalState.prefix.trim() + modalState.suffix;
-    if (modalState.checkboxes.length === 0) return filename;
     const opts = {};
     for (const cb of modalState.checkboxes) opts[cb.key] = cb.checked;
     return { filename, ...opts };

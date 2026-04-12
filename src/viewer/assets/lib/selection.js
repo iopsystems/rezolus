@@ -191,8 +191,9 @@ const buildPayload = (store, attrs) => ({
 
 const exportJSON = async (store, attrs) => {
     const defaultPrefix = `report-${Date.now()}`;
-    const filename = await showSaveModal(defaultPrefix, '.json');
-    if (!filename) return;
+    const result = await showSaveModal(defaultPrefix, '.json');
+    if (!result) return;
+    const filename = result.filename;
     const payload = buildPayload(store, attrs);
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -284,8 +285,8 @@ const saveToParquet = async (store, attrs) => {
         : [];
     const result = await showSaveModal(defaultPrefix, '.parquet', checkboxes);
     if (!result) return;
-    const filename = typeof result === 'string' ? result : result.filename;
-    const trimToSelection = typeof result === 'object' && result.trim;
+    const filename = result.filename;
+    const trimToSelection = result.trim;
     const payload = buildPayload(store, attrs);
 
     // When trimming, compute the absolute time range (ms) from the zoom percentage

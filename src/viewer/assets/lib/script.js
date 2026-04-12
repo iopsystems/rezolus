@@ -78,8 +78,9 @@ const stopRecording = () => {
 };
 
 const saveCapture = async () => {
-    const filename = await showSaveModal('rezolus-capture', '.parquet');
-    if (!filename) return;
+    const result = await showSaveModal('rezolus-capture', '.parquet');
+    if (!result) return;
+    const filename = result.filename;
     const a = document.createElement('a');
     a.href = ViewerApi.saveUrl();
     a.download = filename;

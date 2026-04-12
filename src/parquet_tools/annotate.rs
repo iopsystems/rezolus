@@ -86,7 +86,14 @@ fn effective_query(kpi: &crate::viewer::Kpi) -> String {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                None => "[0.5, 0.9, 0.99, 0.999, 0.9999]".to_string(),
+                None => format!(
+                    "[{}]",
+                    crate::common::DEFAULT_PERCENTILES
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             };
             format!("histogram_percentiles({}, {})", quantiles, kpi.query)
         }

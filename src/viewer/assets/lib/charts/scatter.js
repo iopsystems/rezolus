@@ -19,6 +19,7 @@ import {
     FONTS,
 } from './base.js';
 import { SCATTER_PALETTE } from './util/colormap.js';
+import { DEFAULT_PERCENTILES } from './metric_types.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -55,7 +56,7 @@ export function configureScatterChart(chart) {
     // percentile label), falling back to opts.percentiles for pre-data render.
     const percentileLabels = (chart.spec.series_names && chart.spec.series_names.length > 0)
         ? chart.spec.series_names.map(v => `p${parseFloat(v) * 100}`)
-        : (opts.percentiles || [0.5, 0.9, 0.99, 0.999, 0.9999]).map(v => `p${v * 100}`);
+        : (opts.percentiles || DEFAULT_PERCENTILES).map(v => `p${v * 100}`);
 
     const scatterColors = SCATTER_PALETTE;
 
