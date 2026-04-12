@@ -232,16 +232,11 @@ fn annotate_parquet(
         .cloned()
         .unwrap_or_default();
 
-    // Remove any existing service extension keys
-    kv_meta.retain(|kv| kv.key != "metric_type" && kv.key != "service_extension");
+    // Remove any existing service queries key
+    kv_meta.retain(|kv| kv.key != "service_queries");
 
-    // Add new keys
     kv_meta.push(KeyValue {
-        key: "metric_type".to_string(),
-        value: Some("rezolus:service-extension".to_string()),
-    });
-    kv_meta.push(KeyValue {
-        key: "service_extension".to_string(),
+        key: "service_queries".to_string(),
         value: Some(service_extension_json.to_string()),
     });
 

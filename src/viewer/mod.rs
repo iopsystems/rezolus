@@ -454,17 +454,9 @@ fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
     let reader = SerializedFileReader::new(f).ok()?;
     let kv = reader.metadata().file_metadata().key_value_metadata()?;
 
-    let metric_type = kv
-        .iter()
-        .find(|kv| kv.key == "metric_type")
-        .and_then(|kv| kv.value.as_deref())?;
-    if metric_type != "rezolus:service-extension" {
-        return None;
-    }
-
     let json = kv
         .iter()
-        .find(|kv| kv.key == "service_extension")
+        .find(|kv| kv.key == "service_queries")
         .and_then(|kv| kv.value.as_deref())?;
     ServiceExtension::from_json(json)
 }
