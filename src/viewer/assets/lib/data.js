@@ -1,6 +1,10 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
 
+let _stepOverride = null;
+const setStepOverride = (step) => { _stepOverride = step; };
+const getStepOverride = () => _stepOverride;
+
 const defaultGetMetadata = () => ViewerApi.getMetadata();
 const defaultQueryRange = (query, start, end, step) =>
     ViewerApi.queryRange(query, start, end, step);
@@ -162,7 +166,7 @@ const createDataApi = ({
 
         const windowDuration = Math.min(3600, duration);
         const start = Math.max(minTime, maxTime - windowDuration);
-        const step = Math.max(1, Math.floor(windowDuration / 500));
+        const step = _stepOverride || Math.max(1, Math.floor(windowDuration / 500));
 
         return queryRange(query, start, maxTime, step);
     };
@@ -313,4 +317,7 @@ export {
     substituteCgroupPattern,
     processDashboardData,
     clearMetadataCache,
+    createDataApi,
+    setStepOverride,
+    getStepOverride,
 };

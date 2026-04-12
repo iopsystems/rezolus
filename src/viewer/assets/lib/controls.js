@@ -286,4 +286,36 @@ const TimeRangeBar = {
     },
 };
 
-export { TimeRangeBar };
+// Granularity (step) selector — lets users override the auto-calculated query step.
+const GRANULARITY_OPTIONS = [
+    { value: '', label: 'Auto' },
+    { value: '1', label: '1s' },
+    { value: '15', label: '15s' },
+    { value: '60', label: '1m' },
+    { value: '900', label: '15m' },
+];
+
+const GranularitySelector = {
+    view(vnode) {
+        const value = vnode.attrs.value;
+        const onChange = vnode.attrs.onChange;
+        const hidden = vnode.attrs.hidden;
+
+        return m('div.granularity-selector', {
+            style: { visibility: hidden ? 'hidden' : '' },
+        }, [
+            m('label.granularity-label', 'Step'),
+            m('select.granularity-select', {
+                value: value == null ? '' : String(value),
+                onchange: (e) => {
+                    const val = e.target.value === '' ? null : parseInt(e.target.value, 10);
+                    onChange(val);
+                },
+            }, GRANULARITY_OPTIONS.map(opt =>
+                m('option', { value: opt.value }, opt.label),
+            )),
+        ]);
+    },
+};
+
+export { TimeRangeBar, GranularitySelector };

@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride } from './data.js';
 import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
@@ -137,6 +137,8 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onStopRecording: stopRecording,
     onSaveCapture: saveCapture,
     onUploadParquet: uploadParquet,
+    granularity: currentGranularity,
+    onGranularityChange: changeGranularity,
     extra,
 });
 
@@ -383,6 +385,27 @@ const Group = {
 
 // Application state management
 const chartsState = new ChartsState();
+let currentGranularity = null;
+
+const changeGranularity = async (step) => {
+    currentGranularity = step;
+    setStepOverride(step);
+    clearViewerCaches();
+    m.redraw();
+
+    const currentRoute = m.route.get();
+    if (!currentRoute) return;
+    const section = currentRoute.replace(/^\//, '');
+    if (!section) return;
+
+    try {
+        const data = await ViewerApi.getSection(section);
+        const processed = await processDashboardData(data, activeCgroupPattern);
+        sectionResponseCache[section] = processed;
+        if (processed.sections) preloadSections(processed.sections);
+        m.redraw();
+    } catch (_) { /* keep existing view on error */ }
+};
 
 // Double-click anywhere on the page resets zoom and clears all pin selections
 document.addEventListener('dblclick', () => {

@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, setStepOverride, getStepOverride } from './data.js';
 import { selectionStore, reportStore, setStorageScope, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -22,6 +22,31 @@ let systemInfoData = null;
 // File checksum — not available in WASM mode (data never leaves the browser)
 let fileChecksum = null;
 
+let currentGranularity = null;
+
+const clearViewerCaches = () => {
+    Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
+    heatmapDataCache.clear();
+};
+
+const changeGranularity = async (step) => {
+    currentGranularity = step;
+    setStepOverride(step);
+    clearViewerCaches();
+    m.redraw();
+
+    const currentRoute = m.route.get();
+    if (!currentRoute) return;
+    const section = currentRoute.replace(/^\//, '').replace(/#.*/, '');
+    if (!section) return;
+
+    try {
+        const data = await loadSection(section);
+        if (data?.sections) preloadSections(data.sections);
+        m.redraw();
+    } catch (_) { /* keep existing view on error */ }
+};
+
 // Build TopNav attrs from section data.
 const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     data,
@@ -30,6 +55,8 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     fileChecksum,
     liveMode: false,
     recording: false,
+    granularity: currentGranularity,
+    onGranularityChange: changeGranularity,
     extra,
 });
 

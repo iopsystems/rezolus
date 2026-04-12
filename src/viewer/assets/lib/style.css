@@ -472,6 +472,44 @@ body::after {
     border-color: var(--border-emphasis);
 }
 
+.granularity-selector {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+
+.granularity-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-secondary);
+    white-space: nowrap;
+    user-select: none;
+}
+
+.granularity-select {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    padding: 2px 4px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--transition-base);
+}
+
+.granularity-select:hover {
+    border-color: var(--accent-muted);
+}
+
+.granularity-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 4px var(--accent-glow);
+}
+
 #topnav .topnav-actions {
     display: flex;
     align-items: center;
@@ -2594,6 +2632,10 @@ main {
 
     .time-track {
         width: 120px;
+    }
+
+    .granularity-selector {
+        margin-right: 0;
     }
 
     /* ── Sidebar as slide-out drawer ── */
