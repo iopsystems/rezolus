@@ -282,6 +282,13 @@ impl PlotOpts {
         self
     }
 
+    pub fn maybe_unit_system(self, unit: Option<&str>) -> Self {
+        match unit {
+            Some(u) => self.with_unit_system(u),
+            None => self,
+        }
+    }
+
     pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
         self.format.y_axis_label = Some(y_label.into());
         self

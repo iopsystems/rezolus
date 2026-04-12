@@ -20,6 +20,8 @@ mod agent;
 mod exporter;
 mod hindsight;
 mod mcp;
+mod parquet_metadata;
+mod parquet_tools;
 mod recorder;
 mod viewer;
 
@@ -64,6 +66,7 @@ fn main() {
         .subcommand(exporter::command())
         .subcommand(hindsight::command())
         .subcommand(mcp::command())
+        .subcommand(parquet_tools::command())
         .subcommand(recorder::command())
         .subcommand(viewer::command())
         .subcommand(
@@ -101,6 +104,9 @@ fn main() {
             let config = mcp::Config::try_from(args.clone()).expect("failed to configure");
 
             mcp::run(config)
+        }
+        Some(("parquet", args)) => {
+            parquet_tools::run(args.clone());
         }
         Some(("record", args)) => {
             let config = recorder::Config::try_from(args.clone()).expect("failed to configure");
