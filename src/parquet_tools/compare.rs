@@ -2,45 +2,12 @@ use arrow::array::{
     Array, Float64Array, GenericListArray, Int64Array, ListArray, PrimitiveArray, UInt32Array,
     UInt64Array,
 };
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use clap::ArgMatches;
 use std::error::Error;
 use std::path::PathBuf;
 
 use super::read_parquet_footer;
-
-fn compare_fields(x: &Field, y: &Field) {
-    if x.data_type() != y.data_type() {
-        eprintln!(
-            "Differing data type for {}: {} vs {}",
-            x.name(),
-            x.data_type(),
-            y.data_type()
-        );
-    }
-
-    // Compare metadata
-    let (meta1, meta2) = (x.metadata(), y.metadata());
-
-    // Compare left to right
-    meta1.iter().for_each(|(k, v)| {
-        if meta2.get(k) != Some(v) {
-            let v2 = if let Some(s) = meta2.get(k) {
-                s
-            } else {
-                &"None".to_string()
-            };
-            eprintln!("Mismatch in {}; key {k}: {v} vs {v2}", x.name());
-        }
-    });
-
-    // Compare right to left: only for missing keys
-    meta2.iter().for_each(|(k, v)| {
-        if !meta1.contains_key(k) {
-            eprintln!("Mismatch in {}; key {k}: None vs {v}", x.name());
-        }
-    });
-}
 
 fn compare_column<T: arrow::array::ArrowPrimitiveType>(
     column: &str,
@@ -107,44 +74,7 @@ fn compare_listarray_column(
     Ok(())
 }
 
-pub(super) fn run_compare_schema(args: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let left = args.get_one::<PathBuf>("left").unwrap();
-    let right = args.get_one::<PathBuf>("right").unwrap();
-
-    let (_, s1, _) = read_parquet_footer(left)?;
-    let (_, s2, _) = read_parquet_footer(right)?;
-
-    if s1.fields().len() != s2.fields().len() {
-        eprintln!(
-            "Differing field counts: {} vs {}",
-            s1.fields().len(),
-            s2.fields().len()
-        );
-    }
-
-    // Compare fields from left with right
-    for f1 in s1.fields() {
-        let Ok(f2) = s2.field_with_name(f1.name()) else {
-            eprintln!("Field {} missing in {}", f1.name(), right.display());
-            continue;
-        };
-
-        compare_fields(f1, f2);
-    }
-
-    // Look for any leftover uncompared fields from the right
-    for f2 in s2.fields() {
-        if s1.field_with_name(f2.name()).is_ok() {
-            continue;
-        }
-
-        eprintln!("Field {} missing in {}", f2.name(), left.display());
-    }
-
-    Ok(())
-}
-
-pub(super) fn run_compare(args: &ArgMatches) -> Result<(), Box<dyn Error>> {
+pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let left = args.get_one::<PathBuf>("left").unwrap();
     let right = args.get_one::<PathBuf>("right").unwrap();
 

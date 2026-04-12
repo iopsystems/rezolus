@@ -77,26 +77,6 @@ pub fn command() -> Command {
                 ),
         )
         .subcommand(
-            Command::new("compare-schema")
-                .about("Compare schemas between two parquet files")
-                .arg(
-                    clap::Arg::new("left")
-                        .short('l')
-                        .long("left")
-                        .help("Left parquet file")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true),
-                )
-                .arg(
-                    clap::Arg::new("right")
-                        .short('r')
-                        .long("right")
-                        .help("Right parquet file")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true),
-                ),
-        )
-        .subcommand(
             Command::new("compare")
                 .about("Compare data values between two parquet files")
                 .arg(
@@ -125,8 +105,7 @@ pub fn run(args: ArgMatches) {
             return;
         }
         Some(("metadata", sub_args)) => metadata::run(sub_args),
-        Some(("compare-schema", sub_args)) => compare::run_compare_schema(sub_args),
-        Some(("compare", sub_args)) => compare::run_compare(sub_args),
+        Some(("compare", sub_args)) => compare::run(sub_args),
         _ => unreachable!(),
     };
 
