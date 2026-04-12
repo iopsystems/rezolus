@@ -169,9 +169,7 @@ pub(super) fn run_compare(args: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
             let (d1, d2) = (l.data_type(), r.data_type());
             if d1 != d2 {
-                return Err(
-                    format!("Data type mismatch for {}: {} vs {}", column, d1, d2).into(),
-                );
+                return Err(format!("Data type mismatch for {}: {} vs {}", column, d1, d2).into());
             }
 
             let (l_any, r_any) = (l.as_any(), r.as_any());

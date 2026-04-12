@@ -93,10 +93,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             "  {:<idx_w$} | {:>rows_w$} | {:>bytes_w$}",
             "Group", "Rows", "Bytes",
         );
-        println!(
-            "  {:-<idx_w$}-+-{:->rows_w$}-+-{:->bytes_w$}",
-            "", "", "",
-        );
+        println!("  {:-<idx_w$}-+-{:->rows_w$}-+-{:->bytes_w$}", "", "", "",);
         for (i, rg) in row_groups.iter().enumerate() {
             println!(
                 "  {:<idx_w$} | {:>rows_w$} | {:>bytes_w$}",
@@ -105,10 +102,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
                 format_bytes(rg.total_byte_size()),
             );
         }
-        println!(
-            "  {:-<idx_w$}-+-{:->rows_w$}-+-{:->bytes_w$}",
-            "", "", "",
-        );
+        println!("  {:-<idx_w$}-+-{:->rows_w$}-+-{:->bytes_w$}", "", "", "",);
         println!(
             "  {:<idx_w$} | {:>rows_w$} | {:>bytes_w$}",
             "Total",
@@ -141,10 +135,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             let dtype = format!("{}", field.data_type());
             let meta = field.metadata();
 
-            let metric_type = meta
-                .get("metric_type")
-                .cloned()
-                .unwrap_or_default();
+            let metric_type = meta.get("metric_type").cloned().unwrap_or_default();
 
             let other_meta = meta
                 .iter()
@@ -219,7 +210,10 @@ fn run_json(
                 }
             }
         }
-        out.insert("file_metadata".to_string(), serde_json::Value::Object(file_meta));
+        out.insert(
+            "file_metadata".to_string(),
+            serde_json::Value::Object(file_meta),
+        );
     }
 
     if show_all || geometry_only {
