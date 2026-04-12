@@ -22,13 +22,9 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
         match value {
             Some(v) => {
-                // Try to pretty-print if it's valid JSON
-                if json {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(v) {
-                        println!("{}", serde_json::to_string_pretty(&parsed)?);
-                    } else {
-                        println!("{v}");
-                    }
+                // Always try to pretty-print if it's valid JSON
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(v) {
+                    println!("{}", serde_json::to_string_pretty(&parsed)?);
                 } else {
                     println!("{v}");
                 }
