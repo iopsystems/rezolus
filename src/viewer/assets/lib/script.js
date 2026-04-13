@@ -14,6 +14,7 @@ import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 import { initTheme } from './theme.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
+import { renderServiceSection, createServiceRoutes } from './service.js';
 
 initTheme();
 
@@ -216,35 +217,7 @@ const SectionContent = {
 
         // Special handling for Service extension
         if (sectionRoute.startsWith('/service/')) {
-            const meta = attrs.metadata || {};
-            const serviceName = meta.service_name || 'Service';
-            const serviceMeta = meta.service_metadata || {};
-            const unavailable = meta.unavailable_kpis || [];
-            return m('div#section-content', [
-                m('h1', serviceName),
-                Object.keys(serviceMeta).length > 0
-                    ? m('table.sysinfo-table', [
-                        m('tbody', Object.entries(serviceMeta).map(([k, v]) =>
-                            m('tr', [m('td.sysinfo-key', k), m('td', v)])
-                        )),
-                    ])
-                    : null,
-                m('div#groups',
-                    (attrs.groups || []).map((group) =>
-                        m(Group, { ...group, sectionRoute, sectionName, interval })
-                    )
-                ),
-                unavailable.length > 0 && m('div.service-notes', [
-                    m('h3', 'Unavailable KPIs'),
-                    m('p', 'The following KPIs have no matching data in this recording:'),
-                    m('ul', unavailable.map((kpi) =>
-                        m('li', [
-                            m('strong', kpi.title),
-                            ` (${kpi.role})`,
-                        ])
-                    )),
-                ]),
-            ]);
+            return renderServiceSection(attrs, Group, sectionRoute, sectionName, interval);
         }
 
         const { withData } = countCharts(attrs.groups);
@@ -417,17 +390,21 @@ document.addEventListener('dblclick', () => {
 });
 
 
-// Fetch data for a section and cache it.
+// Fetch, process, and cache a section. Returns the processed data.
+const loadSection = async (section) => {
+    if (sectionResponseCache[section]) return sectionResponseCache[section];
+    const data = await ViewerApi.getSection(section);
+    const processedData = await processDashboardData(data, activeCgroupPattern);
+    sectionResponseCache[section] = processedData;
+    return processedData;
+};
+
+// Fetch data for a section and cache it (preload variant — skips in live mode).
 const preloadSection = async (section) => {
-    // Skip preloading in live mode - data changes constantly
     if (liveMode || sectionResponseCache[section]) {
         return Promise.resolve();
     }
-
-    const data = await ViewerApi.getSection(section);
-
-    const processedData = await processDashboardData(data, activeCgroupPattern);
-    sectionResponseCache[section] = processedData;
+    return loadSection(section);
 };
 
 // Preload all sections in parallel so sidebar chart counts appear eagerly.
@@ -611,74 +588,17 @@ const bootstrap = async () => {
                     });
             },
         },
-        '/service/:serviceName/chart/:chartId': {
-            onmatch(params) {
-                const svcKey = `service/${params.serviceName}`;
-
-                const makeView = () => ({
-                    view() {
-                        const data = sectionResponseCache[svcKey];
-                        if (!data) return m('div', 'Loading...');
-                        const activeSection = data.sections.find(s => s.route === `/service/${params.serviceName}`);
-                        return m('div', [
-                            m(TopNav, topNavAttrs(data, activeSection?.route)),
-                            m('main.single-chart-main', [
-                                m(SingleChartView, {
-                                    data,
-                                    chartId: decodeURIComponent(params.chartId),
-                                    applyResultToPlot,
-                                }),
-                            ]),
-                        ]);
-                    },
-                });
-
-                if (sectionResponseCache[svcKey]) {
-                    return makeView();
-                }
-                return ViewerApi.getSection(svcKey)
-                    .then(async (data) => {
-                        const processedData = await processDashboardData(data, activeCgroupPattern);
-                        sectionResponseCache[svcKey] = processedData;
-                        return makeView();
-                    });
-            },
-        },
-        '/service/:serviceName': {
-            onmatch(params, requestedPath) {
-                if (m.route.get() === requestedPath) {
-                    return new Promise(function () {});
-                }
-                if (requestedPath !== m.route.get()) {
-                    chartsState.charts.clear();
-                    window.scrollTo(0, 0);
-                }
-
-                const svcKey = `service/${params.serviceName}`;
-
-                const makeView = () => ({
-                    view() {
-                        const data = sectionResponseCache[svcKey];
-                        if (!data) return m('div', 'Loading...');
-                        const activeSection = data.sections.find(
-                            (section) => section.route === `/service/${params.serviceName}`,
-                        );
-                        return m(Main, { ...data, activeSection });
-                    },
-                });
-
-                if (sectionResponseCache[svcKey]) {
-                    return makeView();
-                }
-                return ViewerApi.getSection(svcKey)
-                    .then(async (data) => {
-                        const processedData = await processDashboardData(data, activeCgroupPattern);
-                        sectionResponseCache[svcKey] = processedData;
-                        preloadSections(processedData.sections);
-                        return makeView();
-                    });
-            },
-        },
+        ...createServiceRoutes({
+            sectionResponseCache,
+            loadSection,
+            preloadSections,
+            chartsState,
+            Main,
+            TopNav,
+            topNavAttrs,
+            SingleChartView,
+            applyResultToPlot,
+        }),
         '/:section': {
             onmatch(params, requestedPath) {
                 // Prevent a route change if we're already on this route

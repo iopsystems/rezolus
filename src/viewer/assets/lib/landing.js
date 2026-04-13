@@ -73,14 +73,19 @@ const FileUpload = {
                         onclick: () => onConnect(connectUrl.trim()),
                     }, 'Connect'),
                 ]),
-                onDemo && m('div', { style: 'margin-top: 1.5rem' }, [
-                    m('p.upload-or', 'or'),
-                    m('button.upload-btn', {
-                        style: 'margin-top: 0.75rem; background: #6c757d',
-                        onclick: onDemo,
-                        disabled: loading,
-                    }, 'Try Demo'),
-                ]),
+                (attrs.demos || (onDemo ? [{ label: 'Try Demo' }] : [])).length > 0 &&
+                    m('div', { style: 'margin-top: 1.5rem' }, [
+                        m('p.upload-or', 'or'),
+                        m('div', { style: 'display: flex; gap: 0.5rem; justify-content: center; margin-top: 0.75rem; flex-wrap: wrap' },
+                            (attrs.demos || [{ label: 'Try Demo' }]).map(demo =>
+                                m('button.upload-btn', {
+                                    style: 'background: #6c757d',
+                                    onclick: () => onDemo(demo.file),
+                                    disabled: loading,
+                                }, demo.label),
+                            ),
+                        ),
+                    ]),
                 error && m('p.upload-error', error),
                 loading && m('p.upload-loading', 'Loading...'),
             ]),
