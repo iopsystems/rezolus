@@ -60,7 +60,7 @@ pub(super) fn filter_parquet_file(
             keep.contains(name.as_str())
                 || name
                     .split_once(':')
-                    .map_or(false, |(base, _)| keep.contains(base))
+                    .is_some_and(|(base, _)| keep.contains(base))
         })
         .map(|(i, _)| i)
         .collect();
