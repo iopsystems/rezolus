@@ -21,10 +21,8 @@ pub(crate) static TEMPLATES: &[(&str, &str)] = &[
 ];
 
 /// Source name aliases for renamed projects (old name → canonical name).
-pub(crate) static SOURCE_ALIASES: &[(&str, &str)] = &[
-    ("llm-bench", "llm-perf"),
-    ("redis", "valkey"),
-];
+pub(crate) static SOURCE_ALIASES: &[(&str, &str)] =
+    &[("llm-bench", "llm-perf"), ("redis", "valkey")];
 
 /// Look up a built-in service template by source name, resolving aliases.
 pub(crate) fn lookup_template(source: &str) -> Option<&'static str> {
