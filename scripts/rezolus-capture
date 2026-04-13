@@ -9,17 +9,22 @@ ENDPOINT=""
 SOURCE=""
 INTERVAL="1s"
 AGENT="http://127.0.0.1:4241"
+AGENT_CONFIG="/etc/rezolus/agent.toml"
 OUTPUT_DIR="."
 VIEWER_LISTEN="127.0.0.1:0"
 NO_VIEWER=false
+STARTED_AGENT=false
 
 help() {
     cat <<EOF
 $PROGRAM - Capture system and service metrics, then view the results.
 
-Records system metrics from a running Rezolus agent and optionally records
-service metrics from a Prometheus-compatible endpoint, combines them into a
-single parquet file, and launches the Rezolus viewer.
+Records system metrics from a Rezolus agent and optionally records service
+metrics from a Prometheus-compatible endpoint, combines them into a single
+parquet file, and launches the Rezolus viewer.
+
+If no Rezolus agent is already running, the script will start one automatically.
+Starting the agent requires root privileges for eBPF instrumentation.
 
 USAGE:
     $PROGRAM --duration <DURATION> [OPTIONS]
@@ -29,6 +34,7 @@ REQUIRED:
 
 OPTIONS:
     --agent <URL>               Rezolus agent URL (default: http://127.0.0.1:4241)
+    --agent-config <PATH>       Agent config file (default: /etc/rezolus/agent.toml)
     --endpoint <URL>            Service metrics endpoint (Prometheus-compatible)
     --source <NAME>             Source name for service metrics (required with --endpoint)
     --interval <INTERVAL>       Sampling interval (default: 1s)
@@ -77,6 +83,10 @@ while [ $# -gt 0 ]; do
             [ -n "${2:-}" ] || error "--agent requires a value"
             AGENT="$2"; shift 2
             ;;
+        --agent-config)
+            [ -n "${2:-}" ] || error "--agent-config requires a value"
+            AGENT_CONFIG="$2"; shift 2
+            ;;
         --endpoint)
             [ -n "${2:-}" ] || error "--endpoint requires a value"
             ENDPOINT="$2"; shift 2
@@ -114,9 +124,51 @@ if [ -n "$ENDPOINT" ] && [ -z "$SOURCE" ]; then
     error "--source is required when --endpoint is specified"
 fi
 
-# Verify the agent is running
-if ! curl -sf "$AGENT/" > /dev/null 2>&1; then
-    error "Rezolus agent is not reachable at $AGENT"
+# Check if the agent is already running
+if curl -sf "$AGENT/" > /dev/null 2>&1; then
+    echo "Rezolus agent detected at $AGENT"
+else
+    echo "No Rezolus agent detected at $AGENT, starting one..."
+
+    # Check for root/sudo privileges needed for eBPF
+    if [ "$(id -u)" -ne 0 ]; then
+        error "Starting the Rezolus agent requires root privileges for eBPF instrumentation.
+  Either run this script with sudo:
+    sudo $PROGRAM $*
+  Or start the agent separately:
+    sudo rezolus $AGENT_CONFIG"
+    fi
+
+    # Check for the config file
+    if [ ! -f "$AGENT_CONFIG" ]; then
+        error "Agent config not found at $AGENT_CONFIG
+  Specify the path with --agent-config or install the default config:
+    sudo cp config/agent.toml /etc/rezolus/agent.toml"
+    fi
+
+    # Start the agent in the background
+    rezolus "$AGENT_CONFIG" &
+    AGENT_PID=$!
+    STARTED_AGENT=true
+
+    # Wait for the agent to become ready
+    echo "Waiting for agent to be ready..."
+    for i in $(seq 1 30); do
+        if curl -sf "$AGENT/" > /dev/null 2>&1; then
+            echo "Agent is ready (pid $AGENT_PID)"
+            break
+        fi
+        if ! kill -0 "$AGENT_PID" 2>/dev/null; then
+            error "Agent process exited unexpectedly. Check that you have the required
+  kernel support (Linux 5.8+ with BPF) and privileges."
+        fi
+        sleep 1
+    done
+
+    if ! curl -sf "$AGENT/" > /dev/null 2>&1; then
+        kill "$AGENT_PID" 2>/dev/null || true
+        error "Agent failed to start within 30 seconds"
+    fi
 fi
 
 # Set up temp files and output
@@ -128,6 +180,12 @@ mkdir -p "$OUTPUT_DIR"
 
 cleanup() {
     rm -f "$SYSTEM_PARQUET" "$SERVICE_PARQUET"
+    # Stop the agent if we started it
+    if $STARTED_AGENT && [ -n "${AGENT_PID:-}" ]; then
+        echo "Stopping Rezolus agent (pid $AGENT_PID)..."
+        kill "$AGENT_PID" 2>/dev/null || true
+        wait "$AGENT_PID" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
@@ -186,7 +244,12 @@ echo ""
 # Launch viewer
 if ! $NO_VIEWER; then
     echo "Launching viewer at http://$VIEWER_LISTEN ..."
-    exec rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+    if $STARTED_AGENT; then
+        # Run without exec so the EXIT trap can stop the agent we started
+        rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+    else
+        exec rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+    fi
 else
     echo "Done. View the recording with:"
     echo "  rezolus view $OUTPUT_FILE"
