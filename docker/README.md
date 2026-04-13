@@ -41,19 +41,18 @@ Then open http://localhost:8080 in your browser.
 
 ### System + service metrics (e.g., Redis)
 
-Start Redis and a Prometheus exporter for it:
+Run all containers with `--network=host` so they can reach each other on
+localhost:
 
 ```bash
-docker run -d --name redis -p 6379:6379 redis:latest
-docker run -d --name redis-exporter -p 9121:9121 \
-  --link redis oliver006/redis_exporter
-```
+# Start Redis
+docker run -d --network=host redis:latest
 
-Capture both system and Redis metrics for 2 minutes:
+# Start a Prometheus exporter for Redis
+docker run -d --network=host oliver006/redis_exporter
 
-```bash
-docker run --rm -it --privileged \
-  --network=host \
+# Capture both system and Redis metrics for 2 minutes
+docker run --rm -it --privileged --network=host \
   -v $(pwd)/data:/data \
   rezolus \
   rezolus-capture --duration 2m \
@@ -67,12 +66,11 @@ Redis metrics side by side.
 ### System + service metrics (e.g., Valkey)
 
 ```bash
-docker run -d --name valkey -p 6379:6379 valkey/valkey:latest
-docker run -d --name valkey-exporter -p 9121:9121 \
-  --link valkey oliver006/redis_exporter --redis.addr redis://valkey:6379
+docker run -d --network=host valkey/valkey:latest
+docker run -d --network=host \
+  oliver006/redis_exporter --redis.addr redis://localhost:6379
 
-docker run --rm -it --privileged \
-  --network=host \
+docker run --rm -it --privileged --network=host \
   -v $(pwd)/data:/data \
   rezolus \
   rezolus-capture --duration 2m \
