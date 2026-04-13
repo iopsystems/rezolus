@@ -173,17 +173,15 @@ const Sidebar = {
     view({ attrs }) {
         const sectionResponseCache = attrs.sectionResponseCache;
 
-        // Separate Query Explorer from other sections
-        const regularSections = attrs.sections.filter(
-            (s) => s.name !== 'Query Explorer',
-        );
+        // Separate special sections from sampler sections
         const queryExplorer = attrs.sections.find(
             (s) => s.name === 'Query Explorer',
         );
-
-        // Find the first non-overview section to use as samplers header
-        const overviewSection = regularSections.find((s) => s.name === 'Overview');
-        const samplerSections = regularSections.filter((s) => s.name !== 'Overview');
+        const overviewSection = attrs.sections.find((s) => s.name === 'Overview');
+        const serviceSection = attrs.sections.find((s) => s.route === '/service');
+        const samplerSections = attrs.sections.filter(
+            (s) => s.name !== 'Query Explorer' && s.name !== 'Overview' && s.route !== '/service',
+        );
 
         return [
         // Backdrop overlay for mobile drawer
@@ -232,15 +230,18 @@ const Sidebar = {
                 overviewSection.name,
             ),
 
-            // Service section (shown only when service extension data is present)
-            attrs.hasServiceExtension && m(
-                m.route.Link,
-                {
-                    class: attrs.activeSection?.route === '/service' ? 'selected' : '',
-                    href: '/service',
-                },
-                'Service',
-            ),
+            // Service section (own labeled group, named after the source)
+            serviceSection && [
+                m('div.sidebar-label', serviceSection.name),
+                m(
+                    m.route.Link,
+                    {
+                        class: attrs.activeSection?.route === '/service' ? 'selected' : '',
+                        href: '/service',
+                    },
+                    'KPIs',
+                ),
+            ],
 
             // Samplers label
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),

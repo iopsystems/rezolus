@@ -17,19 +17,33 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
         );
     }
 
+    // Group KPIs by role so that charts sharing a role render side-by-side
+    // via the 2-column CSS grid on `.group .charts`.
+    let mut groups: Vec<(String, Group)> = Vec::new();
+
     for kpi in &service_ext.kpis {
-        let id = format!("kpi-{}", kpi.role);
-        let mut group = Group::new(&kpi.title, &id);
+        let plot_id = format!("kpi-{}-{}", kpi.role, slug(&kpi.title));
+
+        let group = match groups.iter_mut().find(|(r, _)| *r == kpi.role) {
+            Some((_, g)) => g,
+            None => {
+                groups.push((
+                    kpi.role.clone(),
+                    Group::new(&capitalize(&kpi.role), &format!("kpi-{}", kpi.role)),
+                ));
+                &mut groups.last_mut().unwrap().1
+            }
+        };
 
         let opts = match kpi.metric_type.as_str() {
-            "gauge" => PlotOpts::gauge(&kpi.title, &id, Unit::Count),
+            "gauge" => PlotOpts::gauge(&kpi.title, &plot_id, Unit::Count),
             "histogram" => PlotOpts::histogram(
                 &kpi.title,
-                &id,
+                &plot_id,
                 Unit::Count,
                 kpi.subtype.as_deref().unwrap_or("percentiles"),
             ),
-            _ => PlotOpts::counter(&kpi.title, &id, Unit::Count),
+            _ => PlotOpts::counter(&kpi.title, &plot_id, Unit::Count),
         };
         let opts = opts.maybe_unit_system(kpi.unit_system.as_deref());
         let opts = match &kpi.percentiles {
@@ -38,8 +52,32 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
         };
 
         group.plot_promql(opts, kpi.query.clone());
+    }
+
+    for (_, group) in groups {
         view.group(group);
     }
 
     view
+}
+
+/// Convert a title into a kebab-case slug for use as a DOM id.
+fn slug(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Capitalize the first letter of a string (for group titles).
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+    }
 }

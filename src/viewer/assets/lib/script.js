@@ -215,7 +215,7 @@ const SectionContent = {
         }
 
         // Special handling for Service extension
-        if (sectionName === 'Service') {
+        if (sectionRoute === '/service') {
             const meta = attrs.metadata || {};
             const serviceName = meta.service_name || 'Service';
             const serviceMeta = meta.service_metadata || {};
@@ -303,10 +303,6 @@ Main = createMainComponent({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo: () => systemInfoData,
-    getHasServiceExtension: () => {
-        const anyCached = Object.values(sectionResponseCache)[0];
-        return anyCached?.sections?.some(s => s.route === '/service');
-    },
     buildAttrs: topNavAttrs,
 });
 const SystemInfoView = createSystemInfoView({

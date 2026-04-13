@@ -159,16 +159,21 @@ pub fn run(config: Config) {
             info!("Computing file checksum...");
             let file_checksum = compute_file_checksum(path);
 
-            if let Some(ref ext) = service_ext {
+            if let Some((ref source, ref ext)) = service_ext {
                 info!(
-                    "Found service extension for {:?} ({} KPIs)",
+                    "Found service extension for {:?} from source {:?} ({} KPIs)",
                     ext.service_name,
+                    source,
                     ext.kpis.len()
                 );
             }
 
             info!("Generating dashboards...");
-            let state = dashboard::generate(data, filesize, service_ext.as_ref());
+            let state = dashboard::generate(
+                data,
+                filesize,
+                service_ext.as_ref().map(|(s, e)| (s.as_str(), e)),
+            );
             *state.parquet_path.write() = Some(path.clone());
             *state.systeminfo.write() = systeminfo;
             *state.selection.write() = selection;
@@ -448,7 +453,7 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
 
 /// Search for service_queries inside the nested `metadata` map.
 /// Scans all sources and returns the first ServiceExtension found.
-fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
+fn extract_service_extension_metadata(path: &Path) -> Option<(String, ServiceExtension)> {
     use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, NESTED_SERVICE_QUERIES};
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
@@ -465,10 +470,10 @@ fn extract_service_extension_metadata(path: &Path) -> Option<ServiceExtension> {
     let metadata_map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(metadata_json).ok()?;
 
-    for (_source, value) in &metadata_map {
+    for (source, value) in &metadata_map {
         if let Some(sq) = value.get(NESTED_SERVICE_QUERIES) {
             if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
-                return Some(ext);
+                return Some((source.clone(), ext));
             }
         }
     }
@@ -841,7 +846,11 @@ async fn upload_parquet(
     data.set_filename(filename.clone());
 
     let service_ext = extract_service_extension_metadata(&temp_path);
-    let new_state = dashboard::generate(data, filesize, service_ext.as_ref());
+    let new_state = dashboard::generate(
+        data,
+        filesize,
+        service_ext.as_ref().map(|(s, e)| (s.as_str(), e)),
+    );
     let (systeminfo, selection) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 

@@ -11,49 +11,49 @@
       "unit_system": "rate"
     },
     {
-      "role": "custom",
+      "role": "load",
       "title": "Input Token Rate",
       "query": "sum(irate(tokens{direction=\"input\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
-      "role": "saturation",
+      "role": "load",
       "title": "Requests In-Flight",
       "query": "requests_inflight",
       "type": "gauge",
       "unit_system": "count"
     },
     {
-      "role": "custom",
+      "role": "throughput",
       "title": "Request Rate",
       "query": "sum(irate(requests{status=\"success\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
-      "role": "error_rate",
+      "role": "error",
       "title": "Error Rate",
       "query": "sum(irate(requests{status=\"error\"}[5s])) / sum(irate(requests{status=\"sent\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "percentage"
     },
     {
-      "role": "custom",
+      "role": "error",
       "title": "Error Request Rate",
       "query": "sum(irate(requests{status=\"error\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
-      "role": "custom",
+      "role": "error",
       "title": "Timeout Request Rate",
       "query": "sum(irate(requests{status=\"timeout\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
-      "role": "custom",
+      "role": "error",
       "title": "Canceled Request Rate",
       "query": "sum(irate(requests{status=\"canceled\"}[5s]))",
       "type": "delta_counter",

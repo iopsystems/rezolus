@@ -37,7 +37,6 @@ const createMainComponent = ({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo,
-    getHasServiceExtension,
     buildAttrs,
 }) => ({
     view({
@@ -56,7 +55,6 @@ const createMainComponent = ({
                     sections,
                     sectionResponseCache,
                     hasSystemInfo: !!getHasSystemInfo(),
-                    hasServiceExtension: !!getHasServiceExtension(),
                 }),
                 m(SectionContent, {
                     section: activeSection,
