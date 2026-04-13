@@ -166,11 +166,16 @@ if ! curl -sf http://127.0.0.1:4241/ > /dev/null 2>&1; then
     error "Rezolus agent is not running on 127.0.0.1:4241"
 fi
 
+# Detect the invoking user when running under sudo
+REAL_USER="${SUDO_USER:-$(id -un)}"
+REAL_GROUP="$(id -gn "$REAL_USER" 2>/dev/null || id -gn)"
+
 # Set up temp files and output
 SYSTEM_PARQUET="$(mktemp /tmp/system-XXXXXX.parquet)"
 OUTPUT_FILE="${OUTPUT_DIR}/capture.parquet"
 
 mkdir -p "$OUTPUT_DIR"
+chown "$REAL_USER:$REAL_GROUP" "$OUTPUT_DIR" 2>/dev/null || true
 
 # Helper: stop all recorder processes gracefully
 stop_recorders() {
@@ -280,6 +285,13 @@ else
     rezolus parquet combine "${COMBINE_FILES[@]}" -o "$OUTPUT_FILE"
     echo "Combined parquet saved to $OUTPUT_FILE"
 fi
+
+# Fix ownership and permissions on output files
+for f in "$OUTPUT_DIR"/*.parquet; do
+    [ -f "$f" ] || continue
+    chown "$REAL_USER:$REAL_GROUP" "$f" 2>/dev/null || true
+    chmod 755 "$f" 2>/dev/null || true
+done
 
 # Show metadata summary
 echo ""
