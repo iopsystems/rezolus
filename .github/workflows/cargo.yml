@@ -136,12 +136,23 @@ jobs:
 
       - name: Update cargo flags
         if: ${{ matrix.profile == 'release' }}
-        run: echo 'FLAGS=--release' >> $GITHUB_ENV
+        run: |
+          echo 'FLAGS=--release' >> $GITHUB_ENV
+          echo 'CARGO_BUILD_JOBS=2' >> $GITHUB_ENV
         shell: bash
       - name: Update cargo flags
         if: ${{ matrix.profile == 'debug' }}
         run: echo 'FLAGS=' >> $GITHUB_ENV
         shell: bash
+
+      - name: Add swap
+        if: ${{ matrix.os != 'macos-latest' }}
+        shell: bash
+        run: |
+          sudo fallocate -l 4G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
 
       - name: Install dependencies
         if: ${{ matrix.os != 'macos-latest' }}

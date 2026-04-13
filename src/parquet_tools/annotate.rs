@@ -4,33 +4,21 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, KEY_SOURCE, NESTED_SERVICE_QUERIES};
+use crate::parquet_metadata::{KEY_SERVICE_QUERIES, KEY_SOURCE};
 use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::ServiceExtension;
 
-static TEMPLATES: &[(&str, &str)] = &[
-    ("llm-perf", include_str!("templates/llm_perf.json")),
-    ("cachecannon", include_str!("templates/cachecannon.json")),
-];
-
-/// Source name aliases for renamed projects (old name → canonical name).
-static SOURCE_ALIASES: &[(&str, &str)] = &[("llm-bench", "llm-perf")];
-
-fn lookup_template(source: &str) -> Option<&'static str> {
-    let canonical = SOURCE_ALIASES
-        .iter()
-        .find(|(alias, _)| *alias == source)
-        .map(|(_, canon)| *canon)
-        .unwrap_or(source);
-    TEMPLATES
-        .iter()
-        .find(|(name, _)| *name == canonical)
-        .map(|(_, json)| *json)
-}
+use super::lookup_template;
 
 pub(super) fn run(args: &ArgMatches) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
+
+    if args.get_flag("undo") {
+        run_undo(path);
+        return;
+    }
+
     let custom_file = args.get_one::<PathBuf>("service-extension");
 
     let source = read_source_metadata(path).unwrap_or_else(|| {
@@ -64,7 +52,7 @@ pub(super) fn run(args: &ArgMatches) {
 
     let annotated_json =
         serde_json::to_string(&ext).expect("failed to serialize service extension");
-    annotate_parquet(path, &source, &annotated_json).expect("failed to annotate parquet file");
+    annotate_parquet(path, &annotated_json).expect("failed to annotate parquet file");
 
     println!(
         "Annotated {:?} with {:?} service queries ({} KPIs)",
@@ -72,6 +60,15 @@ pub(super) fn run(args: &ArgMatches) {
         ext.service_name,
         ext.kpis.len()
     );
+}
+
+/// Remove service_queries from all sources in per_source_metadata.
+fn run_undo(path: &Path) {
+    unannotate_parquet(path).unwrap_or_else(|e| {
+        eprintln!("error: failed to remove annotation: {e}");
+        std::process::exit(1);
+    });
+    println!("Removed service extension annotation from {:?}", path);
 }
 
 /// Build the effective PromQL query for a KPI, accounting for histogram wrapping.
@@ -206,7 +203,6 @@ fn read_source_metadata(path: &Path) -> Option<String> {
 
 fn annotate_parquet(
     path: &Path,
-    source: &str,
     service_queries_json: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -225,27 +221,11 @@ fn annotate_parquet(
         .cloned()
         .unwrap_or_default();
 
-    // Build or update the nested metadata map
-    let mut metadata_map: serde_json::Map<String, serde_json::Value> = kv_meta
-        .iter()
-        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-        .and_then(|kv| kv.value.as_deref())
-        .and_then(|v| serde_json::from_str(v).ok())
-        .unwrap_or_default();
-
-    // Nest service_queries under this source
-    let service_queries: serde_json::Value = serde_json::from_str(service_queries_json)?;
-    let source_entry = metadata_map
-        .entry(source.to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    if let serde_json::Value::Object(map) = source_entry {
-        map.insert(NESTED_SERVICE_QUERIES.to_string(), service_queries);
-    }
-
-    kv_meta.retain(|kv| kv.key != KEY_PER_SOURCE_METADATA);
+    // Write service_queries as a top-level key
+    kv_meta.retain(|kv| kv.key != KEY_SERVICE_QUERIES);
     kv_meta.push(KeyValue {
-        key: KEY_PER_SOURCE_METADATA.to_string(),
-        value: Some(serde_json::to_string(&metadata_map)?),
+        key: KEY_SERVICE_QUERIES.to_string(),
+        value: Some(service_queries_json.to_string()),
     });
 
     let props = WriterProperties::builder()
@@ -268,6 +248,53 @@ fn annotate_parquet(
     }
 
     // Write back to the same file (in-place)
+    std::fs::write(path, &output)?;
+
+    Ok(())
+}
+
+/// Remove the top-level `service_queries` key from parquet metadata.
+fn unannotate_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use parquet::format::KeyValue;
+
+    let meta_reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
+    let mut kv_meta: Vec<KeyValue> = meta_reader
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .cloned()
+        .unwrap_or_default();
+
+    let before = kv_meta.len();
+    kv_meta.retain(|kv| kv.key != KEY_SERVICE_QUERIES);
+
+    if kv_meta.len() == before {
+        eprintln!("warning: no service_queries annotation found");
+        return Ok(());
+    }
+
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(kv_meta))
+        .build();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
+    let schema = builder.schema().clone();
+    let reader = builder.build()?;
+
+    let mut output = Vec::new();
+    {
+        let mut writer = ArrowWriter::try_new(Cursor::new(&mut output), schema, Some(props))?;
+        for batch in reader {
+            writer.write(&batch?)?;
+        }
+        writer.close()?;
+    }
+
     std::fs::write(path, &output)?;
 
     Ok(())
