@@ -617,15 +617,6 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
                 map.entry(NESTED_VERSION.to_string())
                     .or_insert(serde_json::Value::String(version));
             }
-            if let Some(sq) = input
-                .kv_metadata
-                .iter()
-                .find(|kv| kv.key == KEY_SERVICE_QUERIES)
-                .and_then(|kv| kv.value.as_deref())
-                .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
-            {
-                map.entry(NESTED_SERVICE_QUERIES.to_string()).or_insert(sq);
-            }
         }
     }
     if !per_source.is_empty() {

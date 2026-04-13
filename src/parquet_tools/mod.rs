@@ -16,10 +16,13 @@ use std::sync::Arc;
 pub(crate) static TEMPLATES: &[(&str, &str)] = &[
     ("llm-perf", include_str!("templates/llm_perf.json")),
     ("cachecannon", include_str!("templates/cachecannon.json")),
+    ("valkey", include_str!("templates/valkey.json")),
+    ("vllm", include_str!("templates/vllm.json")),
 ];
 
 /// Source name aliases for renamed projects (old name → canonical name).
-pub(crate) static SOURCE_ALIASES: &[(&str, &str)] = &[("llm-bench", "llm-perf")];
+pub(crate) static SOURCE_ALIASES: &[(&str, &str)] =
+    &[("llm-bench", "llm-perf"), ("redis", "valkey")];
 
 /// Look up a built-in service template by source name, resolving aliases.
 pub(crate) fn lookup_template(source: &str) -> Option<&'static str> {
