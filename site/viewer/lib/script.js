@@ -220,7 +220,7 @@ const Group = {
 
         const expandLink = (spec) => {
             if (!spec.promql_query) return null;
-            const href = `${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
+            const href = `#${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
             return m('a.chart-expand', {
                 href, target: '_blank', title: 'Open in new tab',
                 onclick: (e) => e.stopPropagation(),
