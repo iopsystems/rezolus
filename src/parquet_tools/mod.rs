@@ -53,6 +53,13 @@ pub fn command() -> Command {
                         .help("Custom service extension JSON file (overrides built-in template)")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("undo")
+                        .long("undo")
+                        .help("Remove service extension annotation from the parquet file")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("service-extension"),
                 ),
         )
         .subcommand(
