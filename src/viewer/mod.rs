@@ -147,9 +147,7 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    let registry = TemplateRegistry::resolve_and_load(
-        config.templates_dir.as_deref(),
-    );
+    let registry = TemplateRegistry::resolve_and_load(config.templates_dir.as_deref());
 
     let state = match &config.source {
         Source::File(path) => {
@@ -1358,12 +1356,7 @@ async fn lib(uri: Uri) -> impl IntoResponse {
 pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(output_dir)?;
 
-    let state = dashboard::generate(
-        Tsdb::default(),
-        None,
-        None,
-        TemplateRegistry::empty(),
-    );
+    let state = dashboard::generate(Tsdb::default(), None, None, TemplateRegistry::empty());
 
     // Extract the shared sections list from the first entry and write it once.
     let mut sections_written = false;

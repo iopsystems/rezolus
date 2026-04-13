@@ -81,7 +81,10 @@ impl TemplateRegistry {
         match Self::load(&dir) {
             Ok(registry) => registry,
             Err(e) => {
-                eprintln!("warning: failed to load templates from {}: {e}", dir.display());
+                eprintln!(
+                    "warning: failed to load templates from {}: {e}",
+                    dir.display()
+                );
                 Self::empty()
             }
         }
@@ -104,9 +107,8 @@ impl TemplateRegistry {
 
             if path.extension().is_some_and(|e| e == "json") {
                 let content = std::fs::read_to_string(&path)?;
-                let ext: ServiceExtension = serde_json::from_str(&content).map_err(|e| {
-                    format!("failed to parse {}: {e}", path.display())
-                })?;
+                let ext: ServiceExtension = serde_json::from_str(&content)
+                    .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
 
                 insert_template_key(&mut templates, ext.service_name.clone(), &path, &ext)?;
                 for alias in &ext.aliases {
@@ -142,12 +144,9 @@ fn insert_template_key(
             entry.insert(ext.clone());
             Ok(())
         }
-        Entry::Occupied(_) => Err(format!(
-            "duplicate template key {:?} in {}",
-            key,
-            path.display()
-        )
-        .into()),
+        Entry::Occupied(_) => {
+            Err(format!("duplicate template key {:?} in {}", key, path.display()).into())
+        }
     }
 }
 

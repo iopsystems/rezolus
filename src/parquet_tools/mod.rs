@@ -164,7 +164,9 @@ pub fn run(args: ArgMatches) {
     let result = match args.subcommand() {
         Some(("annotate", sub_args)) => {
             let registry = TemplateRegistry::resolve_and_load(
-                sub_args.get_one::<PathBuf>("templates").map(|p| p.as_path()),
+                sub_args
+                    .get_one::<PathBuf>("templates")
+                    .map(|p| p.as_path()),
             );
             annotate::run(sub_args, &registry);
             return;
@@ -172,7 +174,9 @@ pub fn run(args: ArgMatches) {
         Some(("combine", sub_args)) => combine::run(sub_args),
         Some(("filter", sub_args)) => {
             let registry = TemplateRegistry::resolve_and_load(
-                sub_args.get_one::<PathBuf>("templates").map(|p| p.as_path()),
+                sub_args
+                    .get_one::<PathBuf>("templates")
+                    .map(|p| p.as_path()),
             );
             filter::run(sub_args, &registry);
             return;
