@@ -13,6 +13,7 @@ pub struct Config {
     output: PathBuf,
     metadata: Vec<(String, String)>,
     counter_map: Option<PathBuf>,
+    filter: Option<PathBuf>,
 }
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
@@ -41,6 +42,7 @@ impl TryFrom<ArgMatches> for Config {
                 })
                 .collect(),
             counter_map: args.get_one::<PathBuf>("COUNTER_MAP").cloned(),
+            filter: args.get_one::<PathBuf>("FILTER").cloned(),
         })
     }
 }
@@ -120,7 +122,14 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("COUNTER_MAP")
                 .long("counter-map")
-                .help("JSON file mapping Redis/Valkey INFO fields to counter types")
+                .help("JSON file listing non-obvious counter fields for Redis/Valkey recording")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            clap::Arg::new("FILTER")
+                .long("filter")
+                .help("JSON file listing Redis/Valkey INFO fields to retain (discard all others)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf)),
         )
@@ -196,10 +205,17 @@ pub fn run(config: Config) {
                     std::process::exit(1);
                 })
             });
+            let filter = config.filter.as_ref().map(|path| {
+                valkey::MetricFilter::load(path).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                })
+            });
             match rt.block_on(valkey::ValkeySource::connect(
                 &config.url,
                 &config.interval,
                 counter_map,
+                filter,
             )) {
                 Ok(source) => SourceType::Valkey(source),
                 Err(e) => {

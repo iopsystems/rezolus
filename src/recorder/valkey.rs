@@ -33,6 +33,28 @@ impl CounterMap {
     }
 }
 
+/// Whitelist of metric field names to retain. When provided, any field not in
+/// the set is discarded before conversion. Loaded from a JSON array via
+/// `--filter`.
+///
+/// Keyspace sub-fields use the `keyspace/<sub_key>` form (e.g. `keyspace/keys`).
+#[derive(Clone, Debug)]
+pub struct MetricFilter {
+    fields: HashSet<String>,
+}
+
+impl MetricFilter {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let data = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read filter {}: {e}", path.display()))?;
+        let list: Vec<String> = serde_json::from_str(&data)
+            .map_err(|e| format!("failed to parse filter {}: {e}", path.display()))?;
+        Ok(Self {
+            fields: list.into_iter().collect(),
+        })
+    }
+}
+
 /// Holds the Redis/Valkey connection and converter for a recording session.
 pub struct ValkeySource {
     connection: ConnectionManager,
@@ -48,6 +70,7 @@ struct ValkeyConverter {
     next_id: usize,
     known_counters: HashSet<String>,
     float_counters: HashSet<String>,
+    filter: Option<HashSet<String>>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -61,6 +84,7 @@ impl ValkeySource {
         url: &Url,
         interval: &humantime::Duration,
         counter_map: Option<CounterMap>,
+        filter: Option<MetricFilter>,
     ) -> Result<Self, String> {
         let redis_url = normalize_url(url);
 
@@ -107,7 +131,7 @@ impl ValkeySource {
 
         Ok(Self {
             connection,
-            converter: ValkeyConverter::new(counter_map.unwrap_or_default()),
+            converter: ValkeyConverter::new(counter_map.unwrap_or_default(), filter),
             source_name,
             version,
         })
@@ -147,7 +171,7 @@ impl ValkeySource {
 }
 
 impl ValkeyConverter {
-    fn new(map: CounterMap) -> Self {
+    fn new(map: CounterMap, filter: Option<MetricFilter>) -> Self {
         let float_counters: HashSet<String> = map.float_counters.into_iter().collect();
         let mut known_counters: HashSet<String> = map.counters.into_iter().collect();
         // Float counters are also counters.
@@ -157,6 +181,7 @@ impl ValkeyConverter {
             next_id: 0,
             known_counters,
             float_counters,
+            filter: filter.map(|f| f.fields),
         }
     }
 
@@ -300,6 +325,13 @@ impl ValkeyConverter {
                 continue;
             }
 
+            // Apply filter: discard fields not in the whitelist
+            if let Some(ref allowed) = self.filter {
+                if !allowed.contains(field) {
+                    continue;
+                }
+            }
+
             // Try parsing as f64
             let Ok(num) = value.parse::<f64>() else {
                 continue;
@@ -352,6 +384,15 @@ impl ValkeyConverter {
             let Some((sub_key, sub_value)) = kv.split_once('=') else {
                 continue;
             };
+
+            // Filter uses "keyspace/<sub_key>" form
+            if let Some(ref allowed) = self.filter {
+                let filter_key = format!("keyspace/{sub_key}");
+                if !allowed.contains(&filter_key) {
+                    continue;
+                }
+            }
+
             let Ok(num) = sub_value.trim().parse::<i64>() else {
                 continue;
             };
@@ -430,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_info() {
-        let mut converter = ValkeyConverter::new(CounterMap::default());
+        let mut converter = ValkeyConverter::new(CounterMap::default(), None);
         let info = "\
 # Server\r
 redis_version:7.2.4\r
@@ -468,7 +509,7 @@ connected_clients:10\r
 
     #[test]
     fn test_counter_classification() {
-        let mut converter = ValkeyConverter::new(test_counter_map());
+        let mut converter = ValkeyConverter::new(test_counter_map(), None);
         let info = "\
 # Stats\r
 total_connections_received:100\r
@@ -487,7 +528,7 @@ connected_clients:5\r
 
     #[test]
     fn test_keyspace_parsing() {
-        let mut converter = ValkeyConverter::new(CounterMap::default());
+        let mut converter = ValkeyConverter::new(CounterMap::default(), None);
         let info = "\
 # Keyspace\r
 db0:keys=100,expires=10,avg_ttl=5000\r
@@ -511,7 +552,7 @@ db1:keys=50,expires=5,avg_ttl=3000\r
 
     #[test]
     fn test_float_cpu_scaling() {
-        let mut converter = ValkeyConverter::new(test_counter_map());
+        let mut converter = ValkeyConverter::new(test_counter_map(), None);
         let info = "\
 # CPU\r
 used_cpu_sys:10.500000\r
@@ -539,7 +580,7 @@ used_cpu_user:20.300000\r
 
     #[test]
     fn test_stable_metric_ids() {
-        let mut converter = ValkeyConverter::new(test_counter_map());
+        let mut converter = ValkeyConverter::new(test_counter_map(), None);
         let info1 = "\
 # Stats\r
 total_connections_received:100\r
@@ -570,7 +611,7 @@ connected_clients:10\r
 
     #[test]
     fn test_non_numeric_values_skipped() {
-        let mut converter = ValkeyConverter::new(CounterMap::default());
+        let mut converter = ValkeyConverter::new(CounterMap::default(), None);
         let info = "\
 # Server\r
 redis_version:7.2.4\r
@@ -590,7 +631,7 @@ uptime_in_seconds:100\r
 
     #[test]
     fn test_human_readable_fields_skipped() {
-        let mut converter = ValkeyConverter::new(CounterMap::default());
+        let mut converter = ValkeyConverter::new(CounterMap::default(), None);
         let info = "\
 # Memory\r
 used_memory:1000000\r
@@ -656,7 +697,7 @@ redis_mode:standalone\r
 
     #[test]
     fn test_msgpack_roundtrip() {
-        let mut converter = ValkeyConverter::new(test_counter_map());
+        let mut converter = ValkeyConverter::new(test_counter_map(), None);
         let info = "\
 # Stats\r
 total_connections_received:100\r
@@ -675,8 +716,62 @@ connected_clients:5\r
     }
 
     #[test]
+    fn test_filter_retains_only_listed_fields() {
+        let filter = MetricFilter {
+            fields: HashSet::from(["connected_clients".to_string(), "used_memory".to_string()]),
+        };
+        let mut converter = ValkeyConverter::new(CounterMap::default(), Some(filter));
+        let info = "\
+# Clients\r
+connected_clients:10\r
+blocked_clients:2\r
+\r
+# Memory\r
+used_memory:1000000\r
+used_memory_rss:2000000\r
+";
+        let snapshot = converter.convert(info);
+        match snapshot {
+            Snapshot::V2(s) => {
+                assert_eq!(s.gauges.len(), 2);
+                let names: HashSet<_> = s
+                    .gauges
+                    .iter()
+                    .map(|g| g.metadata.get("metric").unwrap().as_str())
+                    .collect();
+                assert!(names.contains("redis/connected_clients"));
+                assert!(names.contains("redis/used_memory"));
+            }
+            _ => panic!("expected V2 snapshot"),
+        }
+    }
+
+    #[test]
+    fn test_filter_keyspace() {
+        let filter = MetricFilter {
+            fields: HashSet::from(["keyspace/keys".to_string()]),
+        };
+        let mut converter = ValkeyConverter::new(CounterMap::default(), Some(filter));
+        let info = "\
+# Keyspace\r
+db0:keys=100,expires=10,avg_ttl=5000\r
+";
+        let snapshot = converter.convert(info);
+        match snapshot {
+            Snapshot::V2(s) => {
+                assert_eq!(s.gauges.len(), 1);
+                assert_eq!(
+                    s.gauges[0].metadata.get("metric").unwrap(),
+                    "redis/keyspace/keys"
+                );
+            }
+            _ => panic!("expected V2 snapshot"),
+        }
+    }
+
+    #[test]
     fn test_total_prefix_heuristic() {
-        let mut converter = ValkeyConverter::new(CounterMap::default());
+        let mut converter = ValkeyConverter::new(CounterMap::default(), None);
         let info = "\
 # Stats\r
 total_some_new_metric:42\r
