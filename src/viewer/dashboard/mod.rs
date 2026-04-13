@@ -35,7 +35,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
 pub fn generate(
     data: Tsdb,
     filesize: Option<u64>,
-    service_ext: Option<&crate::viewer::ServiceExtension>,
+    service_ext: Option<(&str, &crate::viewer::ServiceExtension)>,
 ) -> AppState {
     let state = AppState::new(data);
 
@@ -49,12 +49,14 @@ pub fn generate(
     }))
     .collect();
 
-    if service_ext.is_some() {
-        // Insert Service section after Overview (position 1)
+    if let Some((source_name, _)) = service_ext {
+        // Insert service section after Overview (position 1).
+        // Use the parquet source name (e.g. "llm-perf") so the sidebar
+        // labels the section after the service rather than a generic "Service".
         all_sections.insert(
             1,
             Section {
-                name: "Service".to_string(),
+                name: source_name.to_string(),
                 route: "/service".to_string(),
             },
         );
@@ -65,7 +67,7 @@ pub fn generate(
 
     // Generate overview separately (needs throughput_query from service extension)
     let throughput_query = service_ext
-        .and_then(|e| e.throughput_query())
+        .and_then(|(_, e)| e.throughput_query())
         .map(str::to_string);
     {
         let mut view = overview::generate(&tsdb, all_sections.clone(), throughput_query.as_deref());
@@ -88,7 +90,7 @@ pub fn generate(
     }
 
     // Generate service section if extension is present
-    if let Some(ext) = service_ext {
+    if let Some((_, ext)) = service_ext {
         let view = service::generate(&tsdb, all_sections.clone(), ext);
         rendered_sections.insert(
             "service.json".to_string(),

@@ -24,10 +24,18 @@ pub struct Kpi {
     pub subtype: Option<String>,
     #[serde(default)]
     pub unit_system: Option<String>,
+    /// Custom percentile quantiles for histogram KPIs (e.g. [0.5, 0.95]).
+    /// When absent, `common::DEFAULT_PERCENTILES` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percentiles: Option<Vec<f64>>,
     /// Whether the parquet file contains data for this KPI's query.
     /// Set by `rezolus parquet annotate` during validation.
     #[serde(default = "default_available")]
     pub available: bool,
+    /// When true, this KPI's query is used as the denominator for
+    /// normalized overview charts (e.g. "CPU / Throughput").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub denominator: bool,
 }
 
 fn default_available() -> bool {
@@ -38,7 +46,7 @@ impl ServiceExtension {
     pub fn throughput_query(&self) -> Option<&str> {
         self.kpis
             .iter()
-            .find(|k| k.role == "throughput")
+            .find(|k| k.denominator)
             .map(|k| k.query.as_str())
     }
 }

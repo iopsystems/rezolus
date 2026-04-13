@@ -47,6 +47,9 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(kv) = metadata.file_metadata().key_value_metadata() {
             println!("File Metadata:");
             for entry in kv {
+                if entry.key == "ARROW:schema" {
+                    continue;
+                }
                 let value = entry.value.as_deref().unwrap_or("");
                 if value.len() > 120 {
                     println!("  {}: {}...", entry.key, &value[..120]);
@@ -132,7 +135,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
         for field in schema.fields() {
             let name = field.name().clone();
-            let dtype = format!("{}", field.data_type());
+            let dtype = format_data_type(field.data_type());
             let meta = field.metadata();
 
             let metric_type = meta.get("metric_type").cloned().unwrap_or_default();
@@ -198,6 +201,9 @@ fn run_json(
         let mut file_meta = serde_json::Map::new();
         if let Some(kv) = metadata.file_metadata().key_value_metadata() {
             for entry in kv {
+                if entry.key == "ARROW:schema" {
+                    continue;
+                }
                 let value = entry.value.as_deref().unwrap_or("");
                 // Try to parse as JSON to nest it properly
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(value) {
@@ -276,6 +282,17 @@ fn run_json(
 
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
+}
+
+/// Human-friendly data type string. Simplifies `List(Field { name: "item",
+/// data_type: UInt64, ... })` to just `List<UInt64>`.
+fn format_data_type(dt: &arrow::datatypes::DataType) -> String {
+    use arrow::datatypes::DataType;
+    match dt {
+        DataType::List(f) => format!("List<{}>", format_data_type(f.data_type())),
+        DataType::LargeList(f) => format!("LargeList<{}>", format_data_type(f.data_type())),
+        other => format!("{other}"),
+    }
 }
 
 fn format_bytes(bytes: i64) -> String {

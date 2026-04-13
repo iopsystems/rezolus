@@ -58,6 +58,11 @@ export function configureMultiSeriesChart(chart) {
 
     const cgroupColors = seriesNames.map(name => globalColorMapper.getColorByName(name));
 
+    // For percentile charts, assign z-index so lower quantiles draw on top of higher ones.
+    // This ensures p50 is visible when its value equals p99.99.
+    const isPercentileChart = chart.spec.promql_query &&
+        chart.spec.promql_query.includes('histogram_percentiles');
+
     for (let i = 1; i < data.length; i++) {
         const name = seriesNames[i - 1];
         const isOtherCategory = name === "Other";
@@ -68,6 +73,16 @@ export function configureMultiSeriesChart(chart) {
             return [t * 1000, v, raw];
         });
         zippedData = insertGapNulls(zippedData, chart.interval);
+
+        // z controls draw order: higher z draws on top.
+        // Percentile charts: reverse so lower quantiles (earlier in array) draw on top.
+        // Other charts: "Other" category behind everything else.
+        let zLevel;
+        if (isPercentileChart) {
+            zLevel = data.length - i;
+        } else {
+            zLevel = isOtherCategory ? 1 : 2;
+        }
 
         series.push({
             name: name,
@@ -86,8 +101,7 @@ export function configureMultiSeriesChart(chart) {
             // Add symbol for "Other" category to make it more distinguishable
             showSymbol: isOtherCategory,
             symbolSize: isOtherCategory ? 3 : 0,
-            // Ensure "Other" appears behind other lines
-            z: isOtherCategory ? 1 : 2,
+            z: zLevel,
             emphasis: {
                 focus: 'series',
                 lineStyle: {

@@ -1,3 +1,6 @@
+/** Default percentile quantiles used across the viewer. */
+export const DEFAULT_PERCENTILES = [0.5, 0.9, 0.99, 0.999, 0.9999];
+
 /**
  * Maps semantic metric types to compatible chart styles.
  *
@@ -63,14 +66,15 @@ export function resolveStyle(type_, subtype, result) {
  *
  * @param {string} baseQuery - The raw metric selector (e.g. 'tcp_packet_latency')
  * @param {string} [subtype]  - 'percentiles' or 'buckets'
+ * @param {number[]} [percentiles] - Custom quantiles (default: DEFAULT_PERCENTILES)
  * @returns {string} The wrapped PromQL query
  */
-export function buildHistogramQuery(baseQuery, subtype) {
+export function buildHistogramQuery(baseQuery, subtype, percentiles) {
     if (subtype === 'buckets') {
         return `histogram_heatmap(${baseQuery})`;
     }
-    // Default to percentiles
-    return `histogram_percentiles([0.5, 0.9, 0.99, 0.999, 0.9999], ${baseQuery})`;
+    const quantiles = percentiles || DEFAULT_PERCENTILES;
+    return `histogram_percentiles([${quantiles.join(', ')}], ${baseQuery})`;
 }
 
 /**

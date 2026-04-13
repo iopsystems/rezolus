@@ -3,6 +3,10 @@ pub use logging::{configure_logging, verbosity_to_level, Level, LogConfig, LogDr
 
 pub static HISTOGRAM_GROUPING_POWER: u8 = 3;
 
+/// Default percentile quantiles used for histogram summaries across the
+/// exporter, parquet annotation, and viewer.
+pub const DEFAULT_PERCENTILES: &[f64] = &[0.5, 0.9, 0.99, 0.999, 0.9999];
+
 // Static metric descriptions extracted from source by build.rs.
 // Platform-independent — includes all metrics regardless of target OS.
 include!(concat!(env!("OUT_DIR"), "/metric_descriptions.rs"));

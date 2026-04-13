@@ -40,7 +40,7 @@ const createMainComponent = ({
     buildAttrs,
 }) => ({
     view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series },
+        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series, metadata },
     }) {
         return m(
             'div',
@@ -60,6 +60,7 @@ const createMainComponent = ({
                     section: activeSection,
                     groups,
                     interval,
+                    metadata,
                 }),
             ]),
             m(SaveModal),

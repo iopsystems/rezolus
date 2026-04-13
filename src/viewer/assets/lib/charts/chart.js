@@ -16,6 +16,7 @@ import {
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
 import { themeVersion } from '../theme.js';
+import { resolveStyle } from './metric_types.js';
 
 
 export class ChartsState {
@@ -147,6 +148,21 @@ export class Chart {
         if (this.echart && (oldSpec.data !== this.spec.data || themeChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
+
+            // Restore zoom state after re-render (notMerge wipes dataZoom range)
+            if (themeChanged && this.chartsState.zoomLevel !== null) {
+                const z = this.chartsState.zoomLevel;
+                if (z.start !== 0 || z.end !== 100) {
+                    this.echart.dispatchAction({
+                        type: 'dataZoom',
+                        start: z.start,
+                        end: z.end,
+                        startValue: z.startValue,
+                        endValue: z.endValue,
+                    });
+                    this._rescaleYAxis();
+                }
+            }
         }
     }
 
@@ -370,7 +386,9 @@ export class Chart {
     _rescaleYAxis() {
         if (!this.echart) return;
 
-        const style = this.spec.opts.style || this.spec._resolvedStyle;
+        const style = this.spec.opts.style
+            || this.spec._resolvedStyle
+            || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
         // Only for chart types with a value/log Y-axis
         if (style === 'heatmap' || style === 'histogram_heatmap') return;
 
@@ -461,8 +479,11 @@ export class Chart {
     }
 
     configureChartByType() {
-        // Use explicit style (query explorer) or resolved style (from metric type)
-        const style = this.spec.opts.style || this.spec._resolvedStyle;
+        // Use explicit style (query explorer), resolved style (from query result),
+        // or infer from metric type/subtype before data arrives.
+        const style = this.spec.opts.style
+            || this.spec._resolvedStyle
+            || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
 
         // Clean up heatmap DOM legend bar when switching to a different chart type
         if (style !== 'histogram_heatmap' && style !== 'heatmap') {

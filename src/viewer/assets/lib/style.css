@@ -45,7 +45,39 @@
     --success: #3fb950;
     --warning: #d29922;
     --danger: #f85149;
+    --danger-fg: #ffa198;
     --info: #58a6ff;
+
+    /* Transport / recording controls */
+    --record: #f56565;
+    --record-bg: rgba(229, 62, 62, 0.2);
+    --record-bg-hover: rgba(229, 62, 62, 0.35);
+    --record-hover: #fc8181;
+    --record-glow: rgba(229, 62, 62, 0.25);
+    --stop: #ecc94b;
+    --stop-bg: rgba(236, 201, 75, 0.15);
+    --stop-bg-hover: rgba(236, 201, 75, 0.3);
+    --stop-hover: #f6e05e;
+    --stop-glow: rgba(236, 201, 75, 0.2);
+    --recording-badge: #e53e3e;
+
+    /* Overlays */
+    --overlay: rgba(0, 0, 0, 0.5);
+    --overlay-heavy: rgba(0, 0, 0, 0.6);
+    --selection-highlight: rgba(255, 255, 255, 0.06);
+
+    /* Topology diagram */
+    --topo-threads: rgba(63, 185, 80, 0.6);
+    --topo-threads-emphasis: rgba(63, 185, 80, 0.9);
+    --topo-cache: rgba(249, 115, 22, 0.6);
+    --topo-numa: rgba(88, 166, 255, 0.6);
+    --topo-numa-emphasis: rgba(88, 166, 255, 0.9);
+    --topo-inset: rgba(22, 27, 34, 0.4);
+    --topo-inset-deep: rgba(28, 33, 40, 0.6);
+    --topo-inset-deeper: rgba(13, 17, 23, 0.5);
+
+    /* On-accent foreground (text on filled accent/primary buttons) */
+    --fg-on-accent: #fff;
 
     /* Gradients */
     --bg-card-gradient: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-void) 100%);
@@ -122,7 +154,39 @@
     --success: #1a7f37;
     --warning: #9a6700;
     --danger: #cf222e;
+    --danger-fg: #cf222e;
     --info: #0969da;
+
+    /* Transport / recording controls */
+    --record: #cf222e;
+    --record-bg: rgba(207, 34, 46, 0.1);
+    --record-bg-hover: rgba(207, 34, 46, 0.18);
+    --record-hover: #a40e26;
+    --record-glow: rgba(207, 34, 46, 0.15);
+    --stop: #9a6700;
+    --stop-bg: rgba(154, 103, 0, 0.1);
+    --stop-bg-hover: rgba(154, 103, 0, 0.18);
+    --stop-hover: #7c5200;
+    --stop-glow: rgba(154, 103, 0, 0.12);
+    --recording-badge: #cf222e;
+
+    /* Overlays */
+    --overlay: rgba(0, 0, 0, 0.3);
+    --overlay-heavy: rgba(0, 0, 0, 0.45);
+    --selection-highlight: rgba(0, 0, 0, 0.06);
+
+    /* Topology diagram */
+    --topo-threads: rgba(26, 127, 55, 0.6);
+    --topo-threads-emphasis: rgba(26, 127, 55, 0.9);
+    --topo-cache: rgba(188, 82, 0, 0.6);
+    --topo-numa: rgba(9, 105, 218, 0.6);
+    --topo-numa-emphasis: rgba(9, 105, 218, 0.85);
+    --topo-inset: rgba(208, 215, 222, 0.5);
+    --topo-inset-deep: rgba(208, 215, 222, 0.7);
+    --topo-inset-deeper: rgba(208, 215, 222, 0.4);
+
+    /* On-accent foreground */
+    --fg-on-accent: #fff;
 
     /* Shadows */
     --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.08);
@@ -139,11 +203,11 @@
     --chart-shadow-strong: rgba(31, 35, 40, 0.25);
 }
 
-/* In light theme, replace the subtle grid overlay with a lighter tint */
+/* In light theme, use a slightly stronger grid tint for visibility */
 [data-theme="light"] body::before {
     background-image:
-        linear-gradient(rgba(9, 105, 218, 0.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(9, 105, 218, 0.025) 1px, transparent 1px);
+        linear-gradient(color-mix(in srgb, var(--accent) 2.5%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, var(--accent) 2.5%, transparent) 1px, transparent 1px);
 }
 
 [data-theme="light"] body::after {
@@ -175,8 +239,8 @@ body::before {
     position: fixed;
     inset: 0;
     background-image:
-        linear-gradient(rgba(88, 166, 255, 0.015) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(88, 166, 255, 0.015) 1px, transparent 1px);
+        linear-gradient(color-mix(in srgb, var(--accent) 1.5%, transparent) 1px, transparent 1px),
+        linear-gradient(90deg, color-mix(in srgb, var(--accent) 1.5%, transparent) 1px, transparent 1px);
     background-size: 48px 48px;
     pointer-events: none;
     z-index: -1;
@@ -240,13 +304,13 @@ body::after {
     font-size: var(--font-size-xs);
     font-weight: 700;
     letter-spacing: 0.08em;
-    color: #fff;
+    color: var(--fg-on-accent);
     padding: 0.15rem 0.5rem;
     border-radius: 4px;
 }
 
 #topnav .logo .live-indicator.recording {
-    background: #e53e3e;
+    background: var(--recording-badge);
     animation: live-pulse 2s ease-in-out infinite;
 }
 
@@ -313,7 +377,7 @@ body::after {
     position: absolute;
     top: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--overlay);
     pointer-events: none;
 }
 
@@ -321,7 +385,7 @@ body::after {
     position: absolute;
     top: 0;
     bottom: 0;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--selection-highlight);
     cursor: grab;
     min-width: 2px;
 }
@@ -455,7 +519,7 @@ body::after {
     border-radius: 6px;
     z-index: 200;
     white-space: nowrap;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--shadow-md);
     overflow: hidden;
     border-spacing: 0;
 }
@@ -513,38 +577,38 @@ body::after {
 
 /* Record button — red */
 #topnav .topnav-actions .transport-btn.record-btn {
-    background: rgba(229, 62, 62, 0.2);
-    color: #f56565;
+    background: var(--record-bg);
+    color: var(--record);
 }
 
 #topnav .topnav-actions .transport-btn.record-btn:hover:not(:disabled) {
-    background: rgba(229, 62, 62, 0.35);
-    color: #fc8181;
-    box-shadow: 0 0 12px rgba(229, 62, 62, 0.25);
+    background: var(--record-bg-hover);
+    color: var(--record-hover);
+    box-shadow: 0 0 12px var(--record-glow);
 }
 
 /* Stop button — amber */
 #topnav .topnav-actions .transport-btn.stop-btn {
-    background: rgba(236, 201, 75, 0.15);
-    color: #ecc94b;
+    background: var(--stop-bg);
+    color: var(--stop);
 }
 
 #topnav .topnav-actions .transport-btn.stop-btn:hover:not(:disabled) {
-    background: rgba(236, 201, 75, 0.3);
-    color: #f6e05e;
-    box-shadow: 0 0 12px rgba(236, 201, 75, 0.2);
+    background: var(--stop-bg-hover);
+    color: var(--stop-hover);
+    box-shadow: 0 0 12px var(--stop-glow);
 }
 
 /* Save button — blue */
 #topnav .topnav-actions .transport-btn.save-btn {
-    background: rgba(88, 166, 255, 0.15);
+    background: var(--accent-subtle);
     color: var(--accent);
 }
 
 #topnav .topnav-actions .transport-btn.save-btn:hover {
-    background: rgba(88, 166, 255, 0.3);
+    background: var(--accent-muted);
     color: var(--accent-emphasis);
-    box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+    box-shadow: 0 0 12px var(--accent-glow);
 }
 
 #topnav .topnav-actions .transport-btn.import-btn {
@@ -555,7 +619,7 @@ body::after {
     font-size: 0.75rem;
     font-weight: 500;
     letter-spacing: 0.03em;
-    background: rgba(88, 166, 255, 0.15);
+    background: var(--accent-subtle);
     color: var(--accent);
 }
 
@@ -571,20 +635,20 @@ body::after {
 }
 
 #topnav .topnav-actions .transport-btn.import-btn:hover {
-    background: rgba(88, 166, 255, 0.3);
+    background: var(--accent-muted);
     color: var(--accent-emphasis);
-    box-shadow: 0 0 12px rgba(88, 166, 255, 0.2);
+    box-shadow: 0 0 12px var(--accent-glow);
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded {
-    color: #3fb950;
-    border-color: rgba(63, 185, 80, 0.4);
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 40%, transparent);
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded:hover {
-    background: rgba(63, 185, 80, 0.15);
-    color: #56d364;
-    box-shadow: 0 0 12px rgba(63, 185, 80, 0.2);
+    background: color-mix(in srgb, var(--success) 15%, transparent);
+    color: var(--success);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--success) 20%, transparent);
 }
 
 #topnav .theme-toggle-btn {
@@ -931,7 +995,7 @@ main {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, rgba(88, 166, 255, 0.03) 0%, transparent 30%);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 3%, transparent) 0%, transparent 30%);
     pointer-events: none;
     opacity: 0;
     transition: opacity var(--transition-base);
@@ -942,7 +1006,7 @@ main {
     box-shadow:
         var(--shadow-lg),
         0 0 0 1px var(--accent-subtle),
-        inset 0 1px 0 rgba(255, 255, 255, 0.02);
+        inset 0 1px 0 color-mix(in srgb, var(--fg-on-accent) 2%, transparent);
 }
 
 .chart-wrapper:hover::before {
@@ -1157,7 +1221,7 @@ main {
 
 .execute-btn {
     padding: 0.75rem 1.5rem;
-    background: linear-gradient(180deg, var(--accent) 0%, #4393eb 100%);
+    background: linear-gradient(180deg, var(--accent) 0%, var(--accent-emphasis) 100%);
     color: var(--bg-void);
     border: none;
     border-radius: 6px;
@@ -1168,14 +1232,14 @@ main {
     letter-spacing: 0.02em;
     align-self: flex-start;
     transition: all var(--transition-base);
-    box-shadow: 0 2px 8px rgba(88, 166, 255, 0.3);
+    box-shadow: 0 2px 8px var(--accent-muted);
 }
 
 .execute-btn:hover:not(:disabled) {
     transform: translateY(-1px);
     box-shadow:
-        0 4px 16px rgba(88, 166, 255, 0.4),
-        0 0 24px rgba(88, 166, 255, 0.2);
+        0 4px 16px var(--accent-muted),
+        0 0 24px var(--accent-glow);
 }
 
 .execute-btn:active:not(:disabled) {
@@ -1218,9 +1282,9 @@ main {
 }
 
 .error-message {
-    background: linear-gradient(180deg, rgba(248, 81, 73, 0.15) 0%, rgba(248, 81, 73, 0.05) 100%);
-    border: 1px solid rgba(248, 81, 73, 0.3);
-    color: #ffa198;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--danger) 15%, transparent) 0%, color-mix(in srgb, var(--danger) 5%, transparent) 100%);
+    border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+    color: var(--danger-fg);
     padding: 1rem;
     border-radius: var(--card-radius);
     margin: 1rem 0;
@@ -1384,9 +1448,9 @@ main {
 }
 
 .cgroup-selector .error-message {
-    background: rgba(248, 81, 73, 0.1);
-    border: 1px solid rgba(248, 81, 73, 0.3);
-    color: #ffa198;
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+    color: var(--danger-fg);
     padding: 0.5rem 1rem;
     border-radius: 4px;
     margin-bottom: 1rem;
@@ -1595,6 +1659,41 @@ main {
     user-select: text;
 }
 
+/* Service section heading */
+#section-content > h1 {
+    margin-bottom: 1.5rem;
+}
+
+/* Service notes — unavailable KPIs */
+.service-notes {
+    margin-top: 2rem;
+    padding: 1rem 1.25rem;
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    color: var(--fg-muted);
+    font-size: var(--font-size-sm);
+}
+
+.service-notes h3 {
+    margin: 0 0 0.5rem;
+    font-size: var(--font-size-sm);
+    color: var(--fg-secondary);
+}
+
+.service-notes p {
+    margin: 0 0 0.5rem;
+}
+
+.service-notes ul {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.service-notes li {
+    margin-bottom: 0.25rem;
+}
+
 /* Sidebar systeminfo link — same style as query explorer link */
 #sidebar .systeminfo-link {
     color: var(--fg-secondary);
@@ -1660,9 +1759,9 @@ main {
 .topo-toggle:hover { color: var(--fg-secondary); }
 .topo-toggle.active { color: var(--fg); }
 
-.topo-toggle-threads.active { border-color: rgba(63, 185, 80, 0.6); }
-.topo-toggle-caches.active  { border-color: rgba(249, 115, 22, 0.6); }
-.topo-toggle-numa.active    { border-color: rgba(88, 166, 255, 0.6); }
+.topo-toggle-threads.active { border-color: var(--topo-threads); }
+.topo-toggle-caches.active  { border-color: var(--topo-cache); }
+.topo-toggle-numa.active    { border-color: var(--topo-numa); }
 
 /* Packages container */
 .topo-packages {
@@ -1702,14 +1801,14 @@ main {
 }
 
 .topo-numa-box.numa-highlighted {
-    border-color: rgba(88, 166, 255, 0.6);
+    border-color: var(--topo-numa);
 }
 
 .topo-numa-header {
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
     font-weight: 400;
-    color: rgba(88, 166, 255, 0.9);
+    color: var(--topo-numa-emphasis);
     margin-bottom: 0.35rem;
 }
 
@@ -1729,7 +1828,7 @@ main {
 /* Core cell */
 .topo-core {
     background: var(--bg-tertiary);
-    border: var(--topo-border, 2px) solid rgba(63, 185, 80, 0.6);
+    border: var(--topo-border, 2px) solid var(--topo-threads);
     border-radius: 3px;
     display: flex;
     flex-direction: column;
@@ -1742,7 +1841,7 @@ main {
 }
 
 .topo-core:hover {
-    border-color: rgba(63, 185, 80, 0.9);
+    border-color: var(--topo-threads-emphasis);
 }
 
 .core-id {
@@ -1776,8 +1875,8 @@ main {
     gap: 2px;
     justify-content: center;
     align-items: center;
-    background: rgba(22, 27, 34, 0.4);
-    border: var(--topo-border, 2px) solid rgba(249, 115, 22, 0.6);
+    background: var(--topo-inset);
+    border: var(--topo-border, 2px) solid var(--topo-cache);
     border-radius: 3px;
     padding: 3px 4px;
     min-width: 0;
@@ -1797,7 +1896,7 @@ main {
     font-family: var(--font-mono);
     font-size: 9px;
     color: var(--fg);
-    background: rgba(28, 33, 40, 0.6);
+    background: var(--topo-inset-deep);
     border-radius: 2px;
     padding: 2px 4px;
     line-height: 1.4;
@@ -1805,7 +1904,7 @@ main {
 
 /* Cache bars — span their cores (orange outline) */
 .topo-cache-bar {
-    border: var(--topo-border, 2px) solid rgba(249, 115, 22, 0.6);
+    border: var(--topo-border, 2px) solid var(--topo-cache);
     text-align: center;
     display: flex;
     flex-direction: column;
@@ -1833,12 +1932,12 @@ main {
 }
 
 .topo-mid-cache {
-    background: rgba(22, 27, 34, 0.4);
+    background: var(--topo-inset);
     border-radius: 3px;
 }
 
 .topo-llc {
-    background: rgba(13, 17, 23, 0.5);
+    background: var(--topo-inset-deeper);
     border-radius: 4px;
 }
 
@@ -2005,9 +2104,39 @@ main {
 }
 
 .selection-btn-danger:hover {
-    background: rgba(248, 81, 73, 0.15);
-    color: #f85149;
-    border-color: #f85149;
+    background: color-mix(in srgb, var(--danger) 15%, transparent);
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.save-modal-input-row + .save-modal-options {
+    margin-top: -11px;
+}
+
+.save-modal-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 1rem;
+    padding-left: 2px;
+}
+
+.save-modal-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.save-modal-checkbox input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--accent-muted);
+    background: var(--bg-tertiary);
 }
 
 .selection-card {
@@ -2068,7 +2197,7 @@ main {
 }
 
 .selection-card-remove:hover {
-    color: #f85149;
+    color: var(--danger);
 }
 
 .selection-card-body {
@@ -2197,7 +2326,7 @@ main {
     color: var(--fg);
     border: 1px solid var(--border-default);
     background: var(--bg-elevated);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-md);
     opacity: 0;
     transform: translateX(20px);
     transition: opacity 0.25s ease, transform 0.25s ease;
@@ -2235,7 +2364,7 @@ main {
 .save-modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--overlay-heavy);
     z-index: 9999;
     display: flex;
     align-items: center;
@@ -2249,7 +2378,7 @@ main {
     padding: 1.5rem;
     min-width: 380px;
     max-width: 500px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-lg);
 }
 
 .save-modal-title {
@@ -2483,7 +2612,7 @@ main {
     .sidebar-backdrop {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.5);
+        background: var(--overlay);
         z-index: 199;
     }
 
@@ -2626,7 +2755,7 @@ main {
 
 .upload-dropzone.dragover {
     border-color: var(--accent);
-    background: rgba(91, 155, 213, 0.05);
+    background: var(--accent-subtle);
 }
 
 .upload-icon {
@@ -2651,7 +2780,7 @@ main {
     margin-top: 0.75rem;
     padding: 0.5rem 1.5rem;
     background: var(--accent);
-    color: #fff;
+    color: var(--fg-on-accent);
     border: none;
     border-radius: 6px;
     font-size: 0.9rem;
@@ -2665,7 +2794,7 @@ main {
 }
 
 .upload-error {
-    color: #e05252;
+    color: var(--danger);
     margin-top: 1rem;
     font-size: 0.85rem;
 }
