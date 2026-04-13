@@ -1,5 +1,6 @@
 mod annotate;
 mod combine;
+mod filter;
 mod metadata;
 
 use arrow::datatypes::SchemaRef;
@@ -60,6 +61,13 @@ pub fn command() -> Command {
                         .help("Remove service extension annotation from the parquet file")
                         .action(clap::ArgAction::SetTrue)
                         .conflicts_with("service-extension"),
+                )
+                .arg(
+                    clap::Arg::new("filter")
+                        .long("filter")
+                        .help("Also filter columns to only those needed by the service extension KPIs")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("undo"),
                 ),
         )
         .subcommand(
@@ -125,6 +133,34 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::SetTrue),
                 ),
         )
+        .subcommand(
+            Command::new("filter")
+                .about("Filter parquet columns to only those needed by service extension KPIs")
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("Parquet file to filter")
+                        .value_parser(value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    clap::Arg::new("service-extension")
+                        .long("file")
+                        .value_name("PATH")
+                        .help("Custom service extension JSON file (overrides metadata/template)")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("PATH")
+                        .help("Output file path (default: overwrite input file in-place)")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
+                ),
+        )
 }
 
 pub fn run(args: ArgMatches) {
@@ -134,6 +170,10 @@ pub fn run(args: ArgMatches) {
             return;
         }
         Some(("combine", sub_args)) => combine::run(sub_args),
+        Some(("filter", sub_args)) => {
+            filter::run(sub_args);
+            return;
+        }
         Some(("metadata", sub_args)) => metadata::run(sub_args),
         _ => unreachable!(),
     };

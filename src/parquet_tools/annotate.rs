@@ -60,6 +60,13 @@ pub(super) fn run(args: &ArgMatches) {
         ext.service_name,
         ext.kpis.len()
     );
+
+    if args.get_flag("filter") {
+        if let Err(e) = super::filter::filter_parquet_file(path, &ext, None) {
+            eprintln!("error: failed to filter columns: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Remove service_queries from all sources in per_source_metadata.
@@ -158,7 +165,7 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 ///
 /// Matches `metric_name` or `metric_name{labels...}`, skipping anything
 /// followed by `(` (i.e. function calls like `sum(`, `irate(`).
-fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
+pub(super) fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
     use regex::Regex;
     use std::sync::LazyLock;
 
@@ -188,7 +195,7 @@ fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
     }
 }
 
-fn read_source_metadata(path: &Path) -> Option<String> {
+pub(super) fn read_source_metadata(path: &Path) -> Option<String> {
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
 
