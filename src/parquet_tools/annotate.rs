@@ -18,11 +18,11 @@ pub(super) fn run(args: &ArgMatches) {
         return;
     }
 
-    let custom_file = args.get_one::<PathBuf>("service-extension");
+    let custom_file = args.get_one::<PathBuf>("queries");
 
     let source = read_source_metadata(path).unwrap_or_else(|| {
         eprintln!(
-            "error: parquet file has no 'source' metadata. Use --file to provide a template."
+            "error: parquet file has no 'source' metadata. Use --queries to provide a template."
         );
         std::process::exit(1);
     });
@@ -36,7 +36,7 @@ pub(super) fn run(args: &ArgMatches) {
     } else {
         let template = lookup_template(&source).unwrap_or_else(|| {
             eprintln!(
-                "error: no built-in template for source {:?}. Use --file to provide one.",
+                "error: no built-in template for source {:?}. Use --queries to provide one.",
                 source
             );
             std::process::exit(1);

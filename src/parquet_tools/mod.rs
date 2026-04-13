@@ -49,8 +49,8 @@ pub fn command() -> Command {
                         .index(1),
                 )
                 .arg(
-                    clap::Arg::new("service-extension")
-                        .long("file")
+                    clap::Arg::new("queries")
+                        .long("queries")
                         .value_name("PATH")
                         .help("Custom service extension JSON file (overrides built-in template)")
                         .value_parser(value_parser!(PathBuf))
@@ -61,7 +61,7 @@ pub fn command() -> Command {
                         .long("undo")
                         .help("Remove service extension annotation from the parquet file")
                         .action(clap::ArgAction::SetTrue)
-                        .conflicts_with("service-extension"),
+                        .conflicts_with("queries"),
                 )
                 .arg(
                     clap::Arg::new("filter")
@@ -145,8 +145,8 @@ pub fn command() -> Command {
                         .index(1),
                 )
                 .arg(
-                    clap::Arg::new("service-extension")
-                        .long("file")
+                    clap::Arg::new("queries")
+                        .long("queries")
                         .value_name("PATH")
                         .help("Custom service extension JSON file (overrides metadata/template)")
                         .value_parser(value_parser!(PathBuf))

@@ -13,7 +13,7 @@ use super::lookup_template;
 
 pub(super) fn run(args: &ArgMatches) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
-    let custom_file = args.get_one::<PathBuf>("service-extension");
+    let custom_file = args.get_one::<PathBuf>("queries");
     let output = args.get_one::<PathBuf>("output");
 
     let ext =
@@ -191,7 +191,7 @@ fn resolve_service_extension(
         }
     }
 
-    Err("no service extension found: use --file to provide one".into())
+    Err("no service extension found: use --queries to provide one".into())
 }
 
 #[cfg(test)]
