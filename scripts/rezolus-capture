@@ -91,10 +91,14 @@ error() {
 }
 
 # Extract port number from a URL (e.g., http://host:4241/path -> 4241)
+# Returns empty string if no numeric port is found.
 extract_port() {
     local hostport="${1#*://}"
     hostport="${hostport%%/*}"
-    echo "${hostport##*:}"
+    local port="${hostport##*:}"
+    if [[ "$port" =~ ^[0-9]+$ ]]; then
+        echo "$port"
+    fi
 }
 
 # Parse arguments
@@ -362,8 +366,9 @@ fi
 for i in "${!ENDPOINTS[@]}"; do
     if [ -s "${SERVICE_PARQUETS[$i]}" ]; then
         ep_port="$(extract_port "${ENDPOINTS[$i]}")"
-        cp "${SERVICE_PARQUETS[$i]}" "${OUTPUT_DIR}/${SOURCES[$i]}-${ep_port}.parquet"
-        echo "  ${SOURCES[$i]}-${ep_port}.parquet"
+        suffix="${ep_port:-${MONITOR_PID:-unknown}}"
+        cp "${SERVICE_PARQUETS[$i]}" "${OUTPUT_DIR}/${SOURCES[$i]}-${suffix}.parquet"
+        echo "  ${SOURCES[$i]}-${suffix}.parquet"
     fi
 done
 
