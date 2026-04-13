@@ -12,6 +12,7 @@ pub struct Config {
     url: Url,
     output: PathBuf,
     metadata: Vec<(String, String)>,
+    counter_map: Option<PathBuf>,
 }
 impl TryFrom<ArgMatches> for Config {
     type Error = String;
@@ -39,6 +40,7 @@ impl TryFrom<ArgMatches> for Config {
                         .map(|(k, v)| (k.to_string(), v.to_string()))
                 })
                 .collect(),
+            counter_map: args.get_one::<PathBuf>("COUNTER_MAP").cloned(),
         })
     }
 }
@@ -115,6 +117,13 @@ pub fn command() -> Command {
                 .help("Add file-level parquet metadata (key=value)")
                 .action(clap::ArgAction::Append),
         )
+        .arg(
+            clap::Arg::new("COUNTER_MAP")
+                .long("counter-map")
+                .help("JSON file mapping Redis/Valkey INFO fields to counter types")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf)),
+        )
 }
 
 /// Runs the Rezolus `recorder` which is a Rezolus client that pulls data from
@@ -181,7 +190,17 @@ pub fn run(config: Config) {
     // Determine source type from URL scheme
     let mut source_type: SourceType = match config.url.scheme() {
         "redis" | "rediss" | "valkey" | "valkeys" => {
-            match rt.block_on(valkey::ValkeySource::connect(&config.url, &config.interval)) {
+            let counter_map = config.counter_map.as_ref().map(|path| {
+                valkey::CounterMap::load(path).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                })
+            });
+            match rt.block_on(valkey::ValkeySource::connect(
+                &config.url,
+                &config.interval,
+                counter_map,
+            )) {
                 Ok(source) => SourceType::Valkey(source),
                 Err(e) => {
                     eprintln!("failed to connect to Redis/Valkey: {e}");

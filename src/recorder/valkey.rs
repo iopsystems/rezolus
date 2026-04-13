@@ -1,75 +1,37 @@
 use metriken_exposition::{Counter, Gauge, Snapshot, SnapshotV2};
 use redis::aio::ConnectionManager;
 use reqwest::Url;
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, error, info, warn};
 
-/// Known counter metrics in Redis/Valkey INFO output.
-/// These are monotonically increasing values.
-static KNOWN_COUNTERS: &[&str] = &[
-    // Stats
-    "total_connections_received",
-    "total_commands_processed",
-    "total_net_input_bytes",
-    "total_net_output_bytes",
-    "total_net_repl_input_bytes",
-    "total_net_repl_output_bytes",
-    "rejected_connections",
-    "sync_full",
-    "sync_partial_ok",
-    "sync_partial_err",
-    "expired_keys",
-    "expired_time_cap_reached_count",
-    "evicted_keys",
-    "evicted_clients",
-    "evicted_scripts",
-    "keyspace_hits",
-    "keyspace_misses",
-    "total_forks",
-    "total_reads_processed",
-    "total_writes_processed",
-    "io_threaded_reads_processed",
-    "io_threaded_writes_processed",
-    "reply_buffer_shrinks",
-    "reply_buffer_expands",
-    "total_error_replies",
-    "dump_payload_sanitizations",
-    "total_active_defrag_time",
-    "total_eviction_exceeded_time",
-    "eventloop_cycles",
-    "eventloop_duration_sum",
-    "eventloop_duration_cmd_sum",
-    "expire_cycle_cpu_milliseconds",
-    "acl_access_denied_auth",
-    "acl_access_denied_cmd",
-    "acl_access_denied_key",
-    "acl_access_denied_channel",
-    "client_query_buffer_limit_disconnections",
-    "client_output_buffer_limit_disconnections",
-    // Persistence
-    "rdb_changes_since_last_save",
-    "rdb_saves",
-    "aof_rewrites",
-    "aof_delayed_fsync",
-    // CPU (float values, scaled to microseconds)
-    "used_cpu_sys",
-    "used_cpu_user",
-    "used_cpu_sys_children",
-    "used_cpu_user_children",
-    "used_cpu_sys_main_thread",
-    "used_cpu_user_main_thread",
-];
+/// Describes which Redis/Valkey INFO fields are monotonic counters and which
+/// float counters need seconds-to-microseconds scaling. Loaded from a JSON
+/// file via the `--counter-map` CLI flag.
+///
+/// Fields not listed here (and not matching the `total_` prefix heuristic)
+/// are recorded as gauges.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CounterMap {
+    /// Metric field names that are monotonically increasing counters.
+    #[serde(default)]
+    counters: Vec<String>,
+    /// Subset of counters whose values are float seconds and should be scaled
+    /// to microseconds (×1 000 000) before storing as u64.
+    #[serde(default)]
+    float_counters: Vec<String>,
+}
 
-/// Float counter metrics that need scaling (seconds -> microseconds).
-static FLOAT_COUNTERS: &[&str] = &[
-    "used_cpu_sys",
-    "used_cpu_user",
-    "used_cpu_sys_children",
-    "used_cpu_user_children",
-    "used_cpu_sys_main_thread",
-    "used_cpu_user_main_thread",
-];
+impl CounterMap {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let data = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read counter map {}: {e}", path.display()))?;
+        serde_json::from_str(&data)
+            .map_err(|e| format!("failed to parse counter map {}: {e}", path.display()))
+    }
+}
 
 /// Holds the Redis/Valkey connection and converter for a recording session.
 pub struct ValkeySource {
@@ -84,8 +46,8 @@ pub struct ValkeySource {
 struct ValkeyConverter {
     metric_ids: HashMap<MetricKey, usize>,
     next_id: usize,
-    known_counters: HashSet<&'static str>,
-    float_counters: HashSet<&'static str>,
+    known_counters: HashSet<String>,
+    float_counters: HashSet<String>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -95,7 +57,11 @@ struct MetricKey {
 }
 
 impl ValkeySource {
-    pub async fn connect(url: &Url, interval: &humantime::Duration) -> Result<Self, String> {
+    pub async fn connect(
+        url: &Url,
+        interval: &humantime::Duration,
+        counter_map: Option<CounterMap>,
+    ) -> Result<Self, String> {
         let redis_url = normalize_url(url);
 
         let client = redis::Client::open(redis_url.as_str())
@@ -141,7 +107,7 @@ impl ValkeySource {
 
         Ok(Self {
             connection,
-            converter: ValkeyConverter::new(),
+            converter: ValkeyConverter::new(counter_map.unwrap_or_default()),
             source_name,
             version,
         })
@@ -181,12 +147,16 @@ impl ValkeySource {
 }
 
 impl ValkeyConverter {
-    fn new() -> Self {
+    fn new(map: CounterMap) -> Self {
+        let float_counters: HashSet<String> = map.float_counters.into_iter().collect();
+        let mut known_counters: HashSet<String> = map.counters.into_iter().collect();
+        // Float counters are also counters.
+        known_counters.extend(float_counters.iter().cloned());
         Self {
             metric_ids: HashMap::new(),
             next_id: 0,
-            known_counters: KNOWN_COUNTERS.iter().copied().collect(),
-            float_counters: FLOAT_COUNTERS.iter().copied().collect(),
+            known_counters,
+            float_counters,
         }
     }
 
@@ -290,6 +260,10 @@ impl ValkeyConverter {
         self.known_counters.contains(field) || field.starts_with("total_")
     }
 
+    fn is_float_counter(&self, field: &str) -> bool {
+        self.float_counters.contains(field)
+    }
+
     pub fn convert(&mut self, info_text: &str) -> Snapshot {
         let mut counters = Vec::new();
         let mut gauges = Vec::new();
@@ -340,7 +314,7 @@ impl ValkeyConverter {
 
             if self.is_counter(field) {
                 let id = self.get_or_assign_id(&metric_name, &labels);
-                let counter_value = if self.float_counters.contains(field) {
+                let counter_value = if self.is_float_counter(field) {
                     // Convert seconds to microseconds for precision
                     (num * 1_000_000.0) as u64
                 } else {
@@ -439,9 +413,24 @@ fn normalize_url(url: &Url) -> String {
 mod tests {
     use super::*;
 
+    /// Build a CounterMap matching the shipped config/valkey-counters.json.
+    fn test_counter_map() -> CounterMap {
+        CounterMap {
+            counters: vec![
+                "total_connections_received".into(),
+                "total_commands_processed".into(),
+                "keyspace_hits".into(),
+                "keyspace_misses".into(),
+                "expired_keys".into(),
+                "evicted_keys".into(),
+            ],
+            float_counters: vec!["used_cpu_sys".into(), "used_cpu_user".into()],
+        }
+    }
+
     #[test]
     fn test_parse_simple_info() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(CounterMap::default());
         let info = "\
 # Server\r
 redis_version:7.2.4\r
@@ -479,7 +468,7 @@ connected_clients:10\r
 
     #[test]
     fn test_counter_classification() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(test_counter_map());
         let info = "\
 # Stats\r
 total_connections_received:100\r
@@ -498,7 +487,7 @@ connected_clients:5\r
 
     #[test]
     fn test_keyspace_parsing() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(CounterMap::default());
         let info = "\
 # Keyspace\r
 db0:keys=100,expires=10,avg_ttl=5000\r
@@ -522,7 +511,7 @@ db1:keys=50,expires=5,avg_ttl=3000\r
 
     #[test]
     fn test_float_cpu_scaling() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(test_counter_map());
         let info = "\
 # CPU\r
 used_cpu_sys:10.500000\r
@@ -550,7 +539,7 @@ used_cpu_user:20.300000\r
 
     #[test]
     fn test_stable_metric_ids() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(test_counter_map());
         let info1 = "\
 # Stats\r
 total_connections_received:100\r
@@ -581,7 +570,7 @@ connected_clients:10\r
 
     #[test]
     fn test_non_numeric_values_skipped() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(CounterMap::default());
         let info = "\
 # Server\r
 redis_version:7.2.4\r
@@ -601,7 +590,7 @@ uptime_in_seconds:100\r
 
     #[test]
     fn test_human_readable_fields_skipped() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(CounterMap::default());
         let info = "\
 # Memory\r
 used_memory:1000000\r
@@ -667,7 +656,7 @@ redis_mode:standalone\r
 
     #[test]
     fn test_msgpack_roundtrip() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(test_counter_map());
         let info = "\
 # Stats\r
 total_connections_received:100\r
@@ -687,7 +676,7 @@ connected_clients:5\r
 
     #[test]
     fn test_total_prefix_heuristic() {
-        let mut converter = ValkeyConverter::new();
+        let mut converter = ValkeyConverter::new(CounterMap::default());
         let info = "\
 # Stats\r
 total_some_new_metric:42\r
