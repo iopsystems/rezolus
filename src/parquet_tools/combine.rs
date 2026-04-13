@@ -624,8 +624,7 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
                 .and_then(|kv| kv.value.as_deref())
                 .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
             {
-                map.entry(NESTED_SERVICE_QUERIES.to_string())
-                    .or_insert(sq);
+                map.entry(NESTED_SERVICE_QUERIES.to_string()).or_insert(sq);
             }
         }
     }
