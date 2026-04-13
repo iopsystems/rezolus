@@ -9,7 +9,7 @@ ENDPOINT=""
 SOURCE=""
 INTERVAL="1s"
 AGENT="http://127.0.0.1:4241"
-AGENT_CONFIG="/etc/rezolus/agent.toml"
+AGENT_CONFIG="config/agent.toml"
 OUTPUT_DIR="."
 VIEWER_LISTEN="127.0.0.1:0"
 NO_VIEWER=false
@@ -34,7 +34,7 @@ REQUIRED:
 
 OPTIONS:
     --agent <URL>               Rezolus agent URL (default: http://127.0.0.1:4241)
-    --agent-config <PATH>       Agent config file (default: /etc/rezolus/agent.toml)
+    --agent-config <PATH>       Agent config file (default: config/agent.toml)
     --endpoint <URL>            Service metrics endpoint (Prometheus-compatible)
     --source <NAME>             Source name for service metrics (required with --endpoint)
     --interval <INTERVAL>       Sampling interval (default: 1s)
@@ -142,8 +142,7 @@ else
     # Check for the config file
     if [ ! -f "$AGENT_CONFIG" ]; then
         error "Agent config not found at $AGENT_CONFIG
-  Specify the path with --agent-config or install the default config:
-    sudo cp config/agent.toml /etc/rezolus/agent.toml"
+  Run this script from the rezolus repo root, or specify the path with --agent-config"
     fi
 
     # Start the agent in the background

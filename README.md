@@ -89,6 +89,31 @@ To view your artifact:
 rezolus view rezolus.parquet [listen address]
 ```
 
+#### Quick Capture with `rezolus-capture`
+
+The `scripts/rezolus-capture` script automates the full workflow: it starts the
+agent if needed, records system metrics (and optionally service metrics from a
+Prometheus-compatible endpoint), combines them, and launches the viewer.
+
+```bash
+# System metrics only for 60 seconds (starts the agent automatically)
+sudo scripts/rezolus-capture --duration 60s
+
+# System + Redis metrics for 2 minutes
+# (requires redis_exporter running at localhost:9121)
+sudo scripts/rezolus-capture --duration 2m \
+    --endpoint http://localhost:9121/metrics \
+    --source redis
+
+# Capture without launching the viewer
+sudo scripts/rezolus-capture --duration 5m --no-viewer --output-dir /tmp/captures
+```
+
+The script requires root privileges for eBPF instrumentation. If a Rezolus agent
+is already running, it will use the existing agent instead of starting a new one.
+
+Run `scripts/rezolus-capture --help` for all options.
+
 ### DevOps and SRE Troubleshooting
 Rezolus also has value for people operating services. The Agent and Exporter can
 be used to integrate Rezolus telemetry with your observability stack and give
