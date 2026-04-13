@@ -5,6 +5,7 @@ on:
     paths-ignore:
       - 'site/**'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - 'site/**'
 
@@ -118,15 +119,31 @@ jobs:
           rustup component add rustfmt
           cargo fmt --all -- --check
 
+  setup:
+    name: setup
+    runs-on: ubuntu-latest
+    outputs:
+      profiles: ${{ steps.set-profiles.outputs.profiles }}
+    steps:
+      - name: determine build profiles
+        id: set-profiles
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.draft }}" == "true" ]]; then
+            echo 'profiles=["debug"]' >> $GITHUB_OUTPUT
+          else
+            echo 'profiles=["release", "debug"]' >> $GITHUB_OUTPUT
+          fi
+
   # Second group of checks: These are more expensive than the first set so we
   # gate them on the check action succeeding.
   build:
     name: build-${{ matrix.os }}-${{ matrix.profile }}-${{ matrix.features }}
+    needs: setup
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ ubuntu-24.04, ubuntu-22.04, macos-latest ]
-        profile: [ release, debug ]
+        profile: ${{ fromJson(needs.setup.outputs.profiles) }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
@@ -196,6 +213,7 @@ jobs:
     name: verify all tests pass
     runs-on: ubuntu-latest
     needs:
+      - setup
       - build
       - check
       - dashboard-drift

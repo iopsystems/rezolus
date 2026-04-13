@@ -60,6 +60,7 @@ The skill accepts an optional branch name argument:
    gh pr create \
      --repo iopsystems/rezolus \
      --head <fork-owner>:<branch-name> \
+     --draft \
      --title "<conventional commit style title>" \
      --body "$(cat <<'EOF'
    ## Summary
@@ -94,3 +95,4 @@ Non-release PRs must **never** bump the major, minor, or patch version. Instead,
 - If `cargo clippy`, `cargo test`, or `cargo fmt --check` haven't been run yet during this session, run them before committing
 - Never force push or amend existing commits
 - The fork owner can be determined from the origin remote URL (e.g., `git@github.com:brayniac/rezolus` → `brayniac`)
+- PRs are created as drafts by default. Mark ready via GitHub UI or `gh pr ready`
