@@ -359,9 +359,10 @@ echo "Recording complete."
 
 # Preserve individual parquet files in the output directory
 AGENT_PORT="$(extract_port "$AGENT")"
+AGENT_SUFFIX="${AGENT_PORT:-${AGENT_PID:-unknown}}"
 if [ -s "$SYSTEM_PARQUET" ]; then
-    cp "$SYSTEM_PARQUET" "${OUTPUT_DIR}/agent-${AGENT_PORT}.parquet"
-    echo "  agent-${AGENT_PORT}.parquet"
+    cp "$SYSTEM_PARQUET" "${OUTPUT_DIR}/agent-${AGENT_SUFFIX}.parquet"
+    echo "  agent-${AGENT_SUFFIX}.parquet"
 fi
 for i in "${!ENDPOINTS[@]}"; do
     if [ -s "${SERVICE_PARQUETS[$i]}" ]; then
