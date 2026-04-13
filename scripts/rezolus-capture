@@ -90,6 +90,13 @@ error() {
     exit 1
 }
 
+# Extract port number from a URL (e.g., http://host:4241/path -> 4241)
+extract_port() {
+    local hostport="${1#*://}"
+    hostport="${hostport%%/*}"
+    echo "${hostport##*:}"
+}
+
 # Parse arguments
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -345,6 +352,20 @@ else
 fi
 
 echo "Recording complete."
+
+# Preserve individual parquet files in the output directory
+AGENT_PORT="$(extract_port "$AGENT")"
+if [ -s "$SYSTEM_PARQUET" ]; then
+    cp "$SYSTEM_PARQUET" "${OUTPUT_DIR}/agent-${AGENT_PORT}.parquet"
+    echo "  agent-${AGENT_PORT}.parquet"
+fi
+for i in "${!ENDPOINTS[@]}"; do
+    if [ -s "${SERVICE_PARQUETS[$i]}" ]; then
+        ep_port="$(extract_port "${ENDPOINTS[$i]}")"
+        cp "${SERVICE_PARQUETS[$i]}" "${OUTPUT_DIR}/${SOURCES[$i]}-${ep_port}.parquet"
+        echo "  ${SOURCES[$i]}-${ep_port}.parquet"
+    fi
+done
 
 # Combine or copy the output
 COMBINE_FILES=()
