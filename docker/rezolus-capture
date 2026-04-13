@@ -5,12 +5,15 @@ PROGRAM="$(basename "$0")"
 
 # Defaults
 DURATION=""
-ENDPOINT=""
-SOURCE=""
+MONITOR_PID=""
+ENDPOINTS=()
+SOURCES=()
 INTERVAL="1s"
 OUTPUT_DIR="/data"
 VIEWER_LISTEN="0.0.0.0:8080"
 NO_VIEWER=false
+RECORDER_PIDS=()
+SERVICE_PARQUETS=()
 
 help() {
     cat <<EOF
@@ -18,18 +21,22 @@ $PROGRAM - Capture system and service metrics, then view the results.
 
 The Rezolus agent must already be running (started by the container entrypoint).
 This script records system metrics from the local agent and optionally records
-service metrics from a Prometheus-compatible endpoint, combines them into a
+service metrics from Prometheus-compatible endpoints, combines them into a
 single parquet file, and launches the Rezolus viewer.
 
 USAGE:
-    $PROGRAM --duration <DURATION> [OPTIONS]
+    $PROGRAM <--duration <DURATION> | --pid <PID>> [OPTIONS]
 
-REQUIRED:
+CAPTURE MODE (exactly one required):
     --duration <DURATION>       How long to capture (e.g., 60s, 5m, 1h)
+    --pid <PID>                 Capture while an existing process is running.
+                                Stops when the process exits.
 
 OPTIONS:
-    --endpoint <URL>            Service metrics endpoint (Prometheus-compatible)
-    --source <NAME>             Source name for service metrics (required with --endpoint)
+    --endpoint <URL>            Service metrics endpoint (Prometheus-compatible).
+                                Can be specified multiple times for multiple services.
+    --source <NAME>             Source name for service metrics. Must be specified
+                                once per --endpoint, in the same order.
     --interval <INTERVAL>       Sampling interval (default: 1s)
     --output-dir <DIR>          Output directory for parquet files (default: /data)
     --viewer-listen <ADDR>      Viewer listen address (default: 0.0.0.0:8080)
@@ -45,6 +52,14 @@ EXAMPLES:
         --endpoint http://localhost:9121/metrics \\
         --source redis
 
+    # Multiple service endpoints
+    $PROGRAM --duration 60s \\
+        --endpoint http://localhost:9121/metrics --source redis \\
+        --endpoint http://localhost:8080/metrics --source myapp
+
+    # Capture while a process is running
+    $PROGRAM --pid 12345
+
     # Capture without launching the viewer
     $PROGRAM --duration 60s --no-viewer
 EOF
@@ -54,6 +69,17 @@ error() {
     echo "Error: $1" >&2
     echo "Try '$PROGRAM --help' for more information." >&2
     exit 1
+}
+
+# Extract port number from a URL (e.g., http://host:4241/path -> 4241)
+# Returns empty string if no numeric port is found.
+extract_port() {
+    local hostport="${1#*://}"
+    hostport="${hostport%%/*}"
+    local port="${hostport##*:}"
+    if [[ "$port" =~ ^[0-9]+$ ]]; then
+        echo "$port"
+    fi
 }
 
 # Parse arguments
@@ -67,13 +93,17 @@ while [ $# -gt 0 ]; do
             [ -n "${2:-}" ] || error "--duration requires a value"
             DURATION="$2"; shift 2
             ;;
+        --pid)
+            [ -n "${2:-}" ] || error "--pid requires a value"
+            MONITOR_PID="$2"; shift 2
+            ;;
         --endpoint)
             [ -n "${2:-}" ] || error "--endpoint requires a value"
-            ENDPOINT="$2"; shift 2
+            ENDPOINTS+=("$2"); shift 2
             ;;
         --source)
             [ -n "${2:-}" ] || error "--source requires a value"
-            SOURCE="$2"; shift 2
+            SOURCES+=("$2"); shift 2
             ;;
         --interval)
             [ -n "${2:-}" ] || error "--interval requires a value"
@@ -96,12 +126,39 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Validate required arguments
-[ -n "$DURATION" ] || error "--duration is required"
+# Validate capture mode: exactly one of --duration or --pid
+MODE_COUNT=0
+[ -n "$DURATION" ] && MODE_COUNT=$((MODE_COUNT + 1))
+[ -n "$MONITOR_PID" ] && MODE_COUNT=$((MODE_COUNT + 1))
 
-# If endpoint is given, source is required
-if [ -n "$ENDPOINT" ] && [ -z "$SOURCE" ]; then
-    error "--source is required when --endpoint is specified"
+if [ "$MODE_COUNT" -eq 0 ]; then
+    error "one of --duration or --pid is required"
+fi
+if [ "$MODE_COUNT" -gt 1 ]; then
+    error "--duration and --pid are mutually exclusive"
+fi
+
+# Validate endpoint/source pairing
+if [ ${#ENDPOINTS[@]} -ne ${#SOURCES[@]} ]; then
+    error "each --endpoint must have a corresponding --source (got ${#ENDPOINTS[@]} endpoints and ${#SOURCES[@]} sources)"
+fi
+
+# Validate source names are unique
+if [ ${#SOURCES[@]} -gt 0 ]; then
+    declare -A SEEN_SOURCES
+    for src in "${SOURCES[@]}"; do
+        if [ -n "${SEEN_SOURCES[$src]:-}" ]; then
+            error "duplicate source name: $src"
+        fi
+        SEEN_SOURCES[$src]=1
+    done
+fi
+
+# Validate --pid target exists
+if [ -n "$MONITOR_PID" ]; then
+    if ! kill -0 "$MONITOR_PID" 2>/dev/null; then
+        error "process $MONITOR_PID not found"
+    fi
 fi
 
 # Verify the agent is running
@@ -109,63 +166,132 @@ if ! curl -sf http://127.0.0.1:4241/ > /dev/null 2>&1; then
     error "Rezolus agent is not running on 127.0.0.1:4241"
 fi
 
+# Detect the invoking user when running under sudo
+REAL_USER="${SUDO_USER:-$(id -un)}"
+REAL_GROUP="$(id -gn "$REAL_USER" 2>/dev/null || id -gn)"
+
 # Set up temp files and output
 SYSTEM_PARQUET="$(mktemp /tmp/system-XXXXXX.parquet)"
-SERVICE_PARQUET="$(mktemp /tmp/service-XXXXXX.parquet)"
 OUTPUT_FILE="${OUTPUT_DIR}/capture.parquet"
 
 mkdir -p "$OUTPUT_DIR"
+chown "$REAL_USER:$REAL_GROUP" "$OUTPUT_DIR" 2>/dev/null || true
+
+# Helper: stop all recorder processes gracefully
+stop_recorders() {
+    for pid in "${RECORDER_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    for pid in "${RECORDER_PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+}
 
 cleanup() {
-    rm -f "$SYSTEM_PARQUET" "$SERVICE_PARQUET"
+    # Stop all recorders
+    stop_recorders
+
+    # Clean temp files
+    rm -f "$SYSTEM_PARQUET"
+    for f in "${SERVICE_PARQUETS[@]}"; do
+        rm -f "$f"
+    done
 }
 trap cleanup EXIT
 
+# Build duration flag for recorders
+DURATION_ARGS=()
+if [ -n "$DURATION" ]; then
+    DURATION_ARGS=(-d "$DURATION")
+fi
+
 # Start system metrics recording
-echo "Recording system metrics for $DURATION (interval: $INTERVAL)..."
+if [ -n "$DURATION" ]; then
+    echo "Recording system metrics for $DURATION (interval: $INTERVAL)..."
+else
+    echo "Recording system metrics while process $MONITOR_PID is running (interval: $INTERVAL)..."
+fi
+
 rezolus record http://127.0.0.1:4241 "$SYSTEM_PARQUET" \
-    -d "$DURATION" -i "$INTERVAL" -m source=rezolus &
-SYSTEM_PID=$!
+    "${DURATION_ARGS[@]}" -i "$INTERVAL" -m source=rezolus &
+RECORDER_PIDS+=($!)
 
-# Start service metrics recording if endpoint is specified
-SERVICE_PID=""
-if [ -n "$ENDPOINT" ]; then
-    echo "Recording service metrics from $ENDPOINT (source: $SOURCE)..."
-    rezolus record "$ENDPOINT" "$SERVICE_PARQUET" \
-        -d "$DURATION" -i "$INTERVAL" -m "source=$SOURCE" &
-    SERVICE_PID=$!
-fi
+# Start service metrics recording for each endpoint
+for i in "${!ENDPOINTS[@]}"; do
+    tmp="$(mktemp "/tmp/service-${SOURCES[$i]}-XXXXXX.parquet")"
+    SERVICE_PARQUETS+=("$tmp")
+    echo "Recording service metrics from ${ENDPOINTS[$i]} (source: ${SOURCES[$i]})..."
+    rezolus record "${ENDPOINTS[$i]}" "$tmp" \
+        "${DURATION_ARGS[@]}" -i "$INTERVAL" -m "source=${SOURCES[$i]}" &
+    RECORDER_PIDS+=($!)
+done
 
-# Wait for recordings to complete
-FAILED=false
-
-if ! wait "$SYSTEM_PID"; then
-    echo "Error: System metrics recording failed" >&2
-    FAILED=true
-fi
-
-if [ -n "$SERVICE_PID" ]; then
-    if ! wait "$SERVICE_PID"; then
-        echo "Error: Service metrics recording failed" >&2
-        FAILED=true
+# Wait for capture to complete based on mode
+if [ -n "$DURATION" ]; then
+    # Duration mode: recorders stop themselves, just wait for them
+    FAILED=false
+    for pid in "${RECORDER_PIDS[@]}"; do
+        if ! wait "$pid"; then
+            FAILED=true
+        fi
+    done
+    RECORDER_PIDS=()
+    if $FAILED; then
+        echo "Error: one or more recordings failed" >&2
+        exit 1
     fi
-fi
 
-if $FAILED; then
-    exit 1
+else
+    # PID mode: poll until the process exits, then stop recorders
+    while kill -0 "$MONITOR_PID" 2>/dev/null; do
+        sleep 1
+    done
+    echo "Process $MONITOR_PID exited, stopping capture..."
+    stop_recorders
+    RECORDER_PIDS=()
 fi
 
 echo "Recording complete."
 
-# Combine or move the output
-if [ -n "$ENDPOINT" ] && [ -f "$SERVICE_PARQUET" ] && [ -s "$SERVICE_PARQUET" ]; then
-    echo "Combining system and service recordings..."
-    rezolus parquet combine "$SYSTEM_PARQUET" "$SERVICE_PARQUET" -o "$OUTPUT_FILE"
-    echo "Combined parquet saved to $OUTPUT_FILE"
-else
-    cp "$SYSTEM_PARQUET" "$OUTPUT_FILE"
-    echo "System parquet saved to $OUTPUT_FILE"
+# Preserve individual parquet files in the output directory
+if [ -s "$SYSTEM_PARQUET" ]; then
+    cp "$SYSTEM_PARQUET" "${OUTPUT_DIR}/agent-4241.parquet"
+    echo "  agent-4241.parquet"
 fi
+for i in "${!ENDPOINTS[@]}"; do
+    if [ -s "${SERVICE_PARQUETS[$i]}" ]; then
+        ep_port="$(extract_port "${ENDPOINTS[$i]}")"
+        suffix="${ep_port:-${MONITOR_PID:-unknown}}"
+        cp "${SERVICE_PARQUETS[$i]}" "${OUTPUT_DIR}/${SOURCES[$i]}-${suffix}.parquet"
+        echo "  ${SOURCES[$i]}-${suffix}.parquet"
+    fi
+done
+
+# Combine or copy the output
+COMBINE_FILES=()
+[ -s "$SYSTEM_PARQUET" ] && COMBINE_FILES+=("$SYSTEM_PARQUET")
+for f in "${SERVICE_PARQUETS[@]}"; do
+    [ -s "$f" ] && COMBINE_FILES+=("$f")
+done
+
+if [ ${#COMBINE_FILES[@]} -eq 0 ]; then
+    echo "Error: no recordings were produced" >&2
+    exit 1
+elif [ ${#COMBINE_FILES[@]} -eq 1 ]; then
+    cp "${COMBINE_FILES[0]}" "$OUTPUT_FILE"
+    echo "Parquet saved to $OUTPUT_FILE"
+else
+    echo "Combining ${#COMBINE_FILES[@]} recordings..."
+    rezolus parquet combine "${COMBINE_FILES[@]}" -o "$OUTPUT_FILE"
+    echo "Combined parquet saved to $OUTPUT_FILE"
+fi
+
+# Fix ownership and permissions on output files
+for f in "$OUTPUT_DIR"/*.parquet; do
+    [ -f "$f" ] || continue
+    chown "$REAL_USER:$REAL_GROUP" "$f" 2>/dev/null || true
+    chmod 755 "$f" 2>/dev/null || true
+done
 
 # Show metadata summary
 echo ""
