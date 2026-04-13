@@ -1,5 +1,6 @@
+use super::MetricFilter;
 use metriken_exposition::{Counter, Gauge, Histogram as SnapshotHistogram, Snapshot, SnapshotV2};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 use tracing::warn;
 
@@ -12,6 +13,7 @@ pub struct PrometheusConverter {
     metric_ids: HashMap<MetricKey, usize>,
     next_id: usize,
     descriptions: HashMap<String, String>,
+    filter: Option<HashSet<String>>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -21,11 +23,12 @@ struct MetricKey {
 }
 
 impl PrometheusConverter {
-    pub fn new() -> Self {
+    pub fn new(filter: Option<MetricFilter>) -> Self {
         Self {
             metric_ids: HashMap::new(),
             next_id: 0,
             descriptions: HashMap::new(),
+            filter: filter.map(|f| f.fields),
         }
     }
 
@@ -80,6 +83,13 @@ impl PrometheusConverter {
         let mut histograms = Vec::new();
 
         for sample in scrape.samples {
+            // Apply filter: discard metrics not in the whitelist
+            if let Some(ref allowed) = self.filter {
+                if !allowed.contains(&sample.metric) {
+                    continue;
+                }
+            }
+
             let mut labels: Vec<(String, String)> = sample
                 .labels
                 .iter()

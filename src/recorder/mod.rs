@@ -1,8 +1,30 @@
 use super::*;
 use clap::ArgMatches;
+use std::collections::HashSet;
 
 mod prometheus;
 mod valkey;
+
+/// Whitelist of metric names to retain. When provided, any metric not in
+/// the set is discarded before conversion. Loaded from a JSON array via
+/// `--filter`. The same file format works for both Prometheus and
+/// Valkey/Redis sources — entries are matched against the native metric
+/// name of each source.
+pub struct MetricFilter {
+    pub fields: HashSet<String>,
+}
+
+impl MetricFilter {
+    pub fn load(path: &std::path::Path) -> Result<Self, String> {
+        let data = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read filter {}: {e}", path.display()))?;
+        let list: Vec<String> = serde_json::from_str(&data)
+            .map_err(|e| format!("failed to parse filter {}: {e}", path.display()))?;
+        Ok(Self {
+            fields: list.into_iter().collect(),
+        })
+    }
+}
 
 pub struct Config {
     interval: humantime::Duration,
@@ -196,17 +218,19 @@ pub fn run(config: Config) {
         }
     };
 
+    // Load metric filter (shared across all source types)
+    let filter = config.filter.as_ref().map(|path| {
+        MetricFilter::load(path).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        })
+    });
+
     // Determine source type from URL scheme
     let mut source_type: SourceType = match config.url.scheme() {
         "redis" | "rediss" | "valkey" | "valkeys" => {
             let counter_map = config.counter_map.as_ref().map(|path| {
                 valkey::CounterMap::load(path).unwrap_or_else(|e| {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                })
-            });
-            let filter = config.filter.as_ref().map(|path| {
-                valkey::MetricFilter::load(path).unwrap_or_else(|e| {
                     eprintln!("{e}");
                     std::process::exit(1);
                 })
@@ -320,7 +344,7 @@ pub fn run(config: Config) {
                 SourceType::Prometheus {
                     client,
                     url,
-                    converter: prometheus::PrometheusConverter::new(),
+                    converter: prometheus::PrometheusConverter::new(filter),
                 }
             } else {
                 SourceType::Rezolus { client, url }

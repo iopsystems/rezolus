@@ -49,27 +49,7 @@ impl CounterMap {
     }
 }
 
-/// Whitelist of metric field names to retain. When provided, any field not in
-/// the set is discarded before conversion. Loaded from a JSON array via
-/// `--filter`.
-///
-/// Keyspace sub-fields use the `keyspace/<sub_key>` form (e.g. `keyspace/keys`).
-#[derive(Clone, Debug)]
-pub struct MetricFilter {
-    fields: HashSet<String>,
-}
-
-impl MetricFilter {
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let data = std::fs::read_to_string(path)
-            .map_err(|e| format!("failed to read filter {}: {e}", path.display()))?;
-        let list: Vec<String> = serde_json::from_str(&data)
-            .map_err(|e| format!("failed to parse filter {}: {e}", path.display()))?;
-        Ok(Self {
-            fields: list.into_iter().collect(),
-        })
-    }
-}
+use super::MetricFilter;
 
 /// Holds the Redis/Valkey connection and converter for a recording session.
 pub struct ValkeySource {
