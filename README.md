@@ -34,6 +34,21 @@ sudo scripts/rezolus-capture --duration 2m \
 
 Run `scripts/rezolus-capture --help` for all options.
 
+### Docker
+
+A Docker image is also available for trying Rezolus without installing from
+source:
+
+```bash
+docker run --rm -it --privileged \
+  -p 8080:8080 -v $(pwd)/data:/data \
+  ghcr.io/iopsystems/rezolus:latest \
+  rezolus-capture --duration 60s
+```
+
+See [docker/README.md](docker/README.md) for more examples including combined
+system + service metric captures.
+
 [redis_exporter]: https://github.com/oliver006/redis_exporter
 
 ## Performance Metrics
