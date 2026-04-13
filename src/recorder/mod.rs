@@ -2,6 +2,7 @@ use super::*;
 use clap::ArgMatches;
 
 mod prometheus;
+mod valkey;
 
 pub struct Config {
     interval: humantime::Duration,
@@ -42,12 +43,25 @@ impl TryFrom<ArgMatches> for Config {
     }
 }
 
+enum SourceType {
+    Rezolus {
+        client: Client,
+        url: Url,
+    },
+    Prometheus {
+        client: Client,
+        url: Url,
+        converter: prometheus::PrometheusConverter,
+    },
+    Valkey(valkey::ValkeySource),
+}
+
 pub fn command() -> Command {
     Command::new("record")
         .about("On-demand recording to a file")
         .arg(
             clap::Arg::new("URL")
-                .help("Metrics endpoint (Rezolus agent or Prometheus)")
+                .help("Metrics endpoint (Rezolus agent, Prometheus, or redis://host:port for Valkey/Redis)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Url))
                 .required(true)
@@ -138,15 +152,6 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    // our http client
-    let client = match Client::builder().http1_only().build() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error creating http client: {e}");
-            std::process::exit(1);
-        }
-    };
-
     // open our destination file
     let mut destination = std::fs::File::create(config.output.clone())
         .map_err(|e| {
@@ -173,120 +178,164 @@ pub fn run(config: Config) {
         }
     };
 
-    // Auto-detect source type by probing the endpoint. For root-path URLs,
-    // try the Rezolus binary endpoint first; if it fails, try /metrics as
-    // Prometheus. For non-root URLs, use the path as-is.
-    let mut url = config.url.clone();
-    let prometheus_mode: bool;
-
-    {
-        let client = client.clone();
-
-        prometheus_mode = rt.block_on(async {
-            // Determine candidate URLs to try
-            let candidates: Vec<(Url, bool)> = if url.path() == "/" {
-                let mut rezolus_url = url.clone();
-                rezolus_url.set_path("/metrics/binary");
-                let mut prom_url = url.clone();
-                prom_url.set_path("/metrics");
-                vec![(rezolus_url, false), (prom_url, true)]
-            } else {
-                vec![(url.clone(), true)]
-            };
-
-            for (candidate_url, is_prom) in &candidates {
-                let start = Instant::now();
-
-                if let Ok(response) = client.get(candidate_url.clone()).send().await {
-                    if !response.status().is_success() {
-                        continue;
-                    }
-
-                    if let Ok(body) = response.bytes().await {
-                        let latency = start.elapsed();
-
-                        if latency.as_nanos() >= config.interval.as_nanos() {
-                            let recommended = humantime::Duration::from(Duration::from_millis(
-                                (latency * 2).as_nanos().div_ceil(1000000) as u64,
-                            ));
-                            eprintln!(
-                                "sampling latency ({} us) exceeded the sample interval. \
-                                 Try setting the interval to: {}",
-                                latency.as_micros(),
-                                recommended
-                            );
-                            std::process::exit(1);
-                        } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
-                            warn!(
-                                "sampling latency ({} us) is more that 75% of the sample interval. \
-                                 Consider increasing the interval",
-                                latency.as_micros()
-                            );
-                        } else {
-                            debug!("sampling latency: {} us", latency.as_micros());
-                        }
-
-                        if *is_prom {
-                            url = candidate_url.clone();
-                            info!("detected prometheus endpoint: {url}");
-                            return true;
-                        }
-
-                        // Try to deserialize as msgpack to confirm it's Rezolus
-                        if rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body).is_ok() {
-                            url = candidate_url.clone();
-                            info!("detected rezolus agent: {url}");
-                            return false;
-                        }
-
-                        // Got a response but it's not valid msgpack - try next
-                        continue;
-                    }
+    // Determine source type from URL scheme
+    let mut source_type: SourceType = match config.url.scheme() {
+        "redis" | "rediss" | "valkey" | "valkeys" => {
+            match rt.block_on(valkey::ValkeySource::connect(&config.url, &config.interval)) {
+                Ok(source) => SourceType::Valkey(source),
+                Err(e) => {
+                    eprintln!("failed to connect to Redis/Valkey: {e}");
+                    std::process::exit(1);
                 }
             }
+        }
+        "http" | "https" => {
+            // our http client
+            let client = match Client::builder().http1_only().build() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("error creating http client: {e}");
+                    std::process::exit(1);
+                }
+            };
 
-            eprintln!(
-                "failed to connect or unrecognized response. \
-                 Please check that the source is running and the address is correct"
-            );
+            // Auto-detect source type by probing the endpoint. For root-path
+            // URLs, try the Rezolus binary endpoint first; if it fails, try
+            // /metrics as Prometheus. For non-root URLs, use the path as-is.
+            let mut url = config.url.clone();
+
+            let is_prometheus = {
+                let client = client.clone();
+
+                rt.block_on(async {
+                    let candidates: Vec<(Url, bool)> = if url.path() == "/" {
+                        let mut rezolus_url = url.clone();
+                        rezolus_url.set_path("/metrics/binary");
+                        let mut prom_url = url.clone();
+                        prom_url.set_path("/metrics");
+                        vec![(rezolus_url, false), (prom_url, true)]
+                    } else {
+                        vec![(url.clone(), true)]
+                    };
+
+                    for (candidate_url, is_prom) in &candidates {
+                        let start = Instant::now();
+
+                        if let Ok(response) = client.get(candidate_url.clone()).send().await {
+                            if !response.status().is_success() {
+                                continue;
+                            }
+
+                            if let Ok(body) = response.bytes().await {
+                                let latency = start.elapsed();
+
+                                if latency.as_nanos() >= config.interval.as_nanos() {
+                                    let recommended =
+                                        humantime::Duration::from(Duration::from_millis(
+                                            (latency * 2).as_nanos().div_ceil(1000000) as u64,
+                                        ));
+                                    eprintln!(
+                                        "sampling latency ({} us) exceeded the sample interval. \
+                                         Try setting the interval to: {}",
+                                        latency.as_micros(),
+                                        recommended
+                                    );
+                                    std::process::exit(1);
+                                } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4)
+                                {
+                                    warn!(
+                                        "sampling latency ({} us) is more that 75% of the sample \
+                                         interval. Consider increasing the interval",
+                                        latency.as_micros()
+                                    );
+                                } else {
+                                    debug!("sampling latency: {} us", latency.as_micros());
+                                }
+
+                                if *is_prom {
+                                    url = candidate_url.clone();
+                                    info!("detected prometheus endpoint: {url}");
+                                    return true;
+                                }
+
+                                // Try to deserialize as msgpack to confirm it's Rezolus
+                                if rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body)
+                                    .is_ok()
+                                {
+                                    url = candidate_url.clone();
+                                    info!("detected rezolus agent: {url}");
+                                    return false;
+                                }
+
+                                // Got a response but it's not valid msgpack - try next
+                                continue;
+                            }
+                        }
+                    }
+
+                    eprintln!(
+                        "failed to connect or unrecognized response. \
+                         Please check that the source is running and the address is correct"
+                    );
+                    std::process::exit(1);
+                })
+            };
+
+            if is_prometheus {
+                SourceType::Prometheus {
+                    client,
+                    url,
+                    converter: prometheus::PrometheusConverter::new(),
+                }
+            } else {
+                SourceType::Rezolus { client, url }
+            }
+        }
+        other => {
+            eprintln!("unsupported URL scheme: {other}");
             std::process::exit(1);
-        });
-    }
+        }
+    };
 
     // Fetch the agent's systeminfo for embedding in parquet metadata
-    let agent_systeminfo: Option<String> = if prometheus_mode {
-        None
-    } else {
-        let client = client.clone();
-        let mut info_url = config.url.clone();
-        info_url.set_path("/systeminfo");
-        rt.block_on(async move {
-            match client.get(info_url).send().await {
-                Ok(response) if response.status().is_success() => response.text().await.ok(),
-                _ => None,
-            }
-        })
+    let agent_systeminfo: Option<String> = match &source_type {
+        SourceType::Rezolus { client, .. } => {
+            let client = client.clone();
+            let mut info_url = config.url.clone();
+            info_url.set_path("/systeminfo");
+            rt.block_on(async move {
+                match client.get(info_url).send().await {
+                    Ok(response) if response.status().is_success() => response.text().await.ok(),
+                    _ => None,
+                }
+            })
+        }
+        SourceType::Valkey(source) => source.server_info_json().map(|s| s.to_string()),
+        SourceType::Prometheus { .. } => None,
     };
 
     if agent_systeminfo.is_some() {
-        debug!("fetched systeminfo from agent");
+        debug!("fetched systeminfo");
     } else {
-        debug!("agent systeminfo not available");
+        debug!("systeminfo not available");
     }
 
     // Fetch metric descriptions for embedding in parquet metadata
-    let descriptions: Option<String> = if prometheus_mode {
-        None // descriptions come from # HELP lines during recording
-    } else {
-        let client = client.clone();
-        let mut desc_url = config.url.clone();
-        desc_url.set_path("/metrics/descriptions");
-        rt.block_on(async move {
-            match client.get(desc_url).send().await {
-                Ok(response) if response.status().is_success() => response.text().await.ok(),
-                _ => None,
-            }
-        })
+    let descriptions: Option<String> = match &source_type {
+        SourceType::Rezolus { client, .. } => {
+            let client = client.clone();
+            let mut desc_url = config.url.clone();
+            desc_url.set_path("/metrics/descriptions");
+            rt.block_on(async move {
+                match client.get(desc_url).send().await {
+                    Ok(response) if response.status().is_success() => response.text().await.ok(),
+                    _ => None,
+                }
+            })
+        }
+        // Prometheus descriptions come from # HELP lines during recording;
+        // Valkey descriptions are static and collected after recording.
+        _ => None,
     };
 
     if descriptions.is_some() {
@@ -294,6 +343,15 @@ pub fn run(config: Config) {
     } else {
         debug!("agent descriptions not available");
     }
+
+    // Source and version metadata for Valkey/Redis
+    let source_metadata: Option<(String, String)> = match &source_type {
+        SourceType::Valkey(source) => Some((
+            source.source_name().to_string(),
+            source.server_version().to_string(),
+        )),
+        _ => None,
+    };
 
     if config.duration.is_some() {
         info!("recording metrics... ctrl-c to terminate early");
@@ -309,13 +367,6 @@ pub fn run(config: Config) {
         // sampling interval
         let mut interval = crate::common::aligned_interval(interval);
 
-        // prometheus converter for parsing text format responses
-        let mut converter = if prometheus_mode {
-            Some(prometheus::PrometheusConverter::new())
-        } else {
-            None
-        };
-
         // sample in a loop until RUNNING is false or duration has completed
         while STATE.load(Ordering::Relaxed) == RUNNING {
             // check if the duration has completed
@@ -328,12 +379,22 @@ pub fn run(config: Config) {
             // wait to sample
             interval.tick().await;
 
-            let start = Instant::now();
+            let sample_start = Instant::now();
 
             // sample the metrics source
-            if let Ok(response) = client.get(url.clone()).send().await {
-                let body: Option<Vec<u8>> = if let Some(ref mut converter) = converter {
-                    match response.text().await {
+            let body: Option<Vec<u8>> = match &mut source_type {
+                SourceType::Rezolus { client, url } => {
+                    match client.get(url.clone()).send().await {
+                        Ok(response) => response.bytes().await.ok().map(|b| b.to_vec()),
+                        Err(_) => None,
+                    }
+                }
+                SourceType::Prometheus {
+                    client,
+                    url,
+                    converter,
+                } => match client.get(url.clone()).send().await {
+                    Ok(response) => match response.text().await {
                         Ok(text) => {
                             let snapshot = converter.convert(&text);
                             match rmp_serde::encode::to_vec(&snapshot) {
@@ -345,32 +406,29 @@ pub fn run(config: Config) {
                             }
                         }
                         Err(_) => None,
-                    }
+                    },
+                    Err(_) => None,
+                },
+                SourceType::Valkey(source) => source.fetch_snapshot().await,
+            };
+
+            if let Some(body) = body {
+                let latency = sample_start.elapsed();
+
+                if latency.as_nanos() >= config.interval.as_nanos() {
+                    error!("sampling latency ({} us) exceeded the sample interval. Samples will be missing", latency.as_micros());
+               } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
+                    warn!("sampling latency ({} us) is more that 75% of the sample interval. Consider increasing the interval", latency.as_micros());
                 } else {
-                    response.bytes().await.ok().map(|b| b.to_vec())
-                };
+                    debug!("sampling latency: {} us", latency.as_micros());
+                }
 
-                if let Some(body) = body {
-                    let latency = start.elapsed();
-
-                    if latency.as_nanos() >= config.interval.as_nanos() {
-                        error!("sampling latency ({} us) exceeded the sample interval. Samples will be missing", latency.as_micros());
-                   } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
-                        warn!("sampling latency ({} us) is more that 75% of the sample interval. Consider increasing the interval", latency.as_micros());
-                    } else {
-                        debug!("sampling latency: {} us", latency.as_micros());
-                    }
-
-                    if let Err(e) = writer.write_all(&body) {
-                        eprintln!("error writing to temporary file: {e}");
-                        std::process::exit(1);
-                    }
-                } else {
-                    eprintln!("failed to read response. terminating early");
-                    break;
+                if let Err(e) = writer.write_all(&body) {
+                    eprintln!("error writing to temporary file: {e}");
+                    std::process::exit(1);
                 }
             } else {
-                eprintln!("failed to get metrics. terminating early");
+                eprintln!("failed to read response. terminating early");
                 break;
             }
         }
@@ -378,11 +436,25 @@ pub fn run(config: Config) {
         debug!("flushing writer");
         let _ = writer.flush();
 
-        // Collect Prometheus descriptions accumulated during recording
-        let prom_descriptions = converter
-            .as_ref()
-            .filter(|c| !c.descriptions().is_empty())
-            .and_then(|c| serde_json::to_string(c.descriptions()).ok());
+        // Collect descriptions accumulated during recording
+        let extra_descriptions = match &source_type {
+            SourceType::Prometheus { converter, .. } => {
+                if !converter.descriptions().is_empty() {
+                    serde_json::to_string(converter.descriptions()).ok()
+                } else {
+                    None
+                }
+            }
+            SourceType::Valkey(source) => {
+                let descs = source.descriptions();
+                if !descs.is_empty() {
+                    serde_json::to_string(descs).ok()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
 
         // handle any output format specific transforms
         match config.format {
@@ -408,7 +480,12 @@ pub fn run(config: Config) {
                     converter = converter.metadata("systeminfo".to_string(), json.clone());
                 }
 
-                let desc_json = descriptions.or(prom_descriptions);
+                if let Some((ref source, ref version)) = source_metadata {
+                    converter = converter.metadata("source".to_string(), source.clone());
+                    converter = converter.metadata("version".to_string(), version.clone());
+                }
+
+                let desc_json = descriptions.or(extra_descriptions);
                 if let Some(ref json) = desc_json {
                     converter = converter.metadata("descriptions".to_string(), json.clone());
                 }
