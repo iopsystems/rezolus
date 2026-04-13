@@ -5,6 +5,37 @@
 Rezolus is a Linux performance telemetry agent that provides detailed insights
 into system behavior through efficient, low-overhead instrumentation.
 
+## Quick Start
+
+```bash
+git clone https://github.com/iopsystems/rezolus
+cd rezolus
+cargo build --release
+```
+
+Capture system metrics for 60 seconds and view them in your browser:
+
+```bash
+sudo scripts/rezolus-capture --duration 60s
+```
+
+The script starts the Rezolus agent automatically, records system metrics, and
+launches an interactive dashboard. Root privileges are required for eBPF
+instrumentation.
+
+To also capture service metrics from a Prometheus-compatible endpoint (e.g.,
+Redis via [redis_exporter][redis_exporter]):
+
+```bash
+sudo scripts/rezolus-capture --duration 2m \
+    --endpoint http://localhost:9121/metrics \
+    --source redis
+```
+
+Run `scripts/rezolus-capture --help` for all options.
+
+[redis_exporter]: https://github.com/oliver006/redis_exporter
+
 ## Performance Metrics
 
 Rezolus captures a comprehensive set of system performance metrics across
@@ -89,30 +120,6 @@ To view your artifact:
 rezolus view rezolus.parquet [listen address]
 ```
 
-#### Quick Capture with `rezolus-capture`
-
-The `scripts/rezolus-capture` script automates the full workflow: it starts the
-agent if needed, records system metrics (and optionally service metrics from a
-Prometheus-compatible endpoint), combines them, and launches the viewer.
-
-```bash
-# System metrics only for 60 seconds (starts the agent automatically)
-sudo scripts/rezolus-capture --duration 60s
-
-# System + Redis metrics for 2 minutes
-# (requires redis_exporter running at localhost:9121)
-sudo scripts/rezolus-capture --duration 2m \
-    --endpoint http://localhost:9121/metrics \
-    --source redis
-
-# Capture without launching the viewer
-sudo scripts/rezolus-capture --duration 5m --no-viewer --output-dir /tmp/captures
-```
-
-The script requires root privileges for eBPF instrumentation. If a Rezolus agent
-is already running, it will use the existing agent instead of starting a new one.
-
-Run `scripts/rezolus-capture --help` for all options.
 
 ### DevOps and SRE Troubleshooting
 Rezolus also has value for people operating services. The Agent and Exporter can
