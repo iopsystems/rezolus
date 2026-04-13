@@ -17,6 +17,7 @@ pub(crate) static TEMPLATES: &[(&str, &str)] = &[
     ("llm-perf", include_str!("templates/llm_perf.json")),
     ("cachecannon", include_str!("templates/cachecannon.json")),
     ("valkey", include_str!("templates/valkey.json")),
+    ("vllm", include_str!("templates/vllm.json")),
 ];
 
 /// Source name aliases for renamed projects (old name → canonical name).
