@@ -262,9 +262,9 @@ fn resolve_interval_ns(inputs: &[InputFile]) -> Result<u64, Box<dyn std::error::
         .iter()
         .find_map(|i| i.sampling_interval_ms.as_deref())
         .ok_or("no sampling_interval_ms metadata in any input file")?;
-    let ms: u64 = ms_str.parse().map_err(|_| {
-        format!("sampling_interval_ms {:?} is not a valid integer", ms_str)
-    })?;
+    let ms: u64 = ms_str
+        .parse()
+        .map_err(|_| format!("sampling_interval_ms {:?} is not a valid integer", ms_str))?;
     Ok(ms * 1_000_000) // ms → ns
 }
 
@@ -318,7 +318,10 @@ fn validate_alignment_quality(
 
     let mut aligned = 0usize;
     for &qts in common_quantized {
-        let raws: Vec<u64> = raw_maps.iter().filter_map(|m| m.get(&qts).copied()).collect();
+        let raws: Vec<u64> = raw_maps
+            .iter()
+            .filter_map(|m| m.get(&qts).copied())
+            .collect();
         if raws.len() < 2 {
             aligned += 1;
             continue;
@@ -972,8 +975,20 @@ mod tests {
 
     #[test]
     fn test_combine_preserves_field_metadata() {
-        let (_t1, p1) = make_test_file(&[SEC, 2 * SEC], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t1, p1) = make_test_file(
+            &[SEC, 2 * SEC],
+            "m1",
+            &[Some(1), Some(2)],
+            "rezolus",
+            "1000",
+        );
+        let (_t2, p2) = make_test_file(
+            &[SEC, 2 * SEC],
+            "m2",
+            &[Some(3), Some(4)],
+            "llm-perf",
+            "1000",
+        );
 
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
@@ -1096,19 +1111,25 @@ mod tests {
         let result = combine_and_write(&inputs, &out_path);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("alignment too poor"), "unexpected error: {err}");
+        assert!(
+            err.contains("alignment too poor"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
     fn test_quantize_rounds_to_nearest() {
         let interval = 1_000_000_000; // 1s
-        // Exact boundary
+                                      // Exact boundary
         assert_eq!(quantize(2 * interval, interval), 2 * interval);
         // Slightly after boundary
         assert_eq!(quantize(2 * interval + 1000, interval), 2 * interval);
         // Just before next boundary (rounds up)
         assert_eq!(quantize(3 * interval - 1000, interval), 3 * interval);
         // Exactly at midpoint (rounds up)
-        assert_eq!(quantize(2 * interval + interval / 2, interval), 3 * interval);
+        assert_eq!(
+            quantize(2 * interval + interval / 2, interval),
+            3 * interval
+        );
     }
 }
