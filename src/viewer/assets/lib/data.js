@@ -313,5 +313,4 @@ export {
     substituteCgroupPattern,
     processDashboardData,
     clearMetadataCache,
-    createDataApi,
 };

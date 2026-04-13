@@ -30,7 +30,7 @@
       "title": "Bytes Received Rate",
       "query": "sum(irate(bytes_rx[5s]))",
       "type": "delta_counter",
-      "unit_system": "data_rate"
+      "unit_system": "datarate"
     },
     {
       "role": "latency",

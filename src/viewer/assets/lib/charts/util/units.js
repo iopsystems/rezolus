@@ -200,11 +200,8 @@ function formatWithUnit(value, unitSystem, precision = 2) {
     // Get absolute value for scaling (we'll preserve sign later)
     const absValue = Math.abs(value);
 
-    // Normalize unit system name - handle both 'time' and 'time_ns'
-    const normalizedUnitSystem = unitSystem === 'time_ns' ? 'time' : unitSystem;
-
     // Get the unit system configuration
-    const system = UNIT_SYSTEMS[normalizedUnitSystem];
+    const system = UNIT_SYSTEMS[unitSystem];
     if (!system) {
         // Fallback for unknown unit systems
         return {

@@ -54,7 +54,14 @@ pub(super) fn filter_parquet_file(
         .fields()
         .iter()
         .enumerate()
-        .filter(|(_, f)| keep.contains(f.name()))
+        .filter(|(_, f)| {
+            let name = f.name();
+            // Exact match, or match the base name before ':' (e.g. "response_latency:buckets")
+            keep.contains(name.as_str())
+                || name
+                    .split_once(':')
+                    .is_some_and(|(base, _)| keep.contains(base))
+        })
         .map(|(i, _)| i)
         .collect();
 
