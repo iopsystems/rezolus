@@ -12,31 +12,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Built-in service extension templates keyed by canonical source name.
-pub(crate) static TEMPLATES: &[(&str, &str)] = &[
-    ("llm-perf", include_str!("templates/llm_perf.json")),
-    ("cachecannon", include_str!("templates/cachecannon.json")),
-    ("valkey", include_str!("templates/valkey.json")),
-    ("vllm", include_str!("templates/vllm.json")),
-];
-
-/// Source name aliases for renamed projects (old name → canonical name).
-pub(crate) static SOURCE_ALIASES: &[(&str, &str)] =
-    &[("llm-bench", "llm-perf"), ("redis", "valkey")];
-
-/// Look up a built-in service template by source name, resolving aliases.
-pub(crate) fn lookup_template(source: &str) -> Option<&'static str> {
-    let canonical = SOURCE_ALIASES
-        .iter()
-        .find(|(alias, _)| *alias == source)
-        .map(|(_, canon)| *canon)
-        .unwrap_or(source);
-    TEMPLATES
-        .iter()
-        .find(|(name, _)| *name == canonical)
-        .map(|(_, json)| *json)
-}
-
 pub fn command() -> Command {
     Command::new("parquet")
         .about("Parquet file operations")
@@ -72,6 +47,14 @@ pub fn command() -> Command {
                         .help("Also filter columns to only those needed by the service extension KPIs")
                         .action(clap::ArgAction::SetTrue)
                         .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("templates")
+                        .long("templates")
+                        .value_name("DIR")
+                        .help("Directory containing service extension template JSON files")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
                 ),
         )
         .subcommand(
@@ -163,19 +146,39 @@ pub fn command() -> Command {
                         .help("Output file path (default: overwrite input file in-place)")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("templates")
+                        .long("templates")
+                        .value_name("DIR")
+                        .help("Directory containing service extension template JSON files")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
                 ),
         )
 }
 
 pub fn run(args: ArgMatches) {
+    use crate::viewer::TemplateRegistry;
+
     let result = match args.subcommand() {
         Some(("annotate", sub_args)) => {
-            annotate::run(sub_args);
+            let registry = TemplateRegistry::resolve_and_load(
+                sub_args
+                    .get_one::<PathBuf>("templates")
+                    .map(|p| p.as_path()),
+            );
+            annotate::run(sub_args, &registry);
             return;
         }
         Some(("combine", sub_args)) => combine::run(sub_args),
         Some(("filter", sub_args)) => {
-            filter::run(sub_args);
+            let registry = TemplateRegistry::resolve_and_load(
+                sub_args
+                    .get_one::<PathBuf>("templates")
+                    .map(|p| p.as_path()),
+            );
+            filter::run(sub_args, &registry);
             return;
         }
         Some(("metadata", sub_args)) => metadata::run(sub_args),

@@ -6,11 +6,9 @@ use std::sync::Arc;
 use crate::parquet_metadata::{KEY_SERVICE_QUERIES, KEY_SOURCE};
 use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
-use crate::viewer::ServiceExtension;
+use crate::viewer::{ServiceExtension, TemplateRegistry};
 
-use super::lookup_template;
-
-pub(super) fn run(args: &ArgMatches) {
+pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
 
     if args.get_flag("undo") {
@@ -34,14 +32,14 @@ pub(super) fn run(args: &ArgMatches) {
             serde_json::from_str(&content).expect("invalid service extension JSON");
         content
     } else {
-        let template = lookup_template(&source).unwrap_or_else(|| {
+        let template = registry.get(&source).unwrap_or_else(|| {
             eprintln!(
-                "error: no built-in template for source {:?}. Use --queries to provide one.",
+                "error: no template for source {:?}. Use --queries to provide one.",
                 source
             );
             std::process::exit(1);
         });
-        template.to_string()
+        serde_json::to_string(template).expect("failed to serialize service extension template")
     };
 
     let mut ext: ServiceExtension = serde_json::from_str(&json).unwrap();

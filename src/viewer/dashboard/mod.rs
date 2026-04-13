@@ -36,8 +36,9 @@ pub fn generate(
     data: Tsdb,
     filesize: Option<u64>,
     service_ext: Option<(&str, &crate::viewer::ServiceExtension)>,
+    templates: crate::viewer::TemplateRegistry,
 ) -> AppState {
-    let state = AppState::new(data);
+    let state = AppState::new(data, templates);
 
     let mut all_sections: Vec<Section> = std::iter::once(Section {
         name: "Overview".to_string(),
@@ -111,7 +112,7 @@ mod tests {
     #[test]
     fn generate_produces_expected_keys() {
         let data = Tsdb::default();
-        let state = generate(data, None, None);
+        let state = generate(data, None, None, crate::viewer::TemplateRegistry::empty());
 
         let mut keys: Vec<_> = state.sections.read().keys().cloned().collect();
         keys.sort();
