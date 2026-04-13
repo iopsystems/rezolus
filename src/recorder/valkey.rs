@@ -71,16 +71,12 @@ static FLOAT_COUNTERS: &[&str] = &[
     "used_cpu_user_main_thread",
 ];
 
-/// Service version fields to capture for parquet metadata.
-static SERVICE_INFO_FIELDS: &[&str] = &["redis_version", "valkey_version", "server_name"];
-
 /// Holds the Redis/Valkey connection and converter for a recording session.
 pub struct ValkeySource {
     connection: ConnectionManager,
     converter: ValkeyConverter,
     source_name: String,
     version: String,
-    systeminfo_json: Option<String>,
 }
 
 /// Converts Redis/Valkey INFO output into SnapshotV2 objects.
@@ -137,19 +133,9 @@ impl ValkeySource {
             debug!("sampling latency: {} us", latency.as_micros());
         }
 
-        // Extract server metadata from the probe INFO response
-        let server_info = parse_server_info(&info_text);
-        let source_name = if server_info.get("server_name").map(|s| s.as_str()) == Some("valkey") {
-            "valkey".to_string()
-        } else {
-            "redis".to_string()
-        };
-        let version = server_info
-            .get("valkey_version")
-            .or_else(|| server_info.get("redis_version"))
-            .cloned()
-            .unwrap_or_default();
-        let systeminfo_json = serde_json::to_string(&server_info).ok();
+        // Detect whether this is Valkey or Redis and extract the version
+        // by scanning the INFO output for server_name / *_version fields.
+        let (source_name, version) = detect_service(&info_text);
 
         info!("connected to {source_name} {version} at {url}");
 
@@ -158,7 +144,6 @@ impl ValkeySource {
             converter: ValkeyConverter::new(),
             source_name,
             version,
-            systeminfo_json,
         })
     }
 
@@ -188,10 +173,6 @@ impl ValkeySource {
 
     pub fn server_version(&self) -> &str {
         &self.version
-    }
-
-    pub fn server_info_json(&self) -> Option<&str> {
-        self.systeminfo_json.as_deref()
     }
 
     pub fn descriptions(&self) -> &HashMap<String, String> {
@@ -412,34 +393,34 @@ impl ValkeyConverter {
     }
 }
 
-/// Parse the Server section of an INFO response to extract metadata strings.
-fn parse_server_info(info_text: &str) -> HashMap<String, String> {
-    let fields: HashSet<&str> = SERVICE_INFO_FIELDS.iter().copied().collect();
-    let mut result = HashMap::new();
-    let mut in_server_section = false;
+/// Detect whether the server is Valkey or Redis and return (source_name, version).
+fn detect_service(info_text: &str) -> (String, String) {
+    let mut is_valkey = false;
+    let mut redis_version = String::new();
+    let mut valkey_version = String::new();
 
     for line in info_text.lines() {
         let line = line.trim();
-        if line.starts_with("# ") {
-            in_server_section = line.eq_ignore_ascii_case("# Server");
-            if !in_server_section && !result.is_empty() {
-                // Past the Server section, stop scanning
-                break;
-            }
-            continue;
-        }
-        if !in_server_section {
-            continue;
-        }
         if let Some((field, value)) = line.split_once(':') {
-            let field = field.trim();
-            if fields.contains(field) {
-                result.insert(field.to_string(), value.trim().to_string());
+            match field.trim() {
+                "server_name" if value.trim() == "valkey" => is_valkey = true,
+                "valkey_version" => valkey_version = value.trim().to_string(),
+                "redis_version" => redis_version = value.trim().to_string(),
+                _ => {}
             }
         }
     }
 
-    result
+    if is_valkey {
+        let version = if valkey_version.is_empty() {
+            redis_version
+        } else {
+            valkey_version
+        };
+        ("valkey".to_string(), version)
+    } else {
+        ("redis".to_string(), redis_version)
+    }
 }
 
 /// Normalize valkey:// to redis:// and valkeys:// to rediss:// for the redis crate.
@@ -659,29 +640,29 @@ used_memory_rss_human:1.91M\r
     }
 
     #[test]
-    fn test_parse_server_info() {
+    fn test_detect_service_valkey() {
         let info = "\
 # Server\r
 redis_version:7.2.4\r
 server_name:valkey\r
 valkey_version:8.0.1\r
-os:Linux 5.15.0-1024-aws x86_64\r
-arch_bits:64\r
-tcp_port:6379\r
-redis_mode:standalone\r
-run_id:abc123def456\r
-\r
-# Clients\r
-connected_clients:10\r
+os:Linux 5.15.0\r
 ";
-        let info_map = parse_server_info(info);
-        assert_eq!(info_map.get("redis_version").unwrap(), "7.2.4");
-        assert_eq!(info_map.get("server_name").unwrap(), "valkey");
-        assert_eq!(info_map.get("valkey_version").unwrap(), "8.0.1");
-        // Only service version fields are captured
-        assert!(!info_map.contains_key("os"));
-        assert!(!info_map.contains_key("arch_bits"));
-        assert!(!info_map.contains_key("connected_clients"));
+        let (name, version) = detect_service(info);
+        assert_eq!(name, "valkey");
+        assert_eq!(version, "8.0.1");
+    }
+
+    #[test]
+    fn test_detect_service_redis() {
+        let info = "\
+# Server\r
+redis_version:7.2.4\r
+redis_mode:standalone\r
+";
+        let (name, version) = detect_service(info);
+        assert_eq!(name, "redis");
+        assert_eq!(version, "7.2.4");
     }
 
     #[test]

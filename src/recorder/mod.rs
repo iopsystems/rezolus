@@ -310,7 +310,7 @@ pub fn run(config: Config) {
                 }
             })
         }
-        SourceType::Valkey(source) => source.server_info_json().map(|s| s.to_string()),
+        SourceType::Valkey(_) => None,
         SourceType::Prometheus { .. } => None,
     };
 
