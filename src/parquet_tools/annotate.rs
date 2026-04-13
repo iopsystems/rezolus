@@ -1,6 +1,5 @@
 use clap::ArgMatches;
 use std::collections::BTreeSet;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,11 +18,11 @@ pub(super) fn run(args: &ArgMatches) {
         return;
     }
 
-    let custom_file = args.get_one::<PathBuf>("service-extension");
+    let custom_file = args.get_one::<PathBuf>("queries");
 
     let source = read_source_metadata(path).unwrap_or_else(|| {
         eprintln!(
-            "error: parquet file has no 'source' metadata. Use --file to provide a template."
+            "error: parquet file has no 'source' metadata. Use --queries to provide a template."
         );
         std::process::exit(1);
     });
@@ -37,7 +36,7 @@ pub(super) fn run(args: &ArgMatches) {
     } else {
         let template = lookup_template(&source).unwrap_or_else(|| {
             eprintln!(
-                "error: no built-in template for source {:?}. Use --file to provide one.",
+                "error: no built-in template for source {:?}. Use --queries to provide one.",
                 source
             );
             std::process::exit(1);
@@ -60,6 +59,13 @@ pub(super) fn run(args: &ArgMatches) {
         ext.service_name,
         ext.kpis.len()
     );
+
+    if args.get_flag("filter") {
+        if let Err(e) = super::filter::filter_parquet_file(path, &ext, None) {
+            eprintln!("error: failed to filter columns: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Remove service_queries from all sources in per_source_metadata.
@@ -158,7 +164,7 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 ///
 /// Matches `metric_name` or `metric_name{labels...}`, skipping anything
 /// followed by `(` (i.e. function calls like `sum(`, `irate(`).
-fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
+pub(super) fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
     use regex::Regex;
     use std::sync::LazyLock;
 
@@ -188,7 +194,7 @@ fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
     }
 }
 
-fn read_source_metadata(path: &Path) -> Option<String> {
+pub(super) fn read_source_metadata(path: &Path) -> Option<String> {
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
 
@@ -205,70 +211,24 @@ fn annotate_parquet(
     path: &Path,
     service_queries_json: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
-    use parquet::file::reader::FileReader;
-    use parquet::file::serialized_reader::SerializedFileReader;
     use parquet::format::KeyValue;
 
-    // Read existing metadata
-    let meta_reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
-    let mut kv_meta: Vec<KeyValue> = meta_reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .cloned()
-        .unwrap_or_default();
+    let mut kv_meta = super::read_file_metadata(path)?;
 
-    // Write service_queries as a top-level key
     kv_meta.retain(|kv| kv.key != KEY_SERVICE_QUERIES);
     kv_meta.push(KeyValue {
         key: KEY_SERVICE_QUERIES.to_string(),
         value: Some(service_queries_json.to_string()),
     });
 
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(kv_meta))
-        .build();
-
-    // Read all record batches
-    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
-    let schema = builder.schema().clone();
-    let reader = builder.build()?;
-
-    // Write to memory buffer with updated metadata
-    let mut output = Vec::new();
-    {
-        let mut writer = ArrowWriter::try_new(Cursor::new(&mut output), schema, Some(props))?;
-        for batch in reader {
-            writer.write(&batch?)?;
-        }
-        writer.close()?;
-    }
-
-    // Write back to the same file (in-place)
-    std::fs::write(path, &output)?;
-
+    let buf = super::rewrite_parquet(path, kv_meta, None)?;
+    std::fs::write(path, &buf)?;
     Ok(())
 }
 
 /// Remove the top-level `service_queries` key from parquet metadata.
 fn unannotate_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
-    use parquet::file::reader::FileReader;
-    use parquet::file::serialized_reader::SerializedFileReader;
-    use parquet::format::KeyValue;
-
-    let meta_reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
-    let mut kv_meta: Vec<KeyValue> = meta_reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .cloned()
-        .unwrap_or_default();
+    let mut kv_meta = super::read_file_metadata(path)?;
 
     let before = kv_meta.len();
     kv_meta.retain(|kv| kv.key != KEY_SERVICE_QUERIES);
@@ -278,25 +238,8 @@ fn unannotate_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(kv_meta))
-        .build();
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
-    let schema = builder.schema().clone();
-    let reader = builder.build()?;
-
-    let mut output = Vec::new();
-    {
-        let mut writer = ArrowWriter::try_new(Cursor::new(&mut output), schema, Some(props))?;
-        for batch in reader {
-            writer.write(&batch?)?;
-        }
-        writer.close()?;
-    }
-
-    std::fs::write(path, &output)?;
-
+    let buf = super::rewrite_parquet(path, kv_meta, None)?;
+    std::fs::write(path, &buf)?;
     Ok(())
 }
 

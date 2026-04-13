@@ -1169,48 +1169,18 @@ async fn save_with_selection(
     // File mode: copy original parquet with selection metadata added
     if let Some(path) = parquet_path {
         let result = tokio::task::spawn_blocking(move || {
-            use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-            use parquet::arrow::ArrowWriter;
-            use parquet::file::properties::WriterProperties;
-            use parquet::file::reader::FileReader;
-            use parquet::file::serialized_reader::SerializedFileReader;
             use parquet::format::KeyValue;
 
-            let file = std::fs::File::open(&path)?;
-
-            // Read existing metadata to preserve and augment
-            let meta_reader = SerializedFileReader::new(std::fs::File::open(&path)?)?;
-            let mut kv_meta: Vec<KeyValue> = meta_reader
-                .metadata()
-                .file_metadata()
-                .key_value_metadata()
-                .cloned()
-                .unwrap_or_default();
+            let mut kv_meta =
+                crate::parquet_tools::read_file_metadata(&path).map_err(|e| e.to_string())?;
             kv_meta.retain(|kv| kv.key != "selection");
             kv_meta.push(KeyValue {
                 key: "selection".to_string(),
                 value: Some(selection_json),
             });
 
-            let props = WriterProperties::builder()
-                .set_key_value_metadata(Some(kv_meta))
-                .build();
-
-            let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-            let schema = builder.schema().clone();
-            let reader = builder.build()?;
-
-            let mut output = Vec::new();
-            {
-                let mut writer =
-                    ArrowWriter::try_new(Cursor::new(&mut output), schema, Some(props))?;
-                for batch in reader {
-                    let batch = batch?;
-                    writer.write(&batch)?;
-                }
-                writer.close()?;
-            }
-
+            let output = crate::parquet_tools::rewrite_parquet(&path, kv_meta, None)
+                .map_err(|e| e.to_string())?;
             info!("saved annotated parquet ({} bytes)", output.len());
             Ok::<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>(output)
         })

@@ -68,7 +68,7 @@ target/release/rezolus parquet metadata -i file.parquet             # show file/
 target/release/rezolus parquet metadata -i file.parquet --json      # JSON output
 target/release/rezolus parquet metadata -i file.parquet --field source
 target/release/rezolus parquet annotate file.parquet                # add service extension KPIs
-target/release/rezolus parquet annotate file.parquet --file ext.json
+target/release/rezolus parquet annotate file.parquet --queries ext.json
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet
 
 # MCP - AI analysis server or CLI commands
