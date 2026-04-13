@@ -5,6 +5,35 @@ let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
+// ---------------------------------------------------------------------------
+// Query rewriting for non-default granularity (step override)
+// ---------------------------------------------------------------------------
+// When the user picks a coarser step (e.g. 15s instead of auto ~1s), raw
+// queries must be adjusted so that values are properly smoothed over the
+// wider window rather than just down-sampled.
+//
+//   Counter:  irate(m[5m]) → rate(m[Ns])   (true average rate over window)
+//   Gauge:    m             → avg_over_time(m[Ns])  (average value over window)
+//   Histogram: stride parameter passed to histogram_percentiles / histogram_heatmap
+
+// Replace all irate(...[window]) with rate(...[Ns]) in a query string.
+const rewriteCounterQuery = (query, stepSecs) => {
+    const window = stepSecs + 's';
+    return query.replace(/\birate\s*\(([^)]*?)\[\d+[smhd]\]/g, `rate($1[${window}]`);
+};
+
+// Wrap a simple gauge metric selector with avg_over_time(metric[Ns]).
+// Only applies to plain selectors (e.g. "memory_total" or
+// "memory_total{host=\"a\"}").  Compound expressions with operators
+// are left unchanged since avg_over_time only accepts a matrix selector.
+const rewriteGaugeQuery = (query, stepSecs) => {
+    if (/_over_time\s*\(/.test(query)) return query;
+    // Only wrap if the query is a simple metric selector (no arithmetic/parens)
+    if (/[+\-*/() ]/.test(query.replace(/\{[^}]*\}/g, ''))) return query;
+    const window = stepSecs + 's';
+    return `avg_over_time(${query}[${window}])`;
+};
+
 const defaultGetMetadata = () => ViewerApi.getMetadata();
 const defaultQueryRange = (query, start, end, step) =>
     ViewerApi.queryRange(query, start, end, step);
@@ -180,10 +209,24 @@ const createDataApi = ({
             for (const plot of group.plots || []) {
                 if (plot.promql_query) {
                     let queryToRun = plot.promql_query;
+                    const stepActive = _stepOverride && _stepOverride > 1;
 
-                    // Wrap histogram queries with the appropriate function
+                    // Wrap histogram queries with the appropriate function,
+                    // passing stride when a coarser step is selected.
                     if (plot.opts.type === 'histogram') {
-                        queryToRun = buildHistogramQuery(queryToRun, plot.opts.subtype, plot.opts.percentiles);
+                        queryToRun = buildHistogramQuery(
+                            queryToRun, plot.opts.subtype, plot.opts.percentiles,
+                            stepActive ? _stepOverride : undefined,
+                        );
+                    }
+
+                    // Rewrite counter/gauge queries for coarser granularity
+                    if (stepActive) {
+                        if (plot.opts.type === 'delta_counter') {
+                            queryToRun = rewriteCounterQuery(queryToRun, _stepOverride);
+                        } else if (plot.opts.type === 'gauge') {
+                            queryToRun = rewriteGaugeQuery(queryToRun, _stepOverride);
+                        }
                     }
 
                     if (queryToRun.includes('__SELECTED_CGROUPS__')) {
@@ -246,7 +289,8 @@ const createDataApi = ({
             return null;
         }
 
-        const result = await executePromQLRangeQuery(`histogram_heatmap(${metricSelector})`);
+        const strideSuffix = (_stepOverride && _stepOverride > 1) ? `, ${_stepOverride}` : '';
+        const result = await executePromQLRangeQuery(`histogram_heatmap(${metricSelector}${strideSuffix})`);
 
         if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
             const hr = result.data.result;

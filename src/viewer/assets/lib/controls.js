@@ -292,7 +292,6 @@ const GRANULARITY_OPTIONS = [
     { value: '1', label: '1s' },
     { value: '15', label: '15s' },
     { value: '60', label: '1m' },
-    { value: '900', label: '15m' },
 ];
 
 const GranularitySelector = {

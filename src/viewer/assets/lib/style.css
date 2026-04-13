@@ -330,7 +330,6 @@ body::after {
     align-items: center;
     gap: 8px;
     margin-left: auto;
-    margin-right: var(--content-padding);
 }
 
 .time-label {
@@ -2580,7 +2579,7 @@ main {
         height: auto;
         min-height: var(--header-height);
         padding: 0.5rem 0.75rem;
-        gap: 0.5rem;
+        gap: 0.25rem 0.5rem;
     }
 
     .hamburger-btn {
@@ -2622,12 +2621,11 @@ main {
         padding: 0;
     }
 
-    /* Time range bar wraps to its own row on mobile */
+    /* Time range bar shares row with granularity + theme on mobile */
     .time-range-bar {
-        width: 100%;
         margin-left: 0;
         margin-right: 0;
-        justify-content: center;
+        gap: 4px;
     }
 
     .time-track {
@@ -2635,6 +2633,7 @@ main {
     }
 
     .granularity-selector {
+        margin-left: auto;
         margin-right: 0;
     }
 
