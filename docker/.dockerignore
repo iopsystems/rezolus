@@ -1,0 +1,5 @@
+target/
+.git/
+*.parquet
+debian/cargo_home/
+debian/cargo_target/
