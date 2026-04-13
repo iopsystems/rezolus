@@ -533,7 +533,11 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/save", get(save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
-        .route("/upload", axum::routing::post(upload_parquet))
+        .route(
+            "/upload",
+            axum::routing::post(upload_parquet)
+                .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         .route("/connect", axum::routing::post(connect_agent))
         .route(
             "/save_with_selection",

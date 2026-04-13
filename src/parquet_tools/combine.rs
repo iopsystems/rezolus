@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn test_combine_trims_to_overlap() {
         let (_t1, p1) = make_test_file(
-            &[1 * SEC, 2 * SEC, 3 * SEC],
+            &[SEC, 2 * SEC, 3 * SEC],
             "m1",
             &[Some(1), Some(2), Some(3)],
             "rezolus",
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn test_combine_end_to_end() {
         let (_t1, p1) = make_test_file(
-            &[1 * SEC, 2 * SEC, 3 * SEC],
+            &[SEC, 2 * SEC, 3 * SEC],
             "cpu",
             &[Some(10), Some(20), Some(30)],
             "rezolus",
@@ -972,8 +972,8 @@ mod tests {
 
     #[test]
     fn test_combine_preserves_field_metadata() {
-        let (_t1, p1) = make_test_file(&[1 * SEC, 2 * SEC], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[1 * SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
+        let (_t1, p1) = make_test_file(&[SEC, 2 * SEC], "m1", &[Some(1), Some(2)], "rezolus", "1000");
+        let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
 
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
@@ -1002,7 +1002,7 @@ mod tests {
         // Overlapping time range but timestamps land in different buckets
         // (offset by a full interval so they never share a quantized bucket)
         let (_t1, p1) = make_test_file(
-            &[1 * SEC, 3 * SEC, 5 * SEC],
+            &[SEC, 3 * SEC, 5 * SEC],
             "m1",
             &[Some(1), Some(2), Some(3)],
             "rezolus",
@@ -1030,14 +1030,14 @@ mod tests {
         // Quantization should snap them to the same bucket.
         let offset = 5_000_000; // 5ms in ns
         let (_t1, p1) = make_test_file(
-            &[1 * SEC, 2 * SEC, 3 * SEC],
+            &[SEC, 2 * SEC, 3 * SEC],
             "m1",
             &[Some(10), Some(20), Some(30)],
             "rezolus",
             "1000",
         );
         let (_t2, p2) = make_test_file(
-            &[1 * SEC + offset, 2 * SEC + offset, 3 * SEC + offset],
+            &[SEC + offset, 2 * SEC + offset, 3 * SEC + offset],
             "m2",
             &[Some(40), Some(50), Some(60)],
             "llm-perf",
@@ -1075,14 +1075,14 @@ mod tests {
         // With a 1s interval, 150ms offset exceeds the 100ms (10%) tolerance.
         let bad_offset = 150_000_000; // 150ms in ns
         let (_t1, p1) = make_test_file(
-            &[1 * SEC, 2 * SEC, 3 * SEC],
+            &[SEC, 2 * SEC, 3 * SEC],
             "m1",
             &[Some(1), Some(2), Some(3)],
             "rezolus",
             "1000",
         );
         let (_t2, p2) = make_test_file(
-            &[1 * SEC + bad_offset, 2 * SEC + bad_offset, 3 * SEC + bad_offset],
+            &[SEC + bad_offset, 2 * SEC + bad_offset, 3 * SEC + bad_offset],
             "m2",
             &[Some(4), Some(5), Some(6)],
             "llm-perf",

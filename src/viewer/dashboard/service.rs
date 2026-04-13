@@ -39,7 +39,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
             None => {
                 groups.push((
                     kpi.role.clone(),
-                    Group::new(&capitalize(&kpi.role), &format!("kpi-{}", kpi.role)),
+                    Group::new(capitalize(&kpi.role), format!("kpi-{}", kpi.role)),
                 ));
                 &mut groups.last_mut().unwrap().1
             }
