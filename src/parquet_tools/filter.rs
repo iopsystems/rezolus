@@ -156,7 +156,12 @@ fn resolve_service_extension(
         }
     }
 
-    // 3. per_source_metadata.<source>.service_queries
+    // For combined files we must collect KPIs from ALL sources so the filter
+    // retains columns needed by every service, not just the first one found.
+    let mut all_kpis = Vec::new();
+    let mut first_ext: Option<ServiceExtension> = None;
+
+    // 3. per_source_metadata.<source>.service_queries — collect from all sources
     let source = kv
         .iter()
         .find(|kv| kv.key == KEY_SOURCE)
@@ -172,28 +177,33 @@ fn resolve_service_extension(
             for (_source_name, source_meta) in &psm {
                 if let Some(sq) = source_meta.get(NESTED_SERVICE_QUERIES) {
                     if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
-                        return Ok(ext);
+                        all_kpis.extend(ext.kpis.clone());
+                        if first_ext.is_none() {
+                            first_ext = Some(ext);
+                        }
                     }
                 }
             }
         }
     }
 
-    // 4. Template registry by source name
+    // 4. Template registry by source name — collect from all sources
     if let Some(source_str) = source {
-        // Source may be a plain string or a JSON array; try plain string first
-        let canonical = source_str.trim_matches('"');
-        if let Some(template) = registry.get(canonical) {
-            return Ok(template.clone());
-        }
-        // Try as JSON array
-        if let Ok(sources) = serde_json::from_str::<Vec<String>>(source_str) {
-            for s in &sources {
-                if let Some(template) = registry.get(s) {
-                    return Ok(template.clone());
+        let sources: Vec<String> = serde_json::from_str::<Vec<String>>(source_str)
+            .unwrap_or_else(|_| vec![source_str.trim_matches('"').to_string()]);
+        for s in &sources {
+            if let Some(template) = registry.get(s) {
+                all_kpis.extend(template.kpis.clone());
+                if first_ext.is_none() {
+                    first_ext = Some(template.clone());
                 }
             }
         }
+    }
+
+    if let Some(mut ext) = first_ext {
+        ext.kpis = all_kpis;
+        return Ok(ext);
     }
 
     Err("no service extension found: use --queries to provide one".into())
