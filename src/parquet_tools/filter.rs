@@ -55,18 +55,44 @@ pub(super) fn filter_parquet_file(
         .enumerate()
         .filter(|(_, f)| {
             let name = f.name();
-            // Exact match, or match the base name before ':' (e.g. "response_latency:buckets")
-            keep.contains(name.as_str())
-                || name
-                    .split_once(':')
-                    .is_some_and(|(base, _)| keep.contains(base))
+            // Exact match by column name
+            if keep.contains(name.as_str()) {
+                return true;
+            }
+            // Match the base name before ':' (e.g. "response_latency:buckets")
+            if name
+                .split_once(':')
+                .is_some_and(|(base, _)| keep.contains(base))
+            {
+                return true;
+            }
+            // Match by "metric" field metadata (Prometheus-sourced columns use
+            // numeric column names with the real metric name in metadata)
+            if let Some(metric) = f.metadata().get("metric") {
+                if keep.contains(metric.as_str()) {
+                    return true;
+                }
+            }
+            // Keep all rezolus (agent) columns — they provide system-level
+            // context and are not referenced by service KPI queries.
+            if f.metadata().get("source").is_some_and(|s| s == "rezolus") {
+                return true;
+            }
+            false
         })
         .map(|(i, _)| i)
         .collect();
 
     let kept_names: BTreeSet<&str> = indices
         .iter()
-        .map(|&i| schema.field(i).name().as_str())
+        .flat_map(|&i| {
+            let f = schema.field(i);
+            let mut names = vec![f.name().as_str()];
+            if let Some(metric) = f.metadata().get("metric") {
+                names.push(metric.as_str());
+            }
+            names
+        })
         .collect();
 
     filter_descriptions_metadata(&mut kv_meta, &kept_names);
