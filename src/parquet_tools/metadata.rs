@@ -47,6 +47,9 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(kv) = metadata.file_metadata().key_value_metadata() {
             println!("File Metadata:");
             for entry in kv {
+                if entry.key == "ARROW:schema" {
+                    continue;
+                }
                 let value = entry.value.as_deref().unwrap_or("");
                 if value.len() > 120 {
                     println!("  {}: {}...", entry.key, &value[..120]);
@@ -198,6 +201,9 @@ fn run_json(
         let mut file_meta = serde_json::Map::new();
         if let Some(kv) = metadata.file_metadata().key_value_metadata() {
             for entry in kv {
+                if entry.key == "ARROW:schema" {
+                    continue;
+                }
                 let value = entry.value.as_deref().unwrap_or("");
                 // Try to parse as JSON to nest it properly
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(value) {
