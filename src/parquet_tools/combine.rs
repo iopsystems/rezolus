@@ -433,12 +433,14 @@ fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
         }
     }
 
-    // All metric columns from each input in order
+    // All metric columns from each input in order, stamped with source
     for input in inputs {
         for field in input.schema.fields() {
             let name = field.name().as_str();
             if name != "timestamp" && name != "duration" {
-                fields.push(field.clone());
+                let mut meta = field.metadata().clone();
+                meta.insert("source".to_string(), input.source.clone());
+                fields.push(Arc::new(field.as_ref().clone().with_metadata(meta)));
             }
         }
     }
@@ -682,6 +684,7 @@ fn write_parquet(
     let props = WriterProperties::builder()
         .set_key_value_metadata(Some(kv_metadata))
         .set_max_row_group_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE)
+        .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
         .build();
 
     let file = std::fs::File::create(output)?;

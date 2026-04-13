@@ -162,7 +162,7 @@ pub fn run(config: Config) {
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
             let (systeminfo, selection) = extract_parquet_metadata(path);
-            let service_ext = extract_service_extension_metadata(path, &registry);
+            let service_exts = extract_service_extension_metadata(path, &registry);
 
             // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
             // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
@@ -171,7 +171,7 @@ pub fn run(config: Config) {
             info!("Computing file checksum...");
             let file_checksum = compute_file_checksum(path);
 
-            if let Some((ref source, ref ext)) = service_ext {
+            for (source, ext) in &service_exts {
                 info!(
                     "Found service extension for {:?} from source {:?} ({} KPIs)",
                     ext.service_name,
@@ -181,12 +181,8 @@ pub fn run(config: Config) {
             }
 
             info!("Generating dashboards...");
-            let state = dashboard::generate(
-                data,
-                filesize,
-                service_ext.as_ref().map(|(s, e)| (s.as_str(), e)),
-                registry.clone(),
-            );
+            let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
+            let state = dashboard::generate(data, filesize, &service_refs, registry.clone());
             *state.parquet_path.write() = Some(path.clone());
             *state.systeminfo.write() = systeminfo;
             *state.selection.write() = selection;
@@ -247,7 +243,7 @@ pub fn run(config: Config) {
             tsdb.set_source(source.clone());
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
-            let state = dashboard::generate(tsdb, None, None, registry.clone());
+            let state = dashboard::generate(tsdb, None, &[], registry.clone());
             state.live.store(true, Ordering::Relaxed);
 
             *state.systeminfo.write() = agent_systeminfo;
@@ -475,16 +471,27 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
 fn extract_service_extension_metadata(
     path: &Path,
     registry: &TemplateRegistry,
-) -> Option<(String, ServiceExtension)> {
+) -> Vec<(String, ServiceExtension)> {
     use crate::parquet_metadata::{
         KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
     };
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
 
-    let f = std::fs::File::open(path).ok()?;
-    let reader = SerializedFileReader::new(f).ok()?;
-    let kv = reader.metadata().file_metadata().key_value_metadata()?;
+    let mut results = Vec::new();
+
+    let f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return results,
+    };
+    let reader = match SerializedFileReader::new(f) {
+        Ok(r) => r,
+        Err(_) => return results,
+    };
+    let kv = match reader.metadata().file_metadata().key_value_metadata() {
+        Some(kv) => kv,
+        None => return results,
+    };
 
     // 1. Top-level service_queries (written by `parquet annotate`).
     if let Some(sq_json) = kv
@@ -493,13 +500,12 @@ fn extract_service_extension_metadata(
         .and_then(|kv| kv.value.as_deref())
     {
         if let Ok(ext) = serde_json::from_str::<ServiceExtension>(sq_json) {
-            // Use the top-level source key as the source name.
             let source = kv
                 .iter()
                 .find(|kv| kv.key == KEY_SOURCE)
                 .and_then(|kv| kv.value.as_deref())
                 .unwrap_or(&ext.service_name);
-            return Some((source.to_string(), ext));
+            results.push((source.to_string(), ext));
         }
     }
 
@@ -513,33 +519,43 @@ fn extract_service_extension_metadata(
             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(metadata_json)
         {
             for (source, value) in &metadata_map {
+                // Skip sources already found via top-level service_queries.
+                if results.iter().any(|(s, _)| s == source) {
+                    continue;
+                }
                 if let Some(sq) = value.get(NESTED_SERVICE_QUERIES) {
                     if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
-                        return Some((source.clone(), ext));
+                        results.push((source.clone(), ext));
                     }
                 }
             }
 
-            // 3a. No service_queries found — check if any source has a built-in template.
+            // 3a. No service_queries found for a source — check built-in templates.
             for source in metadata_map.keys() {
+                if results.iter().any(|(s, _)| s == source) {
+                    continue;
+                }
                 if let Some(ext) = registry.get(source) {
-                    return Some((source.clone(), ext.clone()));
+                    results.push((source.clone(), ext.clone()));
                 }
             }
         }
     }
 
     // 3b. No per_source_metadata — check the top-level source key for a template.
-    let source = kv
-        .iter()
-        .find(|kv| kv.key == KEY_SOURCE)
-        .and_then(|kv| kv.value.as_deref())?;
-
-    if let Some(ext) = registry.get(source) {
-        return Some((source.to_string(), ext.clone()));
+    if results.is_empty() {
+        if let Some(source) = kv
+            .iter()
+            .find(|kv| kv.key == KEY_SOURCE)
+            .and_then(|kv| kv.value.as_deref())
+        {
+            if let Some(ext) = registry.get(source) {
+                results.push((source.to_string(), ext.clone()));
+            }
+        }
     }
 
-    None
+    results
 }
 
 fn compute_file_checksum(path: &Path) -> Option<String> {
@@ -616,7 +632,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
 
     let router = Router::new()
         .route("/about", get(about))
-        .route("/data/{path}", get(data))
+        .route("/data/{*path}", get(data))
         .nest("/api/v1", api_routes)
         .with_state(state.clone());
 
@@ -910,13 +926,9 @@ async fn upload_parquet(
     // embeds the original name instead of the temp path.
     data.set_filename(filename.clone());
 
-    let service_ext = extract_service_extension_metadata(&temp_path, &state.templates);
-    let new_state = dashboard::generate(
-        data,
-        filesize,
-        service_ext.as_ref().map(|(s, e)| (s.as_str(), e)),
-        state.templates.clone(),
-    );
+    let service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+    let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
+    let new_state = dashboard::generate(data, filesize, &service_refs, state.templates.clone());
     let (systeminfo, selection) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
@@ -1020,7 +1032,7 @@ async fn connect_agent(
     tsdb.set_source(source.clone());
     tsdb.set_version(version.clone());
     tsdb.set_filename(url.to_string());
-    let new_state = dashboard::generate(tsdb, None, None, state.templates.clone());
+    let new_state = dashboard::generate(tsdb, None, &[], state.templates.clone());
 
     // Update shared state
     {
@@ -1356,7 +1368,7 @@ async fn lib(uri: Uri) -> impl IntoResponse {
 pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(output_dir)?;
 
-    let state = dashboard::generate(Tsdb::default(), None, None, TemplateRegistry::empty());
+    let state = dashboard::generate(Tsdb::default(), None, &[], TemplateRegistry::empty());
 
     // Extract the shared sections list from the first entry and write it once.
     let mut sections_written = false;

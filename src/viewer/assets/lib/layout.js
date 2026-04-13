@@ -178,9 +178,9 @@ const Sidebar = {
             (s) => s.name === 'Query Explorer',
         );
         const overviewSection = attrs.sections.find((s) => s.name === 'Overview');
-        const serviceSection = attrs.sections.find((s) => s.route === '/service');
+        const serviceSections = attrs.sections.filter((s) => s.route.startsWith('/service/'));
         const samplerSections = attrs.sections.filter(
-            (s) => s.name !== 'Query Explorer' && s.name !== 'Overview' && s.route !== '/service',
+            (s) => s.name !== 'Query Explorer' && s.name !== 'Overview' && !s.route.startsWith('/service/'),
         );
 
         return [
@@ -230,23 +230,24 @@ const Sidebar = {
                 overviewSection.name,
             ),
 
-            // Service section (own labeled group, named after the source)
-            serviceSection && (() => {
-                const cached = sectionResponseCache['service'];
+            // Services group header (shown only when service sections exist)
+            serviceSections.length > 0 && m('div.sidebar-label', 'Services'),
+
+            // Service sections (one per source)
+            serviceSections.map((section) => {
+                const sectionKey = section.route.replace(/^\//, '');
+                const cached = sectionResponseCache[sectionKey];
                 const count = cached ? countCharts(cached.groups) : null;
-                const label = count ? `KPIs (${count.withData})` : 'KPIs';
-                return [
-                    m('div.sidebar-label', serviceSection.name),
-                    m(
-                        m.route.Link,
-                        {
-                            class: attrs.activeSection?.route === '/service' ? 'selected' : '',
-                            href: '/service',
-                        },
-                        label,
-                    ),
-                ];
-            })(),
+                const label = count ? `${section.name} (${count.withData})` : section.name;
+                return m(
+                    m.route.Link,
+                    {
+                        class: attrs.activeSection?.route === section.route ? 'selected' : '',
+                        href: section.route,
+                    },
+                    label,
+                );
+            }),
 
             // Samplers label
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),

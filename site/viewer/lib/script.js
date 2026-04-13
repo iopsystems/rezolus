@@ -11,6 +11,7 @@ import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 import { FileUpload } from './landing.js';
+import { renderServiceSection, createServiceRoutes } from './service.js';
 
 // Viewer info — set after WASM parquet load
 let viewerInfo = null;
@@ -93,6 +94,10 @@ const SectionContent = {
                 heatmapLoading,
                 onToggleHeatmap: toggleGlobalHeatmap,
             });
+        }
+
+        if (sectionRoute.startsWith('/service/')) {
+            return renderServiceSection(attrs, Group, sectionRoute, sectionName, interval);
         }
 
         const { withData } = countCharts(attrs.groups);
@@ -348,20 +353,20 @@ const buildClientOnlySectionView = (activeSection) => ({
     },
 });
 
-async function loadDemo() {
+async function loadDemo(filename = 'demo.parquet') {
     window._loading = true;
     window._loadError = null;
     m.redraw();
 
     try {
-        const resp = await fetch('demo.parquet');
-        if (!resp.ok) throw new Error(`Failed to fetch demo: ${resp.status}`);
+        const resp = await fetch(filename);
+        if (!resp.ok) throw new Error(`Failed to fetch ${filename}: ${resp.status}`);
         const arrayBuffer = await resp.arrayBuffer();
         const data = new Uint8Array(arrayBuffer);
 
         const wasmModule = await import('../pkg/wasm_viewer.js');
         await wasmModule.default();
-        window.viewer = new wasmModule.Viewer(data, 'demo.parquet');
+        window.viewer = new wasmModule.Viewer(data, filename);
         ViewerApi.setViewer(window.viewer);
 
         viewerInfo = JSON.parse(window.viewer.info());
@@ -380,9 +385,10 @@ async function loadDemo() {
         window._loading = false;
 
         // Ensure ?demo is in the URL so bookmarks/refreshes auto-load the demo
-        if (!new URLSearchParams(window.location.search).has('demo')) {
-            const url = new URL(window.location);
-            url.searchParams.set('demo', '');
+        const url = new URL(window.location);
+        const currentDemo = new URLSearchParams(window.location.search).get('demo');
+        if (currentDemo !== filename) {
+            url.searchParams.set('demo', filename);
             window.history.replaceState(null, '', url);
         }
 
@@ -463,6 +469,17 @@ function initDashboardRouter() {
                 return loadSection(sectionKey).then(() => makeSingleChartView());
             },
         },
+        ...createServiceRoutes({
+            sectionResponseCache,
+            loadSection,
+            preloadSections,
+            chartsState,
+            Main,
+            TopNav,
+            topNavAttrs,
+            SingleChartView,
+            applyResultToPlot,
+        }),
         '/:section': {
             onmatch(params, requestedPath) {
                 if (m.route.get() === requestedPath) {
@@ -519,13 +536,18 @@ function initDashboardRouter() {
 }
 
 // ---- Initial mount: show file upload page, or auto-load demo ----
-if (new URLSearchParams(window.location.search).has('demo')) {
-    loadDemo();
+const _demoParam = new URLSearchParams(window.location.search).get('demo');
+if (_demoParam !== null) {
+    loadDemo(_demoParam || 'demo.parquet');
 } else {
     m.mount(document.body, {
         view: () => m(FileUpload, {
             onFile: loadFile,
             onDemo: loadDemo,
+            demos: [
+                { label: 'System Metrics', file: 'demo.parquet' },
+                { label: 'vLLM + System', file: 'vllm.parquet' },
+            ],
             loading: window._loading,
             error: window._loadError,
         }),
