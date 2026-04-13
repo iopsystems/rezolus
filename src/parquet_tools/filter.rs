@@ -1,10 +1,9 @@
 use clap::ArgMatches;
 use std::collections::BTreeSet;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use crate::parquet_metadata::{
-    KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, MAX_ROW_GROUP_SIZE,
+    KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE,
     NESTED_SERVICE_QUERIES,
 };
 use crate::viewer::ServiceExtension;
@@ -39,33 +38,18 @@ pub(super) fn filter_parquet_file(
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
-    use parquet::file::reader::FileReader;
-    use parquet::file::serialized_reader::SerializedFileReader;
-    use parquet::format::KeyValue;
 
     let mut keep = extract_column_names(ext);
     keep.insert("timestamp".to_string());
     keep.insert("duration".to_string());
 
-    // Read existing metadata
-    let meta_reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
-    let mut kv_meta: Vec<KeyValue> = meta_reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .cloned()
-        .unwrap_or_default();
+    let mut kv_meta = super::read_file_metadata(path)?;
 
-    // Read all record batches
+    // Read schema to compute column indices
     let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
     let schema = builder.schema().clone();
-    let reader = builder.build()?;
-
     let total_columns = schema.fields().len();
 
-    // Compute column indices to keep
     let indices: Vec<usize> = schema
         .fields()
         .iter()
@@ -79,30 +63,9 @@ pub(super) fn filter_parquet_file(
         .map(|&i| schema.field(i).name().as_str())
         .collect();
 
-    // Project schema
-    let projected_schema = std::sync::Arc::new(schema.project(&indices)?);
-
-    // Filter descriptions metadata to only retained columns
     filter_descriptions_metadata(&mut kv_meta, &kept_names);
 
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(kv_meta))
-        .set_max_row_group_size(MAX_ROW_GROUP_SIZE)
-        .build();
-
-    // Write projected batches to memory buffer
-    let mut buf = Vec::new();
-    {
-        let mut writer =
-            ArrowWriter::try_new(Cursor::new(&mut buf), projected_schema.clone(), Some(props))?;
-        for batch in reader {
-            let batch = batch?;
-            let projected = batch.project(&indices)?;
-            writer.write(&projected)?;
-        }
-        writer.close()?;
-    }
-
+    let buf = super::rewrite_parquet(path, kv_meta, Some(&indices))?;
     let dest = output.unwrap_or(path);
     std::fs::write(dest, &buf)?;
 

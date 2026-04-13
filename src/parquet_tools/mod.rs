@@ -7,6 +7,7 @@ use arrow::datatypes::SchemaRef;
 use clap::{value_parser, ArgMatches, Command};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::file::metadata::ParquetMetaData;
+use parquet::format::KeyValue;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -182,6 +183,68 @@ pub fn run(args: ArgMatches) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Read file-level key-value metadata from a parquet file footer.
+pub(crate) fn read_file_metadata(
+    path: impl AsRef<Path>,
+) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+
+    let reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
+    Ok(reader
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .cloned()
+        .unwrap_or_default())
+}
+
+/// Rewrite a parquet file with updated metadata, optionally projecting columns.
+/// Returns the serialized parquet bytes.
+///
+/// If `projection` is `Some`, only the columns at those indices are kept and
+/// the output schema is projected accordingly.  If `None`, all columns are
+/// passed through unchanged.
+pub(crate) fn rewrite_parquet(
+    path: impl AsRef<Path>,
+    kv_meta: Vec<KeyValue>,
+    projection: Option<&[usize]>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
+    let schema = builder.schema().clone();
+    let reader = builder.build()?;
+
+    let output_schema = match projection {
+        Some(indices) => Arc::new(schema.project(indices)?),
+        None => schema,
+    };
+
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(kv_meta))
+        .set_max_row_group_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE)
+        .build();
+
+    let mut buf = Vec::new();
+    {
+        let mut writer =
+            ArrowWriter::try_new(std::io::Cursor::new(&mut buf), output_schema, Some(props))?;
+        for batch in reader {
+            let batch = batch?;
+            let batch = match projection {
+                Some(indices) => batch.project(indices)?,
+                None => batch,
+            };
+            writer.write(&batch)?;
+        }
+        writer.close()?;
+    }
+
+    Ok(buf)
 }
 
 fn read_parquet_footer(
