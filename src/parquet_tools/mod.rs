@@ -10,6 +10,28 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Built-in service extension templates keyed by canonical source name.
+pub(crate) static TEMPLATES: &[(&str, &str)] = &[
+    ("llm-perf", include_str!("templates/llm_perf.json")),
+    ("cachecannon", include_str!("templates/cachecannon.json")),
+];
+
+/// Source name aliases for renamed projects (old name → canonical name).
+pub(crate) static SOURCE_ALIASES: &[(&str, &str)] = &[("llm-bench", "llm-perf")];
+
+/// Look up a built-in service template by source name, resolving aliases.
+pub(crate) fn lookup_template(source: &str) -> Option<&'static str> {
+    let canonical = SOURCE_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == source)
+        .map(|(_, canon)| *canon)
+        .unwrap_or(source);
+    TEMPLATES
+        .iter()
+        .find(|(name, _)| *name == canonical)
+        .map(|(_, json)| *json)
+}
+
 pub fn command() -> Command {
     Command::new("parquet")
         .about("Parquet file operations")

@@ -453,8 +453,10 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
 
 /// Search for service_queries inside the nested `metadata` map.
 /// Scans all sources and returns the first ServiceExtension found.
+/// If no service_queries exist but the source matches a known service
+/// template (e.g. llm-perf, cachecannon), falls back to the built-in template.
 fn extract_service_extension_metadata(path: &Path) -> Option<(String, ServiceExtension)> {
-    use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, NESTED_SERVICE_QUERIES};
+    use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, KEY_SOURCE, NESTED_SERVICE_QUERIES};
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
 
@@ -462,19 +464,43 @@ fn extract_service_extension_metadata(path: &Path) -> Option<(String, ServiceExt
     let reader = SerializedFileReader::new(f).ok()?;
     let kv = reader.metadata().file_metadata().key_value_metadata()?;
 
-    let metadata_json = kv
+    // Try to find service_queries in per_source_metadata first.
+    if let Some(metadata_json) = kv
         .iter()
         .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+        .and_then(|kv| kv.value.as_deref())
+    {
+        if let Ok(metadata_map) =
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(metadata_json)
+        {
+            for (source, value) in &metadata_map {
+                if let Some(sq) = value.get(NESTED_SERVICE_QUERIES) {
+                    if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
+                        return Some((source.clone(), ext));
+                    }
+                }
+            }
+
+            // No service_queries found — check if any source has a built-in template.
+            for source in metadata_map.keys() {
+                if let Some(template_json) = crate::parquet_tools::lookup_template(source) {
+                    if let Ok(ext) = serde_json::from_str::<ServiceExtension>(template_json) {
+                        return Some((source.clone(), ext));
+                    }
+                }
+            }
+        }
+    }
+
+    // No per_source_metadata at all — check the top-level source key.
+    let source = kv
+        .iter()
+        .find(|kv| kv.key == KEY_SOURCE)
         .and_then(|kv| kv.value.as_deref())?;
 
-    let metadata_map: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(metadata_json).ok()?;
-
-    for (source, value) in &metadata_map {
-        if let Some(sq) = value.get(NESTED_SERVICE_QUERIES) {
-            if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
-                return Some((source.clone(), ext));
-            }
+    if let Some(template_json) = crate::parquet_tools::lookup_template(source) {
+        if let Ok(ext) = serde_json::from_str::<ServiceExtension>(template_json) {
+            return Some((source.to_string(), ext));
         }
     }
 

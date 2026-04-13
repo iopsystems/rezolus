@@ -9,25 +9,7 @@ use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::ServiceExtension;
 
-static TEMPLATES: &[(&str, &str)] = &[
-    ("llm-perf", include_str!("templates/llm_perf.json")),
-    ("cachecannon", include_str!("templates/cachecannon.json")),
-];
-
-/// Source name aliases for renamed projects (old name → canonical name).
-static SOURCE_ALIASES: &[(&str, &str)] = &[("llm-bench", "llm-perf")];
-
-fn lookup_template(source: &str) -> Option<&'static str> {
-    let canonical = SOURCE_ALIASES
-        .iter()
-        .find(|(alias, _)| *alias == source)
-        .map(|(_, canon)| *canon)
-        .unwrap_or(source);
-    TEMPLATES
-        .iter()
-        .find(|(name, _)| *name == canonical)
-        .map(|(_, json)| *json)
-}
+use super::lookup_template;
 
 pub(super) fn run(args: &ArgMatches) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
