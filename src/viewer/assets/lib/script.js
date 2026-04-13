@@ -5,7 +5,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache } from './data.js';
-import { reportStore, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -104,6 +104,9 @@ const uploadParquet = async (file) => {
         clearMetadataCache();
         chartsState.resetAll();
         await fetchBackendState();
+        if (fileChecksum) {
+            setStorageScope({ filename: fileChecksum });
+        }
         // Re-fetch overview so the view has data to render immediately.
         // m.route.set('/overview') is a no-op when already on /overview
         // (the route guard returns a never-resolving promise), so we must
@@ -550,6 +553,9 @@ const bootstrap = async () => {
 
     // Fetch metadata, system info, and selection in parallel
     await fetchBackendState();
+    if (fileChecksum) {
+        setStorageScope({ filename: fileChecksum });
+    }
 
     // Set up the router now that data is loaded
     m.route.prefix = ''; // use regular paths for navigation, eg. /overview

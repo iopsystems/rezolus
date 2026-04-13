@@ -5,7 +5,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData } from './data.js';
-import { selectionStore, reportStore, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { selectionStore, reportStore, setStorageScope, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, renderCgroupSection } from './section_views.js';
@@ -371,6 +371,14 @@ async function loadDemo(filename = 'demo.parquet') {
 
         viewerInfo = JSON.parse(window.viewer.info());
         ViewerApi.setViewerInfo(viewerInfo);
+        setStorageScope({
+            filename: viewerInfo.filename,
+            minTime: viewerInfo.minTime,
+            maxTime: viewerInfo.maxTime,
+            numSeries: (viewerInfo.counter_names?.length || 0) +
+                       (viewerInfo.gauge_names?.length || 0) +
+                       (viewerInfo.histogram_names?.length || 0),
+        });
 
         try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
 
@@ -416,6 +424,14 @@ async function loadFile(file) {
 
         viewerInfo = JSON.parse(window.viewer.info());
         ViewerApi.setViewerInfo(viewerInfo);
+        setStorageScope({
+            filename: viewerInfo.filename,
+            minTime: viewerInfo.minTime,
+            maxTime: viewerInfo.maxTime,
+            numSeries: (viewerInfo.counter_names?.length || 0) +
+                       (viewerInfo.gauge_names?.length || 0) +
+                       (viewerInfo.histogram_names?.length || 0),
+        });
 
         try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
 

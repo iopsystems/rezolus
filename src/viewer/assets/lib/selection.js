@@ -48,8 +48,33 @@ const reportStore = {
 
 // ── LocalStorage persistence ─────────────────────────────────────
 
-const REPORT_STORAGE_KEY = 'rezolus_report';
-const SELECTION_STORAGE_KEY = 'rezolus_selection';
+let REPORT_STORAGE_KEY = 'rezolus_report';
+let SELECTION_STORAGE_KEY = 'rezolus_selection';
+
+/**
+ * Scope localStorage keys by a file fingerprint so each parquet file
+ * gets its own selection/report state. Call after loading a new file.
+ *
+ * @param {{ filename?: string, minTime?: number, maxTime?: number, numSeries?: number }} info
+ */
+const setStorageScope = (info) => {
+    const parts = [
+        info.filename || '',
+        info.minTime || 0,
+        info.maxTime || 0,
+        info.numSeries || 0,
+    ].join('|');
+    const suffix = Array.from(new TextEncoder().encode(parts))
+        .reduce((h, b) => ((h << 5) - h + b) | 0, 0)
+        .toString(36);
+    REPORT_STORAGE_KEY = `rezolus_report_${suffix}`;
+    SELECTION_STORAGE_KEY = `rezolus_selection_${suffix}`;
+    // Restore from the scoped keys
+    clearStore(selectionStore);
+    clearStore(reportStore);
+    restoreStore(REPORT_STORAGE_KEY, reportStore);
+    restoreStore(SELECTION_STORAGE_KEY, selectionStore);
+};
 
 const persistStore = (key, store) => {
     try {
@@ -110,6 +135,8 @@ const restoreStore = (key, store) => {
 const persistReport = () => persistStore(REPORT_STORAGE_KEY, reportStore);
 const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStore);
 
+// Stores are restored when setStorageScope() is called with a file fingerprint,
+// or eagerly here for the default (unscoped) keys as a fallback.
 restoreStore(REPORT_STORAGE_KEY, reportStore);
 restoreStore(SELECTION_STORAGE_KEY, selectionStore);
 
@@ -575,6 +602,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
 export {
     selectionStore,
     reportStore,
+    setStorageScope,
     toggleSelection,
     isSelected,
     clearStore,
