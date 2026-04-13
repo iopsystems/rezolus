@@ -219,6 +219,7 @@ const SectionContent = {
             const meta = attrs.metadata || {};
             const serviceName = meta.service_name || 'Service';
             const serviceMeta = meta.service_metadata || {};
+            const unavailable = meta.unavailable_kpis || [];
             return m('div#section-content', [
                 m('h1', serviceName),
                 Object.keys(serviceMeta).length > 0
@@ -233,6 +234,16 @@ const SectionContent = {
                         m(Group, { ...group, sectionRoute, sectionName, interval })
                     )
                 ),
+                unavailable.length > 0 && m('div.service-notes', [
+                    m('h3', 'Unavailable KPIs'),
+                    m('p', 'The following KPIs have no matching data in this recording:'),
+                    m('ul', unavailable.map((kpi) =>
+                        m('li', [
+                            m('strong', kpi.title),
+                            ` (${kpi.role})`,
+                        ])
+                    )),
+                ]),
             ]);
         }
 

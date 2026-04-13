@@ -9,7 +9,10 @@ use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::ServiceExtension;
 
-static TEMPLATES: &[(&str, &str)] = &[("llm-perf", include_str!("templates/llm_perf.json"))];
+static TEMPLATES: &[(&str, &str)] = &[
+    ("llm-perf", include_str!("templates/llm_perf.json")),
+    ("cachecannon", include_str!("templates/cachecannon.json")),
+];
 
 /// Source name aliases for renamed projects (old name → canonical name).
 static SOURCE_ALIASES: &[(&str, &str)] = &[("llm-bench", "llm-perf")];

@@ -32,6 +32,10 @@ pub struct Kpi {
     /// Set by `rezolus parquet annotate` during validation.
     #[serde(default = "default_available")]
     pub available: bool,
+    /// When true, this KPI's query is used as the denominator for
+    /// normalized overview charts (e.g. "CPU / Throughput").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub denominator: bool,
 }
 
 fn default_available() -> bool {
@@ -42,7 +46,7 @@ impl ServiceExtension {
     pub fn throughput_query(&self) -> Option<&str> {
         self.kpis
             .iter()
-            .find(|k| k.role == "throughput")
+            .find(|k| k.denominator)
             .map(|k| k.query.as_str())
     }
 }

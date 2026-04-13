@@ -231,17 +231,22 @@ const Sidebar = {
             ),
 
             // Service section (own labeled group, named after the source)
-            serviceSection && [
-                m('div.sidebar-label', serviceSection.name),
-                m(
-                    m.route.Link,
-                    {
-                        class: attrs.activeSection?.route === '/service' ? 'selected' : '',
-                        href: '/service',
-                    },
-                    'KPIs',
-                ),
-            ],
+            serviceSection && (() => {
+                const cached = sectionResponseCache['service'];
+                const count = cached ? countCharts(cached.groups) : null;
+                const label = count ? `KPIs (${count.withData})` : 'KPIs';
+                return [
+                    m('div.sidebar-label', serviceSection.name),
+                    m(
+                        m.route.Link,
+                        {
+                            class: attrs.activeSection?.route === '/service' ? 'selected' : '',
+                            href: '/service',
+                        },
+                        label,
+                    ),
+                ];
+            })(),
 
             // Samplers label
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),

@@ -8,7 +8,8 @@
       "title": "Output Token Rate",
       "query": "sum(irate(tokens{direction=\"output\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "denominator": true
     },
     {
       "role": "load",

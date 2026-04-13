@@ -20,8 +20,18 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
     // Group KPIs by role so that charts sharing a role render side-by-side
     // via the 2-column CSS grid on `.group .charts`.
     let mut groups: Vec<(String, Group)> = Vec::new();
+    let mut unavailable: Vec<serde_json::Value> = Vec::new();
 
     for kpi in &service_ext.kpis {
+        if !kpi.available {
+            unavailable.push(serde_json::json!({
+                "title": kpi.title,
+                "role": kpi.role,
+                "query": kpi.query,
+            }));
+            continue;
+        }
+
         let plot_id = format!("kpi-{}-{}", kpi.role, slug(&kpi.title));
 
         let group = match groups.iter_mut().find(|(r, _)| *r == kpi.role) {
@@ -52,6 +62,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
         };
 
         group.plot_promql(opts, kpi.query.clone());
+    }
+
+    if !unavailable.is_empty() {
+        view.metadata.insert(
+            "unavailable_kpis".to_string(),
+            serde_json::Value::Array(unavailable),
+        );
     }
 
     for (_, group) in groups {

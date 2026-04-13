@@ -1659,6 +1659,41 @@ main {
     user-select: text;
 }
 
+/* Service section heading */
+#section-content > h1 {
+    margin-bottom: 1.5rem;
+}
+
+/* Service notes — unavailable KPIs */
+.service-notes {
+    margin-top: 2rem;
+    padding: 1rem 1.25rem;
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    color: var(--fg-muted);
+    font-size: var(--font-size-sm);
+}
+
+.service-notes h3 {
+    margin: 0 0 0.5rem;
+    font-size: var(--font-size-sm);
+    color: var(--fg-secondary);
+}
+
+.service-notes p {
+    margin: 0 0 0.5rem;
+}
+
+.service-notes ul {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.service-notes li {
+    margin-bottom: 0.25rem;
+}
+
 /* Sidebar systeminfo link — same style as query explorer link */
 #sidebar .systeminfo-link {
     color: var(--fg-secondary);
