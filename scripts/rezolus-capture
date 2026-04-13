@@ -1,0 +1,193 @@
+#!/bin/bash
+set -e
+
+PROGRAM="$(basename "$0")"
+
+# Defaults
+DURATION=""
+ENDPOINT=""
+SOURCE=""
+INTERVAL="1s"
+AGENT="http://127.0.0.1:4241"
+OUTPUT_DIR="."
+VIEWER_LISTEN="127.0.0.1:0"
+NO_VIEWER=false
+
+help() {
+    cat <<EOF
+$PROGRAM - Capture system and service metrics, then view the results.
+
+Records system metrics from a running Rezolus agent and optionally records
+service metrics from a Prometheus-compatible endpoint, combines them into a
+single parquet file, and launches the Rezolus viewer.
+
+USAGE:
+    $PROGRAM --duration <DURATION> [OPTIONS]
+
+REQUIRED:
+    --duration <DURATION>       How long to capture (e.g., 60s, 5m, 1h)
+
+OPTIONS:
+    --agent <URL>               Rezolus agent URL (default: http://127.0.0.1:4241)
+    --endpoint <URL>            Service metrics endpoint (Prometheus-compatible)
+    --source <NAME>             Source name for service metrics (required with --endpoint)
+    --interval <INTERVAL>       Sampling interval (default: 1s)
+    --output-dir <DIR>          Output directory for parquet files (default: .)
+    --viewer-listen <ADDR>      Viewer listen address (default: 127.0.0.1:0)
+    --no-viewer                 Skip launching the viewer after capture
+    -h, --help                  Show this help text
+
+EXAMPLES:
+    # System metrics only for 60 seconds
+    $PROGRAM --duration 60s
+
+    # System + Redis metrics for 2 minutes
+    $PROGRAM --duration 2m \\
+        --endpoint http://localhost:9121/metrics \\
+        --source redis
+
+    # Custom agent address and output directory
+    $PROGRAM --duration 5m \\
+        --agent http://10.0.0.5:4241 \\
+        --output-dir /tmp/captures
+
+    # Capture without launching the viewer
+    $PROGRAM --duration 60s --no-viewer
+EOF
+}
+
+error() {
+    echo "Error: $1" >&2
+    echo "Try '$PROGRAM --help' for more information." >&2
+    exit 1
+}
+
+# Parse arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            help
+            exit 0
+            ;;
+        --duration)
+            [ -n "${2:-}" ] || error "--duration requires a value"
+            DURATION="$2"; shift 2
+            ;;
+        --agent)
+            [ -n "${2:-}" ] || error "--agent requires a value"
+            AGENT="$2"; shift 2
+            ;;
+        --endpoint)
+            [ -n "${2:-}" ] || error "--endpoint requires a value"
+            ENDPOINT="$2"; shift 2
+            ;;
+        --source)
+            [ -n "${2:-}" ] || error "--source requires a value"
+            SOURCE="$2"; shift 2
+            ;;
+        --interval)
+            [ -n "${2:-}" ] || error "--interval requires a value"
+            INTERVAL="$2"; shift 2
+            ;;
+        --output-dir)
+            [ -n "${2:-}" ] || error "--output-dir requires a value"
+            OUTPUT_DIR="$2"; shift 2
+            ;;
+        --viewer-listen)
+            [ -n "${2:-}" ] || error "--viewer-listen requires a value"
+            VIEWER_LISTEN="$2"; shift 2
+            ;;
+        --no-viewer)
+            NO_VIEWER=true; shift
+            ;;
+        *)
+            error "unexpected argument '$1'"
+            ;;
+    esac
+done
+
+# Validate required arguments
+[ -n "$DURATION" ] || error "--duration is required"
+
+# If endpoint is given, source is required
+if [ -n "$ENDPOINT" ] && [ -z "$SOURCE" ]; then
+    error "--source is required when --endpoint is specified"
+fi
+
+# Verify the agent is running
+if ! curl -sf "$AGENT/" > /dev/null 2>&1; then
+    error "Rezolus agent is not reachable at $AGENT"
+fi
+
+# Set up temp files and output
+SYSTEM_PARQUET="$(mktemp /tmp/system-XXXXXX.parquet)"
+SERVICE_PARQUET="$(mktemp /tmp/service-XXXXXX.parquet)"
+OUTPUT_FILE="${OUTPUT_DIR}/capture.parquet"
+
+mkdir -p "$OUTPUT_DIR"
+
+cleanup() {
+    rm -f "$SYSTEM_PARQUET" "$SERVICE_PARQUET"
+}
+trap cleanup EXIT
+
+# Start system metrics recording
+echo "Recording system metrics for $DURATION (interval: $INTERVAL)..."
+rezolus record "$AGENT" "$SYSTEM_PARQUET" \
+    -d "$DURATION" -i "$INTERVAL" -m source=rezolus &
+SYSTEM_PID=$!
+
+# Start service metrics recording if endpoint is specified
+SERVICE_PID=""
+if [ -n "$ENDPOINT" ]; then
+    echo "Recording service metrics from $ENDPOINT (source: $SOURCE)..."
+    rezolus record "$ENDPOINT" "$SERVICE_PARQUET" \
+        -d "$DURATION" -i "$INTERVAL" -m "source=$SOURCE" &
+    SERVICE_PID=$!
+fi
+
+# Wait for recordings to complete
+FAILED=false
+
+if ! wait "$SYSTEM_PID"; then
+    echo "Error: System metrics recording failed" >&2
+    FAILED=true
+fi
+
+if [ -n "$SERVICE_PID" ]; then
+    if ! wait "$SERVICE_PID"; then
+        echo "Error: Service metrics recording failed" >&2
+        FAILED=true
+    fi
+fi
+
+if $FAILED; then
+    exit 1
+fi
+
+echo "Recording complete."
+
+# Combine or move the output
+if [ -n "$ENDPOINT" ] && [ -f "$SERVICE_PARQUET" ] && [ -s "$SERVICE_PARQUET" ]; then
+    echo "Combining system and service recordings..."
+    rezolus parquet combine "$SYSTEM_PARQUET" "$SERVICE_PARQUET" -o "$OUTPUT_FILE"
+    echo "Combined parquet saved to $OUTPUT_FILE"
+else
+    cp "$SYSTEM_PARQUET" "$OUTPUT_FILE"
+    echo "System parquet saved to $OUTPUT_FILE"
+fi
+
+# Show metadata summary
+echo ""
+echo "Recording metadata:"
+rezolus parquet metadata -i "$OUTPUT_FILE" 2>/dev/null || true
+echo ""
+
+# Launch viewer
+if ! $NO_VIEWER; then
+    echo "Launching viewer at http://$VIEWER_LISTEN ..."
+    exec rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+else
+    echo "Done. View the recording with:"
+    echo "  rezolus view $OUTPUT_FILE"
+fi
