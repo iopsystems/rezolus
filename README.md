@@ -5,6 +5,52 @@
 Rezolus is a Linux performance telemetry agent that provides detailed insights
 into system behavior through efficient, low-overhead instrumentation.
 
+## Quick Start
+
+```bash
+git clone https://github.com/iopsystems/rezolus
+cd rezolus
+cargo build --release
+```
+
+Capture system metrics for 60 seconds and view them in your browser:
+
+```bash
+sudo scripts/rezolus-capture --duration 60s
+```
+
+The script starts the Rezolus agent automatically, records system metrics, and
+launches an interactive dashboard. Root privileges are required for eBPF
+instrumentation.
+
+To also capture service metrics from a Prometheus-compatible endpoint (e.g.,
+Redis via [redis_exporter][redis_exporter]):
+
+```bash
+sudo scripts/rezolus-capture --duration 2m \
+    --endpoint http://localhost:9121/metrics \
+    --source redis
+```
+
+Run `scripts/rezolus-capture --help` for all options.
+
+### Docker
+
+A Docker image is also available for trying Rezolus without installing from
+source:
+
+```bash
+docker run --rm -it --privileged \
+  -p 8080:8080 -v $(pwd)/data:/data \
+  ghcr.io/iopsystems/rezolus:latest \
+  rezolus-capture --duration 60s
+```
+
+See [docker/README.md](docker/README.md) for more examples including combined
+system + service metric captures.
+
+[redis_exporter]: https://github.com/oliver006/redis_exporter
+
 ## Performance Metrics
 
 Rezolus captures a comprehensive set of system performance metrics across
@@ -88,6 +134,7 @@ To view your artifact:
 ```bash
 rezolus view rezolus.parquet [listen address]
 ```
+
 
 ### DevOps and SRE Troubleshooting
 Rezolus also has value for people operating services. The Agent and Exporter can

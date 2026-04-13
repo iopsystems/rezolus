@@ -1,0 +1,255 @@
+#!/bin/bash
+set -e
+
+PROGRAM="$(basename "$0")"
+
+# Defaults
+DURATION=""
+ENDPOINT=""
+SOURCE=""
+INTERVAL="1s"
+AGENT="http://127.0.0.1:4241"
+AGENT_CONFIG="config/agent.toml"
+OUTPUT_DIR="."
+VIEWER_LISTEN="127.0.0.1:0"
+NO_VIEWER=false
+STARTED_AGENT=false
+
+help() {
+    cat <<EOF
+$PROGRAM - Capture system and service metrics, then view the results.
+
+Records system metrics from a Rezolus agent and optionally records service
+metrics from a Prometheus-compatible endpoint, combines them into a single
+parquet file, and launches the Rezolus viewer.
+
+If no Rezolus agent is already running, the script will start one automatically.
+Starting the agent requires root privileges for eBPF instrumentation.
+
+USAGE:
+    $PROGRAM --duration <DURATION> [OPTIONS]
+
+REQUIRED:
+    --duration <DURATION>       How long to capture (e.g., 60s, 5m, 1h)
+
+OPTIONS:
+    --agent <URL>               Rezolus agent URL (default: http://127.0.0.1:4241)
+    --agent-config <PATH>       Agent config file (default: config/agent.toml)
+    --endpoint <URL>            Service metrics endpoint (Prometheus-compatible)
+    --source <NAME>             Source name for service metrics (required with --endpoint)
+    --interval <INTERVAL>       Sampling interval (default: 1s)
+    --output-dir <DIR>          Output directory for parquet files (default: .)
+    --viewer-listen <ADDR>      Viewer listen address (default: 127.0.0.1:0)
+    --no-viewer                 Skip launching the viewer after capture
+    -h, --help                  Show this help text
+
+EXAMPLES:
+    # System metrics only for 60 seconds
+    $PROGRAM --duration 60s
+
+    # System + Redis metrics for 2 minutes
+    $PROGRAM --duration 2m \\
+        --endpoint http://localhost:9121/metrics \\
+        --source redis
+
+    # Custom agent address and output directory
+    $PROGRAM --duration 5m \\
+        --agent http://10.0.0.5:4241 \\
+        --output-dir /tmp/captures
+
+    # Capture without launching the viewer
+    $PROGRAM --duration 60s --no-viewer
+EOF
+}
+
+error() {
+    echo "Error: $1" >&2
+    echo "Try '$PROGRAM --help' for more information." >&2
+    exit 1
+}
+
+# Parse arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            help
+            exit 0
+            ;;
+        --duration)
+            [ -n "${2:-}" ] || error "--duration requires a value"
+            DURATION="$2"; shift 2
+            ;;
+        --agent)
+            [ -n "${2:-}" ] || error "--agent requires a value"
+            AGENT="$2"; shift 2
+            ;;
+        --agent-config)
+            [ -n "${2:-}" ] || error "--agent-config requires a value"
+            AGENT_CONFIG="$2"; shift 2
+            ;;
+        --endpoint)
+            [ -n "${2:-}" ] || error "--endpoint requires a value"
+            ENDPOINT="$2"; shift 2
+            ;;
+        --source)
+            [ -n "${2:-}" ] || error "--source requires a value"
+            SOURCE="$2"; shift 2
+            ;;
+        --interval)
+            [ -n "${2:-}" ] || error "--interval requires a value"
+            INTERVAL="$2"; shift 2
+            ;;
+        --output-dir)
+            [ -n "${2:-}" ] || error "--output-dir requires a value"
+            OUTPUT_DIR="$2"; shift 2
+            ;;
+        --viewer-listen)
+            [ -n "${2:-}" ] || error "--viewer-listen requires a value"
+            VIEWER_LISTEN="$2"; shift 2
+            ;;
+        --no-viewer)
+            NO_VIEWER=true; shift
+            ;;
+        *)
+            error "unexpected argument '$1'"
+            ;;
+    esac
+done
+
+# Validate required arguments
+[ -n "$DURATION" ] || error "--duration is required"
+
+# If endpoint is given, source is required
+if [ -n "$ENDPOINT" ] && [ -z "$SOURCE" ]; then
+    error "--source is required when --endpoint is specified"
+fi
+
+# Check if the agent is already running
+if curl -sf "$AGENT/" > /dev/null 2>&1; then
+    echo "Rezolus agent detected at $AGENT"
+else
+    echo "No Rezolus agent detected at $AGENT, starting one..."
+
+    # Check for root/sudo privileges needed for eBPF
+    if [ "$(id -u)" -ne 0 ]; then
+        error "Starting the Rezolus agent requires root privileges for eBPF instrumentation.
+  Either run this script with sudo:
+    sudo $PROGRAM $*
+  Or start the agent separately:
+    sudo rezolus $AGENT_CONFIG"
+    fi
+
+    # Check for the config file
+    if [ ! -f "$AGENT_CONFIG" ]; then
+        error "Agent config not found at $AGENT_CONFIG
+  Run this script from the rezolus repo root, or specify the path with --agent-config"
+    fi
+
+    # Start the agent in the background
+    rezolus "$AGENT_CONFIG" &
+    AGENT_PID=$!
+    STARTED_AGENT=true
+
+    # Wait for the agent to become ready
+    echo "Waiting for agent to be ready..."
+    for i in $(seq 1 30); do
+        if curl -sf "$AGENT/" > /dev/null 2>&1; then
+            echo "Agent is ready (pid $AGENT_PID)"
+            break
+        fi
+        if ! kill -0 "$AGENT_PID" 2>/dev/null; then
+            error "Agent process exited unexpectedly. Check that you have the required
+  kernel support (Linux 5.8+ with BPF) and privileges."
+        fi
+        sleep 1
+    done
+
+    if ! curl -sf "$AGENT/" > /dev/null 2>&1; then
+        kill "$AGENT_PID" 2>/dev/null || true
+        error "Agent failed to start within 30 seconds"
+    fi
+fi
+
+# Set up temp files and output
+SYSTEM_PARQUET="$(mktemp /tmp/system-XXXXXX.parquet)"
+SERVICE_PARQUET="$(mktemp /tmp/service-XXXXXX.parquet)"
+OUTPUT_FILE="${OUTPUT_DIR}/capture.parquet"
+
+mkdir -p "$OUTPUT_DIR"
+
+cleanup() {
+    rm -f "$SYSTEM_PARQUET" "$SERVICE_PARQUET"
+    # Stop the agent if we started it
+    if $STARTED_AGENT && [ -n "${AGENT_PID:-}" ]; then
+        echo "Stopping Rezolus agent (pid $AGENT_PID)..."
+        kill "$AGENT_PID" 2>/dev/null || true
+        wait "$AGENT_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+# Start system metrics recording
+echo "Recording system metrics for $DURATION (interval: $INTERVAL)..."
+rezolus record "$AGENT" "$SYSTEM_PARQUET" \
+    -d "$DURATION" -i "$INTERVAL" -m source=rezolus &
+SYSTEM_PID=$!
+
+# Start service metrics recording if endpoint is specified
+SERVICE_PID=""
+if [ -n "$ENDPOINT" ]; then
+    echo "Recording service metrics from $ENDPOINT (source: $SOURCE)..."
+    rezolus record "$ENDPOINT" "$SERVICE_PARQUET" \
+        -d "$DURATION" -i "$INTERVAL" -m "source=$SOURCE" &
+    SERVICE_PID=$!
+fi
+
+# Wait for recordings to complete
+FAILED=false
+
+if ! wait "$SYSTEM_PID"; then
+    echo "Error: System metrics recording failed" >&2
+    FAILED=true
+fi
+
+if [ -n "$SERVICE_PID" ]; then
+    if ! wait "$SERVICE_PID"; then
+        echo "Error: Service metrics recording failed" >&2
+        FAILED=true
+    fi
+fi
+
+if $FAILED; then
+    exit 1
+fi
+
+echo "Recording complete."
+
+# Combine or move the output
+if [ -n "$ENDPOINT" ] && [ -f "$SERVICE_PARQUET" ] && [ -s "$SERVICE_PARQUET" ]; then
+    echo "Combining system and service recordings..."
+    rezolus parquet combine "$SYSTEM_PARQUET" "$SERVICE_PARQUET" -o "$OUTPUT_FILE"
+    echo "Combined parquet saved to $OUTPUT_FILE"
+else
+    cp "$SYSTEM_PARQUET" "$OUTPUT_FILE"
+    echo "System parquet saved to $OUTPUT_FILE"
+fi
+
+# Show metadata summary
+echo ""
+echo "Recording metadata:"
+rezolus parquet metadata -i "$OUTPUT_FILE" 2>/dev/null || true
+echo ""
+
+# Launch viewer
+if ! $NO_VIEWER; then
+    echo "Launching viewer at http://$VIEWER_LISTEN ..."
+    if $STARTED_AGENT; then
+        # Run without exec so the EXIT trap can stop the agent we started
+        rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+    else
+        exec rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+    fi
+else
+    echo "Done. View the recording with:"
+    echo "  rezolus view $OUTPUT_FILE"
+fi
