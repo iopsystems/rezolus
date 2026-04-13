@@ -71,22 +71,8 @@ static FLOAT_COUNTERS: &[&str] = &[
     "used_cpu_user_main_thread",
 ];
 
-/// Server info fields to capture as string metadata for parquet systeminfo.
-static SERVER_INFO_FIELDS: &[&str] = &[
-    "redis_version",
-    "valkey_version",
-    "server_name",
-    "os",
-    "arch_bits",
-    "tcp_port",
-    "redis_mode",
-    "run_id",
-    "multiplexing_api",
-    "gcc_version",
-    "process_id",
-    "valkey_release_stage",
-    "availability_zone",
-];
+/// Service version fields to capture for parquet metadata.
+static SERVICE_INFO_FIELDS: &[&str] = &["redis_version", "valkey_version", "server_name"];
 
 /// Holds the Redis/Valkey connection and converter for a recording session.
 pub struct ValkeySource {
@@ -428,7 +414,7 @@ impl ValkeyConverter {
 
 /// Parse the Server section of an INFO response to extract metadata strings.
 fn parse_server_info(info_text: &str) -> HashMap<String, String> {
-    let fields: HashSet<&str> = SERVER_INFO_FIELDS.iter().copied().collect();
+    let fields: HashSet<&str> = SERVICE_INFO_FIELDS.iter().copied().collect();
     let mut result = HashMap::new();
     let mut in_server_section = false;
 
@@ -692,11 +678,9 @@ connected_clients:10\r
         assert_eq!(info_map.get("redis_version").unwrap(), "7.2.4");
         assert_eq!(info_map.get("server_name").unwrap(), "valkey");
         assert_eq!(info_map.get("valkey_version").unwrap(), "8.0.1");
-        assert_eq!(info_map.get("os").unwrap(), "Linux 5.15.0-1024-aws x86_64");
-        assert_eq!(info_map.get("arch_bits").unwrap(), "64");
-        assert_eq!(info_map.get("tcp_port").unwrap(), "6379");
-        assert_eq!(info_map.get("redis_mode").unwrap(), "standalone");
-        // connected_clients is in Clients section, not captured
+        // Only service version fields are captured
+        assert!(!info_map.contains_key("os"));
+        assert!(!info_map.contains_key("arch_bits"));
         assert!(!info_map.contains_key("connected_clients"));
     }
 
