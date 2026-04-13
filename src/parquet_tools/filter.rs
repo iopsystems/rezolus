@@ -6,18 +6,17 @@ use crate::parquet_metadata::{
     KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE,
     NESTED_SERVICE_QUERIES,
 };
-use crate::viewer::ServiceExtension;
+use crate::viewer::{ServiceExtension, TemplateRegistry};
 
 use super::annotate::extract_metric_selectors;
-use super::lookup_template;
 
-pub(super) fn run(args: &ArgMatches) {
+pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
     let custom_file = args.get_one::<PathBuf>("queries");
     let output = args.get_one::<PathBuf>("output");
 
-    let ext =
-        resolve_service_extension(path, custom_file.map(|p| p.as_path())).unwrap_or_else(|e| {
+    let ext = resolve_service_extension(path, custom_file.map(|p| p.as_path()), registry)
+        .unwrap_or_else(|e| {
             eprintln!("error: {e}");
             std::process::exit(1);
         });
@@ -124,6 +123,7 @@ fn filter_descriptions_metadata(kv_meta: &mut [parquet::format::KeyValue], kept:
 fn resolve_service_extension(
     path: &Path,
     custom_file: Option<&Path>,
+    registry: &TemplateRegistry,
 ) -> Result<ServiceExtension, Box<dyn std::error::Error>> {
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
@@ -179,20 +179,18 @@ fn resolve_service_extension(
         }
     }
 
-    // 4. Built-in template by source name
+    // 4. Template registry by source name
     if let Some(source_str) = source {
         // Source may be a plain string or a JSON array; try plain string first
         let canonical = source_str.trim_matches('"');
-        if let Some(template) = lookup_template(canonical) {
-            let ext: ServiceExtension = serde_json::from_str(template)?;
-            return Ok(ext);
+        if let Some(template) = registry.get(canonical) {
+            return Ok(template.clone());
         }
         // Try as JSON array
         if let Ok(sources) = serde_json::from_str::<Vec<String>>(source_str) {
             for s in &sources {
-                if let Some(template) = lookup_template(s) {
-                    let ext: ServiceExtension = serde_json::from_str(template)?;
-                    return Ok(ext);
+                if let Some(template) = registry.get(s) {
+                    return Ok(template.clone());
                 }
             }
         }
@@ -208,6 +206,7 @@ mod tests {
     fn make_test_ext(queries: &[&str]) -> ServiceExtension {
         ServiceExtension {
             service_name: "test".to_string(),
+            aliases: Vec::new(),
             service_metadata: Default::default(),
             slo: None,
             kpis: queries

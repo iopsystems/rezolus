@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceExtension {
     pub service_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     #[serde(default)]
     pub service_metadata: HashMap<String, String>,
     #[serde(default)]
@@ -48,5 +52,176 @@ impl ServiceExtension {
             .iter()
             .find(|k| k.denominator)
             .map(|k| k.query.as_str())
+    }
+}
+
+/// Registry of service extension templates loaded from a directory at runtime.
+///
+/// Templates are indexed by `service_name` and each entry in `aliases`.
+/// Constructed once at startup via [`TemplateRegistry::load`].
+#[derive(Debug, Clone)]
+pub struct TemplateRegistry {
+    templates: HashMap<String, ServiceExtension>,
+}
+
+const DEFAULT_TEMPLATES_DIR: &str = "config/templates";
+const TEMPLATES_ENV_VAR: &str = "REZOLUS_TEMPLATES";
+
+impl TemplateRegistry {
+    /// Resolve the template directory from (in priority order):
+    /// 1. Explicit CLI `--templates` path
+    /// 2. `REZOLUS_TEMPLATES` environment variable
+    /// 3. Default: `config/templates/`
+    pub fn resolve_and_load(cli_path: Option<&Path>) -> Self {
+        let dir = cli_path
+            .map(|p| p.to_path_buf())
+            .or_else(|| std::env::var(TEMPLATES_ENV_VAR).ok().map(Into::into))
+            .unwrap_or_else(|| DEFAULT_TEMPLATES_DIR.into());
+
+        match Self::load(&dir) {
+            Ok(registry) => registry,
+            Err(e) => {
+                eprintln!("warning: failed to load templates from {}: {e}", dir.display());
+                Self::empty()
+            }
+        }
+    }
+
+    /// Scan `dir` for `*.json` files, parse each as `ServiceExtension`,
+    /// and index by `service_name` and each alias.
+    pub fn load(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut templates = HashMap::new();
+
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::empty()),
+            Err(e) => return Err(format!("{}: {e}", dir.display()).into()),
+        };
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.extension().is_some_and(|e| e == "json") {
+                let content = std::fs::read_to_string(&path)?;
+                let ext: ServiceExtension = serde_json::from_str(&content).map_err(|e| {
+                    format!("failed to parse {}: {e}", path.display())
+                })?;
+
+                insert_template_key(&mut templates, ext.service_name.clone(), &path, &ext)?;
+                for alias in &ext.aliases {
+                    insert_template_key(&mut templates, alias.clone(), &path, &ext)?;
+                }
+            }
+        }
+
+        Ok(Self { templates })
+    }
+
+    /// Create an empty registry (no templates).
+    pub fn empty() -> Self {
+        Self {
+            templates: HashMap::new(),
+        }
+    }
+
+    /// Look up a template by service name or alias.
+    pub fn get(&self, source: &str) -> Option<&ServiceExtension> {
+        self.templates.get(source)
+    }
+}
+
+fn insert_template_key(
+    templates: &mut HashMap<String, ServiceExtension>,
+    key: String,
+    path: &Path,
+    ext: &ServiceExtension,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match templates.entry(key.clone()) {
+        Entry::Vacant(entry) => {
+            entry.insert(ext.clone());
+            Ok(())
+        }
+        Entry::Occupied(_) => Err(format!(
+            "duplicate template key {:?} in {}",
+            key,
+            path.display()
+        )
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_template(
+        dir: &tempfile::TempDir,
+        name: &str,
+        body: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::write(dir.path().join(name), body)?;
+        Ok(())
+    }
+
+    #[test]
+    fn load_indexes_service_name_and_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        write_template(
+            &dir,
+            "service.json",
+            r#"{
+                "service_name": "valkey",
+                "aliases": ["redis"],
+                "service_metadata": {},
+                "slo": null,
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+
+        let registry = TemplateRegistry::load(dir.path()).unwrap();
+
+        assert_eq!(
+            registry.get("valkey").map(|ext| ext.service_name.as_str()),
+            Some("valkey")
+        );
+        assert_eq!(
+            registry.get("redis").map(|ext| ext.service_name.as_str()),
+            Some("valkey")
+        );
+    }
+
+    #[test]
+    fn load_rejects_duplicate_keys_across_templates() {
+        let dir = tempfile::tempdir().unwrap();
+        write_template(
+            &dir,
+            "one.json",
+            r#"{
+                "service_name": "valkey",
+                "aliases": ["redis"],
+                "service_metadata": {},
+                "slo": null,
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+        write_template(
+            &dir,
+            "two.json",
+            r#"{
+                "service_name": "redis",
+                "service_metadata": {},
+                "slo": null,
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+
+        let err = TemplateRegistry::load(dir.path()).unwrap_err().to_string();
+
+        assert!(err.contains("duplicate template key"));
+        assert!(err.contains("redis"));
     }
 }
