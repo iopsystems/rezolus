@@ -36,7 +36,14 @@ pub const KEY_DESCRIPTIONS: &str = "descriptions";
 /// JSON-serialised user selection/filter state saved by the viewer.
 pub const KEY_SELECTION: &str = "selection";
 
-/// Per-source metadata map. Value is a JSON object keyed by source name:
+/// Service KPI query definitions (ServiceExtension JSON). Top-level key
+/// used in single-source parquet files written by `parquet annotate`.
+/// When files are combined, this is moved under
+/// `per_source_metadata.<source>.service_queries`.
+pub const KEY_SERVICE_QUERIES: &str = "service_queries";
+
+/// Per-source metadata map (used in combined files). Value is a JSON
+/// object keyed by source name:
 ///
 /// ```json
 /// {

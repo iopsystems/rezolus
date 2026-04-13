@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, KEY_SOURCE, NESTED_SERVICE_QUERIES};
+use crate::parquet_metadata::{KEY_SERVICE_QUERIES, KEY_SOURCE};
 use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::ServiceExtension;
@@ -52,7 +52,7 @@ pub(super) fn run(args: &ArgMatches) {
 
     let annotated_json =
         serde_json::to_string(&ext).expect("failed to serialize service extension");
-    annotate_parquet(path, &source, &annotated_json).expect("failed to annotate parquet file");
+    annotate_parquet(path, &annotated_json).expect("failed to annotate parquet file");
 
     println!(
         "Annotated {:?} with {:?} service queries ({} KPIs)",
@@ -203,7 +203,6 @@ fn read_source_metadata(path: &Path) -> Option<String> {
 
 fn annotate_parquet(
     path: &Path,
-    source: &str,
     service_queries_json: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -222,27 +221,11 @@ fn annotate_parquet(
         .cloned()
         .unwrap_or_default();
 
-    // Build or update the nested metadata map
-    let mut metadata_map: serde_json::Map<String, serde_json::Value> = kv_meta
-        .iter()
-        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-        .and_then(|kv| kv.value.as_deref())
-        .and_then(|v| serde_json::from_str(v).ok())
-        .unwrap_or_default();
-
-    // Nest service_queries under this source
-    let service_queries: serde_json::Value = serde_json::from_str(service_queries_json)?;
-    let source_entry = metadata_map
-        .entry(source.to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    if let serde_json::Value::Object(map) = source_entry {
-        map.insert(NESTED_SERVICE_QUERIES.to_string(), service_queries);
-    }
-
-    kv_meta.retain(|kv| kv.key != KEY_PER_SOURCE_METADATA);
+    // Write service_queries as a top-level key
+    kv_meta.retain(|kv| kv.key != KEY_SERVICE_QUERIES);
     kv_meta.push(KeyValue {
-        key: KEY_PER_SOURCE_METADATA.to_string(),
-        value: Some(serde_json::to_string(&metadata_map)?),
+        key: KEY_SERVICE_QUERIES.to_string(),
+        value: Some(service_queries_json.to_string()),
     });
 
     let props = WriterProperties::builder()
@@ -270,7 +253,7 @@ fn annotate_parquet(
     Ok(())
 }
 
-/// Remove `service_queries` from all sources in `per_source_metadata`.
+/// Remove the top-level `service_queries` key from parquet metadata.
 fn unannotate_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::ArrowWriter;
@@ -287,34 +270,12 @@ fn unannotate_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .unwrap_or_default();
 
-    let mut metadata_map: serde_json::Map<String, serde_json::Value> = kv_meta
-        .iter()
-        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-        .and_then(|kv| kv.value.as_deref())
-        .and_then(|v| serde_json::from_str(v).ok())
-        .unwrap_or_default();
+    let before = kv_meta.len();
+    kv_meta.retain(|kv| kv.key != KEY_SERVICE_QUERIES);
 
-    // Remove service_queries from every source entry.
-    let mut removed = false;
-    for (_source, value) in &mut metadata_map {
-        if let serde_json::Value::Object(map) = value {
-            if map.remove(NESTED_SERVICE_QUERIES).is_some() {
-                removed = true;
-            }
-        }
-    }
-
-    if !removed {
+    if kv_meta.len() == before {
         eprintln!("warning: no service_queries annotation found");
         return Ok(());
-    }
-
-    kv_meta.retain(|kv| kv.key != KEY_PER_SOURCE_METADATA);
-    if !metadata_map.is_empty() {
-        kv_meta.push(KeyValue {
-            key: KEY_PER_SOURCE_METADATA.to_string(),
-            value: Some(serde_json::to_string(&metadata_map)?),
-        });
     }
 
     let props = WriterProperties::builder()
