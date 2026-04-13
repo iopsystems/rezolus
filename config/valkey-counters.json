@@ -31,12 +31,12 @@
     "aof_rewrites",
     "aof_delayed_fsync"
   ],
-  "float_counters": [
-    "used_cpu_sys",
-    "used_cpu_user",
-    "used_cpu_sys_children",
-    "used_cpu_user_children",
-    "used_cpu_sys_main_thread",
-    "used_cpu_user_main_thread"
-  ]
+  "float_counters": {
+    "used_cpu_sys":              { "scale": 1000000, "unit": "microseconds" },
+    "used_cpu_user":             { "scale": 1000000, "unit": "microseconds" },
+    "used_cpu_sys_children":     { "scale": 1000000, "unit": "microseconds" },
+    "used_cpu_user_children":    { "scale": 1000000, "unit": "microseconds" },
+    "used_cpu_sys_main_thread":  { "scale": 1000000, "unit": "microseconds" },
+    "used_cpu_user_main_thread": { "scale": 1000000, "unit": "microseconds" }
+  }
 }

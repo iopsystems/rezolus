@@ -7,21 +7,37 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, error, info, warn};
 
-/// Describes which Redis/Valkey INFO fields are monotonic counters and which
-/// float counters need seconds-to-microseconds scaling. Loaded from a JSON
-/// file via the `--counter-map` CLI flag.
+/// Describes which Redis/Valkey INFO fields are monotonic counters.
+/// Loaded from a JSON file via the `--counter-map` CLI flag.
 ///
 /// Fields not listed here (and not matching the `total_` prefix heuristic)
 /// are recorded as gauges.
+///
+/// ```json
+/// {
+///   "counters": ["expired_keys", "keyspace_hits"],
+///   "float_counters": {
+///     "used_cpu_sys": { "scale": 1000000, "unit": "microseconds" }
+///   }
+/// }
+/// ```
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct CounterMap {
     /// Metric field names that are monotonically increasing counters.
     #[serde(default)]
     counters: Vec<String>,
-    /// Subset of counters whose values are float seconds and should be scaled
-    /// to microseconds (×1 000 000) before storing as u64.
+    /// Counters whose raw values are floats and need scaling before storage.
+    /// Each entry maps a field name to its scale factor and unit label.
     #[serde(default)]
-    float_counters: Vec<String>,
+    float_counters: HashMap<String, FloatCounter>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct FloatCounter {
+    /// Multiply the raw float value by this factor before casting to u64.
+    pub scale: f64,
+    /// Unit label written into the metric metadata (e.g. "microseconds").
+    pub unit: String,
 }
 
 impl CounterMap {
@@ -69,7 +85,7 @@ struct ValkeyConverter {
     metric_ids: HashMap<MetricKey, usize>,
     next_id: usize,
     known_counters: HashSet<String>,
-    float_counters: HashSet<String>,
+    float_counters: HashMap<String, FloatCounter>,
     filter: Option<HashSet<String>>,
 }
 
@@ -172,15 +188,14 @@ impl ValkeySource {
 
 impl ValkeyConverter {
     fn new(map: CounterMap, filter: Option<MetricFilter>) -> Self {
-        let float_counters: HashSet<String> = map.float_counters.into_iter().collect();
         let mut known_counters: HashSet<String> = map.counters.into_iter().collect();
         // Float counters are also counters.
-        known_counters.extend(float_counters.iter().cloned());
+        known_counters.extend(map.float_counters.keys().cloned());
         Self {
             metric_ids: HashMap::new(),
             next_id: 0,
             known_counters,
-            float_counters,
+            float_counters: map.float_counters,
             filter: filter.map(|f| f.fields),
         }
     }
@@ -285,8 +300,8 @@ impl ValkeyConverter {
         self.known_counters.contains(field) || field.starts_with("total_")
     }
 
-    fn is_float_counter(&self, field: &str) -> bool {
-        self.float_counters.contains(field)
+    fn float_counter(&self, field: &str) -> Option<&FloatCounter> {
+        self.float_counters.get(field)
     }
 
     pub fn convert(&mut self, info_text: &str) -> Snapshot {
@@ -346,16 +361,17 @@ impl ValkeyConverter {
 
             if self.is_counter(field) {
                 let id = self.get_or_assign_id(&metric_name, &labels);
-                let counter_value = if self.is_float_counter(field) {
-                    // Convert seconds to microseconds for precision
-                    (num * 1_000_000.0) as u64
+                let mut metadata = Self::build_metadata(&metric_name, &labels);
+                let counter_value = if let Some(fc) = self.float_counter(field) {
+                    metadata.insert("unit".to_string(), fc.unit.clone());
+                    (num * fc.scale) as u64
                 } else {
                     num as u64
                 };
                 counters.push(Counter {
                     name: id,
                     value: counter_value,
-                    metadata: Self::build_metadata(&metric_name, &labels),
+                    metadata,
                 });
             } else {
                 let id = self.get_or_assign_id(&metric_name, &labels);
@@ -454,18 +470,31 @@ fn normalize_url(url: &Url) -> String {
 mod tests {
     use super::*;
 
-    /// Build a CounterMap matching the shipped config/valkey-counters.json.
+    /// Build a CounterMap for testing.
     fn test_counter_map() -> CounterMap {
         CounterMap {
             counters: vec![
-                "total_connections_received".into(),
-                "total_commands_processed".into(),
                 "keyspace_hits".into(),
                 "keyspace_misses".into(),
                 "expired_keys".into(),
                 "evicted_keys".into(),
             ],
-            float_counters: vec!["used_cpu_sys".into(), "used_cpu_user".into()],
+            float_counters: HashMap::from([
+                (
+                    "used_cpu_sys".into(),
+                    FloatCounter {
+                        scale: 1_000_000.0,
+                        unit: "microseconds".into(),
+                    },
+                ),
+                (
+                    "used_cpu_user".into(),
+                    FloatCounter {
+                        scale: 1_000_000.0,
+                        unit: "microseconds".into(),
+                    },
+                ),
+            ]),
         }
     }
 
@@ -573,6 +602,7 @@ used_cpu_user:20.300000\r
                     })
                     .unwrap();
                 assert_eq!(cpu_sys.value, 10_500_000); // 10.5 * 1_000_000
+                assert_eq!(cpu_sys.metadata.get("unit").unwrap(), "microseconds");
             }
             _ => panic!("expected V2 snapshot"),
         }
