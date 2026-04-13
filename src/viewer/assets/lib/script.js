@@ -215,7 +215,7 @@ const SectionContent = {
         }
 
         // Special handling for Service extension
-        if (sectionRoute === '/service') {
+        if (sectionRoute.startsWith('/service/')) {
             const meta = attrs.metadata || {};
             const serviceName = meta.service_name || 'Service';
             const serviceMeta = meta.service_metadata || {};
@@ -611,6 +611,74 @@ const bootstrap = async () => {
                     });
             },
         },
+        '/service/:serviceName/chart/:chartId': {
+            onmatch(params) {
+                const svcKey = `service/${params.serviceName}`;
+
+                const makeView = () => ({
+                    view() {
+                        const data = sectionResponseCache[svcKey];
+                        if (!data) return m('div', 'Loading...');
+                        const activeSection = data.sections.find(s => s.route === `/service/${params.serviceName}`);
+                        return m('div', [
+                            m(TopNav, topNavAttrs(data, activeSection?.route)),
+                            m('main.single-chart-main', [
+                                m(SingleChartView, {
+                                    data,
+                                    chartId: decodeURIComponent(params.chartId),
+                                    applyResultToPlot,
+                                }),
+                            ]),
+                        ]);
+                    },
+                });
+
+                if (sectionResponseCache[svcKey]) {
+                    return makeView();
+                }
+                return ViewerApi.getSection(svcKey)
+                    .then(async (data) => {
+                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        sectionResponseCache[svcKey] = processedData;
+                        return makeView();
+                    });
+            },
+        },
+        '/service/:serviceName': {
+            onmatch(params, requestedPath) {
+                if (m.route.get() === requestedPath) {
+                    return new Promise(function () {});
+                }
+                if (requestedPath !== m.route.get()) {
+                    chartsState.charts.clear();
+                    window.scrollTo(0, 0);
+                }
+
+                const svcKey = `service/${params.serviceName}`;
+
+                const makeView = () => ({
+                    view() {
+                        const data = sectionResponseCache[svcKey];
+                        if (!data) return m('div', 'Loading...');
+                        const activeSection = data.sections.find(
+                            (section) => section.route === `/service/${params.serviceName}`,
+                        );
+                        return m(Main, { ...data, activeSection });
+                    },
+                });
+
+                if (sectionResponseCache[svcKey]) {
+                    return makeView();
+                }
+                return ViewerApi.getSection(svcKey)
+                    .then(async (data) => {
+                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        sectionResponseCache[svcKey] = processedData;
+                        preloadSections(processedData.sections);
+                        return makeView();
+                    });
+            },
+        },
         '/:section': {
             onmatch(params, requestedPath) {
                 // Prevent a route change if we're already on this route
@@ -649,8 +717,6 @@ const bootstrap = async () => {
                     bootstrapCacheIfNeeded();
                     return buildClientOnlySectionView(reportSection);
                 }
-
-                // Service section is fetched from backend like any other section
 
                 // In live mode, always read from cache dynamically so
                 // refreshes flow through to the rendered view.

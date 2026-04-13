@@ -35,7 +35,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
 pub fn generate(
     data: Tsdb,
     filesize: Option<u64>,
-    service_ext: Option<(&str, &crate::viewer::ServiceExtension)>,
+    service_exts: &[(&str, &crate::viewer::ServiceExtension)],
     templates: crate::viewer::TemplateRegistry,
 ) -> AppState {
     let state = AppState::new(data, templates);
@@ -50,15 +50,15 @@ pub fn generate(
     }))
     .collect();
 
-    if let Some((source_name, _)) = service_ext {
-        // Insert service section after Overview (position 1).
-        // Use the parquet source name (e.g. "llm-perf") so the sidebar
-        // labels the section after the service rather than a generic "Service".
+    // Insert one service section per source after Overview (position 1+).
+    // Use the parquet source name (e.g. "llm-perf") so the sidebar
+    // labels the section after the service rather than a generic "Service".
+    for (i, (source_name, _)) in service_exts.iter().enumerate() {
         all_sections.insert(
-            1,
+            1 + i,
             Section {
                 name: source_name.to_string(),
-                route: "/service".to_string(),
+                route: format!("/service/{source_name}"),
             },
         );
     }
@@ -66,8 +66,10 @@ pub fn generate(
     let tsdb = state.tsdb.read();
     let mut rendered_sections = state.sections.write();
 
-    // Generate overview separately (needs throughput_query from service extension)
-    let throughput_query = service_ext
+    // Generate overview separately (needs throughput_query from service extension).
+    // Use the first service extension's throughput query if available.
+    let throughput_query = service_exts
+        .first()
         .and_then(|(_, e)| e.throughput_query())
         .map(str::to_string);
     {
@@ -90,13 +92,11 @@ pub fn generate(
         rendered_sections.insert(key, serde_json::to_string(&view).unwrap());
     }
 
-    // Generate service section if extension is present
-    if let Some((_, ext)) = service_ext {
+    // Generate one service section per source
+    for (source_name, ext) in service_exts {
         let view = service::generate(&tsdb, all_sections.clone(), ext);
-        rendered_sections.insert(
-            "service.json".to_string(),
-            serde_json::to_string(&view).unwrap(),
-        );
+        let key = format!("service/{source_name}.json");
+        rendered_sections.insert(key, serde_json::to_string(&view).unwrap());
     }
 
     drop(rendered_sections);
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn generate_produces_expected_keys() {
         let data = Tsdb::default();
-        let state = generate(data, None, None, crate::viewer::TemplateRegistry::empty());
+        let state = generate(data, None, &[], crate::viewer::TemplateRegistry::empty());
 
         let mut keys: Vec<_> = state.sections.read().keys().cloned().collect();
         keys.sort();
