@@ -67,14 +67,16 @@ export function resolveStyle(type_, subtype, result) {
  * @param {string} baseQuery - The raw metric selector (e.g. 'tcp_packet_latency')
  * @param {string} [subtype]  - 'percentiles' or 'buckets'
  * @param {number[]} [percentiles] - Custom quantiles (default: DEFAULT_PERCENTILES)
+ * @param {number} [strideSecs] - Optional stride in seconds for coarser granularity
  * @returns {string} The wrapped PromQL query
  */
-export function buildHistogramQuery(baseQuery, subtype, percentiles) {
+export function buildHistogramQuery(baseQuery, subtype, percentiles, strideSecs) {
+    const strideSuffix = strideSecs ? `, ${strideSecs}` : '';
     if (subtype === 'buckets') {
-        return `histogram_heatmap(${baseQuery})`;
+        return `histogram_heatmap(${baseQuery}${strideSuffix})`;
     }
     const quantiles = percentiles || DEFAULT_PERCENTILES;
-    return `histogram_percentiles([${quantiles.join(', ')}], ${baseQuery})`;
+    return `histogram_percentiles([${quantiles.join(', ')}], ${baseQuery}${strideSuffix})`;
 }
 
 /**

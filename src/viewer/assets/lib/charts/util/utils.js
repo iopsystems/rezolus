@@ -1,3 +1,5 @@
+import { getStepOverride } from '../../data.js';
+
 /**
  * Insert a null data point at each gap in the time series so ECharts
  * breaks the line instead of drawing a misleading segment across the gap.
@@ -12,11 +14,15 @@ export function insertGapNulls(zippedData, intervalSec) {
     }
     // Items may be plain arrays or echarts object-form { value: [...], ... }
     const ts = (item) => Array.isArray(item) ? item[0] : item.value[0];
-    const thresholdMs = intervalSec * 1500; // 1.5x interval in ms
+    // When a coarser step is selected, data points are spaced at the step
+    // interval rather than the base sampling interval.  Use the effective
+    // interval so legitimate step-spaced gaps don't break the line.
+    const effectiveSec = Math.max(intervalSec, getStepOverride() || 0);
+    const thresholdMs = effectiveSec * 1500; // 1.5x interval in ms
     const result = [zippedData[0]];
     for (let i = 1; i < zippedData.length; i++) {
         if (ts(zippedData[i]) - ts(zippedData[i - 1]) > thresholdMs) {
-            result.push([ts(zippedData[i - 1]) + intervalSec * 1000, null]);
+            result.push([ts(zippedData[i - 1]) + effectiveSec * 1000, null]);
         }
         result.push(zippedData[i]);
     }

@@ -24,12 +24,12 @@ launches an interactive dashboard. Root privileges are required for eBPF
 instrumentation.
 
 To also capture service metrics from a Prometheus-compatible endpoint (e.g.,
-Redis via [redis_exporter][redis_exporter]):
+Valkey via [redis_exporter][redis_exporter]):
 
 ```bash
 sudo scripts/rezolus-capture --duration 2m \
     --endpoint http://localhost:9121/metrics \
-    --source redis
+    --source valkey
 ```
 
 Run `scripts/rezolus-capture --help` for all options.
@@ -70,29 +70,38 @@ to see what metrics Rezolus supports.
 ## Operating Modes
 
 ### Agent
+
 The core component of Rezolus that collects performance metrics from the system.
 It provides the foundational telemetry gathering capabilities.
 
 ### Exporter
+
 Transforms collected metrics for Prometheus compatibility:
+
 - Exposes metrics on a Prometheus-compatible endpoint
 - Allows conversion of histogram distributions to summary metrics
 
 ### Recorder
+
 Enables on-demand metric collection:
+
 - Write metrics directly to parquet or raw msgpack files
 - Auto-detects Rezolus agent vs Prometheus endpoints
 - Supports custom file-level metadata via `--metadata key=value`
 - Flexible, targeted performance analysis
 
 ### Hindsight
+
 Provides after-the-fact artifacts for incident investigation:
+
 - Maintains a rolling, high-resolution metrics buffer
 - Snapshot metrics during or after performance incidents
 - Capture detailed system state when unexpected events occur
 
 ### Viewer
+
 Open a Parquet artifact in a web-based dashboard:
+
 - View your Rezolus Recorder and Hindsight artifacts
 - Connect to a live Rezolus agent for real-time dashboards
 - Start in upload-only mode with no file argument
@@ -101,42 +110,51 @@ Open a Parquet artifact in a web-based dashboard:
 - Export/download parquet files from the viewer
 
 ### Parquet Tools
+
 File operations for parquet recordings:
+
 - **Metadata** - Inspect file-level and column-level metadata, geometry, and schema
 - **Annotate** - Embed service extension KPI definitions for custom viewer dashboards
 - **Combine** - Merge a Rezolus parquet with service-level parquet files, joining on
   timestamps and producing a unified multi-source recording
 
 ### MCP Server
+
 Provides tools for AI-guided analysis of recordings:
+
 - Allows a model to interact with a Rezolus recording
 - Tool calls for analysis including anomaly detection, metric correlation, and PromQL queries
 - Runs as a stdio MCP server or as one-shot CLI commands (`describe-recording`,
   `describe-metrics`, `detect-anomalies`, `query`, `analyze-correlation`)
 
 ## Use Cases
+
 We believe that Rezolus is useful for:
+
 - Performance engineering
 - DevOps and SRE troubleshooting
 
 ### Performance Engineering
+
 Rezolus can be run with just the Agent and the Recorder can be used to take
 on-demand captures during tests run in lab environments or to capture production
 performance data to help characterize workload and understand what conditions
 you may want to replicate in test environments.
 
 Simply run the following command to collect a per-second recording for 15 minutes:
+
 ```bash
 rezolus record --interval 1s --duration 15m http://localhost:4241 rezolus.parquet
 ```
 
 To view your artifact:
+
 ```bash
 rezolus view rezolus.parquet [listen address]
 ```
 
-
 ### DevOps and SRE Troubleshooting
+
 Rezolus also has value for people operating services. The Agent and Exporter can
 be used to integrate Rezolus telemetry with your observability stack and give
 deeper insights into production behaviors. The Exporter is designed to allow
@@ -152,10 +170,12 @@ high-resolution data to root cause a production performance issue. With Rezolus
 Hindsight, you can do exactly that.
 
 ## Community & Support
+
 - [Discord Community][discord]
 - [GitHub Issues][new issue]
 
 ## License
+
 Dual-licensed under [Apache 2.0][license apache] and [MIT][license mit], unless
 otherwise specified.
 
@@ -164,6 +184,7 @@ Detailed licensing information can be found in the [COPYRIGHT][copyright] file.
 ## Deployment
 
 ### Supported Environments
+
 - Architectures: x86_64 and ARM64
 - Deployment: Bare-metal and cloud environments
 - Linux kernel 5.8+
@@ -173,6 +194,7 @@ Detailed licensing information can be found in the [COPYRIGHT][copyright] file.
 For detailed installation instructions, see the [Installation Guide](docs/installation.md).
 
 **Quick Install:**
+
 ```bash
 curl -fsSL https://install.rezolus.com | bash
 ```
@@ -194,9 +216,11 @@ systemctl start rezolus-hindsight
 ```
 
 ### Configuration
+
 Rezolus has three services each with its own configuration.
 
 #### Agent
+
 The agent config may be adjusted to enable/disable individual samplers.
 
 Please see the [config/agent.toml][agent.toml] to review all configuration
@@ -211,6 +235,7 @@ systemctl restart rezolus
 ```
 
 #### Exporter
+
 The exporter **must** be configured so that the `interval` matches the scrape
 interval for metrics in your environment. If the interval is too short, any
 summary metrics will not cover the entire period between scrapes of the metrics
@@ -231,6 +256,7 @@ sudo systemctl restart rezolus-exporter
 ```
 
 #### Hindsight
+
 This service is disabled by default. Please review the configuration and make
 any necessary changes before you enable it.
 
@@ -268,11 +294,11 @@ Available endpoints:
 The `/dump` and `/dump/file` endpoints support query parameters for time
 filtering:
 
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `last`    | Relative time range | `?last=5m` |
+| Parameter | Description                             | Example                       |
+| --------- | --------------------------------------- | ----------------------------- |
+| `last`    | Relative time range                     | `?last=5m`                    |
 | `start`   | Start time (Unix timestamp or RFC 3339) | `?start=2024-01-01T12:00:00Z` |
-| `end`     | End time (Unix timestamp or RFC 3339) | `?end=2024-01-01T13:00:00Z` |
+| `end`     | End time (Unix timestamp or RFC 3339)   | `?end=2024-01-01T13:00:00Z`   |
 
 Examples:
 
@@ -297,6 +323,7 @@ curl -X POST "http://localhost:4242/dump/file?last=10m"
 ```
 
 ### Build from source
+
 ```bash
 git clone https://github.com/iopsystems/rezolus
 cd rezolus
@@ -324,6 +351,7 @@ target/release/rezolus parquet combine rezolus.parquet service.parquet -o combin
 ```
 
 ## Contributing
+
 To contribute to Rezolus first check if there are any open pull requests or
 issues related to the bugfix or feature you wish to contribute. If there is not,
 please start by opening a [new issue on GitHub][new issue] to either report the
@@ -331,11 +359,12 @@ bug or get feedback on a new feature. This will allow one of the maintainers to
 confirm the bug and provide early input on new features.
 
 Once you're ready to contribute some changes, the workflow is:
-* [create a fork][create a fork] of this repository
-* clone your fork and create a new feature branch
-* make your changes and write a helpful commit message
-* push your feature branch to your fork
-* open a [new pull request][new pull request]
+
+- [create a fork][create a fork] of this repository
+- clone your fork and create a new feature branch
+- make your changes and write a helpful commit message
+- push your feature branch to your fork
+- open a [new pull request][new pull request]
 
 [agent.toml]: https://github.com/iopsystems/rezolus/blob/main/config/agent.toml
 [copyright]: https://github.com/iopsystems/rezolus/blob/main/COPYRIGHT

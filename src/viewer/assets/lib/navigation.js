@@ -9,6 +9,8 @@ const buildTopNavAttrs = ({
     onStopRecording,
     onSaveCapture,
     onUploadParquet,
+    granularity = null,
+    onGranularityChange,
     extra = {},
 }) => ({
     sectionRoute,
@@ -26,6 +28,8 @@ const buildTopNavAttrs = ({
     onStopRecording,
     onSaveCapture,
     onUploadParquet,
+    granularity,
+    onGranularityChange,
     chartsState,
     ...extra,
 });

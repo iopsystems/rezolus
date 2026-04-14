@@ -8,4 +8,6 @@ export {
     fetchHeatmapsForGroups,
     substituteCgroupPattern,
     processDashboardData,
+    setStepOverride,
+    getStepOverride,
 } from './data_base.js';

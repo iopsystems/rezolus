@@ -1,4 +1,4 @@
-import { TimeRangeBar } from './controls.js';
+import { TimeRangeBar, GranularitySelector } from './controls.js';
 import { selectionStore, reportStore, importJSON } from './selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 
@@ -139,6 +139,13 @@ const TopNav = {
                     start_time: attrs.start_time,
                     end_time: attrs.end_time,
                     chartsState: attrs.chartsState,
+                    hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
+                }),
+            // Granularity (step) selector
+            (attrs.start_time != null && attrs.end_time != null) &&
+                m(GranularitySelector, {
+                    value: attrs.granularity,
+                    onChange: attrs.onGranularityChange,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
             // Theme toggle — rightmost element in navbar

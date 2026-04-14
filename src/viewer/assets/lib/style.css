@@ -330,7 +330,6 @@ body::after {
     align-items: center;
     gap: 8px;
     margin-left: auto;
-    margin-right: var(--content-padding);
 }
 
 .time-label {
@@ -470,6 +469,44 @@ body::after {
     background: var(--bg-elevated);
     color: var(--fg);
     border-color: var(--border-emphasis);
+}
+
+.granularity-selector {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+
+.granularity-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-secondary);
+    white-space: nowrap;
+    user-select: none;
+}
+
+.granularity-select {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    padding: 2px 4px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--transition-base);
+}
+
+.granularity-select:hover {
+    border-color: var(--accent-muted);
+}
+
+.granularity-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 4px var(--accent-glow);
 }
 
 #topnav .topnav-actions {
@@ -2542,7 +2579,7 @@ main {
         height: auto;
         min-height: var(--header-height);
         padding: 0.5rem 0.75rem;
-        gap: 0.5rem;
+        gap: 0.25rem 0.5rem;
     }
 
     .hamburger-btn {
@@ -2584,16 +2621,20 @@ main {
         padding: 0;
     }
 
-    /* Time range bar wraps to its own row on mobile */
+    /* Time range bar shares row with granularity + theme on mobile */
     .time-range-bar {
-        width: 100%;
         margin-left: 0;
         margin-right: 0;
-        justify-content: center;
+        gap: 4px;
     }
 
     .time-track {
         width: 120px;
+    }
+
+    .granularity-selector {
+        margin-left: auto;
+        margin-right: 0;
     }
 
     /* ── Sidebar as slide-out drawer ── */
