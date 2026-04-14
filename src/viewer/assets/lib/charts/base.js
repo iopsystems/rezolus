@@ -264,11 +264,6 @@ export function calculateMinZoomSpan(timeData) {
  */
 export function getDataZoomConfig(minZoomSpan) {
     return [{
-        type: 'inside',
-        xAxisIndex: 0,
-        minSpan: minZoomSpan,
-        filterMode: 'none',
-    }, {
         type: 'slider',
         show: false,
         xAxisIndex: 0,
