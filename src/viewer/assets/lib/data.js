@@ -12,8 +12,8 @@ const getStepOverride = () => _stepOverride;
 // queries must be adjusted so that values are properly smoothed over the
 // wider window rather than just down-sampled.
 //
-//   Counter:  irate(m[5m]) → rate(m[Ns])   (true average rate over window)
-//   Gauge:    m             → avg_over_time(m[Ns])  (average value over window)
+//   Counter:   irate(m[5m]) → rate(m[Ns])   (true average rate over window)
+//   Gauge:     no rewrite needed (engine samples at step points)
 //   Histogram: stride parameter passed to histogram_percentiles / histogram_heatmap
 
 // Replace all irate(...[window]) with rate(...[Ns]) in a query string.
@@ -22,17 +22,8 @@ const rewriteCounterQuery = (query, stepSecs) => {
     return query.replace(/\birate\s*\(([^)]*?)\[\d+[smhd]\]/g, `rate($1[${window}]`);
 };
 
-// Wrap a simple gauge metric selector with avg_over_time(metric[Ns]).
-// Only applies to plain selectors (e.g. "memory_total" or
-// "memory_total{host=\"a\"}").  Compound expressions with operators
-// are left unchanged since avg_over_time only accepts a matrix selector.
-const rewriteGaugeQuery = (query, stepSecs) => {
-    if (/_over_time\s*\(/.test(query)) return query;
-    // Only wrap if the query is a simple metric selector (no arithmetic/parens)
-    if (/[+\-*/() ]/.test(query.replace(/\{[^}]*\}/g, ''))) return query;
-    const window = stepSecs + 's';
-    return `avg_over_time(${query}[${window}])`;
-};
+// Gauge queries don't need rewriting — the PromQL engine samples the
+// instantaneous value at each step point, which is correct for gauges.
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
 const defaultQueryRange = (query, start, end, step) =>
@@ -224,8 +215,6 @@ const createDataApi = ({
                     if (stepActive) {
                         if (plot.opts.type === 'delta_counter') {
                             queryToRun = rewriteCounterQuery(queryToRun, _stepOverride);
-                        } else if (plot.opts.type === 'gauge') {
-                            queryToRun = rewriteGaugeQuery(queryToRun, _stepOverride);
                         }
                     }
 

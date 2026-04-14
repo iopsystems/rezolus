@@ -34,7 +34,7 @@ linkme = "0.3.33"
 memmap2 = "0.9.5"
 metriken = "0.8.0"
 metriken-exposition = "0.14.0"
-metriken-query = { version = "0.6.0", features = ["http"] }
+metriken-query = { version = "0.8.0", features = ["http"] }
 notify = "8.0.0"
 open = "5.3.2"
 ouroboros = "0.18.5"
@@ -44,7 +44,9 @@ prometheus-parse = "0.2.5"
 plain = "0.2.3"
 rayon = "1.10"
 regex = "1"
-reqwest = { version = "0.12.20", default-features = false, features = ["blocking"] }
+reqwest = { version = "0.12.20", default-features = false, features = [
+    "blocking",
+] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-log = "0.2"
@@ -61,7 +63,11 @@ thiserror = "2.0.12"
 tokio = { version = "1.45.1", features = ["full"] }
 toml = "0.8.23"
 tower = { version = "0.5.2", features = ["tokio"] }
-tower-http = { version = "0.6.6", features = ["compression-full", "decompression-full", "fs"] }
+tower-http = { version = "0.6.6", features = [
+    "compression-full",
+    "decompression-full",
+    "fs",
+] }
 tower-livereload = "0.9.6"
 systeminfo = { path = "crates/systeminfo" }
 walkdir = "2.5.0"
@@ -101,13 +107,41 @@ section = "admin"
 priority = "optional"
 depends = "$auto"
 assets = [
-    ["target/release/rezolus", "usr/bin/", "755"],
-    ["config/agent.toml", "etc/rezolus/", "644"],
-    ["config/exporter.toml", "etc/rezolus/", "644"],
-    ["config/hindsight.toml", "etc/rezolus/", "644"],
-    ["debian/rezolus.rezolus.service", "usr/lib/systemd/system/rezolus.service", "644"],
-    ["debian/rezolus.rezolus-exporter.service", "usr/lib/systemd/system/rezolus-exporter.service", "644"],
-    ["debian/rezolus.rezolus-hindsight.service", "usr/lib/systemd/system/rezolus-hindsight.service", "644"],
+    [
+        "target/release/rezolus",
+        "usr/bin/",
+        "755",
+    ],
+    [
+        "config/agent.toml",
+        "etc/rezolus/",
+        "644",
+    ],
+    [
+        "config/exporter.toml",
+        "etc/rezolus/",
+        "644",
+    ],
+    [
+        "config/hindsight.toml",
+        "etc/rezolus/",
+        "644",
+    ],
+    [
+        "debian/rezolus.rezolus.service",
+        "usr/lib/systemd/system/rezolus.service",
+        "644",
+    ],
+    [
+        "debian/rezolus.rezolus-exporter.service",
+        "usr/lib/systemd/system/rezolus-exporter.service",
+        "644",
+    ],
+    [
+        "debian/rezolus.rezolus-hindsight.service",
+        "usr/lib/systemd/system/rezolus-hindsight.service",
+        "644",
+    ],
 ]
 
 [package.metadata.generate-rpm]

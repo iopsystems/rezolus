@@ -2293,12 +2293,13 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.6.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73c7622b45019bfa1bf5e0a4257d4e806e6e2bc6a51311df0475a03922c14f94"
+checksum = "61f70f1eb85e93bcd3e4e686cf0ff467305a5ca2568a685484d3f208f78e7745"
 dependencies = [
  "arrow 56.2.0",
  "axum",
+ "bytes",
  "histogram",
  "metriken-exposition",
  "parquet 56.2.0",

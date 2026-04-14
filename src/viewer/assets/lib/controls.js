@@ -290,6 +290,7 @@ const TimeRangeBar = {
 const GRANULARITY_OPTIONS = [
     { value: '', label: 'Auto' },
     { value: '1', label: '1s' },
+    { value: '5', label: '5s' },
     { value: '15', label: '15s' },
     { value: '60', label: '1m' },
 ];
