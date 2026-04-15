@@ -32,6 +32,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .collect();
     let output = args.get_one::<PathBuf>("output").unwrap();
+    let bypass_time_check = args.get_flag("bypass-time-check");
 
     // Phase 1: Load all input files
     let inputs = load_inputs(&files)?;
@@ -43,7 +44,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     validate_time_overlap(&inputs)?;
 
     // Phase 3: Combine and write
-    combine_and_write(&inputs, output)?;
+    combine_and_write(&inputs, output, bypass_time_check)?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
     println!(
@@ -218,6 +219,7 @@ fn timestamp_range(input: &InputFile) -> Result<(u64, u64), Box<dyn std::error::
 fn combine_and_write(
     inputs: &[InputFile],
     output: &PathBuf,
+    bypass_time_check: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let interval_ns = resolve_interval_ns(inputs)?;
 
@@ -235,7 +237,11 @@ fn combine_and_write(
 
     // Step 2b: Validate alignment quality — at least 95% of matched
     // timestamps must have raw values within 10% of the interval.
-    validate_alignment_quality(inputs, &common_timestamps, interval_ns)?;
+    if bypass_time_check {
+        eprintln!("warning: skipping timestamp alignment quality check (--bypass-time-check)");
+    } else {
+        validate_alignment_quality(inputs, &common_timestamps, interval_ns)?;
+    }
 
     // Step 3: Build merged schema
     let (primary_idx, merged_schema) = build_merged_schema(inputs);
@@ -877,7 +883,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        combine_and_write(&inputs, &out_path).unwrap();
+        combine_and_write(&inputs, &out_path, false).unwrap();
 
         // Read back
         let file = std::fs::File::open(&out_path).unwrap();
@@ -941,7 +947,7 @@ mod tests {
         validate_sampling_interval(&inputs).unwrap();
         validate_no_column_conflicts(&inputs).unwrap();
         validate_time_overlap(&inputs).unwrap();
-        combine_and_write(&inputs, &out_path).unwrap();
+        combine_and_write(&inputs, &out_path, false).unwrap();
 
         // Read back and verify schema
         let file = std::fs::File::open(&out_path).unwrap();
@@ -997,7 +1003,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        combine_and_write(&inputs, &out_path).unwrap();
+        combine_and_write(&inputs, &out_path, false).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1038,7 +1044,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path);
+        let result = combine_and_write(&inputs, &out_path, false);
         assert!(result.is_err());
     }
 
@@ -1066,7 +1072,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        combine_and_write(&inputs, &out_path).unwrap();
+        combine_and_write(&inputs, &out_path, false).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1111,7 +1117,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path);
+        let result = combine_and_write(&inputs, &out_path, false);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(

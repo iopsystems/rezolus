@@ -5,17 +5,17 @@
   "kpis": [
     {
       "role": "load",
-      "title": "Request Rate",
-      "query": "sum(irate(requests_sent[5s]))",
-      "type": "delta_counter",
-      "unit_system": "rate"
-    },
-    {
-      "role": "load",
       "title": "Target Rate",
       "query": "target_rate",
       "type": "gauge",
       "unit_system": "count"
+    },
+    {
+      "role": "throughput",
+      "title": "Request Rate",
+      "query": "sum(irate(requests_sent[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
     },
     {
       "role": "throughput",
@@ -33,6 +33,13 @@
       "unit_system": "datarate"
     },
     {
+      "role": "throughput",
+      "title": "Bytes Sent Rate",
+      "query": "sum(irate(bytes_tx[5s]))",
+      "type": "delta_counter",
+      "unit_system": "datarate"
+    },
+    {
       "role": "latency",
       "title": "Response Latency",
       "query": "response_latency",
@@ -41,8 +48,24 @@
       "unit_system": "time"
     },
     {
+      "role": "latency",
+      "title": "GET Latency",
+      "query": "get_latency",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "unit_system": "time"
+    },
+    {
+      "role": "latency",
+      "title": "SET Latency",
+      "query": "set_latency",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "unit_system": "time"
+    },
+    {
       "role": "error",
-      "title": "Error Rate",
+      "title": "Request Error Rate",
       "query": "sum(irate(request_errors[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
@@ -51,6 +74,34 @@
       "role": "error",
       "title": "Connection Failure Rate",
       "query": "sum(irate(connections_failed[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "custom",
+      "title": "Cache Hit Rate",
+      "query": "sum(irate(cache_hits[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "custom",
+      "title": "Cache Miss Rate",
+      "query": "sum(irate(cache_misses[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "custom",
+      "title": "GET Rate",
+      "query": "sum(irate(get_count[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "custom",
+      "title": "SET Rate",
+      "query": "sum(irate(set_count[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     }
