@@ -45,6 +45,22 @@ const DESCRIPTIONS = {
     numa: 'NUMA Topology: Memory locality domains. Each node has local memory and a set of CPUs.',
 };
 
+// ── Layout helpers ───────────────────────────────────────────────────
+
+/**
+ * Pick the best columns-per-row so cores divide evenly (no dangling last row).
+ * Searches [maxCols .. maxCols/2] for the largest exact divisor of totalCores.
+ * Falls back to maxCols if no clean split exists.
+ */
+const bestCols = (totalCores, maxCols) => {
+    if (totalCores <= maxCols) return totalCores;
+    const minCols = Math.max(1, Math.ceil(maxCols / 2));
+    for (let c = maxCols; c >= minCols; c--) {
+        if (totalCores % c === 0) return c;
+    }
+    return maxCols;
+};
+
 // ── Cache level helpers ──────────────────────────────────────────────
 
 const getCacheLevels = (levels) => {
@@ -95,25 +111,34 @@ const computeLayout = (numaGroups, numaPerRow, containerWidth) => {
         if (cores.size > maxCoresPerNuma) maxCoresPerNuma = cores.size;
     }
 
-    const effectiveCores = maxCoresPerNuma * numaPerRow;
-
-    let labeled, cellWidth;
-    if (containerWidth) {
-        // Subtract padding/borders/gaps: package ~14px, NUMA box ~16px + gap ~12px per column
-        const overhead = 48 + numaPerRow * 40;
-        cellWidth = (containerWidth - overhead) / effectiveCores;
-        labeled = cellWidth >= 48;
-    } else {
-        labeled = effectiveCores <= 24;
-        cellWidth = null;
+    if (!containerWidth) {
+        const total = maxCoresPerNuma * numaPerRow;
+        const labeled = total <= 24;
+        return { labeled, borderW: labeled ? 2 : 1, numaPerRow, maxCoresPerNuma, cellSize: null, maxCols: labeled ? 16 : 32 };
     }
 
-    const borderW = effectiveCores > 32 ? 1 : labeled ? 2 : 1;
+    // Subtract padding/borders/gaps: package ~14px, NUMA box ~16px + gap ~12px per column
+    const overhead = 48 + numaPerRow * 40;
+    const widthPerNuma = (containerWidth - overhead) / numaPerRow;
 
-    // In compact mode, cap cell size for comfortable proportions
-    const cellSize = !labeled && cellWidth ? Math.min(cellWidth, 32) : null;
+    // Try labeled mode: need >= 48px per cell.  Wrapping caps columns to maxCols.
+    const labeledMaxCols = Math.max(8, Math.floor(widthPerNuma / 48));
+    const labeledCols = Math.min(maxCoresPerNuma, labeledMaxCols);
+    const labeledCellW = widthPerNuma / labeledCols;
 
-    return { labeled, borderW, numaPerRow, maxCoresPerNuma, cellSize };
+    if (labeledCellW >= 48) {
+        const total = labeledCols * numaPerRow;
+        return { labeled: true, borderW: total > 32 ? 1 : 2, numaPerRow, maxCoresPerNuma, cellSize: null, maxCols: labeledMaxCols };
+    }
+
+    // Compact mode: smaller cells, more columns per row
+    const compactMaxCols = Math.max(8, Math.floor(widthPerNuma / 20));
+    const compactCols = Math.min(maxCoresPerNuma, compactMaxCols);
+    const compactCellW = widthPerNuma / compactCols;
+    const cellSize = Math.min(compactCellW, 32);
+    const total = compactCols * numaPerRow;
+
+    return { labeled: false, borderW: total > 32 ? 1 : 1, numaPerRow, maxCoresPerNuma, cellSize, maxCols: compactMaxCols };
 };
 
 // ── Rendering ────────────────────────────────────────────────────────
@@ -191,86 +216,162 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
         }];
     }
 
+    const colSize = cellSize ? `${Math.round(cellSize)}px` : '1fr';
+    const coreH = cellSize ? `height:${Math.round(cellSize)}px` : '';
+    const barH = cellSize ? `height:${Math.max(8, Math.round(cellSize / 2))}px` : '';
+
+    /** Render core cells + L1 row for a slice of cores. */
+    const renderCoreCells = (cores) => {
+        const cells = [];
+        for (const { coreId, cpus } of cores) {
+            cells.push(m('div.topo-core', {
+                key: `c${coreId}`,
+                title: buildTooltip(coreId, cpus, l1dSize, l1iSize),
+                style: labeled ? '' : coreH,
+            }, labeled ? [
+                m('span.core-id', `C${coreId}`),
+                opts.hasSMT && toggles.threads && m('div.topo-threads',
+                    cpus.map(e => m('span.topo-thread', `T${e.cpu}`)),
+                ),
+            ] : []));
+        }
+        if (showCaches && (l1dSize || l1iSize)) {
+            for (const { coreId } of cores) {
+                cells.push(
+                    labeled
+                        ? m('div.topo-l1-pair', { key: `l1-${coreId}` }, [
+                            l1dSize && m('span.topo-l1', [
+                                m('span.topo-cache-name', 'L1d'),
+                                m('span.topo-cache-size', l1dSize),
+                            ]),
+                            l1iSize && m('span.topo-l1', [
+                                m('span.topo-cache-name', 'L1i'),
+                                m('span.topo-cache-size', l1iSize),
+                            ]),
+                        ])
+                        : m('div.topo-l1-pair.compact', { key: `l1-${coreId}`, style: barH }),
+                );
+            }
+        }
+        return cells;
+    };
+
+    /** Render a cache bar (mid-level or LLC). cls is dot-separated. */
+    const renderBar = (cls, label, size, key, style) =>
+        m(`div.topo-cache-bar.${cls}`, { key, style: style || '' },
+            labeled ? [
+                m('span.topo-cache-name', label),
+                m('span.topo-cache-size', size),
+            ] : []);
+
     /**
-     * Render an LLC group as a CSS grid:
-     *   Row 1: core cells (one per column)
-     *   Row 2: L1 cells (one per column)
-     *   Row 3: mid-level cache bars (each spanning its shared cores)
-     *   Row 4: LLC bar (spanning all columns)
+     * Render an LLC group.
+     *
+     * Flat mode (fits in maxCols): single CSS grid with spanning bars.
+     * Wrapped mode: each sub-group (L2/CCX) as its own grid, flex-wrapped,
+     * with the LLC bar full-width below.
      */
     const renderLLCGroup = ({ llcIdx, allCores: llcCores, subGroups: sgs }) => {
         const numCols = llcCores.length;
+        const { maxCols } = layout;
+
+        // ── Wrapped layout: explicit row packing ──────────────────
+        if (numCols > maxCols) {
+            const rowCols = bestCols(numCols, maxCols);
+
+            // Build renderable elements with their column widths
+            const elems = []; // { el, cols } or { el, cols: Infinity } for full-width bars
+            for (const { groupIdx, cores: sgCores, size } of sgs) {
+                if (sgCores.length <= rowCols) {
+                    // Sub-group fits in one row: render as one grid
+                    const children = renderCoreCells(sgCores);
+                    if (showCaches && size && groupLevel) {
+                        children.push(renderBar('topo-mid-cache',
+                            groupLevel.toUpperCase(), size,
+                            `mid-${groupIdx}`,
+                            `grid-column:1/-1` + (barH ? `;${barH}` : '')));
+                    }
+                    elems.push({ cols: sgCores.length, el: m('div.topo-subgroup-grid', {
+                        key: `sg-${groupIdx}`,
+                        style: `grid-template-columns:repeat(${sgCores.length},${colSize});flex:${sgCores.length} 1 0`,
+                    }, children) });
+                } else {
+                    // Large sub-group: chunk cores into even rows
+                    const chunkCols = bestCols(sgCores.length, rowCols);
+                    for (let i = 0; i < sgCores.length; i += chunkCols) {
+                        const slice = sgCores.slice(i, i + chunkCols);
+                        elems.push({ cols: slice.length, el: m('div.topo-subgroup-grid', {
+                            key: `sg-${groupIdx}-${i}`,
+                            style: `grid-template-columns:repeat(${slice.length},${colSize});flex:${slice.length} 1 0`,
+                        }, renderCoreCells(slice)) });
+                    }
+                    // Full-width bar for the chunked sub-group's cache level
+                    if (showCaches && size && groupLevel) {
+                        elems.push({ cols: Infinity, el: renderBar('topo-mid-cache.topo-full-width',
+                            groupLevel.toUpperCase(), size,
+                            `mid-full-${groupIdx}`, barH || '') });
+                    }
+                }
+            }
+
+            // Pack elements into rows of <= rowCols cores
+            const rows = [];
+            let curRow = [], curCols = 0;
+            for (const e of elems) {
+                if (e.cols === Infinity) {
+                    if (curRow.length) { rows.push(curRow); curRow = []; curCols = 0; }
+                    rows.push([e]);
+                } else if (curCols + e.cols > rowCols && curRow.length) {
+                    rows.push(curRow);
+                    curRow = [e]; curCols = e.cols;
+                } else {
+                    curRow.push(e); curCols += e.cols;
+                }
+            }
+            if (curRow.length) rows.push(curRow);
+
+            const rowDivs = rows.map((row, ri) =>
+                row.length === 1 && row[0].cols === Infinity
+                    ? row[0].el
+                    : m('div.topo-llc-row', { key: `row-${ri}` },
+                        row.map(e => e.el))
+            );
+
+            // LLC bar (when separate from group level)
+            if (showCaches && llc && llc !== groupLevel && llcData) {
+                rowDivs.push(renderBar('topo-llc.topo-full-width',
+                    llc.toUpperCase(), llcData.size,
+                    `llc-${llcIdx}`, barH || ''));
+            }
+
+            return m('div.topo-llc-group-wrap', { key: llcIdx }, rowDivs);
+        }
+
+        // ── Flat layout: single grid with spanning cache bars ─────
         const coreColIdx = new Map();
         llcCores.forEach((c, i) => coreColIdx.set(c.coreId, i));
 
-        // Compact mode heights
-        const coreH = cellSize ? `height:${Math.round(cellSize)}px` : '';
-        const barH = cellSize ? `height:${Math.max(8, Math.round(cellSize / 2))}px` : '';
+        const children = renderCoreCells(llcCores);
 
-        const children = [
-            // Row: cores
-            ...llcCores.map(({ coreId, cpus }) =>
-                m('div.topo-core', {
-                    key: `c${coreId}`,
-                    title: buildTooltip(coreId, cpus, l1dSize, l1iSize),
-                    style: labeled ? '' : coreH,
-                }, labeled ? [
-                    m('span.core-id', `C${coreId}`),
-                    opts.hasSMT && toggles.threads && m('div.topo-threads',
-                        cpus.map(e => m('span.topo-thread', `T${e.cpu}`)),
-                    ),
-                ] : []),
-            ),
-        ];
-
-        // Row: L1
-        if (showCaches && (l1dSize || l1iSize)) {
-            children.push(...llcCores.map(({ coreId }) =>
-                labeled
-                    ? m('div.topo-l1-pair', { key: `l1-${coreId}` }, [
-                        l1dSize && m('span.topo-l1', [
-                            m('span.topo-cache-name', 'L1d'),
-                            m('span.topo-cache-size', l1dSize),
-                        ]),
-                        l1iSize && m('span.topo-l1', [
-                            m('span.topo-cache-name', 'L1i'),
-                            m('span.topo-cache-size', l1iSize),
-                        ]),
-                    ])
-                    : m('div.topo-l1-pair.compact', { key: `l1-${coreId}`, style: barH }),
-            ));
-        }
-
-        // Row: mid-level cache bars (each spanning its shared cores)
         if (showCaches && groupLevel) {
             for (const { groupIdx, cores: sgCores, size } of sgs) {
                 if (!size) continue;
                 const startCol = coreColIdx.get(sgCores[0].coreId) + 1;
                 const span = sgCores.length;
-                const style = `grid-column:${startCol}/span ${span}` + (barH ? `;${barH}` : '');
-                children.push(m('div.topo-cache-bar.topo-mid-cache', {
-                    key: `mid-${groupIdx}`,
-                    style,
-                }, labeled ? [
-                    m('span.topo-cache-name', groupLevel.toUpperCase()),
-                    m('span.topo-cache-size', size),
-                ] : []));
+                children.push(renderBar('topo-mid-cache',
+                    groupLevel.toUpperCase(), size,
+                    `mid-${groupIdx}`,
+                    `grid-column:${startCol}/span ${span}` + (barH ? `;${barH}` : '')));
             }
         }
 
-        // Row: LLC bar spanning all columns
         if (showCaches && llc && llc !== groupLevel && llcData) {
-            const style = `grid-column:1/-1` + (barH ? `;${barH}` : '');
-            children.push(m('div.topo-cache-bar.topo-llc', {
-                key: `llc-${llcIdx}`,
-                style,
-            }, labeled ? [
-                m('span.topo-cache-name', llc.toUpperCase()),
-                m('span.topo-cache-size', llcData.size),
-            ] : []));
+            children.push(renderBar('topo-llc',
+                llc.toUpperCase(), llcData.size,
+                `llc-${llcIdx}`,
+                `grid-column:1/-1` + (barH ? `;${barH}` : '')));
         }
 
-        const colSize = cellSize ? `${Math.round(cellSize)}px` : '1fr';
         return m('div.topo-llc-group', {
             key: llcIdx,
             style: `grid-template-columns:repeat(${numCols},${colSize})`,

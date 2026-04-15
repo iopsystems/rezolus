@@ -164,6 +164,9 @@ export function configureScatterChart(chart) {
         chart.pinnedSet = new Set();
     }
 
+    // Store labels so _rescaleYAxis can map data indices to pinned names
+    chart._seriesLabels = percentileLabels;
+
     const minZoomSpan = calculateMinZoomSpan(timeData);
 
     const uniqueNamesForLayout = [...new Set(series.map(s => s.name))];
@@ -376,6 +379,7 @@ export function configureScatterChart(chart) {
             }
         }
         applyPinState();
+        chart._rescaleYAxis();
     });
 
     // Restore pin state if chart was reconfigured (e.g., data update)

@@ -131,6 +131,7 @@
     --bg-card: #ffffff;
     --bg-card-hover: #f3f5f8;
     --bg-elevated: #ffffff;
+    --bg-card-gradient: var(--bg-card);
 
     /* Border hierarchy */
     --border-subtle: rgba(31, 35, 40, 0.12);
@@ -475,6 +476,7 @@ body::after {
     display: flex;
     align-items: center;
     gap: 4px;
+    margin-left: 12px;
     margin-right: 4px;
     flex-shrink: 0;
 }
@@ -1862,9 +1864,26 @@ main {
     flex: 1 1 0;
 }
 
+/* Wrapped LLC group: explicit row packing (no CSS flex-wrap) */
+.topo-llc-group-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.topo-llc-row {
+    display: flex;
+    gap: 8px;
+}
+
+.topo-subgroup-grid {
+    display: grid;
+    gap: var(--topo-border, 2px);
+}
+
 /* Core cell */
 .topo-core {
-    background: var(--bg-tertiary);
+    background: var(--bg);
     border: var(--topo-border, 2px) solid var(--topo-threads);
     border-radius: 3px;
     display: flex;

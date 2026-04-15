@@ -399,8 +399,12 @@ export class Chart {
         const option = this.echart.getOption();
         const isLog = option?.yAxis?.[0]?.type === 'log';
 
-        // If at default zoom, restore original bounds
-        if (this.chartsState.isDefaultZoom()) {
+        // When percentile series are pinned, rescale Y to pinned subset only.
+        const hasPins = this.pinnedSet && this.pinnedSet.size > 0;
+        const labels = this._seriesLabels; // set by scatter chart config
+
+        // If at default zoom and no pins active, restore original bounds
+        if (this.chartsState.isDefaultZoom() && !(hasPins && labels)) {
             this.echart.setOption({
                 yAxis: { min: null, max: this._oobAxisMax ?? null }
             });
@@ -412,7 +416,11 @@ export class Chart {
         const zoom = this.chartsState.zoomLevel;
 
         let visibleMinMs, visibleMaxMs;
-        if (zoom.startValue !== undefined && zoom.endValue !== undefined) {
+        if (!zoom) {
+            // No zoom state (default view) — scan full time range
+            visibleMinMs = timeData[0] * 1000;
+            visibleMaxMs = timeData[timeData.length - 1] * 1000;
+        } else if (zoom.startValue !== undefined && zoom.endValue !== undefined) {
             visibleMinMs = zoom.startValue;
             visibleMaxMs = zoom.endValue;
         } else {
@@ -423,11 +431,17 @@ export class Chart {
             visibleMaxMs = totalMinMs + (zoom.end / 100) * totalRange;
         }
 
-        // Scan raw data for min/max Y in visible range
+        // Scan raw data for min/max Y in visible range.
+        // When percentile series are pinned, only consider pinned series.
         let yMin = Infinity;
         let yMax = -Infinity;
 
         for (let seriesIdx = 1; seriesIdx < data.length; seriesIdx++) {
+            // Skip faded (non-pinned) series so Y-axis rescales to selection
+            if (hasPins && labels) {
+                const name = labels[seriesIdx - 1];
+                if (name && !this.pinnedSet.has(name)) continue;
+            }
             const values = data[seriesIdx];
             for (let i = 0; i < timeData.length; i++) {
                 const tMs = timeData[i] * 1000;

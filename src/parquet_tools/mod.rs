@@ -75,6 +75,12 @@ pub fn command() -> Command {
                         .help("Output parquet file path")
                         .value_parser(value_parser!(PathBuf))
                         .required(true),
+                )
+                .arg(
+                    clap::Arg::new("bypass-time-check")
+                        .long("bypass-time-check")
+                        .help("Skip the timestamp alignment quality check")
+                        .action(clap::ArgAction::SetTrue),
                 ),
         )
         .subcommand(
