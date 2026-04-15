@@ -25,6 +25,20 @@ struct InputFile {
     sampling_interval_ms: Option<String>,
 }
 
+/// Combine multiple parquet files into one. Used by the `parquet combine` CLI
+/// command and by the multi-endpoint recorder for combined output.
+pub(crate) fn combine_files(
+    paths: &[PathBuf],
+    output: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let inputs = load_inputs(paths)?;
+    validate_sources(&inputs)?;
+    validate_sampling_interval(&inputs)?;
+    validate_no_column_conflicts(&inputs)?;
+    validate_time_overlap(&inputs)?;
+    combine_and_write(&inputs, output)
+}
+
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let files: Vec<PathBuf> = args
         .get_many::<PathBuf>("FILES")

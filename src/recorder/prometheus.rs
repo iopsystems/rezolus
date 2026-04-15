@@ -12,6 +12,8 @@ pub struct PrometheusConverter {
     metric_ids: HashMap<MetricKey, usize>,
     next_id: usize,
     descriptions: HashMap<String, String>,
+    source: Option<String>,
+    endpoint: Option<String>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -21,11 +23,13 @@ struct MetricKey {
 }
 
 impl PrometheusConverter {
-    pub fn new() -> Self {
+    pub fn with_provenance(source: String, endpoint: String) -> Self {
         Self {
             metric_ids: HashMap::new(),
             next_id: 0,
             descriptions: HashMap::new(),
+            source: Some(source),
+            endpoint: Some(endpoint),
         }
     }
 
@@ -48,11 +52,17 @@ impl PrometheusConverter {
         id.to_string()
     }
 
-    fn build_metadata(name: &str, labels: &[(String, String)]) -> HashMap<String, String> {
+    fn build_metadata(&self, name: &str, labels: &[(String, String)]) -> HashMap<String, String> {
         let mut metadata = HashMap::new();
         metadata.insert("metric".to_string(), name.to_string());
         for (k, v) in labels {
             metadata.insert(k.clone(), v.clone());
+        }
+        if let Some(ref source) = self.source {
+            metadata.insert("source".to_string(), source.clone());
+        }
+        if let Some(ref endpoint) = self.endpoint {
+            metadata.insert("endpoint".to_string(), endpoint.clone());
         }
         metadata
     }
@@ -96,7 +106,7 @@ impl PrometheusConverter {
                     counters.push(Counter {
                         name: id,
                         value: v as u64,
-                        metadata: Self::build_metadata(&sample.metric, &labels),
+                        metadata: self.build_metadata(&sample.metric, &labels),
                     });
                 }
                 prometheus_parse::Value::Gauge(v) => {
@@ -107,7 +117,7 @@ impl PrometheusConverter {
                     gauges.push(Gauge {
                         name: id,
                         value: v as i64,
-                        metadata: Self::build_metadata(&sample.metric, &labels),
+                        metadata: self.build_metadata(&sample.metric, &labels),
                     });
                 }
                 prometheus_parse::Value::Untyped(v) => {
@@ -120,7 +130,7 @@ impl PrometheusConverter {
                     // gives the true mean for comparison against approximated
                     // histogram percentiles.
                     let id = self.get_or_assign_id(&sample.metric, &labels);
-                    let metadata = Self::build_metadata(&sample.metric, &labels);
+                    let metadata = self.build_metadata(&sample.metric, &labels);
                     if sample.metric.ends_with("_total")
                         || sample.metric.ends_with("_sum")
                         || sample.metric.ends_with("_count")
@@ -139,8 +149,13 @@ impl PrometheusConverter {
                     }
                 }
                 prometheus_parse::Value::Histogram(ref buckets) => {
-                    if let Some((h, metadata)) = convert_histogram(buckets, &sample.metric, &labels)
-                    {
+                    if let Some((h, metadata)) = convert_histogram(
+                        buckets,
+                        &sample.metric,
+                        &labels,
+                        self.source.as_deref(),
+                        self.endpoint.as_deref(),
+                    ) {
                         let id = self.get_or_assign_id(&sample.metric, &labels);
                         histograms.push(SnapshotHistogram {
                             name: id,
@@ -162,7 +177,7 @@ impl PrometheusConverter {
                         gauges.push(Gauge {
                             name: id,
                             value: quantile.count as i64,
-                            metadata: Self::build_metadata(&sample.metric, &q_labels),
+                            metadata: self.build_metadata(&sample.metric, &q_labels),
                         });
                     }
                 }
@@ -192,6 +207,8 @@ fn convert_histogram(
     buckets: &[prometheus_parse::HistogramCount],
     metric_name: &str,
     labels: &[(String, String)],
+    source: Option<&str>,
+    endpoint: Option<&str>,
 ) -> Option<(histogram::Histogram, HashMap<String, String>)> {
     // Filter to finite boundaries only (+Inf cannot be represented)
     let finite_buckets: Vec<_> = buckets
@@ -239,7 +256,17 @@ fn convert_histogram(
         prev_count = cum_count;
     }
 
-    let mut metadata = PrometheusConverter::build_metadata(metric_name, labels);
+    let mut metadata = HashMap::new();
+    metadata.insert("metric".to_string(), metric_name.to_string());
+    for (k, v) in labels {
+        metadata.insert(k.clone(), v.clone());
+    }
+    if let Some(s) = source {
+        metadata.insert("source".to_string(), s.to_string());
+    }
+    if let Some(e) = endpoint {
+        metadata.insert("endpoint".to_string(), e.to_string());
+    }
     metadata.insert("grouping_power".to_string(), grouping_power.to_string());
     metadata.insert("max_value_power".to_string(), max_value_power.to_string());
 

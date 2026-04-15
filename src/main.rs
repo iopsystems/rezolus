@@ -109,7 +109,7 @@ fn main() {
             parquet_tools::run(args.clone());
         }
         Some(("record", args)) => {
-            let config = recorder::Config::try_from(args.clone()).expect("failed to configure");
+            let config = recorder::RecordingConfig::from_args(args).expect("failed to configure");
 
             recorder::run(config)
         }
