@@ -59,10 +59,10 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("combine")
-                .about("Combine a rezolus parquet file with service-level parquet files")
+                .about("Combine multiple parquet files (multi-node rezolus and/or multi-instance services)")
                 .arg(
                     clap::Arg::new("FILES")
-                        .help("Input parquet files (one rezolus + one or more service files)")
+                        .help("Input parquet files (rezolus agent and/or service files)")
                         .value_parser(value_parser!(PathBuf))
                         .required(true)
                         .num_args(2..)
