@@ -39,6 +39,12 @@ let nodeList = [];           // e.g. ["web01", "web02"]
 let perSourceMeta = {};      // parsed per_source_metadata object
 let selectedNode = null;     // currently selected node name (null = no multi-node)
 
+// Per-service instance lists: { "vllm": [{id: "0", node: "gpu01"}, ...], ... }
+let serviceInstances = {};
+
+// Selected instance per service: { "vllm": null, "llm-perf": "0" }
+let selectedInstances = {};
+
 // Transport state for live mode (Wireshark-style)
 // Starts recording — data flows from agent into TSDB and UI refreshes
 let recording = true;
@@ -96,6 +102,35 @@ const parseNodeList = () => {
         selectedNode = nodeList[0];
         setSelectedNode(nodeList[0]);
     }
+
+    parseServiceInstances();
+};
+
+const parseServiceInstances = () => {
+    serviceInstances = {};
+    selectedInstances = {};
+
+    if (!perSourceMeta) return;
+
+    for (const [key, value] of Object.entries(perSourceMeta)) {
+        const colonIdx = key.indexOf(':');
+        if (colonIdx < 0) continue;
+        const source = key.substring(0, colonIdx);
+        if (source === 'rezolus') continue;
+
+        const instanceId = value.instance || key.substring(colonIdx + 1);
+        if (!serviceInstances[source]) {
+            serviceInstances[source] = [];
+        }
+        serviceInstances[source].push({
+            id: instanceId,
+            node: value.node || null,
+        });
+    }
+
+    for (const source of Object.keys(serviceInstances)) {
+        selectedInstances[source] = null;
+    }
 };
 
 // Transport control actions
@@ -138,6 +173,14 @@ const changeNode = (nodeName) => {
     selectedNode = nodeName;
     setSelectedNode(nodeName);
     clearViewerCaches();
+    m.redraw();
+};
+
+const changeInstance = (serviceName, instanceId) => {
+    selectedInstances[serviceName] = instanceId;
+    setSelectedInstance(serviceName, instanceId);
+    const svcKey = `service/${serviceName}`;
+    delete sectionResponseCache[svcKey];
     m.redraw();
 };
 
@@ -270,7 +313,12 @@ const SectionContent = {
 
         // Special handling for Service extension
         if (sectionRoute.startsWith('/service/')) {
-            return renderServiceSection(attrs, Group, sectionRoute, sectionName, interval);
+            const svcName = sectionRoute.replace('/service/', '');
+            return renderServiceSection(attrs, Group, sectionRoute, sectionName, interval, {
+                instances: serviceInstances[svcName] || [],
+                selectedInstance: selectedInstances[svcName] || null,
+                onInstanceChange: (id) => changeInstance(svcName, id),
+            });
         }
 
         const { withData } = countCharts(attrs.groups);
