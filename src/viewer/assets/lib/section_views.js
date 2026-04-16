@@ -10,86 +10,113 @@ const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
             ]);
         }
 
-        const rows = (items) => items
-            .filter(([, v]) => v != null && v !== '')
-            .map(([label, value]) => m('tr', [
-                m('td.sysinfo-label', label),
-                m('td.sysinfo-value', String(value)),
-            ]));
+        // Detect multi-node format: top-level values are objects with system fields
+        const isMultiNode = !info.hostname && !info.cpus &&
+            Object.values(info).some(v => v && typeof v === 'object' && (v.hostname || v.cpus));
 
-        const table = (title, items) => {
-            const filtered = items.filter(([, v]) => v != null && v !== '');
-            if (filtered.length === 0) return null;
-            return m('div.sysinfo-group', [
-                m('h2.sysinfo-group-title', title),
-                m('table.sysinfo-table', m('tbody', rows(items))),
+        if (isMultiNode) {
+            return m('div.systeminfo-section', [
+                m('h1.section-title', 'System Info'),
+                ...Object.entries(info).map(([nodeName, nodeInfo]) =>
+                    renderNodeInfo(nodeName, nodeInfo, CpuTopology, formatBytes)
+                ),
             ]);
-        };
+        }
 
+        // Single-node: render as before
         return m('div.systeminfo-section', [
             m('h1.section-title', 'System Info'),
-            m(CpuTopology, { data: info }),
-            m('div.sysinfo-grid', [
-                table('System', [
-                    ['Hostname', info.hostname],
-                    ['OS', info.os],
-                    ['Kernel', info.kernel],
-                    ['Architecture', info.arch],
-                ]),
-                table('CPU', [
-                    ['Model', info.cpu_model],
-                    ['Vendor', info.cpu_vendor],
-                    ['Logical CPUs', info.cpus],
-                    ['Physical Cores', info.cores],
-                    ['Packages', info.packages],
-                    ['SMT', info.smt != null ? (info.smt ? 'Enabled' : 'Disabled') : null],
-                ]),
-                table('Memory', [
-                    ['Total', formatBytes(info.memory_total_bytes)],
-                    ['NUMA Nodes', info.numa_nodes],
-                ]),
-                info.caches && info.caches.length > 0 && m('div.sysinfo-group', [
-                    m('h2.sysinfo-group-title', 'Cache Topology'),
-                    m('table.sysinfo-table', m('tbody',
-                        info.caches.map((c) => m('tr', [
-                            m('td.sysinfo-label', c.level),
-                            m('td.sysinfo-value', [c.size || '', c.instances > 1 ? ` x ${c.instances}` : ''].join('')),
-                        ])),
-                    )),
-                ]),
-                info.nics && info.nics.length > 0 && m('div.sysinfo-group', [
-                    m('h2.sysinfo-group-title', 'Network Interfaces'),
-                    m('table.sysinfo-table', m('tbody',
-                        info.nics.map((nic) => m('tr', [
-                            m('td.sysinfo-label', nic.name),
-                            m('td.sysinfo-value', [
-                                nic.speed ? `${nic.speed} Mbps` : '',
-                                nic.driver ? ` (${nic.driver})` : '',
-                                nic.numa_node != null ? ` NUMA ${nic.numa_node}` : '',
-                            ].join('')),
-                        ])),
-                    )),
-                ]),
-                info.gpus && info.gpus.length > 0 && m('div.sysinfo-group', [
-                    m('h2.sysinfo-group-title', 'GPUs'),
-                    m('table.sysinfo-table', m('tbody',
-                        info.gpus.map((gpu) => m('tr', [
-                            m('td.sysinfo-label', gpu.name || gpu.vendor),
-                            m('td.sysinfo-value', [
-                                gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : '',
-                                gpu.driver ? ` (${gpu.driver})` : '',
-                            ].join('')),
-                        ])),
-                    )),
-                ]),
-            ]),
-            m('div.sysinfo-raw', [
-                m('h2.sysinfo-group-title', 'Raw JSON'),
-                m('pre.sysinfo-json', JSON.stringify(info, null, 2)),
-            ]),
+            renderSingleNodeInfo(info, CpuTopology, formatBytes),
         ]);
     },
 });
+
+const renderSingleNodeInfo = (info, CpuTopology, formatBytes) => {
+    const rows = (items) => items
+        .filter(([, v]) => v != null && v !== '')
+        .map(([label, value]) => m('tr', [
+            m('td.sysinfo-label', label),
+            m('td.sysinfo-value', String(value)),
+        ]));
+
+    const table = (title, items) => {
+        const filtered = items.filter(([, v]) => v != null && v !== '');
+        if (filtered.length === 0) return null;
+        return m('div.sysinfo-group', [
+            m('h2.sysinfo-group-title', title),
+            m('table.sysinfo-table', m('tbody', rows(items))),
+        ]);
+    };
+
+    return [
+        m(CpuTopology, { data: info }),
+        m('div.sysinfo-grid', [
+            table('System', [
+                ['Hostname', info.hostname],
+                ['OS', info.os],
+                ['Kernel', info.kernel],
+                ['Architecture', info.arch],
+            ]),
+            table('CPU', [
+                ['Model', info.cpu_model],
+                ['Vendor', info.cpu_vendor],
+                ['Logical CPUs', info.cpus],
+                ['Physical Cores', info.cores],
+                ['Packages', info.packages],
+                ['SMT', info.smt != null ? (info.smt ? 'Enabled' : 'Disabled') : null],
+            ]),
+            table('Memory', [
+                ['Total', formatBytes(info.memory_total_bytes)],
+                ['NUMA Nodes', info.numa_nodes],
+            ]),
+            info.caches && info.caches.length > 0 && m('div.sysinfo-group', [
+                m('h2.sysinfo-group-title', 'Cache Topology'),
+                m('table.sysinfo-table', m('tbody',
+                    info.caches.map((c) => m('tr', [
+                        m('td.sysinfo-label', c.level),
+                        m('td.sysinfo-value', [c.size || '', c.instances > 1 ? ` x ${c.instances}` : ''].join('')),
+                    ])),
+                )),
+            ]),
+            info.nics && info.nics.length > 0 && m('div.sysinfo-group', [
+                m('h2.sysinfo-group-title', 'Network Interfaces'),
+                m('table.sysinfo-table', m('tbody',
+                    info.nics.map((nic) => m('tr', [
+                        m('td.sysinfo-label', nic.name),
+                        m('td.sysinfo-value', [
+                            nic.speed ? `${nic.speed} Mbps` : '',
+                            nic.driver ? ` (${nic.driver})` : '',
+                            nic.numa_node != null ? ` NUMA ${nic.numa_node}` : '',
+                        ].join('')),
+                    ])),
+                )),
+            ]),
+            info.gpus && info.gpus.length > 0 && m('div.sysinfo-group', [
+                m('h2.sysinfo-group-title', 'GPUs'),
+                m('table.sysinfo-table', m('tbody',
+                    info.gpus.map((gpu) => m('tr', [
+                        m('td.sysinfo-label', gpu.name || gpu.vendor),
+                        m('td.sysinfo-value', [
+                            gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : '',
+                            gpu.driver ? ` (${gpu.driver})` : '',
+                        ].join('')),
+                    ])),
+                )),
+            ]),
+        ]),
+        m('div.sysinfo-raw', [
+            m('h2.sysinfo-group-title', 'Raw JSON'),
+            m('pre.sysinfo-json', JSON.stringify(info, null, 2)),
+        ]),
+    ];
+};
+
+const renderNodeInfo = (nodeName, info, CpuTopology, formatBytes) => {
+    return m('div.systeminfo-node', [
+        m('h2.systeminfo-node-title', nodeName),
+        ...renderSingleNodeInfo(info, CpuTopology, formatBytes),
+    ]);
+};
 
 const renderCgroupSection = ({
     attrs,
