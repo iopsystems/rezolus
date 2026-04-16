@@ -761,9 +761,16 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
                     map.entry(NESTED_NODE.to_string())
                         .or_insert(serde_json::Value::String(node.clone()));
                 }
-            } else if let Some(ref instance) = input.instance {
-                map.entry(NESTED_INSTANCE.to_string())
-                    .or_insert(serde_json::Value::String(instance.clone()));
+            } else {
+                if let Some(ref instance) = input.instance {
+                    map.entry(NESTED_INSTANCE.to_string())
+                        .or_insert(serde_json::Value::String(instance.clone()));
+                }
+                // Also store node for service files if present (informational — which host it ran on)
+                if let Some(ref node) = input.node {
+                    map.entry(NESTED_NODE.to_string())
+                        .or_insert(serde_json::Value::String(node.clone()));
+                }
             }
         }
     }
@@ -1689,6 +1696,34 @@ mod tests {
         assert!(psm.get("rezolus:web02").is_some());
         assert_eq!(psm["rezolus:web01"]["node"].as_str().unwrap(), "web01");
         assert_eq!(psm["rezolus:web02"]["node"].as_str().unwrap(), "web02");
+    }
+
+    #[test]
+    fn test_merge_metadata_includes_service_node() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "metric_a",
+            &[Some(1), Some(2)],
+            "vllm",
+            "1000",
+            vec![("instance", "0"), ("node", "gpu01")],
+        );
+
+        let inputs = vec![load(&p1)];
+        let kv = merge_metadata(&inputs).unwrap();
+
+        let psm_str = kv
+            .iter()
+            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+            .and_then(|kv| kv.value.as_deref())
+            .expect("per_source_metadata should exist");
+
+        let psm: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(psm_str).unwrap();
+
+        let entry = psm.get("vllm:0").expect("vllm:0 entry should exist");
+        assert_eq!(entry.get("instance").and_then(|v| v.as_str()), Some("0"));
+        assert_eq!(entry.get("node").and_then(|v| v.as_str()), Some("gpu01"));
     }
 
     #[test]
