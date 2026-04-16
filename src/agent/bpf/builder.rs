@@ -5,7 +5,7 @@ use tracing::trace;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
-use metriken::{LazyCounter, RwLockHistogram};
+use metriken::{CounterGroup, LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
 use std::collections::HashMap;

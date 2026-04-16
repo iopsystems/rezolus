@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::MAX_CPUS;
 
 use libbpf_rs::Map;
 use memmap2::{MmapMut, MmapOptions};
