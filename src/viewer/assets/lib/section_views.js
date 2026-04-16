@@ -154,7 +154,12 @@ const renderCgroupSection = ({
             pairs.map((pair) => {
                 const title = pair.left?.opts?.title || pair.right?.opts?.title || '';
                 const description = pair.left?.opts?.description || pair.right?.opts?.description;
-                const seriesNames = pair.right?.series_names || [];
+                // Only show a legend when the right-side chart has actual series data;
+                // otherwise stale series_names can linger as "ghost" entries.
+                const rightData = pair.right?.data;
+                const hasData = Array.isArray(rightData) && rightData.length > 1
+                    && Array.isArray(rightData[0]) && rightData[0].length > 0;
+                const seriesNames = hasData ? (pair.right?.series_names || []) : [];
                 const legend = seriesNames.length > 0 && m('div.cgroup-pair-legend',
                     seriesNames.map((name) =>
                         m('span.cgroup-legend-item', [

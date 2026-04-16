@@ -153,6 +153,9 @@ const applyResultToPlot = (plot, result) => {
             } else {
                 plot.data = [];
             }
+            // Line-style plots have no series legend; clear any stale entries
+            // from a prior multi-series render so legends don't "ghost".
+            plot.series_names = [];
         }
     } else {
         plot.data = [];

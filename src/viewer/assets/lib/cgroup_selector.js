@@ -7,6 +7,8 @@
 //   substitutePattern: (query, pattern) => string — substitutes cgroup placeholder
 //   setActiveCgroupPattern: (pattern) => void — sets the global active cgroup pattern
 
+import globalColorMapper from './charts/util/colormap.js';
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /** Extract cgroup names from a PromQL query result's metric labels. */
@@ -25,25 +27,27 @@ const extractCgroupNames = (result) => {
     return names;
 };
 
-/** Collect the selected options from a <select> change event into a Set. */
-const syncSelection = (set, event) => {
-    set.clear();
-    for (const opt of event.target.selectedOptions) {
-        set.add(opt.value);
-    }
-};
-
-/** Render a multi-select list with a header. */
-const selectList = (title, items, selectionSet, onchange, emptyLabel) =>
+/** Render a custom multi-select list with a color swatch per item. */
+const selectList = (title, items, selectionSet, onToggle, emptyLabel) =>
     m('div.selector-column', [
         m('h4', title),
-        m('select.cgroup-select[multiple]', {
-            size: Math.max(2, Math.min(10, items.length || 1)),
-            onchange,
+        m('ul.cgroup-select', {
+            role: 'listbox',
+            'aria-multiselectable': 'true',
         }, items.length === 0
-            ? [m('option[disabled]', emptyLabel)]
+            ? m('li.cgroup-select-empty', emptyLabel)
             : items.map((item) =>
-                m('option', { value: item, selected: selectionSet.has(item) }, item),
+                m('li.cgroup-select-item', {
+                    role: 'option',
+                    'aria-selected': selectionSet.has(item) ? 'true' : 'false',
+                    class: selectionSet.has(item) ? 'selected' : '',
+                    onclick: () => onToggle(item),
+                }, [
+                    m('span.cgroup-select-swatch', {
+                        style: { background: globalColorMapper.getColorByName(item) },
+                    }),
+                    m('span.cgroup-select-name', item),
+                ]),
             ),
         ),
     ]);
@@ -71,6 +75,19 @@ export const CgroupSelector = {
         vnode.state.leftSelected = new Set();
         vnode.state.rightSelected = new Set();
         vnode.state.originalQueries = persistedOriginalQueries;
+
+        // Force multi-series style on right-side (individual) cgroup plots so that
+        // color assignment is always by cgroup name (hash-based) — even when only
+        // one cgroup is selected, which would otherwise resolve to a single-series
+        // line chart with the accent color.
+        for (const group of vnode.attrs.groups || []) {
+            if (group.metadata?.side !== 'right') continue;
+            for (const plot of group.plots || []) {
+                if (plot.opts && plot.opts.style !== 'multi') {
+                    plot.opts.style = 'multi';
+                }
+            }
+        }
 
         this.fetchAvailableCgroups(vnode);
     },
@@ -219,6 +236,11 @@ export const CgroupSelector = {
             ? [] // selectList will show emptyLabel
             : unselected;
 
+        const toggleMark = (set, item) => {
+            if (set.has(item)) set.delete(item);
+            else set.add(item);
+        };
+
         return m('div.cgroup-selector', [
             m('h3', 'Cgroup Selection'),
             st.error && m('div.error-message', st.error),
@@ -228,7 +250,7 @@ export const CgroupSelector = {
                     'Available Cgroups (Aggregate)',
                     leftItems,
                     st.leftSelected,
-                    (e) => syncSelection(st.leftSelected, e),
+                    (item) => toggleMark(st.leftSelected, item),
                     st.loading ? 'Loading cgroups...' : 'No cgroups available',
                 ),
 
@@ -253,7 +275,7 @@ export const CgroupSelector = {
                     'Individual Cgroups',
                     selected,
                     st.rightSelected,
-                    (e) => syncSelection(st.rightSelected, e),
+                    (item) => toggleMark(st.rightSelected, item),
                     'No cgroups selected',
                 ),
             ]),
