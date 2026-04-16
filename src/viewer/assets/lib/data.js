@@ -29,6 +29,48 @@ const defaultGetMetadata = () => ViewerApi.getMetadata();
 const defaultQueryRange = (query, start, end, step) =>
     ViewerApi.queryRange(query, start, end, step);
 
+// Module-level state for label injection
+let _selectedNode = null;
+let _selectedInstances = {};  // { serviceName: instanceId | null }
+
+const setSelectedNode = (node) => { _selectedNode = node; };
+const getSelectedNode = () => _selectedNode;
+const setSelectedInstance = (serviceName, instanceId) => {
+    _selectedInstances[serviceName] = instanceId;
+};
+const getSelectedInstance = (serviceName) => _selectedInstances[serviceName] || null;
+
+// Inject a label selector into all metric selectors in a query.
+const injectLabel = (query, labelName, labelValue) => {
+    if (!labelName || !labelValue) return query;
+    const selector = `${labelName}="${labelValue}"`;
+
+    // Match metric_name{existing_labels} — insert before closing brace
+    let result = query.replace(/(\w+)\{([^}]*)\}/g, (match, metric, labels) => {
+        if (['by', 'without', 'on', 'ignoring', 'group_left', 'group_right', 'bool'].includes(metric)) {
+            return match;
+        }
+        return `${metric}{${labels},${selector}}`;
+    });
+
+    // Match bare metric_name[ or metric_name) — add label selector
+    result = result.replace(/\b([a-z_][a-z0-9_]*)\s*(\[|\))/gi, (match, metric, suffix, offset) => {
+        const before = result.substring(0, offset);
+        const lastBrace = before.lastIndexOf('{');
+        const lastClose = before.lastIndexOf('}');
+        if (lastBrace > lastClose) return match;
+
+        const keywords = ['by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
+            'bool', 'sum', 'avg', 'min', 'max', 'count', 'rate', 'irate', 'increase',
+            'histogram_percentiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset'];
+        if (keywords.includes(metric)) return match;
+
+        return `${metric}{${selector}}${suffix}`;
+    });
+
+    return result;
+};
+
 const substituteCgroupPattern = (query, pattern) => {
     query = query.replace(/,?\s*name!~"[^"]*"/g, '');
     query = query.replace(/\{\s*\}/g, '');
@@ -194,7 +236,7 @@ const createDataApi = ({
         return queryRange(query, start, maxTime, step);
     };
 
-    const processDashboardData = async (data, activeCgroupPattern) => {
+    const processDashboardData = async (data, activeCgroupPattern, sectionRoute) => {
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
 
@@ -236,6 +278,19 @@ const createDataApi = ({
                             continue;
                         }
                     }
+                    // Inject node label filter for non-service sections only.
+                    if (_selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
+                        queryToRun = injectLabel(queryToRun, 'node', _selectedNode);
+                    }
+
+                    // Inject instance label filter when a specific instance is selected
+                    if (data.metadata?.service_name) {
+                        const inst = _selectedInstances[data.metadata.service_name];
+                        if (inst) {
+                            queryToRun = injectLabel(queryToRun, 'instance', inst);
+                        }
+                    }
+
                     queryPlots.push({ plot, query: queryToRun });
                 }
             }
@@ -356,4 +411,9 @@ export {
     createDataApi,
     setStepOverride,
     getStepOverride,
+    setSelectedNode,
+    getSelectedNode,
+    setSelectedInstance,
+    getSelectedInstance,
+    injectLabel,
 };

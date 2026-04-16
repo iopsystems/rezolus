@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance } from './data.js';
 import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
@@ -31,6 +31,14 @@ let systemInfoData = null;
 // File checksum (SHA-256) — fetched once at startup for parquet identity
 let fileChecksum = null;
 
+// File-level metadata — fetched once at startup
+let fileMetadata = null;
+
+// Parsed node list and per-source metadata from combined files
+let nodeList = [];           // e.g. ["web01", "web02"]
+let perSourceMeta = {};      // parsed per_source_metadata object
+let selectedNode = null;     // currently selected node name (null = no multi-node)
+
 // Transport state for live mode (Wireshark-style)
 // Starts recording — data flows from agent into TSDB and UI refreshes
 let recording = true;
@@ -38,10 +46,11 @@ let recording = true;
 // Fetch metadata, system info, and selection in parallel.
 // Used by both bootstrap() and uploadParquet().
 const fetchBackendState = async () => {
-    const [metaResult, sysResult, selResult] = await Promise.allSettled([
+    const [metaResult, sysResult, selResult, fmResult] = await Promise.allSettled([
         ViewerApi.getMetadata(),
         ViewerApi.getSystemInfo(),
         ViewerApi.getSelection(),
+        ViewerApi.getFileMetadata(),
     ]);
     if (metaResult.status === 'fulfilled') {
         const r = metaResult.value;
@@ -58,6 +67,34 @@ const fetchBackendState = async () => {
             loadPayloadIntoStore(reportStore, data);
             reportStore.loadedFrom = 'embedded report';
         }
+    }
+    if (fmResult.status === 'fulfilled') {
+        fileMetadata = fmResult.value;
+        parseNodeList();
+    }
+};
+
+const parseNodeList = () => {
+    nodeList = [];
+    perSourceMeta = {};
+    selectedNode = null;
+
+    if (!fileMetadata || !fileMetadata.per_source_metadata) return;
+
+    perSourceMeta = fileMetadata.per_source_metadata;
+    const nodes = [];
+    for (const [key, value] of Object.entries(perSourceMeta)) {
+        if (key.startsWith('rezolus:')) {
+            const nodeName = value.node || key.split(':')[1] || key;
+            if (!nodes.includes(nodeName)) {
+                nodes.push(nodeName);
+            }
+        }
+    }
+    nodeList = nodes;
+    if (nodeList.length > 0) {
+        selectedNode = nodeList[0];
+        setSelectedNode(nodeList[0]);
     }
 };
 
@@ -97,6 +134,13 @@ const clearViewerCaches = () => {
     chartsState.clear();
 };
 
+const changeNode = (nodeName) => {
+    selectedNode = nodeName;
+    setSelectedNode(nodeName);
+    clearViewerCaches();
+    m.redraw();
+};
+
 const uploadParquet = async (file) => {
     try {
         await ViewerApi.uploadParquet(file);
@@ -112,7 +156,7 @@ const uploadParquet = async (file) => {
         // (the route guard returns a never-resolving promise), so we must
         // populate the cache before triggering a redraw.
         const data = await ViewerApi.getSection('overview');
-        const processed = await processDashboardData(data, null);
+        const processed = await processDashboardData(data, null, '/overview');
         sectionResponseCache['overview'] = processed;
         if (processed.sections) preloadSections(processed.sections);
         // Navigate to overview if on a different route; otherwise just redraw.
@@ -139,6 +183,10 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onUploadParquet: uploadParquet,
     granularity: currentGranularity,
     onGranularityChange: changeGranularity,
+    nodeList,
+    selectedNode,
+    perSourceMeta,
+    onNodeChange: changeNode,
     extra,
 });
 
@@ -400,7 +448,7 @@ const changeGranularity = async (step) => {
 
     try {
         const data = await ViewerApi.getSection(section);
-        const processed = await processDashboardData(data, activeCgroupPattern);
+        const processed = await processDashboardData(data, activeCgroupPattern, `/${section}`);
         sectionResponseCache[section] = processed;
         if (processed.sections) preloadSections(processed.sections);
         m.redraw();
@@ -420,7 +468,7 @@ document.addEventListener('dblclick', () => {
 const loadSection = async (section) => {
     if (sectionResponseCache[section]) return sectionResponseCache[section];
     const data = await ViewerApi.getSection(section);
-    const processedData = await processDashboardData(data, activeCgroupPattern);
+    const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
     sectionResponseCache[section] = processedData;
     return processedData;
 };
@@ -466,7 +514,7 @@ const refreshCurrentSection = async () => {
         const data = await ViewerApi.getSection(section, true);
 
         // Run regular queries and histogram heatmap queries concurrently
-        const promises = [processDashboardData(data, activeCgroupPattern)];
+        const promises = [processDashboardData(data, activeCgroupPattern, currentRoute)];
         if (heatmapEnabled) {
             promises.push(fetchSectionHeatmapData(currentRoute, data.groups));
         }
@@ -611,7 +659,7 @@ const bootstrap = async () => {
 
                 return ViewerApi.getSection(sectionKey)
                     .then(async (data) => {
-                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        const processedData = await processDashboardData(data, activeCgroupPattern, `/${sectionKey}`);
                         sectionResponseCache[sectionKey] = processedData;
                         return makeSingleChartView();
                     });
@@ -692,7 +740,7 @@ const bootstrap = async () => {
                     .then(async (data) => {
 
                         // Process PromQL queries for this section
-                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        const processedData = await processDashboardData(data, activeCgroupPattern, requestedPath);
                         sectionResponseCache[params.section] = processedData;
 
                         // Fetch heatmap data if globally enabled and not cached for this section

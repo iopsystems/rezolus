@@ -11,6 +11,10 @@ const buildTopNavAttrs = ({
     onUploadParquet,
     granularity = null,
     onGranularityChange,
+    nodeList = [],
+    selectedNode = null,
+    perSourceMeta = {},
+    onNodeChange,
     extra = {},
 }) => ({
     sectionRoute,
@@ -31,6 +35,10 @@ const buildTopNavAttrs = ({
     granularity,
     onGranularityChange,
     chartsState,
+    nodeList,
+    selectedNode,
+    perSourceMeta,
+    onNodeChange,
     ...extra,
 });
 
