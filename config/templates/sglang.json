@@ -34,8 +34,22 @@
     },
     {
       "role": "throughput",
-      "title": "Request Completion Rate",
+      "title": "Request Rate",
+      "query": "sum(irate(sglang_num_requests_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "throughput",
+      "title": "Successful Request Rate",
       "query": "sum(irate(sglang_num_requests_total[5s])) - sum(irate(sglang_num_aborted_requests_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "error",
+      "title": "Abort Rate",
+      "query": "sum(irate(sglang_num_aborted_requests_total[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
@@ -76,11 +90,25 @@
       "unit_system": "time"
     },
     {
-      "role": "error",
-      "title": "Abort Rate",
-      "query": "sum(irate(sglang_num_aborted_requests_total[5s]))",
+      "role": "throughput",
+      "title": "Estimated FLOPS per GPU",
+      "query": "sum(irate(sglang_estimated_flops_per_gpu_total[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
+    },
+    {
+      "role": "throughput",
+      "title": "Estimated Memory Read Bandwidth per GPU",
+      "query": "sum(irate(sglang_estimated_read_bytes_per_gpu_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "datarate"
+    },
+    {
+      "role": "throughput",
+      "title": "Estimated Memory Write Bandwidth per GPU",
+      "query": "sum(irate(sglang_estimated_write_bytes_per_gpu_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "datarate"
     }
   ]
 }
