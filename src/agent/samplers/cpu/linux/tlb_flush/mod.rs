@@ -36,7 +36,7 @@ use stats::*;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-static CGROUP_METRICS: &[&dyn MetricGroup] = &[
+static CGROUP_METRICS: &[&dyn GroupMetadata] = &[
     &CGROUP_TLB_FLUSH_TASK_SWITCH,
     &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
     &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN,

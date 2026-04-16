@@ -1,11 +1,11 @@
 use super::*;
-use crate::agent::*;
 
 use libbpf_rs::Map;
 use memmap2::{MmapMut, MmapOptions};
-use metriken::LazyCounter;
+use metriken::{CounterGroup, LazyCounter};
 
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::sync::atomic::AtomicU64;
 
 /// This wraps the BPF map along with an opened memory-mapped region for the map
 /// values.
@@ -162,11 +162,10 @@ impl<'a> CpuCounters<'a> {
 
 /// Represents a set of counters where the BPF map is a dense set of counters,
 /// meaning there is no padding. No aggregation is performed, and the values are
-/// updated into a single `RwLockCounterGroup`.
+/// read directly from the memory-mapped BPF map via `attach_external`.
 pub struct PackedCounters<'a> {
     _map: &'a Map<'a>,
-    mmap: MmapMut,
-    counters: &'static CounterGroup,
+    _mmap: MmapMut,
 }
 
 impl<'a> PackedCounters<'a> {
@@ -176,7 +175,7 @@ impl<'a> PackedCounters<'a> {
     /// The map layout is not cacheline padded. The ordering of the dynamic
     /// counters must exactly match the layout in the BPF map.
     pub fn new(map: &'a Map, counters: &'static CounterGroup) -> Self {
-        let total_bytes = counters.len() * std::mem::size_of::<u64>();
+        let total_bytes = counters.entries() * std::mem::size_of::<u64>();
 
         let fd = map.as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
@@ -187,72 +186,27 @@ impl<'a> PackedCounters<'a> {
                 .expect("failed to mmap() bpf counterset")
         };
 
-        let (_prefix, values, _suffix) = unsafe { mmap.align_to::<u64>() };
+        let (_prefix, values, _suffix) = unsafe { mmap.align_to::<AtomicU64>() };
 
-        if values.len() != counters.len() {
+        if values.len() != counters.entries() {
             panic!("mmap region not aligned or width doesn't match");
         }
 
         // Attach the mmap directly to the counter group so the exposition code
         // can read values without an intermediate copy.
+        //
+        // SAFETY: The mmap is kept alive by self._mmap for the lifetime of
+        // this struct (which is the process lifetime for BPF samplers).
+        // AtomicU64 has the same layout as u64.
         unsafe {
-            counters.attach_mmap_values(values.as_ptr(), values.len());
+            counters.attach_external(std::mem::transmute::<&[AtomicU64], &'static [AtomicU64]>(
+                values,
+            ));
         }
 
         Self {
             _map: map,
-            mmap,
-            counters,
-        }
-    }
-
-    /// No-op: values are read directly from the mmap by the exposition code.
-    /// Kept for API compatibility with the sampler refresh loop.
-    pub fn refresh(&mut self) {}
-}
-
-/// Like `PackedCounters`, but for `SparseCounterGroup` which uses sparse
-/// metadata storage for high-cardinality metrics like per-task counters.
-pub struct SparsePackedCounters<'a> {
-    _map: &'a Map<'a>,
-    mmap: MmapMut,
-    counters: &'static SparseCounterGroup,
-}
-
-impl<'a> SparsePackedCounters<'a> {
-    /// Create a new set of counters from the provided BPF map and collection of
-    /// counter metrics.
-    ///
-    /// The map layout is not cacheline padded. The ordering of the dynamic
-    /// counters must exactly match the layout in the BPF map.
-    pub fn new(map: &'a Map, counters: &'static SparseCounterGroup) -> Self {
-        let total_bytes = counters.len() * std::mem::size_of::<u64>();
-
-        let fd = map.as_fd().as_raw_fd();
-        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
-        let mmap: MmapMut = unsafe {
-            MmapOptions::new()
-                .len(total_bytes)
-                .map_mut(&file)
-                .expect("failed to mmap() bpf counterset")
-        };
-
-        let (_prefix, values, _suffix) = unsafe { mmap.align_to::<u64>() };
-
-        if values.len() != counters.len() {
-            panic!("mmap region not aligned or width doesn't match");
-        }
-
-        // Attach the mmap directly to the counter group so the exposition code
-        // can read values without an intermediate copy.
-        unsafe {
-            counters.attach_mmap_values(values.as_ptr(), values.len());
-        }
-
-        Self {
-            _map: map,
-            mmap,
-            counters,
+            _mmap: mmap,
         }
     }
 

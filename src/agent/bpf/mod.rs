@@ -7,7 +7,7 @@ pub use builder::Builder as BpfBuilder;
 pub use builder::{BpfProgStats, PerfEvent};
 
 use crate::agent::samplers::Sampler;
-use crate::agent::MetricGroup;
+use crate::agent::GroupMetadata;
 use crate::*;
 
 pub trait OpenSkelExt {
@@ -69,11 +69,11 @@ fn whole_pages<T>(count: usize) -> usize {
     (count * std::mem::size_of::<T>()).div_ceil(PAGE_SIZE)
 }
 
-use counters::{Counters, CpuCounters, PackedCounters, SparsePackedCounters};
+use counters::{Counters, CpuCounters, PackedCounters};
 use histogram::Histogram;
 pub use sync_primitive::SyncPrimitive;
 
-pub fn process_cgroup_info<T>(data: &[u8], metrics: &[&dyn MetricGroup]) -> i32
+pub fn process_cgroup_info<T>(data: &[u8], metrics: &[&dyn GroupMetadata]) -> i32
 where
     T: CgroupInfo + plain::Plain + Default,
 {
