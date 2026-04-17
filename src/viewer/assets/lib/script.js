@@ -170,21 +170,41 @@ const clearViewerCaches = () => {
     chartsState.clear();
 };
 
-const changeNode = (nodeName) => {
+const changeNode = async (nodeName) => {
     selectedNode = nodeName;
     setSelectedNode(nodeName);
     clearViewerCaches();
-    // Re-set the current route to force onmatch to re-run and fetch
-    // fresh data for the newly selected node.
-    m.route.set(m.route.get());
+    m.redraw(); // show loading state immediately
+    await reloadCurrentSection();
 };
 
-const changeInstance = (serviceName, instanceId) => {
+const changeInstance = async (serviceName, instanceId) => {
     selectedInstances[serviceName] = instanceId;
     setSelectedInstance(serviceName, instanceId);
     const svcKey = `service/${serviceName}`;
     delete sectionResponseCache[svcKey];
-    m.route.set(m.route.get());
+    m.redraw();
+    await reloadCurrentSection();
+};
+
+/// Re-fetch and re-process the current section's data, then redraw.
+const reloadCurrentSection = async () => {
+    const currentRoute = m.route.get();
+    if (!currentRoute) return;
+    const section = currentRoute.replace(/^\//, '');
+    if (!section) return;
+
+    try {
+        const data = await ViewerApi.getSection(section);
+        const processedData = await processDashboardData(data, activeCgroupPattern, currentRoute);
+        sectionResponseCache[section] = processedData;
+        if (heatmapEnabled && !heatmapDataCache.has(currentRoute)) {
+            fetchSectionHeatmapData(currentRoute, processedData.groups);
+        }
+        m.redraw();
+    } catch (e) {
+        console.error('Failed to reload section after selection change:', e);
+    }
 };
 
 const uploadParquet = async (file) => {
