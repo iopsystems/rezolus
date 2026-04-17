@@ -65,3 +65,9 @@ pub const NESTED_SERVICE_QUERIES: &str = "service_queries";
 /// - `"service"` — the system under test (e.g. an LLM inference server)
 /// - `"loadgen"` — the load generator / benchmark tool (e.g. llm-perf)
 pub const NESTED_ROLE: &str = "role";
+
+/// Nanosecond timestamp of the first successful scrape for this source.
+pub const NESTED_FIRST_SAMPLE_NS: &str = "first_sample_ns";
+
+/// Nanosecond timestamp of the last successful scrape for this source.
+pub const NESTED_LAST_SAMPLE_NS: &str = "last_sample_ns";

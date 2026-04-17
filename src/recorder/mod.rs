@@ -1,46 +1,13 @@
 use super::*;
-use clap::ArgMatches;
 
+mod config;
+mod endpoint;
 mod prometheus;
 
-pub struct Config {
-    interval: humantime::Duration,
-    duration: Option<humantime::Duration>,
-    format: Format,
-    verbose: u8,
-    url: Url,
-    output: PathBuf,
-    metadata: Vec<(String, String)>,
-}
-impl TryFrom<ArgMatches> for Config {
-    type Error = String;
-
-    fn try_from(
-        args: ArgMatches,
-    ) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
-        Ok(Config {
-            url: args.get_one::<Url>("URL").unwrap().clone(),
-            output: args.get_one::<PathBuf>("OUTPUT").unwrap().to_path_buf(),
-            verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
-            interval: *args
-                .get_one::<humantime::Duration>("INTERVAL")
-                .unwrap_or(&humantime::Duration::from_str("1s").unwrap()),
-            duration: args.get_one::<humantime::Duration>("DURATION").copied(),
-            format: args
-                .get_one::<Format>("FORMAT")
-                .copied()
-                .unwrap_or(Format::Parquet),
-            metadata: args
-                .get_many::<String>("METADATA")
-                .unwrap_or_default()
-                .filter_map(|s| {
-                    s.split_once('=')
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                })
-                .collect(),
-        })
-    }
-}
+use crate::parquet_metadata;
+pub use config::RecordingConfig;
+use endpoint::{EndpointState, EndpointStatus, Protocol};
+use std::path::Path;
 
 pub fn command() -> Command {
     Command::new("record")
@@ -50,7 +17,6 @@ pub fn command() -> Command {
                 .help("Metrics endpoint (Rezolus agent or Prometheus)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Url))
-                .required(true)
                 .index(1),
         )
         .arg(
@@ -58,8 +24,28 @@ pub fn command() -> Command {
                 .help("Path to the output file")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
-                .required(true)
                 .index(2),
+        )
+        .arg(
+            clap::Arg::new("CONFIG_FILE")
+                .long("config")
+                .help("TOML config file for multi-endpoint recording")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf))
+                .conflicts_with_all(["URL"]),
+        )
+        .arg(
+            clap::Arg::new("ENDPOINT")
+                .long("endpoint")
+                .help("Endpoint: url[,source=name][,role=role][,protocol=msgpack|prometheus]")
+                .action(clap::ArgAction::Append)
+                .conflicts_with_all(["URL", "CONFIG_FILE"]),
+        )
+        .arg(
+            clap::Arg::new("SEPARATE")
+                .long("separate")
+                .help("Write one parquet file per endpoint instead of combining")
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
             clap::Arg::new("VERBOSE")
@@ -103,19 +89,286 @@ pub fn command() -> Command {
         )
 }
 
-/// Runs the Rezolus `recorder` which is a Rezolus client that pulls data from
-/// the msgpack endpoint and writes it to disk. The caller may use either timed
-/// collection or terminate the process to finalize the recording.
-///
-/// This is intended to be run as ad-hoc collection of high-resolution metrics
-/// or in situations where Rezolus is being used outside of a full observability
-/// stack, for example in lab environments where experiments are being run using
-/// either manual or automated processes.
-pub fn run(config: Config) {
-    // configure logging
+// ---------------------------------------------------------------------------
+// Probe and metadata helpers
+// ---------------------------------------------------------------------------
+
+/// Probe a single endpoint to detect its protocol and resolve the scrape URL.
+async fn probe_endpoint(
+    client: &Client,
+    config: &endpoint::EndpointConfig,
+) -> Option<(Protocol, Url)> {
+    // If protocol is explicitly set, validate connectivity on the expected path
+    if let Some(ref proto) = config.protocol {
+        let url = match proto {
+            Protocol::Msgpack => {
+                let mut u = config.url.clone();
+                if u.path() == "/" {
+                    u.set_path("/metrics/binary");
+                }
+                u
+            }
+            Protocol::Prometheus => {
+                let mut u = config.url.clone();
+                if u.path() == "/" {
+                    u.set_path("/metrics");
+                }
+                u
+            }
+        };
+        if let Ok(resp) = client.get(url.clone()).send().await {
+            if resp.status().is_success() {
+                return Some((proto.clone(), url));
+            }
+        }
+        return None;
+    }
+
+    // Auto-detect: try Rezolus binary first, then Prometheus
+    let candidates: Vec<(Url, bool)> = if config.url.path() == "/" {
+        let mut rezolus_url = config.url.clone();
+        rezolus_url.set_path("/metrics/binary");
+        let mut prom_url = config.url.clone();
+        prom_url.set_path("/metrics");
+        vec![(rezolus_url, false), (prom_url, true)]
+    } else {
+        vec![(config.url.clone(), true)]
+    };
+
+    for (candidate_url, is_prom) in &candidates {
+        if let Ok(response) = client.get(candidate_url.clone()).send().await {
+            if !response.status().is_success() {
+                continue;
+            }
+            if let Ok(body) = response.bytes().await {
+                if *is_prom {
+                    return Some((Protocol::Prometheus, candidate_url.clone()));
+                }
+                if rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body).is_ok() {
+                    return Some((Protocol::Msgpack, candidate_url.clone()));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Fetch systeminfo and descriptions from a Rezolus agent endpoint.
+async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> (Option<String>, Option<String>) {
+    let mut info_url = base_url.clone();
+    info_url.set_path("/systeminfo");
+    let systeminfo = match client.get(info_url).send().await {
+        Ok(response) if response.status().is_success() => response.text().await.ok(),
+        _ => None,
+    };
+
+    let mut desc_url = base_url.clone();
+    desc_url.set_path("/metrics/descriptions");
+    let descriptions = match client.get(desc_url).send().await {
+        Ok(response) if response.status().is_success() => response.text().await.ok(),
+        _ => None,
+    };
+
+    (systeminfo, descriptions)
+}
+
+// ---------------------------------------------------------------------------
+// Scrape helper
+// ---------------------------------------------------------------------------
+
+async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
+    let response = client
+        .get(url.clone())
+        .send()
+        .await
+        .map_err(|e| format!("{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    response
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("{e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Metadata injection for msgpack snapshots
+// ---------------------------------------------------------------------------
+
+fn inject_provenance(
+    mut snapshot: metriken_exposition::Snapshot,
+    source: &str,
+    endpoint_url: &str,
+) -> metriken_exposition::Snapshot {
+    fn inject_metrics(
+        counters: &mut [metriken_exposition::Counter],
+        gauges: &mut [metriken_exposition::Gauge],
+        histograms: &mut [metriken_exposition::Histogram],
+        source: &str,
+        endpoint_url: &str,
+    ) {
+        for counter in counters.iter_mut() {
+            counter
+                .metadata
+                .insert("source".to_string(), source.to_string());
+            counter
+                .metadata
+                .insert("endpoint".to_string(), endpoint_url.to_string());
+        }
+        for gauge in gauges.iter_mut() {
+            gauge
+                .metadata
+                .insert("source".to_string(), source.to_string());
+            gauge
+                .metadata
+                .insert("endpoint".to_string(), endpoint_url.to_string());
+        }
+        for histogram in histograms.iter_mut() {
+            histogram
+                .metadata
+                .insert("source".to_string(), source.to_string());
+            histogram
+                .metadata
+                .insert("endpoint".to_string(), endpoint_url.to_string());
+        }
+    }
+
+    match &mut snapshot {
+        metriken_exposition::Snapshot::V2(ref mut v2) => {
+            inject_metrics(
+                &mut v2.counters,
+                &mut v2.gauges,
+                &mut v2.histograms,
+                source,
+                endpoint_url,
+            );
+        }
+        metriken_exposition::Snapshot::V1(ref mut v1) => {
+            inject_metrics(
+                &mut v1.counters,
+                &mut v1.gauges,
+                &mut v1.histograms,
+                source,
+                endpoint_url,
+            );
+        }
+    }
+    snapshot
+}
+
+// ---------------------------------------------------------------------------
+// Output path helpers
+// ---------------------------------------------------------------------------
+
+fn separate_output_path(base: &Path, source: &str) -> PathBuf {
+    let stem = base.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = base.extension().unwrap_or_default().to_string_lossy();
+    let filename = if ext.is_empty() {
+        format!("{stem}_{source}")
+    } else {
+        format!("{stem}_{source}.{ext}")
+    };
+    base.with_file_name(filename)
+}
+
+fn output_dir(output: &Path) -> PathBuf {
+    match output.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parquet converter builder
+// ---------------------------------------------------------------------------
+
+fn build_parquet_converter(
+    config: &RecordingConfig,
+    ep: &EndpointState,
+    prom_converter: &Option<prometheus::PrometheusConverter>,
+) -> MsgpackToParquet {
+    let mut converter = MsgpackToParquet::with_options(ParquetOptions::new()).metadata(
+        "sampling_interval_ms".to_string(),
+        config.interval.as_millis().to_string(),
+    );
+
+    // Source metadata
+    converter = converter.metadata("source".to_string(), ep.config.source.clone());
+
+    // User-supplied metadata
+    for (key, value) in &config.metadata {
+        converter = converter.metadata(key.clone(), value.clone());
+    }
+
+    // Agent systeminfo
+    if let Some(ref json) = ep.systeminfo {
+        converter = converter.metadata("systeminfo".to_string(), json.clone());
+    }
+
+    // Descriptions: prefer agent-fetched, fall back to Prometheus HELP
+    let prom_desc = prom_converter
+        .as_ref()
+        .filter(|c| !c.descriptions().is_empty())
+        .and_then(|c| serde_json::to_string(c.descriptions()).ok());
+    let desc = ep.descriptions.clone().or(prom_desc);
+    if let Some(ref json) = desc {
+        converter = converter.metadata("descriptions".to_string(), json.clone());
+    }
+
+    // per_source_metadata with first/last sample timestamps
+    let mut psm = serde_json::Map::new();
+    let mut source_meta = serde_json::Map::new();
+    if let Some(ns) = ep.first_success_ns {
+        source_meta.insert(
+            parquet_metadata::NESTED_FIRST_SAMPLE_NS.to_string(),
+            serde_json::json!(ns),
+        );
+    }
+    if let Some(ns) = ep.last_success_ns {
+        source_meta.insert(
+            parquet_metadata::NESTED_LAST_SAMPLE_NS.to_string(),
+            serde_json::json!(ns),
+        );
+    }
+    if let Some(ref role) = ep.config.role {
+        source_meta.insert(
+            parquet_metadata::NESTED_ROLE.to_string(),
+            serde_json::json!(role),
+        );
+    }
+    if !source_meta.is_empty() {
+        psm.insert(
+            ep.config.source.clone(),
+            serde_json::Value::Object(source_meta),
+        );
+        if let Ok(json) = serde_json::to_string(&psm) {
+            converter = converter.metadata("per_source_metadata".to_string(), json);
+        }
+    }
+
+    converter
+}
+
+// ---------------------------------------------------------------------------
+// Per-endpoint writer state
+// ---------------------------------------------------------------------------
+
+struct EndpointWriter {
+    writer: std::fs::File,
+    converter: Option<prometheus::PrometheusConverter>,
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
+/// Runs the Rezolus `recorder` which pulls metrics from one or more endpoints
+/// and writes them to parquet file(s). Supports Rezolus msgpack and Prometheus
+/// text format endpoints, with auto-detection.
+pub fn run(config: RecordingConfig) {
     let _log_drain = configure_logging(verbosity_to_level(config.verbose));
 
-    // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(1)
@@ -125,9 +378,7 @@ pub fn run(config: Config) {
 
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);
-
         println!();
-
         if state == RUNNING {
             info!("finalizing recording... ctrl+c to terminate early");
             STATE.store(TERMINATING, Ordering::SeqCst);
@@ -138,7 +389,6 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    // our http client
     let client = match Client::builder().http1_only().build() {
         Ok(c) => c,
         Err(e) => {
@@ -147,153 +397,77 @@ pub fn run(config: Config) {
         }
     };
 
-    // open our destination file
-    let mut destination = std::fs::File::create(config.output.clone())
-        .map_err(|e| {
-            eprintln!("failed to open destination file: {e}");
-            std::process::exit(1);
-        })
-        .ok();
+    let out_dir = output_dir(&config.output);
 
-    // our writer will either be our destination if the output is raw msgpack or
-    // it will be some tempfile
-    let mut writer = match config.format {
-        Format::Raw => destination.take().unwrap(),
-        Format::Parquet => {
-            let mut path: PathBuf = config.output.clone();
-            path.pop();
+    // Initialize endpoint states
+    let mut endpoints: Vec<EndpointState> = config
+        .endpoints
+        .iter()
+        .map(|ep| EndpointState::new(ep.clone()))
+        .collect();
 
-            match tempfile_in(path.clone()) {
-                Ok(t) => t,
-                Err(error) => {
-                    eprintln!("could not open temporary file in: {path:?}\n{error}");
-                    std::process::exit(1);
+    // Probe all endpoints (best-effort startup)
+    rt.block_on(async {
+        for ep in &mut endpoints {
+            match probe_endpoint(&client, &ep.config).await {
+                Some((protocol, url)) => {
+                    info!(
+                        "endpoint {} ({}): detected {:?}",
+                        ep.config.source, ep.config.url, protocol
+                    );
+                    if protocol == Protocol::Msgpack {
+                        let (si, desc) = fetch_agent_metadata(&client, &ep.config.url).await;
+                        ep.systeminfo = si;
+                        ep.descriptions = desc;
+                    }
+                    ep.scrape_url = Some(url);
+                    ep.detected_protocol = Some(protocol);
+                    ep.status = EndpointStatus::Active;
+                }
+                None => {
+                    warn!(
+                        "endpoint {} ({}) not reachable, will retry each tick",
+                        ep.config.source, ep.config.url
+                    );
                 }
             }
         }
-    };
+    });
 
-    // Auto-detect source type by probing the endpoint. For root-path URLs,
-    // try the Rezolus binary endpoint first; if it fails, try /metrics as
-    // Prometheus. For non-root URLs, use the path as-is.
-    let mut url = config.url.clone();
-    let prometheus_mode: bool;
-
+    if !endpoints
+        .iter()
+        .any(|ep| ep.status == EndpointStatus::Active)
     {
-        let client = client.clone();
+        eprintln!("error: no endpoints could be reached. Check your configuration.");
+        std::process::exit(1);
+    }
 
-        prometheus_mode = rt.block_on(async {
-            // Determine candidate URLs to try
-            let candidates: Vec<(Url, bool)> = if url.path() == "/" {
-                let mut rezolus_url = url.clone();
-                rezolus_url.set_path("/metrics/binary");
-                let mut prom_url = url.clone();
-                prom_url.set_path("/metrics");
-                vec![(rezolus_url, false), (prom_url, true)]
+    // Create per-endpoint writers
+    let mut writers: Vec<Option<EndpointWriter>> = endpoints
+        .iter()
+        .map(|ep| {
+            if ep.status == EndpointStatus::Active {
+                let writer = match tempfile_in(out_dir.clone()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("failed to create temp file: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                let converter = if ep.protocol() == Some(&Protocol::Prometheus) {
+                    Some(prometheus::PrometheusConverter::with_provenance(
+                        ep.config.source.clone(),
+                        ep.config.url.to_string(),
+                    ))
+                } else {
+                    None
+                };
+                Some(EndpointWriter { writer, converter })
             } else {
-                vec![(url.clone(), true)]
-            };
-
-            for (candidate_url, is_prom) in &candidates {
-                let start = Instant::now();
-
-                if let Ok(response) = client.get(candidate_url.clone()).send().await {
-                    if !response.status().is_success() {
-                        continue;
-                    }
-
-                    if let Ok(body) = response.bytes().await {
-                        let latency = start.elapsed();
-
-                        if latency.as_nanos() >= config.interval.as_nanos() {
-                            let recommended = humantime::Duration::from(Duration::from_millis(
-                                (latency * 2).as_nanos().div_ceil(1000000) as u64,
-                            ));
-                            eprintln!(
-                                "sampling latency ({} us) exceeded the sample interval. \
-                                 Try setting the interval to: {}",
-                                latency.as_micros(),
-                                recommended
-                            );
-                            std::process::exit(1);
-                        } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
-                            warn!(
-                                "sampling latency ({} us) is more that 75% of the sample interval. \
-                                 Consider increasing the interval",
-                                latency.as_micros()
-                            );
-                        } else {
-                            debug!("sampling latency: {} us", latency.as_micros());
-                        }
-
-                        if *is_prom {
-                            url = candidate_url.clone();
-                            info!("detected prometheus endpoint: {url}");
-                            return true;
-                        }
-
-                        // Try to deserialize as msgpack to confirm it's Rezolus
-                        if rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body).is_ok() {
-                            url = candidate_url.clone();
-                            info!("detected rezolus agent: {url}");
-                            return false;
-                        }
-
-                        // Got a response but it's not valid msgpack - try next
-                        continue;
-                    }
-                }
-            }
-
-            eprintln!(
-                "failed to connect or unrecognized response. \
-                 Please check that the source is running and the address is correct"
-            );
-            std::process::exit(1);
-        });
-    }
-
-    // Fetch the agent's systeminfo for embedding in parquet metadata
-    let agent_systeminfo: Option<String> = if prometheus_mode {
-        None
-    } else {
-        let client = client.clone();
-        let mut info_url = config.url.clone();
-        info_url.set_path("/systeminfo");
-        rt.block_on(async move {
-            match client.get(info_url).send().await {
-                Ok(response) if response.status().is_success() => response.text().await.ok(),
-                _ => None,
+                None
             }
         })
-    };
-
-    if agent_systeminfo.is_some() {
-        debug!("fetched systeminfo from agent");
-    } else {
-        debug!("agent systeminfo not available");
-    }
-
-    // Fetch metric descriptions for embedding in parquet metadata
-    let descriptions: Option<String> = if prometheus_mode {
-        None // descriptions come from # HELP lines during recording
-    } else {
-        let client = client.clone();
-        let mut desc_url = config.url.clone();
-        desc_url.set_path("/metrics/descriptions");
-        rt.block_on(async move {
-            match client.get(desc_url).send().await {
-                Ok(response) if response.status().is_success() => response.text().await.ok(),
-                _ => None,
-            }
-        })
-    };
-
-    if descriptions.is_some() {
-        debug!("fetched descriptions from agent");
-    } else {
-        debug!("agent descriptions not available");
-    }
+        .collect();
 
     if config.duration.is_some() {
         info!("recording metrics... ctrl-c to terminate early");
@@ -301,123 +475,365 @@ pub fn run(config: Config) {
         info!("recording metrics... ctrl-c to end the recording");
     }
 
-    rt.block_on(async move {
-        // get the approximate time for the first sample
-        let interval: Duration = config.interval.into();
-        let start = Instant::now() + interval;
+    rt.block_on(async {
+        let interval_dur: Duration = config.interval.into();
+        let start = Instant::now() + interval_dur;
+        let mut interval = crate::common::aligned_interval(interval_dur);
 
-        // sampling interval
-        let mut interval = crate::common::aligned_interval(interval);
-
-        // prometheus converter for parsing text format responses
-        let mut converter = if prometheus_mode {
-            Some(prometheus::PrometheusConverter::new())
-        } else {
-            None
-        };
-
-        // sample in a loop until RUNNING is false or duration has completed
         while STATE.load(Ordering::Relaxed) == RUNNING {
-            // check if the duration has completed
             if let Some(duration) = config.duration.map(Into::<Duration>::into) {
                 if start.elapsed() >= duration {
                     break;
                 }
             }
 
-            // wait to sample
             interval.tick().await;
+            let now_ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
 
-            let start = Instant::now();
+            // Scrape all active endpoints concurrently
+            let active_indices: Vec<usize> = endpoints
+                .iter()
+                .enumerate()
+                .filter(|(_, ep)| ep.status == EndpointStatus::Active)
+                .map(|(i, _)| i)
+                .collect();
 
-            // sample the metrics source
-            if let Ok(response) = client.get(url.clone()).send().await {
-                let body: Option<Vec<u8>> = if let Some(ref mut converter) = converter {
-                    match response.text().await {
-                        Ok(text) => {
-                            let snapshot = converter.convert(&text);
-                            match rmp_serde::encode::to_vec(&snapshot) {
-                                Ok(bytes) => Some(bytes),
+            let scrape_futures: Vec<_> = active_indices
+                .iter()
+                .map(|&idx| {
+                    let client = client.clone();
+                    let url = endpoints[idx].scrape_url.clone().unwrap();
+                    async move { (idx, scrape_one(&client, &url).await) }
+                })
+                .collect();
+
+            let results = futures::future::join_all(scrape_futures).await;
+
+            for (idx, result) in results {
+                match result {
+                    Ok(body) => {
+                        endpoints[idx].record_success(now_ns);
+                        if let Some(ref mut ew) = writers[idx] {
+                            let bytes = if let Some(ref mut conv) = ew.converter {
+                                // Prometheus: parse text → snapshot → msgpack
+                                let text = String::from_utf8_lossy(&body);
+                                let snapshot = conv.convert(&text);
+                                match rmp_serde::encode::to_vec(&snapshot) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        error!(
+                                            "serialize error for {}: {e}",
+                                            endpoints[idx].config.source
+                                        );
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                // Msgpack: deserialize, inject provenance, re-serialize
+                                match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body)
+                                {
+                                    Ok(snapshot) => {
+                                        let snapshot = inject_provenance(
+                                            snapshot,
+                                            &endpoints[idx].config.source,
+                                            endpoints[idx].config.url.as_str(),
+                                        );
+                                        match rmp_serde::encode::to_vec(&snapshot) {
+                                            Ok(b) => b,
+                                            Err(e) => {
+                                                error!(
+                                                    "serialize error for {}: {e}",
+                                                    endpoints[idx].config.source
+                                                );
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "msgpack decode error for {}: {e}",
+                                            endpoints[idx].config.source
+                                        );
+                                        continue;
+                                    }
+                                }
+                            };
+
+                            if let Err(e) = ew.writer.write_all(&bytes) {
+                                error!("write error for {}: {e}", endpoints[idx].config.source);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "scrape failed for {} ({}): {e}",
+                            endpoints[idx].config.source, endpoints[idx].config.url
+                        );
+                    }
+                }
+            }
+
+            // Retry pending endpoints
+            let pending_indices: Vec<usize> = endpoints
+                .iter()
+                .enumerate()
+                .filter(|(_, ep)| ep.status == EndpointStatus::Pending)
+                .map(|(i, _)| i)
+                .collect();
+
+            for idx in pending_indices {
+                if let Some((protocol, url)) = probe_endpoint(&client, &endpoints[idx].config).await
+                {
+                    info!(
+                        "endpoint {} ({}) now available, starting capture",
+                        endpoints[idx].config.source, endpoints[idx].config.url
+                    );
+                    if protocol == Protocol::Msgpack {
+                        let (si, desc) =
+                            fetch_agent_metadata(&client, &endpoints[idx].config.url).await;
+                        endpoints[idx].systeminfo = si;
+                        endpoints[idx].descriptions = desc;
+                    }
+                    endpoints[idx].scrape_url = Some(url);
+                    endpoints[idx].detected_protocol = Some(protocol.clone());
+                    endpoints[idx].status = EndpointStatus::Active;
+
+                    let converter = if protocol == Protocol::Prometheus {
+                        Some(prometheus::PrometheusConverter::with_provenance(
+                            endpoints[idx].config.source.clone(),
+                            endpoints[idx].config.url.to_string(),
+                        ))
+                    } else {
+                        None
+                    };
+                    writers[idx] = Some(EndpointWriter {
+                        writer: tempfile_in(out_dir.clone()).expect("failed to create temp file"),
+                        converter,
+                    });
+                }
+            }
+        }
+
+        // ── Finalization ──────────────────────────────────────────────────
+
+        // Flush all writers
+        for ew in writers.iter_mut().flatten() {
+            let _ = ew.writer.flush();
+        }
+
+        let active_count = endpoints
+            .iter()
+            .filter(|ep| ep.first_success_ns.is_some())
+            .count();
+
+        if active_count == 0 {
+            eprintln!("error: no data was recorded from any endpoint");
+            std::process::exit(1);
+        }
+
+        match config.format {
+            Format::Raw => {
+                // For raw format, copy temp files to destinations
+                for (idx, ew) in writers.iter_mut().enumerate() {
+                    if let Some(ref mut ew) = ew {
+                        if endpoints[idx].first_success_ns.is_none() {
+                            continue;
+                        }
+                        let dest_path = if config.separate || active_count > 1 {
+                            separate_output_path(&config.output, &endpoints[idx].config.source)
+                        } else {
+                            config.output.clone()
+                        };
+                        let _ = ew.writer.rewind();
+                        match std::fs::File::create(&dest_path) {
+                            Ok(mut dest) => {
+                                if let Err(e) = std::io::copy(&mut ew.writer, &mut dest) {
+                                    eprintln!("error writing {}: {e}", dest_path.display());
+                                }
+                            }
+                            Err(e) => eprintln!("error creating {}: {e}", dest_path.display()),
+                        }
+                    }
+                }
+                debug!("finished (raw)");
+            }
+            Format::Parquet if config.separate => {
+                // Separate mode: convert each endpoint to its own parquet
+                info!("converting recordings to parquet (separate files)...");
+                for (idx, ew) in writers.iter_mut().enumerate() {
+                    if let Some(ref mut ew) = ew {
+                        if endpoints[idx].first_success_ns.is_none() {
+                            continue;
+                        }
+                        let dest_path =
+                            separate_output_path(&config.output, &endpoints[idx].config.source);
+                        match std::fs::File::create(&dest_path) {
+                            Ok(dest) => {
+                                let _ = ew.writer.rewind();
+                                let converter = build_parquet_converter(
+                                    &config,
+                                    &endpoints[idx],
+                                    &ew.converter,
+                                );
+                                if let Err(e) = converter
+                                    .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
+                                {
+                                    eprintln!(
+                                        "error saving parquet for {}: {e}",
+                                        endpoints[idx].config.source
+                                    );
+                                } else {
+                                    info!("wrote {}", dest_path.display());
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("error creating {}: {e}", dest_path.display());
+                            }
+                        }
+                    }
+                }
+            }
+            Format::Parquet => {
+                if active_count == 1 {
+                    // Single endpoint — direct conversion, no combine needed
+                    info!("converting the recording to parquet... please wait");
+                    let idx = endpoints
+                        .iter()
+                        .position(|ep| ep.first_success_ns.is_some())
+                        .unwrap();
+                    if let Some(ref mut ew) = writers[idx] {
+                        let _ = ew.writer.rewind();
+                        match std::fs::File::create(&config.output) {
+                            Ok(dest) => {
+                                let converter = build_parquet_converter(
+                                    &config,
+                                    &endpoints[idx],
+                                    &ew.converter,
+                                );
+                                if let Err(e) = converter
+                                    .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
+                                {
+                                    eprintln!("error saving parquet file: {e}");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("error creating output file: {e}");
+                            }
+                        }
+                    }
+                } else {
+                    // Multiple endpoints — convert each to temp parquet, then combine
+                    info!("converting and combining recordings to parquet... please wait");
+                    let mut temp_parquets: Vec<tempfile::NamedTempFile> = Vec::new();
+
+                    for (idx, ew) in writers.iter_mut().enumerate() {
+                        if let Some(ref mut ew) = ew {
+                            if endpoints[idx].first_success_ns.is_none() {
+                                continue;
+                            }
+                            let _ = ew.writer.rewind();
+
+                            let temp = match tempfile::NamedTempFile::new_in(&out_dir) {
+                                Ok(t) => t,
                                 Err(e) => {
-                                    error!("error serializing snapshot: {e}");
-                                    None
+                                    eprintln!("failed to create temp parquet file: {e}");
+                                    continue;
+                                }
+                            };
+
+                            match std::fs::File::create(temp.path()) {
+                                Ok(dest) => {
+                                    let converter = build_parquet_converter(
+                                        &config,
+                                        &endpoints[idx],
+                                        &ew.converter,
+                                    );
+                                    if let Err(e) = converter
+                                        .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
+                                    {
+                                        eprintln!(
+                                            "error converting {} to parquet: {e}",
+                                            endpoints[idx].config.source
+                                        );
+                                        continue;
+                                    }
+                                    temp_parquets.push(temp);
+                                }
+                                Err(e) => {
+                                    eprintln!("error creating temp parquet: {e}");
                                 }
                             }
                         }
-                        Err(_) => None,
                     }
-                } else {
-                    response.bytes().await.ok().map(|b| b.to_vec())
-                };
 
-                if let Some(body) = body {
-                    let latency = start.elapsed();
-
-                    if latency.as_nanos() >= config.interval.as_nanos() {
-                        error!("sampling latency ({} us) exceeded the sample interval. Samples will be missing", latency.as_micros());
-                   } else if latency.as_nanos() >= (3 * config.interval.as_nanos() / 4) {
-                        warn!("sampling latency ({} us) is more that 75% of the sample interval. Consider increasing the interval", latency.as_micros());
+                    if temp_parquets.len() < 2 {
+                        // Only one file survived — just move it
+                        if let Some(temp) = temp_parquets.into_iter().next() {
+                            if let Err(e) = std::fs::copy(temp.path(), &config.output) {
+                                eprintln!("error writing output: {e}");
+                            }
+                        } else {
+                            eprintln!("error: no data was recorded");
+                        }
                     } else {
-                        debug!("sampling latency: {} us", latency.as_micros());
+                        let paths: Vec<PathBuf> = temp_parquets
+                            .iter()
+                            .map(|t| t.path().to_path_buf())
+                            .collect();
+
+                        if let Err(e) =
+                            crate::parquet_tools::combine::combine_files(&paths, &config.output)
+                        {
+                            eprintln!("error combining parquet files: {e}");
+                        } else {
+                            info!("wrote combined recording to {}", config.output.display());
+                        }
                     }
-
-                    if let Err(e) = writer.write_all(&body) {
-                        eprintln!("error writing to temporary file: {e}");
-                        std::process::exit(1);
-                    }
-                } else {
-                    eprintln!("failed to read response. terminating early");
-                    break;
-                }
-            } else {
-                eprintln!("failed to get metrics. terminating early");
-                break;
-            }
-        }
-
-        debug!("flushing writer");
-        let _ = writer.flush();
-
-        // Collect Prometheus descriptions accumulated during recording
-        let prom_descriptions = converter
-            .as_ref()
-            .filter(|c| !c.descriptions().is_empty())
-            .and_then(|c| serde_json::to_string(c.descriptions()).ok());
-
-        // handle any output format specific transforms
-        match config.format {
-            Format::Raw => {
-                debug!("finished");
-            }
-            Format::Parquet => {
-                info!("converting the recording to parquet... please wait");
-
-                let _ = writer.rewind();
-
-                let mut converter = MsgpackToParquet::with_options(ParquetOptions::new())
-                    .metadata(
-                        "sampling_interval_ms".to_string(),
-                        config.interval.as_millis().to_string(),
-                    );
-
-                for (key, value) in &config.metadata {
-                    converter = converter.metadata(key.clone(), value.clone());
-                }
-
-                if let Some(ref json) = agent_systeminfo {
-                    converter = converter.metadata("systeminfo".to_string(), json.clone());
-                }
-
-                let desc_json = descriptions.or(prom_descriptions);
-                if let Some(ref json) = desc_json {
-                    converter = converter.metadata("descriptions".to_string(), json.clone());
-                }
-
-                if let Err(e) = converter.convert_file_handle(writer, destination.unwrap())
-                {
-                    eprintln!("error saving parquet file: {e}");
+                    // temp files cleaned up on drop
                 }
             }
         }
-    })
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_separate_output_path() {
+        let base = PathBuf::from("/tmp/recording.parquet");
+        assert_eq!(
+            separate_output_path(&base, "rezolus"),
+            PathBuf::from("/tmp/recording_rezolus.parquet")
+        );
+    }
+
+    #[test]
+    fn test_separate_output_path_no_extension() {
+        let base = PathBuf::from("/tmp/recording");
+        assert_eq!(
+            separate_output_path(&base, "vllm"),
+            PathBuf::from("/tmp/recording_vllm")
+        );
+    }
+
+    #[test]
+    fn test_output_dir() {
+        assert_eq!(
+            output_dir(&PathBuf::from("/tmp/out.parquet")),
+            PathBuf::from("/tmp")
+        );
+        assert_eq!(
+            output_dir(&PathBuf::from("out.parquet")),
+            PathBuf::from(".")
+        );
+    }
 }

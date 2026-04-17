@@ -1,5 +1,5 @@
 mod annotate;
-mod combine;
+pub(crate) mod combine;
 mod filter;
 mod metadata;
 
