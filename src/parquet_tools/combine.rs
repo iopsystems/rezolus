@@ -33,10 +33,9 @@ pub(crate) fn combine_files(
     paths: &[PathBuf],
     output: &PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let inputs = load_inputs(paths)?;
-    validate_sources(&inputs)?;
+    let mut inputs = load_inputs(paths)?;
     validate_sampling_interval(&inputs)?;
-    validate_no_column_conflicts(&inputs)?;
+    validate_labels(&mut inputs)?;
     validate_time_overlap(&inputs)?;
     combine_and_write(&inputs, output, false)
 }
