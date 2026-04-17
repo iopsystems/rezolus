@@ -40,6 +40,14 @@ const ViewerApi = {
         return selection ? JSON.parse(selection) : null;
     },
 
+    async getFileMetadata() {
+        ensureViewer();
+        if (typeof viewer.file_metadata_json === 'function') {
+            return JSON.parse(viewer.file_metadata_json());
+        }
+        return {};
+    },
+
     async getSection(section) {
         if (!viewerInfo) throw new Error('Viewer info not initialized');
         const data = await generateSectionData(section, viewerInfo);

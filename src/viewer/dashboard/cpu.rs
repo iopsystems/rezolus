@@ -12,7 +12,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // Average CPU busy percentage across all cores
     utilization.plot_promql(
         PlotOpts::counter("Busy %", "busy-pct", Unit::Percentage).percentage_range(),
-        "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
+        "sum(irate(cpu_usage[5m])) / sum(cpu_cores) / 1000000000".to_string(),
     );
 
     // Per-CPU busy percentage heatmap
@@ -34,7 +34,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range(),
-            format!("sum(irate(cpu_usage{{state=\"{state}\"}}[5m])) / cpu_cores / 1000000000"),
+            format!("sum(irate(cpu_usage{{state=\"{state}\"}}[5m])) / sum(cpu_cores) / 1000000000"),
         );
 
         // Per-CPU for this state
@@ -74,7 +74,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // Complex calculation: instructions / cycles * tsc * aperf / mperf / 1e9 / cores
     performance.plot_promql(
         PlotOpts::counter("Instructions per Nanosecond (IPNS)", "ipns", Unit::Count),
-        "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores".to_string(),
+        "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / sum(cpu_cores)".to_string(),
     );
 
     // Per-CPU IPNS
@@ -100,7 +100,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // CPU Frequency
     performance.plot_promql(
         PlotOpts::counter("Frequency", "frequency", Unit::Frequency),
-        "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores".to_string(),
+        "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / sum(cpu_cores)".to_string(),
     );
 
     // Per-CPU Frequency

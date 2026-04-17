@@ -127,6 +127,19 @@ impl Viewer {
         self.file_metadata.get("selection").cloned()
     }
 
+    /// Returns all file-level metadata as a JSON object, mirroring the
+    /// server's /file_metadata endpoint.  Values that are valid JSON are
+    /// embedded as-is; everything else becomes a JSON string.
+    pub fn file_metadata_json(&self) -> String {
+        let mut map = serde_json::Map::new();
+        for (key, val) in &self.file_metadata {
+            let json_val = serde_json::from_str(val)
+                .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
+            map.insert(key.clone(), json_val);
+        }
+        serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".into())
+    }
+
     /// Execute a PromQL range query. Returns JSON compatible with
     /// /api/v1/query_range response format.
     pub fn query_range(&self, query: &str, start: f64, end: f64, step: f64) -> String {

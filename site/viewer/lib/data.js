@@ -10,4 +10,6 @@ export {
     processDashboardData,
     setStepOverride,
     getStepOverride,
+    setSelectedNode,
+    setSelectedInstance,
 } from './data_base.js';
