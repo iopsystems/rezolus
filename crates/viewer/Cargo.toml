@@ -1,0 +1,22 @@
+[package]
+name = "viewer"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Workspace declares metriken-query with default-features = false. The browser
+# doesn't need the server-side http or ingest features, so we inherit as-is.
+metriken-query.workspace = true
+wasm-bindgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+console_error_panic_hook.workspace = true
+# Force zstd to disable x86 asm for wasm32 builds
+zstd-sys = { version = "2", default-features = false, features = ["no_asm"] }

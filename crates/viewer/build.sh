@@ -2,8 +2,8 @@
 # Build the WASM viewer and place the output in site/viewer/pkg/ so it can be
 # loaded by the static site frontend (imports `../pkg/wasm_viewer.js`).
 #
-# Requires `wasm-pack` and (on macOS) Homebrew LLVM for compiling zstd to
-# wasm32.
+# Requires `wasm-pack` (>= 0.13 for --profile support) and (on macOS) Homebrew
+# LLVM for compiling zstd to wasm32.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,5 +20,5 @@ wasm-pack build \
     --target web \
     --out-dir "$OUT_DIR" \
     --out-name wasm_viewer \
-    --release \
+    --profile wasm-release \
     "$@"

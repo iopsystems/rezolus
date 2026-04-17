@@ -1,4 +1,4 @@
-# rezolus-webview
+# viewer
 
 A Rust library compiled to WebAssembly that powers the static Rezolus viewer at
 [site/viewer/](../../site/viewer/). Provides a PromQL query engine over Rezolus
