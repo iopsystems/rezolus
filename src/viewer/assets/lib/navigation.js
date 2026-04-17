@@ -49,6 +49,7 @@ const createMainComponent = ({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo,
+    getHasFileMetadata,
     buildAttrs,
 }) => ({
     view({
@@ -67,6 +68,7 @@ const createMainComponent = ({
                     sections,
                     sectionResponseCache,
                     hasSystemInfo: !!getHasSystemInfo(),
+                    hasFileMetadata: !!(getHasFileMetadata && getHasFileMetadata()),
                 }),
                 m(SectionContent, {
                     section: activeSection,

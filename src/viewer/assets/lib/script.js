@@ -10,7 +10,7 @@ import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
-import { createSystemInfoView, renderCgroupSection } from './section_views.js';
+import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 import { initTheme } from './theme.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
@@ -283,6 +283,13 @@ const SectionContent = {
             ]);
         }
 
+        // Special handling for Metadata
+        if (sectionName === 'Metadata') {
+            return m('div#section-content', [
+                m(MetadataView, { data: fileMetadata }),
+            ]);
+        }
+
         // Special handling for Selection
         if (sectionName === 'Selection') {
             const sectionMeta = getCachedSectionMeta(interval);
@@ -388,12 +395,14 @@ Main = createMainComponent({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo: () => systemInfoData,
+    getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
     buildAttrs: topNavAttrs,
 });
 const SystemInfoView = createSystemInfoView({
     CpuTopology,
     formatBytes: formatSize,
 });
+const MetadataView = createMetadataView();
 
 // Active cgroup selection pattern — used by processDashboardData during live refresh
 // to substitute __SELECTED_CGROUPS__ placeholders in cgroup queries.
@@ -584,6 +593,7 @@ const startLiveRefresh = () => {
 
 // Synthetic section object for System Info (not a backend dashboard section)
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
+const metadataSection = { name: 'Metadata', route: '/metadata' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
 
@@ -749,6 +759,11 @@ const bootstrap = async () => {
                 if (params.section === 'systeminfo') {
                     bootstrapCacheIfNeeded();
                     return buildClientOnlySectionView(systemInfoSection);
+                }
+
+                if (params.section === 'metadata') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(metadataSection);
                 }
 
                 // Selection is a client-only section — no backend data

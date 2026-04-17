@@ -118,6 +118,136 @@ const renderNodeInfo = (nodeName, info, CpuTopology, formatBytes) => {
     ]);
 };
 
+const createMetadataView = () => {
+    let rawExpanded = false;
+    let descFilter = '';
+
+    return {
+        view({ attrs }) {
+            const meta = attrs.data;
+            if (!meta || Object.keys(meta).length === 0) {
+                return m('div.metadata-section', [
+                    m('h1.section-title', 'Metadata'),
+                    m('p.systeminfo-empty', 'No file metadata available.'),
+                ]);
+            }
+
+            const psm = meta.per_source_metadata || {};
+            const descriptions = meta.descriptions || {};
+            const descEntries = Object.entries(descriptions)
+                .filter(([k]) => !descFilter || k.toLowerCase().includes(descFilter.toLowerCase()))
+                .sort(([a], [b]) => a.localeCompare(b));
+
+            const serviceQueries = [];
+            for (const [key, value] of Object.entries(psm)) {
+                if (value.service_queries) {
+                    serviceQueries.push({ source: key, queries: value.service_queries });
+                }
+            }
+
+            if (meta.service_queries && serviceQueries.length === 0) {
+                serviceQueries.push({ source: meta.source || 'unknown', queries: meta.service_queries });
+            }
+
+            return m('div.metadata-section', [
+                m('h1.section-title', 'Metadata'),
+
+                // Recording Info
+                m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', 'Recording Info'),
+                    m('table.sysinfo-table', m('tbody', [
+                        meta.source && m('tr', [
+                            m('td.sysinfo-label', 'Source'),
+                            m('td.sysinfo-value', Array.isArray(meta.source) ? meta.source.join(', ') : String(meta.source)),
+                        ]),
+                        meta.sampling_interval_ms && m('tr', [
+                            m('td.sysinfo-label', 'Sampling Interval'),
+                            m('td.sysinfo-value', `${meta.sampling_interval_ms} ms`),
+                        ]),
+                        meta.version && m('tr', [
+                            m('td.sysinfo-label', 'Version'),
+                            m('td.sysinfo-value', String(meta.version)),
+                        ]),
+                    ].filter(Boolean))),
+                ]),
+
+                // Sources (from per_source_metadata)
+                Object.keys(psm).length > 0 && m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', 'Sources'),
+                    m('table.sysinfo-table', [
+                        m('thead', m('tr', [
+                            m('th', 'Key'),
+                            m('th', 'Role'),
+                            m('th', 'Version'),
+                            m('th', 'Node'),
+                            m('th', 'Instance'),
+                        ])),
+                        m('tbody', Object.entries(psm).map(([key, val]) =>
+                            m('tr', [
+                                m('td', key),
+                                m('td', val.role || ''),
+                                m('td', val.version || ''),
+                                m('td', val.node || ''),
+                                m('td', val.instance || ''),
+                            ])
+                        )),
+                    ]),
+                ]),
+
+                // Descriptions
+                descEntries.length > 0 && m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', `Metric Descriptions (${descEntries.length})`),
+                    m('input.metadata-search', {
+                        placeholder: 'Filter metrics...',
+                        value: descFilter,
+                        oninput: (e) => { descFilter = e.target.value; },
+                    }),
+                    m('div.metadata-desc-list', [
+                        m('table.sysinfo-table', m('tbody',
+                            descEntries.slice(0, 200).map(([name, desc]) =>
+                                m('tr', [
+                                    m('td.sysinfo-label', name),
+                                    m('td.sysinfo-value', String(desc)),
+                                ])
+                            )
+                        )),
+                        descEntries.length > 200 && m('p.fg-secondary',
+                            `Showing 200 of ${descEntries.length}. Use filter to narrow.`
+                        ),
+                    ]),
+                ]),
+
+                // Service Queries
+                serviceQueries.length > 0 && m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', 'Service Queries'),
+                    ...serviceQueries.map(sq => [
+                        m('h3', sq.source),
+                        sq.queries.kpis && m('table.sysinfo-table', [
+                            m('thead', m('tr', [m('th', 'Title'), m('th', 'Type'), m('th', 'Query')])),
+                            m('tbody', sq.queries.kpis.map(kpi =>
+                                m('tr', [
+                                    m('td', kpi.title || ''),
+                                    m('td', kpi.metric_type || kpi.type || ''),
+                                    m('td', m('code', kpi.query || '')),
+                                ])
+                            )),
+                        ]),
+                    ]),
+                ]),
+
+                // Raw Metadata
+                m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', {
+                        onclick: () => { rawExpanded = !rawExpanded; },
+                        style: { cursor: 'pointer' },
+                    }, [rawExpanded ? '\u25BE' : '\u25B8', ' Raw Metadata']),
+                    rawExpanded && m('pre.sysinfo-json', JSON.stringify(meta, null, 2)),
+                ]),
+            ]);
+        },
+    };
+};
+
 const renderCgroupSection = ({
     attrs,
     titleText,
@@ -212,4 +342,4 @@ const renderCgroupSection = ({
     ]);
 };
 
-export { createSystemInfoView, renderCgroupSection };
+export { createSystemInfoView, createMetadataView, renderCgroupSection };

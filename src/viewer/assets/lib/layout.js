@@ -348,6 +348,21 @@ const Sidebar = {
                     [m('span.arrow', '→'), ' System Info'],
                 ),
             ],
+
+            // Metadata link (below System Info)
+            attrs.hasFileMetadata && [
+                m(
+                    m.route.Link,
+                    {
+                        class:
+                            attrs.activeSection?.route === '/metadata'
+                                ? 'selected metadata-link'
+                                : 'metadata-link',
+                        href: '/metadata',
+                    },
+                    [m('span.arrow', '→'), ' Metadata'],
+                ),
+            ],
         ])];
     },
 };
