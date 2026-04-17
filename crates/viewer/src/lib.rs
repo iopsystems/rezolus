@@ -98,9 +98,21 @@ impl Viewer {
             filename: tsdb.filename().to_string(),
             min_time,
             max_time,
-            counter_names: tsdb.counter_names().into_iter().map(|s| s.to_string()).collect(),
-            gauge_names: tsdb.gauge_names().into_iter().map(|s| s.to_string()).collect(),
-            histogram_names: tsdb.histogram_names().into_iter().map(|s| s.to_string()).collect(),
+            counter_names: tsdb
+                .counter_names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+            gauge_names: tsdb
+                .gauge_names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
+            histogram_names: tsdb
+                .histogram_names()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect(),
         })
         .unwrap()
     }

@@ -1,3 +1,7 @@
+# Standalone workspace root so xtask keeps its own lockfile and stays out of
+# the main rezolus workspace build graph.
+[workspace]
+
 [package]
 name = "xtask"
 version = "0.1.0"
