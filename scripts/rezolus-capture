@@ -10,6 +10,7 @@ MONITOR_PID=""
 ENDPOINTS=()
 SOURCES=()
 INTERVAL="1s"
+REZOLUS="${REZOLUS:-rezolus}"
 AGENT="http://127.0.0.1:4241"
 AGENT_CONFIG="config/agent.toml"
 OUTPUT_DIR="."
@@ -52,6 +53,7 @@ OPTIONS:
     --output-dir <DIR>          Output directory for parquet files (default: .)
     --viewer-listen <ADDR>      Viewer listen address (default: 127.0.0.1:0)
     --no-viewer                 Skip launching the viewer after capture
+    --rezolus <PATH>            Path to the rezolus binary (default: rezolus)
     -h, --help                  Show this help text
 
 EXAMPLES:
@@ -156,6 +158,10 @@ while [ $# -gt 0 ]; do
         --no-viewer)
             NO_VIEWER=true; shift
             ;;
+        --rezolus)
+            [ -n "${2:-}" ] || error "--rezolus requires a value"
+            REZOLUS="$2"; shift 2
+            ;;
         *)
             error "unexpected argument '$1'"
             ;;
@@ -210,7 +216,7 @@ else
   Either run this script with sudo:
     sudo $PROGRAM $*
   Or start the agent separately:
-    sudo rezolus $AGENT_CONFIG"
+    sudo $REZOLUS $AGENT_CONFIG"
     fi
 
     # Check for the config file
@@ -220,7 +226,7 @@ else
     fi
 
     # Start the agent in the background
-    rezolus "$AGENT_CONFIG" &
+    "$REZOLUS" "$AGENT_CONFIG" &
     AGENT_PID=$!
     STARTED_AGENT=true
 
@@ -305,7 +311,7 @@ else
     echo "Recording system metrics while process $MONITOR_PID is running (interval: $INTERVAL)..."
 fi
 
-rezolus record "$AGENT" "$SYSTEM_PARQUET" \
+"$REZOLUS" record "$AGENT" "$SYSTEM_PARQUET" \
     "${DURATION_ARGS[@]}" -i "$INTERVAL" -m source=rezolus &
 RECORDER_PIDS+=($!)
 
@@ -314,7 +320,7 @@ for i in "${!ENDPOINTS[@]}"; do
     tmp="$(mktemp "/tmp/service-${SOURCES[$i]}-XXXXXX.parquet")"
     SERVICE_PARQUETS+=("$tmp")
     echo "Recording service metrics from ${ENDPOINTS[$i]} (source: ${SOURCES[$i]})..."
-    rezolus record "${ENDPOINTS[$i]}" "$tmp" \
+    "$REZOLUS" record "${ENDPOINTS[$i]}" "$tmp" \
         "${DURATION_ARGS[@]}" -i "$INTERVAL" -m "source=${SOURCES[$i]}" &
     RECORDER_PIDS+=($!)
 done
@@ -393,7 +399,7 @@ elif [ ${#COMBINE_FILES[@]} -eq 1 ]; then
     echo "Parquet saved to $OUTPUT_FILE"
 else
     echo "Combining ${#COMBINE_FILES[@]} recordings..."
-    rezolus parquet combine "${COMBINE_FILES[@]}" -o "$OUTPUT_FILE"
+    "$REZOLUS" parquet combine "${COMBINE_FILES[@]}" -o "$OUTPUT_FILE"
     echo "Combined parquet saved to $OUTPUT_FILE"
 fi
 
@@ -407,7 +413,7 @@ done
 # Show metadata summary
 echo ""
 echo "Recording metadata:"
-rezolus parquet metadata -i "$OUTPUT_FILE" 2>/dev/null || true
+"$REZOLUS" parquet metadata -i "$OUTPUT_FILE" 2>/dev/null || true
 echo ""
 
 # Launch viewer
@@ -415,11 +421,11 @@ if ! $NO_VIEWER; then
     echo "Launching viewer at http://$VIEWER_LISTEN ..."
     if $STARTED_AGENT; then
         # Run without exec so the EXIT trap can stop the agent we started
-        rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+        "$REZOLUS" view "$OUTPUT_FILE" "$VIEWER_LISTEN"
     else
-        exec rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+        exec "$REZOLUS" view "$OUTPUT_FILE" "$VIEWER_LISTEN"
     fi
 else
     echo "Done. View the recording with:"
-    echo "  rezolus view $OUTPUT_FILE"
+    echo "  $REZOLUS view $OUTPUT_FILE"
 fi

@@ -29,6 +29,82 @@ const defaultGetMetadata = () => ViewerApi.getMetadata();
 const defaultQueryRange = (query, start, end, step) =>
     ViewerApi.queryRange(query, start, end, step);
 
+// Module-level state for label injection
+let _selectedNode = null;
+let _selectedInstances = {};  // { serviceName: instanceId | null }
+
+const setSelectedNode = (node) => { _selectedNode = node; };
+const getSelectedNode = () => _selectedNode;
+const setSelectedInstance = (serviceName, instanceId) => {
+    _selectedInstances[serviceName] = instanceId;
+};
+const getSelectedInstance = (serviceName) => _selectedInstances[serviceName] || null;
+
+// Inject a label selector into all metric selectors in a query.
+const PROMQL_KEYWORDS = new Set([
+    'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
+    'bool', 'sum', 'avg', 'min', 'max', 'count', 'rate', 'irate', 'increase',
+    'histogram_percentiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset',
+    'abs', 'absent', 'ceil', 'floor', 'round', 'sqrt', 'exp', 'ln', 'log2',
+    'log10', 'clamp', 'clamp_max', 'clamp_min', 'delta', 'deriv', 'idelta',
+    'predict_linear', 'resets', 'changes', 'label_replace', 'label_join',
+    'sort', 'sort_desc', 'time', 'timestamp', 'vector', 'scalar', 'sgn',
+    'stddev', 'stdvar', 'quantile', 'count_values', 'group',
+]);
+
+// Inject a label selector into all metric references in a PromQL query.
+// Handles three forms:
+//   metric{existing}  → metric{existing,label="value"}
+//   metric[5m]        → metric{label="value"}[5m]
+//   metric            → metric{label="value"}   (bare, in expressions)
+const injectLabel = (query, labelName, labelValue) => {
+    if (!labelName || !labelValue) return query;
+    const selector = `${labelName}="${labelValue}"`;
+
+    // Single-pass regex that matches either:
+    //   (1) identifier{...}  — metric with existing label selector
+    //   (2) identifier       — bare identifier (metric, keyword, or other)
+    // We handle both in one pass to avoid offset issues.
+    return query.replace(/\b([a-z_]\w*)(\{[^}]*\})?/gi, (match, name, braces, offset) => {
+        // Skip keywords (functions, aggregation operators, modifiers)
+        if (PROMQL_KEYWORDS.has(name)) return match;
+
+        // Skip if starts with digit (not a valid metric name)
+        if (/^\d/.test(name)) return match;
+
+        // If has braces: insert selector before closing brace
+        if (braces) {
+            return `${name}{${braces.slice(1, -1)},${selector}}`;
+        }
+
+        // Bare identifier — check context to decide if it's a metric name
+
+        // Skip short tokens without underscores — likely time units (m, s, h, d),
+        // PromQL modifiers, or label fragments, not metric names
+        if (name.length < 3 && !name.includes('_')) return match;
+
+        // Look ahead: if followed by '(' it's a function call, skip
+        const after = query.substring(offset + match.length);
+        if (/^\s*\(/.test(after)) return match;
+
+        // Check if inside braces (label name/value) or square brackets (duration)
+        const before = query.substring(0, offset);
+        const lastOpenBrace = before.lastIndexOf('{');
+        const lastCloseBrace = before.lastIndexOf('}');
+        if (lastOpenBrace > lastCloseBrace) return match;
+        const lastOpenBracket = before.lastIndexOf('[');
+        const lastCloseBracket = before.lastIndexOf(']');
+        if (lastOpenBracket > lastCloseBracket) return match;
+
+        // Check if inside a string literal
+        const quotesBefore = (before.match(/"/g) || []).length;
+        if (quotesBefore % 2 !== 0) return match;
+
+        // It's a bare metric name — add label selector
+        return `${name}{${selector}}`;
+    });
+};
+
 const substituteCgroupPattern = (query, pattern) => {
     query = query.replace(/,?\s*name!~"[^"]*"/g, '');
     query = query.replace(/\{\s*\}/g, '');
@@ -153,6 +229,9 @@ const applyResultToPlot = (plot, result) => {
             } else {
                 plot.data = [];
             }
+            // Line-style plots have no series legend; clear any stale entries
+            // from a prior multi-series render so legends don't "ghost".
+            plot.series_names = [];
         }
     } else {
         plot.data = [];
@@ -191,7 +270,7 @@ const createDataApi = ({
         return queryRange(query, start, maxTime, step);
     };
 
-    const processDashboardData = async (data, activeCgroupPattern) => {
+    const processDashboardData = async (data, activeCgroupPattern, sectionRoute) => {
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
 
@@ -233,6 +312,19 @@ const createDataApi = ({
                             continue;
                         }
                     }
+                    // Inject node label filter for non-service sections only.
+                    if (_selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
+                        queryToRun = injectLabel(queryToRun, 'node', _selectedNode);
+                    }
+
+                    // Inject instance label filter when a specific instance is selected
+                    if (data.metadata?.service_name) {
+                        const inst = _selectedInstances[data.metadata.service_name];
+                        if (inst) {
+                            queryToRun = injectLabel(queryToRun, 'instance', inst);
+                        }
+                    }
+
                     queryPlots.push({ plot, query: queryToRun });
                 }
             }
@@ -353,4 +445,9 @@ export {
     createDataApi,
     setStepOverride,
     getStepOverride,
+    setSelectedNode,
+    getSelectedNode,
+    setSelectedInstance,
+    getSelectedInstance,
+    injectLabel,
 };

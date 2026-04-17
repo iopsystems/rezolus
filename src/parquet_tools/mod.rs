@@ -1,5 +1,5 @@
 mod annotate;
-mod combine;
+pub(crate) mod combine;
 mod filter;
 mod metadata;
 
@@ -59,10 +59,10 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("combine")
-                .about("Combine a rezolus parquet file with service-level parquet files")
+                .about("Combine multiple parquet files (multi-node rezolus and/or multi-instance services)")
                 .arg(
                     clap::Arg::new("FILES")
-                        .help("Input parquet files (one rezolus + one or more service files)")
+                        .help("Input parquet files (rezolus agent and/or service files)")
                         .value_parser(value_parser!(PathBuf))
                         .required(true)
                         .num_args(2..)
@@ -81,6 +81,12 @@ pub fn command() -> Command {
                         .long("bypass-time-check")
                         .help("Skip the timestamp alignment quality check")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("pinned")
+                        .long("pinned")
+                        .help("Default rezolus node to display in the viewer (node name or filename)")
+                        .value_parser(clap::value_parser!(String)),
                 ),
         )
         .subcommand(

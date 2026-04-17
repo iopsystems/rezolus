@@ -10,7 +10,6 @@ use tracing::{debug, error, info, warn};
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -109,7 +108,7 @@ fn main() {
             parquet_tools::run(args.clone());
         }
         Some(("record", args)) => {
-            let config = recorder::Config::try_from(args.clone()).expect("failed to configure");
+            let config = recorder::RecordingConfig::from_args(args).expect("failed to configure");
 
             recorder::run(config)
         }

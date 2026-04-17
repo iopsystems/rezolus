@@ -4,13 +4,13 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance } from './data.js';
 import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
-import { createSystemInfoView, renderCgroupSection } from './section_views.js';
+import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 import { initTheme } from './theme.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
@@ -31,6 +31,20 @@ let systemInfoData = null;
 // File checksum (SHA-256) — fetched once at startup for parquet identity
 let fileChecksum = null;
 
+// File-level metadata — fetched once at startup
+let fileMetadata = null;
+
+// Parsed node list and per-source metadata from combined files
+let nodeList = [];           // e.g. ["web01", "web02"]
+let perSourceMeta = {};      // parsed per_source_metadata object
+let selectedNode = null;     // currently selected node name (null = no multi-node)
+
+// Per-service instance lists: { "vllm": [{id: "0", node: "gpu01"}, ...], ... }
+let serviceInstances = {};
+
+// Selected instance per service: { "vllm": null, "llm-perf": "0" }
+let selectedInstances = {};
+
 // Transport state for live mode (Wireshark-style)
 // Starts recording — data flows from agent into TSDB and UI refreshes
 let recording = true;
@@ -38,10 +52,11 @@ let recording = true;
 // Fetch metadata, system info, and selection in parallel.
 // Used by both bootstrap() and uploadParquet().
 const fetchBackendState = async () => {
-    const [metaResult, sysResult, selResult] = await Promise.allSettled([
+    const [metaResult, sysResult, selResult, fmResult] = await Promise.allSettled([
         ViewerApi.getMetadata(),
         ViewerApi.getSystemInfo(),
         ViewerApi.getSelection(),
+        ViewerApi.getFileMetadata(),
     ]);
     if (metaResult.status === 'fulfilled') {
         const r = metaResult.value;
@@ -58,6 +73,66 @@ const fetchBackendState = async () => {
             loadPayloadIntoStore(reportStore, data);
             reportStore.loadedFrom = 'embedded report';
         }
+    }
+    if (fmResult.status === 'fulfilled') {
+        fileMetadata = fmResult.value;
+        parseNodeList();
+    }
+};
+
+const parseNodeList = () => {
+    nodeList = [];
+    perSourceMeta = {};
+    selectedNode = null;
+
+    if (!fileMetadata || !fileMetadata.per_source_metadata) return;
+
+    perSourceMeta = fileMetadata.per_source_metadata;
+    const nodes = [];
+    const rezGroup = perSourceMeta.rezolus;
+    if (rezGroup && typeof rezGroup === 'object') {
+        for (const [subKey, value] of Object.entries(rezGroup)) {
+            const nodeName = value.node || subKey;
+            if (!nodes.includes(nodeName)) {
+                nodes.push(nodeName);
+            }
+        }
+    }
+    nodeList = nodes;
+    if (nodeList.length > 0) {
+        const pinned = fileMetadata?.pinned_node;
+        const defaultNode = (pinned && nodeList.includes(pinned)) ? pinned : nodeList[0];
+        selectedNode = defaultNode;
+        setSelectedNode(defaultNode);
+    }
+
+    parseServiceInstances();
+};
+
+const parseServiceInstances = () => {
+    serviceInstances = {};
+    selectedInstances = {};
+
+    if (!perSourceMeta) return;
+
+    for (const [source, group] of Object.entries(perSourceMeta)) {
+        if (source === 'rezolus') continue;
+        if (!group || typeof group !== 'object') continue;
+
+        for (const [subKey, value] of Object.entries(group)) {
+            const instanceId = value.instance || subKey;
+            if (!serviceInstances[source]) {
+                serviceInstances[source] = [];
+            }
+            serviceInstances[source].push({
+                id: instanceId,
+                node: value.node || null,
+            });
+        }
+    }
+
+    for (const source of Object.keys(serviceInstances)) {
+        selectedInstances[source] = null;
     }
 };
 
@@ -97,6 +172,43 @@ const clearViewerCaches = () => {
     chartsState.clear();
 };
 
+const changeNode = async (nodeName) => {
+    selectedNode = nodeName;
+    setSelectedNode(nodeName);
+    clearViewerCaches();
+    m.redraw(); // show loading state immediately
+    await reloadCurrentSection();
+};
+
+const changeInstance = async (serviceName, instanceId) => {
+    selectedInstances[serviceName] = instanceId;
+    setSelectedInstance(serviceName, instanceId);
+    const svcKey = `service/${serviceName}`;
+    delete sectionResponseCache[svcKey];
+    m.redraw();
+    await reloadCurrentSection();
+};
+
+/// Re-fetch and re-process the current section's data, then redraw.
+const reloadCurrentSection = async () => {
+    const currentRoute = m.route.get();
+    if (!currentRoute) return;
+    const section = currentRoute.replace(/^\//, '');
+    if (!section) return;
+
+    try {
+        const data = await ViewerApi.getSection(section);
+        const processedData = await processDashboardData(data, activeCgroupPattern, currentRoute);
+        sectionResponseCache[section] = processedData;
+        if (heatmapEnabled && !heatmapDataCache.has(currentRoute)) {
+            fetchSectionHeatmapData(currentRoute, processedData.groups);
+        }
+        m.redraw();
+    } catch (e) {
+        console.error('Failed to reload section after selection change:', e);
+    }
+};
+
 const uploadParquet = async (file) => {
     try {
         await ViewerApi.uploadParquet(file);
@@ -112,7 +224,7 @@ const uploadParquet = async (file) => {
         // (the route guard returns a never-resolving promise), so we must
         // populate the cache before triggering a redraw.
         const data = await ViewerApi.getSection('overview');
-        const processed = await processDashboardData(data, null);
+        const processed = await processDashboardData(data, null, '/overview');
         sectionResponseCache['overview'] = processed;
         if (processed.sections) preloadSections(processed.sections);
         // Navigate to overview if on a different route; otherwise just redraw.
@@ -139,6 +251,10 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onUploadParquet: uploadParquet,
     granularity: currentGranularity,
     onGranularityChange: changeGranularity,
+    nodeList,
+    selectedNode,
+    perSourceMeta,
+    onNodeChange: changeNode,
     extra,
 });
 
@@ -192,6 +308,13 @@ const SectionContent = {
             ]);
         }
 
+        // Special handling for Metadata
+        if (sectionName === 'Metadata') {
+            return m('div#section-content', [
+                m(MetadataView, { data: fileMetadata }),
+            ]);
+        }
+
         // Special handling for Selection
         if (sectionName === 'Selection') {
             const sectionMeta = getCachedSectionMeta(interval);
@@ -222,7 +345,12 @@ const SectionContent = {
 
         // Special handling for Service extension
         if (sectionRoute.startsWith('/service/')) {
-            return renderServiceSection(attrs, Group, sectionRoute, sectionName, interval);
+            const svcName = sectionRoute.replace('/service/', '');
+            return renderServiceSection(attrs, Group, sectionRoute, sectionName, interval, {
+                instances: serviceInstances[svcName] || [],
+                selectedInstance: selectedInstances[svcName] || null,
+                onInstanceChange: (id) => changeInstance(svcName, id),
+            });
         }
 
         const { withData } = countCharts(attrs.groups);
@@ -292,12 +420,14 @@ Main = createMainComponent({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo: () => systemInfoData,
+    getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
     buildAttrs: topNavAttrs,
 });
 const SystemInfoView = createSystemInfoView({
     CpuTopology,
     formatBytes: formatSize,
 });
+const MetadataView = createMetadataView();
 
 // Active cgroup selection pattern — used by processDashboardData during live refresh
 // to substitute __SELECTED_CGROUPS__ placeholders in cgroup queries.
@@ -400,7 +530,7 @@ const changeGranularity = async (step) => {
 
     try {
         const data = await ViewerApi.getSection(section);
-        const processed = await processDashboardData(data, activeCgroupPattern);
+        const processed = await processDashboardData(data, activeCgroupPattern, `/${section}`);
         sectionResponseCache[section] = processed;
         if (processed.sections) preloadSections(processed.sections);
         m.redraw();
@@ -420,7 +550,7 @@ document.addEventListener('dblclick', () => {
 const loadSection = async (section) => {
     if (sectionResponseCache[section]) return sectionResponseCache[section];
     const data = await ViewerApi.getSection(section);
-    const processedData = await processDashboardData(data, activeCgroupPattern);
+    const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
     sectionResponseCache[section] = processedData;
     return processedData;
 };
@@ -466,7 +596,7 @@ const refreshCurrentSection = async () => {
         const data = await ViewerApi.getSection(section, true);
 
         // Run regular queries and histogram heatmap queries concurrently
-        const promises = [processDashboardData(data, activeCgroupPattern)];
+        const promises = [processDashboardData(data, activeCgroupPattern, currentRoute)];
         if (heatmapEnabled) {
             promises.push(fetchSectionHeatmapData(currentRoute, data.groups));
         }
@@ -488,6 +618,7 @@ const startLiveRefresh = () => {
 
 // Synthetic section object for System Info (not a backend dashboard section)
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
+const metadataSection = { name: 'Metadata', route: '/metadata' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
 
@@ -611,7 +742,7 @@ const bootstrap = async () => {
 
                 return ViewerApi.getSection(sectionKey)
                     .then(async (data) => {
-                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        const processedData = await processDashboardData(data, activeCgroupPattern, `/${sectionKey}`);
                         sectionResponseCache[sectionKey] = processedData;
                         return makeSingleChartView();
                     });
@@ -655,6 +786,11 @@ const bootstrap = async () => {
                     return buildClientOnlySectionView(systemInfoSection);
                 }
 
+                if (params.section === 'metadata') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(metadataSection);
+                }
+
                 // Selection is a client-only section — no backend data
                 if (params.section === 'selection') {
                     bootstrapCacheIfNeeded();
@@ -692,7 +828,7 @@ const bootstrap = async () => {
                     .then(async (data) => {
 
                         // Process PromQL queries for this section
-                        const processedData = await processDashboardData(data, activeCgroupPattern);
+                        const processedData = await processDashboardData(data, activeCgroupPattern, requestedPath);
                         sectionResponseCache[params.section] = processedData;
 
                         // Fetch heatmap data if globally enabled and not cached for this section

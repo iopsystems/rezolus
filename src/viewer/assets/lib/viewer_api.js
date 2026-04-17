@@ -29,6 +29,10 @@ const ViewerApi = {
         return backendRequest({ method: 'GET', url: '/api/v1/selection' });
     },
 
+    async getFileMetadata() {
+        return backendRequest({ method: 'GET', url: '/api/v1/file_metadata' });
+    },
+
     async reset() {
         return backendRequest({ method: 'POST', url: '/api/v1/reset', background: true });
     },

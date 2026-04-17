@@ -32,9 +32,9 @@ lazy_static = "1.5.0"
 libc = "0.2.172"
 linkme = "0.3.33"
 memmap2 = "0.9.5"
-metriken = { git = "https://github.com/iopsystems/metriken" }
-metriken-exposition = { git = "https://github.com/iopsystems/metriken" }
-metriken-query = { git = "https://github.com/iopsystems/metriken", features = ["http"] }
+metriken = { git = "https://github.com/iopsystems/metriken", branch = "main" }
+metriken-exposition = { git = "https://github.com/iopsystems/metriken", branch = "main" }
+metriken-query = { git = "https://github.com/iopsystems/metriken", branch = "main", features = ["http"] }
 notify = "8.0.0"
 open = "5.3.2"
 ouroboros = "0.18.5"

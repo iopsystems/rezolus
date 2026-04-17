@@ -9,7 +9,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::format::KeyValue;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,6 +23,21 @@ struct InputFile {
     batches: Vec<RecordBatch>,
     source: String,
     sampling_interval_ms: Option<String>,
+    node: Option<String>,
+    instance: Option<String>,
+}
+
+/// Combine multiple parquet files into one. Used by the `parquet combine` CLI
+/// command and by the multi-endpoint recorder for combined output.
+pub(crate) fn combine_files(
+    paths: &[PathBuf],
+    output: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut inputs = load_inputs(paths)?;
+    validate_sampling_interval(&inputs)?;
+    validate_labels(&mut inputs)?;
+    validate_time_overlap(&inputs)?;
+    combine_and_write(&inputs, output, false, None)
 }
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
@@ -33,18 +48,34 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let output = args.get_one::<PathBuf>("output").unwrap();
     let bypass_time_check = args.get_flag("bypass-time-check");
+    let pinned = args.get_one::<String>("pinned");
 
     // Phase 1: Load all input files
-    let inputs = load_inputs(&files)?;
+    let mut inputs = load_inputs(&files)?;
 
     // Phase 2: Validate (cheapest checks first)
-    validate_sources(&inputs)?;
     validate_sampling_interval(&inputs)?;
-    validate_no_column_conflicts(&inputs)?;
+    validate_labels(&mut inputs)?;
     validate_time_overlap(&inputs)?;
 
+    // Validate --pinned matches an actual rezolus node
+    if let Some(pinned_node) = pinned {
+        let rez_nodes: Vec<&str> = inputs
+            .iter()
+            .filter(|i| i.source == "rezolus")
+            .filter_map(|i| i.node.as_deref())
+            .collect();
+        if !rez_nodes.contains(&pinned_node.as_str()) {
+            return Err(format!(
+                "--pinned {:?} does not match any rezolus node (available: {:?})",
+                pinned_node, rez_nodes
+            )
+            .into());
+        }
+    }
+
     // Phase 3: Combine and write
-    combine_and_write(&inputs, output, bypass_time_check)?;
+    combine_and_write(&inputs, output, bypass_time_check, pinned)?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
     println!(
@@ -84,6 +115,26 @@ fn load_single_input(path: &PathBuf) -> Result<InputFile, Box<dyn std::error::Er
         .find(|kv| kv.key == KEY_SAMPLING_INTERVAL_MS)
         .and_then(|kv| kv.value.clone());
 
+    let node = kv_metadata
+        .iter()
+        .find(|kv| kv.key == KEY_NODE)
+        .and_then(|kv| kv.value.clone())
+        .or_else(|| {
+            // For rezolus files, fall back to filename stem
+            if source == "rezolus" {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        });
+
+    let instance = kv_metadata
+        .iter()
+        .find(|kv| kv.key == KEY_INSTANCE)
+        .and_then(|kv| kv.value.clone());
+
     // Read all record batches
     let file = std::fs::File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -98,22 +149,12 @@ fn load_single_input(path: &PathBuf) -> Result<InputFile, Box<dyn std::error::Er
         batches,
         source,
         sampling_interval_ms,
+        node,
+        instance,
     })
 }
 
 // ── Validation ──────────────────────────────────────────────────────────
-
-fn validate_sources(inputs: &[InputFile]) -> Result<(), Box<dyn std::error::Error>> {
-    let rezolus_count = inputs.iter().filter(|i| i.source == "rezolus").count();
-    if rezolus_count > 1 {
-        return Err(format!(
-            "found {} files with source=\"rezolus\"; at most one is allowed",
-            rezolus_count
-        )
-        .into());
-    }
-    Ok(())
-}
 
 fn validate_sampling_interval(inputs: &[InputFile]) -> Result<(), Box<dyn std::error::Error>> {
     let intervals: Vec<(&str, &PathBuf)> = inputs
@@ -135,26 +176,94 @@ fn validate_sampling_interval(inputs: &[InputFile]) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-fn validate_no_column_conflicts(inputs: &[InputFile]) -> Result<(), Box<dyn std::error::Error>> {
-    let shared_columns: HashSet<&str> = ["timestamp", "duration"].into_iter().collect();
-    let mut seen: HashMap<&str, &PathBuf> = HashMap::new();
+/// Validate and resolve node/instance labels across all inputs.
+///
+/// - Rezolus files: `node` must be unique across all rezolus inputs.
+/// - Service files: within each source group, either all have `instance`
+///   metadata or none do. If none do, auto-assign "0", "1", "2"...
+///   If all do, they must be unique within the group.
+/// - Mixed (some have instance, some don't) within the same source: error.
+fn validate_labels(inputs: &mut [InputFile]) -> Result<(), Box<dyn std::error::Error>> {
+    // ── Rezolus node validation ──
+    let mut seen_nodes: HashMap<&str, &PathBuf> = HashMap::new();
+    for input in inputs.iter() {
+        if input.source != "rezolus" {
+            continue;
+        }
+        let node = input.node.as_deref().ok_or_else(|| {
+            format!(
+                "{:?}: rezolus file has no node label and filename fallback failed",
+                input.path
+            )
+        })?;
+        if let Some(prev) = seen_nodes.get(node) {
+            return Err(
+                format!("duplicate node {:?}: {:?} and {:?}", node, prev, input.path).into(),
+            );
+        }
+        seen_nodes.insert(node, &input.path);
+    }
 
-    for input in inputs {
-        for field in input.schema.fields() {
-            let name = field.name().as_str();
-            if shared_columns.contains(name) {
-                continue;
-            }
-            if let Some(prev_path) = seen.get(name) {
-                return Err(format!(
-                    "column {:?} appears in both {:?} and {:?}",
-                    name, prev_path, input.path
-                )
-                .into());
-            }
-            seen.insert(name, &input.path);
+    // ── Service instance validation ──
+    // Group non-rezolus files by source (use owned keys to avoid borrow conflicts)
+    let mut source_groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, input) in inputs.iter().enumerate() {
+        if input.source != "rezolus" {
+            source_groups
+                .entry(input.source.clone())
+                .or_default()
+                .push(i);
         }
     }
+
+    for (source, indices) in &source_groups {
+        if indices.len() <= 1 {
+            // Single file for this source — auto-assign instance "0" if missing
+            let idx = indices[0];
+            if inputs[idx].instance.is_none() {
+                inputs[idx].instance = Some("0".to_string());
+            }
+            continue;
+        }
+
+        let has_instance: Vec<bool> = indices
+            .iter()
+            .map(|&i| inputs[i].instance.is_some())
+            .collect();
+        let all_have = has_instance.iter().all(|&b| b);
+        let none_have = has_instance.iter().all(|&b| !b);
+
+        if !all_have && !none_have {
+            return Err(format!(
+                "source {:?}: mixed instance metadata — either all files must have \
+                 'instance' metadata or none should",
+                source
+            )
+            .into());
+        }
+
+        if none_have {
+            // Auto-assign sequential instance IDs
+            for (seq, &idx) in indices.iter().enumerate() {
+                inputs[idx].instance = Some(seq.to_string());
+            }
+        } else {
+            // All have instance — check for duplicates within the group
+            let mut seen: Vec<(&str, &PathBuf)> = Vec::new();
+            for &idx in indices {
+                let inst = inputs[idx].instance.as_deref().unwrap();
+                if let Some((_, prev)) = seen.iter().find(|(s, _)| *s == inst) {
+                    return Err(format!(
+                        "source {:?}: duplicate instance {:?} in {:?} and {:?}",
+                        source, inst, prev, inputs[idx].path
+                    )
+                    .into());
+                }
+                seen.push((inst, &inputs[idx].path));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -220,6 +329,7 @@ fn combine_and_write(
     inputs: &[InputFile],
     output: &PathBuf,
     bypass_time_check: bool,
+    pinned: Option<&String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let interval_ns = resolve_interval_ns(inputs)?;
 
@@ -256,7 +366,13 @@ fn combine_and_write(
     )?;
 
     // Step 5: Merge metadata and write
-    let merged_kv = merge_metadata(inputs)?;
+    let mut merged_kv = merge_metadata(inputs)?;
+    if let Some(pinned_node) = pinned {
+        merged_kv.push(KeyValue {
+            key: KEY_PINNED_NODE.to_string(),
+            value: Some(pinned_node.clone()),
+        });
+    }
     write_parquet(output, &merged_schema, &output_batch, merged_kv)?;
 
     Ok(())
@@ -439,14 +555,34 @@ fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
         }
     }
 
-    // All metric columns from each input in order, stamped with source
+    // All metric columns from each input, prefixed and labeled
     for input in inputs {
+        let (prefix, label_key, label_value) = if input.source == "rezolus" {
+            let node = input.node.as_deref().unwrap_or("unknown");
+            (node.to_string(), "node".to_string(), node.to_string())
+        } else {
+            let instance = input.instance.as_deref().unwrap_or("0");
+            (
+                instance.to_string(),
+                "instance".to_string(),
+                instance.to_string(),
+            )
+        };
+
         for field in input.schema.fields() {
             let name = field.name().as_str();
             if name != "timestamp" && name != "duration" {
+                let prefixed_name = format!("{}::{}", prefix, name);
                 let mut meta = field.metadata().clone();
                 meta.insert("source".to_string(), input.source.clone());
-                fields.push(Arc::new(field.as_ref().clone().with_metadata(meta)));
+                meta.insert(label_key.clone(), label_value.clone());
+                let new_field = Field::new(
+                    prefixed_name,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )
+                .with_metadata(meta);
+                fields.push(Arc::new(new_field));
             }
         }
     }
@@ -543,8 +679,13 @@ fn concatenate_columns(input: &InputFile) -> Result<Vec<ArrayRef>, Box<dyn std::
 fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
     let mut result: Vec<KeyValue> = Vec::new();
 
-    // source: JSON array of all source names
-    let sources: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
+    // source: deduplicated JSON array of all source names
+    let sources: Vec<&str> = {
+        let mut s: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
+        s.sort();
+        s.dedup();
+        s
+    };
     result.push(KeyValue {
         key: KEY_SOURCE.to_string(),
         value: Some(serde_json::to_string(&sources)?),
@@ -558,7 +699,8 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         });
     }
 
-    // systeminfo: prefer rezolus file
+    // systeminfo: keep first rezolus file as the top-level value (viewer compat).
+    // Per-node systeminfo is stashed in per_source_metadata for future use.
     if let Some(val) = find_kv_value(inputs, KEY_SYSTEMINFO, Some("rezolus")) {
         result.push(KeyValue {
             key: KEY_SYSTEMINFO.to_string(),
@@ -592,10 +734,14 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         });
     }
 
-    // per_source_metadata: merge maps, nest top-level version under each source
+    // per_source_metadata: nested by source name, then by node/instance ID.
+    // Structure: { "rezolus": { "web01": {...}, "web02": {...} },
+    //              "vllm":    { "0": {...}, "1": {...} } }
+    // For rezolus sources, the sub-key is the node name.
+    // For service sources, the sub-key is the instance ID.
     let mut per_source: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     for input in inputs {
-        // Merge existing per_source_metadata if present
+        // Merge existing per_source_metadata if present (from already-combined files)
         if let Some(psm_str) = input
             .kv_metadata
             .iter()
@@ -605,28 +751,93 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
             if let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
             {
-                for (k, v) in psm {
-                    per_source.insert(k, v);
+                // Deep-merge: source groups are objects, merge their sub-entries
+                for (source_name, group_val) in psm {
+                    let target = per_source
+                        .entry(source_name)
+                        .or_insert_with(|| serde_json::json!({}));
+                    if let (
+                        serde_json::Value::Object(target_map),
+                        serde_json::Value::Object(src_map),
+                    ) = (target, group_val)
+                    {
+                        for (k, v) in src_map {
+                            target_map.entry(k).or_insert(v);
+                        }
+                    }
                 }
             }
         }
 
-        // Move top-level version and service_queries into per_source_metadata.<source>
-        let source_entry = per_source
+        // Determine the sub-key within this source's group
+        let sub_key = if input.source == "rezolus" {
+            input.node.as_deref().unwrap_or("unknown").to_string()
+        } else {
+            input.instance.as_deref().unwrap_or("0").to_string()
+        };
+
+        let source_group = per_source
             .entry(input.source.clone())
             .or_insert_with(|| serde_json::json!({}));
-        if let serde_json::Value::Object(map) = source_entry {
-            if let Some(version) = input
-                .kv_metadata
-                .iter()
-                .find(|kv| kv.key == KEY_VERSION)
-                .and_then(|kv| kv.value.clone())
-            {
-                map.entry(NESTED_VERSION.to_string())
-                    .or_insert(serde_json::Value::String(version));
+        let serde_json::Value::Object(group_map) = source_group else {
+            continue;
+        };
+        let entry = group_map
+            .entry(sub_key)
+            .or_insert_with(|| serde_json::json!({}));
+        let serde_json::Value::Object(map) = entry else {
+            continue;
+        };
+
+        // Move top-level version into per-source entry
+        if let Some(version) = input
+            .kv_metadata
+            .iter()
+            .find(|kv| kv.key == KEY_VERSION)
+            .and_then(|kv| kv.value.clone())
+        {
+            map.entry(NESTED_VERSION.to_string())
+                .or_insert(serde_json::Value::String(version));
+        }
+
+        // Store node or instance label in per-source metadata
+        if input.source == "rezolus" {
+            if let Some(ref node) = input.node {
+                map.entry(NESTED_NODE.to_string())
+                    .or_insert(serde_json::Value::String(node.clone()));
+            }
+        } else {
+            if let Some(ref instance) = input.instance {
+                map.entry(NESTED_INSTANCE.to_string())
+                    .or_insert(serde_json::Value::String(instance.clone()));
+            }
+            // Also store node for service files if present (informational — which host it ran on)
+            if let Some(ref node) = input.node {
+                map.entry(NESTED_NODE.to_string())
+                    .or_insert(serde_json::Value::String(node.clone()));
             }
         }
     }
+
+    // Stash per-node systeminfo into per_source_metadata entries
+    for input in inputs.iter().filter(|i| i.source == "rezolus") {
+        if let Some(sysinfo_val) = input
+            .kv_metadata
+            .iter()
+            .find(|kv| kv.key == KEY_SYSTEMINFO)
+            .and_then(|kv| kv.value.as_deref())
+        {
+            let node = input.node.as_deref().unwrap_or("unknown");
+            if let Some(serde_json::Value::Object(group)) = per_source.get_mut("rezolus") {
+                if let Some(serde_json::Value::Object(map)) = group.get_mut(node) {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(sysinfo_val) {
+                        map.entry(KEY_SYSTEMINFO.to_string()).or_insert(parsed);
+                    }
+                }
+            }
+        }
+    }
+
     if !per_source.is_empty() {
         result.push(KeyValue {
             key: KEY_PER_SOURCE_METADATA.to_string(),
@@ -782,56 +993,11 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_sources_rejects_duplicate_rezolus() {
-        let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "rezolus", "1000");
-        let inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_sources(&inputs).is_err());
-    }
-
-    #[test]
-    fn test_validate_sources_allows_one_rezolus() {
-        let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
-        let inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_sources(&inputs).is_ok());
-    }
-
-    #[test]
     fn test_validate_sampling_interval_mismatch() {
         let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
         let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "500");
         let inputs = vec![load(&p1), load(&p2)];
         assert!(validate_sampling_interval(&inputs).is_err());
-    }
-
-    #[test]
-    fn test_validate_column_conflicts() {
-        let (_t1, p1) = make_test_file(
-            &[100, 200],
-            "same_name",
-            &[Some(1), Some(2)],
-            "rezolus",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[100, 200],
-            "same_name",
-            &[Some(3), Some(4)],
-            "llm-perf",
-            "1000",
-        );
-        let inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_no_column_conflicts(&inputs).is_err());
-    }
-
-    #[test]
-    fn test_validate_column_shared_ok() {
-        // timestamp and duration are shared and should not conflict
-        let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
-        let inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_no_column_conflicts(&inputs).is_ok());
     }
 
     #[test]
@@ -882,8 +1048,9 @@ mod tests {
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
 
-        let inputs = vec![load(&p1), load(&p2)];
-        combine_and_write(&inputs, &out_path, false).unwrap();
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
 
         // Read back
         let file = std::fs::File::open(&out_path).unwrap();
@@ -903,18 +1070,21 @@ mod tests {
         assert_eq!(ts_col.value(0), 2 * SEC);
         assert_eq!(ts_col.value(1), 3 * SEC);
 
-        // m1 values for timestamps 2s, 3s are 2, 3
+        // Find prefixed column names
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        let m1_col_name = *field_names.iter().find(|n| n.ends_with("::m1")).unwrap();
+        let m2_col_name = *field_names.iter().find(|n| n.ends_with("::m2")).unwrap();
+
         let m1_col = batch
-            .column(schema.index_of("m1").unwrap())
+            .column(schema.index_of(m1_col_name).unwrap())
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(m1_col.value(0), 2);
         assert_eq!(m1_col.value(1), 3);
 
-        // m2 values for timestamps 2s, 3s are 4, 5
         let m2_col = batch
-            .column(schema.index_of("m2").unwrap())
+            .column(schema.index_of(m2_col_name).unwrap())
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
@@ -942,20 +1112,22 @@ mod tests {
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
 
-        let inputs = load_inputs(&[p1, p2]).unwrap();
-        validate_sources(&inputs).unwrap();
+        let mut inputs = load_inputs(&[p1, p2]).unwrap();
         validate_sampling_interval(&inputs).unwrap();
-        validate_no_column_conflicts(&inputs).unwrap();
+        validate_labels(&mut inputs).unwrap();
         validate_time_overlap(&inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
 
         // Read back and verify schema
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let schema = builder.schema().clone();
 
+        // Columns are now prefixed with node/instance
         let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(field_names, vec!["timestamp", "duration", "cpu", "tokens"]);
+        assert_eq!(field_names.len(), 4); // timestamp, duration, <node>::cpu, 0::tokens
+        assert!(field_names[2].ends_with("::cpu"));
+        assert!(field_names[3].starts_with("0::tokens"));
 
         // Verify metadata
         let meta_reader =
@@ -972,7 +1144,8 @@ mod tests {
             .and_then(|kv| kv.value.as_deref())
             .unwrap();
         let sources: Vec<String> = serde_json::from_str(source_val).unwrap();
-        assert_eq!(sources, vec!["rezolus", "llm-perf"]);
+        assert!(sources.contains(&"rezolus".to_string()));
+        assert!(sources.contains(&"llm-perf".to_string()));
 
         let interval_val = kv
             .iter()
@@ -1002,19 +1175,29 @@ mod tests {
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
 
-        let inputs = vec![load(&p1), load(&p2)];
-        combine_and_write(&inputs, &out_path, false).unwrap();
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let schema = builder.schema().clone();
 
-        // Check that metric_type metadata is preserved on metric columns
-        let m1_field = schema.field_with_name("m1").unwrap();
-        assert_eq!(m1_field.metadata().get("metric_type").unwrap(), "gauge");
+        // Find prefixed column names
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        let m1_name = *field_names.iter().find(|n| n.ends_with("::m1")).unwrap();
+        let m2_name = *field_names.iter().find(|n| n.ends_with("::m2")).unwrap();
 
-        let m2_field = schema.field_with_name("m2").unwrap();
+        // Check that metric_type metadata is preserved on metric columns
+        let m1_field = schema.field_with_name(m1_name).unwrap();
+        assert_eq!(m1_field.metadata().get("metric_type").unwrap(), "gauge");
+        assert_eq!(m1_field.metadata().get("source").unwrap(), "rezolus");
+        assert!(m1_field.metadata().contains_key("node"));
+
+        let m2_field = schema.field_with_name(m2_name).unwrap();
         assert_eq!(m2_field.metadata().get("metric_type").unwrap(), "gauge");
+        assert_eq!(m2_field.metadata().get("source").unwrap(), "llm-perf");
+        assert!(m2_field.metadata().contains_key("instance"));
 
         // Check timestamp field metadata
         let ts_field = schema.field_with_name("timestamp").unwrap();
@@ -1044,7 +1227,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false);
+        let result = combine_and_write(&inputs, &out_path, false, None);
         assert!(result.is_err());
     }
 
@@ -1071,8 +1254,9 @@ mod tests {
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
 
-        let inputs = vec![load(&p1), load(&p2)];
-        combine_and_write(&inputs, &out_path, false).unwrap();
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1083,8 +1267,10 @@ mod tests {
         // All 3 timestamps should match
         assert_eq!(batch.num_rows(), 3);
 
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        let m2_col_name = *field_names.iter().find(|n| n.ends_with("::m2")).unwrap();
         let m2_col = batch
-            .column(schema.index_of("m2").unwrap())
+            .column(schema.index_of(m2_col_name).unwrap())
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
@@ -1117,13 +1303,475 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false);
+        let result = combine_and_write(&inputs, &out_path, false, None);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("alignment too poor"),
             "unexpected error: {err}"
         );
+    }
+
+    fn make_test_file_with_metadata(
+        timestamps: &[u64],
+        metric_name: &str,
+        metric_values: &[Option<i64>],
+        source: &str,
+        sampling_interval_ms: &str,
+        extra_kv: Vec<(&str, &str)>,
+    ) -> (NamedTempFile, PathBuf) {
+        let ts_field =
+            Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
+                ("metric_type".to_string(), "timestamp".to_string()),
+                ("unit".to_string(), "nanoseconds".to_string()),
+            ]));
+        let dur_field =
+            Field::new("duration", DataType::UInt64, true).with_metadata(HashMap::from([
+                ("metric_type".to_string(), "duration".to_string()),
+                ("unit".to_string(), "nanoseconds".to_string()),
+            ]));
+        let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
+            HashMap::from([("metric_type".to_string(), "gauge".to_string())]),
+        );
+
+        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
+
+        let ts_array = UInt64Array::from(timestamps.to_vec());
+        let dur_array = UInt64Array::from(vec![None::<u64>; timestamps.len()]);
+        let metric_array = Int64Array::from(metric_values.to_vec());
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(ts_array),
+                Arc::new(dur_array),
+                Arc::new(metric_array),
+            ],
+        )
+        .unwrap();
+
+        let mut kv = vec![
+            KeyValue {
+                key: KEY_SOURCE.to_string(),
+                value: Some(source.to_string()),
+            },
+            KeyValue {
+                key: KEY_SAMPLING_INTERVAL_MS.to_string(),
+                value: Some(sampling_interval_ms.to_string()),
+            },
+        ];
+        for (k, v) in extra_kv {
+            kv.push(KeyValue {
+                key: k.to_string(),
+                value: Some(v.to_string()),
+            });
+        }
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(kv))
+            .build();
+
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let file = std::fs::File::create(&path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        (tmp, path)
+    }
+
+    // ── Label resolution tests ──
+
+    #[test]
+    fn test_resolve_node_from_metadata() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(10), Some(20)],
+            "rezolus",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let input = load(&p1);
+        assert_eq!(input.node.as_deref(), Some("web01"));
+    }
+
+    #[test]
+    fn test_resolve_node_fallback_to_filename() {
+        let (_t1, p1) = make_test_file(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(10), Some(20)],
+            "rezolus",
+            "1000",
+        );
+        let input = load(&p1);
+        assert!(input.node.is_some());
+    }
+
+    #[test]
+    fn test_resolve_instance_from_metadata() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "tokens",
+            &[Some(10), Some(20)],
+            "vllm",
+            "1000",
+            vec![("instance", "primary")],
+        );
+        let input = load(&p1);
+        assert_eq!(input.instance.as_deref(), Some("primary"));
+    }
+
+    #[test]
+    fn test_resolve_instance_none_when_absent() {
+        let (_t1, p1) = make_test_file(
+            &[SEC, 2 * SEC],
+            "tokens",
+            &[Some(10), Some(20)],
+            "vllm",
+            "1000",
+        );
+        let input = load(&p1);
+        assert!(input.instance.is_none());
+    }
+
+    // ── Label validation tests ──
+
+    #[test]
+    fn test_validate_labels_rejects_duplicate_nodes() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(10), Some(20)],
+            "rezolus",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let (_t2, p2) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(30), Some(40)],
+            "rezolus",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let mut inputs = vec![load(&p1), load(&p2)];
+        assert!(validate_labels(&mut inputs).is_err());
+    }
+
+    #[test]
+    fn test_validate_labels_allows_different_nodes() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(10), Some(20)],
+            "rezolus",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let (_t2, p2) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(30), Some(40)],
+            "rezolus",
+            "1000",
+            vec![("node", "web02")],
+        );
+        let mut inputs = vec![load(&p1), load(&p2)];
+        assert!(validate_labels(&mut inputs).is_ok());
+    }
+
+    #[test]
+    fn test_validate_labels_rejects_mixed_instance_metadata() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "tokens_a",
+            &[Some(10), Some(20)],
+            "vllm",
+            "1000",
+            vec![("instance", "primary")],
+        );
+        let (_t2, p2) = make_test_file(
+            &[SEC, 2 * SEC],
+            "tokens_b",
+            &[Some(30), Some(40)],
+            "vllm",
+            "1000",
+        );
+        let mut inputs = vec![load(&p1), load(&p2)];
+        let err = validate_labels(&mut inputs).unwrap_err().to_string();
+        assert!(err.contains("mixed"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_validate_labels_auto_assigns_instances() {
+        let (_t1, p1) = make_test_file(
+            &[SEC, 2 * SEC],
+            "tokens_a",
+            &[Some(10), Some(20)],
+            "vllm",
+            "1000",
+        );
+        let (_t2, p2) = make_test_file(
+            &[SEC, 2 * SEC],
+            "tokens_b",
+            &[Some(30), Some(40)],
+            "vllm",
+            "1000",
+        );
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+        assert_eq!(inputs[0].instance.as_deref(), Some("0"));
+        assert_eq!(inputs[1].instance.as_deref(), Some("1"));
+    }
+
+    // ── Multi-node / multi-instance combine tests ──
+
+    #[test]
+    fn test_combine_two_rezolus_nodes() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC, 3 * SEC],
+            "cpu",
+            &[Some(10), Some(20), Some(30)],
+            "rezolus",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let (_t2, p2) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC, 3 * SEC],
+            "cpu",
+            &[Some(40), Some(50), Some(60)],
+            "rezolus",
+            "1000",
+            vec![("node", "web02")],
+        );
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
+
+        let file = std::fs::File::open(&out_path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+        let mut reader = builder.build().unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(batch.num_rows(), 3);
+
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(
+            field_names,
+            vec!["timestamp", "duration", "web01::cpu", "web02::cpu"]
+        );
+
+        let web01_field = schema.field_with_name("web01::cpu").unwrap();
+        assert_eq!(web01_field.metadata().get("node").unwrap(), "web01");
+        assert_eq!(web01_field.metadata().get("source").unwrap(), "rezolus");
+
+        let web02_field = schema.field_with_name("web02::cpu").unwrap();
+        assert_eq!(web02_field.metadata().get("node").unwrap(), "web02");
+
+        let web01_col = batch
+            .column(schema.index_of("web01::cpu").unwrap())
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(web01_col.value(0), 10);
+
+        let web02_col = batch
+            .column(schema.index_of("web02::cpu").unwrap())
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(web02_col.value(0), 40);
+    }
+
+    #[test]
+    fn test_combine_two_service_instances() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "tokens",
+            &[Some(100), Some(200)],
+            "vllm",
+            "1000",
+            vec![("instance", "primary")],
+        );
+        let (_t2, p2) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "tokens",
+            &[Some(300), Some(400)],
+            "vllm",
+            "1000",
+            vec![("instance", "secondary")],
+        );
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
+
+        let file = std::fs::File::open(&out_path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(
+            field_names,
+            vec![
+                "timestamp",
+                "duration",
+                "primary::tokens",
+                "secondary::tokens"
+            ]
+        );
+
+        let primary_field = schema.field_with_name("primary::tokens").unwrap();
+        assert_eq!(primary_field.metadata().get("instance").unwrap(), "primary");
+        assert_eq!(primary_field.metadata().get("source").unwrap(), "vllm");
+    }
+
+    #[test]
+    fn test_combine_mixed_rezolus_and_service() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(10), Some(20)],
+            "rezolus",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let (_t2, p2) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(30), Some(40)],
+            "rezolus",
+            "1000",
+            vec![("node", "web02")],
+        );
+        let (_t3, p3) = make_test_file(
+            &[SEC, 2 * SEC],
+            "tokens",
+            &[Some(100), Some(200)],
+            "vllm",
+            "1000",
+        );
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+
+        let mut inputs = vec![load(&p1), load(&p2), load(&p3)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
+
+        let file = std::fs::File::open(&out_path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(
+            field_names,
+            vec![
+                "timestamp",
+                "duration",
+                "web01::cpu",
+                "web02::cpu",
+                "0::tokens"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_metadata_includes_nodes() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(10), Some(20)],
+            "rezolus",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let (_t2, p2) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "cpu",
+            &[Some(30), Some(40)],
+            "rezolus",
+            "1000",
+            vec![("node", "web02")],
+        );
+
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
+
+        let meta_reader =
+            SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
+        let kv = meta_reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .unwrap();
+
+        // source array should be deduplicated
+        let source_val = kv
+            .iter()
+            .find(|kv| kv.key == KEY_SOURCE)
+            .and_then(|kv| kv.value.as_deref())
+            .unwrap();
+        let sources: Vec<String> = serde_json::from_str(source_val).unwrap();
+        assert_eq!(sources, vec!["rezolus"]);
+
+        // per_source_metadata nested by source, then by node/instance
+        let psm_str = kv
+            .iter()
+            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+            .and_then(|kv| kv.value.as_deref())
+            .unwrap();
+        let psm: serde_json::Value = serde_json::from_str(psm_str).unwrap();
+
+        assert!(psm["rezolus"].get("web01").is_some());
+        assert!(psm["rezolus"].get("web02").is_some());
+        assert_eq!(psm["rezolus"]["web01"]["node"].as_str().unwrap(), "web01");
+        assert_eq!(psm["rezolus"]["web02"]["node"].as_str().unwrap(), "web02");
+    }
+
+    #[test]
+    fn test_merge_metadata_includes_service_node() {
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "metric_a",
+            &[Some(1), Some(2)],
+            "vllm",
+            "1000",
+            vec![("instance", "0"), ("node", "gpu01")],
+        );
+
+        let inputs = vec![load(&p1)];
+        let kv = merge_metadata(&inputs).unwrap();
+
+        let psm_str = kv
+            .iter()
+            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+            .and_then(|kv| kv.value.as_deref())
+            .expect("per_source_metadata should exist");
+
+        let psm: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(psm_str).unwrap();
+
+        let entry = psm
+            .get("vllm")
+            .and_then(|g| g.get("0"))
+            .expect("vllm.0 entry should exist");
+        assert_eq!(entry.get("instance").and_then(|v| v.as_str()), Some("0"));
+        assert_eq!(entry.get("node").and_then(|v| v.as_str()), Some("gpu01"));
     }
 
     #[test]
