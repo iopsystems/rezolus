@@ -75,37 +75,6 @@ fn run_undo(path: &Path) {
     println!("Removed service extension annotation from {:?}", path);
 }
 
-/// Build the effective PromQL query for a KPI, accounting for histogram wrapping.
-fn effective_query(kpi: &crate::viewer::Kpi) -> String {
-    if kpi.metric_type == "histogram" {
-        let subtype = kpi.subtype.as_deref().unwrap_or("percentiles");
-        if subtype == "buckets" {
-            format!("histogram_heatmap({})", kpi.query)
-        } else {
-            let quantiles = match &kpi.percentiles {
-                Some(p) => format!(
-                    "[{}]",
-                    p.iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None => format!(
-                    "[{}]",
-                    crate::common::DEFAULT_PERCENTILES
-                        .iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            };
-            format!("histogram_percentiles({}, {})", quantiles, kpi.query)
-        }
-    } else {
-        kpi.query.clone()
-    }
-}
-
 /// Validate that each KPI query returns data from the parquet file.
 /// Sets `available` on each KPI based on whether its query returns data.
 /// Prints warnings for unavailable KPIs and exits if none match.
@@ -126,7 +95,7 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
     let mut missing_metrics = BTreeSet::new();
 
     for kpi in &mut ext.kpis {
-        let query = effective_query(kpi);
+        let query = kpi.effective_query();
         let has_data = match engine.query_range(&query, start, end, step) {
             Ok(result) => !query_result_is_empty(&result),
             Err(_) => false,

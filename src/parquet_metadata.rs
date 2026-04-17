@@ -71,3 +71,27 @@ pub const NESTED_FIRST_SAMPLE_NS: &str = "first_sample_ns";
 
 /// Nanosecond timestamp of the last successful scrape for this source.
 pub const NESTED_LAST_SAMPLE_NS: &str = "last_sample_ns";
+
+// ── Node / instance disambiguation ──────────────────────────────────
+
+/// Node name for rezolus agent data. Identifies which host/VM the
+/// metrics came from. Top-level in single-source files, nested under
+/// `per_source_metadata.<source>.node` in combined files.
+pub const KEY_NODE: &str = "node";
+
+/// Instance identifier for service data. Identifies which process/container
+/// the metrics came from. Top-level in single-source files, nested under
+/// `per_source_metadata.<source>.instance` in combined files.
+pub const KEY_INSTANCE: &str = "instance";
+
+/// Per-source node name (nested key).
+pub const NESTED_NODE: &str = "node";
+
+/// Per-source instance identifier (nested key).
+pub const NESTED_INSTANCE: &str = "instance";
+
+// ── Viewer hints ─────────────────────────────────────────────────────
+
+/// The default rezolus node to display when the viewer opens a combined
+/// file with multiple nodes. Set by `parquet combine --pinned <node>`.
+pub const KEY_PINNED_NODE: &str = "pinned_node";

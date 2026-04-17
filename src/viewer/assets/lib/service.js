@@ -11,13 +11,33 @@
  * @param {string} sectionName
  * @param {number} interval
  */
-const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval) => {
+const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval, instanceOpts = {}) => {
     const meta = attrs.metadata || {};
     const serviceName = meta.service_name || 'Service';
     const serviceMeta = meta.service_metadata || {};
     const unavailable = meta.unavailable_kpis || [];
+    const { instances = [], selectedInstance = null, onInstanceChange } = instanceOpts;
+    const hasMultiInstance = instances.length > 1;
     return m('div#section-content', [
         m('h1', serviceName),
+        // Instance selector (only for multi-instance)
+        hasMultiInstance && m('div.instance-selector', [
+            m('select.instance-select', {
+                value: selectedInstance || '__all__',
+                onchange: (e) => {
+                    const val = e.target.value === '__all__' ? null : e.target.value;
+                    if (onInstanceChange) onInstanceChange(val);
+                },
+            }, [
+                m('option', { value: '__all__' }, 'All Instances'),
+                ...instances.map(inst => {
+                    const label = inst.node
+                        ? `Instance ${inst.id} (${inst.node})`
+                        : `Instance ${inst.id}`;
+                    return m('option', { value: inst.id }, label);
+                }),
+            ]),
+        ]),
         Object.keys(serviceMeta).length > 0
             ? m('table.sysinfo-table', [
                 m('tbody', Object.entries(serviceMeta).map(([k, v]) =>

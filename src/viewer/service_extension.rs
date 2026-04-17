@@ -46,6 +46,40 @@ fn default_available() -> bool {
     true
 }
 
+impl Kpi {
+    /// Build the effective PromQL query for this KPI, wrapping histogram
+    /// metrics in the appropriate histogram function.
+    pub fn effective_query(&self) -> String {
+        if self.metric_type == "histogram" {
+            let subtype = self.subtype.as_deref().unwrap_or("percentiles");
+            if subtype == "buckets" {
+                format!("histogram_heatmap({})", self.query)
+            } else {
+                let quantiles = match &self.percentiles {
+                    Some(p) => format!(
+                        "[{}]",
+                        p.iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    None => format!(
+                        "[{}]",
+                        crate::common::DEFAULT_PERCENTILES
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                };
+                format!("histogram_percentiles({}, {})", quantiles, self.query)
+            }
+        } else {
+            self.query.clone()
+        }
+    }
+}
+
 impl ServiceExtension {
     pub fn throughput_query(&self) -> Option<&str> {
         self.kpis

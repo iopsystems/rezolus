@@ -11,6 +11,10 @@ const buildTopNavAttrs = ({
     onUploadParquet,
     granularity = null,
     onGranularityChange,
+    nodeList = [],
+    selectedNode = null,
+    perSourceMeta = {},
+    onNodeChange,
     extra = {},
 }) => ({
     sectionRoute,
@@ -31,6 +35,10 @@ const buildTopNavAttrs = ({
     granularity,
     onGranularityChange,
     chartsState,
+    nodeList,
+    selectedNode,
+    perSourceMeta,
+    onNodeChange,
     ...extra,
 });
 
@@ -41,6 +49,7 @@ const createMainComponent = ({
     SectionContent,
     sectionResponseCache,
     getHasSystemInfo,
+    getHasFileMetadata,
     buildAttrs,
 }) => ({
     view({
@@ -59,6 +68,7 @@ const createMainComponent = ({
                     sections,
                     sectionResponseCache,
                     hasSystemInfo: !!getHasSystemInfo(),
+                    hasFileMetadata: !!(getHasFileMetadata && getHasFileMetadata()),
                 }),
                 m(SectionContent, {
                     section: activeSection,

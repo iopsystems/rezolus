@@ -87,6 +87,18 @@ pub fn command() -> Command {
                 .help("Add file-level parquet metadata (key=value)")
                 .action(clap::ArgAction::Append),
         )
+        .arg(
+            clap::Arg::new("NODE")
+                .long("node")
+                .help("Node name for rezolus agent data (written to parquet metadata)")
+                .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("INSTANCE")
+                .long("instance")
+                .help("Instance name for service data (written to parquet metadata)")
+                .action(clap::ArgAction::Set),
+        )
 }
 
 // ---------------------------------------------------------------------------

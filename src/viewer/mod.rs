@@ -161,8 +161,16 @@ pub fn run(config: Config) {
 
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
-            let (systeminfo, selection) = extract_parquet_metadata(path);
-            let service_exts = extract_service_extension_metadata(path, &registry);
+            let (systeminfo, selection, file_meta) = extract_parquet_metadata(path);
+            let mut service_exts = extract_service_extension_metadata(path, &registry);
+
+            // Validate KPI availability against the loaded data so that
+            // template-derived dashboards hide KPIs with no data.
+            let data_arc = std::sync::Arc::new(data);
+            validate_service_extensions(&data_arc, &mut service_exts);
+            let data = std::sync::Arc::try_unwrap(data_arc)
+                .ok()
+                .expect("Arc still shared");
 
             // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
             // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
@@ -172,10 +180,12 @@ pub fn run(config: Config) {
             let file_checksum = compute_file_checksum(path);
 
             for (source, ext) in &service_exts {
+                let available = ext.kpis.iter().filter(|k| k.available).count();
                 info!(
-                    "Found service extension for {:?} from source {:?} ({} KPIs)",
+                    "Found service extension for {:?} from source {:?} ({}/{} KPIs available)",
                     ext.service_name,
                     source,
+                    available,
                     ext.kpis.len()
                 );
             }
@@ -184,9 +194,11 @@ pub fn run(config: Config) {
             let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
             let state = dashboard::generate(data, filesize, &service_refs, registry.clone());
             *state.parquet_path.write() = Some(path.clone());
-            *state.systeminfo.write() = systeminfo;
+            let multinode_sysinfo = build_multinode_systeminfo(path);
+            *state.systeminfo.write() = multinode_sysinfo.or(systeminfo);
             *state.selection.write() = selection;
             *state.file_checksum.write() = file_checksum;
+            *state.file_metadata.write() = file_meta;
             state
         }
         Source::Live(url) => {
@@ -423,6 +435,8 @@ struct AppState {
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
     file_checksum: parking_lot::RwLock<Option<String>>,
+    /// Raw parquet file-level key-value metadata as a JSON object.
+    file_metadata: parking_lot::RwLock<Option<String>>,
 }
 
 impl AppState {
@@ -437,11 +451,12 @@ impl AppState {
             systeminfo: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
+            file_metadata: parking_lot::RwLock::new(None),
         }
     }
 }
 
-fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
+fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
     std::fs::File::open(path)
@@ -457,9 +472,75 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>) {
                 .iter()
                 .find(|kv| kv.key == "selection")
                 .and_then(|kv| kv.value.clone());
-            Some((sysinfo, sel))
+
+            // Build a JSON object from all key-value pairs.
+            let mut map = serde_json::Map::new();
+            for pair in kv {
+                if let Some(ref val) = pair.value {
+                    // Try to parse value as JSON; fall back to plain string.
+                    let json_val = serde_json::from_str(val)
+                        .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
+                    map.insert(pair.key.clone(), json_val);
+                }
+            }
+            let file_meta = serde_json::to_string(&serde_json::Value::Object(map)).ok();
+
+            Some((sysinfo, sel, file_meta))
         })
-        .unwrap_or((None, None))
+        .unwrap_or((None, None, None))
+}
+
+/// Build a multi-node systeminfo JSON object from `per_source_metadata`.
+///
+/// Returns `Some(json_string)` when there are multiple nodes (>1), where the
+/// JSON is an object keyed by node name with the systeminfo object as value.
+/// Returns `None` for single-node files (the caller falls back to flat format).
+fn build_multinode_systeminfo(path: &Path) -> Option<String> {
+    use crate::parquet_metadata::KEY_PER_SOURCE_METADATA;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+
+    let f = std::fs::File::open(path).ok()?;
+    let reader = SerializedFileReader::new(f).ok()?;
+    let kv = reader.metadata().file_metadata().key_value_metadata()?;
+
+    let psm_json = kv
+        .iter()
+        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+        .and_then(|kv| kv.value.as_ref())?;
+
+    let psm: serde_json::Map<String, serde_json::Value> = serde_json::from_str(psm_json).ok()?;
+
+    let mut nodes = serde_json::Map::new();
+
+    // per_source_metadata is nested: { "rezolus": { "node1": {...}, "node2": {...} }, ... }
+    // Extract systeminfo from each rezolus node entry.
+    if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
+        for (node_key, entry) in rez_group {
+            let obj = match entry.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            let sysinfo_val = match obj.get("systeminfo") {
+                Some(v) => v,
+                None => continue,
+            };
+            let node_name = obj
+                .get("node")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| node_key.clone());
+
+            nodes.insert(node_name, sysinfo_val.clone());
+        }
+    }
+
+    // Only return multi-node format when there are actually multiple nodes
+    if nodes.len() > 1 {
+        serde_json::to_string(&serde_json::Value::Object(nodes)).ok()
+    } else {
+        None
+    }
 }
 
 /// Extract service extension metadata from a parquet file.
@@ -518,14 +599,22 @@ fn extract_service_extension_metadata(
         if let Ok(metadata_map) =
             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(metadata_json)
         {
-            for (source, value) in &metadata_map {
+            // per_source_metadata is nested: { "source": { "id": { ... }, ... }, ... }
+            // Check each source group's entries for service_queries.
+            for (source, group_val) in &metadata_map {
                 // Skip sources already found via top-level service_queries.
                 if results.iter().any(|(s, _)| s == source) {
                     continue;
                 }
-                if let Some(sq) = value.get(NESTED_SERVICE_QUERIES) {
-                    if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
-                        results.push((source.clone(), ext));
+                if let Some(group) = group_val.as_object() {
+                    for (_sub_key, entry) in group {
+                        if let Some(sq) = entry.get(NESTED_SERVICE_QUERIES) {
+                            if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone())
+                            {
+                                results.push((source.clone(), ext));
+                                break; // one extension per source
+                            }
+                        }
                     }
                 }
             }
@@ -556,6 +645,33 @@ fn extract_service_extension_metadata(
     }
 
     results
+}
+
+/// Validate KPI availability for service extensions by running each KPI's
+/// PromQL query against the loaded TSDB. Sets `available = false` on KPIs
+/// whose queries return empty results (e.g. zero-traffic histograms).
+fn validate_service_extensions(
+    tsdb: &std::sync::Arc<Tsdb>,
+    exts: &mut [(String, ServiceExtension)],
+) {
+    let engine = QueryEngine::new(tsdb.clone());
+    let (start, end) = engine.get_time_range();
+
+    for (_source, ext) in exts.iter_mut() {
+        for kpi in &mut ext.kpis {
+            let query = kpi.effective_query();
+            let has_data = match engine.query_range(&query, start, end, 1.0) {
+                Ok(result) => match &result {
+                    promql::QueryResult::Vector { result } => !result.is_empty(),
+                    promql::QueryResult::Matrix { result } => !result.is_empty(),
+                    promql::QueryResult::Scalar { .. } => true,
+                    promql::QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
+                },
+                Err(_) => false,
+            };
+            kpi.available = has_data;
+        }
+    }
 }
 
 fn compute_file_checksum(path: &Path) -> Option<String> {
@@ -610,6 +726,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/save", get(save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
+        .route("/file_metadata", get(file_metadata_handler))
         .route(
             "/upload",
             axum::routing::post(upload_parquet)
@@ -726,6 +843,26 @@ async fn selection_handler(
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn file_metadata_handler(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match &*state.file_metadata.read() {
+        Some(json) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json.clone(),
+        )
+            .into_response(),
+        None => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            "{}".to_string(),
+        )
+            .into_response(),
     }
 }
 
@@ -926,10 +1063,15 @@ async fn upload_parquet(
     // embeds the original name instead of the temp path.
     data.set_filename(filename.clone());
 
-    let service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+    let data_arc = std::sync::Arc::new(data);
+    validate_service_extensions(&data_arc, &mut service_exts);
+    let data = std::sync::Arc::try_unwrap(data_arc)
+        .ok()
+        .expect("Arc still shared");
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
     let new_state = dashboard::generate(data, filesize, &service_refs, state.templates.clone());
-    let (systeminfo, selection) = extract_parquet_metadata(&temp_path);
+    let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
     {
@@ -943,10 +1085,12 @@ async fn upload_parquet(
         let mut sections = state.sections.write();
         *sections = new_state.sections.into_inner();
     }
+    let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
-    *state.systeminfo.write() = systeminfo;
+    *state.systeminfo.write() = multinode_sysinfo.or(systeminfo);
     *state.selection.write() = selection;
     *state.file_checksum.write() = file_checksum;
+    *state.file_metadata.write() = file_meta;
 
     axum::response::Json(ApiResponse::success(serde_json::json!({
         "filename": filename,

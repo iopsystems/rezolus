@@ -45,17 +45,6 @@ const TopNav = {
         const liveMode = attrs.liveMode;
         const recording = attrs.recording;
 
-        // Build metadata key/value pairs
-        const metaEntries = [];
-        if (attrs.source) metaEntries.push(['Source', attrs.source]);
-        if (attrs.version) metaEntries.push(['Version', attrs.version]);
-        if (attrs.interval) metaEntries.push(['Interval', formatInterval(attrs.interval)]);
-        if (!liveMode && attrs.filesize) metaEntries.push(['Size', formatSize(attrs.filesize)]);
-        if (attrs.start_time != null && attrs.end_time != null) {
-            metaEntries.push(['Duration', formatDuration((attrs.end_time - attrs.start_time) / 1000)]);
-        }
-        if (attrs.num_series != null) metaEntries.push(['Series', attrs.num_series.toLocaleString()]);
-
         return m('div#topnav', [
             m('button.hamburger-btn', {
                 onclick: () => { sidebarOpen = !sidebarOpen; },
@@ -67,20 +56,75 @@ const TopNav = {
                     class: recording ? 'recording' : 'stopped',
                 }, recording ? 'REC' : 'STOPPED'),
             ]),
-            attrs.filename && m('div.topnav-source', {
-                onclick: () => { metadataExpanded = !metadataExpanded; },
-            }, [
-                m('span.topnav-source-name', attrs.filename),
-                m('span.topnav-source-chevron', { class: metadataExpanded ? 'expanded' : '' }, '\u25BE'),
-                metadataExpanded && metaEntries.length > 0 && m('div.topnav-meta-table', [
-                    m('div.topnav-meta-row.topnav-meta-header',
-                        metaEntries.map(([key]) => m('span', key)),
-                    ),
-                    m('div.topnav-meta-row.topnav-meta-values',
-                        metaEntries.map(([, val]) => m('span', val)),
-                    ),
-                ]),
-            ]),
+            // Node selector / filename display
+            (() => {
+                const nodes = attrs.nodeList || [];
+                const selNode = attrs.selectedNode;
+                const hasMultiNode = nodes.length > 1;
+
+                // Build metadata entries from per-source metadata for selected node
+                const metaEntries = [];
+                if (attrs.source) metaEntries.push(['Source', attrs.source]);
+                if (selNode && attrs.perSourceMeta) {
+                    const rezGroup = attrs.perSourceMeta.rezolus;
+                    const nodeEntry = rezGroup && rezGroup[selNode];
+                    if (nodeEntry && nodeEntry.version) {
+                        metaEntries.push(['Version', nodeEntry.version]);
+                    }
+                } else if (attrs.version) {
+                    metaEntries.push(['Version', attrs.version]);
+                }
+                if (attrs.interval) metaEntries.push(['Interval', formatInterval(attrs.interval)]);
+                if (!liveMode && attrs.filesize) metaEntries.push(['Size', formatSize(attrs.filesize)]);
+                if (attrs.start_time != null && attrs.end_time != null) {
+                    metaEntries.push(['Duration', formatDuration((attrs.end_time - attrs.start_time) / 1000)]);
+                }
+                if (attrs.num_series != null) metaEntries.push(['Series', attrs.num_series.toLocaleString()]);
+
+                // Display label: node name or filename
+                const displayLabel = selNode || attrs.filename;
+                if (!displayLabel) return null;
+
+                if (hasMultiNode) {
+                    // Multi-node dropdown
+                    return m('div.topnav-source', {
+                        onclick: () => { metadataExpanded = !metadataExpanded; },
+                    }, [
+                        m('select.topnav-node-select', {
+                            value: selNode,
+                            onclick: (e) => e.stopPropagation(),
+                            onchange: (e) => {
+                                attrs.onNodeChange(e.target.value);
+                            },
+                        }, nodes.map(n => m('option', { value: n }, n))),
+                        m('span.topnav-source-chevron', { class: metadataExpanded ? 'expanded' : '' }, '\u25BE'),
+                        metadataExpanded && metaEntries.length > 0 && m('div.topnav-meta-table', [
+                            m('div.topnav-meta-row.topnav-meta-header',
+                                metaEntries.map(([key]) => m('span', key)),
+                            ),
+                            m('div.topnav-meta-row.topnav-meta-values',
+                                metaEntries.map(([, val]) => m('span', val)),
+                            ),
+                        ]),
+                    ]);
+                }
+
+                // Single node or no-node (filename) — static label with metadata popup
+                return m('div.topnav-source', {
+                    onclick: () => { metadataExpanded = !metadataExpanded; },
+                }, [
+                    m('span.topnav-source-name', displayLabel),
+                    m('span.topnav-source-chevron', { class: metadataExpanded ? 'expanded' : '' }, '\u25BE'),
+                    metadataExpanded && metaEntries.length > 0 && m('div.topnav-meta-table', [
+                        m('div.topnav-meta-row.topnav-meta-header',
+                            metaEntries.map(([key]) => m('span', key)),
+                        ),
+                        m('div.topnav-meta-row.topnav-meta-values',
+                            metaEntries.map(([, val]) => m('span', val)),
+                        ),
+                    ]),
+                ]);
+            })(),
             m('div.topnav-actions', [
                 // Upload parquet (file mode only)
                 !liveMode && m('button.transport-btn.import-btn', {
@@ -305,6 +349,21 @@ const Sidebar = {
                         href: '/systeminfo',
                     },
                     [m('span.arrow', '→'), ' System Info'],
+                ),
+            ],
+
+            // Metadata link (below System Info)
+            attrs.hasFileMetadata && [
+                m(
+                    m.route.Link,
+                    {
+                        class:
+                            attrs.activeSection?.route === '/metadata'
+                                ? 'selected metadata-link'
+                                : 'metadata-link',
+                        href: '/metadata',
+                    },
+                    [m('span.arrow', '→'), ' Metadata'],
                 ),
             ],
         ])];
