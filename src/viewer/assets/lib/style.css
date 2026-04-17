@@ -1521,27 +1521,57 @@ main {
 .cgroup-select {
     width: 100%;
     min-height: 8.5rem;
+    max-height: 16rem;
+    overflow-y: auto;
     background: var(--bg-card);
     color: var(--fg);
     border: 1px solid var(--border-default);
     border-radius: 6px;
-    padding: 0.5rem;
+    padding: 0.25rem;
+    margin: 0;
+    list-style: none;
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
 }
 
-.cgroup-select option {
-    padding: 0.375rem 0.5rem;
+.cgroup-select-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: none;
 }
 
-.cgroup-select option:checked {
+.cgroup-select-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.cgroup-select-item.selected {
     background: var(--accent);
     color: var(--bg-void);
 }
 
-.cgroup-select option[disabled] {
+.cgroup-select-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.cgroup-select-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cgroup-select-empty {
+    padding: 0.375rem 0.5rem;
     color: var(--fg-muted);
     font-style: italic;
+    list-style: none;
 }
 
 .selector-controls {
