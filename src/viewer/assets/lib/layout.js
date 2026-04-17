@@ -64,12 +64,15 @@ const TopNav = {
 
                 // Build metadata entries from per-source metadata for selected node
                 const metaEntries = [];
+                if (attrs.source) metaEntries.push(['Source', attrs.source]);
                 if (selNode && attrs.perSourceMeta) {
                     const nodeEntry = Object.values(attrs.perSourceMeta)
                         .find(v => v.node === selNode);
-                    if (nodeEntry) {
-                        if (nodeEntry.version) metaEntries.push(['Version', nodeEntry.version]);
+                    if (nodeEntry && nodeEntry.version) {
+                        metaEntries.push(['Version', nodeEntry.version]);
                     }
+                } else if (attrs.version) {
+                    metaEntries.push(['Version', attrs.version]);
                 }
                 if (attrs.interval) metaEntries.push(['Interval', formatInterval(attrs.interval)]);
                 if (!liveMode && attrs.filesize) metaEntries.push(['Size', formatSize(attrs.filesize)]);

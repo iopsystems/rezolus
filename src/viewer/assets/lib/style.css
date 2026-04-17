@@ -2580,6 +2580,136 @@ main {
 }
 
 /* ==========================================================================
+   Node Selector (TopNav)
+   ========================================================================== */
+
+.topnav-node-select {
+    background: var(--bg-tertiary);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.8rem;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+}
+
+.topnav-node-select:hover {
+    border-color: var(--accent);
+}
+
+.topnav-node-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-muted);
+}
+
+/* ==========================================================================
+   Instance Selector (Service Sections)
+   ========================================================================== */
+
+.instance-selector {
+    margin: 0.5rem 0 1rem 0;
+}
+
+.instance-select {
+    background: var(--bg-tertiary);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+}
+
+.instance-select:hover {
+    border-color: var(--accent);
+}
+
+.instance-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-muted);
+}
+
+/* ==========================================================================
+   Metadata Page
+   ========================================================================== */
+
+.metadata-section {
+    padding: 1rem 2rem;
+    max-width: 1200px;
+}
+
+.metadata-section .sysinfo-group {
+    margin-bottom: 1.5rem;
+}
+
+.metadata-search {
+    width: 100%;
+    max-width: 400px;
+    background: var(--bg-tertiary);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    margin-bottom: 0.75rem;
+    outline: none;
+}
+
+.metadata-search:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-muted);
+}
+
+.metadata-desc-list {
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.metadata-section code {
+    font-size: 0.8rem;
+    background: var(--bg-tertiary);
+    padding: 1px 4px;
+    border-radius: 3px;
+    word-break: break-all;
+}
+
+.metadata-section thead th {
+    text-align: left;
+    padding: 4px 8px;
+    color: var(--fg-secondary);
+    font-weight: 500;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border-default);
+}
+
+/* ==========================================================================
+   Multi-Node System Info
+   ========================================================================== */
+
+.systeminfo-node {
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.systeminfo-node:last-child {
+    border-bottom: none;
+}
+
+.systeminfo-node-title {
+    font-size: 1.1rem;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ==========================================================================
    Narrow viewport — single-column charts, sidebar stays (<1200px)
    ========================================================================== */
 
