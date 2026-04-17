@@ -27,7 +27,7 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-static CGROUP_METRICS: &[&dyn MetricGroup] = &[&CGROUP_CPU_MIGRATIONS];
+static CGROUP_METRICS: &[&dyn GroupMetadata] = &[&CGROUP_CPU_MIGRATIONS];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)

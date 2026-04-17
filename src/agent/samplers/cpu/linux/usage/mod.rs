@@ -37,8 +37,8 @@ impl_cgroup_info!(bpf::types::cgroup_info);
 unsafe impl plain::Plain for bpf::types::task_info {}
 unsafe impl plain::Plain for bpf::types::task_exit {}
 
-static CGROUP_METRICS: &[&dyn MetricGroup] = &[&CGROUP_CPU_USAGE_USER, &CGROUP_CPU_USAGE_SYSTEM];
-static TASK_METRICS: &[&dyn MetricGroup] = &[&TASK_CPU_USAGE];
+static CGROUP_METRICS: &[&dyn GroupMetadata] = &[&CGROUP_CPU_USAGE_USER, &CGROUP_CPU_USAGE_SYSTEM];
+static TASK_METRICS: &[&dyn GroupMetadata] = &[&TASK_CPU_USAGE];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)

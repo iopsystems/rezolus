@@ -27,7 +27,7 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-static CGROUP_METRICS: &[&dyn MetricGroup] = &[
+static CGROUP_METRICS: &[&dyn GroupMetadata] = &[
     &CGROUP_SCHEDULER_IVCSW,
     &CGROUP_SCHEDULER_OFFCPU,
     &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
