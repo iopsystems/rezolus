@@ -162,15 +162,6 @@ jobs:
         run: echo 'FLAGS=' >> $GITHUB_ENV
         shell: bash
 
-      - name: Add swap
-        if: ${{ matrix.os != 'macos-latest' }}
-        shell: bash
-        run: |
-          sudo fallocate -l 4G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-
       - name: Install dependencies
         if: ${{ matrix.os != 'macos-latest' }}
         shell: bash
