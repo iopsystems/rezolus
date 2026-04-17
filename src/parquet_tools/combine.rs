@@ -36,7 +36,7 @@ pub(crate) fn combine_files(
     validate_sampling_interval(&inputs)?;
     validate_no_column_conflicts(&inputs)?;
     validate_time_overlap(&inputs)?;
-    combine_and_write(&inputs, output)
+    combine_and_write(&inputs, output, false)
 }
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
