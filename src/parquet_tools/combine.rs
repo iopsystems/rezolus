@@ -710,8 +710,11 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         });
     }
 
-    // per_source_metadata: use composite keys (source:label) to support
-    // multiple files per source name
+    // per_source_metadata: nested by source name, then by node/instance ID.
+    // Structure: { "rezolus": { "web01": {...}, "web02": {...} },
+    //              "vllm":    { "0": {...}, "1": {...} } }
+    // For rezolus sources, the sub-key is the node name.
+    // For service sources, the sub-key is the instance ID.
     let mut per_source: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     for input in inputs {
         // Merge existing per_source_metadata if present (from already-combined files)
@@ -724,52 +727,68 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
             if let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
             {
-                for (k, v) in psm {
-                    per_source.insert(k, v);
+                // Deep-merge: source groups are objects, merge their sub-entries
+                for (source_name, group_val) in psm {
+                    let target = per_source
+                        .entry(source_name)
+                        .or_insert_with(|| serde_json::json!({}));
+                    if let (serde_json::Value::Object(target_map), serde_json::Value::Object(src_map)) =
+                        (target, group_val)
+                    {
+                        for (k, v) in src_map {
+                            target_map.entry(k).or_insert(v);
+                        }
+                    }
                 }
             }
         }
 
-        // Determine the composite key for this input's per-source entry
-        let psm_key = if input.source == "rezolus" {
-            let node = input.node.as_deref().unwrap_or("unknown");
-            format!("{}:{}", input.source, node)
+        // Determine the sub-key within this source's group
+        let sub_key = if input.source == "rezolus" {
+            input.node.as_deref().unwrap_or("unknown").to_string()
         } else {
-            let instance = input.instance.as_deref().unwrap_or("0");
-            format!("{}:{}", input.source, instance)
+            input.instance.as_deref().unwrap_or("0").to_string()
         };
 
-        let source_entry = per_source
-            .entry(psm_key)
+        let source_group = per_source
+            .entry(input.source.clone())
             .or_insert_with(|| serde_json::json!({}));
-        if let serde_json::Value::Object(map) = source_entry {
-            // Move top-level version into per-source entry
-            if let Some(version) = input
-                .kv_metadata
-                .iter()
-                .find(|kv| kv.key == KEY_VERSION)
-                .and_then(|kv| kv.value.clone())
-            {
-                map.entry(NESTED_VERSION.to_string())
-                    .or_insert(serde_json::Value::String(version));
-            }
+        let serde_json::Value::Object(group_map) = source_group else {
+            continue;
+        };
+        let entry = group_map
+            .entry(sub_key)
+            .or_insert_with(|| serde_json::json!({}));
+        let serde_json::Value::Object(map) = entry else {
+            continue;
+        };
 
-            // Store node or instance label in per-source metadata
-            if input.source == "rezolus" {
-                if let Some(ref node) = input.node {
-                    map.entry(NESTED_NODE.to_string())
-                        .or_insert(serde_json::Value::String(node.clone()));
-                }
-            } else {
-                if let Some(ref instance) = input.instance {
-                    map.entry(NESTED_INSTANCE.to_string())
-                        .or_insert(serde_json::Value::String(instance.clone()));
-                }
-                // Also store node for service files if present (informational — which host it ran on)
-                if let Some(ref node) = input.node {
-                    map.entry(NESTED_NODE.to_string())
-                        .or_insert(serde_json::Value::String(node.clone()));
-                }
+        // Move top-level version into per-source entry
+        if let Some(version) = input
+            .kv_metadata
+            .iter()
+            .find(|kv| kv.key == KEY_VERSION)
+            .and_then(|kv| kv.value.clone())
+        {
+            map.entry(NESTED_VERSION.to_string())
+                .or_insert(serde_json::Value::String(version));
+        }
+
+        // Store node or instance label in per-source metadata
+        if input.source == "rezolus" {
+            if let Some(ref node) = input.node {
+                map.entry(NESTED_NODE.to_string())
+                    .or_insert(serde_json::Value::String(node.clone()));
+            }
+        } else {
+            if let Some(ref instance) = input.instance {
+                map.entry(NESTED_INSTANCE.to_string())
+                    .or_insert(serde_json::Value::String(instance.clone()));
+            }
+            // Also store node for service files if present (informational — which host it ran on)
+            if let Some(ref node) = input.node {
+                map.entry(NESTED_NODE.to_string())
+                    .or_insert(serde_json::Value::String(node.clone()));
             }
         }
     }
@@ -783,10 +802,11 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
             .and_then(|kv| kv.value.as_deref())
         {
             let node = input.node.as_deref().unwrap_or("unknown");
-            let psm_key = format!("rezolus:{}", node);
-            if let Some(serde_json::Value::Object(map)) = per_source.get_mut(&psm_key) {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(sysinfo_val) {
-                    map.entry(KEY_SYSTEMINFO.to_string()).or_insert(parsed);
+            if let Some(serde_json::Value::Object(group)) = per_source.get_mut("rezolus") {
+                if let Some(serde_json::Value::Object(map)) = group.get_mut(node) {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(sysinfo_val) {
+                        map.entry(KEY_SYSTEMINFO.to_string()).or_insert(parsed);
+                    }
                 }
             }
         }
@@ -1683,7 +1703,7 @@ mod tests {
         let sources: Vec<String> = serde_json::from_str(source_val).unwrap();
         assert_eq!(sources, vec!["rezolus"]);
 
-        // per_source_metadata keyed by composite "rezolus:web01", "rezolus:web02"
+        // per_source_metadata nested by source, then by node/instance
         let psm_str = kv
             .iter()
             .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
@@ -1691,10 +1711,10 @@ mod tests {
             .unwrap();
         let psm: serde_json::Value = serde_json::from_str(psm_str).unwrap();
 
-        assert!(psm.get("rezolus:web01").is_some());
-        assert!(psm.get("rezolus:web02").is_some());
-        assert_eq!(psm["rezolus:web01"]["node"].as_str().unwrap(), "web01");
-        assert_eq!(psm["rezolus:web02"]["node"].as_str().unwrap(), "web02");
+        assert!(psm["rezolus"].get("web01").is_some());
+        assert!(psm["rezolus"].get("web02").is_some());
+        assert_eq!(psm["rezolus"]["web01"]["node"].as_str().unwrap(), "web01");
+        assert_eq!(psm["rezolus"]["web02"]["node"].as_str().unwrap(), "web02");
     }
 
     #[test]
@@ -1720,7 +1740,7 @@ mod tests {
         let psm: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(psm_str).unwrap();
 
-        let entry = psm.get("vllm:0").expect("vllm:0 entry should exist");
+        let entry = psm.get("vllm").and_then(|g| g.get("0")).expect("vllm.0 entry should exist");
         assert_eq!(entry.get("instance").and_then(|v| v.as_str()), Some("0"));
         assert_eq!(entry.get("node").and_then(|v| v.as_str()), Some("gpu01"));
     }

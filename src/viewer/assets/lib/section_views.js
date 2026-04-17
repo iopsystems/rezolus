@@ -171,28 +171,40 @@ const createMetadataView = () => {
                     ].filter(Boolean))),
                 ]),
 
-                // Sources (from per_source_metadata)
-                Object.keys(psm).length > 0 && m('div.sysinfo-group', [
-                    m('h2.sysinfo-group-title', 'Sources'),
-                    m('table.sysinfo-table', [
-                        m('thead', m('tr', [
-                            m('th', 'Key'),
-                            m('th', 'Role'),
-                            m('th', 'Version'),
-                            m('th', 'Node'),
-                            m('th', 'Instance'),
-                        ])),
-                        m('tbody', Object.entries(psm).map(([key, val]) =>
-                            m('tr', [
-                                m('td', key),
-                                m('td', val.role || ''),
-                                m('td', val.version || ''),
-                                m('td', val.node || ''),
-                                m('td', val.instance || ''),
-                            ])
-                        )),
-                    ]),
-                ]),
+                // Sources (from per_source_metadata — nested: source -> subkey -> entry)
+                Object.keys(psm).length > 0 && (() => {
+                    const rows = [];
+                    for (const [source, group] of Object.entries(psm)) {
+                        if (!group || typeof group !== 'object') continue;
+                        for (const [subKey, val] of Object.entries(group)) {
+                            rows.push({ source, subKey, val });
+                        }
+                    }
+                    if (rows.length === 0) return null;
+                    return m('div.sysinfo-group', [
+                        m('h2.sysinfo-group-title', 'Sources'),
+                        m('table.sysinfo-table', [
+                            m('thead', m('tr', [
+                                m('th', 'Source'),
+                                m('th', 'ID'),
+                                m('th', 'Role'),
+                                m('th', 'Version'),
+                                m('th', 'Node'),
+                                m('th', 'Instance'),
+                            ])),
+                            m('tbody', rows.map(({ source, subKey, val }) =>
+                                m('tr', [
+                                    m('td', source),
+                                    m('td', subKey),
+                                    m('td', val.role || ''),
+                                    m('td', val.version || ''),
+                                    m('td', val.node || ''),
+                                    m('td', val.instance || ''),
+                                ])
+                            )),
+                        ]),
+                    ]);
+                })(),
 
                 // Descriptions
                 descEntries.length > 0 && m('div.sysinfo-group', [

@@ -162,7 +162,13 @@ pub fn run(config: Config) {
             let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
 
             let (systeminfo, selection, file_meta) = extract_parquet_metadata(path);
-            let service_exts = extract_service_extension_metadata(path, &registry);
+            let mut service_exts = extract_service_extension_metadata(path, &registry);
+
+            // Validate KPI availability against the loaded data so that
+            // template-derived dashboards hide KPIs with no data.
+            let data_arc = std::sync::Arc::new(data);
+            validate_service_extensions(&data_arc, &mut service_exts);
+            let data = std::sync::Arc::try_unwrap(data_arc).ok().expect("Arc still shared");
 
             // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
             // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
@@ -172,10 +178,12 @@ pub fn run(config: Config) {
             let file_checksum = compute_file_checksum(path);
 
             for (source, ext) in &service_exts {
+                let available = ext.kpis.iter().filter(|k| k.available).count();
                 info!(
-                    "Found service extension for {:?} from source {:?} ({} KPIs)",
+                    "Found service extension for {:?} from source {:?} ({}/{} KPIs available)",
                     ext.service_name,
                     source,
+                    available,
                     ext.kpis.len()
                 );
             }
@@ -503,30 +511,26 @@ fn build_multinode_systeminfo(path: &Path) -> Option<String> {
 
     let mut nodes = serde_json::Map::new();
 
-    for (composite_key, entry) in &psm {
-        let obj = match entry.as_object() {
-            Some(o) => o,
-            None => continue,
-        };
-        let sysinfo_val = match obj.get("systeminfo") {
-            Some(v) => v,
-            None => continue,
-        };
+    // per_source_metadata is nested: { "rezolus": { "node1": {...}, "node2": {...} }, ... }
+    // Extract systeminfo from each rezolus node entry.
+    if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
+        for (node_key, entry) in rez_group {
+            let obj = match entry.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            let sysinfo_val = match obj.get("systeminfo") {
+                Some(v) => v,
+                None => continue,
+            };
+            let node_name = obj
+                .get("node")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| node_key.clone());
 
-        // Determine node name: prefer explicit "node" field, else parse composite key
-        let node_name = obj
-            .get("node")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| {
-                // Composite key format: "source:nodename"
-                composite_key
-                    .split_once(':')
-                    .map(|(_, name)| name.to_string())
-                    .unwrap_or_else(|| composite_key.clone())
-            });
-
-        nodes.insert(node_name, sysinfo_val.clone());
+            nodes.insert(node_name, sysinfo_val.clone());
+        }
     }
 
     // Only return multi-node format when there are actually multiple nodes
@@ -593,14 +597,23 @@ fn extract_service_extension_metadata(
         if let Ok(metadata_map) =
             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(metadata_json)
         {
-            for (source, value) in &metadata_map {
+            // per_source_metadata is nested: { "source": { "id": { ... }, ... }, ... }
+            // Check each source group's entries for service_queries.
+            for (source, group_val) in &metadata_map {
                 // Skip sources already found via top-level service_queries.
                 if results.iter().any(|(s, _)| s == source) {
                     continue;
                 }
-                if let Some(sq) = value.get(NESTED_SERVICE_QUERIES) {
-                    if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
-                        results.push((source.clone(), ext));
+                if let Some(group) = group_val.as_object() {
+                    for (_sub_key, entry) in group {
+                        if let Some(sq) = entry.get(NESTED_SERVICE_QUERIES) {
+                            if let Ok(ext) =
+                                serde_json::from_value::<ServiceExtension>(sq.clone())
+                            {
+                                results.push((source.clone(), ext));
+                                break; // one extension per source
+                            }
+                        }
                     }
                 }
             }
@@ -631,6 +644,65 @@ fn extract_service_extension_metadata(
     }
 
     results
+}
+
+/// Validate KPI availability for service extensions by running each KPI's
+/// PromQL query against the loaded TSDB. Sets `available = false` on KPIs
+/// whose queries return empty results (e.g. zero-traffic histograms).
+fn validate_service_extensions(
+    tsdb: &std::sync::Arc<Tsdb>,
+    exts: &mut [(String, ServiceExtension)],
+) {
+    let engine = QueryEngine::new(tsdb.clone());
+    let (start, end) = engine.get_time_range();
+
+    for (_source, ext) in exts.iter_mut() {
+        for kpi in &mut ext.kpis {
+            let query = kpi_effective_query(kpi);
+            let has_data = match engine.query_range(&query, start, end, 1.0) {
+                Ok(result) => match &result {
+                    promql::QueryResult::Vector { result } => !result.is_empty(),
+                    promql::QueryResult::Matrix { result } => !result.is_empty(),
+                    promql::QueryResult::Scalar { .. } => true,
+                    promql::QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
+                },
+                Err(_) => false,
+            };
+            kpi.available = has_data;
+        }
+    }
+}
+
+/// Build the effective PromQL query for a KPI, wrapping histogram metrics in
+/// the appropriate histogram function.
+fn kpi_effective_query(kpi: &Kpi) -> String {
+    if kpi.metric_type == "histogram" {
+        let subtype = kpi.subtype.as_deref().unwrap_or("percentiles");
+        if subtype == "buckets" {
+            format!("histogram_heatmap({})", kpi.query)
+        } else {
+            let quantiles = match &kpi.percentiles {
+                Some(p) => format!(
+                    "[{}]",
+                    p.iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                None => format!(
+                    "[{}]",
+                    crate::common::DEFAULT_PERCENTILES
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            format!("histogram_percentiles({}, {})", quantiles, kpi.query)
+        }
+    } else {
+        kpi.query.clone()
+    }
 }
 
 fn compute_file_checksum(path: &Path) -> Option<String> {
@@ -1022,7 +1094,10 @@ async fn upload_parquet(
     // embeds the original name instead of the temp path.
     data.set_filename(filename.clone());
 
-    let service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+    let data_arc = std::sync::Arc::new(data);
+    validate_service_extensions(&data_arc, &mut service_exts);
+    let data = std::sync::Arc::try_unwrap(data_arc).ok().expect("Arc still shared");
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
     let new_state = dashboard::generate(data, filesize, &service_refs, state.templates.clone());
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);

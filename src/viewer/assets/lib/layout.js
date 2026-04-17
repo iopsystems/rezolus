@@ -66,8 +66,8 @@ const TopNav = {
                 const metaEntries = [];
                 if (attrs.source) metaEntries.push(['Source', attrs.source]);
                 if (selNode && attrs.perSourceMeta) {
-                    const nodeEntry = Object.values(attrs.perSourceMeta)
-                        .find(v => v.node === selNode);
+                    const rezGroup = attrs.perSourceMeta.rezolus;
+                    const nodeEntry = rezGroup && rezGroup[selNode];
                     if (nodeEntry && nodeEntry.version) {
                         metaEntries.push(['Version', nodeEntry.version]);
                     }

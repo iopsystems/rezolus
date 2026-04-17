@@ -89,9 +89,10 @@ const parseNodeList = () => {
 
     perSourceMeta = fileMetadata.per_source_metadata;
     const nodes = [];
-    for (const [key, value] of Object.entries(perSourceMeta)) {
-        if (key.startsWith('rezolus:')) {
-            const nodeName = value.node || key.split(':')[1] || key;
+    const rezGroup = perSourceMeta.rezolus;
+    if (rezGroup && typeof rezGroup === 'object') {
+        for (const [subKey, value] of Object.entries(rezGroup)) {
+            const nodeName = value.node || subKey;
             if (!nodes.includes(nodeName)) {
                 nodes.push(nodeName);
             }
@@ -112,20 +113,20 @@ const parseServiceInstances = () => {
 
     if (!perSourceMeta) return;
 
-    for (const [key, value] of Object.entries(perSourceMeta)) {
-        const colonIdx = key.indexOf(':');
-        if (colonIdx < 0) continue;
-        const source = key.substring(0, colonIdx);
+    for (const [source, group] of Object.entries(perSourceMeta)) {
         if (source === 'rezolus') continue;
+        if (!group || typeof group !== 'object') continue;
 
-        const instanceId = value.instance || key.substring(colonIdx + 1);
-        if (!serviceInstances[source]) {
-            serviceInstances[source] = [];
+        for (const [subKey, value] of Object.entries(group)) {
+            const instanceId = value.instance || subKey;
+            if (!serviceInstances[source]) {
+                serviceInstances[source] = [];
+            }
+            serviceInstances[source].push({
+                id: instanceId,
+                node: value.node || null,
+            });
         }
-        serviceInstances[source].push({
-            id: instanceId,
-            node: value.node || null,
-        });
     }
 
     for (const source of Object.keys(serviceInstances)) {
@@ -173,7 +174,9 @@ const changeNode = (nodeName) => {
     selectedNode = nodeName;
     setSelectedNode(nodeName);
     clearViewerCaches();
-    m.redraw();
+    // Re-set the current route to force onmatch to re-run and fetch
+    // fresh data for the newly selected node.
+    m.route.set(m.route.get());
 };
 
 const changeInstance = (serviceName, instanceId) => {
@@ -181,7 +184,7 @@ const changeInstance = (serviceName, instanceId) => {
     setSelectedInstance(serviceName, instanceId);
     const svcKey = `service/${serviceName}`;
     delete sectionResponseCache[svcKey];
-    m.redraw();
+    m.route.set(m.route.get());
 };
 
 const uploadParquet = async (file) => {
