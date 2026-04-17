@@ -863,7 +863,7 @@ main {
     background: var(--bg);
     min-height: calc(100vh - var(--header-height));
     max-width: calc(100vw - var(--sidebar-width));
-    overflow: hidden;
+    overflow-x: hidden;
 }
 
 .section-header-row {
@@ -2710,7 +2710,7 @@ main {
     gap: 0.5rem;
     margin-bottom: 1.5rem;
     position: sticky;
-    top: 0;
+    top: var(--header-height);
     z-index: 10;
     background: var(--bg);
     padding: 0.75rem 0;
