@@ -170,19 +170,21 @@ jobs:
           sudo apt-get -y install libelf-dev
           rustup component add rustfmt
 
+      # viewer is a wasm32-only workspace member; it is built via
+      # crates/viewer/build.sh rather than in the main CI pipeline.
       - name: build
         shell: bash
         run: |
-          cargo build --workspace ${{ env.FEATURE_FLAGS }} --all-targets --locked ${{ env.FLAGS }}
+          cargo build --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --all-targets --locked ${{ env.FLAGS }}
       - name: test
         shell: bash
         run: |
-          cargo test --workspace ${{ env.FEATURE_FLAGS }} --tests --bins --locked ${{ env.FLAGS }}
+          cargo test --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --tests --bins --locked ${{ env.FLAGS }}
       - name: doctests
         if: ${{ matrix.profile == 'debug' }}
         shell: bash
         run: |
-          cargo test --workspace ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
+          cargo test --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
       - name: smoketest
         if: ${{ matrix.profile == 'release' }}
         shell: bash
