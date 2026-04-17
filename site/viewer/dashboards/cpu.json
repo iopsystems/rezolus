@@ -25,7 +25,7 @@
             "title": "Busy %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000"
+          "promql_query": "sum(irate(cpu_usage[5m])) / sum(cpu_cores) / 1000000000"
         },
         {
           "data": [],
@@ -69,7 +69,7 @@
             "title": "User %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(cpu_usage{state=\"user\"}[5m])) / cpu_cores / 1000000000"
+          "promql_query": "sum(irate(cpu_usage{state=\"user\"}[5m])) / sum(cpu_cores) / 1000000000"
         },
         {
           "data": [],
@@ -113,7 +113,7 @@
             "title": "System %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(cpu_usage{state=\"system\"}[5m])) / cpu_cores / 1000000000"
+          "promql_query": "sum(irate(cpu_usage{state=\"system\"}[5m])) / sum(cpu_cores) / 1000000000"
         },
         {
           "data": [],
@@ -195,7 +195,7 @@
             "title": "Instructions per Nanosecond (IPNS)",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores"
+          "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / sum(cpu_cores)"
         },
         {
           "data": [],
@@ -275,7 +275,7 @@
             "title": "Frequency",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores"
+          "promql_query": "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / sum(cpu_cores)"
         },
         {
           "data": [],

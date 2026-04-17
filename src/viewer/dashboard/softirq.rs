@@ -18,7 +18,7 @@ fn add_softirq_group(view: &mut View, label: &str, kind: &str) {
     group.plot_promql(
         PlotOpts::counter("CPU %", format!("softirq-{kind}-time"), Unit::Percentage)
             .percentage_range(),
-        format!("sum(irate(softirq_time{{kind=\"{kind}\"}}[5m])) / cpu_cores / 1000000000"),
+        format!("sum(irate(softirq_time{{kind=\"{kind}\"}}[5m])) / sum(cpu_cores) / 1000000000"),
     );
 
     group.plot_promql(
@@ -52,7 +52,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     softirq.plot_promql(
         PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
-        "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
+        "sum(irate(softirq_time[5m])) / sum(cpu_cores) / 1000000000".to_string(),
     );
 
     softirq.plot_promql(
