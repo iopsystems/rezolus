@@ -732,8 +732,10 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
                     let target = per_source
                         .entry(source_name)
                         .or_insert_with(|| serde_json::json!({}));
-                    if let (serde_json::Value::Object(target_map), serde_json::Value::Object(src_map)) =
-                        (target, group_val)
+                    if let (
+                        serde_json::Value::Object(target_map),
+                        serde_json::Value::Object(src_map),
+                    ) = (target, group_val)
                     {
                         for (k, v) in src_map {
                             target_map.entry(k).or_insert(v);
@@ -1740,7 +1742,10 @@ mod tests {
         let psm: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(psm_str).unwrap();
 
-        let entry = psm.get("vllm").and_then(|g| g.get("0")).expect("vllm.0 entry should exist");
+        let entry = psm
+            .get("vllm")
+            .and_then(|g| g.get("0"))
+            .expect("vllm.0 entry should exist");
         assert_eq!(entry.get("instance").and_then(|v| v.as_str()), Some("0"));
         assert_eq!(entry.get("node").and_then(|v| v.as_str()), Some("gpu01"));
     }

@@ -168,7 +168,9 @@ pub fn run(config: Config) {
             // template-derived dashboards hide KPIs with no data.
             let data_arc = std::sync::Arc::new(data);
             validate_service_extensions(&data_arc, &mut service_exts);
-            let data = std::sync::Arc::try_unwrap(data_arc).ok().expect("Arc still shared");
+            let data = std::sync::Arc::try_unwrap(data_arc)
+                .ok()
+                .expect("Arc still shared");
 
             // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
             // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
@@ -607,8 +609,7 @@ fn extract_service_extension_metadata(
                 if let Some(group) = group_val.as_object() {
                     for (_sub_key, entry) in group {
                         if let Some(sq) = entry.get(NESTED_SERVICE_QUERIES) {
-                            if let Ok(ext) =
-                                serde_json::from_value::<ServiceExtension>(sq.clone())
+                            if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone())
                             {
                                 results.push((source.clone(), ext));
                                 break; // one extension per source
@@ -1097,7 +1098,9 @@ async fn upload_parquet(
     let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
     let data_arc = std::sync::Arc::new(data);
     validate_service_extensions(&data_arc, &mut service_exts);
-    let data = std::sync::Arc::try_unwrap(data_arc).ok().expect("Arc still shared");
+    let data = std::sync::Arc::try_unwrap(data_arc)
+        .ok()
+        .expect("Arc still shared");
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
     let new_state = dashboard::generate(data, filesize, &service_refs, state.templates.clone());
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
