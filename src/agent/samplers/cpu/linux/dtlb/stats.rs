@@ -1,6 +1,6 @@
 use metriken::*;
 
-use crate::agent::{CounterGroup, MAX_CPUS};
+use crate::agent::MAX_CPUS;
 
 // per-CPU metrics
 

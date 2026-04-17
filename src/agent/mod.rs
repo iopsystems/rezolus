@@ -10,11 +10,8 @@ use config::Config;
 use external_metrics::{ExternalMetricsStore, Protocol, ServerState};
 use samplers::{Sampler, SamplerResult, SAMPLERS};
 
-#[allow(unused_imports)]
-use metrics::{
-    CounterGroup, CounterGroupError, GaugeGroup, GaugeGroupError, MetricGroup, SparseCounterGroup,
-    SparseCounterGroupError,
-};
+#[cfg(target_os = "linux")]
+use metrics::GroupMetadata;
 
 #[cfg(target_os = "linux")]
 mod bpf;

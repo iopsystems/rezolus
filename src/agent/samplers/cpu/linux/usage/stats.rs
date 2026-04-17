@@ -1,6 +1,6 @@
 use metriken::*;
 
-use crate::agent::{CounterGroup, SparseCounterGroup, MAX_CGROUPS, MAX_CPUS, MAX_PID};
+use crate::agent::{MAX_CGROUPS, MAX_CPUS, MAX_PID};
 
 /*
  * bpf prog stats
@@ -65,7 +65,7 @@ pub static CGROUP_CPU_USAGE_SYSTEM: CounterGroup = CounterGroup::new(MAX_CGROUPS
     description = "The amount of CPU time used on a per-task basis",
     metadata = { unit = "nanoseconds" }
 )]
-pub static TASK_CPU_USAGE: SparseCounterGroup = SparseCounterGroup::new(MAX_PID);
+pub static TASK_CPU_USAGE: CounterGroup = CounterGroup::new(MAX_PID);
 
 /*
  * softirq metrics

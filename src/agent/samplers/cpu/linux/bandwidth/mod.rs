@@ -29,7 +29,7 @@ unsafe impl plain::Plain for bpf::types::bandwidth_info {}
 
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-static CGROUP_METRICS: &[&dyn MetricGroup] = &[
+static CGROUP_METRICS: &[&dyn GroupMetadata] = &[
     &CGROUP_CPU_BANDWIDTH_QUOTA,
     &CGROUP_CPU_BANDWIDTH_PERIOD_DURATION,
     &CGROUP_CPU_THROTTLED_TIME,

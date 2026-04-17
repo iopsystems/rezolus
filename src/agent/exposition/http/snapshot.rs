@@ -129,6 +129,55 @@ fn create(
                 value,
                 metadata,
             }),
+            Some(Value::CounterGroup(g)) => {
+                if let Some(values) = g.load_counters() {
+                    for (counter_id, value) in values.iter().enumerate() {
+                        if *value == 0 {
+                            continue;
+                        }
+                        let mut metadata = metadata.clone();
+
+                        metadata.insert("id".to_string(), counter_id.to_string());
+
+                        if let Some(m) = g.load_metadata(counter_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.counters.push(Counter {
+                            name: format!("{metric_id}x{counter_id}"),
+                            value: *value,
+                            metadata,
+                        })
+                    }
+                }
+            }
+            Some(Value::GaugeGroup(g)) => {
+                if let Some(values) = g.load_gauges() {
+                    for (gauge_id, value) in values.iter().enumerate() {
+                        if *value == i64::MIN {
+                            continue;
+                        }
+
+                        let mut metadata = metadata.clone();
+
+                        metadata.insert("id".to_string(), gauge_id.to_string());
+
+                        if let Some(m) = g.load_metadata(gauge_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.gauges.push(Gauge {
+                            name: format!("{metric_id}x{gauge_id}"),
+                            value: *value,
+                            metadata,
+                        })
+                    }
+                }
+            }
             Some(Value::Other(any)) => {
                 if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
                     if let Some(value) = histogram.load() {
@@ -146,100 +195,6 @@ fn create(
                             value,
                             metadata,
                         })
-                    }
-                } else if let Some(counters) = any.downcast_ref::<CounterGroup>() {
-                    // Prefer zero-copy mmap path, fall back to cloned Vec
-                    let values: Option<&[u64]> = counters.load_values();
-                    let owned;
-                    let c: &[u64] = if let Some(v) = values {
-                        v
-                    } else if let Some(v) = {
-                        owned = counters.load();
-                        owned.as_deref()
-                    } {
-                        v
-                    } else {
-                        continue;
-                    };
-
-                    for (counter_id, counter) in c.iter().enumerate() {
-                        if *counter == 0 {
-                            continue;
-                        }
-                        let mut metadata = metadata.clone();
-
-                        metadata.insert("id".to_string(), counter_id.to_string());
-
-                        if let Some(m) = counters.load_metadata(counter_id) {
-                            for (k, v) in m {
-                                metadata.insert(k, v);
-                            }
-                        }
-
-                        s.counters.push(Counter {
-                            name: format!("{metric_id}x{counter_id}"),
-                            value: *counter,
-                            metadata,
-                        })
-                    }
-                } else if let Some(counters) = any.downcast_ref::<SparseCounterGroup>() {
-                    // Prefer zero-copy mmap path, fall back to cloned Vec
-                    let values: Option<&[u64]> = counters.load_values();
-                    let owned;
-                    let c: &[u64] = if let Some(v) = values {
-                        v
-                    } else if let Some(v) = {
-                        owned = counters.load();
-                        owned.as_deref()
-                    } {
-                        v
-                    } else {
-                        continue;
-                    };
-
-                    for (counter_id, counter) in c.iter().enumerate() {
-                        if *counter == 0 {
-                            continue;
-                        }
-                        let mut metadata = metadata.clone();
-
-                        metadata.insert("id".to_string(), counter_id.to_string());
-
-                        if let Some(m) = counters.load_metadata(counter_id) {
-                            for (k, v) in m {
-                                metadata.insert(k, v);
-                            }
-                        }
-
-                        s.counters.push(Counter {
-                            name: format!("{metric_id}x{counter_id}"),
-                            value: *counter,
-                            metadata,
-                        })
-                    }
-                } else if let Some(gauges) = any.downcast_ref::<GaugeGroup>() {
-                    if let Some(g) = gauges.load() {
-                        for (gauge_id, gauge) in g.iter().enumerate() {
-                            if *gauge == i64::MIN {
-                                continue;
-                            }
-
-                            let mut metadata = metadata.clone();
-
-                            metadata.insert("id".to_string(), gauge_id.to_string());
-
-                            if let Some(m) = gauges.load_metadata(gauge_id) {
-                                for (k, v) in m {
-                                    metadata.insert(k, v);
-                                }
-                            }
-
-                            s.gauges.push(Gauge {
-                                name: format!("{metric_id}x{gauge_id}"),
-                                value: *gauge,
-                                metadata,
-                            })
-                        }
                     }
                 }
             }

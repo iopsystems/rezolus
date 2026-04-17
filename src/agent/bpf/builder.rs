@@ -5,7 +5,7 @@ use tracing::trace;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
-use metriken::{LazyCounter, RwLockHistogram};
+use metriken::{CounterGroup, LazyCounter, RwLockHistogram};
 use perf_event::ReadFormat;
 
 use std::collections::HashMap;
@@ -227,7 +227,6 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     cpu_counters: Vec<(&'static str, Vec<&'static CounterGroup>)>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
-    sparse_packed_counters: Vec<(&'static str, &'static SparseCounterGroup)>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
     btf_path: Option<String>,
@@ -259,7 +258,6 @@ where
             cpu_counters: Vec::new(),
             perf_events: Vec::new(),
             packed_counters: Vec::new(),
-            sparse_packed_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
             enabled_programs: None,
@@ -440,12 +438,6 @@ where
                 .map(|(name, counters)| PackedCounters::new(skel.map(name), counters))
                 .collect();
 
-            let mut sparse_packed_counters: Vec<SparsePackedCounters> = self
-                .sparse_packed_counters
-                .into_iter()
-                .map(|(name, counters)| SparsePackedCounters::new(skel.map(name), counters))
-                .collect();
-
             // load any data from userspace into BPF maps
             for (name, values) in self.maps.into_iter() {
                 let fd = skel.map(name).as_fd().as_raw_fd();
@@ -498,10 +490,6 @@ where
                 }
 
                 for v in &mut packed_counters {
-                    v.refresh();
-                }
-
-                for v in &mut sparse_packed_counters {
                     v.refresh();
                 }
 
@@ -636,16 +624,14 @@ where
         self
     }
 
-    /// Register a set of sparse packed counters. Like `packed_counters`, but
-    /// uses `SparseCounterGroup` which has sparse metadata storage, suitable
-    /// for high-cardinality metrics like per-task counters.
+    /// Register a set of sparse packed counters. Alias for `packed_counters`
+    /// since metriken's `CounterGroup` uses sparse metadata by default.
     pub fn sparse_packed_counters(
-        mut self,
+        self,
         name: &'static str,
-        counters: &'static SparseCounterGroup,
+        counters: &'static CounterGroup,
     ) -> Self {
-        self.sparse_packed_counters.push((name, counters));
-        self
+        self.packed_counters(name, counters)
     }
 
     pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {

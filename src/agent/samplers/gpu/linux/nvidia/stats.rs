@@ -1,7 +1,5 @@
 use metriken::*;
 
-use crate::agent::{CounterGroup, GaugeGroup};
-
 const MAX_GPUS: usize = 32;
 
 // Memory

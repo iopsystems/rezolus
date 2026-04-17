@@ -156,6 +156,7 @@ jobs:
         run: |
           echo 'FLAGS=--release' >> $GITHUB_ENV
           echo 'CARGO_BUILD_JOBS=2' >> $GITHUB_ENV
+          echo 'CARGO_PROFILE_RELEASE_LTO=false' >> $GITHUB_ENV
         shell: bash
       - name: Update cargo flags
         if: ${{ matrix.profile == 'debug' }}

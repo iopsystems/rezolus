@@ -1,6 +1,6 @@
 use metriken::*;
 
-use crate::agent::{CounterGroup, GaugeGroup, MAX_CGROUPS};
+use crate::agent::MAX_CGROUPS;
 
 /*
  * bpf prog stats

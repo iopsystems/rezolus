@@ -24,7 +24,7 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-static CGROUP_METRICS: &[&dyn MetricGroup] = &[
+static CGROUP_METRICS: &[&dyn GroupMetadata] = &[
     &CGROUP_SYSCALL_OTHER,
     &CGROUP_SYSCALL_READ,
     &CGROUP_SYSCALL_WRITE,
