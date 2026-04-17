@@ -1,18 +1,18 @@
 [package]
 name = "systeminfo"
-edition = "2021"
 version = "0.1.0"
-license = "MIT OR Apache-2.0"
+edition = "2021"
+license.workspace = true
 publish = false
 
 [features]
 cli = []
 
 [dependencies]
-log = "0.4.21"
-serde = { version = "1.0.188", features = ["derive"] }
-serde_json = "1.0.107"
-walkdir = "2.4.0"
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true
 
 
 [[bin]]

@@ -109,6 +109,11 @@ Open a Parquet artifact in a web-based dashboard:
 - Service KPI dashboards from annotated parquet files
 - Export/download parquet files from the viewer
 
+The same dashboard is also available as a browser-only static site under
+[`site/viewer/`](site/viewer/), powered by the
+[`crates/viewer`](crates/viewer) WASM module. It runs the PromQL query engine
+client-side, so parquet files never leave the browser.
+
 ### Parquet Tools
 
 File operations for parquet recordings:
@@ -349,6 +354,17 @@ target/release/rezolus view http://localhost:4241
 target/release/rezolus parquet metadata -i rezolus.parquet
 target/release/rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
 ```
+
+To rebuild the browser-only static viewer (`site/viewer/`) that ships the
+PromQL engine as WebAssembly, install
+[wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) (0.13+) and run:
+
+```bash
+./crates/viewer/build.sh
+```
+
+The artifacts land in `site/viewer/pkg/`. See
+[`crates/viewer/README.md`](crates/viewer/README.md) for details.
 
 ## Contributing
 

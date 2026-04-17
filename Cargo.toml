@@ -1,9 +1,36 @@
+[workspace]
+members = [".", "crates/systeminfo", "crates/viewer"]
+exclude = ["xtask"]
+resolver = "2"
+
+[workspace.package]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/iopsystems/rezolus"
+homepage = "https://github.com/iopsystems/rezolus"
+
+[workspace.dependencies]
+anyhow = "1.0.98"
+console_error_panic_hook = "0.1"
+histogram = "1.0.0"
+libc = "0.2.172"
+log = "0.4.21"
+metriken = { git = "https://github.com/iopsystems/metriken", branch = "main" }
+metriken-exposition = { git = "https://github.com/iopsystems/metriken", branch = "main" }
+metriken-query = { git = "https://github.com/iopsystems/metriken", branch = "main", default-features = false }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+walkdir = "2.5.0"
+wasm-bindgen = "0.2"
+
 [package]
 name = "rezolus"
 version = "5.9.2-alpha.1"
-license = "MIT OR Apache-2.0"
-edition = "2021"
 description = "High resolution systems performance telemetry agent"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "rezolus"
@@ -11,7 +38,7 @@ path = "src/main.rs"
 
 [dependencies]
 allan = "0.3.0"
-anyhow = "1.0.98"
+anyhow.workspace = true
 archspec = "0.1.3"
 arrow = "54.3.1"
 async-trait = "0.1.88"
@@ -24,17 +51,17 @@ core_affinity = "0.8.3"
 ctrlc = { version = "3.4.7", features = ["termination"] }
 futures = "0.3.31"
 h2 = "0.4.10"
-histogram = "1.0.0"
+histogram.workspace = true
 http = "1.3.1"
 humantime = "2.2.0"
 include_dir = "0.7.4"
 lazy_static = "1.5.0"
-libc = "0.2.172"
+libc.workspace = true
 linkme = "0.3.33"
 memmap2 = "0.9.5"
-metriken = { git = "https://github.com/iopsystems/metriken", branch = "main" }
-metriken-exposition = { git = "https://github.com/iopsystems/metriken", branch = "main" }
-metriken-query = { git = "https://github.com/iopsystems/metriken", branch = "main", features = ["http"] }
+metriken.workspace = true
+metriken-exposition.workspace = true
+metriken-query = { workspace = true, features = ["ingest", "lz4", "http"] }
 notify = "8.0.0"
 open = "5.3.2"
 ouroboros = "0.18.5"
@@ -54,12 +81,12 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 rmp-serde = "1.3.0"
 rustfft = "6.2.0"
 sha2 = "0.10"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+serde.workspace = true
+serde_json.workspace = true
 syscall-numbers = "4.0.2"
 sysconf = "0.3.4"
 tempfile = "3.20.0"
-thiserror = "2.0.12"
+thiserror.workspace = true
 tokio = { version = "1.45.1", features = ["full"] }
 toml = "0.8.23"
 tower = { version = "0.5.2", features = ["tokio"] }
@@ -70,7 +97,7 @@ tower-http = { version = "0.6.6", features = [
 ] }
 tower-livereload = "0.9.6"
 systeminfo = { path = "crates/systeminfo" }
-walkdir = "2.5.0"
+walkdir.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.25.0" }
@@ -100,6 +127,13 @@ codegen-units = 1
 debug = true
 lto = true
 codegen-units = 1
+
+# Profile used by crates/viewer/build.sh for the wasm build. Smaller and
+# debuginfo-free so the .wasm artifact stays compact when shipped to browsers.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+debug = false
 
 [package.metadata.deb]
 maintainer = "IOP Systems <team@iop.systems>"
