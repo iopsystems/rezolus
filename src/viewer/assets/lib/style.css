@@ -973,16 +973,7 @@ main {
 }
 
 .chart-wrapper:has(.no-data) {
-    min-height: 40px;
-}
-
-.chart-wrapper:has(.no-data) .chart-header {
-    opacity: 0.5;
-}
-
-.chart-wrapper:has(.no-data):hover {
-    border-color: var(--border-default);
-    box-shadow: none;
+    display: none;
 }
 
 .chart-header {
@@ -1782,6 +1773,28 @@ main {
 }
 
 #sidebar .systeminfo-link.selected {
+    color: var(--accent);
+}
+
+/* Sidebar metadata link — same style as query explorer / system info links */
+#sidebar .metadata-link {
+    color: var(--fg-secondary);
+    display: flex;
+    align-items: center;
+}
+
+#sidebar .metadata-link .arrow {
+    margin-right: 0.5rem;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    transition: transform var(--transition-base);
+}
+
+#sidebar .metadata-link:hover .arrow {
+    transform: translateX(2px);
+}
+
+#sidebar .metadata-link.selected {
     color: var(--accent);
 }
 
@@ -2696,6 +2709,11 @@ main {
     flex-wrap: wrap;
     gap: 0.5rem;
     margin-bottom: 1.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
+    padding: 0.75rem 0;
 }
 
 .systeminfo-node-btn {

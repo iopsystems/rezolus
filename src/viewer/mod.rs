@@ -659,7 +659,7 @@ fn validate_service_extensions(
 
     for (_source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
-            let query = kpi_effective_query(kpi);
+            let query = kpi.effective_query();
             let has_data = match engine.query_range(&query, start, end, 1.0) {
                 Ok(result) => match &result {
                     promql::QueryResult::Vector { result } => !result.is_empty(),
@@ -671,38 +671,6 @@ fn validate_service_extensions(
             };
             kpi.available = has_data;
         }
-    }
-}
-
-/// Build the effective PromQL query for a KPI, wrapping histogram metrics in
-/// the appropriate histogram function.
-fn kpi_effective_query(kpi: &Kpi) -> String {
-    if kpi.metric_type == "histogram" {
-        let subtype = kpi.subtype.as_deref().unwrap_or("percentiles");
-        if subtype == "buckets" {
-            format!("histogram_heatmap({})", kpi.query)
-        } else {
-            let quantiles = match &kpi.percentiles {
-                Some(p) => format!(
-                    "[{}]",
-                    p.iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                None => format!(
-                    "[{}]",
-                    crate::common::DEFAULT_PERCENTILES
-                        .iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            };
-            format!("histogram_percentiles({}, {})", quantiles, kpi.query)
-        }
-    } else {
-        kpi.query.clone()
     }
 }
 
