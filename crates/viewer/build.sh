@@ -9,10 +9,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/../../site/viewer/pkg"
 
-# LLVM from Homebrew is needed for compiling zstd C code to wasm32 on macOS
-if [ -d /opt/homebrew/opt/llvm ]; then
-    export CC=/opt/homebrew/opt/llvm/bin/clang
-    export AR=/opt/homebrew/opt/llvm/bin/llvm-ar
+# On macOS, Apple's system clang can't target wasm32 — use Homebrew's LLVM
+# for compiling zstd to wasm32. Resolve the prefix via brew so this works on
+# both Apple Silicon (/opt/homebrew) and Intel (/usr/local).
+if command -v brew >/dev/null 2>&1 && LLVM_PREFIX=$(brew --prefix llvm 2>/dev/null); then
+    export CC="$LLVM_PREFIX/bin/clang"
+    export AR="$LLVM_PREFIX/bin/llvm-ar"
 fi
 
 cd "$SCRIPT_DIR"
