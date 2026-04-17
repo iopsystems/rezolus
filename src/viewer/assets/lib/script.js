@@ -520,12 +520,23 @@ let currentGranularity = null;
 const changeGranularity = async (step) => {
     currentGranularity = step;
     setStepOverride(step);
-    clearViewerCaches();
-    m.redraw();
 
     const currentRoute = m.route.get();
-    if (!currentRoute) return;
-    const section = currentRoute.replace(/^\//, '');
+    const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
+
+    // Invalidate all section caches EXCEPT the current one so the component
+    // tree stays mounted (avoids unmounting CgroupSelector which would lose
+    // its selected-cgroup state and leave charts empty).
+    for (const key of Object.keys(sectionResponseCache)) {
+        if (key !== section) delete sectionResponseCache[key];
+    }
+    heatmapDataCache.clear();
+    // Reset zoom state but keep chart registrations — the chart instances
+    // stay alive because we preserved the current section's cache.
+    chartsState.zoomLevel = null;
+    chartsState.zoomSource = null;
+    chartsState.globalZoom = null;
+
     if (!section) return;
 
     try {

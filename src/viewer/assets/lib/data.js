@@ -87,8 +87,14 @@ const injectLabel = (query, labelName, labelValue) => {
         const after = query.substring(offset + match.length);
         if (/^\s*\(/.test(after)) return match;
 
-        // Check if inside braces (label name/value) or square brackets (duration)
+        // Check context before the identifier
         const before = query.substring(0, offset);
+
+        // Skip identifiers inside by(...) / without(...) grouping clauses —
+        // these are label names, not metric names.
+        if (/\b(?:by|without)\s*\([^)]*$/.test(before)) return match;
+
+        // Check if inside braces (label name/value) or square brackets (duration)
         const lastOpenBrace = before.lastIndexOf('{');
         const lastCloseBrace = before.lastIndexOf('}');
         if (lastOpenBrace > lastCloseBrace) return match;

@@ -27,8 +27,9 @@ const extractCgroupNames = (result) => {
     return names;
 };
 
-/** Render a custom multi-select list with a color swatch per item. */
-const selectList = (title, items, selectionSet, onToggle, emptyLabel) =>
+/** Render a custom multi-select list with a color swatch per item.
+ *  Supports shift+click range selection via lastClicked / setLastClicked. */
+const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicked, setLastClicked) =>
     m('div.selector-column', [
         m('h4', title),
         m('ul.cgroup-select', {
@@ -41,7 +42,22 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel) =>
                     role: 'option',
                     'aria-selected': selectionSet.has(item) ? 'true' : 'false',
                     class: selectionSet.has(item) ? 'selected' : '',
-                    onclick: () => onToggle(item),
+                    onclick: (e) => {
+                        if (e.shiftKey && lastClicked != null) {
+                            const from = items.indexOf(lastClicked);
+                            const to = items.indexOf(item);
+                            if (from !== -1 && to !== -1) {
+                                const lo = Math.min(from, to);
+                                const hi = Math.max(from, to);
+                                for (let i = lo; i <= hi; i++) {
+                                    selectionSet.add(items[i]);
+                                }
+                            }
+                        } else {
+                            onToggle(item);
+                        }
+                        setLastClicked(item);
+                    },
                 }, [
                     m('span.cgroup-select-swatch', {
                         style: { background: globalColorMapper.getColorByName(item) },
@@ -74,6 +90,8 @@ export const CgroupSelector = {
         vnode.state.error = null;
         vnode.state.leftSelected = new Set();
         vnode.state.rightSelected = new Set();
+        vnode.state.lastClickedLeft = null;
+        vnode.state.lastClickedRight = null;
         vnode.state.originalQueries = persistedOriginalQueries;
 
         // Force multi-series style on right-side (individual) cgroup plots so that
@@ -90,6 +108,13 @@ export const CgroupSelector = {
         }
 
         this.fetchAvailableCgroups(vnode);
+
+        // When re-initialized with persisted selections (e.g. after granularity
+        // or node change unmounts/remounts the component tree), re-run queries
+        // so the individual cgroup charts get populated.
+        if (persistedSelectedCgroups.size > 0 && persistedOriginalQueries) {
+            this.debouncedUpdateQueries(vnode);
+        }
     },
 
     async fetchAvailableCgroups(vnode) {
@@ -252,6 +277,8 @@ export const CgroupSelector = {
                     st.leftSelected,
                     (item) => toggleMark(st.leftSelected, item),
                     st.loading ? 'Loading cgroups...' : 'No cgroups available',
+                    st.lastClickedLeft,
+                    (item) => { st.lastClickedLeft = item; },
                 ),
 
                 // Transfer buttons
@@ -277,6 +304,8 @@ export const CgroupSelector = {
                     st.rightSelected,
                     (item) => toggleMark(st.rightSelected, item),
                     'No cgroups selected',
+                    st.lastClickedRight,
+                    (item) => { st.lastClickedRight = item; },
                 ),
             ]),
             m('div.selector-info', [

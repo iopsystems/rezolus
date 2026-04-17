@@ -32,15 +32,28 @@ const clearViewerCaches = () => {
 const changeGranularity = async (step) => {
     currentGranularity = step;
     setStepOverride(step);
-    clearViewerCaches();
-    m.redraw();
 
     const currentRoute = m.route.get();
-    if (!currentRoute) return;
-    const section = currentRoute.replace(/^\//, '').replace(/#.*/, '');
+    const section = currentRoute
+        ? currentRoute.replace(/^\//, '').replace(/#.*/, '')
+        : '';
+
+    // Invalidate all section caches EXCEPT the current one so the component
+    // tree stays mounted (avoids unmounting CgroupSelector which would lose
+    // its selected-cgroup state and leave charts empty).
+    for (const key of Object.keys(sectionResponseCache)) {
+        if (key !== section) delete sectionResponseCache[key];
+    }
+    heatmapDataCache.clear();
+    chartsState.zoomLevel = null;
+    chartsState.zoomSource = null;
+    chartsState.globalZoom = null;
+
     if (!section) return;
 
     try {
+        // Force re-fetch by clearing just this section's cache before loadSection
+        delete sectionResponseCache[section];
         const data = await loadSection(section);
         if (data?.sections) preloadSections(data.sections);
         m.redraw();
@@ -531,7 +544,9 @@ function initDashboardRouter() {
 
                 if (requestedPath !== m.route.get()) {
                     chartsState.charts.clear();
-                    activeCgroupPattern = null;
+                    if (params.section !== 'cgroups') {
+                        activeCgroupPattern = null;
+                    }
                     window.scrollTo(0, 0);
                 }
 
