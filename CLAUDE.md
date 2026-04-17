@@ -38,6 +38,9 @@ cargo xtask generate-dashboards --check
 
 # Developer mode build (serves viewer assets from disk for hot reload)
 cargo build --features developer-mode
+
+# Build the WASM viewer for the static site (outputs to site/viewer/pkg/)
+./crates/rezolus-webview/build.sh
 ```
 
 ## Running Modes
@@ -131,6 +134,12 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 ### Service Extensions
 
 Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.
+
+### Static Site Viewer (WASM)
+
+The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It shares the `src/viewer/assets/` frontend (via symlinks) with the server-backed viewer, but loads parquet files directly in the browser through a WASM module.
+
+The WASM crate lives at `crates/rezolus-webview/`. It is its own Cargo workspace — it targets `wasm32-unknown-unknown` and has profile settings that differ from the main rezolus binary. Build with `./crates/rezolus-webview/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`.
 
 ### Key Dependencies
 
