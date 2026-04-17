@@ -104,10 +104,6 @@ const renderSingleNodeInfo = (info, CpuTopology, formatBytes) => {
                 )),
             ]),
         ]),
-        m('div.sysinfo-raw', [
-            m('h2.sysinfo-group-title', 'Raw JSON'),
-            m('pre.sysinfo-json', JSON.stringify(info, null, 2)),
-        ]),
     ];
 };
 
