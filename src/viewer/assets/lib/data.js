@@ -41,34 +41,68 @@ const setSelectedInstance = (serviceName, instanceId) => {
 const getSelectedInstance = (serviceName) => _selectedInstances[serviceName] || null;
 
 // Inject a label selector into all metric selectors in a query.
+const PROMQL_KEYWORDS = new Set([
+    'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
+    'bool', 'sum', 'avg', 'min', 'max', 'count', 'rate', 'irate', 'increase',
+    'histogram_percentiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset',
+    'abs', 'absent', 'ceil', 'floor', 'round', 'sqrt', 'exp', 'ln', 'log2',
+    'log10', 'clamp', 'clamp_max', 'clamp_min', 'delta', 'deriv', 'idelta',
+    'predict_linear', 'resets', 'changes', 'label_replace', 'label_join',
+    'sort', 'sort_desc', 'time', 'timestamp', 'vector', 'scalar', 'sgn',
+    'stddev', 'stdvar', 'quantile', 'count_values', 'group',
+]);
+
+// Inject a label selector into all metric references in a PromQL query.
+// Handles three forms:
+//   metric{existing}  → metric{existing,label="value"}
+//   metric[5m]        → metric{label="value"}[5m]
+//   metric            → metric{label="value"}   (bare, in expressions)
 const injectLabel = (query, labelName, labelValue) => {
     if (!labelName || !labelValue) return query;
     const selector = `${labelName}="${labelValue}"`;
 
-    // Match metric_name{existing_labels} — insert before closing brace
-    let result = query.replace(/(\w+)\{([^}]*)\}/g, (match, metric, labels) => {
-        if (['by', 'without', 'on', 'ignoring', 'group_left', 'group_right', 'bool'].includes(metric)) {
-            return match;
+    // Single-pass regex that matches either:
+    //   (1) identifier{...}  — metric with existing label selector
+    //   (2) identifier       — bare identifier (metric, keyword, or other)
+    // We handle both in one pass to avoid offset issues.
+    return query.replace(/\b([a-z_]\w*)(\{[^}]*\})?/gi, (match, name, braces, offset) => {
+        // Skip keywords (functions, aggregation operators, modifiers)
+        if (PROMQL_KEYWORDS.has(name)) return match;
+
+        // Skip if starts with digit (not a valid metric name)
+        if (/^\d/.test(name)) return match;
+
+        // If has braces: insert selector before closing brace
+        if (braces) {
+            return `${name}{${braces.slice(1, -1)},${selector}}`;
         }
-        return `${metric}{${labels},${selector}}`;
+
+        // Bare identifier — check context to decide if it's a metric name
+
+        // Skip short tokens without underscores — likely time units (m, s, h, d),
+        // PromQL modifiers, or label fragments, not metric names
+        if (name.length < 3 && !name.includes('_')) return match;
+
+        // Look ahead: if followed by '(' it's a function call, skip
+        const after = query.substring(offset + match.length);
+        if (/^\s*\(/.test(after)) return match;
+
+        // Check if inside braces (label name/value) or square brackets (duration)
+        const before = query.substring(0, offset);
+        const lastOpenBrace = before.lastIndexOf('{');
+        const lastCloseBrace = before.lastIndexOf('}');
+        if (lastOpenBrace > lastCloseBrace) return match;
+        const lastOpenBracket = before.lastIndexOf('[');
+        const lastCloseBracket = before.lastIndexOf(']');
+        if (lastOpenBracket > lastCloseBracket) return match;
+
+        // Check if inside a string literal
+        const quotesBefore = (before.match(/"/g) || []).length;
+        if (quotesBefore % 2 !== 0) return match;
+
+        // It's a bare metric name — add label selector
+        return `${name}{${selector}}`;
     });
-
-    // Match bare metric_name[ or metric_name) — add label selector
-    result = result.replace(/\b([a-z_][a-z0-9_]*)\s*(\[|\))/gi, (match, metric, suffix, offset) => {
-        const before = result.substring(0, offset);
-        const lastBrace = before.lastIndexOf('{');
-        const lastClose = before.lastIndexOf('}');
-        if (lastBrace > lastClose) return match;
-
-        const keywords = ['by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
-            'bool', 'sum', 'avg', 'min', 'max', 'count', 'rate', 'irate', 'increase',
-            'histogram_percentiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset'];
-        if (keywords.includes(metric)) return match;
-
-        return `${metric}{${selector}}${suffix}`;
-    });
-
-    return result;
 };
 
 const substituteCgroupPattern = (query, pattern) => {
