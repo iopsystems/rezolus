@@ -100,8 +100,10 @@ const parseNodeList = () => {
     }
     nodeList = nodes;
     if (nodeList.length > 0) {
-        selectedNode = nodeList[0];
-        setSelectedNode(nodeList[0]);
+        const pinned = fileMetadata?.pinned_node;
+        const defaultNode = (pinned && nodeList.includes(pinned)) ? pinned : nodeList[0];
+        selectedNode = defaultNode;
+        setSelectedNode(defaultNode);
     }
 
     parseServiceInstances();

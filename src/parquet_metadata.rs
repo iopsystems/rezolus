@@ -89,3 +89,9 @@ pub const NESTED_NODE: &str = "node";
 
 /// Per-source instance identifier (nested key).
 pub const NESTED_INSTANCE: &str = "instance";
+
+// ── Viewer hints ─────────────────────────────────────────────────────
+
+/// The default rezolus node to display when the viewer opens a combined
+/// file with multiple nodes. Set by `parquet combine --pinned <node>`.
+pub const KEY_PINNED_NODE: &str = "pinned_node";

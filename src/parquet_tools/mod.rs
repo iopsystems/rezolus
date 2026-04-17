@@ -81,6 +81,12 @@ pub fn command() -> Command {
                         .long("bypass-time-check")
                         .help("Skip the timestamp alignment quality check")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("pinned")
+                        .long("pinned")
+                        .help("Default rezolus node to display in the viewer (node name or filename)")
+                        .value_parser(clap::value_parser!(String)),
                 ),
         )
         .subcommand(
