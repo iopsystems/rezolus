@@ -15,10 +15,19 @@ const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
             Object.values(info).some(v => v && typeof v === 'object' && (v.hostname || v.cpus));
 
         if (isMultiNode) {
+            const nodeNames = Object.keys(info);
             return m('div.systeminfo-section', [
                 m('h1.section-title', 'System Info'),
-                ...Object.entries(info).map(([nodeName, nodeInfo]) =>
-                    renderNodeInfo(nodeName, nodeInfo, CpuTopology, formatBytes)
+                m('div.systeminfo-node-nav', nodeNames.map(name =>
+                    m('button.systeminfo-node-btn', {
+                        onclick: () => {
+                            const el = document.getElementById(`sysinfo-node-${name}`);
+                            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        },
+                    }, name)
+                )),
+                ...nodeNames.map(nodeName =>
+                    renderNodeInfo(nodeName, info[nodeName], CpuTopology, formatBytes)
                 ),
             ]);
         }
@@ -108,7 +117,7 @@ const renderSingleNodeInfo = (info, CpuTopology, formatBytes) => {
 };
 
 const renderNodeInfo = (nodeName, info, CpuTopology, formatBytes) => {
-    return m('div.systeminfo-node', [
+    return m('div.systeminfo-node', { id: `sysinfo-node-${nodeName}` }, [
         m('h2.systeminfo-node-title', nodeName),
         ...renderSingleNodeInfo(info, CpuTopology, formatBytes),
     ]);

@@ -2691,6 +2691,30 @@ main {
    Multi-Node System Info
    ========================================================================== */
 
+.systeminfo-node-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.systeminfo-node-btn {
+    padding: 0.35rem 0.75rem;
+    background: var(--bg-secondary);
+    color: var(--fg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: inherit;
+}
+
+.systeminfo-node-btn:hover {
+    background: var(--accent);
+    color: var(--bg-primary);
+    border-color: var(--accent);
+}
+
 .systeminfo-node {
     margin-bottom: 2rem;
     padding-bottom: 1rem;
