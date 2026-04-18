@@ -391,7 +391,7 @@ async function loadDemo(filename = 'demo.parquet') {
     m.redraw();
 
     try {
-        const resp = await fetch(filename);
+        const resp = await fetch('data/' + filename);
         if (!resp.ok) throw new Error(`Failed to fetch ${filename}: ${resp.status}`);
         const arrayBuffer = await resp.arrayBuffer();
         const data = new Uint8Array(arrayBuffer);
