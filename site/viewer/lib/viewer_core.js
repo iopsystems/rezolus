@@ -1,0 +1,1 @@
+../../../src/viewer/assets/lib/viewer_core.js
