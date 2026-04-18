@@ -519,7 +519,6 @@ body::after {
 }
 
 .topnav-source {
-    position: relative;
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
     color: var(--fg);
@@ -528,64 +527,8 @@ body::after {
     border-radius: 4px;
     border: 1px solid var(--border-subtle);
     margin-left: 1.5rem;
-    cursor: pointer;
-    user-select: none;
 }
 
-.topnav-source:hover {
-    border-color: var(--border-default);
-}
-
-.topnav-source-chevron {
-    display: inline-block;
-    margin-left: 0.5rem;
-    font-size: 14px;
-    color: var(--fg-secondary);
-    transition: transform 0.15s ease;
-}
-
-.topnav-source-chevron.expanded {
-    transform: rotate(180deg);
-}
-
-.topnav-meta-table {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    display: table;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    z-index: 200;
-    white-space: nowrap;
-    box-shadow: var(--shadow-md);
-    overflow: hidden;
-    border-spacing: 0;
-}
-
-.topnav-meta-row {
-    display: table-row;
-}
-
-.topnav-meta-row span {
-    display: table-cell;
-    padding: 0.35rem 0.75rem;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-}
-
-.topnav-meta-header span {
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 600;
-    font-size: 9px;
-    border-bottom: 1px solid var(--border-subtle);
-}
-
-.topnav-meta-values span {
-    color: var(--fg-secondary);
-}
 
 /* Transport controls group */
 .transport-controls {
@@ -2832,11 +2775,6 @@ main {
         text-overflow: ellipsis;
         min-width: 0;
         flex: 1;
-    }
-
-    .topnav-source-chevron,
-    .topnav-meta-table {
-        display: none;
     }
 
     /* Shrink transport buttons */
