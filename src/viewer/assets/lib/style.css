@@ -1310,6 +1310,23 @@ main {
     cursor: pointer;
 }
 
+.query-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.unit-select {
+    padding: 0.625rem 0.75rem;
+    background: var(--bg-card);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+}
+
 .error-message {
     background: linear-gradient(180deg, color-mix(in srgb, var(--danger) 15%, transparent) 0%, color-mix(in srgb, var(--danger) 5%, transparent) 100%);
     border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);

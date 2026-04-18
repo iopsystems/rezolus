@@ -1,8 +1,40 @@
 // explorers.js - QueryExplorer and SingleChartView components
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { executePromQLRangeQuery, fetchHeatmapForPlot } from './data.js';
+import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from './data.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
+
+// ── Unit selector ───────────────────────────────────────────────────
+
+const UNIT_OPTIONS = [
+    { value: '', label: 'Auto (none)' },
+    { value: 'count', label: 'Count' },
+    { value: 'rate', label: 'Rate (/s)' },
+    { value: 'time', label: 'Time (ns)' },
+    { value: 'bytes', label: 'Bytes' },
+    { value: 'datarate', label: 'Data Rate (B/s)' },
+    { value: 'bitrate', label: 'Bit Rate (bps)' },
+    { value: 'percentage', label: 'Percentage (0–1 → %)' },
+    { value: 'frequency', label: 'Frequency (Hz)' },
+];
+
+/** Render a unit-type selector dropdown (inline). */
+const unitSelector = (current, onchange) =>
+    m('select.unit-select', {
+        value: current,
+        onchange: (e) => onchange(e.target.value),
+        title: 'Y-axis unit type',
+    }, UNIT_OPTIONS.map(o =>
+        m('option', { value: o.value }, o.label),
+    ));
+
+/** Build a format object for the given unit override (or null if empty). */
+const buildFormatOverride = (unit) => {
+    if (!unit) return undefined;
+    const fmt = { unit_system: unit, precision: 2 };
+    if (unit === 'percentage') fmt.range = { min: 0, max: 1 };
+    return fmt;
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -66,7 +98,7 @@ const buildSingleSeriesData = (resultData) => {
 };
 
 /** Render a Chart component for a query result. */
-const renderQueryChart = (resultData, query, chartsState) => {
+const renderQueryChart = (resultData, query, chartsState, format) => {
     if (!resultData || resultData.length === 0) return m('p', 'No data returned');
 
     const isMulti = resultData.length > 1;
@@ -79,7 +111,7 @@ const renderQueryChart = (resultData, query, chartsState) => {
         return m('div.query-chart', { key }, [
             m(Chart, {
                 spec: {
-                    opts: { id: key, title: 'Query Result', style: 'multi' },
+                    opts: { id: key, title: 'Query Result', style: 'multi', format },
                     data: multi.allData,
                     series_names: multi.seriesNames,
                 },
@@ -95,7 +127,7 @@ const renderQueryChart = (resultData, query, chartsState) => {
     return m('div.query-chart', { key }, [
         m(Chart, {
             spec: {
-                opts: { id: key, title: 'Query Result', style: 'line' },
+                opts: { id: key, title: 'Query Result', style: 'line', format },
                 data,
             },
             chartsState,
@@ -136,6 +168,7 @@ export const QueryExplorer = {
         vnode.state.result = null;
         vnode.state.error = null;
         vnode.state.loading = false;
+        vnode.state.unitOverride = '';
         vnode.state.queryHistory = JSON.parse(
             localStorage.getItem('promql_history') || '[]',
         );
@@ -148,7 +181,10 @@ export const QueryExplorer = {
             vnode.state.error = null;
 
             try {
-                vnode.state.result = await executePromQLRangeQuery(vnode.state.query);
+                let q = vnode.state.query;
+                const node = getSelectedNode();
+                if (node) q = injectLabel(q, 'node', node);
+                vnode.state.result = await executePromQLRangeQuery(q);
             } catch (error) {
                 vnode.state.error = error.message || 'Query failed';
             }
@@ -205,10 +241,16 @@ export const QueryExplorer = {
                             if (e.key === 'Enter' && e.ctrlKey) st.executeQuery();
                         },
                     }),
-                    m('button.execute-btn', {
-                        onclick: () => st.executeQuery(),
-                        disabled: st.loading,
-                    }, st.loading ? 'Running...' : 'Execute Query (Ctrl+Enter)'),
+                    m('div.query-controls', [
+                        m('button.execute-btn', {
+                            onclick: () => st.executeQuery(),
+                            disabled: st.loading,
+                        }, st.loading ? 'Running...' : 'Execute Query (Ctrl+Enter)'),
+                        unitSelector(st.unitOverride, (v) => {
+                            st.unitOverride = v;
+                            st.queryChartsState.clear();
+                        }),
+                    ]),
                 ]),
 
                 // Query history
@@ -237,6 +279,7 @@ export const QueryExplorer = {
                             st.result.data && st.result.data.result,
                             st.query,
                             st.queryChartsState,
+                            buildFormatOverride(st.unitOverride),
                         ),
                     ])
                     : m('div.error-message', 'Query failed: ' + (st.result.error || 'Unknown error')),
@@ -275,6 +318,7 @@ export const SingleChartView = {
         vnode.state.plot = null;
         vnode.state.loading = false;
         vnode.state.error = null;
+        vnode.state.unitOverride = '';
         vnode.state.heatmapMode = false;
         vnode.state.heatmapData = null;
         vnode.state.heatmapLoading = false;
@@ -299,6 +343,7 @@ export const SingleChartView = {
                         vnode.state.query = plot.promql_query || '';
                         vnode.state.title = plot.opts.title || '';
                         vnode.state.description = plot.opts.description || '';
+                        vnode.state.unitOverride = (plot.opts.format && plot.opts.format.unit_system) || '';
                         break;
                     }
                 }
@@ -311,9 +356,10 @@ export const SingleChartView = {
 
         const st = vnode.state;
 
+        const formatOverride = buildFormatOverride(st.unitOverride);
         const spec = {
             ...plot,
-            opts: { ...plot.opts, title: st.title, description: st.description },
+            opts: { ...plot.opts, title: st.title, description: st.description, format: formatOverride || plot.opts.format },
         };
 
         const executeQuery = async () => {
@@ -322,7 +368,10 @@ export const SingleChartView = {
             st.error = null;
 
             try {
-                const response = await executePromQLRangeQuery(st.query);
+                let q = st.query;
+                const node = getSelectedNode();
+                if (node) q = injectLabel(q, 'node', node);
+                const response = await executePromQLRangeQuery(q);
 
                 if (response.status === 'success' && response.data && response.data.result) {
                     applyResultToPlot(plot, response);
@@ -409,10 +458,16 @@ export const SingleChartView = {
                         },
                         rows: 2,
                     }),
-                    m('button.execute-btn', {
-                        onclick: executeQuery,
-                        disabled: st.loading,
-                    }, st.loading ? 'Running...' : 'Execute (Ctrl+Enter)'),
+                    m('div.query-controls', [
+                        m('button.execute-btn', {
+                            onclick: executeQuery,
+                            disabled: st.loading,
+                        }, st.loading ? 'Running...' : 'Execute (Ctrl+Enter)'),
+                        unitSelector(st.unitOverride, (v) => {
+                            st.unitOverride = v;
+                            st.singleChartsState.clear();
+                        }),
+                    ]),
                 ]),
                 st.error && m('div.error-message', st.error),
             ]),

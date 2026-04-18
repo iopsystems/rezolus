@@ -12,4 +12,6 @@ export {
     getStepOverride,
     setSelectedNode,
     setSelectedInstance,
+    getSelectedNode,
+    injectLabel,
 } from './data_base.js';

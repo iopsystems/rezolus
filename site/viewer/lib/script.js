@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
 import { selectionStore, reportStore, setStorageScope, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -222,7 +222,11 @@ const SectionContent = {
                 chartsState,
                 Chart,
                 CgroupSelector,
-                executePromQLRangeQuery,
+                executePromQLRangeQuery: (query, ...args) => {
+                    const node = getSelectedNode();
+                    if (node) query = injectLabel(query, 'node', node);
+                    return executePromQLRangeQuery(query, ...args);
+                },
                 applyResultToPlot,
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
@@ -415,7 +419,7 @@ const loadSection = async (sectionKey) => {
     const data = await ViewerApi.getSection(sectionKey);
     if (!data) return null;
 
-    const processedData = await processDashboardData(data, activeCgroupPattern);
+    const processedData = await processDashboardData(data, activeCgroupPattern, `/${sectionKey}`);
     sectionResponseCache[sectionKey] = processedData;
     return processedData;
 };
