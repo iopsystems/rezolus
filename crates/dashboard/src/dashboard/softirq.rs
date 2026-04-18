@@ -12,7 +12,11 @@ fn add_softirq_group(view: &mut View, label: &str, kind: &str) {
     );
 
     group.plot_promql(
-        PlotOpts::counter("Rate", format!("softirq-{kind}-rate-heatmap"), Unit::Rate),
+        PlotOpts::counter(
+            "Rate (per-CPU)",
+            format!("softirq-{kind}-rate-heatmap"),
+            Unit::Rate,
+        ),
         format!("sum by (id) (irate(softirq{{kind=\"{kind}\"}}[5m]))"),
     );
 
@@ -24,7 +28,7 @@ fn add_softirq_group(view: &mut View, label: &str, kind: &str) {
 
     group.plot_promql(
         PlotOpts::counter(
-            "CPU %",
+            "CPU % (per-CPU)",
             format!("softirq-{kind}-time-heatmap"),
             Unit::Percentage,
         )
@@ -47,7 +51,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     );
 
     softirq.plot_promql(
-        PlotOpts::counter("Rate", "softirq-total-rate-heatmap", Unit::Rate),
+        PlotOpts::counter("Rate (per-CPU)", "softirq-total-rate-heatmap", Unit::Rate),
         "sum by (id) (irate(softirq[5m]))".to_string(),
     );
 
@@ -57,8 +61,12 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     );
 
     softirq.plot_promql(
-        PlotOpts::counter("CPU %", "softirq-total-time-heatmap", Unit::Percentage)
-            .percentage_range(),
+        PlotOpts::counter(
+            "CPU % (per-CPU)",
+            "softirq-total-time-heatmap",
+            Unit::Percentage,
+        )
+        .percentage_range(),
         "sum by (id) (irate(softirq_time[5m])) / 1000000000".to_string(),
     );
 
