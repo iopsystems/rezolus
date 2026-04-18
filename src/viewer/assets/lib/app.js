@@ -45,7 +45,6 @@ let onStopRecording = null;
 let onSaveCapture = null;
 let onUploadParquet = null;
 let onRefresh = null;
-let showLanding = null;
 let liveRefreshInterval = null;
 
 // ── Components (initialized once) ──────────────────────────────────
@@ -396,7 +395,6 @@ const initDashboard = (config = {}) => {
     onSaveCapture = config.onSaveCapture || null;
     onUploadParquet = config.onUploadParquet || null;
     onRefresh = config.onRefresh || null;
-    showLanding = config.showLanding || null;
 
     // Build Main component
     Main = createMainComponent({
@@ -408,14 +406,6 @@ const initDashboard = (config = {}) => {
         getHasSystemInfo: () => systemInfoData,
         getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
         buildAttrs: topNavAttrs,
-    });
-
-    // Double-click resets zoom and pin selections
-    document.addEventListener('dblclick', () => {
-        if (!chartsState.isDefaultZoom() || chartsState.charts.size > 0) {
-            chartsState.resetAll();
-            m.redraw();
-        }
     });
 
     // Start live refresh if applicable
@@ -529,8 +519,18 @@ const initDashboard = (config = {}) => {
     });
 };
 
-// Getter functions for mutable state (used by server stub's live refresh)
+// Double-click anywhere resets zoom and clears all pin selections
+document.addEventListener('dblclick', () => {
+    if (!chartsState.isDefaultZoom() || chartsState.charts.size > 0) {
+        chartsState.resetAll();
+        m.redraw();
+    }
+});
+
+// Getter/setter functions for mutable state shared with stubs
 const getHeatmapEnabled = () => heatmapEnabled;
 const getActiveCgroupPattern = () => activeCgroupPattern;
+const getRecording = () => recording;
+const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern };
+export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording };

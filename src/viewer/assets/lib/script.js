@@ -5,9 +5,9 @@
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
-import { reportStore, setStorageScope, loadPayloadIntoStore } from './selection.js';
+import { setStorageScope } from './selection.js';
 import { clearMetadataCache, processDashboardData } from './data.js';
-import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, preloadSections } from './app.js';
+import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // ── Backend state fetching ─────────────────────────────────────────
 
@@ -16,7 +16,6 @@ let fileChecksum = null;
 let fileMetadata = null;
 let selectionPayload = null;
 let liveMode = false;
-let recording = true;
 
 const fetchBackendState = async () => {
     const [metaResult, sysResult, selResult, fmResult] = await Promise.allSettled([
@@ -48,7 +47,7 @@ const startRecording = async () => {
     try {
         await ViewerApi.reset();
         clearViewerCaches();
-        recording = true;
+        setRecording(true);
         m.redraw();
     } catch (e) {
         console.error('Failed to start recording:', e);
@@ -56,7 +55,7 @@ const startRecording = async () => {
 };
 
 const stopRecording = () => {
-    recording = false;
+    setRecording(false);
 };
 
 const saveCapture = async () => {
@@ -102,7 +101,7 @@ let liveRefreshInProgress = false;
 
 const refreshCurrentSection = async () => {
     if (liveRefreshInProgress) return;
-    if (!recording || !chartsState.isDefaultZoom()) return;
+    if (!getRecording() || !chartsState.isDefaultZoom()) return;
 
     const currentRoute = m.route.get();
     if (!currentRoute) return;
@@ -191,13 +190,12 @@ const bootstrap = async () => {
         fileMetadata,
         selectionPayload,
         liveMode,
-        recording,
+        recording: true,
         onStartRecording: startRecording,
         onStopRecording: stopRecording,
         onSaveCapture: saveCapture,
         onUploadParquet: uploadParquet,
         onRefresh: liveMode ? refreshCurrentSection : null,
-        showLanding,
     });
 };
 
