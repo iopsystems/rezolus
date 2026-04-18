@@ -24,11 +24,15 @@ let fileChecksum = null;
 
 let currentGranularity = null;
 
-// Multi-node / multi-instance state
+// Multi-node / multi-instance state — pre-computed by WASM from per_source_metadata
 let nodeList = [];
-let perSourceMeta = {};
+let nodeVersions = {};
 let selectedNode = null;
 let fileMetadata = null;
+
+// Per-service instance lists and selection
+let serviceInstances = {};
+let selectedInstances = {};
 
 const clearViewerCaches = () => {
     Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
@@ -66,46 +70,29 @@ const changeGranularity = async (step) => {
     } catch (_) { /* keep existing view on error */ }
 };
 
-const parseNodeList = () => {
+// Apply pre-computed multi-node info from the WASM response.
+const applyMultiNodeInfo = () => {
     nodeList = [];
-    perSourceMeta = {};
+    nodeVersions = {};
     selectedNode = null;
+    serviceInstances = {};
+    selectedInstances = {};
 
-    if (!fileMetadata || !fileMetadata.per_source_metadata) return;
+    if (!fileMetadata) return;
 
-    perSourceMeta = fileMetadata.per_source_metadata;
-    const nodes = [];
-    const rezGroup = perSourceMeta.rezolus;
-    if (rezGroup && typeof rezGroup === 'object') {
-        for (const [subKey, value] of Object.entries(rezGroup)) {
-            const nodeName = value.node || subKey;
-            if (!nodes.includes(nodeName)) {
-                nodes.push(nodeName);
-            }
-        }
-    }
-    nodeList = nodes;
+    nodeList = fileMetadata.nodes || [];
+    nodeVersions = fileMetadata.node_versions || {};
+    serviceInstances = fileMetadata.service_instances || {};
+
     if (nodeList.length > 0) {
-        const pinned = fileMetadata?.pinned_node;
+        const pinned = fileMetadata.pinned_node;
         const defaultNode = (pinned && nodeList.includes(pinned)) ? pinned : nodeList[0];
         selectedNode = defaultNode;
         setSelectedNode(defaultNode);
     }
 
-    // Build multi-node systeminfo so the SystemInfo view renders per-node
-    if (nodeList.length > 1 && rezGroup) {
-        const multinodeInfo = {};
-        for (const [subKey, value] of Object.entries(rezGroup)) {
-            if (!value.systeminfo) continue;
-            const nodeName = value.node || subKey;
-            const sysinfo = typeof value.systeminfo === 'string'
-                ? JSON.parse(value.systeminfo)
-                : value.systeminfo;
-            multinodeInfo[nodeName] = sysinfo;
-        }
-        if (Object.keys(multinodeInfo).length > 1) {
-            systemInfoData = multinodeInfo;
-        }
+    for (const source of Object.keys(serviceInstances)) {
+        selectedInstances[source] = null;
     }
 };
 
@@ -139,7 +126,7 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onGranularityChange: changeGranularity,
     nodeList,
     selectedNode,
-    perSourceMeta,
+    nodeVersions,
     onNodeChange: changeNode,
     extra,
 });
@@ -499,7 +486,7 @@ async function loadDemo(filename = 'demo.parquet') {
 
         try {
             fileMetadata = await ViewerApi.getFileMetadata();
-            parseNodeList();
+            applyMultiNodeInfo();
         } catch { /* ignore */ }
 
         try {
@@ -557,7 +544,7 @@ async function loadFile(file) {
 
         try {
             fileMetadata = await ViewerApi.getFileMetadata();
-            parseNodeList();
+            applyMultiNodeInfo();
         } catch { /* ignore */ }
 
         try {
@@ -690,6 +677,7 @@ if (_demoParam !== null) {
             demos: [
                 { label: 'System Metrics', file: 'demo.parquet' },
                 { label: 'vLLM + System', file: 'vllm.parquet' },
+                { label: 'Cachecannon + System', file: 'cachecannon.parquet' },
             ],
             loading: window._loading,
             error: window._loadError,

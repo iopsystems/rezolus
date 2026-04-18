@@ -486,11 +486,108 @@ fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>, Opt
                     map.insert(pair.key.clone(), json_val);
                 }
             }
+
+            // Pre-compute multi-node info so the frontend doesn't have to
+            // re-parse per_source_metadata itself.
+            enrich_with_multi_node_info(&mut map);
+
             let file_meta = serde_json::to_string(&serde_json::Value::Object(map)).ok();
 
             Some((sysinfo, sel, file_meta))
         })
         .unwrap_or((None, None, None))
+}
+
+/// Enrich a file-metadata JSON map with pre-computed multi-node info.
+///
+/// Parses `per_source_metadata` and adds:
+/// - `nodes`: ordered list of node names
+/// - `service_instances`: `{ service: [{id, node}, ...] }` for non-rezolus sources
+/// - `node_versions`: `{ node_name: version }` for the TopNav version display
+///
+/// This consolidates parsing that was previously duplicated in the JS frontend.
+fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Value>) {
+    let psm = match map.get("per_source_metadata").and_then(|v| v.as_object()) {
+        Some(psm) => psm.clone(),
+        None => return,
+    };
+
+    // Extract node list from rezolus group
+    let mut nodes = Vec::new();
+    let mut node_versions = serde_json::Map::new();
+    if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
+        for (sub_key, entry) in rez_group {
+            let obj = match entry.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
+            if !nodes.contains(&node_name.to_string()) {
+                nodes.push(node_name.to_string());
+            }
+            if let Some(version) = obj.get("version").and_then(|v| v.as_str()) {
+                node_versions.insert(
+                    node_name.to_string(),
+                    serde_json::Value::String(version.to_string()),
+                );
+            }
+        }
+    }
+
+    // Extract service instances from non-rezolus groups
+    let mut service_instances = serde_json::Map::new();
+    for (source, group) in &psm {
+        if source == "rezolus" {
+            continue;
+        }
+        let group_obj = match group.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let mut instances = Vec::new();
+        for (sub_key, entry) in group_obj {
+            let obj = match entry.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            let instance_id = obj
+                .get("instance")
+                .and_then(|v| v.as_str())
+                .unwrap_or(sub_key);
+            let node = obj.get("node").and_then(|v| v.as_str());
+            let mut inst = serde_json::Map::new();
+            inst.insert(
+                "id".into(),
+                serde_json::Value::String(instance_id.to_string()),
+            );
+            inst.insert(
+                "node".into(),
+                node.map(|n| serde_json::Value::String(n.to_string()))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            instances.push(serde_json::Value::Object(inst));
+        }
+        if !instances.is_empty() {
+            service_instances.insert(source.clone(), serde_json::Value::Array(instances));
+        }
+    }
+
+    map.insert(
+        "nodes".into(),
+        serde_json::Value::Array(nodes.into_iter().map(serde_json::Value::String).collect()),
+    );
+    if !node_versions.is_empty() {
+        map.insert(
+            "node_versions".into(),
+            serde_json::Value::Object(node_versions),
+        );
+    }
+    if !service_instances.is_empty() {
+        map.insert(
+            "service_instances".into(),
+            serde_json::Value::Object(service_instances),
+        );
+    }
 }
 
 /// Build a multi-node systeminfo JSON object from `per_source_metadata`.
@@ -1343,7 +1440,7 @@ async fn save_with_selection(
     // File mode: copy original parquet with selection metadata added
     if let Some(path) = parquet_path {
         let result = tokio::task::spawn_blocking(move || {
-            use parquet::format::KeyValue;
+            use parquet::file::metadata::KeyValue;
 
             let mut kv_meta =
                 crate::parquet_tools::read_file_metadata(&path).map_err(|e| e.to_string())?;

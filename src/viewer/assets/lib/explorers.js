@@ -18,15 +18,18 @@ const UNIT_OPTIONS = [
     { value: 'frequency', label: 'Frequency (Hz)' },
 ];
 
-/** Render a unit-type selector dropdown (inline). */
+/** Render a unit-type selector dropdown with label (inline). */
 const unitSelector = (current, onchange) =>
-    m('select.unit-select', {
-        value: current,
-        onchange: (e) => onchange(e.target.value),
-        title: 'Y-axis unit type',
-    }, UNIT_OPTIONS.map(o =>
-        m('option', { value: o.value }, o.label),
-    ));
+    m('label.unit-select-label', [
+        'Unit: ',
+        m('select.unit-select', {
+            value: current,
+            onchange: (e) => onchange(e.target.value),
+            title: 'Y-axis unit type',
+        }, UNIT_OPTIONS.map(o =>
+            m('option', { value: o.value }, o.label),
+        )),
+    ]);
 
 /** Build a format object for the given unit override (or null if empty). */
 const buildFormatOverride = (unit) => {
@@ -290,7 +293,7 @@ export const QueryExplorer = {
                 m('h3', 'Example Queries'),
                 m('ul', [
                     exampleQuery(st, 'sum(irate(syscall[5m]))'),
-                    exampleQuery(st, 'sum(irate(cpu_usage[5m])) / 1e9 / sum(cpu_cores)', 'Average CPU utilization (0-1)'),
+                    exampleQuery(st, 'sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores', 'Average CPU utilization (0-1)'),
                     exampleQuery(st, 'sum(irate(network_bytes{direction="transmit"}[5m])) * 8', 'Network transmit (bits/sec)'),
                     exampleQuery(st, 'sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))', 'IPC (Instructions per Cycle)'),
                     exampleQuery(st, 'sum by (id) (irate(cpu_usage[5m])) / 1e9', 'Per-CPU usage (cores)'),
