@@ -278,15 +278,6 @@ body::after {
 .card .link-row { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
 .card .link-row a { font-size: 0.9rem; padding: 0.4rem 0.8rem; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--accent); text-decoration: none; }
 .card .link-row a:hover { border-color: var(--accent); }
-.card table { width: 100%; border-collapse: collapse; text-align: left; }
-.card table td { padding: 0.5rem 0; font-size: 0.85rem; }
-.card table td:first-child { white-space: nowrap; padding-right: 1.5rem; }
-.card table td:first-child code { font-size: 0.8rem; color: var(--accent); }
-.card table td:last-child { color: var(--fg-secondary); }
-.card table tr { border-bottom: 1px solid var(--border-subtle); }
-.card table tr:last-child { border-bottom: none; }
-.card .back { color: var(--fg-secondary); font-size: 0.85rem; margin-top: 1.25rem; display: inline-block; text-decoration: none; }
-.card .back:hover { color: var(--accent); }
 
 /* ==========================================================================
    Top Navigation Bar

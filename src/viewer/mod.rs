@@ -848,7 +848,6 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
 
     let router = Router::new()
         .route("/about", get(about))
-        .route("/sitemap", get(sitemap))
         .route("/data/{*path}", get(data))
         .nest("/api/v1", api_routes)
         .with_state(state.clone());
@@ -903,57 +902,11 @@ async fn about() -> axum::response::Html<String> {
   <div class="link-row">
     <a href="https://rezolus.com">Website</a>
     <a href="https://github.com/iopsystems/rezolus">GitHub</a>
-    <a href="/sitemap">Sitemap</a>
+    <a href="/">Dashboard</a>
   </div>
 </div>
 </body>
 </html>"#
-    ))
-}
-
-/// Lists all endpoints served by the viewer (max 2 levels deep).
-async fn sitemap() -> axum::response::Html<String> {
-    let routes = [
-        ("/", "Dashboard"),
-        ("/about", "About page"),
-        ("/sitemap", "This page"),
-        ("/data/{path}", "Dashboard section data"),
-        ("/api/v1/mode", "Viewer mode (loaded/live)"),
-        ("/api/v1/query", "PromQL instant query"),
-        ("/api/v1/query_range", "PromQL range query"),
-        ("/api/v1/labels", "Label names"),
-        ("/api/v1/label/{name}/values", "Label values"),
-        ("/api/v1/metadata", "File checksum"),
-        ("/api/v1/systeminfo", "System information"),
-        ("/api/v1/selection", "Saved selection state"),
-        ("/api/v1/file_metadata", "Parquet file metadata"),
-        ("/api/v1/reset", "Reset TSDB data"),
-        ("/api/v1/save", "Download parquet"),
-        ("/api/v1/upload", "Upload parquet"),
-        ("/api/v1/connect", "Connect to live agent"),
-        ("/api/v1/save_with_selection", "Save with selection state"),
-    ];
-
-    let rows: Vec<String> = routes
-        .iter()
-        .map(|(path, desc)| format!(r#"<tr><td><code>{path}</code></td><td>{desc}</td></tr>"#))
-        .collect();
-
-    axum::response::Html(format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head><title>Rezolus — Sitemap</title>
-{STANDALONE_HEAD}
-</head>
-<body>
-<div class="card">
-  <h1>Endpoints</h1>
-  <table>{}</table>
-  <a class="back" href="/about">&larr; About</a>
-</div>
-</body>
-</html>"#,
-        rows.join("")
     ))
 }
 
