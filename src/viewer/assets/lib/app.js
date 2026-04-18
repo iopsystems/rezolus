@@ -452,6 +452,22 @@ const initDashboard = (config = {}) => {
             SingleChartView,
             applyResultToPlot,
         }),
+        '/about': {
+            render() {
+                return m('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem' },
+                    m('div.card', [
+                        m('h1', 'Rezolus'),
+                        m('div.version', liveMode ? 'Live Mode' : 'Viewer'),
+                        m('p.subtitle', 'High-resolution systems performance telemetry agent.'),
+                        m('div.link-row', [
+                            m('a', { href: 'https://rezolus.com' }, 'Website'),
+                            m('a', { href: 'https://github.com/iopsystems/rezolus' }, 'GitHub'),
+                            m('a', { href: '#!/overview' }, 'Dashboard'),
+                        ]),
+                    ]),
+                );
+            },
+        },
         '/:section': {
             onmatch(params, requestedPath) {
                 if (m.route.get() === requestedPath) {
