@@ -15,9 +15,22 @@ export class Viewer {
      */
     file_metadata_json(): string;
     /**
+     * Returns the full View JSON for a dashboard section.
+     */
+    get_section(key: string): string | undefined;
+    /**
+     * Returns the sections list as a JSON array.
+     */
+    get_sections(): string;
+    /**
      * Returns JSON with viewer info (interval, source, version, metric names)
      */
     info(): string;
+    /**
+     * Accept a JSON array of ServiceExtension templates, detect which ones
+     * match the loaded parquet file, and regenerate dashboards accordingly.
+     */
+    init_templates(templates_json: string): void;
     /**
      * Returns JSON metadata compatible with /api/v1/metadata
      */
@@ -55,7 +68,10 @@ export interface InitOutput {
     readonly __wbg_viewer_free: (a: number, b: number) => void;
     readonly init: () => void;
     readonly viewer_file_metadata_json: (a: number) => [number, number];
+    readonly viewer_get_section: (a: number, b: number, c: number) => [number, number];
+    readonly viewer_get_sections: (a: number) => [number, number];
     readonly viewer_info: (a: number) => [number, number];
+    readonly viewer_init_templates: (a: number, b: number, c: number) => [number, number];
     readonly viewer_metadata: (a: number) => [number, number];
     readonly viewer_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly viewer_query: (a: number, b: number, c: number, d: number) => [number, number];

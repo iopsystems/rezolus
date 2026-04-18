@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::hash_map::Entry;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
