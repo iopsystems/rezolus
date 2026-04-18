@@ -12,6 +12,28 @@ export class Viewer {
         wasm.__wbg_viewer_free(ptr, 0);
     }
     /**
+     * Returns all file-level metadata as a JSON object, mirroring the
+     * server's /file_metadata endpoint.  Values that are valid JSON are
+     * embedded as-is; everything else becomes a JSON string.
+     *
+     * Includes pre-computed `nodes`, `node_versions`, and
+     * `service_instances` fields so the frontend doesn't have to
+     * re-parse `per_source_metadata` itself.
+     * @returns {string}
+     */
+    file_metadata_json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.viewer_file_metadata_json(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Returns JSON with viewer info (interval, source, version, metric names)
      * @returns {string}
      */
@@ -117,7 +139,11 @@ export class Viewer {
         return v1;
     }
     /**
-     * Returns systeminfo JSON from parquet file metadata, or null
+     * Returns systeminfo JSON from parquet file metadata.
+     *
+     * For multi-node combined files (>1 node in per_source_metadata), returns
+     * an object keyed by node name with each node's systeminfo.  For single-node
+     * files, returns the flat systeminfo string.
      * @returns {string | undefined}
      */
     systeminfo() {
@@ -135,11 +161,10 @@ if (Symbol.dispose) Viewer.prototype[Symbol.dispose] = Viewer.prototype.free;
 export function init() {
     wasm.init();
 }
-
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg___wbindgen_throw_81fc77679af83bc6: function(arg0, arg1) {
+        __wbg___wbindgen_throw_6b64449b9b9ed33c: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
         __wbg_error_a6fa202b58aa1cd3: function(arg0, arg1) {

@@ -3,6 +3,7 @@
 export const memory: WebAssembly.Memory;
 export const __wbg_viewer_free: (a: number, b: number) => void;
 export const init: () => void;
+export const viewer_file_metadata_json: (a: number) => [number, number];
 export const viewer_info: (a: number) => [number, number];
 export const viewer_metadata: (a: number) => [number, number];
 export const viewer_new: (a: number, b: number, c: number, d: number) => [number, number, number];
