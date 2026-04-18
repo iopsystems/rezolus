@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 # Workspace declares metriken-query with default-features = false. The browser
 # doesn't need the server-side http or ingest features, so we inherit as-is.
 metriken-query.workspace = true
+dashboard.workspace = true
 wasm-bindgen.workspace = true
 serde.workspace = true
 serde_json.workspace = true
