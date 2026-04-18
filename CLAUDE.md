@@ -30,6 +30,10 @@ cargo xtask fmt
 # Lint
 cargo clippy
 
+# Dump dashboard JSON for inspection/debugging
+cargo run -p dashboard                  # print to stdout
+cargo run -p dashboard -- output_dir/   # write files to directory
+
 # Developer mode build (serves viewer assets from disk for hot reload)
 cargo build --features developer-mode
 
