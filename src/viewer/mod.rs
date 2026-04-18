@@ -191,7 +191,7 @@ pub fn run(config: Config) {
             let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
             let state = AppState::new(data, registry.clone());
             let rendered = dashboard::dashboard::generate(
-                &*state.tsdb.read(),
+                &state.tsdb.read(),
                 filesize,
                 &service_refs,
                 None,
@@ -261,7 +261,7 @@ pub fn run(config: Config) {
             tsdb.set_filename(url.to_string());
             let state = AppState::new(tsdb, registry.clone());
             let rendered = dashboard::dashboard::generate(
-                &*state.tsdb.read(),
+                &state.tsdb.read(),
                 None,
                 &[],
                 None,

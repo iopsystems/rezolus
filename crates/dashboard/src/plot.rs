@@ -113,25 +113,25 @@ impl Group {
         promql_query: String,
         descriptions: Option<&HashMap<String, String>>,
     ) {
-        if opts.description.is_none() {
-            if let Some(descriptions) = descriptions {
-                let mut best_match: Option<(usize, &str, &str)> = None;
-                for (name, desc) in descriptions {
-                    if let Some(pos) = promql_query.find(name.as_str()) {
-                        let dominated = best_match.is_some_and(|(best_pos, best_name, _)| {
-                            name.len() < best_name.len()
-                                || (name.len() == best_name.len()
-                                    && (pos > best_pos
-                                        || (pos == best_pos && name.as_str() > best_name)))
-                        });
-                        if !dominated {
-                            best_match = Some((pos, name.as_str(), desc.as_str()));
-                        }
+        if opts.description.is_none()
+            && let Some(descriptions) = descriptions
+        {
+            let mut best_match: Option<(usize, &str, &str)> = None;
+            for (name, desc) in descriptions {
+                if let Some(pos) = promql_query.find(name.as_str()) {
+                    let dominated = best_match.is_some_and(|(best_pos, best_name, _)| {
+                        name.len() < best_name.len()
+                            || (name.len() == best_name.len()
+                                && (pos > best_pos
+                                    || (pos == best_pos && name.as_str() > best_name)))
+                    });
+                    if !dominated {
+                        best_match = Some((pos, name.as_str(), desc.as_str()));
                     }
                 }
-                if let Some((_, _, desc)) = best_match {
-                    opts.description = Some(desc.to_string());
-                }
+            }
+            if let Some((_, _, desc)) = best_match {
+                opts.description = Some(desc.to_string());
             }
         }
 

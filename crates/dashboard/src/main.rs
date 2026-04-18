@@ -55,14 +55,14 @@ fn write_to_dir(dir: &str, rendered: &HashMap<String, String>) {
         let mut value: serde_json::Value =
             serde_json::from_str(json).expect("invalid JSON in rendered output");
 
-        if !sections_written {
-            if let Some(sections) = value.get("sections") {
-                let sections_path = path.join("sections.json");
-                let pretty = serde_json::to_string_pretty(sections).unwrap();
-                std::fs::write(&sections_path, &pretty).unwrap();
-                eprintln!("wrote {}", sections_path.display());
-                sections_written = true;
-            }
+        if !sections_written
+            && let Some(sections) = value.get("sections")
+        {
+            let sections_path = path.join("sections.json");
+            let pretty = serde_json::to_string_pretty(sections).unwrap();
+            std::fs::write(&sections_path, &pretty).unwrap();
+            eprintln!("wrote {}", sections_path.display());
+            sections_written = true;
         }
 
         // Remove sections from per-dashboard files to reduce duplication
