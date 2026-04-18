@@ -48,13 +48,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
         // Rate for this operation
         syscall.plot_promql(
-            PlotOpts::counter(&format!("{op} Rate"), format!("syscall-{op}"), Unit::Rate),
+            PlotOpts::counter(format!("{op} Rate"), format!("syscall-{op}"), Unit::Rate),
             format!("sum(irate(syscall{{op=\"{op_lower}\"}}[5m]))"),
         );
 
         // Latency percentiles for this operation
         syscall.plot_promql(
-            PlotOpts::histogram_latency(&format!("{op} Latency"), format!("syscall-{op}-latency")),
+            PlotOpts::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency")),
             format!("syscall_latency{{op=\"{op_lower}\"}}"),
         );
     }
