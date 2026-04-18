@@ -11,33 +11,8 @@ const formatSize = (bytes) => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 };
 
-const formatInterval = (secs) => {
-    if (!secs) return '';
-    if (secs < 0.001) return (secs * 1000000).toFixed(0) + 'us';
-    if (secs < 1) return (secs * 1000).toFixed(0) + 'ms';
-    return secs.toFixed(0) + 's';
-};
-
-const formatDuration = (secs) => {
-    if (!secs && secs !== 0) return '';
-    if (secs < 60) return secs.toFixed(0) + 's';
-    if (secs < 3600) return (secs / 60).toFixed(1) + 'm';
-    if (secs < 86400) return (secs / 3600).toFixed(1) + 'h';
-    return (secs / 86400).toFixed(1) + 'd';
-};
-
-// Collapsible metadata state (private to TopNav)
-let metadataExpanded = false;
-
 // Mobile sidebar drawer state
 let sidebarOpen = false;
-
-document.addEventListener('click', (e) => {
-    if (metadataExpanded && !e.target.closest('.topnav-source')) {
-        metadataExpanded = false;
-        m.redraw();
-    }
-});
 
 // Top navigation bar component
 const TopNav = {
@@ -62,67 +37,22 @@ const TopNav = {
                 const selNode = attrs.selectedNode;
                 const hasMultiNode = nodes.length > 1;
 
-                // Build metadata entries from per-source metadata for selected node
-                const metaEntries = [];
-                if (attrs.source) metaEntries.push(['Source', attrs.source]);
-                if (selNode && attrs.perSourceMeta) {
-                    const rezGroup = attrs.perSourceMeta.rezolus;
-                    const nodeEntry = rezGroup && rezGroup[selNode];
-                    if (nodeEntry && nodeEntry.version) {
-                        metaEntries.push(['Version', nodeEntry.version]);
-                    }
-                } else if (attrs.version) {
-                    metaEntries.push(['Version', attrs.version]);
-                }
-                if (attrs.interval) metaEntries.push(['Interval', formatInterval(attrs.interval)]);
-                if (!liveMode && attrs.filesize) metaEntries.push(['Size', formatSize(attrs.filesize)]);
-                if (attrs.start_time != null && attrs.end_time != null) {
-                    metaEntries.push(['Duration', formatDuration((attrs.end_time - attrs.start_time) / 1000)]);
-                }
-                if (attrs.num_series != null) metaEntries.push(['Series', attrs.num_series.toLocaleString()]);
-
-                // Display label: node name or filename
                 const displayLabel = selNode || attrs.filename;
                 if (!displayLabel) return null;
 
                 if (hasMultiNode) {
-                    // Multi-node dropdown
-                    return m('div.topnav-source', {
-                        onclick: () => { metadataExpanded = !metadataExpanded; },
-                    }, [
+                    return m('div.topnav-source', [
                         m('select.topnav-node-select', {
                             value: selNode,
-                            onclick: (e) => e.stopPropagation(),
                             onchange: (e) => {
                                 attrs.onNodeChange(e.target.value);
                             },
                         }, nodes.map(n => m('option', { value: n }, n))),
-                        m('span.topnav-source-chevron', { class: metadataExpanded ? 'expanded' : '' }, '\u25BE'),
-                        metadataExpanded && metaEntries.length > 0 && m('div.topnav-meta-table', [
-                            m('div.topnav-meta-row.topnav-meta-header',
-                                metaEntries.map(([key]) => m('span', key)),
-                            ),
-                            m('div.topnav-meta-row.topnav-meta-values',
-                                metaEntries.map(([, val]) => m('span', val)),
-                            ),
-                        ]),
                     ]);
                 }
 
-                // Single node or no-node (filename) — static label with metadata popup
-                return m('div.topnav-source', {
-                    onclick: () => { metadataExpanded = !metadataExpanded; },
-                }, [
+                return m('div.topnav-source', [
                     m('span.topnav-source-name', displayLabel),
-                    m('span.topnav-source-chevron', { class: metadataExpanded ? 'expanded' : '' }, '\u25BE'),
-                    metadataExpanded && metaEntries.length > 0 && m('div.topnav-meta-table', [
-                        m('div.topnav-meta-row.topnav-meta-header',
-                            metaEntries.map(([key]) => m('span', key)),
-                        ),
-                        m('div.topnav-meta-row.topnav-meta-values',
-                            metaEntries.map(([, val]) => m('span', val)),
-                        ),
-                    ]),
                 ]);
             })(),
             m('div.topnav-actions', [

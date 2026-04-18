@@ -42,7 +42,7 @@ fn collect_cpu_topology(cpus: usize, cores: usize) -> Vec<CpuTopologyEntry> {
     // macOS doesn't expose per-CPU topology via sysctl. We construct a
     // best-effort mapping: single package, single die, cores numbered
     // sequentially. If SMT is active, pair logical CPUs onto physical cores.
-    let threads_per_core = if cores > 0 { cpus / cores } else { 1 };
+    let threads_per_core = (cpus.checked_div(cores)).unwrap_or(1);
 
     (0..cpus)
         .map(|cpu| CpuTopologyEntry {
@@ -96,7 +96,7 @@ fn collect_caches() -> Vec<CacheSummary> {
     let mut caches = Vec::new();
     let cpus = sysctl_u64("hw.logicalcpu").unwrap_or(1) as usize;
     let cores = sysctl_u64("hw.physicalcpu").unwrap_or(1) as usize;
-    let threads_per_core = if cores > 0 { cpus / cores } else { 1 };
+    let threads_per_core = (cpus.checked_div(cores)).unwrap_or(1);
 
     // macOS doesn't expose per-CPU cache sharing, so we approximate:
     // L1/L2 are per-core, L3 is shared across all CPUs.

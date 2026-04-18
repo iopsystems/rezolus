@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, setStepOverride, getStepOverride } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
 import { selectionStore, reportStore, setStorageScope, toggleSelection, isSelected, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -23,6 +23,12 @@ let systemInfoData = null;
 let fileChecksum = null;
 
 let currentGranularity = null;
+
+// Multi-node / multi-instance state
+let nodeList = [];
+let perSourceMeta = {};
+let selectedNode = null;
+let fileMetadata = null;
 
 const clearViewerCaches = () => {
     Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
@@ -60,6 +66,67 @@ const changeGranularity = async (step) => {
     } catch (_) { /* keep existing view on error */ }
 };
 
+const parseNodeList = () => {
+    nodeList = [];
+    perSourceMeta = {};
+    selectedNode = null;
+
+    if (!fileMetadata || !fileMetadata.per_source_metadata) return;
+
+    perSourceMeta = fileMetadata.per_source_metadata;
+    const nodes = [];
+    const rezGroup = perSourceMeta.rezolus;
+    if (rezGroup && typeof rezGroup === 'object') {
+        for (const [subKey, value] of Object.entries(rezGroup)) {
+            const nodeName = value.node || subKey;
+            if (!nodes.includes(nodeName)) {
+                nodes.push(nodeName);
+            }
+        }
+    }
+    nodeList = nodes;
+    if (nodeList.length > 0) {
+        const pinned = fileMetadata?.pinned_node;
+        const defaultNode = (pinned && nodeList.includes(pinned)) ? pinned : nodeList[0];
+        selectedNode = defaultNode;
+        setSelectedNode(defaultNode);
+    }
+
+    // Build multi-node systeminfo so the SystemInfo view renders per-node
+    if (nodeList.length > 1 && rezGroup) {
+        const multinodeInfo = {};
+        for (const [subKey, value] of Object.entries(rezGroup)) {
+            if (!value.systeminfo) continue;
+            const nodeName = value.node || subKey;
+            const sysinfo = typeof value.systeminfo === 'string'
+                ? JSON.parse(value.systeminfo)
+                : value.systeminfo;
+            multinodeInfo[nodeName] = sysinfo;
+        }
+        if (Object.keys(multinodeInfo).length > 1) {
+            systemInfoData = multinodeInfo;
+        }
+    }
+};
+
+const changeNode = async (nodeName) => {
+    selectedNode = nodeName;
+    setSelectedNode(nodeName);
+    clearViewerCaches();
+    m.redraw();
+
+    const currentRoute = m.route.get();
+    if (!currentRoute) return;
+    const section = currentRoute.replace(/^\//, '').replace(/#.*/, '');
+    if (!section) return;
+
+    try {
+        const data = await loadSection(section);
+        if (data?.sections) preloadSections(data.sections);
+        m.redraw();
+    } catch (_) { /* keep existing view on error */ }
+};
+
 // Build TopNav attrs from section data.
 const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     data,
@@ -70,6 +137,10 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     recording: false,
     granularity: currentGranularity,
     onGranularityChange: changeGranularity,
+    nodeList,
+    selectedNode,
+    perSourceMeta,
+    onNodeChange: changeNode,
     extra,
 });
 
@@ -151,7 +222,11 @@ const SectionContent = {
                 chartsState,
                 Chart,
                 CgroupSelector,
-                executePromQLRangeQuery,
+                executePromQLRangeQuery: (query, ...args) => {
+                    const node = getSelectedNode();
+                    if (node) query = injectLabel(query, 'node', node);
+                    return executePromQLRangeQuery(query, ...args);
+                },
                 applyResultToPlot,
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
@@ -344,7 +419,7 @@ const loadSection = async (sectionKey) => {
     const data = await ViewerApi.getSection(sectionKey);
     if (!data) return null;
 
-    const processedData = await processDashboardData(data, activeCgroupPattern);
+    const processedData = await processDashboardData(data, activeCgroupPattern, `/${sectionKey}`);
     sectionResponseCache[sectionKey] = processedData;
     return processedData;
 };
@@ -423,6 +498,11 @@ async function loadDemo(filename = 'demo.parquet') {
         try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
 
         try {
+            fileMetadata = await ViewerApi.getFileMetadata();
+            parseNodeList();
+        } catch { /* ignore */ }
+
+        try {
             const parsed = await ViewerApi.getSelection();
             if (parsed && Array.isArray(parsed.entries)) {
                 loadPayloadIntoStore(reportStore, parsed);
@@ -474,6 +554,11 @@ async function loadFile(file) {
         });
 
         try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
+
+        try {
+            fileMetadata = await ViewerApi.getFileMetadata();
+            parseNodeList();
+        } catch { /* ignore */ }
 
         try {
             const parsed = await ViewerApi.getSelection();

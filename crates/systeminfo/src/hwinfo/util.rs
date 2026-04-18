@@ -82,7 +82,7 @@ pub(crate) fn read_hexbitmap(path: impl AsRef<Path>) -> Vec<usize> {
 // Return a list of IRQs
 pub(crate) fn read_irqs(path: impl AsRef<Path>) -> Vec<usize> {
     let walker = WalkDir::new(path).max_depth(1);
-    return walker
+    walker
         .into_iter()
         .filter_map(|entry| {
             if let Ok(irq) = entry {
@@ -91,7 +91,7 @@ pub(crate) fn read_irqs(path: impl AsRef<Path>) -> Vec<usize> {
                 None
             }
         })
-        .collect();
+        .collect()
 }
 
 pub(crate) fn read_space_list<T: FromStr>(path: impl AsRef<Path>) -> Result<Vec<T>> {

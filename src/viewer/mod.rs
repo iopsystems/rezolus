@@ -35,7 +35,10 @@ static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 mod dashboard;
 mod plot;
 mod service_extension;
-pub use service_extension::{Kpi, ServiceExtension, TemplateRegistry};
+pub use service_extension::{ServiceExtension, TemplateRegistry};
+// Used by parquet_tools::filter tests via crate::viewer::Kpi
+#[cfg(test)]
+pub use service_extension::Kpi;
 
 // Re-export from metriken-query crate
 pub use metriken_query::promql;
@@ -1509,6 +1512,7 @@ async fn lib(uri: Uri) -> impl IntoResponse {
 
 /// Dump all dashboard definitions as JSON files to the given directory.
 /// Used by `cargo xtask generate-dashboards` to keep site viewer in sync.
+#[cfg(feature = "xtask-commands")]
 pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(output_dir)?;
 

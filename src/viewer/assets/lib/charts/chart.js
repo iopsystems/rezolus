@@ -143,9 +143,10 @@ export class Chart {
         this.spec = vnode.attrs.spec;
         this.interval = vnode.attrs.interval;
 
-        // Re-render if data changed or theme was toggled
+        // Re-render if data changed, format changed, or theme was toggled
         const themeChanged = this._themeVersion !== themeVersion;
-        if (this.echart && (oldSpec.data !== this.spec.data || themeChanged)) {
+        const formatChanged = oldSpec.opts?.format !== this.spec.opts?.format;
+        if (this.echart && (oldSpec.data !== this.spec.data || formatChanged || themeChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 

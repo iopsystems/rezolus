@@ -4,7 +4,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
 import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
@@ -364,7 +364,11 @@ const SectionContent = {
                 chartsState,
                 Chart,
                 CgroupSelector,
-                executePromQLRangeQuery,
+                executePromQLRangeQuery: (query, ...args) => {
+                    const node = getSelectedNode();
+                    if (node) query = injectLabel(query, 'node', node);
+                    return executePromQLRangeQuery(query, ...args);
+                },
                 applyResultToPlot,
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
