@@ -3730,6 +3730,7 @@ name = "viewer"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "dashboard",
  "metriken-query",
  "serde",
  "serde_json",

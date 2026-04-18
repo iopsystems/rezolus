@@ -5,9 +5,8 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("fmt") => fmt(),
-        Some("generate-dashboards") => generate_dashboards(args),
         _ => {
-            eprintln!("Usage: cargo xtask [fmt | generate-dashboards [--check]]");
+            eprintln!("Usage: cargo xtask [fmt]");
             Ok(())
         }
     }
@@ -38,38 +37,6 @@ fn fmt() -> Result<()> {
             bail!("clang-format failed");
         }
     }
-    Ok(())
-}
-
-fn generate_dashboards(args: impl Iterator<Item = String>) -> Result<()> {
-    let check = args.into_iter().any(|a| a == "--check");
-
-    let output_dir = if check {
-        std::env::temp_dir().join("rezolus-dashboards-check")
-    } else {
-        std::path::PathBuf::from("site/viewer/dashboards")
-    };
-
-    run(Command::new("cargo")
-        .args(["run", "--features", "xtask-commands", "--", "dump-dashboards"])
-        .arg(&output_dir))?;
-
-    if check {
-        let committed = std::path::Path::new("site/viewer/dashboards");
-        let status = Command::new("diff")
-            .args(["-r", "-q"])
-            .arg(committed)
-            .arg(&output_dir)
-            .status()?;
-        let _ = std::fs::remove_dir_all(&output_dir);
-        if !status.success() {
-            bail!(
-                "Dashboard JSON is out of date. Run `cargo xtask generate-dashboards` to update."
-            );
-        }
-        eprintln!("Dashboards are up to date.");
-    }
-
     Ok(())
 }
 
