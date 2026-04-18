@@ -375,7 +375,7 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
         println!("----------------------");
 
         // Sort by total anomalies (descending)
-        metrics_with_anomalies.sort_by(|a, b| b.2.cmp(&a.2));
+        metrics_with_anomalies.sort_by_key(|k| std::cmp::Reverse(k.2));
 
         for (metric, metric_type, total, high, medium, low) in metrics_with_anomalies {
             let type_label = match metric_type.as_ref() {

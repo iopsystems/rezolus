@@ -1,6 +1,7 @@
 use super::*;
 
 /// Produces a snapshot from a previous and current snapshot
+#[allow(deprecated)] // TODO: migrate from Histogram::percentiles to SampleQuantiles trait
 pub fn snapshot(
     config: &Config,
     mut previous: Snapshot,

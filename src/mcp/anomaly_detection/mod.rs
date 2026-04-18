@@ -106,11 +106,8 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
                                 break;
                             }
                         }
-                        '[' => {
-                            // Check if this is inside our function
-                            if paren_depth > 0 {
-                                has_range_vector = true;
-                            }
+                        '[' if paren_depth > 0 => {
+                            has_range_vector = true;
                         }
                         _ => {}
                     }
