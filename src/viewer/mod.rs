@@ -1014,9 +1014,7 @@ async fn sitemap() -> axum::response::Html<String> {
 
     let rows: Vec<String> = routes
         .iter()
-        .map(|(path, desc)| {
-            format!(r#"<tr><td><code>{path}</code></td><td>{desc}</td></tr>"#)
-        })
+        .map(|(path, desc)| format!(r#"<tr><td><code>{path}</code></td><td>{desc}</td></tr>"#))
         .collect();
 
     axum::response::Html(format!(
