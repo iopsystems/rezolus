@@ -848,6 +848,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
 
     let router = Router::new()
         .route("/about", get(about))
+        .route("/sitemap", get(sitemap))
         .route("/data/{*path}", get(data))
         .nest("/api/v1", api_routes)
         .with_state(state.clone());
@@ -877,10 +878,181 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
     )
 }
 
-// Basic /about page handler
-async fn about() -> String {
+/// Shared HTML head boilerplate for standalone pages (about, sitemap).
+/// Reads `rezolus-theme` from localStorage to match the viewer's theme choice.
+const STANDALONE_HEAD: &str = r#"<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script>
+// Apply saved theme before first paint to avoid flash
+(function(){
+  var t = localStorage.getItem('rezolus-theme');
+  if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+})();
+</script>
+<style>
+/* Dark (default) */
+:root {
+  --bg: #0a0e14;
+  --bg-card: #0d1117;
+  --border-subtle: rgba(48,54,61,0.4);
+  --fg: #e6edf3;
+  --fg-secondary: #8b949e;
+  --accent: #58a6ff;
+}
+/* Light — matches viewer's [data-theme="light"] */
+[data-theme="light"] {
+  --bg: #f6f8fa;
+  --bg-card: #ffffff;
+  --border-subtle: rgba(0,0,0,0.1);
+  --fg: #1f2328;
+  --fg-secondary: #636c76;
+  --accent: #0969da;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+}
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 2rem 2.5rem;
+  max-width: 600px;
+  width: 100%;
+  text-align: center;
+}
+a { color: var(--accent); text-decoration: none; transition: border-color 0.15s; }
+a:hover { opacity: 0.85; }
+code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+</style>"#;
+
+// Styled /about page handler
+async fn about() -> axum::response::Html<String> {
     let version = env!("CARGO_PKG_VERSION");
-    format!("Rezolus {version} Viewer\nFor information, see: https://rezolus.com\n")
+    axum::response::Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Rezolus — About</title>
+{STANDALONE_HEAD}
+<style>
+h1 {{ font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem; }}
+.version {{
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin-bottom: 1.5rem;
+}}
+.links {{ display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }}
+.links a {{
+  font-size: 0.9rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}}
+.links a:hover {{ border-color: var(--accent); }}
+p {{
+  color: var(--fg-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+  line-height: 1.5;
+}}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Rezolus</h1>
+  <div class="version">v{version}</div>
+  <p>High-resolution systems performance telemetry agent with eBPF instrumentation.</p>
+  <div class="links">
+    <a href="https://rezolus.com">Website</a>
+    <a href="https://github.com/iopsystems/rezolus">GitHub</a>
+    <a href="/sitemap">Sitemap</a>
+  </div>
+</div>
+</body>
+</html>"#
+    ))
+}
+
+/// Lists all endpoints served by the viewer (max 2 levels deep).
+async fn sitemap() -> axum::response::Html<String> {
+    let routes = [
+        ("/", "Dashboard"),
+        ("/about", "About page"),
+        ("/sitemap", "This page"),
+        ("/data/{path}", "Dashboard section data"),
+        ("/api/v1/mode", "Viewer mode (loaded/live)"),
+        ("/api/v1/query", "PromQL instant query"),
+        ("/api/v1/query_range", "PromQL range query"),
+        ("/api/v1/labels", "Label names"),
+        ("/api/v1/label/{name}/values", "Label values"),
+        ("/api/v1/metadata", "File checksum"),
+        ("/api/v1/systeminfo", "System information"),
+        ("/api/v1/selection", "Saved selection state"),
+        ("/api/v1/file_metadata", "Parquet file metadata"),
+        ("/api/v1/reset", "Reset TSDB data"),
+        ("/api/v1/save", "Download parquet"),
+        ("/api/v1/upload", "Upload parquet"),
+        ("/api/v1/connect", "Connect to live agent"),
+        ("/api/v1/save_with_selection", "Save with selection state"),
+    ];
+
+    let rows: Vec<String> = routes
+        .iter()
+        .map(|(path, desc)| {
+            format!(r#"<tr><td><code>{path}</code></td><td>{desc}</td></tr>"#)
+        })
+        .collect();
+
+    axum::response::Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Rezolus — Sitemap</title>
+{STANDALONE_HEAD}
+<style>
+.card {{ text-align: left; }}
+h1 {{ font-size: 1.5rem; font-weight: 700; margin-bottom: 1.25rem; }}
+table {{ width: 100%; border-collapse: collapse; }}
+tr {{ border-bottom: 1px solid var(--border-subtle); }}
+tr:last-child {{ border-bottom: none; }}
+td {{ padding: 0.5rem 0; font-size: 0.85rem; vertical-align: top; }}
+td:first-child {{ white-space: nowrap; padding-right: 1.5rem; }}
+td:last-child {{ color: var(--fg-secondary); }}
+.back {{
+  color: var(--fg-secondary);
+  font-size: 0.85rem;
+  margin-top: 1.25rem;
+  display: inline-block;
+}}
+.back:hover {{ color: var(--accent); }}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Endpoints</h1>
+  <table>{}</table>
+  <a class="back" href="/about">&larr; About</a>
+</div>
+</body>
+</html>"#,
+        rows.join("")
+    ))
 }
 
 async fn data(
