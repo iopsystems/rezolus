@@ -877,10 +877,37 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
     )
 }
 
-// Basic /about page handler
-async fn about() -> String {
+/// Shared HTML head for standalone pages — reuses the main viewer stylesheet
+/// and applies the saved theme before first paint.
+const STANDALONE_HEAD: &str = r#"<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<script>!function(){var t=localStorage.getItem('rezolus-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}()</script>
+<link rel="stylesheet" href="/lib/style.css"/>
+<style>body{display:flex;align-items:center;justify-content:center;padding:2rem}</style>"#;
+
+// Styled /about page handler
+async fn about() -> axum::response::Html<String> {
     let version = env!("CARGO_PKG_VERSION");
-    format!("Rezolus {version} Viewer\nFor information, see: https://rezolus.com\n")
+    axum::response::Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head><title>Rezolus — About</title>
+{STANDALONE_HEAD}
+</head>
+<body>
+<div class="card">
+  <h1>Rezolus</h1>
+  <div class="version">v{version}</div>
+  <p class="subtitle">High-resolution systems performance telemetry agent.</p>
+  <div class="link-row">
+    <a href="https://rezolus.com">Website</a>
+    <a href="https://github.com/iopsystems/rezolus">GitHub</a>
+    <a href="/">Dashboard</a>
+  </div>
+</div>
+</body>
+</html>"#
+    ))
 }
 
 async fn data(

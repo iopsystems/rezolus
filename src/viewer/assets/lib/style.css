@@ -259,6 +259,27 @@ body::after {
 }
 
 /* ==========================================================================
+   Card — reusable centered container (about, sitemap, etc.)
+   ========================================================================== */
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 2rem 2.5rem;
+    max-width: 600px;
+    width: 100%;
+    text-align: center;
+}
+
+.card h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
+.card .version { font-family: var(--font-mono); font-size: 0.85rem; color: var(--accent); margin-bottom: 1.5rem; }
+.card .subtitle { color: var(--fg-secondary); font-size: 0.9rem; margin-bottom: 1.25rem; line-height: 1.5; }
+.card .link-row { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+.card .link-row a { font-size: 0.9rem; padding: 0.4rem 0.8rem; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--accent); text-decoration: none; }
+.card .link-row a:hover { border-color: var(--accent); }
+
+/* ==========================================================================
    Top Navigation Bar
    ========================================================================== */
 
