@@ -13,7 +13,7 @@ const buildTopNavAttrs = ({
     onGranularityChange,
     nodeList = [],
     selectedNode = null,
-    perSourceMeta = {},
+    nodeVersions = {},
     onNodeChange,
     extra = {},
 }) => ({
@@ -37,7 +37,7 @@ const buildTopNavAttrs = ({
     chartsState,
     nodeList,
     selectedNode,
-    perSourceMeta,
+    nodeVersions,
     onNodeChange,
     ...extra,
 });

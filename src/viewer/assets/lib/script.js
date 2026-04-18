@@ -34,9 +34,9 @@ let fileChecksum = null;
 // File-level metadata — fetched once at startup
 let fileMetadata = null;
 
-// Parsed node list and per-source metadata from combined files
+// Multi-node state — pre-computed by the backend from per_source_metadata
 let nodeList = [];           // e.g. ["web01", "web02"]
-let perSourceMeta = {};      // parsed per_source_metadata object
+let nodeVersions = {};       // e.g. {"web01": "5.9.2", "web02": "5.9.2"}
 let selectedNode = null;     // currently selected node name (null = no multi-node)
 
 // Per-service instance lists: { "vllm": [{id: "0", node: "gpu01"}, ...], ... }
@@ -76,59 +76,29 @@ const fetchBackendState = async () => {
     }
     if (fmResult.status === 'fulfilled') {
         fileMetadata = fmResult.value;
-        parseNodeList();
+        applyMultiNodeInfo();
     }
 };
 
-const parseNodeList = () => {
+// Apply pre-computed multi-node info from the backend response.
+const applyMultiNodeInfo = () => {
     nodeList = [];
-    perSourceMeta = {};
+    nodeVersions = {};
     selectedNode = null;
-
-    if (!fileMetadata || !fileMetadata.per_source_metadata) return;
-
-    perSourceMeta = fileMetadata.per_source_metadata;
-    const nodes = [];
-    const rezGroup = perSourceMeta.rezolus;
-    if (rezGroup && typeof rezGroup === 'object') {
-        for (const [subKey, value] of Object.entries(rezGroup)) {
-            const nodeName = value.node || subKey;
-            if (!nodes.includes(nodeName)) {
-                nodes.push(nodeName);
-            }
-        }
-    }
-    nodeList = nodes;
-    if (nodeList.length > 0) {
-        const pinned = fileMetadata?.pinned_node;
-        const defaultNode = (pinned && nodeList.includes(pinned)) ? pinned : nodeList[0];
-        selectedNode = defaultNode;
-        setSelectedNode(defaultNode);
-    }
-
-    parseServiceInstances();
-};
-
-const parseServiceInstances = () => {
     serviceInstances = {};
     selectedInstances = {};
 
-    if (!perSourceMeta) return;
+    if (!fileMetadata) return;
 
-    for (const [source, group] of Object.entries(perSourceMeta)) {
-        if (source === 'rezolus') continue;
-        if (!group || typeof group !== 'object') continue;
+    nodeList = fileMetadata.nodes || [];
+    nodeVersions = fileMetadata.node_versions || {};
+    serviceInstances = fileMetadata.service_instances || {};
 
-        for (const [subKey, value] of Object.entries(group)) {
-            const instanceId = value.instance || subKey;
-            if (!serviceInstances[source]) {
-                serviceInstances[source] = [];
-            }
-            serviceInstances[source].push({
-                id: instanceId,
-                node: value.node || null,
-            });
-        }
+    if (nodeList.length > 0) {
+        const pinned = fileMetadata.pinned_node;
+        const defaultNode = (pinned && nodeList.includes(pinned)) ? pinned : nodeList[0];
+        selectedNode = defaultNode;
+        setSelectedNode(defaultNode);
     }
 
     for (const source of Object.keys(serviceInstances)) {
@@ -253,7 +223,7 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onGranularityChange: changeGranularity,
     nodeList,
     selectedNode,
-    perSourceMeta,
+    nodeVersions,
     onNodeChange: changeNode,
     extra,
 });

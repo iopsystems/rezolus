@@ -117,8 +117,39 @@ impl Viewer {
         .unwrap()
     }
 
-    /// Returns systeminfo JSON from parquet file metadata, or null
+    /// Returns systeminfo JSON from parquet file metadata.
+    ///
+    /// For multi-node combined files (>1 node in per_source_metadata), returns
+    /// an object keyed by node name with each node's systeminfo.  For single-node
+    /// files, returns the flat systeminfo string.
     pub fn systeminfo(&self) -> Option<String> {
+        // Try multi-node first
+        if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
+            if let Ok(psm) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str) {
+                if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
+                    let mut nodes = serde_json::Map::new();
+                    for (sub_key, entry) in rez_group {
+                        let obj = match entry.as_object() {
+                            Some(o) => o,
+                            None => continue,
+                        };
+                        let sysinfo_val = match obj.get("systeminfo") {
+                            Some(v) => v,
+                            None => continue,
+                        };
+                        let node_name = obj
+                            .get("node")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(sub_key);
+                        nodes.insert(node_name.to_string(), sysinfo_val.clone());
+                    }
+                    if nodes.len() > 1 {
+                        return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
+                    }
+                }
+            }
+        }
+        // Fall back to flat systeminfo
         self.file_metadata.get("systeminfo").cloned()
     }
 
@@ -130,6 +161,10 @@ impl Viewer {
     /// Returns all file-level metadata as a JSON object, mirroring the
     /// server's /file_metadata endpoint.  Values that are valid JSON are
     /// embedded as-is; everything else becomes a JSON string.
+    ///
+    /// Includes pre-computed `nodes`, `node_versions`, and
+    /// `service_instances` fields so the frontend doesn't have to
+    /// re-parse `per_source_metadata` itself.
     pub fn file_metadata_json(&self) -> String {
         let mut map = serde_json::Map::new();
         for (key, val) in &self.file_metadata {
@@ -137,6 +172,7 @@ impl Viewer {
                 .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
             map.insert(key.clone(), json_val);
         }
+        enrich_with_multi_node_info(&mut map);
         serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".into())
     }
 
@@ -177,5 +213,86 @@ impl Viewer {
                 format!(r#"{{"status":"error","error":"{}"}}"#, msg)
             }
         }
+    }
+}
+
+/// Enrich a file-metadata JSON map with pre-computed multi-node info.
+///
+/// Parses `per_source_metadata` and adds `nodes`, `node_versions`, and
+/// `service_instances` so the frontend doesn't have to duplicate this logic.
+fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Value>) {
+    let psm = match map.get("per_source_metadata").and_then(|v| v.as_object()) {
+        Some(psm) => psm.clone(),
+        None => return,
+    };
+
+    let mut nodes = Vec::new();
+    let mut node_versions = serde_json::Map::new();
+    if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
+        for (sub_key, entry) in rez_group {
+            let obj = match entry.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            let node_name = obj
+                .get("node")
+                .and_then(|v| v.as_str())
+                .unwrap_or(sub_key);
+            if !nodes.contains(&node_name.to_string()) {
+                nodes.push(node_name.to_string());
+            }
+            if let Some(version) = obj.get("version").and_then(|v| v.as_str()) {
+                node_versions
+                    .insert(node_name.to_string(), serde_json::Value::String(version.to_string()));
+            }
+        }
+    }
+
+    let mut service_instances = serde_json::Map::new();
+    for (source, group) in &psm {
+        if source == "rezolus" {
+            continue;
+        }
+        let group_obj = match group.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let mut instances = Vec::new();
+        for (sub_key, entry) in group_obj {
+            let obj = match entry.as_object() {
+                Some(o) => o,
+                None => continue,
+            };
+            let instance_id = obj
+                .get("instance")
+                .and_then(|v| v.as_str())
+                .unwrap_or(sub_key);
+            let node = obj.get("node").and_then(|v| v.as_str());
+            let mut inst = serde_json::Map::new();
+            inst.insert("id".into(), serde_json::Value::String(instance_id.to_string()));
+            inst.insert(
+                "node".into(),
+                node.map(|n| serde_json::Value::String(n.to_string()))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            instances.push(serde_json::Value::Object(inst));
+        }
+        if !instances.is_empty() {
+            service_instances.insert(source.clone(), serde_json::Value::Array(instances));
+        }
+    }
+
+    map.insert(
+        "nodes".into(),
+        serde_json::Value::Array(nodes.into_iter().map(serde_json::Value::String).collect()),
+    );
+    if !node_versions.is_empty() {
+        map.insert("node_versions".into(), serde_json::Value::Object(node_versions));
+    }
+    if !service_instances.is_empty() {
+        map.insert(
+            "service_instances".into(),
+            serde_json::Value::Object(service_instances),
+        );
     }
 }
