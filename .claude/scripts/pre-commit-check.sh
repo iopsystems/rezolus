@@ -16,7 +16,7 @@ SRC="$ROOT/src/viewer/assets/lib"
 SITE="$ROOT/site/viewer/lib"
 
 # Files in site/viewer/lib/ that are standalone (not symlinked)
-STANDALONE_TOP="data.js script.js dashboards.js viewer_api.js"
+STANDALONE_TOP="script.js viewer_api.js"
 
 errors=()
 
@@ -91,27 +91,7 @@ check_symlinks() {
     done < <(find "$SRC" -type f \( -name '*.js' -o -name '*.css' \))
 }
 
-# ── 4. Check dashboard JSON is up to date ────────────────────────────
-
-check_dashboards() {
-    # Only check if any dashboard-related Rust files are staged
-    staged=$(git diff --cached --name-only 2>/dev/null || true)
-    need_check=false
-    while IFS= read -r f; do
-        case "$f" in
-            src/viewer/dashboard/*|src/viewer/plot.rs|src/viewer/mod.rs)
-                need_check=true ;;
-        esac
-    done <<< "$staged"
-
-    if $need_check; then
-        if ! cargo xtask generate-dashboards --check >/dev/null 2>&1; then
-            errors+=("dashboard JSON is out of date — run: cargo xtask generate-dashboards")
-        fi
-    fi
-}
-
-# ── 5. Rebuild WASM if viewer crate changed ────────────────────────
+# ── 4. Rebuild WASM if viewer crate changed ────────────────────────
 
 check_wasm() {
     staged=$(git diff --cached --name-only 2>/dev/null || true)
@@ -138,7 +118,6 @@ check_wasm() {
 check_formatting
 check_clippy
 check_symlinks
-check_dashboards
 check_wasm
 
 if [ ${#errors[@]} -gt 0 ]; then

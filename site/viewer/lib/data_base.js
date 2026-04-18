@@ -1,1 +1,0 @@
-../../../src/viewer/assets/lib/data.js

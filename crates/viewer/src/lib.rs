@@ -13,6 +13,7 @@ pub fn init() {
 pub struct Viewer {
     engine: QueryEngine<Arc<Tsdb>>,
     file_metadata: std::collections::HashMap<String, String>,
+    dashboard_sections: std::collections::HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -56,11 +57,13 @@ impl Viewer {
         tsdb.set_filename(filename.to_string());
 
         let file_metadata = tsdb.file_metadata().clone();
+        let dashboard_sections = dashboard::dashboard::generate(&tsdb, None, &[], None);
         let engine = QueryEngine::new(Arc::new(tsdb));
 
         Ok(Viewer {
             engine,
             file_metadata,
+            dashboard_sections,
         })
     }
 
@@ -212,6 +215,74 @@ impl Viewer {
                 format!(r#"{{"status":"error","error":"{}"}}"#, msg)
             }
         }
+    }
+
+    /// Accept a JSON array of ServiceExtension templates, detect which ones
+    /// match the loaded parquet file, and regenerate dashboards accordingly.
+    pub fn init_templates(&mut self, templates_json: &str) -> Result<(), JsValue> {
+        let templates: Vec<dashboard::ServiceExtension> = serde_json::from_str(templates_json)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
+
+        let registry = dashboard::TemplateRegistry::from_templates(templates.clone());
+
+        // Detect which service extensions match this file's sources
+        let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
+
+        // Check per_source_metadata for multi-source files
+        if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
+            if let Ok(psm) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
+            {
+                for (source_type, _group) in &psm {
+                    if source_type == "rezolus" {
+                        continue;
+                    }
+                    if let Some(ext) = registry.get(source_type) {
+                        service_exts.push((source_type.clone(), ext.clone()));
+                    }
+                }
+            }
+        }
+
+        // Fall back to single-source detection via source field
+        if service_exts.is_empty() {
+            let tsdb = self.engine.tsdb();
+            let source = tsdb.source().to_string();
+            if let Some(ext) = registry.get(&source) {
+                service_exts.push((source, ext.clone()));
+            }
+        }
+
+        // Regenerate dashboards with service extensions
+        let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
+            .iter()
+            .map(|(name, ext)| (name.as_str(), ext))
+            .collect();
+
+        self.dashboard_sections =
+            dashboard::dashboard::generate(&*self.engine.tsdb(), None, &service_refs, None);
+
+        Ok(())
+    }
+
+    /// Returns the sections list as a JSON array.
+    pub fn get_sections(&self) -> String {
+        if let Some(json) = self.dashboard_sections.values().next() {
+            if let Ok(view) = serde_json::from_str::<serde_json::Value>(json) {
+                if let Some(sections) = view.get("sections") {
+                    return sections.to_string();
+                }
+            }
+        }
+        "[]".to_string()
+    }
+
+    /// Returns the full View JSON for a dashboard section.
+    pub fn get_section(&self, key: &str) -> Option<String> {
+        self.dashboard_sections
+            .get(&format!("{key}.json"))
+            .or_else(|| self.dashboard_sections.get(key))
+            .cloned()
     }
 }
 

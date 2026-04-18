@@ -1,10 +1,8 @@
 // WASM API adapter for site/viewer frontend.
-// Defines a transport abstraction that mirrors src/viewer backend adapter.
-
-import { generateSectionData } from './dashboards.js';
+// Mirrors the server viewer's transport layer — the only difference
+// is that queries run via WASM instead of HTTP.
 
 let viewer = null;
-let viewerInfo = null;
 
 const ensureViewer = () => {
     if (!viewer) throw new Error('No parquet file loaded');
@@ -13,10 +11,6 @@ const ensureViewer = () => {
 const ViewerApi = {
     setViewer(instance) {
         viewer = instance;
-    },
-
-    setViewerInfo(info) {
-        viewerInfo = info;
     },
 
     async getMetadata() {
@@ -49,10 +43,15 @@ const ViewerApi = {
     },
 
     async getSection(section) {
-        if (!viewerInfo) throw new Error('Viewer info not initialized');
-        const data = await generateSectionData(section, viewerInfo);
-        if (!data) throw new Error(`Unknown section: ${section}`);
-        return data;
+        ensureViewer();
+        const json = viewer.get_section(section);
+        if (!json) throw new Error(`Unknown section: ${section}`);
+        return JSON.parse(json);
+    },
+
+    async getSections() {
+        ensureViewer();
+        return JSON.parse(viewer.get_sections());
     },
 
     async queryRange(query, start, end, step) {

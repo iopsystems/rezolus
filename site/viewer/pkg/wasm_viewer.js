@@ -34,6 +34,38 @@ export class Viewer {
         }
     }
     /**
+     * Returns the full View JSON for a dashboard section.
+     * @param {string} key
+     * @returns {string | undefined}
+     */
+    get_section(key) {
+        const ptr0 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.viewer_get_section(this.__wbg_ptr, ptr0, len0);
+        let v2;
+        if (ret[0] !== 0) {
+            v2 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v2;
+    }
+    /**
+     * Returns the sections list as a JSON array.
+     * @returns {string}
+     */
+    get_sections() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.viewer_get_sections(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Returns JSON with viewer info (interval, source, version, metric names)
      * @returns {string}
      */
@@ -47,6 +79,19 @@ export class Viewer {
             return getStringFromWasm0(ret[0], ret[1]);
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Accept a JSON array of ServiceExtension templates, detect which ones
+     * match the loaded parquet file, and regenerate dashboards accordingly.
+     * @param {string} templates_json
+     */
+    init_templates(templates_json) {
+        const ptr0 = passStringToWasm0(templates_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.viewer_init_templates(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
         }
     }
     /**
