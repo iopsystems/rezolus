@@ -12,7 +12,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     // Average CPU busy percentage
     cpu.plot_promql(
         PlotOpts::counter("Busy %", "cpu-busy", Unit::Percentage).percentage_range(),
-        "sum(irate(cpu_usage[5m])) / sum(cpu_cores) / 1000000000".to_string(),
+        "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU busy percentage heatmap
@@ -130,7 +130,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     // Average CPU % spent in softirq
     softirq.plot_promql(
         PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
-        "sum(irate(softirq_time[5m])) / sum(cpu_cores) / 1000000000".to_string(),
+        "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
     );
 
     // Per-CPU % spent in softirq heatmap
@@ -190,7 +190,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
                 "normalized-cpu-busy",
                 Unit::Count,
             ),
-            format!("(sum(irate(cpu_usage[5m])) / sum(cpu_cores) / 1000000000) / ({tq})"),
+            format!("(sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000) / ({tq})"),
         );
 
         normalized.plot_promql(

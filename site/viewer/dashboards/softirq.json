@@ -61,7 +61,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -147,7 +147,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"hi\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"hi\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -233,7 +233,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"irq_poll\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"irq_poll\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -319,7 +319,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"net_tx\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"net_tx\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -405,7 +405,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"net_rx\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"net_rx\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -491,7 +491,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"rcu\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"rcu\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -577,7 +577,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"sched\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"sched\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -663,7 +663,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"tasklet\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"tasklet\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -749,7 +749,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"timer\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"timer\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -835,7 +835,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"hrtimer\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"hrtimer\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
@@ -921,7 +921,7 @@
             "title": "CPU %",
             "type": "delta_counter"
           },
-          "promql_query": "sum(irate(softirq_time{kind=\"block\"}[5m])) / sum(cpu_cores) / 1000000000"
+          "promql_query": "sum(irate(softirq_time{kind=\"block\"}[5m])) / cpu_cores / 1000000000"
         },
         {
           "data": [],
