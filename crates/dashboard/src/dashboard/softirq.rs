@@ -1,5 +1,5 @@
-use crate::plot::*;
 use crate::Tsdb;
+use crate::plot::*;
 
 /// Adds the standard 4-plot pattern for a softirq kind: rate, rate heatmap,
 /// CPU %, and CPU % heatmap.

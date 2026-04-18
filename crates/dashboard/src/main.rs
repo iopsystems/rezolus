@@ -6,8 +6,8 @@
 //! Without arguments, prints all section JSON to stdout.
 //! With a directory argument, writes each section as a pretty-printed JSON file.
 
-use dashboard::dashboard::generate;
 use dashboard::Tsdb;
+use dashboard::dashboard::generate;
 use std::collections::HashMap;
 
 fn main() {
@@ -55,9 +55,7 @@ fn write_to_dir(dir: &str, rendered: &HashMap<String, String>) {
         let mut value: serde_json::Value =
             serde_json::from_str(json).expect("invalid JSON in rendered output");
 
-        if !sections_written
-            && let Some(sections) = value.get("sections")
-        {
+        if !sections_written && let Some(sections) = value.get("sections") {
             let sections_path = path.join("sections.json");
             let pretty = serde_json::to_string_pretty(sections).unwrap();
             std::fs::write(&sections_path, &pretty).unwrap();

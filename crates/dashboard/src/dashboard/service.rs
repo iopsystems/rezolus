@@ -1,6 +1,6 @@
+use crate::Tsdb;
 use crate::plot::*;
 use crate::service_extension::ServiceExtension;
-use crate::Tsdb;
 
 pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtension) -> View {
     let mut view = View::new(data, sections);

@@ -1,6 +1,6 @@
+use crate::Tsdb;
 use crate::plot::*;
 use crate::service_extension::ServiceExtension;
-use crate::Tsdb;
 
 mod blockio;
 mod cgroups;

@@ -31,9 +31,9 @@ use tower_http::services::{ServeDir, ServeFile};
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
-pub use dashboard::{ServiceExtension, TemplateRegistry};
 #[cfg(test)]
 pub use dashboard::Kpi;
+pub use dashboard::{ServiceExtension, TemplateRegistry};
 
 // Re-export from metriken-query crate
 pub use metriken_query::promql;
@@ -190,12 +190,8 @@ pub fn run(config: Config) {
             info!("Generating dashboards...");
             let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
             let state = AppState::new(data, registry.clone());
-            let rendered = dashboard::dashboard::generate(
-                &state.tsdb.read(),
-                filesize,
-                &service_refs,
-                None,
-            );
+            let rendered =
+                dashboard::dashboard::generate(&state.tsdb.read(), filesize, &service_refs, None);
             state.sections.write().extend(rendered);
             *state.parquet_path.write() = Some(path.clone());
             let multinode_sysinfo = build_multinode_systeminfo(path);
@@ -260,12 +256,7 @@ pub fn run(config: Config) {
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
             let state = AppState::new(tsdb, registry.clone());
-            let rendered = dashboard::dashboard::generate(
-                &state.tsdb.read(),
-                None,
-                &[],
-                None,
-            );
+            let rendered = dashboard::dashboard::generate(&state.tsdb.read(), None, &[], None);
             state.sections.write().extend(rendered);
             state.live.store(true, Ordering::Relaxed);
 
@@ -1178,12 +1169,7 @@ async fn upload_parquet(
         .ok()
         .expect("Arc still shared");
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let rendered = dashboard::dashboard::generate(
-        &data,
-        filesize,
-        &service_refs,
-        None,
-    );
+    let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None);
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
@@ -1286,12 +1272,7 @@ async fn connect_agent(
     tsdb.set_source(source.clone());
     tsdb.set_version(version.clone());
     tsdb.set_filename(url.to_string());
-    let rendered = dashboard::dashboard::generate(
-        &tsdb,
-        None,
-        &[],
-        None,
-    );
+    let rendered = dashboard::dashboard::generate(&tsdb, None, &[], None);
 
     // Update shared state
     {
@@ -1618,4 +1599,3 @@ async fn lib(uri: Uri) -> impl IntoResponse {
         )
     }
 }
-

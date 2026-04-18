@@ -1,5 +1,5 @@
-use crate::plot::*;
 use crate::Tsdb;
+use crate::plot::*;
 
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     // Query Explorer doesn't need pre-computed data, it's all dynamic

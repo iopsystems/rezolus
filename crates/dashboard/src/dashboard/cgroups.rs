@@ -1,5 +1,5 @@
-use crate::plot::*;
 use crate::Tsdb;
+use crate::plot::*;
 
 /// Adds the standard cgroup metric plots for either aggregate or individual mode.
 ///
