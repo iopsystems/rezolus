@@ -259,6 +259,20 @@ body::after {
 }
 
 /* ==========================================================================
+   Card — reusable centered container (about, sitemap, etc.)
+   ========================================================================== */
+
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 2rem 2.5rem;
+    max-width: 600px;
+    width: 100%;
+    text-align: center;
+}
+
+/* ==========================================================================
    Top Navigation Bar
    ========================================================================== */
 
