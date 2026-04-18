@@ -921,6 +921,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashboard"
+version = "0.1.0"
+dependencies = [
+ "metriken-query",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2797,6 +2806,7 @@ dependencies = [
  "clocksource",
  "core_affinity",
  "ctrlc",
+ "dashboard",
  "futures",
  "h2",
  "histogram",

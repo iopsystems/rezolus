@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/systeminfo", "crates/viewer"]
+members = [".", "crates/dashboard", "crates/systeminfo", "crates/viewer"]
 exclude = ["xtask"]
 resolver = "2"
 
@@ -20,6 +20,7 @@ metriken-query = { version = "0.9.3", default-features = false }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.12"
+dashboard = { path = "crates/dashboard" }
 walkdir = "2.5.0"
 wasm-bindgen = "0.2"
 
@@ -96,6 +97,7 @@ tower-http = { version = "0.6.6", features = [
     "fs",
 ] }
 tower-livereload = "0.9.6"
+dashboard.workspace = true
 systeminfo = { path = "crates/systeminfo" }
 walkdir.workspace = true
 
