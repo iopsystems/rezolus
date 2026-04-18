@@ -927,6 +927,7 @@ dependencies = [
  "metriken-query",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -11,3 +11,6 @@ publish = false
 metriken-query.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
