@@ -18,15 +18,18 @@ const UNIT_OPTIONS = [
     { value: 'frequency', label: 'Frequency (Hz)' },
 ];
 
-/** Render a unit-type selector dropdown (inline). */
+/** Render a unit-type selector dropdown with label (inline). */
 const unitSelector = (current, onchange) =>
-    m('select.unit-select', {
-        value: current,
-        onchange: (e) => onchange(e.target.value),
-        title: 'Y-axis unit type',
-    }, UNIT_OPTIONS.map(o =>
-        m('option', { value: o.value }, o.label),
-    ));
+    m('label.unit-select-label', [
+        'Unit: ',
+        m('select.unit-select', {
+            value: current,
+            onchange: (e) => onchange(e.target.value),
+            title: 'Y-axis unit type',
+        }, UNIT_OPTIONS.map(o =>
+            m('option', { value: o.value }, o.label),
+        )),
+    ]);
 
 /** Build a format object for the given unit override (or null if empty). */
 const buildFormatOverride = (unit) => {

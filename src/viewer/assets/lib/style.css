@@ -1259,6 +1259,14 @@ main {
     gap: 0.75rem;
 }
 
+.unit-select-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: var(--font-size-sm);
+    color: var(--fg-muted);
+}
+
 .unit-select {
     padding: 0.625rem 0.75rem;
     background: var(--bg-card);

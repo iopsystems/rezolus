@@ -521,16 +521,15 @@ fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Val
                 Some(o) => o,
                 None => continue,
             };
-            let node_name = obj
-                .get("node")
-                .and_then(|v| v.as_str())
-                .unwrap_or(sub_key);
+            let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
             if !nodes.contains(&node_name.to_string()) {
                 nodes.push(node_name.to_string());
             }
             if let Some(version) = obj.get("version").and_then(|v| v.as_str()) {
-                node_versions
-                    .insert(node_name.to_string(), serde_json::Value::String(version.to_string()));
+                node_versions.insert(
+                    node_name.to_string(),
+                    serde_json::Value::String(version.to_string()),
+                );
             }
         }
     }
@@ -557,7 +556,10 @@ fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Val
                 .unwrap_or(sub_key);
             let node = obj.get("node").and_then(|v| v.as_str());
             let mut inst = serde_json::Map::new();
-            inst.insert("id".into(), serde_json::Value::String(instance_id.to_string()));
+            inst.insert(
+                "id".into(),
+                serde_json::Value::String(instance_id.to_string()),
+            );
             inst.insert(
                 "node".into(),
                 node.map(|n| serde_json::Value::String(n.to_string()))
@@ -575,7 +577,10 @@ fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Val
         serde_json::Value::Array(nodes.into_iter().map(serde_json::Value::String).collect()),
     );
     if !node_versions.is_empty() {
-        map.insert("node_versions".into(), serde_json::Value::Object(node_versions));
+        map.insert(
+            "node_versions".into(),
+            serde_json::Value::Object(node_versions),
+        );
     }
     if !service_instances.is_empty() {
         map.insert(
