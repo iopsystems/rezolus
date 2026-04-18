@@ -124,7 +124,10 @@ fn extract_column_names(ext: &ServiceExtension) -> BTreeSet<String> {
 }
 
 /// Filter the `descriptions` metadata key to only include entries for retained columns.
-fn filter_descriptions_metadata(kv_meta: &mut [parquet::format::KeyValue], kept: &BTreeSet<&str>) {
+fn filter_descriptions_metadata(
+    kv_meta: &mut [parquet::file::metadata::KeyValue],
+    kept: &BTreeSet<&str>,
+) {
     if let Some(entry) = kv_meta.iter_mut().find(|kv| kv.key == KEY_DESCRIPTIONS) {
         if let Some(value) = &entry.value {
             if let Ok(mut map) =

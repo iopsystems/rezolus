@@ -5,10 +5,10 @@ use arrow::record_batch::RecordBatch;
 use clap::ArgMatches;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
-use parquet::format::KeyValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -900,7 +900,7 @@ fn write_parquet(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let props = WriterProperties::builder()
         .set_key_value_metadata(Some(kv_metadata))
-        .set_max_row_group_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE)
+        .set_max_row_group_row_count(Some(crate::parquet_metadata::MAX_ROW_GROUP_SIZE))
         .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
         .build();
 

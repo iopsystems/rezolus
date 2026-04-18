@@ -1343,7 +1343,7 @@ async fn save_with_selection(
     // File mode: copy original parquet with selection metadata added
     if let Some(path) = parquet_path {
         let result = tokio::task::spawn_blocking(move || {
-            use parquet::format::KeyValue;
+            use parquet::file::metadata::KeyValue;
 
             let mut kv_meta =
                 crate::parquet_tools::read_file_metadata(&path).map_err(|e| e.to_string())?;

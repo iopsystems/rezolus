@@ -178,7 +178,7 @@ fn annotate_parquet(
     path: &Path,
     service_queries_json: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use parquet::format::KeyValue;
+    use parquet::file::metadata::KeyValue;
 
     let mut kv_meta = super::read_file_metadata(path)?;
 

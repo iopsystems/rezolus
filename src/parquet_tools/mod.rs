@@ -6,8 +6,8 @@ mod metadata;
 use arrow::datatypes::SchemaRef;
 use clap::{value_parser, ArgMatches, Command};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::file::metadata::KeyValue;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::format::KeyValue;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -244,7 +244,7 @@ pub(crate) fn rewrite_parquet(
 
     let props = WriterProperties::builder()
         .set_key_value_metadata(Some(kv_meta))
-        .set_max_row_group_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE)
+        .set_max_row_group_row_count(Some(crate::parquet_metadata::MAX_ROW_GROUP_SIZE))
         .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
         .build();
 
