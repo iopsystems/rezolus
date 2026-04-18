@@ -7,10 +7,7 @@ import { FileUpload } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { reportStore, setStorageScope, loadPayloadIntoStore } from './selection.js';
 import { clearMetadataCache, processDashboardData } from './data.js';
-import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern } from './app.js';
-import { initTheme } from './theme.js';
-
-initTheme();
+import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, preloadSections } from './app.js';
 
 // ── Backend state fetching ─────────────────────────────────────────
 
@@ -20,7 +17,6 @@ let fileMetadata = null;
 let selectionPayload = null;
 let liveMode = false;
 let recording = true;
-let activeCgroupPattern = null;
 
 const fetchBackendState = async () => {
     const [metaResult, sysResult, selResult, fmResult] = await Promise.allSettled([
@@ -89,6 +85,7 @@ const uploadParquet = async (file) => {
         const data = await ViewerApi.getSection('overview');
         const processed = await processDashboardData(data, null, '/overview');
         sectionResponseCache['overview'] = processed;
+        if (processed.sections) preloadSections(processed.sections);
 
         if (m.route.get() !== '/overview') {
             m.route.set('/overview');

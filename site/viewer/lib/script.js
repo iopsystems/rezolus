@@ -6,9 +6,6 @@ import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
 import { setStorageScope } from './selection.js';
 import { initDashboard } from './app.js';
-import { initTheme } from './theme.js';
-
-initTheme();
 
 // ── WASM + template initialization ─────────────────────────────────
 
