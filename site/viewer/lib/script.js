@@ -7,17 +7,21 @@ import { FileUpload } from './landing.js';
 import { setStorageScope } from './selection.js';
 import { initDashboard } from './app.js';
 
+// ── Module-level state ──────────────────────────────────────────────
+
+let loading = false;
+let loadError = null;
+
 // ── WASM + template initialization ─────────────────────────────────
 
 const loadTemplates = async () => {
     const templateNames = ['cachecannon', 'llm-perf', 'sglang', 'valkey', 'vllm'];
-    const templates = [];
-    for (const name of templateNames) {
-        try {
-            const resp = await fetch(`templates/${name}.json`);
-            if (resp.ok) templates.push(await resp.json());
-        } catch (e) { /* template not available, skip */ }
-    }
+    const results = await Promise.allSettled(
+        templateNames.map(name => fetch(`templates/${name}.json`).then(r => r.ok ? r.json() : null))
+    );
+    const templates = results
+        .filter(r => r.status === 'fulfilled' && r.value)
+        .map(r => r.value);
     if (templates.length > 0) {
         window.viewer.init_templates(JSON.stringify(templates));
     }
@@ -42,34 +46,44 @@ const initWasmViewer = async (data, filename) => {
 };
 
 const fetchInitialState = async () => {
-    let systemInfo = null;
-    let fileMetadata = null;
-    let selectionPayload = null;
-
-    try { systemInfo = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
-    try { fileMetadata = await ViewerApi.getFileMetadata(); } catch { /* ignore */ }
-    try { selectionPayload = await ViewerApi.getSelection(); } catch { /* ignore */ }
-
-    return { systemInfo, fileMetadata, selectionPayload };
+    const [sysResult, fmResult, selResult] = await Promise.allSettled([
+        ViewerApi.getSystemInfo(),
+        ViewerApi.getFileMetadata(),
+        ViewerApi.getSelection(),
+    ]);
+    return {
+        systemInfo: sysResult.status === 'fulfilled' ? sysResult.value : null,
+        fileMetadata: fmResult.status === 'fulfilled' ? fmResult.value : null,
+        selectionPayload: selResult.status === 'fulfilled' ? selResult.value : null,
+    };
 };
+
+// ── Common loader ───────────────────────────────────────────────────
+
+async function loadParquet(data, filename) {
+    await initWasmViewer(data, filename);
+    const state = await fetchInitialState();
+    initDashboard({
+        systemInfo: state.systemInfo,
+        fileMetadata: state.fileMetadata,
+        selectionPayload: state.selectionPayload,
+    });
+}
 
 // ── Load demo parquet ──────────────────────────────────────────────
 
 async function loadDemo(filename = 'demo.parquet') {
-    window._loading = true;
-    window._loadError = null;
+    loading = true;
+    loadError = null;
     m.redraw();
 
     try {
         const resp = await fetch('data/' + filename);
         if (!resp.ok) throw new Error(`Failed to fetch ${filename}: ${resp.status}`);
-        const arrayBuffer = await resp.arrayBuffer();
-        const data = new Uint8Array(arrayBuffer);
+        const data = new Uint8Array(await resp.arrayBuffer());
 
-        await initWasmViewer(data, filename);
-        const state = await fetchInitialState();
-
-        window._loading = false;
+        await loadParquet(data, filename);
+        loading = false;
 
         // Ensure ?demo is in the URL so bookmarks/refreshes auto-load the demo
         const url = new URL(window.location);
@@ -78,15 +92,9 @@ async function loadDemo(filename = 'demo.parquet') {
             url.searchParams.set('demo', filename);
             window.history.replaceState(null, '', url);
         }
-
-        initDashboard({
-            systemInfo: state.systemInfo,
-            fileMetadata: state.fileMetadata,
-            selectionPayload: state.selectionPayload,
-        });
     } catch (e) {
-        window._loading = false;
-        window._loadError = `Failed to load demo: ${e.message || e}`;
+        loading = false;
+        loadError = `Failed to load demo: ${e.message || e}`;
         m.redraw();
     }
 }
@@ -94,27 +102,17 @@ async function loadDemo(filename = 'demo.parquet') {
 // ── Load uploaded file ─────────────────────────────────────────────
 
 async function loadFile(file) {
-    window._loading = true;
-    window._loadError = null;
+    loading = true;
+    loadError = null;
     m.redraw();
 
     try {
-        const arrayBuffer = await file.arrayBuffer();
-        const data = new Uint8Array(arrayBuffer);
-
-        await initWasmViewer(data, file.name);
-        const state = await fetchInitialState();
-
-        window._loading = false;
-
-        initDashboard({
-            systemInfo: state.systemInfo,
-            fileMetadata: state.fileMetadata,
-            selectionPayload: state.selectionPayload,
-        });
+        const data = new Uint8Array(await file.arrayBuffer());
+        await loadParquet(data, file.name);
+        loading = false;
     } catch (e) {
-        window._loading = false;
-        window._loadError = `Failed to load file: ${e.message || e}`;
+        loading = false;
+        loadError = `Failed to load file: ${e.message || e}`;
         m.redraw();
     }
 }
@@ -134,8 +132,8 @@ if (_demoParam !== null) {
                 { label: 'Cachecannon + System', file: 'cachecannon.parquet' },
                 { label: 'System Metrics', file: 'demo.parquet' },
             ],
-            loading: window._loading,
-            error: window._loadError,
+            loading,
+            error: loadError,
         }),
     });
 }

@@ -272,6 +272,22 @@ body::after {
     text-align: center;
 }
 
+.card h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
+.card .version { font-family: var(--font-mono); font-size: 0.85rem; color: var(--accent); margin-bottom: 1.5rem; }
+.card .subtitle { color: var(--fg-secondary); font-size: 0.9rem; margin-bottom: 1.25rem; line-height: 1.5; }
+.card .link-row { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+.card .link-row a { font-size: 0.9rem; padding: 0.4rem 0.8rem; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--accent); text-decoration: none; }
+.card .link-row a:hover { border-color: var(--accent); }
+.card table { width: 100%; border-collapse: collapse; text-align: left; }
+.card table td { padding: 0.5rem 0; font-size: 0.85rem; }
+.card table td:first-child { white-space: nowrap; padding-right: 1.5rem; }
+.card table td:first-child code { font-size: 0.8rem; color: var(--accent); }
+.card table td:last-child { color: var(--fg-secondary); }
+.card table tr { border-bottom: 1px solid var(--border-subtle); }
+.card table tr:last-child { border-bottom: none; }
+.card .back { color: var(--fg-secondary); font-size: 0.85rem; margin-top: 1.25rem; display: inline-block; text-decoration: none; }
+.card .back:hover { color: var(--accent); }
+
 /* ==========================================================================
    Top Navigation Bar
    ========================================================================== */

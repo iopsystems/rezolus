@@ -117,9 +117,9 @@ const refreshCurrentSection = async () => {
         if (getHeatmapEnabled()) {
             promises.push(fetchSectionHeatmapData(currentRoute, data.groups));
         }
-        await Promise.all(promises);
+        const [processed] = await Promise.all(promises);
 
-        sectionResponseCache[section] = data;
+        sectionResponseCache[section] = processed;
         m.redraw();
     } catch (e) {
         // Keep existing data on error

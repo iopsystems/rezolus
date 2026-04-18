@@ -897,13 +897,13 @@ async fn about() -> axum::response::Html<String> {
 </head>
 <body>
 <div class="card">
-  <h1 style="font-size:1.75rem;margin-bottom:.25rem">Rezolus</h1>
-  <div style="font-family:var(--font-mono);font-size:.85rem;color:var(--accent);margin-bottom:1.5rem">v{version}</div>
-  <p style="color:var(--fg-secondary);font-size:.9rem;margin-bottom:1.25rem;line-height:1.5">High-resolution systems performance telemetry agent.</p>
-  <div style="display:flex;gap:1rem;justify-content:center;flex-wrap:wrap">
-    <a href="https://rezolus.com" style="font-size:.9rem;padding:.4rem .8rem;border:1px solid var(--border-subtle);border-radius:6px;color:var(--accent);text-decoration:none">Website</a>
-    <a href="https://github.com/iopsystems/rezolus" style="font-size:.9rem;padding:.4rem .8rem;border:1px solid var(--border-subtle);border-radius:6px;color:var(--accent);text-decoration:none">GitHub</a>
-    <a href="/sitemap" style="font-size:.9rem;padding:.4rem .8rem;border:1px solid var(--border-subtle);border-radius:6px;color:var(--accent);text-decoration:none">Sitemap</a>
+  <h1>Rezolus</h1>
+  <div class="version">v{version}</div>
+  <p class="subtitle">High-resolution systems performance telemetry agent.</p>
+  <div class="link-row">
+    <a href="https://rezolus.com">Website</a>
+    <a href="https://github.com/iopsystems/rezolus">GitHub</a>
+    <a href="/sitemap">Sitemap</a>
   </div>
 </div>
 </body>
@@ -936,11 +936,7 @@ async fn sitemap() -> axum::response::Html<String> {
 
     let rows: Vec<String> = routes
         .iter()
-        .map(|(path, desc)| {
-            format!(
-                r#"<tr><td style="white-space:nowrap;padding-right:1.5rem"><code style="font-size:.8rem;color:var(--accent)">{path}</code></td><td style="color:var(--fg-secondary)">{desc}</td></tr>"#
-            )
-        })
+        .map(|(path, desc)| format!(r#"<tr><td><code>{path}</code></td><td>{desc}</td></tr>"#))
         .collect();
 
     axum::response::Html(format!(
@@ -948,13 +944,12 @@ async fn sitemap() -> axum::response::Html<String> {
 <html lang="en">
 <head><title>Rezolus — Sitemap</title>
 {STANDALONE_HEAD}
-<style>table{{width:100%;border-collapse:collapse}}td{{padding:.5rem 0;font-size:.85rem}}tr{{border-bottom:1px solid var(--border-subtle)}}tr:last-child{{border:none}}</style>
 </head>
 <body>
-<div class="card" style="text-align:left">
-  <h1 style="font-size:1.5rem;margin-bottom:1.25rem">Endpoints</h1>
+<div class="card">
+  <h1>Endpoints</h1>
   <table>{}</table>
-  <a href="/about" style="color:var(--fg-secondary);font-size:.85rem;margin-top:1.25rem;display:inline-block;text-decoration:none">&larr; About</a>
+  <a class="back" href="/about">&larr; About</a>
 </div>
 </body>
 </html>"#,

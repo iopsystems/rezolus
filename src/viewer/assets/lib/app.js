@@ -187,9 +187,14 @@ const changeGranularity = async (step) => {
 
 // ── Heatmap ────────────────────────────────────────────────────────
 
-const toggleGlobalHeatmap = async () => {
+const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     heatmapEnabled = !heatmapEnabled;
-    m.redraw();
+    const cached = heatmapDataCache.get(sectionRoute);
+    if (heatmapEnabled && (!cached || cached.size === 0)) {
+        await fetchSectionHeatmapData(sectionRoute, groups);
+    } else {
+        m.redraw();
+    }
 };
 
 const fetchSectionHeatmapData = async (sectionRoute, groups) => {
@@ -333,15 +338,7 @@ const SectionContent = {
                         },
                     }, 'RESET SELECTION'),
                     m('button.section-action-btn', {
-                        onclick: async () => {
-                            heatmapEnabled = !heatmapEnabled;
-                            const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
-                            if (heatmapEnabled && (!sectionHeatmapData || sectionHeatmapData.size === 0)) {
-                                await fetchSectionHeatmapData(sectionRoute, attrs.groups);
-                            } else {
-                                m.redraw();
-                            }
-                        },
+                        onclick: () => toggleGlobalHeatmap(sectionRoute, attrs.groups),
                         disabled: heatmapLoading || !hasHistogramCharts,
                     }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
                 ]),
