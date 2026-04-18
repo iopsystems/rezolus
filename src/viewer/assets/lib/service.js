@@ -50,7 +50,7 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
                 m(Group, { ...group, sectionRoute, sectionName, interval })
             )
         ),
-        unavailable.length > 0 && m('div.service-notes', [
+        unavailable.length > 0 && m('div.section-notes', [
             m('h3', 'Unavailable KPIs'),
             m('p', 'The following KPIs have no matching data in this recording:'),
             m('ul', unavailable.map((kpi) =>

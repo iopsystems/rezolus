@@ -1748,7 +1748,7 @@ main {
 }
 
 /* Service notes — unavailable KPIs */
-.service-notes {
+.section-notes {
     margin-top: 2rem;
     padding: 1rem 1.25rem;
     background: var(--bg-void);
@@ -1758,22 +1758,22 @@ main {
     font-size: var(--font-size-sm);
 }
 
-.service-notes h3 {
+.section-notes h3 {
     margin: 0 0 0.5rem;
     font-size: var(--font-size-sm);
     color: var(--fg-secondary);
 }
 
-.service-notes p {
+.section-notes p {
     margin: 0 0 0.5rem;
 }
 
-.service-notes ul {
+.section-notes ul {
     margin: 0;
     padding-left: 1.25rem;
 }
 
-.service-notes li {
+.section-notes li {
     margin-bottom: 0.25rem;
 }
 
