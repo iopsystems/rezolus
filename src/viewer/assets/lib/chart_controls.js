@@ -7,7 +7,8 @@ const EXPAND_ICON_PATH = 'M10 1h5v5h-1.5V3.56L9.78 7.28 8.72 6.22l3.72-3.72H10V1
 
 export const expandLink = (spec, sectionRoute) => {
     if (!spec.promql_query) return null;
-    const href = `${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
+    const prefix = (typeof m !== 'undefined' && m.route && m.route.prefix) || '';
+    const href = `${prefix}${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
     return m('a.chart-expand', {
         href, target: '_blank', title: 'Open in new tab',
         onclick: (e) => e.stopPropagation(),

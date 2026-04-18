@@ -6,15 +6,15 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
 import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
-import { expandLink, selectButton } from './chart_controls.js';
 import { notify, showSaveModal, SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './navigation.js';
 import { initTheme } from './theme.js';
-import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
+import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './service.js';
+import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 
 initTheme();
 
@@ -235,18 +235,6 @@ const toggleGlobalHeatmap = async () => {
     m.redraw();
 };
 
-const getCachedSectionMeta = (interval) => {
-    const anyCached = Object.values(sectionResponseCache)[0];
-    return {
-        interval: anyCached?.interval || interval,
-        version: anyCached?.version,
-        source: anyCached?.source,
-        filename: anyCached?.filename,
-        start_time: anyCached?.start_time,
-        end_time: anyCached?.end_time,
-    };
-};
-
 const SectionContent = {
     view({ attrs }) {
         const sectionRoute = attrs.section.route;
@@ -287,7 +275,7 @@ const SectionContent = {
 
         // Special handling for Selection
         if (sectionName === 'Selection') {
-            const sectionMeta = getCachedSectionMeta(interval);
+            const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(SelectionView, {
                 title: 'Selection',
                 ...sectionMeta,
@@ -301,7 +289,7 @@ const SectionContent = {
 
         // Special handling for Report
         if (sectionName === 'Report') {
-            const sectionMeta = getCachedSectionMeta(interval);
+            const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(ReportView, {
                 title: 'Report',
                 ...sectionMeta,
@@ -413,6 +401,11 @@ let heatmapLoading = false;
 // Cache of fetched heatmap data per section: sectionRoute -> Map<chartId, data>
 const heatmapDataCache = new Map();
 
+// Group component — shared via viewer_core.js
+const Group = createGroupComponent(() => ({
+    chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
+}));
+
 // Fetch heatmap data for all histogram charts in a section.
 const fetchSectionHeatmapData = async (sectionRoute, groups) => {
     heatmapLoading = true;
@@ -423,68 +416,6 @@ const fetchSectionHeatmapData = async (sectionRoute, groups) => {
 
     heatmapLoading = false;
     m.redraw();
-};
-
-// Group component
-const Group = {
-    view({ attrs }) {
-        const sectionRoute = attrs.sectionRoute;
-        const sectionName = attrs.sectionName;
-        const interval = attrs.interval;
-        const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
-        const isHeatmapMode = heatmapEnabled && !heatmapLoading;
-
-        // Prefix plot titles for self-contained chart labels.
-        // Overview page uses group name (CPU, Network, etc.) since it aggregates multiple sections.
-        // Other pages use section name (Memory, CPU, etc.).
-        const isOverview = sectionRoute === '/overview';
-        const titlePrefix = isOverview ? attrs.name : sectionName;
-        const prefixTitle = (opts) => titlePrefix
-            ? { ...opts, title: `${titlePrefix}: ${opts.title}` }
-            : opts;
-
-        const chartHeader = (opts) => m('div.chart-header', [
-            m('span.chart-title', opts.title),
-            opts.description && m('span.chart-subtitle', opts.description),
-        ]);
-
-        return m(
-            'div.group',
-            {
-                id: attrs.id,
-            },
-            [
-                m('h2', `${attrs.name}`),
-                m(
-                    'div.charts',
-                    attrs.plots.map((spec) => {
-                        // Check if this is a histogram chart and we're in heatmap mode
-                        const isHistogramChart = isHistogramPlot(spec);
-
-                        if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
-                            // Create heatmap spec from the fetched data
-                            const heatmapData = sectionHeatmapData.get(spec.opts.id);
-                            const heatmapSpec = buildHistogramHeatmapSpec(spec, heatmapData, prefixTitle(spec.opts));
-                            return m('div.chart-wrapper', [
-                                chartHeader(heatmapSpec.opts),
-                                m(Chart, { spec: heatmapSpec, chartsState, interval }),
-                                expandLink(spec, sectionRoute),
-                                selectButton(spec, sectionRoute, sectionName),
-                            ]);
-                        }
-
-                        const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse: attrs.noCollapse };
-                        return m('div.chart-wrapper', [
-                            chartHeader(prefixedSpec.opts),
-                            m(Chart, { spec: prefixedSpec, chartsState, interval }),
-                            expandLink(spec, sectionRoute),
-                            selectButton(spec, sectionRoute, sectionName),
-                        ]);
-                    }),
-                ),
-            ],
-        );
-    },
 };
 
 // Application state management
@@ -619,25 +550,6 @@ const bootstrapCacheIfNeeded = () => {
     }).catch(() => {});
 };
 
-const buildClientOnlySectionView = (activeSection) => ({
-    view() {
-        const anyCached = Object.values(sectionResponseCache)[0];
-        const sections = anyCached?.sections || [];
-        return m(Main, {
-            activeSection,
-            groups: [],
-            sections,
-            source: anyCached?.source,
-            version: anyCached?.version,
-            filename: anyCached?.filename,
-            interval: anyCached?.interval,
-            filesize: anyCached?.filesize,
-            start_time: anyCached?.start_time,
-            end_time: anyCached?.end_time,
-            num_series: anyCached?.num_series,
-        });
-    },
-});
 
 // Landing page state
 let landingState = { loading: false, error: null };
@@ -768,24 +680,24 @@ const bootstrap = async () => {
                 // System Info is not a backend section — render directly
                 if (params.section === 'systeminfo') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(systemInfoSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, systemInfoSection);
                 }
 
                 if (params.section === 'metadata') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(metadataSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, metadataSection);
                 }
 
                 // Selection is a client-only section — no backend data
                 if (params.section === 'selection') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(selectionSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, selectionSection);
                 }
 
                 // Report is a client-only section — loaded from JSON import or parquet metadata
                 if (params.section === 'report') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(reportSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, reportSection);
                 }
 
                 // In live mode, always read from cache dynamically so
