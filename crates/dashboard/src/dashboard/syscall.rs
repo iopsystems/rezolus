@@ -9,6 +9,9 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
      */
 
     let mut syscall = Group::new("Syscall", "syscall");
+    syscall
+        .metadata
+        .insert("no_collapse".to_string(), serde_json::json!(true));
 
     // Total syscall rate
     syscall.plot_promql(
