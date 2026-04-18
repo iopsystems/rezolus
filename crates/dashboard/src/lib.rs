@@ -1,3 +1,4 @@
+pub mod dashboard;
 mod plot;
 mod service_extension;
 

@@ -1,0 +1,78 @@
+use crate::plot::*;
+use crate::Tsdb;
+
+pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+    let mut view = View::new(data, sections);
+
+    /*
+     * Traffic
+     */
+
+    let mut traffic = Group::new("Traffic", "traffic");
+
+    // Bandwidth Transmit (convert bytes/sec to bits/sec)
+    traffic.plot_promql(
+        PlotOpts::counter("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
+            .with_unit_system("bitrate"),
+        "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
+    );
+
+    // Bandwidth Receive (convert bytes/sec to bits/sec)
+    traffic.plot_promql(
+        PlotOpts::counter("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
+            .with_unit_system("bitrate"),
+        "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
+    );
+
+    // Packets Transmit
+    traffic.plot_promql(
+        PlotOpts::counter("Packets Transmit", "packets-tx", Unit::Rate),
+        "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
+    );
+
+    // Packets Receive
+    traffic.plot_promql(
+        PlotOpts::counter("Packets Receive", "packets-rx", Unit::Rate),
+        "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
+    );
+
+    view.group(traffic);
+
+    /*
+     * Errors
+     */
+
+    let mut errors = Group::new("Errors", "errors");
+
+    // Network packet drops - dropped packets at network layer
+    errors.plot_promql(
+        PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
+        "sum(irate(network_drop[5m]))".to_string(),
+    );
+
+    // TCP retransmits - retransmitted TCP packets (key health indicator)
+    errors.plot_promql(
+        PlotOpts::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
+        "sum(irate(tcp_retransmit[5m]))".to_string(),
+    );
+
+    view.group(errors);
+
+    /*
+     * TCP
+     */
+
+    let mut tcp = Group::new("TCP", "tcp");
+
+    // TCP Packet Latency percentiles - p50, p90, p99, p99.9
+    tcp.plot_promql(
+        PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+            .with_axis_label("Latency")
+            .with_unit_system("time"),
+        "tcp_packet_latency".to_string(),
+    );
+
+    view.group(tcp);
+
+    view
+}
