@@ -677,6 +677,7 @@ if (_demoParam !== null) {
             demos: [
                 { label: 'System Metrics', file: 'demo.parquet' },
                 { label: 'vLLM + System', file: 'vllm.parquet' },
+                { label: 'Cachecannon + System', file: 'cachecannon.parquet' },
             ],
             loading: window._loading,
             error: window._loadError,
