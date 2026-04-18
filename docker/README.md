@@ -6,8 +6,8 @@ service metrics, then view them in an interactive dashboard.
 The container runs the Rezolus agent automatically for system metrics collection
 (CPU, memory, network, disk, scheduler, syscalls, TCP) via eBPF. It also
 includes a `rezolus-capture` script that records metrics for a given duration,
-optionally combines system metrics with service metrics from a
-Prometheus-compatible endpoint, and launches the Rezolus viewer.
+optionally combines system metrics with service metrics from one or more
+Prometheus-compatible endpoints, and launches the Rezolus viewer.
 
 ## Quick Start
 
@@ -78,6 +78,41 @@ docker run --rm -it --privileged --network=host \
     --source valkey
 ```
 
+### Multiple service endpoints
+
+Capture system metrics alongside multiple services at once:
+
+```bash
+docker run --rm -it --privileged --network=host \
+  -v $(pwd)/data:/data \
+  rezolus \
+  rezolus-capture --duration 2m \
+    --endpoint http://localhost:9121/metrics --source redis \
+    --endpoint http://localhost:8080/metrics --source myapp
+```
+
+### Capture while running a command
+
+Use `--command` to start a workload and capture metrics for its duration:
+
+```bash
+docker run --rm -it --privileged --network=host \
+  -v $(pwd)/data:/data \
+  rezolus \
+  rezolus-capture --command ./run-benchmark.sh --arg1 --arg2
+```
+
+### Capture while a process is running
+
+Use `--pid` to capture until a specific process exits:
+
+```bash
+docker run --rm -it --privileged --network=host \
+  -v $(pwd)/data:/data \
+  rezolus \
+  rezolus-capture --pid 12345
+```
+
 ### Just run the agent
 
 Run the Rezolus agent indefinitely (no capture, no viewer):
@@ -95,16 +130,21 @@ The agent's metrics endpoint is available at http://localhost:4241.
 ```
 rezolus-capture [OPTIONS]
 
-REQUIRED:
+CAPTURE MODE (exactly one required):
   --duration <DURATION>       How long to capture (e.g., 60s, 5m, 1h)
+  --command <CMD...>          Run CMD and capture while it runs
+  --pid <PID>                 Capture while a process is running
 
 OPTIONS:
-  --endpoint <URL>            Service metrics endpoint (Prometheus-compatible)
-  --source <NAME>             Source name for service metrics (required with --endpoint)
+  --endpoint <URL>            Service metrics endpoint (Prometheus-compatible).
+                              Can be specified multiple times.
+  --source <NAME>             Source name for service metrics (required with
+                              --endpoint, one per endpoint in order)
   --interval <INTERVAL>       Sampling interval (default: 1s)
   --output-dir <DIR>          Output directory for parquet files (default: /data)
   --viewer-listen <ADDR>      Viewer listen address (default: 0.0.0.0:8080)
   --no-viewer                 Skip launching the viewer after capture
+  --rezolus <PATH>            Path to the rezolus binary (default: rezolus)
   -h, --help                  Show help text
 ```
 

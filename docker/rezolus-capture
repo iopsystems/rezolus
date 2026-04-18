@@ -5,15 +5,18 @@ PROGRAM="$(basename "$0")"
 
 # Defaults
 DURATION=""
+COMMAND=()
 MONITOR_PID=""
 ENDPOINTS=()
 SOURCES=()
 INTERVAL="1s"
+REZOLUS="${REZOLUS:-rezolus}"
 OUTPUT_DIR="/data"
 VIEWER_LISTEN="0.0.0.0:8080"
 NO_VIEWER=false
 RECORDER_PIDS=()
 SERVICE_PARQUETS=()
+CMD_PID=""
 
 help() {
     cat <<EOF
@@ -25,10 +28,12 @@ service metrics from Prometheus-compatible endpoints, combines them into a
 single parquet file, and launches the Rezolus viewer.
 
 USAGE:
-    $PROGRAM <--duration <DURATION> | --pid <PID>> [OPTIONS]
+    $PROGRAM <--duration <DURATION> | --command <CMD...> | --pid <PID>> [OPTIONS]
 
 CAPTURE MODE (exactly one required):
     --duration <DURATION>       How long to capture (e.g., 60s, 5m, 1h)
+    --command <CMD...>          Run CMD and capture while it runs. All remaining
+                                arguments are treated as the command to execute.
     --pid <PID>                 Capture while an existing process is running.
                                 Stops when the process exits.
 
@@ -41,6 +46,7 @@ OPTIONS:
     --output-dir <DIR>          Output directory for parquet files (default: /data)
     --viewer-listen <ADDR>      Viewer listen address (default: 0.0.0.0:8080)
     --no-viewer                 Skip launching the viewer after capture
+    --rezolus <PATH>            Path to the rezolus binary (default: rezolus)
     -h, --help                  Show this help text
 
 EXAMPLES:
@@ -56,6 +62,9 @@ EXAMPLES:
     $PROGRAM --duration 60s \\
         --endpoint http://localhost:9121/metrics --source redis \\
         --endpoint http://localhost:8080/metrics --source myapp
+
+    # Record while running a benchmark
+    $PROGRAM --command ./run-benchmark.sh --arg1 --arg2
 
     # Capture while a process is running
     $PROGRAM --pid 12345
@@ -93,6 +102,15 @@ while [ $# -gt 0 ]; do
             [ -n "${2:-}" ] || error "--duration requires a value"
             DURATION="$2"; shift 2
             ;;
+        --command)
+            shift
+            if [ $# -eq 0 ]; then
+                error "--command requires a command to run"
+            fi
+            # Consume all remaining arguments as the command
+            COMMAND=("$@")
+            shift $#
+            ;;
         --pid)
             [ -n "${2:-}" ] || error "--pid requires a value"
             MONITOR_PID="$2"; shift 2
@@ -120,22 +138,27 @@ while [ $# -gt 0 ]; do
         --no-viewer)
             NO_VIEWER=true; shift
             ;;
+        --rezolus)
+            [ -n "${2:-}" ] || error "--rezolus requires a value"
+            REZOLUS="$2"; shift 2
+            ;;
         *)
             error "unexpected argument '$1'"
             ;;
     esac
 done
 
-# Validate capture mode: exactly one of --duration or --pid
+# Validate capture mode: exactly one of --duration, --command, --pid
 MODE_COUNT=0
 [ -n "$DURATION" ] && MODE_COUNT=$((MODE_COUNT + 1))
+[ ${#COMMAND[@]} -gt 0 ] && MODE_COUNT=$((MODE_COUNT + 1))
 [ -n "$MONITOR_PID" ] && MODE_COUNT=$((MODE_COUNT + 1))
 
 if [ "$MODE_COUNT" -eq 0 ]; then
-    error "one of --duration or --pid is required"
+    error "one of --duration, --command, or --pid is required"
 fi
 if [ "$MODE_COUNT" -gt 1 ]; then
-    error "--duration and --pid are mutually exclusive"
+    error "--duration, --command, and --pid are mutually exclusive"
 fi
 
 # Validate endpoint/source pairing
@@ -188,6 +211,12 @@ stop_recorders() {
 }
 
 cleanup() {
+    # Stop user command if running (--command mode)
+    if [ -n "$CMD_PID" ]; then
+        kill "$CMD_PID" 2>/dev/null || true
+        wait "$CMD_PID" 2>/dev/null || true
+    fi
+
     # Stop all recorders
     stop_recorders
 
@@ -208,11 +237,13 @@ fi
 # Start system metrics recording
 if [ -n "$DURATION" ]; then
     echo "Recording system metrics for $DURATION (interval: $INTERVAL)..."
+elif [ ${#COMMAND[@]} -gt 0 ]; then
+    echo "Recording system metrics while running command (interval: $INTERVAL)..."
 else
     echo "Recording system metrics while process $MONITOR_PID is running (interval: $INTERVAL)..."
 fi
 
-rezolus record http://127.0.0.1:4241 "$SYSTEM_PARQUET" \
+"$REZOLUS" record http://127.0.0.1:4241 "$SYSTEM_PARQUET" \
     "${DURATION_ARGS[@]}" -i "$INTERVAL" -m source=rezolus &
 RECORDER_PIDS+=($!)
 
@@ -221,7 +252,7 @@ for i in "${!ENDPOINTS[@]}"; do
     tmp="$(mktemp "/tmp/service-${SOURCES[$i]}-XXXXXX.parquet")"
     SERVICE_PARQUETS+=("$tmp")
     echo "Recording service metrics from ${ENDPOINTS[$i]} (source: ${SOURCES[$i]})..."
-    rezolus record "${ENDPOINTS[$i]}" "$tmp" \
+    "$REZOLUS" record "${ENDPOINTS[$i]}" "$tmp" \
         "${DURATION_ARGS[@]}" -i "$INTERVAL" -m "source=${SOURCES[$i]}" &
     RECORDER_PIDS+=($!)
 done
@@ -240,6 +271,21 @@ if [ -n "$DURATION" ]; then
         echo "Error: one or more recordings failed" >&2
         exit 1
     fi
+
+elif [ ${#COMMAND[@]} -gt 0 ]; then
+    # Command mode: run the command, stop recorders when it exits
+    echo "Running: ${COMMAND[*]}"
+    set +e
+    "${COMMAND[@]}" &
+    CMD_PID=$!
+    wait "$CMD_PID"
+    CMD_EXIT=$?
+    CMD_PID=""
+    set -e
+
+    echo "Command exited with status $CMD_EXIT, stopping capture..."
+    stop_recorders
+    RECORDER_PIDS=()
 
 else
     # PID mode: poll until the process exits, then stop recorders
@@ -282,7 +328,7 @@ elif [ ${#COMBINE_FILES[@]} -eq 1 ]; then
     echo "Parquet saved to $OUTPUT_FILE"
 else
     echo "Combining ${#COMBINE_FILES[@]} recordings..."
-    rezolus parquet combine "${COMBINE_FILES[@]}" -o "$OUTPUT_FILE"
+    "$REZOLUS" parquet combine "${COMBINE_FILES[@]}" -o "$OUTPUT_FILE"
     echo "Combined parquet saved to $OUTPUT_FILE"
 fi
 
@@ -296,14 +342,14 @@ done
 # Show metadata summary
 echo ""
 echo "Recording metadata:"
-rezolus parquet metadata -i "$OUTPUT_FILE" 2>/dev/null || true
+"$REZOLUS" parquet metadata -i "$OUTPUT_FILE" 2>/dev/null || true
 echo ""
 
 # Launch viewer
 if ! $NO_VIEWER; then
     echo "Launching viewer at http://$VIEWER_LISTEN ..."
-    exec rezolus view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+    exec "$REZOLUS" view "$OUTPUT_FILE" "$VIEWER_LISTEN"
 else
     echo "Done. View the recording with:"
-    echo "  rezolus view $OUTPUT_FILE"
+    echo "  $REZOLUS view $OUTPUT_FILE"
 fi

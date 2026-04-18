@@ -5,6 +5,8 @@
 #   2. Clippy (warnings are errors)
 #   3. site/viewer symlinks are in sync with src/viewer/assets
 #   4. Generated dashboard JSON is up to date with Rust definitions
+#   5. Capture scripts (scripts/ and docker/) are kept in sync;
+#      recorder changes trigger a reminder to update them
 #
 # Exit 0  = all good
 # Exit 2  = blocking failure (outputs JSON to deny the commit)
@@ -111,7 +113,33 @@ check_dashboards() {
     fi
 }
 
-# ── 5. Rebuild WASM if viewer crate changed ────────────────────────
+# ── 5. Check capture script sync ──────────────────────────────────
+
+check_capture_sync() {
+    staged=$(git diff --cached --name-only 2>/dev/null || true)
+    has_standalone=false
+    has_docker=false
+    has_recorder=false
+    while IFS= read -r f; do
+        case "$f" in
+            scripts/rezolus-capture) has_standalone=true ;;
+            docker/rezolus-capture)  has_docker=true ;;
+            src/recorder/*)          has_recorder=true ;;
+        esac
+    done <<< "$staged"
+
+    if $has_standalone && ! $has_docker; then
+        errors+=("scripts/rezolus-capture changed but docker/rezolus-capture was not updated — keep them in sync")
+    fi
+    if $has_docker && ! $has_standalone; then
+        errors+=("docker/rezolus-capture changed but scripts/rezolus-capture was not updated — keep them in sync")
+    fi
+    if $has_recorder && ! $has_standalone && ! $has_docker; then
+        errors+=("src/recorder/ changed — check if scripts/rezolus-capture and docker/rezolus-capture need updating")
+    fi
+}
+
+# ── 6. Rebuild WASM if viewer crate changed ────────────────────────
 
 check_wasm() {
     staged=$(git diff --cached --name-only 2>/dev/null || true)
@@ -139,6 +167,7 @@ check_formatting
 check_clippy
 check_symlinks
 check_dashboards
+check_capture_sync
 check_wasm
 
 if [ ${#errors[@]} -gt 0 ]; then
