@@ -11,7 +11,6 @@ use http::StatusCode;
 use http::Uri;
 #[cfg(not(feature = "developer-mode"))]
 use include_dir::{include_dir, Dir};
-use serde::Serialize;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
@@ -32,19 +31,14 @@ use tower_http::services::{ServeDir, ServeFile};
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
-mod dashboard;
-mod plot;
-mod service_extension;
-pub use service_extension::{ServiceExtension, TemplateRegistry};
-// Used by parquet_tools::filter tests via crate::viewer::Kpi
 #[cfg(test)]
-pub use service_extension::Kpi;
+pub use dashboard::Kpi;
+pub use dashboard::{ServiceExtension, TemplateRegistry};
 
 // Re-export from metriken-query crate
 pub use metriken_query::promql;
 pub use metriken_query::tsdb;
 
-use plot::*;
 use promql::QueryEngine;
 use tsdb::*;
 
@@ -195,7 +189,10 @@ pub fn run(config: Config) {
 
             info!("Generating dashboards...");
             let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-            let state = dashboard::generate(data, filesize, &service_refs, registry.clone());
+            let state = AppState::new(data, registry.clone());
+            let rendered =
+                dashboard::dashboard::generate(&state.tsdb.read(), filesize, &service_refs, None);
+            state.sections.write().extend(rendered);
             *state.parquet_path.write() = Some(path.clone());
             let multinode_sysinfo = build_multinode_systeminfo(path);
             *state.systeminfo.write() = multinode_sysinfo.or(systeminfo);
@@ -258,7 +255,9 @@ pub fn run(config: Config) {
             tsdb.set_source(source.clone());
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
-            let state = dashboard::generate(tsdb, None, &[], registry.clone());
+            let state = AppState::new(tsdb, registry.clone());
+            let rendered = dashboard::dashboard::generate(&state.tsdb.read(), None, &[], None);
+            state.sections.write().extend(rendered);
             state.live.store(true, Ordering::Relaxed);
 
             *state.systeminfo.write() = agent_systeminfo;
@@ -1170,20 +1169,17 @@ async fn upload_parquet(
         .ok()
         .expect("Arc still shared");
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let new_state = dashboard::generate(data, filesize, &service_refs, state.templates.clone());
+    let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None);
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
     {
         let mut tsdb = state.tsdb.write();
-        *tsdb = Arc::try_unwrap(new_state.tsdb)
-            .ok()
-            .expect("no other references to new tsdb")
-            .into_inner();
+        *tsdb = data;
     }
     {
         let mut sections = state.sections.write();
-        *sections = new_state.sections.into_inner();
+        *sections = rendered;
     }
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
@@ -1276,19 +1272,16 @@ async fn connect_agent(
     tsdb.set_source(source.clone());
     tsdb.set_version(version.clone());
     tsdb.set_filename(url.to_string());
-    let new_state = dashboard::generate(tsdb, None, &[], state.templates.clone());
+    let rendered = dashboard::dashboard::generate(&tsdb, None, &[], None);
 
     // Update shared state
     {
-        let mut tsdb = state.tsdb.write();
-        *tsdb = Arc::try_unwrap(new_state.tsdb)
-            .ok()
-            .expect("no other references to new tsdb")
-            .into_inner();
+        let mut db = state.tsdb.write();
+        *db = tsdb;
     }
     {
         let mut sections = state.sections.write();
-        *sections = new_state.sections.into_inner();
+        *sections = rendered;
     }
     *state.systeminfo.write() = agent_systeminfo;
     state.live.store(true, Ordering::Relaxed);
@@ -1605,40 +1598,4 @@ async fn lib(uri: Uri) -> impl IntoResponse {
             "404 Not Found".to_string(),
         )
     }
-}
-
-/// Dump all dashboard definitions as JSON files to the given directory.
-/// Used by `cargo xtask generate-dashboards` to keep site viewer in sync.
-#[cfg(feature = "xtask-commands")]
-pub fn dump_dashboards(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(output_dir)?;
-
-    let state = dashboard::generate(Tsdb::default(), None, &[], TemplateRegistry::empty());
-
-    // Extract the shared sections list from the first entry and write it once.
-    let mut sections_written = false;
-    for (key, json) in state.sections.read().iter() {
-        let mut value: serde_json::Value = serde_json::from_str(json)?;
-
-        if !sections_written {
-            if let Some(sections) = value.get("sections") {
-                let path = output_dir.join("sections.json");
-                let pretty = serde_json::to_string_pretty(sections)?;
-                std::fs::write(&path, pretty)?;
-                eprintln!("wrote {}", path.display());
-                sections_written = true;
-            }
-        }
-
-        // Remove sections from per-dashboard files to avoid duplication.
-        if let Some(obj) = value.as_object_mut() {
-            obj.remove("sections");
-        }
-
-        let path = output_dir.join(key);
-        let pretty = serde_json::to_string_pretty(&value)?;
-        std::fs::write(&path, pretty)?;
-        eprintln!("wrote {}", path.display());
-    }
-    Ok(())
 }

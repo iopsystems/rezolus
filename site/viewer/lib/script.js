@@ -21,9 +21,6 @@ initTheme();
 // Tracks the active section route to detect section switches
 let activeSectionRoute = null;
 
-// Viewer info — set after WASM parquet load
-let viewerInfo = null;
-
 // System info data — parsed from parquet metadata
 let systemInfoData = null;
 
@@ -353,7 +350,6 @@ document.addEventListener('dblclick', () => {
 // Load a section: generate dashboard data from JS definitions, then run PromQL via WASM.
 const loadSection = async (sectionKey) => {
     if (sectionResponseCache[sectionKey]) return sectionResponseCache[sectionKey];
-    if (!viewerInfo) return null;
 
     const data = await ViewerApi.getSection(sectionKey);
     if (!data) return null;
@@ -405,15 +401,27 @@ async function loadDemo(filename = 'demo.parquet') {
         window.viewer = new wasmModule.Viewer(data, filename);
         ViewerApi.setViewer(window.viewer);
 
-        viewerInfo = JSON.parse(window.viewer.info());
-        ViewerApi.setViewerInfo(viewerInfo);
+        // Load service extension templates and pass to WASM
+        const templateNames = ['cachecannon', 'llm-perf', 'sglang', 'valkey', 'vllm'];
+        const templates = [];
+        for (const name of templateNames) {
+            try {
+                const resp = await fetch(`templates/${name}.json`);
+                if (resp.ok) templates.push(await resp.json());
+            } catch (e) { /* template not available, skip */ }
+        }
+        if (templates.length > 0) {
+            window.viewer.init_templates(JSON.stringify(templates));
+        }
+
+        const info = JSON.parse(window.viewer.info());
         setStorageScope({
-            filename: viewerInfo.filename,
-            minTime: viewerInfo.minTime,
-            maxTime: viewerInfo.maxTime,
-            numSeries: (viewerInfo.counter_names?.length || 0) +
-                       (viewerInfo.gauge_names?.length || 0) +
-                       (viewerInfo.histogram_names?.length || 0),
+            filename: info.filename,
+            minTime: info.minTime,
+            maxTime: info.maxTime,
+            numSeries: (info.counter_names?.length || 0) +
+                       (info.gauge_names?.length || 0) +
+                       (info.histogram_names?.length || 0),
         });
 
         try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }
@@ -463,15 +471,27 @@ async function loadFile(file) {
         window.viewer = new wasmModule.Viewer(data, file.name);
         ViewerApi.setViewer(window.viewer);
 
-        viewerInfo = JSON.parse(window.viewer.info());
-        ViewerApi.setViewerInfo(viewerInfo);
+        // Load service extension templates and pass to WASM
+        const templateNames = ['cachecannon', 'llm-perf', 'sglang', 'valkey', 'vllm'];
+        const templates = [];
+        for (const name of templateNames) {
+            try {
+                const resp = await fetch(`templates/${name}.json`);
+                if (resp.ok) templates.push(await resp.json());
+            } catch (e) { /* template not available, skip */ }
+        }
+        if (templates.length > 0) {
+            window.viewer.init_templates(JSON.stringify(templates));
+        }
+
+        const info = JSON.parse(window.viewer.info());
         setStorageScope({
-            filename: viewerInfo.filename,
-            minTime: viewerInfo.minTime,
-            maxTime: viewerInfo.maxTime,
-            numSeries: (viewerInfo.counter_names?.length || 0) +
-                       (viewerInfo.gauge_names?.length || 0) +
-                       (viewerInfo.histogram_names?.length || 0),
+            filename: info.filename,
+            minTime: info.minTime,
+            maxTime: info.maxTime,
+            numSeries: (info.counter_names?.length || 0) +
+                       (info.gauge_names?.length || 0) +
+                       (info.histogram_names?.length || 0),
         });
 
         try { systemInfoData = await ViewerApi.getSystemInfo(); } catch { /* ignore */ }

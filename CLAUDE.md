@@ -30,11 +30,9 @@ cargo xtask fmt
 # Lint
 cargo clippy
 
-# Generate dashboard JSON for site viewer (from Rust definitions)
-cargo xtask generate-dashboards
-
-# Check dashboards are up to date (used in CI)
-cargo xtask generate-dashboards --check
+# Dump dashboard JSON for inspection/debugging
+cargo run -p dashboard                  # print to stdout
+cargo run -p dashboard -- output_dir/   # write files to directory
 
 # Developer mode build (serves viewer assets from disk for hot reload)
 cargo build --features developer-mode
