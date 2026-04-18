@@ -25,7 +25,7 @@ async function loadDashboard(sectionKey) {
 
 // Map of known service templates available on the static site.
 // Keys are source names that appear in parquet metadata.
-const KNOWN_TEMPLATES = ['cachecannon', 'llm-perf', 'valkey', 'vllm'];
+const KNOWN_TEMPLATES = ['cachecannon', 'llm-perf', 'sglang', 'valkey', 'vllm'];
 
 async function loadTemplate(name) {
     if (templateCache[name]) return templateCache[name];

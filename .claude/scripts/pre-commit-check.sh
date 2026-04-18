@@ -111,12 +111,35 @@ check_dashboards() {
     fi
 }
 
+# ── 5. Rebuild WASM if viewer crate changed ────────────────────────
+
+check_wasm() {
+    staged=$(git diff --cached --name-only 2>/dev/null || true)
+    need_rebuild=false
+    while IFS= read -r f; do
+        case "$f" in
+            crates/viewer/*)
+                need_rebuild=true ;;
+        esac
+    done <<< "$staged"
+
+    if $need_rebuild; then
+        if ! "$ROOT/crates/viewer/build.sh" >/dev/null 2>&1; then
+            errors+=("WASM viewer build failed — run: ./crates/viewer/build.sh")
+        else
+            # Stage the rebuilt pkg so it's included in the commit
+            git add "$ROOT/site/viewer/pkg/" 2>/dev/null || true
+        fi
+    fi
+}
+
 # ── Run checks ───────────────────────────────────────────────────────
 
 check_formatting
 check_clippy
 check_symlinks
 check_dashboards
+check_wasm
 
 if [ ${#errors[@]} -gt 0 ]; then
     msg=$(printf '%s\n' "${errors[@]}")

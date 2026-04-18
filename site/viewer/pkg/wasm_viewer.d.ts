@@ -5,6 +5,16 @@ export class Viewer {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * Returns all file-level metadata as a JSON object, mirroring the
+     * server's /file_metadata endpoint.  Values that are valid JSON are
+     * embedded as-is; everything else becomes a JSON string.
+     *
+     * Includes pre-computed `nodes`, `node_versions`, and
+     * `service_instances` fields so the frontend doesn't have to
+     * re-parse `per_source_metadata` itself.
+     */
+    file_metadata_json(): string;
+    /**
      * Returns JSON with viewer info (interval, source, version, metric names)
      */
     info(): string;
@@ -27,7 +37,11 @@ export class Viewer {
      */
     selection(): string | undefined;
     /**
-     * Returns systeminfo JSON from parquet file metadata, or null
+     * Returns systeminfo JSON from parquet file metadata.
+     *
+     * For multi-node combined files (>1 node in per_source_metadata), returns
+     * an object keyed by node name with each node's systeminfo.  For single-node
+     * files, returns the flat systeminfo string.
      */
     systeminfo(): string | undefined;
 }
@@ -40,6 +54,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_viewer_free: (a: number, b: number) => void;
     readonly init: () => void;
+    readonly viewer_file_metadata_json: (a: number) => [number, number];
     readonly viewer_info: (a: number) => [number, number];
     readonly viewer_metadata: (a: number) => [number, number];
     readonly viewer_new: (a: number, b: number, c: number, d: number) => [number, number, number];
