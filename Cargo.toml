@@ -16,7 +16,7 @@ libc = "0.2.172"
 log = "0.4.21"
 metriken = "0.9.1"
 metriken-exposition = "0.16.0"
-metriken-query = { version = "0.9.3", default-features = false }
+metriken-query = { version = "0.9.4", default-features = false }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.12"
