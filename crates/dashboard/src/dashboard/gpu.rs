@@ -173,7 +173,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             Unit::Percentage,
         )
         .percentage_range(),
-        "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth".to_string(),
+        "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth"
+            .to_string(),
     );
 
     // Per-GPU transmit throughput
@@ -190,7 +191,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             Unit::Percentage,
         )
         .percentage_range(),
-        "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth".to_string(),
+        "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth"
+            .to_string(),
     );
 
     // PCIe bandwidth (max theoretical)
