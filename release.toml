@@ -25,7 +25,7 @@ tag-name = "{{prefix}}{{version}}"
 push = false
 
 # Commit message format
-pre-release-commit-message = "release: {{version}}"
+pre-release-commit-message = "release: prepare v{{version}}"
 
 # Allow releasing from main branch only
 allow-branch = ["main", "release/*"]
