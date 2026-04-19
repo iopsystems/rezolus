@@ -1642,6 +1642,7 @@ main {
 
 .systeminfo-section {
     padding: 0;
+    min-width: 0;
 }
 
 .systeminfo-empty {
@@ -1664,6 +1665,8 @@ main {
     border-radius: var(--card-radius);
     padding: 1.25rem;
     transition: border-color var(--transition-base);
+    min-width: 0;
+    overflow: hidden;
 }
 
 .sysinfo-group:hover {
@@ -1717,6 +1720,8 @@ main {
     font-size: var(--font-size-sm);
     color: var(--fg-secondary);
     padding: 0.5rem 0;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .sysinfo-raw {
@@ -1834,6 +1839,7 @@ main {
     display: flex;
     flex-direction: column;
     align-items: center;
+    overflow-x: auto;
 }
 
 .topo-inner {
@@ -2005,12 +2011,6 @@ main {
     overflow: hidden;
 }
 
-/* Compact L1 — outline only, no content */
-.topo-l1-pair.compact {
-    min-height: 6px;
-    padding: 2px;
-}
-
 .topo-l1 {
     display: flex;
     flex-direction: column;
@@ -2061,50 +2061,6 @@ main {
 .topo-llc {
     background: var(--topo-inset-deeper);
     border-radius: 4px;
-}
-
-/* ── Legend (shown when labels are omitted) ───────────────────────── */
-
-.topo-legend {
-    margin-top: 1rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--border-subtle);
-    overflow-x: auto;
-}
-
-.topo-legend-title {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    color: var(--fg-secondary);
-    margin-bottom: 0.5rem;
-}
-
-.topo-legend-cluster {
-    display: inline-flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.topo-legend-cluster .topo-subgroups {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 8px;
-}
-
-.topo-legend-cluster .topo-subgroup {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.topo-legend-cluster .topo-core-row {
-    display: flex;
-    gap: 2px;
-}
-
-.topo-legend-cluster .topo-cache-bar {
-    width: auto;
 }
 
 /* ── Descriptions ─────────────────────────────────────────────────── */
@@ -2961,8 +2917,8 @@ main {
         grid-template-columns: 1fr;
     }
 
-    .sysinfo-table {
-        overflow-x: auto;
+    .sysinfo-label {
+        white-space: normal;
     }
 
     /* ── Selection cards: stack vertically ── */
