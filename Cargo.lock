@@ -2032,9 +2032,9 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c9090645d701c7399dd77e598b6e2d6ad627c56b4793aedc829b8c05e07dec2"
+checksum = "d34d88b3f3ec8c532945831eeea8170f9410a37f444feb1322b8e124f3a4a3b9"
 dependencies = [
  "histogram",
  "metriken-core",
