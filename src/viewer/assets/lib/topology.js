@@ -103,7 +103,6 @@ const groupByNuma = (dieMap) => {
 
 /**
  * Compute layout parameters from container width and core count.
- * Decides labeled vs compact mode, border width, and compact cell size.
  */
 const computeLayout = (numaGroups, numaPerRow, containerWidth) => {
     let maxCoresPerNuma = 0;
@@ -112,33 +111,18 @@ const computeLayout = (numaGroups, numaPerRow, containerWidth) => {
     }
 
     if (!containerWidth) {
-        const total = maxCoresPerNuma * numaPerRow;
-        const labeled = total <= 24;
-        return { labeled, borderW: labeled ? 2 : 1, numaPerRow, maxCoresPerNuma, cellSize: null, maxCols: labeled ? 16 : 32 };
+        return { borderW: 2, numaPerRow, maxCoresPerNuma, maxCols: 16 };
     }
 
     // Subtract padding/borders/gaps: package ~14px, NUMA box ~16px + gap ~12px per column
     const overhead = 48 + numaPerRow * 40;
     const widthPerNuma = (containerWidth - overhead) / numaPerRow;
 
-    // Try labeled mode: need >= 48px per cell.  Wrapping caps columns to maxCols.
-    const labeledMaxCols = Math.max(8, Math.floor(widthPerNuma / 48));
-    const labeledCols = Math.min(maxCoresPerNuma, labeledMaxCols);
-    const labeledCellW = widthPerNuma / labeledCols;
+    const maxCols = Math.max(4, Math.floor(widthPerNuma / 48));
+    const cols = Math.min(maxCoresPerNuma, maxCols);
+    const total = cols * numaPerRow;
 
-    if (labeledCellW >= 48) {
-        const total = labeledCols * numaPerRow;
-        return { labeled: true, borderW: total > 32 ? 1 : 2, numaPerRow, maxCoresPerNuma, cellSize: null, maxCols: labeledMaxCols };
-    }
-
-    // Compact mode: smaller cells, more columns per row
-    const compactMaxCols = Math.max(8, Math.floor(widthPerNuma / 20));
-    const compactCols = Math.min(maxCoresPerNuma, compactMaxCols);
-    const compactCellW = widthPerNuma / compactCols;
-    const cellSize = Math.min(compactCellW, 32);
-    const total = compactCols * numaPerRow;
-
-    return { labeled: false, borderW: total > 32 ? 1 : 1, numaPerRow, maxCoresPerNuma, cellSize, maxCols: compactMaxCols };
+    return { borderW: total > 32 ? 1 : 2, numaPerRow, maxCoresPerNuma, maxCols };
 };
 
 // ── Rendering ────────────────────────────────────────────────────────
@@ -148,7 +132,6 @@ const computeLayout = (numaGroups, numaPerRow, containerWidth) => {
  */
 const renderNumaGroup = ({ numaNode, cores }, opts) => {
     const { toggles, cacheStructs, layout } = opts;
-    const { labeled, cellSize } = layout;
     const { l1dSize, l1iSize, levels } = cacheStructs;
     const { mid, llc } = getCacheLevels(levels);
     const showCaches = toggles.caches;
@@ -216,10 +199,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
         }];
     }
 
-    const colSize = cellSize ? `${Math.round(cellSize)}px` : '1fr';
-    const coreH = cellSize ? `height:${Math.round(cellSize)}px` : '';
-    const barH = cellSize ? `height:${Math.max(8, Math.round(cellSize / 2))}px` : '';
-
     /** Render core cells + L1 row for a slice of cores. */
     const renderCoreCells = (cores) => {
         const cells = [];
@@ -227,30 +206,25 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
             cells.push(m('div.topo-core', {
                 key: `c${coreId}`,
                 title: buildTooltip(coreId, cpus, l1dSize, l1iSize),
-                style: labeled ? '' : coreH,
-            }, labeled ? [
+            }, [
                 m('span.core-id', `C${coreId}`),
                 opts.hasSMT && toggles.threads && m('div.topo-threads',
                     cpus.map(e => m('span.topo-thread', `T${e.cpu}`)),
                 ),
-            ] : []));
+            ]));
         }
         if (showCaches && (l1dSize || l1iSize)) {
             for (const { coreId } of cores) {
-                cells.push(
-                    labeled
-                        ? m('div.topo-l1-pair', { key: `l1-${coreId}` }, [
-                            l1dSize && m('span.topo-l1', [
-                                m('span.topo-cache-name', 'L1d'),
-                                m('span.topo-cache-size', l1dSize),
-                            ]),
-                            l1iSize && m('span.topo-l1', [
-                                m('span.topo-cache-name', 'L1i'),
-                                m('span.topo-cache-size', l1iSize),
-                            ]),
-                        ])
-                        : m('div.topo-l1-pair.compact', { key: `l1-${coreId}`, style: barH }),
-                );
+                cells.push(m('div.topo-l1-pair', { key: `l1-${coreId}` }, [
+                    l1dSize && m('span.topo-l1', [
+                        m('span.topo-cache-name', 'L1d'),
+                        m('span.topo-cache-size', l1dSize),
+                    ]),
+                    l1iSize && m('span.topo-l1', [
+                        m('span.topo-cache-name', 'L1i'),
+                        m('span.topo-cache-size', l1iSize),
+                    ]),
+                ]));
             }
         }
         return cells;
@@ -258,11 +232,12 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
 
     /** Render a cache bar (mid-level or LLC). cls is dot-separated. */
     const renderBar = (cls, label, size, key, style) =>
-        m(`div.topo-cache-bar.${cls}`, { key, style: style || '' },
-            labeled ? [
-                m('span.topo-cache-name', label),
-                m('span.topo-cache-size', size),
-            ] : []);
+        m(`div.topo-cache-bar.${cls}`, { key, style: style || '' }, [
+            m('span.topo-cache-name', label),
+            m('span.topo-cache-size', size),
+        ]);
+
+    const { maxCols } = layout;
 
     /**
      * Render an LLC group.
@@ -273,78 +248,84 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
      */
     const renderLLCGroup = ({ llcIdx, allCores: llcCores, subGroups: sgs }) => {
         const numCols = llcCores.length;
-        const { maxCols } = layout;
-
         // ── Wrapped layout: explicit row packing ──────────────────
         if (numCols > maxCols) {
             const rowCols = bestCols(numCols, maxCols);
 
-            // Build renderable elements with their column widths
-            const elems = []; // { el, cols } or { el, cols: Infinity } for full-width bars
-            for (const { groupIdx, cores: sgCores, size } of sgs) {
-                if (sgCores.length <= rowCols) {
-                    // Sub-group fits in one row: render as one grid
-                    const children = renderCoreCells(sgCores);
-                    if (showCaches && size && groupLevel) {
-                        children.push(renderBar('topo-mid-cache',
-                            groupLevel.toUpperCase(), size,
-                            `mid-${groupIdx}`,
-                            `grid-column:1/-1` + (barH ? `;${barH}` : '')));
-                    }
-                    elems.push({ cols: sgCores.length, el: m('div.topo-subgroup-grid', {
-                        key: `sg-${groupIdx}`,
-                        style: `grid-template-columns:repeat(${sgCores.length},${colSize});flex:${sgCores.length} 1 0`,
-                    }, children) });
-                } else {
-                    // Large sub-group: chunk cores into even rows
-                    const chunkCols = bestCols(sgCores.length, rowCols);
-                    for (let i = 0; i < sgCores.length; i += chunkCols) {
-                        const slice = sgCores.slice(i, i + chunkCols);
-                        elems.push({ cols: slice.length, el: m('div.topo-subgroup-grid', {
-                            key: `sg-${groupIdx}-${i}`,
-                            style: `grid-template-columns:repeat(${slice.length},${colSize});flex:${slice.length} 1 0`,
-                        }, renderCoreCells(slice)) });
-                    }
-                    // Full-width bar for the chunked sub-group's cache level
-                    if (showCaches && size && groupLevel) {
-                        elems.push({ cols: Infinity, el: renderBar('topo-mid-cache.topo-full-width',
-                            groupLevel.toUpperCase(), size,
-                            `mid-full-${groupIdx}`, barH || '') });
-                    }
-                }
+            // Group sub-groups by core count to infer type (P-core vs E-core).
+            // Each type is packed independently so rows are even within type.
+            const sgsByType = new Map();
+            for (const sg of sgs) {
+                const key = sg.cores.length;
+                if (!sgsByType.has(key)) sgsByType.set(key, []);
+                sgsByType.get(key).push(sg);
             }
 
-            // Pack elements into rows of <= rowCols cores
-            const rows = [];
-            let curRow = [], curCols = 0;
-            for (const e of elems) {
-                if (e.cols === Infinity) {
-                    if (curRow.length) { rows.push(curRow); curRow = []; curCols = 0; }
-                    rows.push([e]);
-                } else if (curCols + e.cols > rowCols && curRow.length) {
-                    rows.push(curRow);
-                    curRow = [e]; curCols = e.cols;
-                } else {
-                    curRow.push(e); curCols += e.cols;
+            const allRowDivs = [];
+            let rowIdx = 0;
+
+            // Process each type, largest sub-groups first
+            for (const [, typeSgs] of [...sgsByType.entries()].sort(([a], [b]) => b - a)) {
+                const totalTypeCores = typeSgs.reduce((s, sg) => s + sg.cores.length, 0);
+                const typeTarget = bestCols(totalTypeCores, rowCols);
+
+                const elems = [];
+                for (const { groupIdx, cores: sgCores, size } of typeSgs) {
+                    if (sgCores.length <= typeTarget) {
+                        const children = renderCoreCells(sgCores);
+                        if (showCaches && size && groupLevel) {
+                            children.push(renderBar('topo-mid-cache',
+                                groupLevel.toUpperCase(), size,
+                                `mid-${groupIdx}`,
+                                `grid-column:1/-1`));
+                        }
+                        elems.push({ cols: sgCores.length, el: m('div.topo-subgroup-grid', {
+                            key: `sg-${groupIdx}`,
+                            style: `grid-template-columns:repeat(${sgCores.length},1fr);flex:${sgCores.length} 1 0`,
+                        }, children) });
+                    } else {
+                        const chunkCols = bestCols(sgCores.length, typeTarget);
+                        for (let i = 0; i < sgCores.length; i += chunkCols) {
+                            const slice = sgCores.slice(i, i + chunkCols);
+                            elems.push({ cols: slice.length, el: m('div.topo-subgroup-grid', {
+                                key: `sg-${groupIdx}-${i}`,
+                                style: `grid-template-columns:repeat(${slice.length},1fr);flex:${slice.length} 1 0`,
+                            }, renderCoreCells(slice)) });
+                        }
+                        if (showCaches && size && groupLevel) {
+                            elems.push({ cols: Infinity, el: renderBar('topo-mid-cache.topo-full-width',
+                                groupLevel.toUpperCase(), size,
+                                `mid-full-${groupIdx}`, '') });
+                        }
+                    }
+                }
+
+                // Pack this type's elements into balanced rows
+                let curRow = [], curCols = 0;
+                for (const e of elems) {
+                    if (e.cols === Infinity) {
+                        if (curRow.length) { allRowDivs.push(m('div.topo-llc-row', { key: `row-${rowIdx++}` }, curRow.map(x => x.el))); curRow = []; curCols = 0; }
+                        allRowDivs.push(e.el);
+                    } else if (curCols + e.cols > typeTarget && curRow.length) {
+                        allRowDivs.push(m('div.topo-llc-row', { key: `row-${rowIdx++}` }, curRow.map(x => x.el)));
+                        curRow = [e]; curCols = e.cols;
+                    } else {
+                        curRow.push(e); curCols += e.cols;
+                    }
+                }
+                if (curRow.length) {
+                    allRowDivs.push(m('div.topo-llc-row', { key: `row-${rowIdx++}` }, curRow.map(x => x.el)));
                 }
             }
-            if (curRow.length) rows.push(curRow);
-
-            const rowDivs = rows.map((row, ri) =>
-                row.length === 1 && row[0].cols === Infinity
-                    ? row[0].el
-                    : m('div.topo-llc-row', { key: `row-${ri}` },
-                        row.map(e => e.el))
-            );
 
             // LLC bar (when separate from group level)
             if (showCaches && llc && llc !== groupLevel && llcData) {
-                rowDivs.push(renderBar('topo-llc.topo-full-width',
+                allRowDivs.push(renderBar('topo-llc.topo-full-width',
                     llc.toUpperCase(), llcData.size,
-                    `llc-${llcIdx}`, barH || ''));
+                    `llc-${llcIdx}`, ''));
             }
 
-            return m('div.topo-llc-group-wrap', { key: llcIdx }, rowDivs);
+            return m('div.topo-llc-group-wrap', { key: llcIdx }, allRowDivs);
         }
 
         // ── Flat layout: single grid with spanning cache bars ─────
@@ -361,7 +342,7 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
                 children.push(renderBar('topo-mid-cache',
                     groupLevel.toUpperCase(), size,
                     `mid-${groupIdx}`,
-                    `grid-column:${startCol}/span ${span}` + (barH ? `;${barH}` : '')));
+                    `grid-column:${startCol}/span ${span}` ));
             }
         }
 
@@ -369,12 +350,12 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
             children.push(renderBar('topo-llc',
                 llc.toUpperCase(), llcData.size,
                 `llc-${llcIdx}`,
-                `grid-column:1/-1` + (barH ? `;${barH}` : '')));
+                `grid-column:1/-1` ));
         }
 
         return m('div.topo-llc-group', {
             key: llcIdx,
-            style: `grid-template-columns:repeat(${numCols},${colSize})`,
+            style: `grid-template-columns:repeat(${numCols},1fr)`,
         }, children);
     };
 
@@ -387,105 +368,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
     return m('div.topo-numa-box', {
         class: toggles.numa ? 'numa-highlighted' : '',
     }, numaChildren);
-};
-
-// ── Legend ────────────────────────────────────────────────────────────
-
-/**
- * Render the legend: one representative LLC cluster at readable size.
- * Shown only in compact mode when inline labels are omitted.
- */
-const renderLegend = (cacheStructs, hasSMT) => {
-    const { l1dSize, l1iSize, levels } = cacheStructs;
-    const { mid, llc } = getCacheLevels(levels);
-    const groupLevel = mid.length > 0 ? mid[0] : llc;
-    const groupData = groupLevel ? levels[groupLevel] : null;
-    const llcData = llc ? levels[llc] : null;
-
-    // How many cores share one group-level cache (CCX)
-    let coresPerGroup = 1;
-    if (groupData) {
-        for (const [, info] of groupData.groups) {
-            coresPerGroup = info.cpus.size;
-            break;
-        }
-    }
-
-    // How many CCXs per LLC cluster
-    let coresPerLLC = coresPerGroup;
-    if (llcData) {
-        for (const [, info] of llcData.groups) {
-            coresPerLLC = info.cpus.size;
-            break;
-        }
-    }
-    const numSubGroups = llc !== groupLevel && coresPerLLC > coresPerGroup
-        ? Math.ceil(coresPerLLC / coresPerGroup) : 1;
-
-    const boxPx = '56px';
-
-    const renderCCX = (si) => {
-        const children = [];
-
-        // Core row
-        children.push(m('div.topo-core-row', { key: `cores-${si}` },
-            Array.from({ length: coresPerGroup }, (_, ci) => {
-                const idx = si * coresPerGroup + ci;
-                const coreChildren = [m('span.core-id', `C${idx}`)];
-                if (hasSMT) {
-                    coreChildren.push(m('div.topo-threads', [
-                        m('span.topo-thread', `T${idx * 2}`),
-                        m('span.topo-thread', `T${idx * 2 + 1}`),
-                    ]));
-                }
-                return m('div.topo-core.legend-core', { style: `width:${boxPx};height:${boxPx}` }, coreChildren);
-            }),
-        ));
-
-        // L1 pairs
-        if (l1dSize || l1iSize) {
-            children.push(m('div.topo-core-row', { key: `l1-${si}` },
-                Array.from({ length: coresPerGroup }, (_, ci) =>
-                    m('div.topo-l1-pair', { key: ci, style: `width:${boxPx}` }, [
-                        l1dSize ? m('span.topo-l1', [
-                            m('span.topo-cache-name', 'L1d'),
-                            m('span.topo-cache-size', l1dSize),
-                        ]) : null,
-                        l1iSize ? m('span.topo-l1', [
-                            m('span.topo-cache-name', 'L1i'),
-                            m('span.topo-cache-size', l1iSize),
-                        ]) : null,
-                    ].filter(Boolean)),
-                ),
-            ));
-        }
-
-        // Group-level cache bar (L2 / CCX)
-        if (groupLevel && groupData) {
-            children.push(m('div.topo-cache-bar.topo-mid-cache', { key: `mid-${si}` }, [
-                m('span.topo-cache-name', groupLevel.toUpperCase()),
-                m('span.topo-cache-size', groupData.size),
-            ]));
-        }
-
-        return m('div.topo-subgroup', { key: si }, children);
-    };
-
-    const clusterChildren = [];
-    clusterChildren.push(m('div.topo-subgroups',
-        Array.from({ length: numSubGroups }, (_, si) => renderCCX(si)),
-    ));
-    if (llc && llc !== groupLevel && llcData) {
-        clusterChildren.push(m('div.topo-cache-bar.topo-llc', [
-            m('span.topo-cache-name', llc.toUpperCase()),
-            m('span.topo-cache-size', llcData.size),
-        ]));
-    }
-
-    return m('div.topo-legend', [
-        m('div.topo-legend-title', 'Legend'),
-        m('div.topo-legend-cluster', clusterChildren),
-    ]);
 };
 
 // ── Component ────────────────────────────────────────────────────────
@@ -544,14 +426,9 @@ const CpuTopology = {
 
         const totalNumaGroups = pkgNumaGroups.reduce((s, p) => s + p.numaGroups.length, 0);
 
-        // Try 2 NUMA columns, drop to 1 before going compact
         const allNumaGroups = pkgNumaGroups.flatMap(p => p.numaGroups);
-        let numaPerRow = Math.min(totalNumaGroups, 2);
-        let layout = computeLayout(allNumaGroups, numaPerRow, this.containerWidth);
-        if (!layout.labeled && numaPerRow > 1) {
-            numaPerRow = 1;
-            layout = computeLayout(allNumaGroups, numaPerRow, this.containerWidth);
-        }
+        const numaPerRow = Math.min(totalNumaGroups, 2);
+        const layout = computeLayout(allNumaGroups, numaPerRow, this.containerWidth);
 
         const renderOpts = { hasSMT, toggles, cacheStructs, layout };
 
@@ -578,10 +455,6 @@ const CpuTopology = {
                 ]),
             )),
         ];
-
-        if (!layout.labeled && toggles.caches) {
-            innerChildren.push(renderLegend(cacheStructs, hasSMT));
-        }
 
         if (activeDescs.length > 0) {
             innerChildren.push(m('div.topo-descriptions',
