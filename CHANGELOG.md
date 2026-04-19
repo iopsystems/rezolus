@@ -1,5 +1,52 @@
 ## [Unreleased]
 
+## [5.10.0] - 2026-04-19
+
+### Added
+
+- Parquet subcommands: `metadata` to inspect files (#776), `annotate` to embed
+  service extension KPIs (#767), `combine` to merge multi-source recordings
+  (#777), and `filter` to reduce files to a needed subset of columns
+  (#779 #781).
+- Recorder support for multiple endpoints in a single recording. (#793)
+- Multi-node viewer with combine/process monitoring modes and UX improvements.
+  (#785 #795)
+- WASM viewer crate imported from `rezolus-webview` for the browser-only
+  static site viewer. (#800)
+- Docker support with agent container and standalone `rezolus-capture` script.
+  (#782 #783 #797)
+- Service extension framework with runtime-loaded templates for SGLang,
+  valkey, vllm, and cachecannon. Multiple service dashboard sections can be
+  rendered per recording. (#774 #786 #788 #789 #794 #799)
+- GPU dashboard improvements including PCIe bandwidth utilization. (#812)
+- Viewer: granularity (step) selector to override query step (#773), splash
+  screen and dashboard labels (#809), styled endpoints and script
+  consolidation (#808), unit selector (#802), stable cgroup colors with
+  selector swatches (#798).
+- Support for multiple service endpoints and process monitoring modes. (#785)
+
+### Changed
+
+- Refactored agent to use metriken group types instead of local
+  implementations. (#796)
+- Unified dashboard JSON via a shared `dashboard` crate. (#806)
+- Extracted shared Group component and helpers into `viewer_core.js`. (#804)
+- Bumped metriken to 0.9.2 for GaugeGroup sentinel fix. (#811)
+- Bumped metriken to crates.io and arrow/parquet to 58. (#803)
+
+### Fixed
+
+- Viewer: topology and sysinfo layout on narrow screens. (#810)
+- Viewer: cgroup charts survive granularity change. (#801)
+- Viewer: expand button URLs for site hash-based routing. (#791)
+- Viewer: stable cgroup colors, swatches in selector, clear ghost legends.
+  (#798)
+- Parquet `filter` retains histogram columns. (#781)
+- Selection/report localStorage scoped by file content fingerprint. (#790)
+- Symlinked templates, WASM rebuild, and pre-commit hook for viewer assets.
+  (#805)
+- Inside `dataZoom` removed so charts no longer capture scroll events. (#792)
+
 ## [5.9.1] - 2026-04-12
 
 ### Fixed
@@ -580,7 +627,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.9.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.10.0...HEAD
+[5.10.0]: https://github.com/iopsystems/rezolus/compare/v5.9.1...v5.10.0
+[5.9.1]: https://github.com/iopsystems/rezolus/compare/v5.9.0...v5.9.1
 [5.9.0]: https://github.com/iopsystems/rezolus/compare/v5.8.2...v5.9.0
 [5.8.2]: https://github.com/iopsystems/rezolus/compare/v5.8.1...v5.8.2
 [5.8.1]: https://github.com/iopsystems/rezolus/compare/v5.8.0...v5.8.1
