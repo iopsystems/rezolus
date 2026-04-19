@@ -23,7 +23,7 @@ pub static GPU_MEMORY_USED: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 #[metric(
     name = "gpu_pcie_bandwidth",
     description = "The PCIe bandwidth in Bytes/s.",
-    metadata = { direction = "receive", unit = "bytes/second" }
+    metadata = { unit = "bytes/second" }
 )]
 pub static GPU_PCIE_BANDWIDTH: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 

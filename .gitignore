@@ -5,3 +5,4 @@
 !.claude/scripts/
 target
 **/*.rs.bk
+.worktrees/
