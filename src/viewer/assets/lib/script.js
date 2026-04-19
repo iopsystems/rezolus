@@ -91,7 +91,7 @@ const uploadParquet = async (file) => {
         }
         m.redraw();
     } catch (e) {
-        notify('error', `Failed to upload parquet: ${e.message || e}`);
+        notify('error', `Failed to upload parquet: ${e?.message ?? e ?? 'unknown error'}`);
     }
 };
 
@@ -144,7 +144,7 @@ const showLanding = () => {
                     window.location.reload();
                 } catch (e) {
                     landingState.loading = false;
-                    landingState.error = `Failed to load file: ${e.message || e}`;
+                    landingState.error = `Failed to load file: ${e?.message ?? e ?? 'unknown error'}`;
                     m.redraw();
                 }
             },
@@ -157,7 +157,7 @@ const showLanding = () => {
                     window.location.reload();
                 } catch (e) {
                     landingState.loading = false;
-                    landingState.error = `Failed to connect: ${e.message || e}`;
+                    landingState.error = `Failed to connect: ${e?.message ?? e ?? 'unknown error'}`;
                     m.redraw();
                 }
             },

@@ -31,6 +31,8 @@ export function createGroupComponent(getState) {
                 opts.description && m('span.chart-subtitle', opts.description),
             ]);
 
+            const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
+
             return m(
                 'div.group',
                 { id: attrs.id },
@@ -52,7 +54,7 @@ export function createGroupComponent(getState) {
                                 ]);
                             }
 
-                            const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse: attrs.noCollapse };
+                            const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
                             return m('div.chart-wrapper', [
                                 chartHeader(prefixedSpec.opts),
                                 m(Chart, { spec: prefixedSpec, chartsState, interval }),
@@ -107,4 +109,3 @@ export function buildClientOnlySectionView(Main, sectionResponseCache, activeSec
         },
     };
 }
-

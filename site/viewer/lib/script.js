@@ -1,5 +1,5 @@
 // script.js — WASM viewer bootstrap stub.
-// Handles parquet loading (demo or upload), WASM init, and template loading.
+// Handles demo parquet loading, WASM init, and template loading.
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
@@ -7,10 +7,17 @@ import { FileUpload } from './landing.js';
 import { setStorageScope } from './selection.js';
 import { initDashboard } from './app.js';
 
-// ── Module-level state ──────────────────────────────────────────────
+// ── UI state ────────────────────────────────────────────────────────
 
-let loading = false;
-let loadError = null;
+let splashLabel = null;   // non-null = show splash, null = show landing
+let splashProgress = -1;  // -1 = indeterminate, 0–1 = determinate
+let landingError = null;
+
+const demos = [
+    { label: 'vLLM + System', file: 'vllm.parquet' },
+    { label: 'Cachecannon + System', file: 'cachecannon.parquet' },
+    { label: 'System Metrics', file: 'demo.parquet' },
+];
 
 // ── WASM + template initialization ─────────────────────────────────
 
@@ -70,20 +77,52 @@ async function loadParquet(data, filename) {
     });
 }
 
-// ── Load demo parquet ──────────────────────────────────────────────
+// ── Load demo parquet (with download progress) ──────────────────────
 
 async function loadDemo(filename = 'demo.parquet') {
-    loading = true;
-    loadError = null;
+    splashLabel = filename;
+    splashProgress = -1;
+    landingError = null;
     m.redraw();
 
     try {
         const resp = await fetch('data/' + filename);
         if (!resp.ok) throw new Error(`Failed to fetch ${filename}: ${resp.status}`);
-        const data = new Uint8Array(await resp.arrayBuffer());
+
+        let data;
+        const contentLength = resp.headers.get('Content-Length');
+
+        if (contentLength && resp.body) {
+            const total = parseInt(contentLength, 10);
+            const reader = resp.body.getReader();
+            const chunks = [];
+            let received = 0;
+
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                received += value.length;
+                splashProgress = received / total;
+                m.redraw();
+            }
+
+            data = new Uint8Array(received);
+            let pos = 0;
+            for (const chunk of chunks) {
+                data.set(chunk, pos);
+                pos += chunk.length;
+            }
+        } else {
+            data = new Uint8Array(await resp.arrayBuffer());
+        }
+
+        // WASM init phase — indeterminate
+        splashLabel = 'Initializing';
+        splashProgress = -1;
+        m.redraw();
 
         await loadParquet(data, filename);
-        loading = false;
 
         // Ensure ?demo is in the URL so bookmarks/refreshes auto-load the demo
         const url = new URL(window.location);
@@ -93,47 +132,44 @@ async function loadDemo(filename = 'demo.parquet') {
             window.history.replaceState(null, '', url);
         }
     } catch (e) {
-        loading = false;
-        loadError = `Failed to load demo: ${e.message || e}`;
+        splashLabel = null;
+        landingError = `Failed to load demo: ${e?.message ?? e ?? 'unknown error'}`;
         m.redraw();
     }
 }
 
-// ── Load uploaded file ─────────────────────────────────────────────
+// ── Root component — switches between splash and landing ────────────
 
-async function loadFile(file) {
-    loading = true;
-    loadError = null;
-    m.redraw();
-
-    try {
-        const data = new Uint8Array(await file.arrayBuffer());
-        await loadParquet(data, file.name);
-        loading = false;
-    } catch (e) {
-        loading = false;
-        loadError = `Failed to load file: ${e.message || e}`;
-        m.redraw();
-    }
-}
+const Root = {
+    view: () => {
+        if (splashLabel) {
+            return m('div#splash', m('div.card', [
+                m('h1', 'Rezolus'),
+                m('p.subtitle', `Loading ${splashLabel}…`),
+                m('div.progress-bar',
+                    m('div.progress-fill', splashProgress < 0
+                        ? { class: 'indeterminate' }
+                        : { style: { width: `${Math.round(splashProgress * 100)}%` } }
+                    ),
+                ),
+            ]));
+        }
+        return m('div', m(FileUpload, {
+            onDemo: loadDemo,
+            demos,
+            loading: false,
+            error: landingError,
+        }));
+    },
+};
 
 // ── Initial mount ──────────────────────────────────────────────────
 
 const _demoParam = new URLSearchParams(window.location.search).get('demo');
 if (_demoParam !== null) {
+    splashLabel = _demoParam || 'demo.parquet';
+    m.mount(document.body, Root);
     loadDemo(_demoParam || 'demo.parquet');
 } else {
-    m.mount(document.body, {
-        view: () => m(FileUpload, {
-            onFile: loadFile,
-            onDemo: loadDemo,
-            demos: [
-                { label: 'vLLM + System', file: 'vllm.parquet' },
-                { label: 'Cachecannon + System', file: 'cachecannon.parquet' },
-                { label: 'System Metrics', file: 'demo.parquet' },
-            ],
-            loading,
-            error: loadError,
-        }),
-    });
+    m.mount(document.body, Root);
 }

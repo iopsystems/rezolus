@@ -16,8 +16,10 @@ const FileUpload = {
         return m('div.upload-container', [
             m('div.upload-card', [
                 m('h1.upload-title', 'Rezolus Viewer'),
-                m('p.upload-subtitle', 'Drop a parquet file to explore system performance metrics.'),
-                m('div.upload-dropzone', {
+                m('p.upload-subtitle', onFile
+                    ? 'Drop a parquet file to explore system performance metrics.'
+                    : 'Explore system performance metrics.'),
+                onFile && m('div.upload-dropzone', {
                     ondragover: (e) => {
                         e.preventDefault();
                         e.currentTarget.classList.add('dragover');
@@ -29,7 +31,7 @@ const FileUpload = {
                         e.preventDefault();
                         e.currentTarget.classList.remove('dragover');
                         const file = e.dataTransfer.files[0];
-                        if (file && onFile) onFile(file);
+                        if (file) onFile(file);
                     },
                 }, [
                     m('svg.upload-icon', {
@@ -49,7 +51,7 @@ const FileUpload = {
                             style: 'display:none',
                             onchange: (e) => {
                                 const file = e.target.files[0];
-                                if (file && onFile) onFile(file);
+                                if (file) onFile(file);
                             },
                         }),
                     ]),
@@ -75,7 +77,7 @@ const FileUpload = {
                 ]),
                 (attrs.demos || (onDemo ? [{ label: 'Try Demo' }] : [])).length > 0 &&
                     m('div', { style: 'margin-top: 1.5rem' }, [
-                        m('p.upload-or', 'or'),
+                        onFile && m('p.upload-or', 'or'),
                         m('div', { style: 'display: flex; gap: 0.5rem; justify-content: center; margin-top: 0.75rem; flex-wrap: wrap' },
                             (attrs.demos || [{ label: 'Try Demo' }]).map(demo =>
                                 m('button.upload-btn', {

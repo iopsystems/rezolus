@@ -279,6 +279,41 @@ body::after {
 .card .link-row a { font-size: 0.9rem; padding: 0.4rem 0.8rem; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--accent); text-decoration: none; }
 .card .link-row a:hover { border-color: var(--accent); }
 
+/* Splash / loading screen */
+#splash {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 2rem;
+}
+
+.progress-bar {
+    width: 200px;
+    height: 3px;
+    background: var(--bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 1rem auto 0;
+}
+
+.progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.progress-fill.indeterminate {
+    width: 30%;
+    animation: splash-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes splash-slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
 /* ==========================================================================
    Top Navigation Bar
    ========================================================================== */
@@ -1713,7 +1748,7 @@ main {
 }
 
 /* Service notes — unavailable KPIs */
-.service-notes {
+.section-notes {
     margin-top: 2rem;
     padding: 1rem 1.25rem;
     background: var(--bg-void);
@@ -1723,22 +1758,22 @@ main {
     font-size: var(--font-size-sm);
 }
 
-.service-notes h3 {
+.section-notes h3 {
     margin: 0 0 0.5rem;
     font-size: var(--font-size-sm);
     color: var(--fg-secondary);
 }
 
-.service-notes p {
+.section-notes p {
     margin: 0 0 0.5rem;
 }
 
-.service-notes ul {
+.section-notes ul {
     margin: 0;
     padding-left: 1.25rem;
 }
 
-.service-notes li {
+.section-notes li {
     margin-bottom: 0.25rem;
 }
 
