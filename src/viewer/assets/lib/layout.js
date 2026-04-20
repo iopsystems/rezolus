@@ -134,12 +134,19 @@ const TopNav = {
     },
 };
 
-// Count plots with non-empty data across groups.
+// Count plots with non-empty data across groups and their subgroups.
+// Supports the new `group.subgroups[*].plots` shape and falls back to
+// the legacy flat `group.plots` shape during the transition.
+const collectGroupPlots = (group) =>
+    Array.isArray(group.subgroups)
+        ? group.subgroups.flatMap((sg) => sg.plots || [])
+        : group.plots || [];
+
 const countCharts = (groups) => {
     let total = 0;
     let withData = 0;
     for (const group of groups || []) {
-        for (const plot of group.plots || []) {
+        for (const plot of collectGroupPlots(group)) {
             total++;
             if (plot.data && plot.data.length >= 1 && plot.data[0] && plot.data[0].length > 0) {
                 withData++;
