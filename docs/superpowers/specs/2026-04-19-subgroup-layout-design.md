@@ -128,10 +128,19 @@ a new subgroup always starts a new row regardless of whether it has a name.
 optional description.
 
 ```rust
+use std::collections::HashSet;
+
 let sg = group.subgroup("Operations");
-let devices = data.counter_labels("blockio_operations")
-    .and_then(|ls| ls.get("device"))
-    .map_or(0, |v| v.len());
+let devices = data
+    .counter_labels("blockio_operations")
+    .map(|labels_list| {
+        labels_list
+            .iter()
+            .filter_map(|l| l.inner.get("device").cloned())
+            .collect::<HashSet<_>>()
+            .len()
+    })
+    .unwrap_or(0);
 if devices == 1 {
     // Known single device — per-device chart would be identical to summary.
     sg.plot_promql_full(summary_opts, summary_q);
@@ -149,9 +158,12 @@ dumps (empty Tsdb) and live-mode first-connect (Tsdb still warming up) both
 show the richer layout, and the collapse is reserved for the narrowly-scoped
 "only one device ever observed" case.
 
-The label-index lookup
-(`Tsdb::counter_labels(name) -> Option<&LabelIndex>`) is already available and
-is a cheap HashMap lookup — no query evaluation.
+The label lookup (`Tsdb::counter_labels(name) -> Option<Vec<Labels>>`) is
+already available. Each `Labels` has `pub inner: BTreeMap<String, String>`.
+The lookup returns series labels, not a per-key index, so distinct label
+values are obtained via `HashSet`. This is O(series) in time for the metric
+— cheap compared to query evaluation, which would also materialize the
+time-series data.
 
 ### Backward compatibility
 
