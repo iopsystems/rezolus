@@ -96,7 +96,7 @@ pub struct SubGroup {
 pub struct Group {
     name: String,
     id: String,
-    plots: Vec<Plot>,
+    subgroups: Vec<SubGroup>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -107,11 +107,64 @@ impl Group {
         Self {
             name: name.into(),
             id: id.into(),
-            plots: Vec::new(),
+            subgroups: Vec::new(),
             metadata: HashMap::new(),
         }
     }
 
+    /// Ensures a trailing subgroup exists to append plots to. Used by the
+    /// legacy `Group::plot_promql*` call sites so they keep working
+    /// without conversion — the first legacy call opens a default
+    /// unnamed subgroup, subsequent legacy calls append to the most
+    /// recently opened subgroup.
+    ///
+    /// NOTE: if the caller has already opened a subgroup via `subgroup()`
+    /// or `subgroup_unnamed()`, a subsequent legacy `plot_promql*` call
+    /// appends to THAT subgroup — even if it is named. Do not mix the
+    /// legacy flat-plot API with the subgroup API on the same `Group`
+    /// unless you intend that behavior.
+    fn tail_subgroup_mut(&mut self) -> &mut SubGroup {
+        if self.subgroups.is_empty() {
+            self.subgroups.push(SubGroup::default());
+        }
+        self.subgroups.last_mut().unwrap()
+    }
+
+    /// Open a named subgroup. Returns a mutable reference so the
+    /// caller can chain plot calls on it.
+    pub fn subgroup<T: Into<String>>(&mut self, name: T) -> &mut SubGroup {
+        self.subgroups.push(SubGroup {
+            name: Some(name.into()),
+            ..SubGroup::default()
+        });
+        self.subgroups.last_mut().unwrap()
+    }
+
+    /// Open an unnamed subgroup. Use when you want the "break to a new
+    /// vertical band" effect without a visible header.
+    pub fn subgroup_unnamed(&mut self) -> &mut SubGroup {
+        self.subgroups.push(SubGroup::default());
+        self.subgroups.last_mut().unwrap()
+    }
+
+    /// Legacy: append a plot to the current (or default) subgroup.
+    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
+        self.tail_subgroup_mut().plot_promql(opts, promql_query);
+    }
+
+    /// Legacy: append a plot with description-autofill support.
+    pub fn plot_promql_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        promql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.tail_subgroup_mut()
+            .plot_promql_with_descriptions(opts, promql_query, descriptions);
+    }
+}
+
+impl SubGroup {
     pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
         self.plot_promql_with_descriptions(opts, promql_query, None);
     }
@@ -445,5 +498,37 @@ mod tests {
         let json = serde_json::to_value(&sg).unwrap();
         assert!(json.get("name").is_none());
         assert!(json.get("description").is_none());
+    }
+
+    #[test]
+    fn legacy_plot_promql_creates_single_unnamed_subgroup() {
+        let mut g = Group::new("G", "g");
+        g.plot_promql(
+            PlotOpts::counter("t1", "id1", Unit::Count),
+            "up".into(),
+        );
+        g.plot_promql(
+            PlotOpts::counter("t2", "id2", Unit::Count),
+            "up".into(),
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        let subs = json["subgroups"].as_array().expect("subgroups present");
+        assert_eq!(subs.len(), 1, "legacy calls collapse to one subgroup");
+        assert!(subs[0].get("name").is_none(), "default subgroup is unnamed");
+        assert_eq!(
+            subs[0]["plots"].as_array().unwrap().len(),
+            2,
+            "both legacy plots land in the default subgroup"
+        );
+    }
+
+    #[test]
+    fn group_no_longer_exposes_bare_plots_in_json() {
+        let g = Group::new("G", "g");
+        let json = serde_json::to_value(&g).unwrap();
+        assert!(
+            json.get("plots").is_none(),
+            "Group JSON should expose subgroups, not plots"
+        );
     }
 }
