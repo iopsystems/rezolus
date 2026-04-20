@@ -209,6 +209,30 @@ impl SubGroup {
             width: PlotWidth::default(),
         });
     }
+
+    /// Set the optional description text rendered below the subgroup header.
+    pub fn describe<T: Into<String>>(&mut self, text: T) -> &mut Self {
+        self.description = Some(text.into());
+        self
+    }
+
+    /// Append a plot that spans the full width of the group's grid.
+    pub fn plot_promql_full(&mut self, opts: PlotOpts, promql_query: String) {
+        self.plot_promql_full_with_descriptions(opts, promql_query, None);
+    }
+
+    /// Full-width variant with description autofill.
+    pub fn plot_promql_full_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        promql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.plot_promql_with_descriptions(opts, promql_query, descriptions);
+        if let Some(plot) = self.plots.last_mut() {
+            plot.width = PlotWidth::Full;
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -529,6 +553,32 @@ mod tests {
         assert!(
             json.get("plots").is_none(),
             "Group JSON should expose subgroups, not plots"
+        );
+    }
+
+    #[test]
+    fn plot_promql_full_marks_plot_as_full_width() {
+        let mut g = Group::new("G", "g");
+        let sg = g.subgroup("Ops");
+        sg.plot_promql_full(
+            PlotOpts::counter("Summary", "sum", Unit::Count),
+            "up".into(),
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        assert_eq!(
+            json["subgroups"][0]["plots"][0]["width"],
+            serde_json::json!("full")
+        );
+    }
+
+    #[test]
+    fn describe_sets_the_description_field() {
+        let mut g = Group::new("G", "g");
+        g.subgroup("Ops").describe("Shows total throughput and IOPS.");
+        let json = serde_json::to_value(&g).unwrap();
+        assert_eq!(
+            json["subgroups"][0]["description"],
+            "Shows total throughput and IOPS."
         );
     }
 }
