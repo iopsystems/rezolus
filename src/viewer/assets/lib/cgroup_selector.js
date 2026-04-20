@@ -8,6 +8,7 @@
 //   setActiveCgroupPattern: (pattern) => void — sets the global active cgroup pattern
 
 import globalColorMapper from './charts/util/colormap.js';
+import { collectGroupPlots } from './group_utils.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -100,7 +101,7 @@ export const CgroupSelector = {
         // line chart with the accent color.
         for (const group of vnode.attrs.groups || []) {
             if (group.metadata?.side !== 'right') continue;
-            for (const plot of group.plots || []) {
+            for (const plot of collectGroupPlots(group)) {
                 if (plot.opts && plot.opts.style !== 'multi') {
                     plot.opts.style = 'multi';
                 }
@@ -177,7 +178,7 @@ export const CgroupSelector = {
         if (!vnode.state.originalQueries) {
             vnode.state.originalQueries = new Map();
             for (const [gi, group] of (vnode.attrs.groups || []).entries()) {
-                for (const [pi, plot] of (group.plots || []).entries()) {
+                for (const [pi, plot] of collectGroupPlots(group).entries()) {
                     if (plot.promql_query) {
                         vnode.state.originalQueries.set(`${gi}-${pi}`, plot.promql_query);
                     }
@@ -192,7 +193,7 @@ export const CgroupSelector = {
         // Collect plots whose original query contains the cgroup placeholder
         const plotsToUpdate = [];
         for (const [gi, group] of (vnode.attrs.groups || []).entries()) {
-            for (const [pi, plot] of (group.plots || []).entries()) {
+            for (const [pi, plot] of collectGroupPlots(group).entries()) {
                 const orig = vnode.state.originalQueries.get(`${gi}-${pi}`);
                 if (orig && orig.includes('__SELECTED_CGROUPS__')) {
                     plotsToUpdate.push({

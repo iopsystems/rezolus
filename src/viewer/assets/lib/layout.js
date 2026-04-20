@@ -1,6 +1,7 @@
 import { TimeRangeBar, GranularitySelector } from './controls.js';
 import { selectionStore, reportStore, importJSON } from './selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
+import { collectGroupPlots } from './group_utils.js';
 
 // Format utilities
 const formatSize = (bytes) => {
@@ -135,13 +136,7 @@ const TopNav = {
 };
 
 // Count plots with non-empty data across groups and their subgroups.
-// Supports the new `group.subgroups[*].plots` shape and falls back to
-// the legacy flat `group.plots` shape during the transition.
-const collectGroupPlots = (group) =>
-    Array.isArray(group.subgroups)
-        ? group.subgroups.flatMap((sg) => sg.plots || [])
-        : group.plots || [];
-
+// `collectGroupPlots` is imported from ./group_utils.js.
 const countCharts = (groups) => {
     let total = 0;
     let withData = 0;

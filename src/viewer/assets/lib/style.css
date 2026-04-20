@@ -969,7 +969,7 @@ main {
     font-size: 0.85rem;
     color: var(--fg-secondary);
     line-height: 1.4;
-    margin: 0 0 0.75rem 0;
+    margin: 0 0 0.5rem 0;
 }
 
 .group .charts .chart-wrapper.full-width {
