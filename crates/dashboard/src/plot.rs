@@ -527,14 +527,8 @@ mod tests {
     #[test]
     fn legacy_plot_promql_creates_single_unnamed_subgroup() {
         let mut g = Group::new("G", "g");
-        g.plot_promql(
-            PlotOpts::counter("t1", "id1", Unit::Count),
-            "up".into(),
-        );
-        g.plot_promql(
-            PlotOpts::counter("t2", "id2", Unit::Count),
-            "up".into(),
-        );
+        g.plot_promql(PlotOpts::counter("t1", "id1", Unit::Count), "up".into());
+        g.plot_promql(PlotOpts::counter("t2", "id2", Unit::Count), "up".into());
         let json = serde_json::to_value(&g).unwrap();
         let subs = json["subgroups"].as_array().expect("subgroups present");
         assert_eq!(subs.len(), 1, "legacy calls collapse to one subgroup");
@@ -574,7 +568,8 @@ mod tests {
     #[test]
     fn describe_sets_the_description_field() {
         let mut g = Group::new("G", "g");
-        g.subgroup("Ops").describe("Shows total throughput and IOPS.");
+        g.subgroup("Ops")
+            .describe("Shows total throughput and IOPS.");
         let json = serde_json::to_value(&g).unwrap();
         assert_eq!(
             json["subgroups"][0]["description"],
