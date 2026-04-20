@@ -83,6 +83,15 @@ pub struct Section {
     pub route: String,
 }
 
+#[derive(Serialize, Default)]
+pub struct SubGroup {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub plots: Vec<Plot>,
+}
+
 #[derive(Serialize)]
 pub struct Group {
     name: String,
@@ -411,5 +420,30 @@ mod tests {
         let plot = make_plot(PlotWidth::Full);
         let json = serde_json::to_value(&plot).unwrap();
         assert_eq!(json["width"], serde_json::json!("full"));
+    }
+
+    #[test]
+    fn subgroup_serializes_with_optional_name_and_description() {
+        let sg = SubGroup {
+            name: Some("Operations".into()),
+            description: Some("Summary + per-device IOPS.".into()),
+            plots: vec![],
+        };
+        let json = serde_json::to_value(&sg).unwrap();
+        assert_eq!(json["name"], "Operations");
+        assert_eq!(json["description"], "Summary + per-device IOPS.");
+        assert_eq!(json["plots"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn subgroup_elides_missing_name_and_description() {
+        let sg = SubGroup {
+            name: None,
+            description: None,
+            plots: vec![],
+        };
+        let json = serde_json::to_value(&sg).unwrap();
+        assert!(json.get("name").is_none());
+        assert!(json.get("description").is_none());
     }
 }
