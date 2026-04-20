@@ -144,6 +144,7 @@ impl Group {
             formatted_time_data: None,
             series_names: None,
             promql_query: Some(promql_query),
+            width: PlotWidth::default(),
         });
     }
 }
@@ -164,6 +165,8 @@ pub struct Plot {
     series_names: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     promql_query: Option<String>,
+    #[serde(skip_serializing_if = "plot_width_is_half", default)]
+    pub width: PlotWidth,
 }
 
 impl Plot {}
@@ -174,6 +177,18 @@ pub enum MetricType {
     Gauge,
     DeltaCounter,
     Histogram,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlotWidth {
+    #[default]
+    Half,
+    Full,
+}
+
+fn plot_width_is_half(w: &PlotWidth) -> bool {
+    matches!(w, PlotWidth::Half)
 }
 
 #[derive(Serialize, Clone)]
@@ -360,5 +375,41 @@ impl std::fmt::Display for Unit {
         };
 
         write!(f, "{s}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_plot(width: PlotWidth) -> Plot {
+        Plot {
+            data: Vec::new(),
+            opts: PlotOpts::counter("t", "id", Unit::Count),
+            min_value: None,
+            max_value: None,
+            time_data: None,
+            formatted_time_data: None,
+            series_names: None,
+            promql_query: Some("up".into()),
+            width,
+        }
+    }
+
+    #[test]
+    fn plot_width_half_is_elided_from_json() {
+        let plot = make_plot(PlotWidth::Half);
+        let json = serde_json::to_value(&plot).unwrap();
+        assert!(
+            json.get("width").is_none(),
+            "expected `width` to be omitted when Half, got {json}"
+        );
+    }
+
+    #[test]
+    fn plot_width_full_is_serialized() {
+        let plot = make_plot(PlotWidth::Full);
+        let json = serde_json::to_value(&plot).unwrap();
+        assert_eq!(json["width"], serde_json::json!("full"));
     }
 }
