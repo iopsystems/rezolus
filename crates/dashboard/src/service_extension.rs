@@ -42,6 +42,19 @@ pub struct Kpi {
     /// normalized overview charts (e.g. "CPU / Throughput").
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub denominator: bool,
+    /// Optional subgroup name within the role group. KPIs sharing a
+    /// role + subgroup render inside the same subgroup; KPIs without
+    /// a subgroup land in the role's default unnamed subgroup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subgroup: Option<String>,
+    /// Optional one-line explanation rendered under the subgroup header.
+    /// Only honored on the first KPI that opens a given subgroup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subgroup_description: Option<String>,
+    /// When true, render this KPI as a full-width chart spanning both
+    /// columns of the group's grid.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full_width: bool,
 }
 
 fn default_available() -> bool {

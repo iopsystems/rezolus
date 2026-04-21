@@ -162,6 +162,20 @@ impl Group {
         self.tail_subgroup_mut()
             .plot_promql_with_descriptions(opts, promql_query, descriptions);
     }
+
+    /// Find an existing named subgroup by exact name match.
+    pub fn find_subgroup(&mut self, name: &str) -> Option<&mut SubGroup> {
+        self.subgroups
+            .iter_mut()
+            .find(|sg| sg.name.as_deref() == Some(name))
+    }
+
+    /// Lazily return the trailing or default unnamed subgroup. Use for
+    /// callers that want the "land in an unnamed catch-all bucket"
+    /// semantics without going through `plot_promql*` on `Group`.
+    pub fn default_subgroup(&mut self) -> &mut SubGroup {
+        self.tail_subgroup_mut()
+    }
 }
 
 impl SubGroup {

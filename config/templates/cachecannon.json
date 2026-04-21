@@ -8,7 +8,9 @@
       "title": "Target Rate",
       "query": "target_rate",
       "type": "gauge",
-      "unit_system": "count"
+      "unit_system": "count",
+      "subgroup": "Target Rate",
+      "full_width": true
     },
     {
       "role": "throughput",
@@ -45,7 +47,9 @@
       "query": "response_latency",
       "type": "histogram",
       "subtype": "percentiles",
-      "unit_system": "time"
+      "unit_system": "time",
+      "subgroup": "Response Latency",
+      "full_width": true
     },
     {
       "role": "latency",
