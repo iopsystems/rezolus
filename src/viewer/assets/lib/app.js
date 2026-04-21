@@ -161,6 +161,14 @@ const changeInstance = async (serviceName, instanceId) => {
     await reloadCurrentSection();
 };
 
+const CLIENT_ONLY_SECTIONS = new Set([
+    'selection',
+    'report',
+    'systeminfo',
+    'metadata',
+    'query_explorer',
+]);
+
 const changeGranularity = async (step) => {
     currentGranularity = step;
     setStepOverride(step);
@@ -170,19 +178,23 @@ const changeGranularity = async (step) => {
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
 
+    // All cached section data is stale against the new step.
     for (const key of Object.keys(sectionResponseCache)) {
-        if (key !== section) delete sectionResponseCache[key];
+        delete sectionResponseCache[key];
     }
     heatmapDataCache.clear();
     chartsState.zoomLevel = null;
     chartsState.zoomSource = null;
     chartsState.globalZoom = null;
 
-    if (!section) return;
+    // Data sections refetch themselves; client-only sections (Selection,
+    // Report, System Info, Metadata, Query Explorer) need overview
+    // primed so the sidebar + topnav meta stays populated after the
+    // cache wipe — otherwise the whole nav collapses.
+    const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
 
     try {
-        delete sectionResponseCache[section];
-        const data = await loadSection(section);
+        const data = await loadSection(target);
         if (data?.sections) preloadSections(data.sections);
         m.redraw();
     } catch (_) { /* keep existing view on error */ }
