@@ -1,7 +1,7 @@
 use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue, ExternalMetricsStore};
 use crate::agent::*;
 
-use metriken::{RwLockHistogram, Value};
+use metriken::Value;
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot, SnapshotV2};
 
 use std::collections::HashMap;
@@ -178,24 +178,22 @@ fn create(
                     }
                 }
             }
-            Some(Value::Other(any)) => {
-                if let Some(histogram) = any.downcast_ref::<RwLockHistogram>() {
-                    if let Some(value) = histogram.load() {
-                        metadata.insert(
-                            "grouping_power".to_string(),
-                            histogram.config().grouping_power().to_string(),
-                        );
-                        metadata.insert(
-                            "max_value_power".to_string(),
-                            histogram.config().max_value_power().to_string(),
-                        );
+            Some(Value::Histogram(h)) => {
+                if let Some(value) = h.load() {
+                    metadata.insert(
+                        "grouping_power".to_string(),
+                        h.config().grouping_power().to_string(),
+                    );
+                    metadata.insert(
+                        "max_value_power".to_string(),
+                        h.config().max_value_power().to_string(),
+                    );
 
-                        s.histograms.push(Histogram {
-                            name,
-                            value,
-                            metadata,
-                        })
-                    }
+                    s.histograms.push(Histogram {
+                        name,
+                        value,
+                        metadata,
+                    })
                 }
             }
             _ => {}
