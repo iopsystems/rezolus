@@ -9,7 +9,7 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
-import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
@@ -164,6 +164,8 @@ const changeInstance = async (serviceName, instanceId) => {
 const changeGranularity = async (step) => {
     currentGranularity = step;
     setStepOverride(step);
+    selectionStore.stepOverride = step ?? null;
+    persistSelection();
 
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
@@ -273,6 +275,7 @@ const SectionContent = {
                 fileChecksum,
                 heatmapEnabled,
                 heatmapLoading,
+                stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
             });
         }
@@ -286,6 +289,7 @@ const SectionContent = {
                 fileChecksum,
                 heatmapEnabled,
                 heatmapLoading,
+                stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
             });
         }
@@ -381,6 +385,16 @@ const initDashboard = (config = {}) => {
     if (config.selectionPayload && Array.isArray(config.selectionPayload.entries)) {
         loadPayloadIntoStore(reportStore, config.selectionPayload);
         reportStore.loadedFrom = 'embedded report';
+    }
+
+    // Restore step override from whichever store carries one. Report
+    // (loaded-from-parquet) wins when both exist so a shared annotated
+    // parquet shows the granularity its author intended.
+    const restoredStep =
+        reportStore.stepOverride ?? selectionStore.stepOverride ?? null;
+    if (restoredStep != null) {
+        currentGranularity = restoredStep;
+        setStepOverride(restoredStep);
     }
 
     applyMultiNodeInfo();
