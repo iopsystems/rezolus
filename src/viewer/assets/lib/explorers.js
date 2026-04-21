@@ -3,6 +3,7 @@
 import { ChartsState, Chart } from './charts/chart.js';
 import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from './data.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
+import { collectGroupPlots } from './group_utils.js';
 
 // ── Unit selector ───────────────────────────────────────────────────
 
@@ -340,7 +341,7 @@ export const SingleChartView = {
         // Find the plot by chart ID across all groups
         if (!vnode.state.plot) {
             for (const group of data.groups || []) {
-                for (const plot of group.plots || []) {
+                for (const plot of collectGroupPlots(group)) {
                     if (plot.opts.id === chartId) {
                         vnode.state.plot = plot;
                         vnode.state.query = plot.promql_query || '';

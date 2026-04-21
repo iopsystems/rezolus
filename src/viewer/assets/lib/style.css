@@ -950,6 +950,32 @@ main {
     gap: 2rem;
 }
 
+.group .subgroup {
+    margin-bottom: 1.5rem;
+}
+
+.group .subgroup:last-child {
+    margin-bottom: 0;
+}
+
+.group .subgroup-title {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--fg-secondary);
+    margin: 0 0 0.25rem 0;
+}
+
+.group .subgroup-description {
+    font-size: 0.85rem;
+    color: var(--fg-secondary);
+    line-height: 1.4;
+    margin: 0 0 0.5rem 0;
+}
+
+.group .charts .chart-wrapper.full-width {
+    grid-column: 1 / -1;
+}
+
 /* ==========================================================================
    Chart Cards
    ========================================================================== */

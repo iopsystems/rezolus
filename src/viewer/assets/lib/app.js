@@ -6,6 +6,7 @@ import { QueryExplorer, SingleChartView } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
+import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
 import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
@@ -324,7 +325,7 @@ const SectionContent = {
         const hasSelection = chartsState.hasActiveSelection();
 
         const hasHistogramCharts = (attrs.groups || []).some(g =>
-            (g.plots || []).some(p => isHistogramPlot(p))
+            collectGroupPlots(g).some(p => isHistogramPlot(p))
         );
 
         return m('div#section-content', [

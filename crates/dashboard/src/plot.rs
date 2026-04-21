@@ -83,11 +83,20 @@ pub struct Section {
     pub route: String,
 }
 
+#[derive(Serialize, Default)]
+pub struct SubGroup {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub plots: Vec<Plot>,
+}
+
 #[derive(Serialize)]
 pub struct Group {
     name: String,
     id: String,
-    plots: Vec<Plot>,
+    subgroups: Vec<SubGroup>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -98,11 +107,78 @@ impl Group {
         Self {
             name: name.into(),
             id: id.into(),
-            plots: Vec::new(),
+            subgroups: Vec::new(),
             metadata: HashMap::new(),
         }
     }
 
+    /// Ensures a trailing subgroup exists to append plots to. Used by the
+    /// legacy `Group::plot_promql*` call sites so they keep working
+    /// without conversion — the first legacy call opens a default
+    /// unnamed subgroup, subsequent legacy calls append to the most
+    /// recently opened subgroup.
+    ///
+    /// NOTE: if the caller has already opened a subgroup via `subgroup()`
+    /// or `subgroup_unnamed()`, a subsequent legacy `plot_promql*` call
+    /// appends to THAT subgroup — even if it is named. Do not mix the
+    /// legacy flat-plot API with the subgroup API on the same `Group`
+    /// unless you intend that behavior.
+    fn tail_subgroup_mut(&mut self) -> &mut SubGroup {
+        if self.subgroups.is_empty() {
+            self.subgroups.push(SubGroup::default());
+        }
+        self.subgroups.last_mut().unwrap()
+    }
+
+    /// Open a named subgroup. Returns a mutable reference so the
+    /// caller can chain plot calls on it.
+    pub fn subgroup<T: Into<String>>(&mut self, name: T) -> &mut SubGroup {
+        self.subgroups.push(SubGroup {
+            name: Some(name.into()),
+            ..SubGroup::default()
+        });
+        self.subgroups.last_mut().unwrap()
+    }
+
+    /// Open an unnamed subgroup. Use when you want the "break to a new
+    /// vertical band" effect without a visible header.
+    pub fn subgroup_unnamed(&mut self) -> &mut SubGroup {
+        self.subgroups.push(SubGroup::default());
+        self.subgroups.last_mut().unwrap()
+    }
+
+    /// Legacy: append a plot to the current (or default) subgroup.
+    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
+        self.tail_subgroup_mut().plot_promql(opts, promql_query);
+    }
+
+    /// Legacy: append a plot with description-autofill support.
+    pub fn plot_promql_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        promql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.tail_subgroup_mut()
+            .plot_promql_with_descriptions(opts, promql_query, descriptions);
+    }
+
+    /// Find an existing named subgroup by exact name match.
+    pub fn find_subgroup(&mut self, name: &str) -> Option<&mut SubGroup> {
+        self.subgroups
+            .iter_mut()
+            .find(|sg| sg.name.as_deref() == Some(name))
+    }
+
+    /// Lazily return the trailing or default unnamed subgroup. Use for
+    /// callers that want the "land in an unnamed catch-all bucket"
+    /// semantics without going through `plot_promql*` on `Group`.
+    pub fn default_subgroup(&mut self) -> &mut SubGroup {
+        self.tail_subgroup_mut()
+    }
+}
+
+impl SubGroup {
     pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
         self.plot_promql_with_descriptions(opts, promql_query, None);
     }
@@ -144,7 +220,32 @@ impl Group {
             formatted_time_data: None,
             series_names: None,
             promql_query: Some(promql_query),
+            width: PlotWidth::default(),
         });
+    }
+
+    /// Set the optional description text rendered below the subgroup header.
+    pub fn describe<T: Into<String>>(&mut self, text: T) -> &mut Self {
+        self.description = Some(text.into());
+        self
+    }
+
+    /// Append a plot that spans the full width of the group's grid.
+    pub fn plot_promql_full(&mut self, opts: PlotOpts, promql_query: String) {
+        self.plot_promql_full_with_descriptions(opts, promql_query, None);
+    }
+
+    /// Full-width variant with description autofill.
+    pub fn plot_promql_full_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        promql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.plot_promql_with_descriptions(opts, promql_query, descriptions);
+        if let Some(plot) = self.plots.last_mut() {
+            plot.width = PlotWidth::Full;
+        }
     }
 }
 
@@ -164,6 +265,8 @@ pub struct Plot {
     series_names: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     promql_query: Option<String>,
+    #[serde(skip_serializing_if = "plot_width_is_half", default)]
+    pub width: PlotWidth,
 }
 
 impl Plot {}
@@ -174,6 +277,18 @@ pub enum MetricType {
     Gauge,
     DeltaCounter,
     Histogram,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlotWidth {
+    #[default]
+    Half,
+    Full,
+}
+
+fn plot_width_is_half(w: &PlotWidth) -> bool {
+    matches!(w, PlotWidth::Half)
 }
 
 #[derive(Serialize, Clone)]
@@ -360,5 +475,119 @@ impl std::fmt::Display for Unit {
         };
 
         write!(f, "{s}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_plot(width: PlotWidth) -> Plot {
+        Plot {
+            data: Vec::new(),
+            opts: PlotOpts::counter("t", "id", Unit::Count),
+            min_value: None,
+            max_value: None,
+            time_data: None,
+            formatted_time_data: None,
+            series_names: None,
+            promql_query: Some("up".into()),
+            width,
+        }
+    }
+
+    #[test]
+    fn plot_width_half_is_elided_from_json() {
+        let plot = make_plot(PlotWidth::Half);
+        let json = serde_json::to_value(&plot).unwrap();
+        assert!(
+            json.get("width").is_none(),
+            "expected `width` to be omitted when Half, got {json}"
+        );
+    }
+
+    #[test]
+    fn plot_width_full_is_serialized() {
+        let plot = make_plot(PlotWidth::Full);
+        let json = serde_json::to_value(&plot).unwrap();
+        assert_eq!(json["width"], serde_json::json!("full"));
+    }
+
+    #[test]
+    fn subgroup_serializes_with_optional_name_and_description() {
+        let sg = SubGroup {
+            name: Some("Operations".into()),
+            description: Some("Summary + per-device IOPS.".into()),
+            plots: vec![],
+        };
+        let json = serde_json::to_value(&sg).unwrap();
+        assert_eq!(json["name"], "Operations");
+        assert_eq!(json["description"], "Summary + per-device IOPS.");
+        assert_eq!(json["plots"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn subgroup_elides_missing_name_and_description() {
+        let sg = SubGroup {
+            name: None,
+            description: None,
+            plots: vec![],
+        };
+        let json = serde_json::to_value(&sg).unwrap();
+        assert!(json.get("name").is_none());
+        assert!(json.get("description").is_none());
+    }
+
+    #[test]
+    fn legacy_plot_promql_creates_single_unnamed_subgroup() {
+        let mut g = Group::new("G", "g");
+        g.plot_promql(PlotOpts::counter("t1", "id1", Unit::Count), "up".into());
+        g.plot_promql(PlotOpts::counter("t2", "id2", Unit::Count), "up".into());
+        let json = serde_json::to_value(&g).unwrap();
+        let subs = json["subgroups"].as_array().expect("subgroups present");
+        assert_eq!(subs.len(), 1, "legacy calls collapse to one subgroup");
+        assert!(subs[0].get("name").is_none(), "default subgroup is unnamed");
+        assert_eq!(
+            subs[0]["plots"].as_array().unwrap().len(),
+            2,
+            "both legacy plots land in the default subgroup"
+        );
+    }
+
+    #[test]
+    fn group_no_longer_exposes_bare_plots_in_json() {
+        let g = Group::new("G", "g");
+        let json = serde_json::to_value(&g).unwrap();
+        assert!(
+            json.get("plots").is_none(),
+            "Group JSON should expose subgroups, not plots"
+        );
+    }
+
+    #[test]
+    fn plot_promql_full_marks_plot_as_full_width() {
+        let mut g = Group::new("G", "g");
+        let sg = g.subgroup("Ops");
+        sg.plot_promql_full(
+            PlotOpts::counter("Summary", "sum", Unit::Count),
+            "up".into(),
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        assert_eq!(
+            json["subgroups"][0]["plots"][0]["width"],
+            serde_json::json!("full")
+        );
+    }
+
+    #[test]
+    fn describe_sets_the_description_field() {
+        let mut g = Group::new("G", "g");
+        g.subgroup("Ops")
+            .describe("Shows total throughput and IOPS.");
+        let json = serde_json::to_value(&g).unwrap();
+        assert_eq!(
+            json["subgroups"][0]["description"],
+            "Shows total throughput and IOPS."
+        );
     }
 }

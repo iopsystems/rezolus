@@ -1,4 +1,5 @@
 import { expandLink, selectButton } from './chart_controls.js';
+import { collectGroupPlots } from './group_utils.js';
 
 const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
     view({ attrs }) {
@@ -284,8 +285,8 @@ const renderCgroupSection = ({
     const leftGroups = attrs.groups.filter((g) => g.metadata?.side === 'left');
     const rightGroups = attrs.groups.filter((g) => g.metadata?.side === 'right');
 
-    const leftPlots = leftGroups.flatMap((g) => g.plots || []);
-    const rightPlots = rightGroups.flatMap((g) => g.plots || []);
+    const leftPlots = leftGroups.flatMap((g) => collectGroupPlots(g));
+    const rightPlots = rightGroups.flatMap((g) => collectGroupPlots(g));
     const rightByTitle = new Map(rightPlots.map((p) => [p.opts?.title, p]));
     const paired = new Set();
     const pairs = [];

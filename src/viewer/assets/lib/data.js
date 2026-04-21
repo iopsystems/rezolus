@@ -1,5 +1,6 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
+import { collectGroupPlots } from './group_utils.js';
 
 let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
@@ -282,7 +283,7 @@ const createDataApi = ({
 
         const queryPlots = [];
         for (const group of data.groups || []) {
-            for (const plot of group.plots || []) {
+            for (const plot of collectGroupPlots(group)) {
                 if (plot.promql_query) {
                     let queryToRun = plot.promql_query;
                     const stepActive = _stepOverride && _stepOverride > 1;
@@ -395,7 +396,7 @@ const createDataApi = ({
     const fetchHeatmapsForGroups = async (groups) => {
         const plots = [];
         for (const group of groups || []) {
-            for (const plot of group.plots || []) {
+            for (const plot of collectGroupPlots(group)) {
                 if (plot.promql_query && isHistogramPlot(plot)) {
                     plots.push(plot);
                 }

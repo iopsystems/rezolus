@@ -18,8 +18,10 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
         );
     }
 
-    // Group KPIs by role so that charts sharing a role render side-by-side
-    // via the 2-column CSS grid on `.group .charts`.
+    // Group KPIs by role. Within each role group, KPIs with the same
+    // `subgroup` value land in a named subgroup; KPIs without a subgroup
+    // land in the role's default unnamed subgroup (lazily created on
+    // first use by `Group::plot_promql*`).
     let mut groups: Vec<(String, Group)> = Vec::new();
     let mut unavailable: Vec<serde_json::Value> = Vec::new();
 
@@ -62,7 +64,28 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
             None => opts,
         };
 
-        group.plot_promql(opts, kpi.query.clone());
+        // Resolve the destination subgroup. Named subgroup is opened on
+        // first use; subsequent KPIs with the same name extend it.
+        let sg = match kpi.subgroup.as_deref() {
+            Some(name) => {
+                if group.find_subgroup(name).is_none() {
+                    let new_sg = group.subgroup(name);
+                    if let Some(desc) = kpi.subgroup_description.as_deref() {
+                        new_sg.describe(desc);
+                    }
+                    new_sg
+                } else {
+                    group.find_subgroup(name).unwrap()
+                }
+            }
+            None => group.default_subgroup(),
+        };
+
+        if kpi.full_width {
+            sg.plot_promql_full(opts, kpi.query.clone());
+        } else {
+            sg.plot_promql(opts, kpi.query.clone());
+        }
     }
 
     if !unavailable.is_empty() {

@@ -13,19 +13,17 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         .metadata
         .insert("no_collapse".to_string(), serde_json::json!(true));
 
-    // Total syscall rate
-    syscall.plot_promql(
+    let overall = syscall.subgroup("Overall");
+    overall.describe("Aggregate syscall rate and latency across all operation categories.");
+    overall.plot_promql(
         PlotOpts::counter("Overall Rate", "syscall-total", Unit::Rate),
         "sum(irate(syscall[5m]))".to_string(),
     );
-
-    // Total syscall latency percentiles
-    syscall.plot_promql(
+    overall.plot_promql(
         PlotOpts::histogram_latency("Overall Latency", "syscall-total-latency"),
         "syscall_latency".to_string(),
     );
 
-    // Per-operation syscall metrics
     for op in &[
         "Read",
         "Write",
@@ -45,15 +43,12 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         "Other",
     ] {
         let op_lower = op.to_lowercase();
-
-        // Rate for this operation
-        syscall.plot_promql(
+        let sg = syscall.subgroup(*op);
+        sg.plot_promql(
             PlotOpts::counter(format!("{op} Rate"), format!("syscall-{op}"), Unit::Rate),
             format!("sum(irate(syscall{{op=\"{op_lower}\"}}[5m]))"),
         );
-
-        // Latency percentiles for this operation
-        syscall.plot_promql(
+        sg.plot_promql(
             PlotOpts::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency")),
             format!("syscall_latency{{op=\"{op_lower}\"}}"),
         );

@@ -33,35 +33,50 @@ export function createGroupComponent(getState) {
 
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
 
+            // Compat shim: if the incoming JSON still uses the legacy
+            // `plots` shape (an array directly on the group), promote it
+            // to a single unnamed subgroup so rendering stays uniform.
+            const subgroups = attrs.subgroups
+                ? attrs.subgroups
+                : [{ name: null, description: null, plots: attrs.plots || [] }];
+
+            const renderChart = (spec) => {
+                const isHistogramChart = isHistogramPlot(spec);
+                const wrapperClass = spec.width === 'full'
+                    ? 'div.chart-wrapper.full-width'
+                    : 'div.chart-wrapper';
+
+                if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
+                    const heatmapData = sectionHeatmapData.get(spec.opts.id);
+                    const heatmapSpec = buildHistogramHeatmapSpec(spec, heatmapData, prefixTitle(spec.opts));
+                    return m(wrapperClass, [
+                        chartHeader(heatmapSpec.opts),
+                        m(Chart, { spec: heatmapSpec, chartsState, interval }),
+                        expandLink(spec, sectionRoute),
+                        selectButton(spec, sectionRoute, sectionName),
+                    ]);
+                }
+
+                const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
+                return m(wrapperClass, [
+                    chartHeader(prefixedSpec.opts),
+                    m(Chart, { spec: prefixedSpec, chartsState, interval }),
+                    expandLink(spec, sectionRoute),
+                    selectButton(spec, sectionRoute, sectionName),
+                ]);
+            };
+
             return m(
                 'div.group',
                 { id: attrs.id },
                 [
                     m('h2', `${attrs.name}`),
-                    m(
-                        'div.charts',
-                        attrs.plots.map((spec) => {
-                            const isHistogramChart = isHistogramPlot(spec);
-
-                            if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
-                                const heatmapData = sectionHeatmapData.get(spec.opts.id);
-                                const heatmapSpec = buildHistogramHeatmapSpec(spec, heatmapData, prefixTitle(spec.opts));
-                                return m('div.chart-wrapper', [
-                                    chartHeader(heatmapSpec.opts),
-                                    m(Chart, { spec: heatmapSpec, chartsState, interval }),
-                                    expandLink(spec, sectionRoute),
-                                    selectButton(spec, sectionRoute, sectionName),
-                                ]);
-                            }
-
-                            const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
-                            return m('div.chart-wrapper', [
-                                chartHeader(prefixedSpec.opts),
-                                m(Chart, { spec: prefixedSpec, chartsState, interval }),
-                                expandLink(spec, sectionRoute),
-                                selectButton(spec, sectionRoute, sectionName),
-                            ]);
-                        }),
+                    subgroups.map((sg) =>
+                        m('div.subgroup', [
+                            sg.name && m('h3.subgroup-title', sg.name),
+                            sg.description && m('p.subgroup-description', sg.description),
+                            m('div.charts', (sg.plots || []).map(renderChart)),
+                        ])
                     ),
                 ],
             );

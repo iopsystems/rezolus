@@ -1,6 +1,7 @@
 import { TimeRangeBar, GranularitySelector } from './controls.js';
 import { selectionStore, reportStore, importJSON } from './selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
+import { collectGroupPlots } from './group_utils.js';
 
 // Format utilities
 const formatSize = (bytes) => {
@@ -134,12 +135,13 @@ const TopNav = {
     },
 };
 
-// Count plots with non-empty data across groups.
+// Count plots with non-empty data across groups and their subgroups.
+// `collectGroupPlots` is imported from ./group_utils.js.
 const countCharts = (groups) => {
     let total = 0;
     let withData = 0;
     for (const group of groups || []) {
-        for (const plot of group.plots || []) {
+        for (const plot of collectGroupPlots(group)) {
             total++;
             if (plot.data && plot.data.length >= 1 && plot.data[0] && plot.data[0].length > 0) {
                 withData++;
