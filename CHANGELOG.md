@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [5.11.0] - 2026-04-21
+
+### Added
+
+- Dashboard: subgroups and full-width plots. (#815)
+- Viewer: preserve step override across save/load of selection. (#817)
+
+### Fixed
+
+- Agent: emit histograms in snapshots after metriken 0.2 core bump.
+  Recordings made since 5.10.0 were missing all histogram columns. (#818)
+- Viewer: hide subgroup header when all charts are empty. (#816)
+
 ## [5.10.0] - 2026-04-19
 
 ### Added
@@ -627,7 +640,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.10.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.11.0...HEAD
+[5.11.0]: https://github.com/iopsystems/rezolus/compare/v5.10.0...v5.11.0
 [5.10.0]: https://github.com/iopsystems/rezolus/compare/v5.9.1...v5.10.0
 [5.9.1]: https://github.com/iopsystems/rezolus/compare/v5.9.0...v5.9.1
 [5.9.0]: https://github.com/iopsystems/rezolus/compare/v5.8.2...v5.9.0
