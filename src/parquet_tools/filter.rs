@@ -261,6 +261,9 @@ mod tests {
                     percentiles: None,
                     available: false,
                     denominator: false,
+                    subgroup: None,
+                    subgroup_description: None,
+                    full_width: false,
                 })
                 .collect(),
         }
