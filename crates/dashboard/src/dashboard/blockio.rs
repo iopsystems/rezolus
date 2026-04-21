@@ -54,11 +54,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut latency = Group::new("Latency", "latency");
 
-    // Latency percentiles for Read and Write operations
+    let by_op = latency.subgroup("By Operation");
+    by_op.describe("Latency percentiles broken down by read vs write.");
     for op in &["Read", "Write"] {
         let op_lower = op.to_lowercase();
-
-        latency.plot_promql(
+        by_op.plot_promql(
             PlotOpts::histogram_latency(*op, format!("latency-{op_lower}")),
             format!("blockio_latency{{op=\"{op_lower}\"}}"),
         );
@@ -72,11 +72,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut size = Group::new("Size", "size");
 
-    // IO size percentiles for Read and Write operations
+    let by_op = size.subgroup("By Operation");
+    by_op.describe("IO size distribution percentiles broken down by read vs write.");
     for op in &["Read", "Write"] {
         let op_lower = op.to_lowercase();
-
-        size.plot_promql(
+        by_op.plot_promql(
             PlotOpts::histogram(*op, format!("size-{op_lower}"), Unit::Bytes, "percentiles")
                 .with_log_scale(true),
             format!("blockio_size{{op=\"{op_lower}\"}}"),
