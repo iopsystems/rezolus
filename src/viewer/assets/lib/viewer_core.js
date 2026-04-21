@@ -41,7 +41,7 @@ export function createGroupComponent(getState) {
                 : [{ name: null, description: null, plots: attrs.plots || [] }];
 
             // Whether a plot has any series data to show. Used to suppress
-            // subgroup headers + descriptions when the whole cluster is
+            // the group title + subgroup headers when the whole cluster is
             // empty (e.g. a section querying metrics that don't exist on
             // the host, like GPU on a CPU-only box).
             const plotHasData = (plot) =>
@@ -49,6 +49,9 @@ export function createGroupComponent(getState) {
                     Array.isArray(series) && series.length > 0
                 );
             const subgroupHasData = (sg) => (sg.plots || []).some(plotHasData);
+            const groupHasData = subgroups.some(subgroupHasData);
+
+            if (!groupHasData) return null;
 
             const renderChart = (spec) => {
                 const isHistogramChart = isHistogramPlot(spec);
