@@ -1000,6 +1000,13 @@ main {
     display: none;
 }
 
+/* Hide a subgroup entirely — header, description, and grid — when
+   every chart it contains is a no-data placeholder. Also covers the
+   (rare) degenerate case of a subgroup with zero plots. */
+.group .subgroup:not(:has(.chart-wrapper:not(:has(.no-data)))) {
+    display: none;
+}
+
 .chart-header {
     position: absolute;
     top: 0;
