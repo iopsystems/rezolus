@@ -3,6 +3,7 @@
 .claude/*
 !.claude/skills/
 !.claude/scripts/
+docs/superpowers/
 target
 **/*.rs.bk
 .worktrees/
