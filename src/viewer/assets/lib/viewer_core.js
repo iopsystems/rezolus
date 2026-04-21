@@ -40,6 +40,19 @@ export function createGroupComponent(getState) {
                 ? attrs.subgroups
                 : [{ name: null, description: null, plots: attrs.plots || [] }];
 
+            // Whether a plot has any series data to show. Used to suppress
+            // the group title + subgroup headers when the whole cluster is
+            // empty (e.g. a section querying metrics that don't exist on
+            // the host, like GPU on a CPU-only box).
+            const plotHasData = (plot) =>
+                Array.isArray(plot.data) && plot.data.some((series) =>
+                    Array.isArray(series) && series.length > 0
+                );
+            const subgroupHasData = (sg) => (sg.plots || []).some(plotHasData);
+            const groupHasData = subgroups.some(subgroupHasData);
+
+            if (!groupHasData) return null;
+
             const renderChart = (spec) => {
                 const isHistogramChart = isHistogramPlot(spec);
                 const wrapperClass = spec.width === 'full'
@@ -71,13 +84,14 @@ export function createGroupComponent(getState) {
                 { id: attrs.id },
                 [
                     m('h2', `${attrs.name}`),
-                    subgroups.map((sg) =>
-                        m('div.subgroup', [
-                            sg.name && m('h3.subgroup-title', sg.name),
-                            sg.description && m('p.subgroup-description', sg.description),
+                    subgroups.map((sg) => {
+                        const hasData = subgroupHasData(sg);
+                        return m('div.subgroup', [
+                            hasData && sg.name && m('h3.subgroup-title', sg.name),
+                            hasData && sg.description && m('p.subgroup-description', sg.description),
                             m('div.charts', (sg.plots || []).map(renderChart)),
-                        ])
-                    ),
+                        ]);
+                    }),
                 ],
             );
         },
