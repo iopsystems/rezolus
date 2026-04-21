@@ -5,7 +5,7 @@
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
-import { setStorageScope } from './selection.js';
+import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData } from './data.js';
 import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
@@ -81,6 +81,16 @@ const uploadParquet = async (file) => {
         if (fileChecksum) {
             setStorageScope({ filename: fileChecksum });
         }
+
+        // If the uploaded parquet has an embedded selection/report, load
+        // it into the reportStore so the "Report" sidebar link appears
+        // and the view can render the saved charts.
+        clearStore(reportStore);
+        if (selectionPayload && Array.isArray(selectionPayload.entries)) {
+            loadPayloadIntoStore(reportStore, selectionPayload);
+            reportStore.loadedFrom = 'embedded report';
+        }
+
         const data = await ViewerApi.getSection('overview');
         const processed = await processDashboardData(data, null, '/overview');
         sectionResponseCache['overview'] = processed;

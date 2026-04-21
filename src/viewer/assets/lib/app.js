@@ -9,7 +9,7 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
-import { reportStore, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
@@ -161,26 +161,40 @@ const changeInstance = async (serviceName, instanceId) => {
     await reloadCurrentSection();
 };
 
+const CLIENT_ONLY_SECTIONS = new Set([
+    'selection',
+    'report',
+    'systeminfo',
+    'metadata',
+    'query_explorer',
+]);
+
 const changeGranularity = async (step) => {
     currentGranularity = step;
     setStepOverride(step);
+    selectionStore.stepOverride = step ?? null;
+    persistSelection();
 
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
 
+    // All cached section data is stale against the new step.
     for (const key of Object.keys(sectionResponseCache)) {
-        if (key !== section) delete sectionResponseCache[key];
+        delete sectionResponseCache[key];
     }
     heatmapDataCache.clear();
     chartsState.zoomLevel = null;
     chartsState.zoomSource = null;
     chartsState.globalZoom = null;
 
-    if (!section) return;
+    // Data sections refetch themselves; client-only sections (Selection,
+    // Report, System Info, Metadata, Query Explorer) need overview
+    // primed so the sidebar + topnav meta stays populated after the
+    // cache wipe — otherwise the whole nav collapses.
+    const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
 
     try {
-        delete sectionResponseCache[section];
-        const data = await loadSection(section);
+        const data = await loadSection(target);
         if (data?.sections) preloadSections(data.sections);
         m.redraw();
     } catch (_) { /* keep existing view on error */ }
@@ -273,6 +287,7 @@ const SectionContent = {
                 fileChecksum,
                 heatmapEnabled,
                 heatmapLoading,
+                stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
             });
         }
@@ -286,6 +301,7 @@ const SectionContent = {
                 fileChecksum,
                 heatmapEnabled,
                 heatmapLoading,
+                stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
             });
         }
@@ -381,6 +397,16 @@ const initDashboard = (config = {}) => {
     if (config.selectionPayload && Array.isArray(config.selectionPayload.entries)) {
         loadPayloadIntoStore(reportStore, config.selectionPayload);
         reportStore.loadedFrom = 'embedded report';
+    }
+
+    // Restore step override from whichever store carries one. Report
+    // (loaded-from-parquet) wins when both exist so a shared annotated
+    // parquet shows the granularity its author intended.
+    const restoredStep =
+        reportStore.stepOverride ?? selectionStore.stepOverride ?? null;
+    if (restoredStep != null) {
+        currentGranularity = restoredStep;
+        setStepOverride(restoredStep);
     }
 
     applyMultiNodeInfo();

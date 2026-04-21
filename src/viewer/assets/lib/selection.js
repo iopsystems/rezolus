@@ -31,12 +31,14 @@ const selectionStore = {
     tagline: '',
     entries: [],
     zoom: null,
+    stepOverride: null,   // query step in seconds (null = auto)
 };
 
 const reportStore = {
     tagline: '',
     entries: [],
     zoom: null,
+    stepOverride: null,   // query step in seconds (null = auto)
     loadedFrom: null,    // filename of the imported JSON
     reportId: null,       // UUIDv7 from the imported report
     savedAt: null,        // ISO timestamp
@@ -81,6 +83,7 @@ const persistStore = (key, store) => {
         const data = {
             tagline: store.tagline,
             zoom: store.zoom,
+            stepOverride: store.stepOverride ?? undefined,
             loadedFrom: store.loadedFrom || undefined,
             reportId: store.reportId || undefined,
             savedAt: store.savedAt || undefined,
@@ -111,6 +114,7 @@ const restoreStore = (key, store) => {
         if (!data.entries || !Array.isArray(data.entries)) return;
         store.tagline = data.tagline || '';
         store.zoom = data.zoom || null;
+        store.stepOverride = data.stepOverride ?? null;
         if (data.loadedFrom !== undefined) store.loadedFrom = data.loadedFrom;
         if (data.reportId !== undefined) store.reportId = data.reportId;
         if (data.savedAt !== undefined) store.savedAt = data.savedAt;
@@ -177,6 +181,7 @@ const clearStore = (store) => {
     store.entries.length = 0;
     store.tagline = '';
     store.zoom = null;
+    store.stepOverride = null;
     if (store === reportStore) {
         store.loadedFrom = null;
         store.reportId = null;
@@ -205,6 +210,7 @@ const buildPayload = (store, attrs) => ({
         end_ms: attrs.end_time || 0,
     },
     zoom: attrs.chartsState?.zoomLevel || null,
+    step_override: attrs.stepOverride ?? null,
     tagline: store.tagline,
     entries: store.entries.map(e => ({
         chartId: e.chartId,
@@ -237,6 +243,7 @@ const exportJSON = async (store, attrs) => {
 const loadPayloadIntoStore = (store, payload) => {
     store.tagline = payload.tagline || '';
     store.zoom = payload.zoom || null;
+    store.stepOverride = payload.step_override ?? null;
     store.entries = payload.entries.map(e => ({
         id: crypto.randomUUID(),
         chartId: e.chartId,
@@ -603,6 +610,7 @@ export {
     selectionStore,
     reportStore,
     setStorageScope,
+    persistSelection,
     toggleSelection,
     isSelected,
     clearStore,
