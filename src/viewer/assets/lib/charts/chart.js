@@ -110,6 +110,16 @@ export class ChartsState {
                 ? null
                 : { start: next.start ?? 0, end: next.end ?? 100 };
         }
+        // Fan out via the chart registry directly. We keep the
+        // subscribeZoom API for new callers (TimeRangeBar view, future
+        // features), but also apply the zoom to every registered chart
+        // imperatively — matches the pre-observable behavior and avoids
+        // a class of lazy-init bugs where a chart was in `charts` but
+        // its subscribeZoom hadn't yet run when the first setZoom fired.
+        this.charts.forEach(chart => {
+            if (chart._applyZoom) chart._applyZoom(this.zoomLevel);
+        });
+        // Then notify any non-chart subscribers (future consumers).
         for (const fn of this._zoomSubs) fn(this.zoomLevel, this.zoomSource);
         return true;
     }
@@ -338,11 +348,9 @@ export class Chart {
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
         if (this._pinCleanup) this._pinCleanup();
 
-        // Drop our zoom subscription so setZoom stops notifying a
-        // disposed echart. Also remove ourselves from the charts
-        // registry so iterations in resetAll / hasActiveSelection /
-        // similar don't walk stale entries.
-        if (this._unsubZoom) { this._unsubZoom(); this._unsubZoom = null; }
+        // Remove ourselves from the charts registry so setZoom's fan-out,
+        // resetAll, hasActiveSelection, etc. don't walk a stale entry
+        // pointing at a disposed echart.
         this.chartsState.charts.delete(this.chartId);
 
         if (this.echart) {
@@ -465,15 +473,13 @@ export class Chart {
             this.minZoomPercent = 0.1; // fallback minimum
         }
 
-        // Store chart instance for cleanup and to prevent re-initialization
+        // Store chart instance for cleanup and to prevent re-initialization.
+        // This Map doubles as the zoom fan-out channel: ChartsState.setZoom
+        // iterates it and calls _applyZoom on each registered chart, so
+        // no separate subscription is needed on the Chart side (the
+        // subscribeZoom API stays for non-chart consumers like future
+        // TimeRangeBar-style views).
         this.chartsState.charts.set(this.chartId, this);
-
-        // Subscribe to zoom-state changes. Every writer — TimeRangeBar
-        // drag, selection restore, ChartsState.resetZoom, and other
-        // charts' datazoom handlers via setZoom — notifies subscribers
-        // with the new zoom. We just apply it to our echart; the diff
-        // guard inside setZoom ensures idempotent echoes don't fire us.
-        this._unsubZoom = this.chartsState.subscribeZoom((zoom) => this._applyZoom(zoom));
 
         // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
         this.configureChartByType();
