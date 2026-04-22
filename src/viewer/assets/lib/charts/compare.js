@@ -353,13 +353,17 @@ const splitMultiToSubgroup = ({ spec, captures, anchors }) =>
     splitIntoOverlayLines({ spec, captures, anchors, labelFor: multiLabel });
 
 /**
- * Split a `scatter` chart (histogram percentiles) into one overlay line
- * chart per shared quantile label.
+ * Split a `scatter` chart (histogram percentiles) into one overlay
+ * scatter chart per shared quantile label. Percentile series are
+ * naturally discrete samples, not continuous measurements — points
+ * read more honestly than a connecting line suggests.
  */
 const splitScatterToSubgroup = ({ spec, captures, anchors }) =>
-    splitIntoOverlayLines({ spec, captures, anchors, labelFor: percentileLabel });
+    splitIntoOverlayLines({
+        spec, captures, anchors, labelFor: percentileLabel, seriesType: 'scatter',
+    });
 
-const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor }) => {
+const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor, seriesType = 'line' }) => {
     const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
     const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline || !experiment) return FALLBACK;
@@ -369,6 +373,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
     const labelsA = new Set(mapA.keys());
     const labelsB = new Set(mapB.keys());
     const shared = [...intersectLabels(labelsA, labelsB)].sort();
+    const asScatter = seriesType === 'scatter';
 
     const specs = shared.map((label) => {
         const a = mapA.get(label);
@@ -394,6 +399,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
                     timeData: rebase(a.timeData, baseSec),
                     valueData: a.valueData,
                     fill: false,
+                    scatter: asScatter,
                 },
                 {
                     name: CAPTURE_EXPERIMENT,
@@ -401,6 +407,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
                     timeData: rebase(b.timeData, expSec),
                     valueData: b.valueData,
                     fill: false,
+                    scatter: asScatter,
                 },
             ],
             xAxisFormatter: relativeTimeFormatter,

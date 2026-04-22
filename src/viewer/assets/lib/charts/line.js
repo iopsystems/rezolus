@@ -71,7 +71,22 @@ export function configureLineChart(chart) {
             const [v, raw] = clampToRange(s.valueData[i], range);
             return [t * 1000, v, raw];
         });
-        zipped = insertGapNulls(zipped, chart.interval);
+        // Scatter-mode series render as discrete points — no gap-nulls
+        // (they only matter for the line-connecting path).
+        if (!s.scatter) zipped = insertGapNulls(zipped, chart.interval);
+
+        if (s.scatter) {
+            return {
+                data: zipped,
+                type: 'scatter',
+                name: s.name,
+                symbol: 'circle',
+                symbolSize: 5,
+                itemStyle: { color: s.color, opacity: 0.85 },
+                emphasis: { focus: 'series' },
+                animationDuration: 0,
+            };
+        }
 
         const base = {
             data: zipped,
