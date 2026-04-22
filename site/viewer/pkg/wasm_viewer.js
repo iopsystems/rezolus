@@ -203,6 +203,273 @@ export class Viewer {
 }
 if (Symbol.dispose) Viewer.prototype[Symbol.dispose] = Viewer.prototype.free;
 
+/**
+ * Registry wrapping up to two `Viewer` instances keyed by capture id
+ * ("baseline" / "experiment").  Mirrors the server-side `CaptureRegistry`
+ * shape so the JS transport layer can address either capture uniformly.
+ *
+ * This type is additive — existing single-capture `Viewer` consumers are
+ * unaffected.
+ */
+export class WasmCaptureRegistry {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        WasmCaptureRegistryFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_wasmcaptureregistry_free(ptr, 0);
+    }
+    /**
+     * Attach a parquet capture under the given slot ("baseline" or
+     * "experiment").  Replaces any previously attached capture in that slot.
+     * @param {string} capture
+     * @param {Uint8Array} data
+     * @param {string} filename
+     */
+    attach(capture, data, filename) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(filename, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_attach(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Drop the capture in the given slot (no-op if unknown or empty).
+     * @param {string} capture
+     */
+    detach(capture) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.wasmcaptureregistry_detach(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {string} capture
+     * @returns {string | undefined}
+     */
+    file_metadata_json(capture) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_file_metadata_json(this.__wbg_ptr, ptr0, len0);
+        let v2;
+        if (ret[0] !== 0) {
+            v2 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v2;
+    }
+    /**
+     * @param {string} capture
+     * @param {string} section
+     * @returns {string | undefined}
+     */
+    get_section(capture, section) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(section, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_get_section(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        let v3;
+        if (ret[0] !== 0) {
+            v3 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v3;
+    }
+    /**
+     * @param {string} capture
+     * @returns {string | undefined}
+     */
+    get_sections(capture) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_get_sections(this.__wbg_ptr, ptr0, len0);
+        let v2;
+        if (ret[0] !== 0) {
+            v2 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v2;
+    }
+    /**
+     * Whether a capture is currently attached in the given slot.
+     * @param {string} capture
+     * @returns {boolean}
+     */
+    has(capture) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_has(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
+     * @param {string} capture
+     * @returns {string}
+     */
+    info(capture) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmcaptureregistry_info(this.__wbg_ptr, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Initialise ServiceExtension templates for the given capture.  Mirrors
+     * `Viewer::init_templates`.
+     * @param {string} capture
+     * @param {string} templates_json
+     */
+    init_templates(capture, templates_json) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(templates_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_init_templates(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @param {string} capture
+     * @returns {string}
+     */
+    metadata(capture) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmcaptureregistry_metadata(this.__wbg_ptr, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    constructor() {
+        const ret = wasm.wasmcaptureregistry_new();
+        this.__wbg_ptr = ret >>> 0;
+        WasmCaptureRegistryFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * @param {string} capture
+     * @param {string} query
+     * @param {number} time
+     * @returns {string}
+     */
+    query(capture, query, time) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(query, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmcaptureregistry_query(this.__wbg_ptr, ptr0, len0, ptr1, len1, time);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * @param {string} capture
+     * @param {string} query
+     * @param {number} start
+     * @param {number} end
+     * @param {number} step
+     * @returns {string}
+     */
+    query_range(capture, query, start, end, step) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(query, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmcaptureregistry_query_range(this.__wbg_ptr, ptr0, len0, ptr1, len1, start, end, step);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * @param {string} capture
+     * @returns {string | undefined}
+     */
+    selection(capture) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_selection(this.__wbg_ptr, ptr0, len0);
+        let v2;
+        if (ret[0] !== 0) {
+            v2 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v2;
+    }
+    /**
+     * @param {string} capture
+     * @returns {string | undefined}
+     */
+    systeminfo(capture) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_systeminfo(this.__wbg_ptr, ptr0, len0);
+        let v2;
+        if (ret[0] !== 0) {
+            v2 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v2;
+    }
+}
+if (Symbol.dispose) WasmCaptureRegistry.prototype[Symbol.dispose] = WasmCaptureRegistry.prototype.free;
+
 export function init() {
     wasm.init();
 }
@@ -258,6 +525,9 @@ function __wbg_get_imports() {
 const ViewerFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_viewer_free(ptr >>> 0, 1));
+const WasmCaptureRegistryFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasmcaptureregistry_free(ptr >>> 0, 1));
 
 let cachedDataViewMemory0 = null;
 function getDataViewMemory0() {

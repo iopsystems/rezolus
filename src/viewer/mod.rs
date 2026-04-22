@@ -42,6 +42,10 @@ pub use metriken_query::tsdb;
 use promql::QueryEngine;
 use tsdb::*;
 
+pub mod capture_registry;
+
+use capture_registry::{CaptureId, CaptureRegistry};
+
 /// The input source for the viewer.
 enum Source {
     /// A parquet file on disk.
@@ -57,10 +61,18 @@ pub fn command() -> Command {
         .about("View a Rezolus artifact or live agent")
         .arg(
             clap::Arg::new("INPUT")
-                .help("Rezolus parquet file or agent URL (e.g. http://localhost:4241)")
+                .help("Rezolus parquet file (baseline) or agent URL (e.g. http://localhost:4241)")
                 .action(clap::ArgAction::Set)
                 .required(false)
                 .index(1),
+        )
+        .arg(
+            clap::Arg::new("EXPERIMENT")
+                .help("Optional second parquet file for A/B comparison (experiment)")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf))
+                .required(false)
+                .index(2),
         )
         .arg(
             clap::Arg::new("VERBOSE")
@@ -71,10 +83,12 @@ pub fn command() -> Command {
         )
         .arg(
             clap::Arg::new("LISTEN")
-                .help("Viewer listen address")
+                .long("listen")
+                .short('l')
+                .value_name("ADDR")
+                .help("Viewer listen address (e.g. 127.0.0.1:8080)")
                 .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(SocketAddr))
-                .index(2),
+                .value_parser(value_parser!(SocketAddr)),
         )
         .arg(
             clap::Arg::new("templates")
@@ -88,6 +102,7 @@ pub fn command() -> Command {
 
 pub struct Config {
     source: Source,
+    experiment_path: Option<PathBuf>,
     verbose: u8,
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
@@ -116,6 +131,7 @@ impl TryFrom<ArgMatches> for Config {
 
         Ok(Config {
             source,
+            experiment_path: args.get_one::<PathBuf>("EXPERIMENT").cloned(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
             listen: *args
                 .get_one::<SocketAddr>("LISTEN")
@@ -190,15 +206,56 @@ pub fn run(config: Config) {
             info!("Generating dashboards...");
             let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
             let state = AppState::new(data, registry.clone());
-            let rendered =
-                dashboard::dashboard::generate(&state.tsdb.read(), filesize, &service_refs, None);
+            let rendered = dashboard::dashboard::generate(
+                &state.baseline_tsdb().read(),
+                filesize,
+                &service_refs,
+                None,
+            );
             state.sections.write().extend(rendered);
             *state.parquet_path.write() = Some(path.clone());
             let multinode_sysinfo = build_multinode_systeminfo(path);
-            *state.systeminfo.write() = multinode_sysinfo.or(systeminfo);
+            state
+                .captures
+                .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
             *state.selection.write() = selection;
             *state.file_checksum.write() = file_checksum;
-            *state.file_metadata.write() = file_meta;
+            state.captures.set_baseline_file_metadata(file_meta);
+
+            // Attach the optional experiment capture for A/B comparison.
+            // NOTE: we deliberately do NOT stash `exp_path` in
+            // `state.experiment_parquet_path` here. That field tracks
+            // server-owned temp files written by the HTTP attach handler
+            // so they can be cleaned up on detach. The CLI path is the
+            // user's own file on disk — detaching must not delete it.
+            if let Some(exp_path) = &config.experiment_path {
+                info!("Loading experiment from parquet file...");
+                let (exp_sysinfo, _exp_selection, exp_file_meta) =
+                    extract_parquet_metadata(exp_path);
+                match Tsdb::load(exp_path) {
+                    Ok(mut exp_tsdb) => {
+                        // Stamp the Tsdb with its filename (basename) so
+                        // the viewer can surface it in the compare badge.
+                        let base = exp_path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("experiment.parquet")
+                            .to_string();
+                        exp_tsdb.set_filename(base);
+                        state
+                            .captures
+                            .attach_experiment(exp_tsdb, exp_sysinfo, exp_file_meta);
+                        info!("Attached experiment capture: {}", exp_path.display());
+                    }
+                    Err(e) => {
+                        warn!(
+                            "failed to load experiment '{}': {e}. Starting in single-capture mode.",
+                            exp_path.display(),
+                        );
+                    }
+                }
+            }
+
             state
         }
         Source::Live(url) => {
@@ -256,14 +313,15 @@ pub fn run(config: Config) {
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
             let state = AppState::new(tsdb, registry.clone());
-            let rendered = dashboard::dashboard::generate(&state.tsdb.read(), None, &[], None);
+            let rendered =
+                dashboard::dashboard::generate(&state.baseline_tsdb().read(), None, &[], None);
             state.sections.write().extend(rendered);
             state.live.store(true, Ordering::Relaxed);
 
-            *state.systeminfo.write() = agent_systeminfo;
+            state.captures.set_baseline_systeminfo(agent_systeminfo);
 
             // Spawn the ingest loop
-            let ingest_tsdb = state.tsdb.clone();
+            let ingest_tsdb = state.baseline_tsdb();
             let ingest_snapshots = state.snapshots.clone();
             let mut ingest_url = url.clone();
             ingest_url.set_path("/metrics/binary");
@@ -283,6 +341,15 @@ pub fn run(config: Config) {
             AppState::new(Tsdb::default(), registry.clone())
         }
     };
+
+    // The experiment CLI arg is only honored when the baseline is a parquet
+    // file. Live and upload-only modes manage the experiment slot via the
+    // HTTP attach endpoint instead.
+    if config.experiment_path.is_some() && !matches!(config.source, Source::File(_)) {
+        warn!(
+            "--experiment ignored outside of file mode (v1 compare requires a baseline parquet file)"
+        );
+    }
 
     // open the tcp listener
     let listener = std::net::TcpListener::bind(config.listen).expect("failed to listen");
@@ -424,37 +491,46 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
 
 struct AppState {
     sections: parking_lot::RwLock<HashMap<String, String>>,
-    tsdb: Arc<parking_lot::RwLock<Tsdb>>,
+    /// Per-capture TSDB + metadata. Single-capture callers always target
+    /// `CaptureId::Baseline`; the experiment slot is empty unless a compare
+    /// mode hand-off has attached one.
+    captures: Arc<CaptureRegistry>,
     templates: TemplateRegistry,
     /// Raw msgpack snapshot bytes for parquet export (live mode only).
     snapshots: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
     live: AtomicBool,
     /// Original parquet file path (file mode only).
     parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
-    /// Serialized SystemSummary JSON from parquet metadata or live system.
-    systeminfo: parking_lot::RwLock<Option<String>>,
+    /// Temp parquet path for the attached experiment capture (cleared on detach).
+    experiment_parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
     /// Serialized selection JSON from parquet metadata.
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
     file_checksum: parking_lot::RwLock<Option<String>>,
-    /// Raw parquet file-level key-value metadata as a JSON object.
-    file_metadata: parking_lot::RwLock<Option<String>>,
 }
 
 impl AppState {
     pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
         Self {
             sections: Default::default(),
-            tsdb: Arc::new(parking_lot::RwLock::new(tsdb)),
+            captures: Arc::new(CaptureRegistry::new(tsdb, None, None)),
             templates,
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: AtomicBool::new(false),
             parquet_path: parking_lot::RwLock::new(None),
-            systeminfo: parking_lot::RwLock::new(None),
+            experiment_parquet_path: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
-            file_metadata: parking_lot::RwLock::new(None),
         }
+    }
+
+    /// Shorthand for the baseline TSDB handle. Every existing caller that
+    /// used to dereference `state.tsdb` directly lands on baseline — the
+    /// registry guarantees the baseline slot is always present.
+    fn baseline_tsdb(&self) -> Arc<parking_lot::RwLock<Tsdb>> {
+        self.captures
+            .get(CaptureId::Baseline)
+            .expect("baseline capture is always present")
     }
 }
 
@@ -831,6 +907,12 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
             axum::routing::post(upload_parquet)
                 .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
+        .route(
+            "/captures/experiment",
+            axum::routing::post(attach_experiment)
+                .delete(detach_experiment)
+                .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         .route("/connect", axum::routing::post(connect_agent))
         .route(
             "/save_with_selection",
@@ -936,20 +1018,38 @@ async fn mode(
     axum::response::Json(serde_json::json!({
         "live": state.live.load(Ordering::Relaxed),
         "loaded": loaded,
+        "compare_mode": state.captures.experiment_attached(),
     }))
+}
+
+/// Query param for endpoints that select between baseline and experiment.
+#[derive(serde::Deserialize)]
+struct CaptureParam {
+    #[serde(default)]
+    capture: Option<String>,
+}
+
+impl CaptureParam {
+    fn capture_id(&self) -> CaptureId {
+        self.capture
+            .as_deref()
+            .and_then(CaptureId::parse)
+            .unwrap_or_default()
+    }
 }
 
 /// Returns the system hardware summary from parquet metadata or the live system.
 async fn systeminfo_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    match &*state.systeminfo.read() {
+    match state.captures.systeminfo(p.capture_id()) {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
-            json.clone(),
+            json,
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -974,13 +1074,14 @@ async fn selection_handler(
 
 async fn file_metadata_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    match &*state.file_metadata.read() {
+    match state.captures.file_metadata(p.capture_id()) {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
-            json.clone(),
+            json,
         )
             .into_response(),
         None => (
@@ -998,6 +1099,8 @@ async fn file_metadata_handler(
 struct QueryParams {
     query: String,
     time: Option<f64>,
+    #[serde(default)]
+    capture: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1006,6 +1109,14 @@ struct RangeQueryParams {
     start: f64,
     end: f64,
     step: f64,
+    #[serde(default)]
+    capture: Option<String>,
+}
+
+fn capture_id_from(opt: &Option<String>) -> CaptureId {
+    opt.as_deref()
+        .and_then(CaptureId::parse)
+        .unwrap_or_default()
 }
 
 #[derive(serde::Serialize)]
@@ -1053,7 +1164,17 @@ async fn instant_query(
     axum::extract::Query(params): axum::extract::Query<QueryParams>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<promql::QueryResult>> {
-    let tsdb = state.tsdb.read();
+    let capture = capture_id_from(&params.capture);
+    let tsdb_handle = match state.captures.get(capture) {
+        Some(t) => t,
+        None => {
+            return axum::response::Json(ApiResponse::error(
+                format!("capture '{:?}' not attached", capture),
+                "capture_not_found".to_string(),
+            ));
+        }
+    };
+    let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
     match engine.query(&params.query, params.time) {
         Ok(result) => axum::response::Json(ApiResponse::success(result)),
@@ -1068,7 +1189,17 @@ async fn range_query(
     axum::extract::Query(params): axum::extract::Query<RangeQueryParams>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<promql::QueryResult>> {
-    let tsdb = state.tsdb.read();
+    let capture = capture_id_from(&params.capture);
+    let tsdb_handle = match state.captures.get(capture) {
+        Some(t) => t,
+        None => {
+            return axum::response::Json(ApiResponse::error(
+                format!("capture '{:?}' not attached", capture),
+                "capture_not_found".to_string(),
+            ));
+        }
+    };
+    let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
     match engine.query_range(&params.query, params.start, params.end, params.step) {
         Ok(result) => axum::response::Json(ApiResponse::success(result)),
@@ -1115,16 +1246,31 @@ async fn label_values(
 
 async fn metadata(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
 ) -> axum::response::Json<ApiResponse<serde_json::Value>> {
-    let tsdb = state.tsdb.read();
+    let capture = p.capture_id();
+    let tsdb_handle = match state.captures.get(capture) {
+        Some(t) => t,
+        None => {
+            return axum::response::Json(ApiResponse::error(
+                format!("capture {:?} not attached", capture),
+                "capture_not_found".to_string(),
+            ));
+        }
+    };
+    let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
     let time_range = engine.get_time_range();
     let mut metadata = serde_json::json!({
         "minTime": time_range.0,
-        "maxTime": time_range.1
+        "maxTime": time_range.1,
+        "filename": tsdb.filename(),
     });
-    if let Some(checksum) = &*state.file_checksum.read() {
-        metadata["fileChecksum"] = serde_json::json!(checksum);
+    // File checksum is only tracked for the baseline capture today.
+    if matches!(capture, capture_registry::CaptureId::Baseline) {
+        if let Some(checksum) = &*state.file_checksum.read() {
+            metadata["fileChecksum"] = serde_json::json!(checksum);
+        }
     }
     axum::response::Json(ApiResponse::success(metadata))
 }
@@ -1201,7 +1347,8 @@ async fn upload_parquet(
     let file_checksum = compute_file_checksum(&temp_path);
 
     {
-        let mut tsdb = state.tsdb.write();
+        let tsdb_handle = state.baseline_tsdb();
+        let mut tsdb = tsdb_handle.write();
         *tsdb = data;
     }
     {
@@ -1210,14 +1357,95 @@ async fn upload_parquet(
     }
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
-    *state.systeminfo.write() = multinode_sysinfo.or(systeminfo);
+    state
+        .captures
+        .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
     *state.selection.write() = selection;
     *state.file_checksum.write() = file_checksum;
-    *state.file_metadata.write() = file_meta;
+    state.captures.set_baseline_file_metadata(file_meta);
 
     axum::response::Json(ApiResponse::success(serde_json::json!({
         "filename": filename,
     })))
+}
+
+/// Attach an experiment parquet for A/B comparison. Body is raw parquet bytes.
+/// Returns 409 if an experiment is already attached (caller must DELETE first).
+async fn attach_experiment(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if state.captures.experiment_attached() {
+        return (
+            StatusCode::CONFLICT,
+            "experiment already attached; DELETE first",
+        )
+            .into_response();
+    }
+
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing parquet bytes").into_response();
+    }
+
+    let filename = headers
+        .get("x-rezolus-filename")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "experiment.parquet".to_string());
+
+    let temp_path =
+        std::env::temp_dir().join(format!("rezolus-experiment-{}.parquet", std::process::id(),));
+    if let Err(e) = std::fs::write(&temp_path, &body) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to store upload: {e}"),
+        )
+            .into_response();
+    }
+
+    let mut tsdb = match Tsdb::load(&temp_path) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_path);
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("failed to load parquet: {e}"),
+            )
+                .into_response();
+        }
+    };
+    // Stamp with the uploader's filename so the viewer can display it
+    // in the compare badge.
+    tsdb.set_filename(filename);
+
+    let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
+    state
+        .captures
+        .attach_experiment(tsdb, sysinfo.clone(), file_meta);
+    *state.experiment_parquet_path.write() = Some(temp_path);
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        sysinfo.unwrap_or_else(|| "{}".into()),
+    )
+        .into_response()
+}
+
+/// Detach the currently attached experiment (if any) and clean up its temp file.
+async fn detach_experiment(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    state.captures.detach_experiment();
+    if let Some(path) = state.experiment_parquet_path.write().take() {
+        let _ = std::fs::remove_file(&path);
+    }
+    StatusCode::OK.into_response()
 }
 
 /// Connect to a live Rezolus agent at runtime.
@@ -1303,18 +1531,19 @@ async fn connect_agent(
 
     // Update shared state
     {
-        let mut db = state.tsdb.write();
+        let tsdb_handle = state.baseline_tsdb();
+        let mut db = tsdb_handle.write();
         *db = tsdb;
     }
     {
         let mut sections = state.sections.write();
         *sections = rendered;
     }
-    *state.systeminfo.write() = agent_systeminfo;
+    state.captures.set_baseline_systeminfo(agent_systeminfo);
     state.live.store(true, Ordering::Relaxed);
 
     // Spawn the ingest loop
-    let ingest_tsdb = state.tsdb.clone();
+    let ingest_tsdb = state.baseline_tsdb();
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
@@ -1348,8 +1577,9 @@ async fn reset_tsdb(
     }
 
     // Preserve metadata across reset
+    let tsdb_handle = state.baseline_tsdb();
     let (source, version, filename) = {
-        let tsdb = state.tsdb.read();
+        let tsdb = tsdb_handle.read();
         (
             tsdb.source().to_string(),
             tsdb.version().to_string(),
@@ -1358,7 +1588,7 @@ async fn reset_tsdb(
     };
 
     {
-        let mut tsdb = state.tsdb.write();
+        let mut tsdb = tsdb_handle.write();
         *tsdb = Tsdb::default();
         tsdb.set_sampling_interval_ms(1000);
         tsdb.set_source(source);
@@ -1389,7 +1619,7 @@ async fn save_parquet(
     }
 
     // Grab the stored systeminfo (from agent or local) for parquet metadata
-    let sysinfo_json = state.systeminfo.read().clone();
+    let sysinfo_json = state.captures.systeminfo(CaptureId::Baseline);
 
     // Run the synchronous parquet conversion off the async runtime
     let result = tokio::task::spawn_blocking(move || {
@@ -1514,7 +1744,7 @@ async fn save_with_selection(
             .unwrap();
     }
 
-    let sysinfo_json = state.systeminfo.read().clone();
+    let sysinfo_json = state.captures.systeminfo(CaptureId::Baseline);
 
     let result = tokio::task::spawn_blocking(move || {
         let total_size: usize = snapshot_data.iter().map(|s| s.len()).sum();

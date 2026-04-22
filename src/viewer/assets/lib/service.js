@@ -89,7 +89,9 @@ const createServiceRoutes = (deps) => {
         topNavAttrs,
         SingleChartView,
         applyResultToPlot,
+        getCompareMode,
     } = deps;
+    const readCompareMode = () => (typeof getCompareMode === 'function' ? !!getCompareMode() : false);
 
     return {
         '/service/:serviceName/chart/:chartId': {
@@ -102,7 +104,7 @@ const createServiceRoutes = (deps) => {
                         if (!data) return m('div', 'Loading...');
                         const activeSection = data.sections.find(s => s.route === `/service/${params.serviceName}`);
                         return m('div', [
-                            m(TopNav, topNavAttrs(data, activeSection?.route)),
+                            m(TopNav, topNavAttrs(data, activeSection?.route, { compareMode: readCompareMode() })),
                             m('main.single-chart-main', [
                                 m(SingleChartView, {
                                     data,
@@ -139,7 +141,7 @@ const createServiceRoutes = (deps) => {
                         const activeSection = data.sections.find(
                             (section) => section.route === `/service/${params.serviceName}`,
                         );
-                        return m(Main, { ...data, activeSection });
+                        return m(Main, { ...data, activeSection, compareMode: readCompareMode() });
                     },
                 });
 

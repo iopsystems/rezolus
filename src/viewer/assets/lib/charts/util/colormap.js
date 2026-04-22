@@ -163,6 +163,75 @@ export function infernoColor(t) {
     return interpolateRamp(INFERNO_RGB, t);
 }
 
+// ── Compare-mode palette ─────────────────────────────────────────────
+
+/**
+ * Diverging blue→neutral→green scale for compare-mode diff heatmaps.
+ * Caller maps values symmetrically around 0 (−absMax..0..+absMax).
+ * Baseline-heavy cells read blue, experiment-heavy cells read green.
+ */
+export const DIVERGING_BLUE_GREEN = [
+    '#2E5BFF', '#6A8BFF', '#A5BBFF', '#D5DFFF',
+    '#F2F2F2',
+    '#CFEBD7', '#9ED6B2', '#5FBD83', '#00C46A',
+];
+
+/** Theme-aware null cell color for diff heatmaps — distinct from zero. */
+export const NULL_CELL_COLOR_DARK = 'rgba(255,255,255,0.04)';
+export const NULL_CELL_COLOR_LIGHT = 'rgba(0,0,0,0.04)';
+
+/** Returns the null cell color for the active theme. */
+export function nullCellColor(isDark) {
+    return isDark ? NULL_CELL_COLOR_DARK : NULL_CELL_COLOR_LIGHT;
+}
+
+/**
+ * Resample a diverging palette (blue…neutral…green, with neutral at the
+ * palette's own midpoint) so that value=0 lands on the neutral color
+ * regardless of whether the data range is symmetric around zero.
+ *
+ * echarts' `visualMap.inRange.color` samples the returned array linearly
+ * across [min, max]. Without resampling, an asymmetric range like [0, 10]
+ * would map 0 → fully-blue and 5 → neutral, which is wrong for a signed
+ * diff. With the remapping below:
+ *   - value < 0  → lower half of the palette (blue side)
+ *   - value = 0  → neutral
+ *   - value > 0  → upper half of the palette (green side)
+ * For one-sided ranges ([0, max] or [min, 0]), the result is just the
+ * relevant half of the palette.
+ *
+ * @param {string[]} palette - diverging hex palette (odd length; middle = neutral).
+ * @param {number} min
+ * @param {number} max
+ * @param {number} [sampleCount] - number of output stops (defaults to 21).
+ * @returns {string[]} resampled hex/rgb color array for echarts `inRange.color`.
+ */
+export function resampleDivergingForRange(palette, min, max, sampleCount = 21) {
+    if (!Array.isArray(palette) || palette.length === 0 || !(max > min)) {
+        return palette;
+    }
+    const ramp = hexToRgbRamp(palette);
+    const clamp = (t) => Math.max(0, Math.min(1, t));
+    // Map value to the palette's native t in [0,1]:
+    //   min >= 0  → only the upper half of the palette (neutral..green)
+    //   max <= 0  → only the lower half (blue..neutral)
+    //   straddling → zero always lands at t=0.5 (neutral)
+    const valueToT = (value) => {
+        if (min >= 0) return 0.5 + 0.5 * (value / max);
+        if (max <= 0) return 0.5 * (1 - value / min);
+        if (value < 0) return 0.5 * (1 - value / min);
+        if (value > 0) return 0.5 + 0.5 * (value / max);
+        return 0.5;
+    };
+    const out = [];
+    for (let i = 0; i < sampleCount; i++) {
+        const frac = i / (sampleCount - 1);
+        const value = min + frac * (max - min);
+        out.push(interpolateRamp(ramp, clamp(valueToT(value))));
+    }
+    return out;
+}
+
 // ── Cgroup color mapper ──────────────────────────────────────────────
 
 /**

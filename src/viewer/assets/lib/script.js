@@ -3,7 +3,7 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
-import { FileUpload } from './landing.js';
+import { FileUpload, CompareLanding } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData } from './data.js';
@@ -140,9 +140,23 @@ const refreshCurrentSection = async () => {
 
 // ── Landing page ───────────────────────────────────────────────────
 
-let landingState = { loading: false, error: null };
+let landingState = {
+    loading: false,
+    error: null,
+    baselineAttached: false,
+    baselineFilename: null,
+    experimentAttached: false,
+    experimentFilename: null,
+};
+
+const isCompareRequested = () =>
+    new URLSearchParams(window.location.search).get('compare') === '1';
 
 const showLanding = () => {
+    if (isCompareRequested()) {
+        showCompareLanding();
+        return;
+    }
     m.mount(document.body, {
         view: () => m(FileUpload, {
             onFile: async (file) => {
@@ -177,9 +191,57 @@ const showLanding = () => {
     });
 };
 
+const showCompareLanding = () => {
+    m.mount(document.body, {
+        view: () => m(CompareLanding, {
+            baselineAttached: landingState.baselineAttached,
+            baselineFilename: landingState.baselineFilename,
+            experimentAttached: landingState.experimentAttached,
+            experimentFilename: landingState.experimentFilename,
+            loading: landingState.loading,
+            error: landingState.error,
+            onBaselineFile: async (file) => {
+                landingState.loading = true;
+                landingState.error = null;
+                m.redraw();
+                try {
+                    await ViewerApi.uploadParquet(file);
+                    landingState.baselineAttached = true;
+                    landingState.baselineFilename = file.name || null;
+                    landingState.loading = false;
+                    m.redraw();
+                } catch (e) {
+                    landingState.loading = false;
+                    landingState.error = `Failed to load baseline: ${e?.message ?? e ?? 'unknown error'}`;
+                    m.redraw();
+                }
+            },
+            onExperimentFile: async (file) => {
+                landingState.loading = true;
+                landingState.error = null;
+                m.redraw();
+                try {
+                    await ViewerApi.attachExperiment(file);
+                    landingState.experimentAttached = true;
+                    landingState.experimentFilename = file.name || null;
+                    landingState.loading = false;
+                    m.redraw();
+                    // Both captures attached — reload into full compare view.
+                    window.location.reload();
+                } catch (e) {
+                    landingState.loading = false;
+                    landingState.error = `Failed to load experiment: ${e?.message ?? e ?? 'unknown error'}`;
+                    m.redraw();
+                }
+            },
+        }),
+    });
+};
+
 // ── Bootstrap ──────────────────────────────────────────────────────
 
 const bootstrap = async () => {
+    let compareMode = false;
     try {
         const response = await ViewerApi.getMode();
         if (!response.loaded && !response.live) {
@@ -187,11 +249,26 @@ const bootstrap = async () => {
             return;
         }
         liveMode = response.live === true;
+        compareMode = response.compare_mode === true;
     } catch (_) { /* assume loaded file mode */ }
 
     await fetchBackendState();
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
+    }
+
+    let experimentSystemInfo = null;
+    let experimentFileMetadata = null;
+    let experimentFilename = null;
+    if (compareMode) {
+        try { experimentSystemInfo = await ViewerApi.getSystemInfo('experiment'); }
+        catch (_) { /* optional */ }
+        try { experimentFileMetadata = await ViewerApi.getFileMetadata('experiment'); }
+        catch (_) { /* optional */ }
+        try {
+            const expMeta = await ViewerApi.getMetadata('experiment');
+            experimentFilename = expMeta?.data?.filename || null;
+        } catch (_) { /* optional */ }
     }
 
     initDashboard({
@@ -200,6 +277,10 @@ const bootstrap = async () => {
         fileMetadata,
         selectionPayload,
         liveMode,
+        compareMode,
+        experimentSystemInfo,
+        experimentFileMetadata,
+        experimentFilename,
         recording: true,
         onStartRecording: startRecording,
         onStopRecording: stopRecording,

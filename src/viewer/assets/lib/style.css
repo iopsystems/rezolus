@@ -41,6 +41,12 @@
     --accent-subtle: rgba(56, 139, 253, 0.15);
     --accent-glow: rgba(56, 139, 253, 0.25);
 
+    /* A/B compare mode — baseline is blue, experiment is green. */
+    --compare-baseline: #2E5BFF;
+    --compare-baseline-bg: rgba(46, 91, 255, 0.08);
+    --compare-experiment: #00C46A;
+    --compare-experiment-bg: rgba(0, 196, 106, 0.08);
+
     /* Status colors */
     --success: #3fb950;
     --warning: #d29922;
@@ -1015,6 +1021,14 @@ main {
 
 .chart-header > * {
     pointer-events: auto;
+}
+
+.chart-title-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
 }
 
 .chart-title {
@@ -3098,4 +3112,219 @@ main {
 .connect-input::placeholder {
     color: var(--fg-muted);
     opacity: 0.6;
+}
+
+/* ==========================================================================
+   Compare mode — side-by-side + diff layouts
+   ========================================================================== */
+
+/* Pair of heatmap charts (baseline | experiment) */
+.compare-heatmap-pair {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+}
+.compare-heatmap-pair .compare-slot {
+    flex: 1 1 0;
+    min-width: 0;
+    position: relative;
+}
+/* Pin the baseline/experiment label just above the heatmap canvas —
+ * same treatment as the percentile split label, so it sits above the
+ * Y-axis tick labels rather than at the very top of the slot. */
+.compare-heatmap-pair .compare-slot-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: absolute;
+    top: 44px;
+    left: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-secondary, #444);
+    letter-spacing: 0.02em;
+    pointer-events: none;
+    z-index: 1;
+}
+.compare-heatmap-pair .compare-slot-label .compare-dot { font-size: 10px; line-height: 1; }
+
+/* Single diff heatmap wrapper — occupies full chart width. Needs
+ * positioning context so the absolute-positioned color legend bar
+ * anchors inside this wrapper. */
+.compare-heatmap-diff {
+    display: block;
+    width: 100%;
+    position: relative;
+}
+
+/* Sub-grid for split multi/scatter charts (one sub-chart per shared label).
+ * Caps at 3 columns per row regardless of container width; at narrow
+ * widths auto-fit can still drop to 2 or 1 per the minmax() floor. */
+.compare-split-subgroup {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-auto-columns: 1fr;
+    gap: 8px;
+    width: 100%;
+}
+.compare-split-subgroup > .chart-wrapper {
+    min-width: 0;
+}
+/* Small label above each disaggregated sub-chart (e.g. "p50").
+ * Positioned just above the chart canvas, slightly inset from the left
+ * so it sits above the Y-axis tick labels rather than spanning the
+ * full wrapper width at the very top. */
+.compare-split-subgroup > .chart-wrapper {
+    position: relative;
+}
+.compare-split-label {
+    position: absolute;
+    top: 44px;
+    left: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-secondary, #444);
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    z-index: 1;
+}
+/* Hard cap at 3 columns when the container is wide enough that auto-fit
+ * would otherwise pack 4+ across. */
+@media (min-width: 900px) {
+    .compare-split-subgroup {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+/* Per-chart "diff" toggle shown in compare mode for heatmaps.
+ * Lives in the top-right of the chart header title row, vertically
+ * aligned with the title via shared baseline, and matched to the
+ * title's font size/family for visual weight. */
+.compare-toggle {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--fg-secondary);
+    user-select: none;
+    flex-shrink: 0;
+}
+.compare-toggle input[type=checkbox] {
+    cursor: pointer;
+    margin: 0;
+    transform: translateY(2px);
+}
+
+/* Transient states for async compare-mode fetches */
+.chart-loading,
+.chart-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 160px;
+    padding: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--fg-muted);
+}
+.chart-error {
+    color: var(--danger-fg);
+}
+
+/* ==========================================================================
+   Compare mode — header badge
+   ========================================================================== */
+.compare-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 10px;
+    margin-left: 8px;
+    background: var(--compare-baseline-bg);
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.compare-badge .compare-capture {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.compare-badge .compare-capture + .compare-capture {
+    padding-left: 12px;
+    border-left: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+}
+.compare-badge .compare-dot { font-size: 10px; line-height: 1; }
+.compare-badge .compare-capture-label {
+    color: var(--fg-muted, #888);
+    letter-spacing: 0.02em;
+}
+.compare-badge .compare-capture-name {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.compare-badge .compare-load {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 6px;
+    height: 22px;
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    border-radius: 3px;
+}
+.compare-badge .compare-load svg { display: block; }
+.compare-badge .compare-load:hover {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+/* Capture-color dots + icons. Parent-agnostic so they pick up the
+ * right color from the shared theme variables whether they live in
+ * the nav badge, heatmap slot label, or anywhere else. */
+.compare-baseline-dot   { color: var(--compare-baseline); }
+.compare-experiment-dot { color: var(--compare-experiment); }
+
+/* ==========================================================================
+   Compare mode — landing (dual dropzone)
+   ========================================================================== */
+.landing-dual {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+}
+.landing-dual .landing-slot {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+.landing-dual .landing-slot h3 {
+    margin: 0;
+    text-align: center;
+    font-size: 14px;
+    color: var(--fg-muted, #888);
+}
+.landing-dual .upload-dropzone.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+.landing-dual .upload-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--success);
+    margin-bottom: 4px;
 }

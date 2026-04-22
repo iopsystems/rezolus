@@ -50,23 +50,35 @@ const createMainComponent = ({
     sectionResponseCache,
     getHasSystemInfo,
     getHasFileMetadata,
+    getCompareBadgeAttrs,
     buildAttrs,
 }) => ({
     view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series, metadata },
+        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series, metadata, compareMode },
     }) {
+        const badgeAttrs = typeof getCompareBadgeAttrs === 'function'
+            ? getCompareBadgeAttrs()
+            : null;
         return m(
             'div',
             m(TopNav, buildAttrs(
                 { groups, filename, source, version, interval, filesize, num_series },
                 activeSection?.route,
-                { start_time, end_time },
+                {
+                    start_time,
+                    end_time,
+                    compareMode: !!compareMode,
+                    experimentFilename: badgeAttrs?.experimentFilename,
+                    onLoadBaseline: badgeAttrs?.onLoadBaseline,
+                    onLoadExperiment: badgeAttrs?.onLoadExperiment,
+                },
             )),
             m('main', [
                 m(Sidebar, {
                     activeSection,
                     sections,
                     sectionResponseCache,
+                    compareMode,
                     hasSystemInfo: !!getHasSystemInfo(),
                     hasFileMetadata: !!(getHasFileMetadata && getHasFileMetadata()),
                 }),

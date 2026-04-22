@@ -93,6 +93,19 @@ export function isHistogramPlot(plot) {
 }
 
 /**
+ * Returns the resolved chart style for a spec, preferring the explicit
+ * opts.style (set by the dashboard author) and falling back to
+ * _resolvedStyle (populated by applyResultToPlot after the first query).
+ * Centralizes the "two places style can live" convention.
+ *
+ * @param {object} spec
+ * @returns {string|undefined}
+ */
+export function resolvedStyle(spec) {
+    return spec?.opts?.style || spec?._resolvedStyle;
+}
+
+/**
  * Builds a histogram_heatmap chart spec by merging heatmap data into a base
  * scatter plot spec.
  *

@@ -20,6 +20,7 @@ const TopNav = {
     view({ attrs }) {
         const liveMode = attrs.liveMode;
         const recording = attrs.recording;
+        const compareMode = attrs.compareMode;
 
         return m('div#topnav', [
             m('button.hamburger-btn', {
@@ -32,7 +33,41 @@ const TopNav = {
                     class: recording ? 'recording' : 'stopped',
                 }, recording ? 'REC' : 'STOPPED'),
             ]),
-            // Node selector / filename display
+            // Hide the whole compare badge in WASM mode. Load handlers
+            // are absent there (same signal we use to hide the Load
+            // Parquet / Load Report buttons); the badge's swatches and
+            // filenames alone don't earn the nav space.
+            compareMode && (attrs.onLoadBaseline || attrs.onLoadExperiment) && (() => {
+                const pickFile = (onPick) => () => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = '.parquet,application/octet-stream';
+                    input.onchange = async () => {
+                        const f = input.files && input.files[0];
+                        if (f) await onPick(f);
+                    };
+                    input.click();
+                };
+                const row = (cls, label, fname, onLoad) => m('div.compare-capture', [
+                    m(`span.compare-dot.${cls}`, '\u25CF'),
+                    m('span.compare-capture-label', label),
+                    m('span.compare-capture-name', {
+                        title: fname || 'No file loaded',
+                    }, fname || '—'),
+                    onLoad && m(`button.compare-load.${cls}`, {
+                        onclick: pickFile(onLoad),
+                        title: `Replace ${label} parquet`,
+                    }, m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>')),
+                ]);
+                return m('div.compare-badge', [
+                    row('compare-baseline-dot', 'baseline', attrs.filename, attrs.onLoadBaseline),
+                    row('compare-experiment-dot', 'experiment', attrs.experimentFilename, attrs.onLoadExperiment),
+                ]);
+            })(),
+            // Node selector / filename display. In compare mode the
+            // filename info is in the compare badge above, so suppress the
+            // duplicate single-capture source label (multi-node selects
+            // still render so the user can pin to one node).
             (() => {
                 const nodes = attrs.nodeList || [];
                 const selNode = attrs.selectedNode;
@@ -52,13 +87,17 @@ const TopNav = {
                     ]);
                 }
 
+                if (compareMode) return null;
+
                 return m('div.topnav-source', [
                     m('span.topnav-source-name', displayLabel),
                 ]);
             })(),
             m('div.topnav-actions', [
-                // Upload parquet (file mode only, when handler provided)
-                attrs.onUploadParquet && !liveMode && m('button.transport-btn.import-btn', {
+                // Upload parquet (file mode only, when handler provided).
+                // Hidden in compare mode — use the per-capture Load buttons
+                // in the compare badge instead.
+                attrs.onUploadParquet && !liveMode && !compareMode && m('button.transport-btn.import-btn', {
                     onclick: () => {
                         const input = document.createElement('input');
                         input.type = 'file';
@@ -76,8 +115,9 @@ const TopNav = {
                     m('span', 'Load Parquet'),
                     m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>'),
                 ]),
-                // Import report JSON (server viewer only)
-                attrs.onUploadParquet && m('button.transport-btn.import-btn', {
+                // Import report JSON (server viewer only). Hidden in
+                // compare mode — reports are single-capture today.
+                attrs.onUploadParquet && !compareMode && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
                     onclick: () => importJSON(attrs.fileChecksum),
@@ -114,6 +154,7 @@ const TopNav = {
                     start_time: attrs.start_time,
                     end_time: attrs.end_time,
                     chartsState: attrs.chartsState,
+                    compareMode: !!attrs.compareMode,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
             // Granularity (step) selector
@@ -156,13 +197,18 @@ const Sidebar = {
     view({ attrs }) {
         const sectionResponseCache = attrs.sectionResponseCache;
 
+        // In compare mode, cgroup section is hidden from navigation (v1 scope).
+        const visibleSections = attrs.compareMode
+            ? attrs.sections.filter((s) => s.route !== '/cgroups')
+            : attrs.sections;
+
         // Separate special sections from sampler sections
-        const queryExplorer = attrs.sections.find(
+        const queryExplorer = visibleSections.find(
             (s) => s.name === 'Query Explorer',
         );
-        const overviewSection = attrs.sections.find((s) => s.name === 'Overview');
-        const serviceSections = attrs.sections.filter((s) => s.route.startsWith('/service/'));
-        const samplerSections = attrs.sections.filter(
+        const overviewSection = visibleSections.find((s) => s.name === 'Overview');
+        const serviceSections = visibleSections.filter((s) => s.route.startsWith('/service/'));
+        const samplerSections = visibleSections.filter(
             (s) => s.name !== 'Query Explorer' && s.name !== 'Overview' && !s.route.startsWith('/service/'),
         );
 

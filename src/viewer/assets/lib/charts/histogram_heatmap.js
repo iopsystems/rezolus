@@ -156,10 +156,16 @@ export function configureHistogramHeatmap(chart) {
     const logRange = logMax - logMin || 1;
 
     // Tooltip reads display mode dynamically — no setOption needed on toggle
+    const customXFormatterForTooltip = chart.spec.xAxisFormatter;
     const tooltipFormatter = function (params) {
         if (!params.data) return '';
         const [timestampMs, logLowerBound, , count, dt] = params.data;
-        const formattedTime = formatDateTime(timestampMs);
+        // In compare mode the timestamp is already a post-anchor
+        // relative ms value (rebase happens before the chart renders);
+        // use the custom formatter so the tooltip matches the axis.
+        const formattedTime = customXFormatterForTooltip
+            ? customXFormatterForTooltip(timestampMs)
+            : formatDateTime(timestampMs);
         const bucketLabel = formatLatencyBucket(Math.pow(10, logLowerBound));
         let formattedValue;
         if (chart.histogramDisplayMode === 'raw') {
@@ -252,6 +258,10 @@ export function configureHistogramHeatmap(chart) {
         };
     };
 
+    // Compare-mode spec may override the x-axis label formatter to
+    // show relative offsets (`+Xs`) instead of absolute timestamps.
+    const xAxisFormatter = chart.spec.xAxisFormatter || TIME_AXIS_FORMATTER;
+
     const option = {
         ...baseOption,
         grid: {
@@ -272,7 +282,7 @@ export function configureHistogramHeatmap(chart) {
             axisLabel: {
                 color: COLORS.fgSecondary,
                 ...FONTS.axisLabel,
-                formatter: TIME_AXIS_FORMATTER,
+                formatter: xAxisFormatter,
             },
             splitLine: {
                 show: true,
@@ -344,7 +354,7 @@ export function configureHistogramHeatmap(chart) {
     const pctMinLabel = pctMin.toFixed(1) + '%';
     const pctMaxLabel = pctMax.toFixed(1) + '%';
 
-    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row
+    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row.
     const wrapper = chart.domNode.parentNode;
     const barCanvas = buildGradientCanvas(infernoColor);
 

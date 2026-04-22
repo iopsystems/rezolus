@@ -17,6 +17,24 @@ import { VIRIDIS_COLORS, viridisColor } from './util/colormap.js';
 import { buildGradientCanvas, ensureLegendBar } from './color_legend.js';
 
 /**
+ * Build an `(t: 0..1) => cssColor` function that interpolates through a
+ * palette array (CSS color strings). Used when the caller supplies a
+ * custom colormap via `chart.spec.colormap`.
+ */
+const buildRampColorFn = (palette) => (t) => {
+    if (!palette || palette.length === 0) return 'rgb(0,0,0)';
+    if (palette.length === 1) return palette[0];
+    const clamped = Math.max(0, Math.min(1, t));
+    const idx = clamped * (palette.length - 1);
+    const i = Math.floor(idx);
+    if (i >= palette.length - 1) return palette[palette.length - 1];
+    // Nearest-neighbor is sufficient for a legend gradient canvas; the
+    // visualMap itself does the real interpolation server-side of echarts.
+    const f = idx - i;
+    return f < 0.5 ? palette[i] : palette[i + 1];
+};
+
+/**
  * Configures the Chart based on Chart.spec
  * Responsible for calling setOption on the echart instance, and for setting up any
  * chart-specific dynamic behavior.
@@ -73,12 +91,18 @@ export function configureHeatmap(chart) {
     }
 
     // Build data ordered by time (columns) first, then CPU (rows),
-    // so that ECharts' progressive rendering fills left-to-right.
+    // so that ECharts' progressive rendering fills left-to-right. When
+    // the spec supplies a `nullCellColor`, emit null cells too so that
+    // renderItem can paint them distinctly.
+    const emitNullCells = !!chart.spec.nullCellColor;
     const processedData = [];
     for (let t = 0; t < xCount; t++) {
         for (let y = 0; y < yCount; y++) {
-            if (dataMatrix[y][t] !== null) {
-                processedData.push([timeData[t] * 1000, y, t, null, dataMatrix[y][t]]);
+            const v = dataMatrix[y][t];
+            if (v !== null) {
+                processedData.push([timeData[t] * 1000, y, t, null, v]);
+            } else if (emitNullCells) {
+                processedData.push([timeData[t] * 1000, y, t, null, null]);
             }
         }
     }
@@ -87,8 +111,13 @@ export function configureHeatmap(chart) {
     // Create a list of options for data to display at different levels of downsampling.
     // These are ordered from highest to lowest resolution. So, usage is to iterate through
     // them until one is low enough resolution.
+    const nullColor = chart.spec.nullCellColor || null;
     chart.downsampleCache = [];
-    chart.downsampleCache.push({ factor: 1, data: processedData, renderItem: createRenderItemFunc(timeData, 1) });
+    chart.downsampleCache.push({
+        factor: 1,
+        data: processedData,
+        renderItem: createRenderItemFunc(timeData, 1, nullColor),
+    });
     const originalRatioOfDataPointsToMax = xCount * yCount / MAX_DATA_POINT_DISPLAY;
 
     if (originalRatioOfDataPointsToMax > 1) {
@@ -102,10 +131,16 @@ export function configureHeatmap(chart) {
                 const minAndMax = downsampledData[y][x];
                 if (minAndMax !== null) {
                     processedDownsampledData.push([timeData[x * factor] * 1000, y, x * factor, minAndMax[0], minAndMax[1]]);
+                } else if (emitNullCells) {
+                    processedDownsampledData.push([timeData[x * factor] * 1000, y, x * factor, null, null]);
                 }
             }
         }
-        chart.downsampleCache.push({ factor, data: processedDownsampledData, renderItem: createRenderItemFunc(timeData, factor) });
+        chart.downsampleCache.push({
+            factor,
+            data: processedDownsampledData,
+            renderItem: createRenderItemFunc(timeData, factor, nullColor),
+        });
     }
 
     // Y axis labels: if more than Y_MAX_LABELS, show every 2nd, 4th, 8th, 16th, or etc.
@@ -128,6 +163,7 @@ export function configureHeatmap(chart) {
     const valueLabel = format.value_label;
 
     // Configure tooltip with unit formatting if specified
+    const customXFormatterForTooltip = chart.spec.xAxisFormatter;
     let tooltipFormatter = function (params) {
         if (params.data === undefined) {
             return '';
@@ -136,7 +172,31 @@ export function configureHeatmap(chart) {
         // Otherwise, it's just the value, with `minValue` being null.
         const [time, cpu, timeIndex, minVal, value] = params.data;
 
-        const formattedTime = formatDateTime(time);
+        // In compare mode, time is already the post-anchor relative ms
+        // value (the rebase happens before the chart is fed). Use the
+        // custom formatter (e.g. `+Xs`) instead of the absolute clock.
+        const formattedTime = customXFormatterForTooltip
+            ? customXFormatterForTooltip(time)
+            : formatDateTime(time);
+
+        // Null cells (compare-mode diff heatmaps where one side is missing)
+        // render with a short "no data" tooltip instead of number formatting.
+        if (value === null || value === undefined) {
+            return `<div style="${FONTS.cssSans}">
+                        <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
+                            ${formattedTime}
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
+                                CPU ${cpu}
+                            </span>
+                            <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fgMuted};">
+                                no data
+                            </span>
+                        </div>
+                        ${getTooltipFreezeFooter(chart)}
+                    </div>`;
+        }
 
         const fmt = unitSystem
             ? createAxisLabelFormatter(unitSystem)
@@ -204,9 +264,28 @@ export function configureHeatmap(chart) {
     };
 
     const effectiveMax = range?.max != null ? Math.min(maxValue, range.max) : maxValue;
+    const visualMapMin = minValue;
+    const visualMapMax = effectiveMax;
+    const visualMapColor = chart.spec.colormap || VIRIDIS_COLORS;
+
+    // Compare-mode renderers override the x-axis formatter so labels
+    // read as relative offsets (`+Xs`, `+XmYs`) instead of absolute
+    // wall-clock times. When the spec sets `xAxisFormatter`, build a
+    // merged xAxis that swaps only the `axisLabel.formatter` field.
+    const customXFormatter = chart.spec.xAxisFormatter;
+    const xAxisOverride = customXFormatter
+        ? {
+            ...baseOption.xAxis,
+            axisLabel: {
+                ...(baseOption.xAxis.axisLabel || {}),
+                formatter: customXFormatter,
+            },
+        }
+        : null;
 
     const option = {
         ...baseOption,
+        ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
         grid: { ...baseOption.grid, top: '71' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
@@ -240,12 +319,12 @@ export function configureHeatmap(chart) {
         },
         visualMap: {
             type: 'continuous',
-            min: minValue,
-            max: effectiveMax,
+            min: visualMapMin,
+            max: visualMapMax,
             calculable: false,
             show: false,
             inRange: {
-                color: VIRIDIS_COLORS,
+                color: visualMapColor,
             }
         },
         series: [{
@@ -273,13 +352,31 @@ export function configureHeatmap(chart) {
 
     applyChartOption(chart, option);
 
-    // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row
+    // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row.
     const formatter = createAxisLabelFormatter(unitSystem || 'count');
     const wrapper = chart.domNode.parentNode;
-    const barCanvas = buildGradientCanvas(viridisColor);
+    const legendColorFn = chart.spec.colormap
+        ? buildRampColorFn(chart.spec.colormap)
+        : viridisColor;
+    // Invalidate a retained legend bar whose gradient no longer matches
+    // the current colormap (e.g. side-by-side → diff toggle).
+    const paletteSig = Array.isArray(chart.spec.colormap)
+        ? chart.spec.colormap.join(',')
+        : 'viridis';
+    const existing = wrapper.querySelector('.heatmap-legend-bar');
+    if (existing && existing.dataset.palette !== paletteSig) {
+        existing.remove();
+    }
+    const barCanvas = buildGradientCanvas(legendColorFn);
     const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
-    minLabel.textContent = formatter(minValue);
-    maxLabel.textContent = formatter(effectiveMax);
+    const bar = wrapper.querySelector('.heatmap-legend-bar');
+    if (bar) bar.dataset.palette = paletteSig;
+    const sig = (v) => {
+        if (!Number.isFinite(v) || v === 0) return v;
+        return parseFloat(v.toPrecision(2));
+    };
+    minLabel.textContent = formatter(sig(visualMapMin));
+    maxLabel.textContent = formatter(sig(visualMapMax));
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {
@@ -372,18 +469,26 @@ const zoomLevelToFactor = (zoomLevel, originalRatioOfDataPointsToMax, originalXD
  * This creates one, accounting for the downsampling factor.
  * @param {Array<number>} timeData the array of original x values
  * @param {number} factor the downsampling factor
+ * @param {string|null} nullColor fill color for null cells (compare-mode
+ *        diff heatmaps). When null, null cells are skipped entirely.
  * @returns {function} renderItem function for echarts
  */
-const createRenderItemFunc = (timeData, factor) => {
+const createRenderItemFunc = (timeData, factor, nullColor) => {
     return function (params, api) {
         const x = api.value(0);
         const y = api.value(1);
         const timeIndex = api.value(2);
+        const value = api.value(4);
         const nextX = timeData[timeIndex + factor] * 1000 || Number.MAX_VALUE;
         const start = api.coord([x, y]);
         const end = api.coord([nextX, y]);
         const width = end[0] - start[0] + 1; // +1 pixel to avoid hairline cracks.
         const height = api.size([0, 1])[1];
+        const isNull = value === null || value === undefined;
+        if (isNull && !nullColor) {
+            // No null color configured — don't paint (matches legacy behavior).
+            return;
+        }
         return (
             {
                 type: 'rect',
@@ -396,8 +501,9 @@ const createRenderItemFunc = (timeData, factor) => {
                 },
                 // Do not use all of api.style() - this causes big performance issues.
                 style: {
-                    // Use the appropriate fill color from the color scale.
-                    fill: api.style().fill
+                    // Use the appropriate fill color from the color scale,
+                    // or the configured null color for missing data.
+                    fill: isNull ? nullColor : api.style().fill,
                 }
             }
         );

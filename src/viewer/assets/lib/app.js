@@ -9,7 +9,7 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
-import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
@@ -38,6 +38,17 @@ const chartsState = new ChartsState();
 let currentGranularity = null;
 const sectionResponseCache = {};
 
+// Compare-mode state (Stage 4 of A/B compare plan)
+let compareMode = false;
+let experimentAttached = false;
+let experimentSystemInfo = null;
+let experimentDurationMs = null;
+let experimentFilename = null;
+
+// Compare-mode per-chart toggles + anchors live in `selectionStore` so
+// they persist across page reloads. See selection_migration.js for the
+// schema. The accessors below read-through to the store.
+
 // Config-driven state (set by initDashboard)
 let liveMode = false;
 let recording = false;
@@ -58,6 +69,10 @@ let Group;
 const initComponents = () => {
     Group = createGroupComponent(() => ({
         chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
+        compareMode,
+        toggles: selectionStore.chartToggles || {},
+        setChartToggle,
+        anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -69,6 +84,82 @@ const initComponents = () => {
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
+
+// Extract a capture's duration (milliseconds) from its file metadata.
+// Tries the structured field first; falls back to max_time - min_time when
+// present. Returns null when neither is available.
+const durationFromFileMetadata = (fileMeta) => {
+    if (!fileMeta) return null;
+    if (typeof fileMeta.duration_ms === 'number') return fileMeta.duration_ms;
+    if (typeof fileMeta.maxTime === 'number' && typeof fileMeta.minTime === 'number') {
+        return fileMeta.maxTime - fileMeta.minTime;
+    }
+    if (typeof fileMeta.max_time === 'number' && typeof fileMeta.min_time === 'number') {
+        return fileMeta.max_time - fileMeta.min_time;
+    }
+    return null;
+};
+
+// ── Compare-mode actions ───────────────────────────────────────────
+
+const attachExperiment = async (file) => {
+    const sysinfo = await ViewerApi.attachExperiment(file);
+    let expFileMeta = null;
+    let expMeta = null;
+    try { expFileMeta = await ViewerApi.getFileMetadata('experiment'); }
+    catch (_) { /* optional */ }
+    try { expMeta = await ViewerApi.getMetadata('experiment'); }
+    catch (_) { /* optional */ }
+    experimentSystemInfo = sysinfo || null;
+    experimentDurationMs = durationFromFileMetadata(expFileMeta);
+    // Prefer server-stamped filename (works in both file-drop and CLI paths);
+    // fall back to the dropped File's name.
+    experimentFilename = (expMeta?.data?.filename)
+        || (file && file.name)
+        || (expFileMeta && (expFileMeta.filename || expFileMeta.file_name))
+        || null;
+    experimentAttached = true;
+    compareMode = true;
+
+    // Clamp a stale anchor when the newly-attached experiment is
+    // shorter than the previously-saved offset. Avoids a chart starting
+    // past the end of its data.
+    const anchors = selectionStore.anchors || { baseline: 0, experiment: 0 };
+    if (experimentDurationMs != null && anchors.experiment > experimentDurationMs) {
+        setAnchor('experiment', experimentDurationMs);
+        console.info(
+            `[compare] experiment anchor clamped to ${experimentDurationMs}ms to fit capture duration`,
+        );
+    }
+
+    m.redraw();
+};
+
+const detachExperiment = async () => {
+    try { await ViewerApi.detachExperiment(); } catch (_) { /* best effort */ }
+    experimentSystemInfo = null;
+    experimentDurationMs = null;
+    experimentFilename = null;
+    experimentAttached = false;
+    compareMode = false;
+    m.redraw();
+};
+
+// Replace the currently attached experiment with a new parquet. Unlike
+// detachExperiment + attachExperiment, this preserves compareMode across
+// the transition so the UI doesn't bounce back to single-capture mode.
+const loadExperiment = async (file) => {
+    if (experimentAttached) {
+        try { await ViewerApi.detachExperiment(); } catch (_) { /* best effort */ }
+    }
+    await attachExperiment(file);
+};
+
+// Thin passthrough to selection.js; kept because it reads cleanly at
+// the call sites in createGroupComponent.
+const setChartToggle = (chartId, key, value) => {
+    setChartToggleInStore(chartId, key, value);
+};
 
 const clearViewerCaches = () => {
     Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
@@ -240,7 +331,14 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     selectedNode,
     nodeVersions,
     onNodeChange: changeNode,
-    extra,
+    extra: {
+        // Default compare state so TopNav renders the badge in every
+        // code path (Main.view, single-chart route). Callers may
+        // override via their own `extra`.
+        compareMode,
+        onDetachExperiment: compareMode ? () => { detachExperiment(); } : null,
+        ...(extra || {}),
+    },
 });
 
 // ── SectionContent component ───────────────────────────────────────
@@ -394,6 +492,17 @@ const initDashboard = (config = {}) => {
     fileChecksum = config.fileChecksum || null;
     fileMetadata = config.fileMetadata || null;
 
+    // Compare-mode initial state (supplied by bootstrap when /api/v1/mode
+    // reported compare_mode=true).
+    compareMode = config.compareMode === true;
+    experimentAttached = compareMode;
+    experimentSystemInfo = config.experimentSystemInfo || null;
+    experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
+    experimentFilename = config.experimentFilename
+        || (config.experimentFileMetadata
+            && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))
+        || null;
+
     if (config.selectionPayload && Array.isArray(config.selectionPayload.entries)) {
         loadPayloadIntoStore(reportStore, config.selectionPayload);
         reportStore.loadedFrom = 'embedded report';
@@ -429,6 +538,17 @@ const initDashboard = (config = {}) => {
         sectionResponseCache,
         getHasSystemInfo: () => systemInfoData,
         getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
+        getCompareBadgeAttrs: () => ({
+            compareMode,
+            // Baseline filename comes from TopNav's existing attrs.filename.
+            experimentFilename,
+            // The WASM viewer has no onUploadParquet handler — that path
+            // is how the site viewer loads its initial parquet on its own.
+            // Use its absence as the "WASM mode" signal and hide both
+            // per-capture Load buttons there. Server viewer always has it.
+            onLoadBaseline: onUploadParquet ? (file) => onUploadParquet(file) : null,
+            onLoadExperiment: onUploadParquet ? (file) => { loadExperiment(file); } : null,
+        }),
         buildAttrs: topNavAttrs,
     });
 
@@ -478,6 +598,7 @@ const initDashboard = (config = {}) => {
             topNavAttrs,
             SingleChartView,
             applyResultToPlot,
+            getCompareMode: () => compareMode,
         }),
         '/about': {
             render() {
@@ -511,22 +632,22 @@ const initDashboard = (config = {}) => {
 
                 if (params.section === 'systeminfo') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, systemInfoSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, systemInfoSection, () => compareMode);
                 }
 
                 if (params.section === 'metadata') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, metadataSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, metadataSection, () => compareMode);
                 }
 
                 if (params.section === 'selection') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, selectionSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, selectionSection, () => compareMode);
                 }
 
                 if (params.section === 'report') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, reportSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, reportSection, () => compareMode);
                 }
 
                 const cachedView = (sectionKey, path) => ({
@@ -536,7 +657,7 @@ const initDashboard = (config = {}) => {
                         const activeSection = data.sections.find(
                             (section) => section.route === path,
                         );
-                        return m(Main, { ...data, activeSection });
+                        return m(Main, { ...data, activeSection, compareMode });
                     },
                 });
 
@@ -573,4 +694,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording };
+export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

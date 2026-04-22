@@ -7,3 +7,4 @@ docs/superpowers/
 target
 **/*.rs.bk
 .worktrees/
+results/

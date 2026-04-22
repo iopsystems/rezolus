@@ -6,6 +6,7 @@ import { ChartsState, Chart } from './charts/chart.js';
 import { executePromQLRangeQuery, applyResultToPlot } from './data.js';
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
+import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
 
 // ── UUIDv7 (RFC 9562) ──────────────────────────────────────────────
 
@@ -28,17 +29,23 @@ const uuidv7 = () => {
 // ── Stores ───────────────────────────────────────────────────────
 
 const selectionStore = {
+    version: SELECTION_SCHEMA_VERSION,
     tagline: '',
     entries: [],
     zoom: null,
     stepOverride: null,   // query step in seconds (null = auto)
+    anchors: { baseline: 0, experiment: 0 }, // compare-mode offsets in ms
+    chartToggles: {},      // per-chart compare-mode toggles, e.g. { chartId: { diff: true } }
 };
 
 const reportStore = {
+    version: SELECTION_SCHEMA_VERSION,
     tagline: '',
     entries: [],
     zoom: null,
     stepOverride: null,   // query step in seconds (null = auto)
+    anchors: { baseline: 0, experiment: 0 },
+    chartToggles: {},
     loadedFrom: null,    // filename of the imported JSON
     reportId: null,       // UUIDv7 from the imported report
     savedAt: null,        // ISO timestamp
@@ -81,9 +88,12 @@ const setStorageScope = (info) => {
 const persistStore = (key, store) => {
     try {
         const data = {
+            version: SELECTION_SCHEMA_VERSION,
             tagline: store.tagline,
             zoom: store.zoom,
             stepOverride: store.stepOverride ?? undefined,
+            anchors: store.anchors || { baseline: 0, experiment: 0 },
+            chartToggles: store.chartToggles || {},
             loadedFrom: store.loadedFrom || undefined,
             reportId: store.reportId || undefined,
             savedAt: store.savedAt || undefined,
@@ -110,11 +120,15 @@ const restoreStore = (key, store) => {
     try {
         const raw = localStorage.getItem(key);
         if (!raw) return;
-        const data = JSON.parse(raw);
-        if (!data.entries || !Array.isArray(data.entries)) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed.entries || !Array.isArray(parsed.entries)) return;
+        const data = migrateSelection(parsed);
+        store.version = data.version;
         store.tagline = data.tagline || '';
         store.zoom = data.zoom || null;
         store.stepOverride = data.stepOverride ?? null;
+        store.anchors = data.anchors || { baseline: 0, experiment: 0 };
+        store.chartToggles = data.chartToggles || {};
         if (data.loadedFrom !== undefined) store.loadedFrom = data.loadedFrom;
         if (data.reportId !== undefined) store.reportId = data.reportId;
         if (data.savedAt !== undefined) store.savedAt = data.savedAt;
@@ -138,6 +152,35 @@ const restoreStore = (key, store) => {
 
 const persistReport = () => persistStore(REPORT_STORAGE_KEY, reportStore);
 const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStore);
+
+// ── Anchors + per-chart toggles (compare-mode state) ─────────────
+
+/**
+ * Set a compare-mode anchor in milliseconds. Only the `baseline` and
+ * `experiment` keys are recognized. Persists + triggers a redraw.
+ */
+const setAnchor = (captureId, ms) => {
+    if (captureId !== 'baseline' && captureId !== 'experiment') return;
+    if (!selectionStore.anchors) selectionStore.anchors = { baseline: 0, experiment: 0 };
+    selectionStore.anchors[captureId] = Number(ms) || 0;
+    persistSelection();
+    if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
+};
+
+/**
+ * Write a per-chart toggle (e.g. the compare-mode heatmap `diff`
+ * flag) into the selection store. Persists + triggers a redraw.
+ */
+const setChartToggle = (chartId, key, value) => {
+    if (!chartId || !key) return;
+    if (!selectionStore.chartToggles) selectionStore.chartToggles = {};
+    if (!selectionStore.chartToggles[chartId]) {
+        selectionStore.chartToggles[chartId] = {};
+    }
+    selectionStore.chartToggles[chartId][key] = value;
+    persistSelection();
+    if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
+};
 
 // Stores are restored when setStorageScope() is called with a file fingerprint,
 // or eagerly here for the default (unscoped) keys as a fallback.
@@ -182,6 +225,8 @@ const clearStore = (store) => {
     store.tagline = '';
     store.zoom = null;
     store.stepOverride = null;
+    store.anchors = { baseline: 0, experiment: 0 };
+    store.chartToggles = {};
     if (store === reportStore) {
         store.loadedFrom = null;
         store.reportId = null;
@@ -199,6 +244,7 @@ const clearStore = (store) => {
 // ── Export / Import / Parquet ─────────────────────────────────────
 
 const buildPayload = (store, attrs) => ({
+    version: SELECTION_SCHEMA_VERSION,
     report_id: uuidv7(),
     rezolus_version: attrs.version || 'unknown',
     saved_at: new Date().toISOString(),
@@ -211,6 +257,8 @@ const buildPayload = (store, attrs) => ({
     },
     zoom: attrs.chartsState?.zoomLevel || null,
     step_override: attrs.stepOverride ?? null,
+    anchors: store.anchors || { baseline: 0, experiment: 0 },
+    chartToggles: store.chartToggles || {},
     tagline: store.tagline,
     entries: store.entries.map(e => ({
         chartId: e.chartId,
@@ -241,9 +289,13 @@ const exportJSON = async (store, attrs) => {
 };
 
 const loadPayloadIntoStore = (store, payload) => {
-    store.tagline = payload.tagline || '';
-    store.zoom = payload.zoom || null;
-    store.stepOverride = payload.step_override ?? null;
+    const migrated = migrateSelection(payload);
+    store.version = migrated.version;
+    store.tagline = migrated.tagline || '';
+    store.zoom = migrated.zoom || null;
+    store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
+    store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
+    store.chartToggles = migrated.chartToggles || {};
     store.entries = payload.entries.map(e => ({
         id: crypto.randomUUID(),
         chartId: e.chartId,
@@ -616,6 +668,10 @@ export {
     clearStore,
     importJSON,
     loadPayloadIntoStore,
+    setAnchor,
+    setChartToggle,
     SelectionView,
     ReportView,
+    migrateSelection,
+    SELECTION_SCHEMA_VERSION,
 };

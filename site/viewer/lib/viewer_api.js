@@ -1,62 +1,105 @@
 // WASM API adapter for site/viewer frontend.
-// Mirrors the server viewer's transport layer — the only difference
-// is that queries run via WASM instead of HTTP.
+// Mirrors the server viewer's transport layer; queries run via WASM.
 
-let viewer = null;
+let registry = null;
 
-const ensureViewer = () => {
-    if (!viewer) throw new Error('No parquet file loaded');
+const ensureRegistry = () => {
+    if (!registry) throw new Error('No parquet file loaded');
+};
+
+const ensureAttached = (captureId) => {
+    ensureRegistry();
+    if (!registry.has(captureId)) {
+        throw new Error(`capture '${captureId}' not attached`);
+    }
 };
 
 const ViewerApi = {
-    setViewer(instance) {
-        viewer = instance;
+    setRegistry(instance) {
+        registry = instance;
     },
 
-    async getMetadata() {
-        ensureViewer();
-        const response = JSON.parse(viewer.metadata());
+    registry() {
+        return registry;
+    },
+
+    async attachBaseline(data, filename) {
+        ensureRegistry();
+        registry.attach('baseline', data, filename);
+    },
+
+    async attachExperiment(file) {
+        ensureRegistry();
+        const data = new Uint8Array(await file.arrayBuffer());
+        registry.attach('experiment', data, file.name || 'experiment.parquet');
+    },
+
+    // Attach an experiment capture from raw bytes (no File wrapper). Used
+    // by the demo URL flow to feed pre-fetched parquet buffers into the
+    // WASM registry.
+    async attachExperimentBytes(bytes, filename) {
+        ensureRegistry();
+        registry.attach('experiment', bytes, filename || 'experiment.parquet');
+    },
+
+    async detachExperiment() {
+        ensureRegistry();
+        registry.detach('experiment');
+    },
+
+    async getMetadata(captureId = 'baseline') {
+        ensureAttached(captureId);
+        const response = JSON.parse(registry.metadata(captureId));
         if (response.status !== 'success') {
             throw new Error('Failed to get metadata');
         }
         return response;
     },
 
-    async getSystemInfo() {
-        ensureViewer();
-        const sysinfo = viewer.systeminfo();
+    async getSystemInfo(captureId = 'baseline') {
+        ensureAttached(captureId);
+        const sysinfo = registry.systeminfo(captureId);
         return sysinfo ? JSON.parse(sysinfo) : null;
     },
 
-    async getSelection() {
-        ensureViewer();
-        const selection = viewer.selection();
+    async getSelection(captureId = 'baseline') {
+        ensureAttached(captureId);
+        const selection = registry.selection(captureId);
         return selection ? JSON.parse(selection) : null;
     },
 
-    async getFileMetadata() {
-        ensureViewer();
-        if (typeof viewer.file_metadata_json === 'function') {
-            return JSON.parse(viewer.file_metadata_json());
-        }
-        return {};
+    async getFileMetadata(captureId = 'baseline') {
+        ensureAttached(captureId);
+        const json = registry.file_metadata_json(captureId);
+        return json ? JSON.parse(json) : {};
     },
 
-    async getSection(section) {
-        ensureViewer();
-        const json = viewer.get_section(section);
+    async getSection(section, background = false, captureId = 'baseline') {
+        ensureAttached(captureId);
+        const json = registry.get_section(captureId, section);
         if (!json) throw new Error(`Unknown section: ${section}`);
         return JSON.parse(json);
     },
 
-    async getSections() {
-        ensureViewer();
-        return JSON.parse(viewer.get_sections());
+    async getSections(captureId = 'baseline') {
+        ensureAttached(captureId);
+        const json = registry.get_sections(captureId);
+        return json ? JSON.parse(json) : [];
     },
 
-    async queryRange(query, start, end, step) {
-        ensureViewer();
-        return JSON.parse(viewer.query_range(query, start, end, step));
+    async queryRange(query, start, end, step, captureId = 'baseline') {
+        ensureAttached(captureId);
+        return JSON.parse(registry.query_range(captureId, query, start, end, step));
+    },
+
+    async getInfo(captureId = 'baseline') {
+        ensureAttached(captureId);
+        return JSON.parse(registry.info(captureId));
+    },
+
+    initTemplates(templatesJson, captureId = 'baseline') {
+        ensureAttached(captureId);
+        registry.init_templates(captureId, templatesJson);
     },
 };
 

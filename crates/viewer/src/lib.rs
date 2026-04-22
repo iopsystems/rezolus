@@ -286,6 +286,134 @@ impl Viewer {
     }
 }
 
+/// Registry wrapping up to two `Viewer` instances keyed by capture id
+/// ("baseline" / "experiment").  Mirrors the server-side `CaptureRegistry`
+/// shape so the JS transport layer can address either capture uniformly.
+///
+/// This type is additive — existing single-capture `Viewer` consumers are
+/// unaffected.
+#[wasm_bindgen]
+pub struct WasmCaptureRegistry {
+    baseline: Option<Viewer>,
+    experiment: Option<Viewer>,
+}
+
+#[wasm_bindgen]
+impl WasmCaptureRegistry {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            baseline: None,
+            experiment: None,
+        }
+    }
+
+    /// Attach a parquet capture under the given slot ("baseline" or
+    /// "experiment").  Replaces any previously attached capture in that slot.
+    pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
+        let viewer = Viewer::new(data, filename)?;
+        match capture {
+            "baseline" => self.baseline = Some(viewer),
+            "experiment" => self.experiment = Some(viewer),
+            other => return Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
+        }
+        Ok(())
+    }
+
+    /// Drop the capture in the given slot (no-op if unknown or empty).
+    pub fn detach(&mut self, capture: &str) {
+        match capture {
+            "baseline" => self.baseline = None,
+            "experiment" => self.experiment = None,
+            _ => {}
+        }
+    }
+
+    /// Whether a capture is currently attached in the given slot.
+    pub fn has(&self, capture: &str) -> bool {
+        self.slot(capture).is_some()
+    }
+
+    pub fn metadata(&self, capture: &str) -> Result<String, JsValue> {
+        self.require_slot(capture).map(|v| v.metadata())
+    }
+
+    pub fn info(&self, capture: &str) -> Result<String, JsValue> {
+        self.require_slot(capture).map(|v| v.info())
+    }
+
+    pub fn systeminfo(&self, capture: &str) -> Option<String> {
+        self.slot(capture).and_then(|v| v.systeminfo())
+    }
+
+    pub fn selection(&self, capture: &str) -> Option<String> {
+        self.slot(capture).and_then(|v| v.selection())
+    }
+
+    pub fn file_metadata_json(&self, capture: &str) -> Option<String> {
+        self.slot(capture).map(|v| v.file_metadata_json())
+    }
+
+    pub fn query_range(
+        &self,
+        capture: &str,
+        query: &str,
+        start: f64,
+        end: f64,
+        step: f64,
+    ) -> Result<String, JsValue> {
+        self.require_slot(capture)
+            .map(|v| v.query_range(query, start, end, step))
+    }
+
+    pub fn query(&self, capture: &str, query: &str, time: f64) -> Result<String, JsValue> {
+        self.require_slot(capture).map(|v| v.query(query, time))
+    }
+
+    /// Initialise ServiceExtension templates for the given capture.  Mirrors
+    /// `Viewer::init_templates`.
+    pub fn init_templates(&mut self, capture: &str, templates_json: &str) -> Result<(), JsValue> {
+        let slot = match capture {
+            "baseline" => self.baseline.as_mut(),
+            "experiment" => self.experiment.as_mut(),
+            other => return Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
+        };
+        let viewer = slot.ok_or_else(|| JsValue::from_str("capture not attached"))?;
+        viewer.init_templates(templates_json)
+    }
+
+    pub fn get_sections(&self, capture: &str) -> Option<String> {
+        self.slot(capture).map(|v| v.get_sections())
+    }
+
+    pub fn get_section(&self, capture: &str, section: &str) -> Option<String> {
+        self.slot(capture).and_then(|v| v.get_section(section))
+    }
+
+    fn slot(&self, capture: &str) -> Option<&Viewer> {
+        match capture {
+            "baseline" => self.baseline.as_ref(),
+            "experiment" => self.experiment.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn require_slot(&self, capture: &str) -> Result<&Viewer, JsValue> {
+        match capture {
+            "baseline" | "experiment" => self
+                .slot(capture)
+                .ok_or_else(|| JsValue::from_str("capture not attached")),
+            other => Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
+        }
+    }
+}
+
+impl Default for WasmCaptureRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Enrich a file-metadata JSON map with pre-computed multi-node info.
 ///
 /// Parses `per_source_metadata` and adds `nodes`, `node_versions`, and

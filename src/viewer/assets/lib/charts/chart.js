@@ -16,7 +16,7 @@ import {
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
 import { themeVersion } from '../theme.js';
-import { resolveStyle } from './metric_types.js';
+import { resolveStyle, resolvedStyle } from './metric_types.js';
 
 
 export class ChartsState {
@@ -387,8 +387,7 @@ export class Chart {
     _rescaleYAxis() {
         if (!this.echart) return;
 
-        const style = this.spec.opts.style
-            || this.spec._resolvedStyle
+        const style = resolvedStyle(this.spec)
             || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
         // Only for chart types with a value/log Y-axis
         if (style === 'heatmap' || style === 'histogram_heatmap') return;
@@ -496,8 +495,7 @@ export class Chart {
     configureChartByType() {
         // Use explicit style (query explorer), resolved style (from query result),
         // or infer from metric type/subtype before data arrives.
-        const style = this.spec.opts.style
-            || this.spec._resolvedStyle
+        const style = resolvedStyle(this.spec)
             || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
 
         // Clean up heatmap DOM legend bar when switching to a different chart type
