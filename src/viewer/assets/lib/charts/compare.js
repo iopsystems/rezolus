@@ -211,23 +211,19 @@ const scrubStaleLegend = (vnode) => {
     vnode.dom.querySelectorAll(':scope > .heatmap-legend-bar').forEach((el) => el.remove());
 };
 
-// Scan both captures' heatmap triples and return a unified (min, max)
-// for the visualMap. Falls back to the spec's own bounds if a capture
-// has no numeric samples.
+// Unified (min, max) across both captures for the shared visualMap.
+// Each capture's extract* stashed its own scanned min/max, so this is
+// just Math.min/Math.max of the two pairs. Falls back to the spec's
+// own bounds if neither capture had numeric samples.
 const unifiedHeatmapRange = (a, b, spec) => {
-    let lo = Infinity;
-    let hi = -Infinity;
-    const visit = (triples) => {
-        if (!Array.isArray(triples)) return;
-        for (const t of triples) {
-            const v = Array.isArray(t) ? t[2] : null;
-            if (v == null || Number.isNaN(v)) continue;
-            if (v < lo) lo = v;
-            if (v > hi) hi = v;
-        }
-    };
-    visit(a?.heatmapData);
-    visit(b?.heatmapData);
+    const lo = Math.min(
+        a?.minValue != null ? a.minValue : Infinity,
+        b?.minValue != null ? b.minValue : Infinity,
+    );
+    const hi = Math.max(
+        a?.maxValue != null ? a.maxValue : -Infinity,
+        b?.maxValue != null ? b.maxValue : -Infinity,
+    );
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
         return {
             min: spec.min_value != null ? spec.min_value : 0,

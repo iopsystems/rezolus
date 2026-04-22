@@ -54,9 +54,10 @@ const extractBaselineCapture = (spec) => {
         cap.timeData = spec.time_data || [];
         cap.heatmapData = spec.data || [];
         cap.bucketBounds = spec.bucket_bounds;
-        cap.minValue = spec.min_value;
-        cap.maxValue = spec.max_value;
         cap.heatmapMatrix = heatmapTriplesToMatrix(cap.heatmapData, cap.timeData.length);
+        const scanned = heatmapTriplesMinMax(cap.heatmapData);
+        cap.minValue = scanned.min != null ? scanned.min : spec.min_value;
+        cap.maxValue = scanned.max != null ? scanned.max : spec.max_value;
         return cap;
     }
 
@@ -169,6 +170,9 @@ const extractExperimentCapture = (spec, promqlResult) => {
         cap.timeData = timestamps.map(Number);
         cap.heatmapData = heatmapData;
         cap.heatmapMatrix = heatmapTriplesToMatrix(heatmapData, cap.timeData.length);
+        const scanned = heatmapTriplesMinMax(heatmapData);
+        cap.minValue = scanned.min;
+        cap.maxValue = scanned.max;
         return cap;
     }
 
@@ -181,6 +185,24 @@ const extractExperimentCapture = (spec, promqlResult) => {
     cap.heatmapMatrix = [];
     return cap;
 };
+
+// Scan a flat [timeIdx, y, value] triple array for the numeric value
+// bounds. Returns { min: null, max: null } when there are no numeric
+// samples. Used once at extract time so unifiedHeatmapRange can just
+// Math.min/Math.max the two pre-computed pairs.
+function heatmapTriplesMinMax(triples) {
+    if (!Array.isArray(triples) || triples.length === 0) return { min: null, max: null };
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const t of triples) {
+        const v = Array.isArray(t) ? t[2] : null;
+        if (v == null || Number.isNaN(v)) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { min: null, max: null };
+    return { min: lo, max: hi };
+}
 
 // Build a rows × bins matrix from a flat [timeIdx, y, value] triple
 // array. Gaps fill with null. Used by the diff-heatmap strategy.
