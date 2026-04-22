@@ -389,8 +389,15 @@ export function configureHeatmap(chart) {
         if (!Number.isFinite(v) || v === 0) return v;
         return parseFloat(v.toPrecision(2));
     };
-    minLabel.textContent = formatter(sig(visualMapMin));
-    maxLabel.textContent = formatter(sig(visualMapMax));
+    // Diff heatmap: the left end is "baseline higher by X"; the right
+    // end is "experiment higher by Y". The sign is already carried by
+    // the caption row, so show magnitudes (absolute values) on both
+    // ends instead of a negative number on the left.
+    const isDiff = !!chart.spec.diffLegendLabels;
+    const minForLabel = isDiff ? Math.abs(visualMapMin) : visualMapMin;
+    const maxForLabel = isDiff ? Math.abs(visualMapMax) : visualMapMax;
+    minLabel.textContent = formatter(sig(minForLabel));
+    maxLabel.textContent = formatter(sig(maxForLabel));
 
     // Diff-heatmap directional caption above the gradient bar. The
     // captions share the legend row's width, so each sits directly
