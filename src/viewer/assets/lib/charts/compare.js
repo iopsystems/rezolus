@@ -31,7 +31,7 @@
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
 import { toRelative, nullDiff, intersectLabels, longerDuration } from './util/compare_math.js';
-import { DIVERGING_BLUE_GREEN, nullCellColor } from './util/colormap.js';
+import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 
 export const BASELINE_COLOR = '#2E5BFF';
 export const EXPERIMENT_COLOR = '#00C46A';
@@ -233,15 +233,29 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     );
 
     const triples = [];
-    let absMax = 0;
+    let dMin = Infinity;
+    let dMax = -Infinity;
     for (let r = 0; r < rows; r++) {
         for (let c = 0; c < bins; c++) {
             const av = aMatrix[r][c];
             const bv = bMatrix[r][c];
             const d = nullDiff(bv, av); // experiment − baseline
-            if (d != null && Math.abs(d) > absMax) absMax = Math.abs(d);
+            if (d != null) {
+                if (d < dMin) dMin = d;
+                if (d > dMax) dMax = d;
+            }
             triples.push([c, r, d]);
         }
+    }
+    // Fallback when all cells were null.
+    if (!Number.isFinite(dMin) || !Number.isFinite(dMax)) {
+        dMin = -1;
+        dMax = 1;
+    } else if (dMin === dMax) {
+        // Flat-zero or flat-nonzero data still needs a non-degenerate range.
+        const pad = Math.max(Math.abs(dMin), 1) * 0.5;
+        dMin -= pad;
+        dMax += pad;
     }
 
     const timeData = (a.timeData || spec.time_data || []).slice(0, bins);
@@ -251,15 +265,22 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         && document.body
         && document.body.classList.contains('theme-dark');
 
+    // Use the data's actual [min, max] rather than forcing a symmetric
+    // band around 0. Resample the diverging palette so neutral still
+    // lands on value=0 — one-sided ranges collapse to the relevant half
+    // of the palette (blue-to-neutral or neutral-to-green) and mixed
+    // ranges preserve neutral at zero's natural fraction.
+    const resampledPalette = resampleDivergingForRange(DIVERGING_BLUE_GREEN, dMin, dMax);
+
     const diffSpec = {
         ...spec,
         opts: { ...spec.opts, title: `${spec.opts.title} (experiment − baseline)` },
         time_data: rebase(timeData, baselineAnchorSec),
         data: triples,
-        min_value: -absMax,
-        max_value: absMax,
-        colormap: DIVERGING_BLUE_GREEN,
-        symmetricBounds: true,
+        min_value: dMin,
+        max_value: dMax,
+        colormap: resampledPalette,
+        symmetricBounds: false,
         nullCellColor: nullCellColor(isDark),
         xAxisFormatter: relativeTimeFormatter,
     };
