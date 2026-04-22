@@ -34,6 +34,14 @@ const ViewerApi = {
         registry.attach('experiment', data, file.name || 'experiment.parquet');
     },
 
+    // Attach an experiment capture from raw bytes (no File wrapper). Used
+    // by the demo URL flow to feed pre-fetched parquet buffers into the
+    // WASM registry.
+    async attachExperimentBytes(bytes, filename) {
+        ensureRegistry();
+        registry.attach('experiment', bytes, filename || 'experiment.parquet');
+    },
+
     async detachExperiment() {
         ensureRegistry();
         registry.detach('experiment');
