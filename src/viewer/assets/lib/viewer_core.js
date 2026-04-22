@@ -307,8 +307,21 @@ const CompareChartWrapper = {
             return m('div.chart-loading', 'Loading experiment\u2026');
         }
 
-        const baselineCap = extractBaselineCapture(spec);
-        const experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult);
+        // Memoize both captures on vnode.state keyed by spec.data /
+        // experimentResult identity. Each extractor walks the raw data
+        // (heatmap extract does an O(rows×bins) normalize), and nothing
+        // else mutates spec.data or experimentResult between redraws —
+        // tooltip/hover/zoom just re-run view() with the same inputs.
+        if (vnode.state._capData !== spec.data) {
+            vnode.state._capData = spec.data;
+            vnode.state._baselineCap = extractBaselineCapture(spec);
+        }
+        if (vnode.state._capExpResult !== vnode.state.experimentResult) {
+            vnode.state._capExpResult = vnode.state.experimentResult;
+            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult);
+        }
+        const baselineCap = vnode.state._baselineCap;
+        const experimentCap = vnode.state._experimentCap;
 
         const result = renderCompareChart({
             spec,
