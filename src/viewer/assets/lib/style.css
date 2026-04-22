@@ -1017,6 +1017,14 @@ main {
     pointer-events: auto;
 }
 
+.chart-title-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+}
+
 .chart-title {
     font-family: var(--font-mono);
     font-size: 13px;
@@ -3185,20 +3193,26 @@ main {
     }
 }
 
-/* Per-chart "diff" toggle shown in compare mode for heatmaps */
+/* Per-chart "diff" toggle shown in compare mode for heatmaps.
+ * Lives in the top-right of the chart header title row, vertically
+ * aligned with the title via shared baseline, and matched to the
+ * title's font size/family for visual weight. */
 .compare-toggle {
     display: inline-flex;
-    align-items: center;
+    align-items: baseline;
     gap: 4px;
-    margin-left: 8px;
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
     color: var(--fg-secondary);
     user-select: none;
+    flex-shrink: 0;
 }
 .compare-toggle input[type=checkbox] {
     cursor: pointer;
     margin: 0;
+    transform: translateY(2px);
 }
 
 /* Transient states for async compare-mode fetches */

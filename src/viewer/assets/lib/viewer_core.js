@@ -394,11 +394,13 @@ export function createGroupComponent(getState) {
                 : opts;
 
             const chartHeader = (opts, spec) => m('div.chart-header', [
-                m('span.chart-title', opts.title),
+                m('div.chart-title-row', [
+                    m('span.chart-title', opts.title),
+                    compareMode && spec && compareToggle(spec, {
+                        compareMode, toggles, setChartToggle,
+                    }),
+                ]),
                 opts.description && m('span.chart-subtitle', opts.description),
-                compareMode && spec && compareToggle(spec, {
-                    compareMode, toggles, setChartToggle,
-                }),
             ]);
 
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
