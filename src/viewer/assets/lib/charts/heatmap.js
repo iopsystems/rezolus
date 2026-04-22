@@ -163,6 +163,7 @@ export function configureHeatmap(chart) {
     const valueLabel = format.value_label;
 
     // Configure tooltip with unit formatting if specified
+    const customXFormatterForTooltip = chart.spec.xAxisFormatter;
     let tooltipFormatter = function (params) {
         if (params.data === undefined) {
             return '';
@@ -171,7 +172,12 @@ export function configureHeatmap(chart) {
         // Otherwise, it's just the value, with `minValue` being null.
         const [time, cpu, timeIndex, minVal, value] = params.data;
 
-        const formattedTime = formatDateTime(time);
+        // In compare mode, time is already the post-anchor relative ms
+        // value (the rebase happens before the chart is fed). Use the
+        // custom formatter (e.g. `+Xs`) instead of the absolute clock.
+        const formattedTime = customXFormatterForTooltip
+            ? customXFormatterForTooltip(time)
+            : formatDateTime(time);
 
         // Null cells (compare-mode diff heatmaps where one side is missing)
         // render with a short "no data" tooltip instead of number formatting.
@@ -267,8 +273,24 @@ export function configureHeatmap(chart) {
     const visualMapMax = symmetric ? Math.max(Math.abs(minValue), Math.abs(effectiveMax)) : effectiveMax;
     const visualMapColor = chart.spec.colormap || VIRIDIS_COLORS;
 
+    // Compare-mode renderers override the x-axis formatter so labels
+    // read as relative offsets (`+Xs`, `+XmYs`) instead of absolute
+    // wall-clock times. When the spec sets `xAxisFormatter`, build a
+    // merged xAxis that swaps only the `axisLabel.formatter` field.
+    const customXFormatter = chart.spec.xAxisFormatter;
+    const xAxisOverride = customXFormatter
+        ? {
+            ...baseOption.xAxis,
+            axisLabel: {
+                ...(baseOption.xAxis.axisLabel || {}),
+                formatter: customXFormatter,
+            },
+        }
+        : null;
+
     const option = {
         ...baseOption,
+        ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
         grid: { ...baseOption.grid, top: '71' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is

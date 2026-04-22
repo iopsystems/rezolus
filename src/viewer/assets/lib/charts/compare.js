@@ -119,6 +119,7 @@ const overlayLine = ({ spec, captures, anchors }) => {
     return {
         ...spec,
         multiSeries: seriesList,
+        xAxisFormatter: relativeTimeFormatter,
     };
 };
 
@@ -145,6 +146,7 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
             data: cap.heatmapData || spec.data,
             min_value: cap.minValue != null ? cap.minValue : spec.min_value,
             max_value: cap.maxValue != null ? cap.maxValue : spec.max_value,
+            xAxisFormatter: relativeTimeFormatter,
         };
     };
 
@@ -212,6 +214,7 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         colormap: DIVERGING_BLUE_GREEN,
         symmetricBounds: true,
         nullCellColor: nullCellColor(isDark),
+        xAxisFormatter: relativeTimeFormatter,
     };
 
     return m('div.compare-heatmap-diff',
@@ -273,6 +276,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
                     fill: false,
                 },
             ],
+            xAxisFormatter: relativeTimeFormatter,
         };
     });
 
@@ -313,6 +317,7 @@ const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, inte
             bucket_bounds: cap.bucketBounds || spec.bucket_bounds,
             min_value: cap.minValue != null ? cap.minValue : spec.min_value,
             max_value: cap.maxValue != null ? cap.maxValue : spec.max_value,
+            xAxisFormatter: relativeTimeFormatter,
         };
     };
 

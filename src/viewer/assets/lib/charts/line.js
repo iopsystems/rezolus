@@ -99,8 +99,29 @@ export function configureLineChart(chart) {
         return base;
     });
 
+    // Compare-mode line overlays want relative-time labels (+Xs) on
+    // the x-axis. Honor `spec.xAxisFormatter` if set; otherwise use
+    // the base time formatter.
+    const customXFormatter = chart.spec.xAxisFormatter;
+    const xAxisOverride = customXFormatter
+        ? {
+            ...baseOption.xAxis,
+            axisLabel: {
+                ...(baseOption.xAxis.axisLabel || {}),
+                formatter: customXFormatter,
+            },
+        }
+        : null;
+
+    // TODO(compare): when `xAxisFormatter` is set we should prepend the
+    // relative offset to the tooltip timestamp too. Today the tooltip
+    // still formats `paramsArray[0].value[0]` as an absolute clock;
+    // changing that means threading the formatter through
+    // `getTooltipFormatter` in `base.js`, which is a wider refactor.
+    // Axis labels carry the relative time, which is the must-have.
     const option = {
         ...baseOption,
+        ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
         dataZoom: getDataZoomConfig(calculateMinZoomSpan(widestTimeData)),
         yAxis: getBaseYAxisOption(logScale, unitSystem),
         tooltip: {
