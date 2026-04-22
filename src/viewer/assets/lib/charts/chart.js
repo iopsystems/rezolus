@@ -194,13 +194,16 @@ export class Chart {
             if (this.chartsState.zoomLevel !== null) {
                 const z = this.chartsState.zoomLevel;
                 if (z.start !== 0 || z.end !== 100) {
-                    this.echart.dispatchAction({
-                        type: 'dataZoom',
-                        start: z.start,
-                        end: z.end,
-                        startValue: z.startValue,
-                        endValue: z.endValue,
-                    });
+                    const p = { type: 'dataZoom' };
+                    if (z.start !== undefined && z.end !== undefined
+                        && !Number.isNaN(z.start) && !Number.isNaN(z.end)) {
+                        p.start = z.start;
+                        p.end = z.end;
+                    } else if (z.startValue !== undefined && z.endValue !== undefined) {
+                        p.startValue = z.startValue;
+                        p.endValue = z.endValue;
+                    }
+                    this.echart.dispatchAction(p);
                     this._rescaleYAxis();
                 }
             }
@@ -326,15 +329,18 @@ export class Chart {
 
         // Match existing zoom state.
         if (this.chartsState.zoomLevel !== null) {
-            if (this.chartsState.zoomLevel.start !== 0 || this.chartsState.zoomLevel.end !== 100) {
-                // Apply the zoom state to the new chart
-                this.echart.dispatchAction({
-                    type: 'dataZoom',
-                    start: this.chartsState.zoomLevel.start,
-                    end: this.chartsState.zoomLevel.end,
-                    startValue: this.chartsState.zoomLevel.startValue,
-                    endValue: this.chartsState.zoomLevel.endValue,
-                });
+            const z = this.chartsState.zoomLevel;
+            if (z.start !== 0 || z.end !== 100) {
+                const p = { type: 'dataZoom' };
+                if (z.start !== undefined && z.end !== undefined
+                    && !Number.isNaN(z.start) && !Number.isNaN(z.end)) {
+                    p.start = z.start;
+                    p.end = z.end;
+                } else if (z.startValue !== undefined && z.endValue !== undefined) {
+                    p.startValue = z.startValue;
+                    p.endValue = z.endValue;
+                }
+                this.echart.dispatchAction(p);
                 this._rescaleYAxis();
             }
         }
@@ -420,14 +426,24 @@ export class Chart {
                 endValue,
             };
             this.chartsState.zoomSource = 'local';
+            // Build a dispatch payload containing only the fields that
+            // are actually defined. Passing `startValue: undefined` (or
+            // `end: undefined`) into echarts' dispatchAction clears
+            // those slots on the existing dataZoom component, which for
+            // heatmaps snaps the axis back to its data range. Pick the
+            // percentage pair when both are available; fall back to
+            // absolute values otherwise.
+            const payload = { type: 'dataZoom' };
+            if (start !== undefined && end !== undefined
+                && !Number.isNaN(start) && !Number.isNaN(end)) {
+                payload.start = start;
+                payload.end = end;
+            } else if (startValue !== undefined && endValue !== undefined) {
+                payload.startValue = startValue;
+                payload.endValue = endValue;
+            }
             this.chartsState.charts.forEach(chart => {
-                chart.dispatchAction({
-                    type: 'dataZoom',
-                    start,
-                    end,
-                    startValue,
-                    endValue,
-                });
+                chart.dispatchAction(payload);
                 chart._rescaleYAxis();
             });
             m.redraw();
