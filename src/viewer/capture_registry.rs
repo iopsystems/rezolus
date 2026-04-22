@@ -23,6 +23,12 @@ impl CaptureId {
             _ => None,
         }
     }
+
+    /// Parse an optional `?capture=…` query param. Missing or unknown
+    /// values resolve to the default (Baseline).
+    pub fn parse_opt(s: Option<&str>) -> Self {
+        s.and_then(Self::parse).unwrap_or_default()
+    }
 }
 
 pub struct CaptureSlot {
