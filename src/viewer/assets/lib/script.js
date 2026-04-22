@@ -180,6 +180,7 @@ const showLanding = () => {
 // ── Bootstrap ──────────────────────────────────────────────────────
 
 const bootstrap = async () => {
+    let compareMode = false;
     try {
         const response = await ViewerApi.getMode();
         if (!response.loaded && !response.live) {
@@ -187,11 +188,21 @@ const bootstrap = async () => {
             return;
         }
         liveMode = response.live === true;
+        compareMode = response.compare_mode === true;
     } catch (_) { /* assume loaded file mode */ }
 
     await fetchBackendState();
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
+    }
+
+    let experimentSystemInfo = null;
+    let experimentFileMetadata = null;
+    if (compareMode) {
+        try { experimentSystemInfo = await ViewerApi.getSystemInfo('experiment'); }
+        catch (_) { /* optional */ }
+        try { experimentFileMetadata = await ViewerApi.getFileMetadata('experiment'); }
+        catch (_) { /* optional */ }
     }
 
     initDashboard({
@@ -200,6 +211,9 @@ const bootstrap = async () => {
         fileMetadata,
         selectionPayload,
         liveMode,
+        compareMode,
+        experimentSystemInfo,
+        experimentFileMetadata,
         recording: true,
         onStartRecording: startRecording,
         onStopRecording: stopRecording,

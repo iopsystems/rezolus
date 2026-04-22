@@ -38,6 +38,13 @@ const chartsState = new ChartsState();
 let currentGranularity = null;
 const sectionResponseCache = {};
 
+// Compare-mode state (Stage 4 of A/B compare plan)
+let compareMode = false;
+let experimentAttached = false;
+let experimentSystemInfo = null;
+let experimentDurationMs = null;
+let baselineDurationMs = null;
+
 // Config-driven state (set by initDashboard)
 let liveMode = false;
 let recording = false;
@@ -69,6 +76,52 @@ const initComponents = () => {
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
+
+// Extract a capture's duration (milliseconds) from its file metadata.
+// Tries the structured field first; falls back to max_time - min_time when
+// present. Returns null when neither is available.
+const durationFromFileMetadata = (fileMeta) => {
+    if (!fileMeta) return null;
+    if (typeof fileMeta.duration_ms === 'number') return fileMeta.duration_ms;
+    if (typeof fileMeta.maxTime === 'number' && typeof fileMeta.minTime === 'number') {
+        return fileMeta.maxTime - fileMeta.minTime;
+    }
+    if (typeof fileMeta.max_time === 'number' && typeof fileMeta.min_time === 'number') {
+        return fileMeta.max_time - fileMeta.min_time;
+    }
+    return null;
+};
+
+// ── Compare-mode actions ───────────────────────────────────────────
+
+const attachExperiment = async (file) => {
+    const sysinfo = await ViewerApi.attachExperiment(file);
+    let expFileMeta = null;
+    try { expFileMeta = await ViewerApi.getFileMetadata('experiment'); }
+    catch (_) { /* optional */ }
+    experimentSystemInfo = sysinfo || null;
+    experimentDurationMs = durationFromFileMetadata(expFileMeta);
+    experimentAttached = true;
+    compareMode = true;
+    m.redraw();
+};
+
+const detachExperiment = async () => {
+    try { await ViewerApi.detachExperiment(); } catch (_) { /* best effort */ }
+    experimentSystemInfo = null;
+    experimentDurationMs = null;
+    experimentAttached = false;
+    compareMode = false;
+    m.redraw();
+};
+
+const getCompareState = () => ({
+    compareMode,
+    experimentAttached,
+    experimentSystemInfo,
+    experimentDurationMs,
+    baselineDurationMs,
+});
 
 const clearViewerCaches = () => {
     Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
@@ -394,6 +447,14 @@ const initDashboard = (config = {}) => {
     fileChecksum = config.fileChecksum || null;
     fileMetadata = config.fileMetadata || null;
 
+    // Compare-mode initial state (supplied by bootstrap when /api/v1/mode
+    // reported compare_mode=true).
+    compareMode = config.compareMode === true;
+    experimentAttached = compareMode;
+    experimentSystemInfo = config.experimentSystemInfo || null;
+    experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
+    baselineDurationMs = durationFromFileMetadata(fileMetadata);
+
     if (config.selectionPayload && Array.isArray(config.selectionPayload.entries)) {
         loadPayloadIntoStore(reportStore, config.selectionPayload);
         reportStore.loadedFrom = 'embedded report';
@@ -573,4 +634,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording };
+export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, getCompareState, durationFromFileMetadata };
