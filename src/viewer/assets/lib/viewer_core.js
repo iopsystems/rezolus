@@ -416,6 +416,24 @@ export function createGroupComponent(getState) {
 
             if (!groupHasData) return null;
 
+            // Build the chart-body vnode for a given (maybe-prefixed) spec.
+            // Picks the compare wrapper when in compare mode AND the spec has
+            // a promql_query (service-template charts without one fall through
+            // to the single-capture path even in compare mode).
+            const chartBody = (renderSpec, sourceSpec) => (compareMode && sourceSpec.promql_query)
+                ? m(CompareChartWrapper, {
+                    spec: renderSpec,
+                    chartsState,
+                    interval,
+                    anchors,
+                    toggles,
+                    setChartToggle,
+                    sectionRoute,
+                    step: interval,
+                    experimentQueryRange,
+                })
+                : m(Chart, { spec: renderSpec, chartsState, interval });
+
             const renderChart = (spec) => {
                 const isHistogramChart = isHistogramPlot(spec);
                 // In compare mode, every chart takes the full chart-grid
@@ -426,53 +444,16 @@ export function createGroupComponent(getState) {
                     ? 'div.chart-wrapper.full-width'
                     : 'div.chart-wrapper';
 
+                let renderSpec;
                 if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
-                    const heatmapData = sectionHeatmapData.get(spec.opts.id);
-                    const heatmapSpec = buildHistogramHeatmapSpec(spec, heatmapData, prefixTitle(spec.opts));
-                    return m(wrapperClass, [
-                        chartHeader(heatmapSpec.opts, heatmapSpec),
-                        compareMode && spec.promql_query
-                            ? m(CompareChartWrapper, {
-                                spec: heatmapSpec,
-                                chartsState,
-                                interval,
-                                anchors,
-                                toggles,
-                                setChartToggle,
-                                sectionRoute,
-                                step: interval,
-                                experimentQueryRange,
-                            })
-                            : m(Chart, { spec: heatmapSpec, chartsState, interval }),
-                        expandLink(spec, sectionRoute),
-                        selectButton(spec, sectionRoute, sectionName),
-                    ]);
-                }
-
-                const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
-
-                if (compareMode && spec.promql_query) {
-                    return m(wrapperClass, [
-                        chartHeader(prefixedSpec.opts, prefixedSpec),
-                        m(CompareChartWrapper, {
-                            spec: prefixedSpec,
-                            chartsState,
-                            interval,
-                            anchors,
-                            toggles,
-                            setChartToggle,
-                            sectionRoute,
-                            step: interval,
-                            experimentQueryRange,
-                        }),
-                        expandLink(spec, sectionRoute),
-                        selectButton(spec, sectionRoute, sectionName),
-                    ]);
+                    renderSpec = buildHistogramHeatmapSpec(spec, sectionHeatmapData.get(spec.opts.id), prefixTitle(spec.opts));
+                } else {
+                    renderSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
                 }
 
                 return m(wrapperClass, [
-                    chartHeader(prefixedSpec.opts, prefixedSpec),
-                    m(Chart, { spec: prefixedSpec, chartsState, interval }),
+                    chartHeader(renderSpec.opts, renderSpec),
+                    chartBody(renderSpec, spec),
                     expandLink(spec, sectionRoute),
                     selectButton(spec, sectionRoute, sectionName),
                 ]);
