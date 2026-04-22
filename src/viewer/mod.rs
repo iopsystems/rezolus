@@ -44,6 +44,8 @@ use tsdb::*;
 
 pub mod capture_registry;
 
+use capture_registry::{CaptureId, CaptureRegistry};
+
 /// The input source for the viewer.
 enum Source {
     /// A parquet file on disk.
@@ -192,15 +194,21 @@ pub fn run(config: Config) {
             info!("Generating dashboards...");
             let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
             let state = AppState::new(data, registry.clone());
-            let rendered =
-                dashboard::dashboard::generate(&state.tsdb.read(), filesize, &service_refs, None);
+            let rendered = dashboard::dashboard::generate(
+                &state.baseline_tsdb().read(),
+                filesize,
+                &service_refs,
+                None,
+            );
             state.sections.write().extend(rendered);
             *state.parquet_path.write() = Some(path.clone());
             let multinode_sysinfo = build_multinode_systeminfo(path);
-            *state.systeminfo.write() = multinode_sysinfo.or(systeminfo);
+            state
+                .captures
+                .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
             *state.selection.write() = selection;
             *state.file_checksum.write() = file_checksum;
-            *state.file_metadata.write() = file_meta;
+            state.captures.set_baseline_file_metadata(file_meta);
             state
         }
         Source::Live(url) => {
@@ -258,14 +266,15 @@ pub fn run(config: Config) {
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
             let state = AppState::new(tsdb, registry.clone());
-            let rendered = dashboard::dashboard::generate(&state.tsdb.read(), None, &[], None);
+            let rendered =
+                dashboard::dashboard::generate(&state.baseline_tsdb().read(), None, &[], None);
             state.sections.write().extend(rendered);
             state.live.store(true, Ordering::Relaxed);
 
-            *state.systeminfo.write() = agent_systeminfo;
+            state.captures.set_baseline_systeminfo(agent_systeminfo);
 
             // Spawn the ingest loop
-            let ingest_tsdb = state.tsdb.clone();
+            let ingest_tsdb = state.baseline_tsdb();
             let ingest_snapshots = state.snapshots.clone();
             let mut ingest_url = url.clone();
             ingest_url.set_path("/metrics/binary");
@@ -426,37 +435,43 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
 
 struct AppState {
     sections: parking_lot::RwLock<HashMap<String, String>>,
-    tsdb: Arc<parking_lot::RwLock<Tsdb>>,
+    /// Per-capture TSDB + metadata. Single-capture callers always target
+    /// `CaptureId::Baseline`; the experiment slot is empty unless a compare
+    /// mode hand-off has attached one.
+    captures: Arc<CaptureRegistry>,
     templates: TemplateRegistry,
     /// Raw msgpack snapshot bytes for parquet export (live mode only).
     snapshots: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
     live: AtomicBool,
     /// Original parquet file path (file mode only).
     parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
-    /// Serialized SystemSummary JSON from parquet metadata or live system.
-    systeminfo: parking_lot::RwLock<Option<String>>,
     /// Serialized selection JSON from parquet metadata.
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
     file_checksum: parking_lot::RwLock<Option<String>>,
-    /// Raw parquet file-level key-value metadata as a JSON object.
-    file_metadata: parking_lot::RwLock<Option<String>>,
 }
 
 impl AppState {
     pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
         Self {
             sections: Default::default(),
-            tsdb: Arc::new(parking_lot::RwLock::new(tsdb)),
+            captures: Arc::new(CaptureRegistry::new(tsdb, None, None)),
             templates,
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: AtomicBool::new(false),
             parquet_path: parking_lot::RwLock::new(None),
-            systeminfo: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
-            file_metadata: parking_lot::RwLock::new(None),
         }
+    }
+
+    /// Shorthand for the baseline TSDB handle. Every existing caller that
+    /// used to dereference `state.tsdb` directly lands on baseline — the
+    /// registry guarantees the baseline slot is always present.
+    fn baseline_tsdb(&self) -> Arc<parking_lot::RwLock<Tsdb>> {
+        self.captures
+            .get(CaptureId::Baseline)
+            .expect("baseline capture is always present")
     }
 }
 
@@ -941,17 +956,34 @@ async fn mode(
     }))
 }
 
+/// Query param for endpoints that select between baseline and experiment.
+#[derive(serde::Deserialize)]
+struct CaptureParam {
+    #[serde(default)]
+    capture: Option<String>,
+}
+
+impl CaptureParam {
+    fn capture_id(&self) -> CaptureId {
+        self.capture
+            .as_deref()
+            .and_then(CaptureId::parse)
+            .unwrap_or_default()
+    }
+}
+
 /// Returns the system hardware summary from parquet metadata or the live system.
 async fn systeminfo_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    match &*state.systeminfo.read() {
+    match state.captures.systeminfo(p.capture_id()) {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
-            json.clone(),
+            json,
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -976,13 +1008,14 @@ async fn selection_handler(
 
 async fn file_metadata_handler(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    match &*state.file_metadata.read() {
+    match state.captures.file_metadata(p.capture_id()) {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
-            json.clone(),
+            json,
         )
             .into_response(),
         None => (
@@ -1000,6 +1033,8 @@ async fn file_metadata_handler(
 struct QueryParams {
     query: String,
     time: Option<f64>,
+    #[serde(default)]
+    capture: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1008,6 +1043,14 @@ struct RangeQueryParams {
     start: f64,
     end: f64,
     step: f64,
+    #[serde(default)]
+    capture: Option<String>,
+}
+
+fn capture_id_from(opt: &Option<String>) -> CaptureId {
+    opt.as_deref()
+        .and_then(CaptureId::parse)
+        .unwrap_or_default()
 }
 
 #[derive(serde::Serialize)]
@@ -1055,7 +1098,17 @@ async fn instant_query(
     axum::extract::Query(params): axum::extract::Query<QueryParams>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<promql::QueryResult>> {
-    let tsdb = state.tsdb.read();
+    let capture = capture_id_from(&params.capture);
+    let tsdb_handle = match state.captures.get(capture) {
+        Some(t) => t,
+        None => {
+            return axum::response::Json(ApiResponse::error(
+                format!("capture '{:?}' not attached", capture),
+                "capture_not_found".to_string(),
+            ));
+        }
+    };
+    let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
     match engine.query(&params.query, params.time) {
         Ok(result) => axum::response::Json(ApiResponse::success(result)),
@@ -1070,7 +1123,17 @@ async fn range_query(
     axum::extract::Query(params): axum::extract::Query<RangeQueryParams>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<promql::QueryResult>> {
-    let tsdb = state.tsdb.read();
+    let capture = capture_id_from(&params.capture);
+    let tsdb_handle = match state.captures.get(capture) {
+        Some(t) => t,
+        None => {
+            return axum::response::Json(ApiResponse::error(
+                format!("capture '{:?}' not attached", capture),
+                "capture_not_found".to_string(),
+            ));
+        }
+    };
+    let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
     match engine.query_range(&params.query, params.start, params.end, params.step) {
         Ok(result) => axum::response::Json(ApiResponse::success(result)),
@@ -1118,7 +1181,8 @@ async fn label_values(
 async fn metadata(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<serde_json::Value>> {
-    let tsdb = state.tsdb.read();
+    let tsdb_handle = state.baseline_tsdb();
+    let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
     let time_range = engine.get_time_range();
     let mut metadata = serde_json::json!({
@@ -1203,7 +1267,8 @@ async fn upload_parquet(
     let file_checksum = compute_file_checksum(&temp_path);
 
     {
-        let mut tsdb = state.tsdb.write();
+        let tsdb_handle = state.baseline_tsdb();
+        let mut tsdb = tsdb_handle.write();
         *tsdb = data;
     }
     {
@@ -1212,10 +1277,12 @@ async fn upload_parquet(
     }
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
-    *state.systeminfo.write() = multinode_sysinfo.or(systeminfo);
+    state
+        .captures
+        .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
     *state.selection.write() = selection;
     *state.file_checksum.write() = file_checksum;
-    *state.file_metadata.write() = file_meta;
+    state.captures.set_baseline_file_metadata(file_meta);
 
     axum::response::Json(ApiResponse::success(serde_json::json!({
         "filename": filename,
@@ -1305,18 +1372,19 @@ async fn connect_agent(
 
     // Update shared state
     {
-        let mut db = state.tsdb.write();
+        let tsdb_handle = state.baseline_tsdb();
+        let mut db = tsdb_handle.write();
         *db = tsdb;
     }
     {
         let mut sections = state.sections.write();
         *sections = rendered;
     }
-    *state.systeminfo.write() = agent_systeminfo;
+    state.captures.set_baseline_systeminfo(agent_systeminfo);
     state.live.store(true, Ordering::Relaxed);
 
     // Spawn the ingest loop
-    let ingest_tsdb = state.tsdb.clone();
+    let ingest_tsdb = state.baseline_tsdb();
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
@@ -1350,8 +1418,9 @@ async fn reset_tsdb(
     }
 
     // Preserve metadata across reset
+    let tsdb_handle = state.baseline_tsdb();
     let (source, version, filename) = {
-        let tsdb = state.tsdb.read();
+        let tsdb = tsdb_handle.read();
         (
             tsdb.source().to_string(),
             tsdb.version().to_string(),
@@ -1360,7 +1429,7 @@ async fn reset_tsdb(
     };
 
     {
-        let mut tsdb = state.tsdb.write();
+        let mut tsdb = tsdb_handle.write();
         *tsdb = Tsdb::default();
         tsdb.set_sampling_interval_ms(1000);
         tsdb.set_source(source);
@@ -1391,7 +1460,7 @@ async fn save_parquet(
     }
 
     // Grab the stored systeminfo (from agent or local) for parquet metadata
-    let sysinfo_json = state.systeminfo.read().clone();
+    let sysinfo_json = state.captures.systeminfo(CaptureId::Baseline);
 
     // Run the synchronous parquet conversion off the async runtime
     let result = tokio::task::spawn_blocking(move || {
@@ -1516,7 +1585,7 @@ async fn save_with_selection(
             .unwrap();
     }
 
-    let sysinfo_json = state.systeminfo.read().clone();
+    let sysinfo_json = state.captures.systeminfo(CaptureId::Baseline);
 
     let result = tokio::task::spawn_blocking(move || {
         let total_size: usize = snapshot_data.iter().map(|s| s.len()).sum();

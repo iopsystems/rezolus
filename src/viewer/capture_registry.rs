@@ -2,26 +2,17 @@
 //! per-capture metadata. All cross-capture composition lives outside this
 //! module; the registry is intentionally dumb about comparison.
 
-// Items here are wired into AppState and HTTP routes in subsequent tasks of
-// the A/B compare charts plan. Silence dead-code warnings until then.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use metriken_query::Tsdb;
 use parking_lot::RwLock;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, serde::Deserialize)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CaptureId {
+    #[default]
     Baseline,
     Experiment,
-}
-
-impl Default for CaptureId {
-    fn default() -> Self {
-        CaptureId::Baseline
-    }
 }
 
 impl CaptureId {
@@ -36,8 +27,8 @@ impl CaptureId {
 
 pub struct CaptureSlot {
     pub tsdb: Arc<RwLock<Tsdb>>,
-    pub systeminfo: Option<String>,
-    pub file_metadata: Option<String>,
+    pub systeminfo: RwLock<Option<String>>,
+    pub file_metadata: RwLock<Option<String>>,
 }
 
 pub struct CaptureRegistry {
@@ -54,8 +45,8 @@ impl CaptureRegistry {
         Self {
             baseline: CaptureSlot {
                 tsdb: Arc::new(RwLock::new(baseline_tsdb)),
-                systeminfo: baseline_systeminfo,
-                file_metadata: baseline_file_metadata,
+                systeminfo: RwLock::new(baseline_systeminfo),
+                file_metadata: RwLock::new(baseline_file_metadata),
             },
             experiment: RwLock::new(None),
         }
@@ -74,26 +65,38 @@ impl CaptureRegistry {
 
     pub fn systeminfo(&self, id: CaptureId) -> Option<String> {
         match id {
-            CaptureId::Baseline => self.baseline.systeminfo.clone(),
+            CaptureId::Baseline => self.baseline.systeminfo.read().clone(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
                 .as_ref()
-                .and_then(|slot| slot.systeminfo.clone()),
+                .and_then(|slot| slot.systeminfo.read().clone()),
         }
     }
 
     pub fn file_metadata(&self, id: CaptureId) -> Option<String> {
         match id {
-            CaptureId::Baseline => self.baseline.file_metadata.clone(),
+            CaptureId::Baseline => self.baseline.file_metadata.read().clone(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
                 .as_ref()
-                .and_then(|slot| slot.file_metadata.clone()),
+                .and_then(|slot| slot.file_metadata.read().clone()),
         }
     }
 
+    /// Overwrite the baseline slot's systeminfo. The baseline TSDB Arc is
+    /// unaffected so callers holding it keep working across updates.
+    pub fn set_baseline_systeminfo(&self, systeminfo: Option<String>) {
+        *self.baseline.systeminfo.write() = systeminfo;
+    }
+
+    /// Overwrite the baseline slot's file_metadata.
+    pub fn set_baseline_file_metadata(&self, file_metadata: Option<String>) {
+        *self.baseline.file_metadata.write() = file_metadata;
+    }
+
+    #[allow(dead_code)]
     pub fn attach_experiment(
         &self,
         tsdb: Tsdb,
@@ -102,15 +105,17 @@ impl CaptureRegistry {
     ) {
         *self.experiment.write() = Some(CaptureSlot {
             tsdb: Arc::new(RwLock::new(tsdb)),
-            systeminfo,
-            file_metadata,
+            systeminfo: RwLock::new(systeminfo),
+            file_metadata: RwLock::new(file_metadata),
         });
     }
 
+    #[allow(dead_code)]
     pub fn detach_experiment(&self) {
         *self.experiment.write() = None;
     }
 
+    #[allow(dead_code)]
     pub fn experiment_attached(&self) -> bool {
         self.experiment.read().is_some()
     }
