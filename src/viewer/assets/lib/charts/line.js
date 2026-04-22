@@ -25,23 +25,31 @@ import {
 export function configureLineChart(chart) {
     const {
         data,
+        multiSeries,
         opts
     } = chart.spec;
 
-    if (
-        !data ||
-        data.length < 2 ||
-        !data[0] ||
-        !data[1] ||
-        data[0].length === 0
-    ) {
+    // Normalize to a list of {name, color, timeData, valueData, fill}.
+    // Single-series callers pass `data: [timeData, valueData]` (unchanged).
+    // Compare-mode callers pass `multiSeries: [{name,color,timeData,valueData}, ...]`.
+    const seriesList = (Array.isArray(multiSeries) && multiSeries.length > 0)
+        ? multiSeries
+        : (data && data.length >= 2 && data[0] && data[1] && data[0].length > 0
+            ? [{
+                name: opts.title,
+                color: COLORS.accent,
+                timeData: data[0],
+                valueData: data[1],
+                fill: true,
+            }]
+            : []);
+
+    if (seriesList.length === 0) {
         applyNoData(chart);
         return;
     }
 
     const baseOption = getBaseOption();
-
-    const [timeData, valueData] = data;
 
     // Access format properties using snake_case naming to match Rust serialization
     const format = opts.format || {};
@@ -49,15 +57,51 @@ export function configureLineChart(chart) {
     const logScale = format.log_scale;
     const range = format.range;
 
-    let zippedData = timeData.map((t, i) => {
-        const [v, raw] = clampToRange(valueData[i], range);
-        return [t * 1000, v, raw];
+    // Pick the widest timeData across all series for zoom-span + formatter purposes.
+    const widestTimeData = seriesList.reduce(
+        (a, s) => (s.timeData.length > a.length ? s.timeData : a),
+        seriesList[0].timeData,
+    );
+
+    const echartsSeries = seriesList.map((s) => {
+        let zipped = s.timeData.map((t, i) => {
+            const [v, raw] = clampToRange(s.valueData[i], range);
+            return [t * 1000, v, raw];
+        });
+        zipped = insertGapNulls(zipped, chart.interval);
+
+        const base = {
+            data: zipped,
+            type: 'line',
+            name: s.name,
+            showSymbol: false,
+            sampling: 'lttb',
+            emphasis: { focus: 'series' },
+            step: 'start',
+            lineStyle: { width: 1.5, color: s.color },
+            itemStyle: { color: s.color },
+            connectNulls: false,
+            animationDuration: 0,
+        };
+        if (s.fill) {
+            base.areaStyle = {
+                color: {
+                    type: 'linear',
+                    x: 0, y: 0, x2: 0, y2: 1,
+                    colorStops: [
+                        { offset: 0, color: COLORS.accentAreaTop },
+                        { offset: 0.5, color: COLORS.accentAreaMid },
+                        { offset: 1, color: COLORS.accentAreaBottom },
+                    ],
+                },
+            };
+        }
+        return base;
     });
-    zippedData = insertGapNulls(zippedData, chart.interval);
 
     const option = {
         ...baseOption,
-        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(widestTimeData)),
         yAxis: getBaseYAxisOption(logScale, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
@@ -65,40 +109,17 @@ export function configureLineChart(chart) {
                 createAxisLabelFormatter(unitSystem) :
                 val => val, null, chart),
         },
-        series: [{
-            data: zippedData,
-            type: 'line',
-            name: opts.title,
-            showSymbol: false,
-            sampling: 'lttb',
-            emphasis: {
-                focus: 'series'
-            },
-            step: 'start',
-            lineStyle: {
-                width: 1.5,
-                color: COLORS.accent,
-            },
-            itemStyle: {
-                color: COLORS.accent,
-            },
-            areaStyle: {
-                color: {
-                    type: 'linear',
-                    x: 0,
-                    y: 0,
-                    x2: 0,
-                    y2: 1,
-                    colorStops: [
-                        { offset: 0, color: COLORS.accentAreaTop },
-                        { offset: 0.5, color: COLORS.accentAreaMid },
-                        { offset: 1, color: COLORS.accentAreaBottom },
-                    ],
-                },
-            },
-            animationDuration: 0, // Don't animate the line in
-        }]
+        series: echartsSeries,
     };
+
+    // Multi-series charts want a legend so traces are distinguishable.
+    if (seriesList.length > 1) {
+        option.legend = {
+            ...(baseOption.legend || {}),
+            data: seriesList.map((s) => s.name),
+            show: true,
+        };
+    }
 
     applyChartOption(chart, option);
 }
