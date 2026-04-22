@@ -50,7 +50,7 @@ const TopNav = {
                     m('span.compare-capture-name', {
                         title: fname || 'No file loaded',
                     }, fname || '—'),
-                    onLoad && m('button.compare-load', {
+                    onLoad && m(`button.compare-load.${cls}`, {
                         onclick: pickFile(onLoad),
                         title: `Replace ${label} parquet`,
                     }, m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>')),

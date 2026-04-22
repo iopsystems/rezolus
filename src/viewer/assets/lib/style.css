@@ -3241,12 +3241,13 @@ main {
     padding: 2px 6px;
     height: 22px;
     cursor: pointer;
-    border: 1px solid var(--border, #ccc);
+    border: none;
     background: transparent;
     border-radius: 3px;
-    color: inherit;
 }
 .compare-badge .compare-load svg { display: block; }
+.compare-badge .compare-load.compare-baseline-dot { color: #2E5BFF; }
+.compare-badge .compare-load.compare-experiment-dot { color: #00C46A; }
 .compare-badge .compare-load:hover {
     background: var(--bg-hover, rgba(0, 0, 0, 0.05));
 }
