@@ -582,6 +582,7 @@ const initDashboard = (config = {}) => {
             topNavAttrs,
             SingleChartView,
             applyResultToPlot,
+            getCompareMode: () => compareMode,
         }),
         '/about': {
             render() {
