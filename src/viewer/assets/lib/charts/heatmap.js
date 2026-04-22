@@ -114,11 +114,12 @@ export function configureHeatmap(chart) {
     // These are ordered from highest to lowest resolution. So, usage is to iterate through
     // them until one is low enough resolution.
     const nullColor = chart.spec.nullCellColor || null;
+    const cellOpacity = chart.spec.cellOpacity != null ? chart.spec.cellOpacity : 1;
     chart.downsampleCache = [];
     chart.downsampleCache.push({
         factor: 1,
         data: processedData,
-        renderItem: createRenderItemFunc(timeData, 1, nullColor),
+        renderItem: createRenderItemFunc(timeData, 1, nullColor, cellOpacity),
     });
     const originalRatioOfDataPointsToMax = xCount * yCount / MAX_DATA_POINT_DISPLAY;
 
@@ -141,7 +142,7 @@ export function configureHeatmap(chart) {
         chart.downsampleCache.push({
             factor,
             data: processedDownsampledData,
-            renderItem: createRenderItemFunc(timeData, factor, nullColor),
+            renderItem: createRenderItemFunc(timeData, factor, nullColor, cellOpacity),
         });
     }
 
@@ -361,6 +362,30 @@ export function configureHeatmap(chart) {
     minLabel.textContent = formatter(sig(visualMapMin));
     maxLabel.textContent = formatter(sig(visualMapMax));
 
+    // Diff-heatmap directional caption: two small muted labels pinned
+    // under the gradient bar's left and right ends. Keeps the numeric
+    // min/max above for magnitude; the sub-labels carry the sign.
+    const diffLabels = chart.spec.diffLegendLabels;
+    if (diffLabels) {
+        let sub = chart.domNode.querySelector('.heatmap-diff-sublabels');
+        if (!sub) {
+            sub = document.createElement('div');
+            sub.className = 'heatmap-diff-sublabels';
+            sub.style.cssText = `${FONTS.cssFootnote} position: absolute; top: 64px; right: 4px; width: 144px; display: flex; justify-content: space-between; color: ${COLORS.fgMuted}; font-size: 10px; pointer-events: none; z-index: 10;`;
+            const leftEl = document.createElement('span');
+            leftEl.className = 'heatmap-diff-sublabel-left';
+            const rightEl = document.createElement('span');
+            rightEl.className = 'heatmap-diff-sublabel-right';
+            sub.appendChild(leftEl);
+            sub.appendChild(rightEl);
+            chart.domNode.appendChild(sub);
+        }
+        sub.querySelector('.heatmap-diff-sublabel-left').textContent = diffLabels.left;
+        sub.querySelector('.heatmap-diff-sublabel-right').textContent = diffLabels.right;
+    } else {
+        chart.domNode.querySelector('.heatmap-diff-sublabels')?.remove();
+    }
+
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {
         // 'datazoom' events triggered by the user vs dispatched by us have different formats:
@@ -454,9 +479,12 @@ const zoomLevelToFactor = (zoomLevel, originalRatioOfDataPointsToMax, originalXD
  * @param {number} factor the downsampling factor
  * @param {string|null} nullColor fill color for null cells (compare-mode
  *        diff heatmaps). When null, null cells are skipped entirely.
+ * @param {number} cellOpacity 0..1 alpha applied to every painted cell.
+ *        Defaults to 1 (opaque); diff heatmap in dark mode drops to 0.6
+ *        so the diverging palette reads softer against the dark bg.
  * @returns {function} renderItem function for echarts
  */
-const createRenderItemFunc = (timeData, factor, nullColor) => {
+const createRenderItemFunc = (timeData, factor, nullColor, cellOpacity = 1) => {
     return function (params, api) {
         const x = api.value(0);
         const y = api.value(1);
@@ -487,6 +515,7 @@ const createRenderItemFunc = (timeData, factor, nullColor) => {
                     // Use the appropriate fill color from the color scale,
                     // or the configured null color for missing data.
                     fill: isNull ? nullColor : api.style().fill,
+                    opacity: cellOpacity,
                 }
             }
         );

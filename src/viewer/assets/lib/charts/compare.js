@@ -318,6 +318,14 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         max_value: dMax,
         colormap: resampledPalette,
         nullCellColor: nullCellColor(isDark),
+        // In dark mode the diverging blue/green reads too stark against the
+        // black canvas — drop cell opacity to 60% to soften without losing
+        // the sign + magnitude signal. Light mode keeps full opacity.
+        cellOpacity: isDark ? 0.6 : 1,
+        // Directional caption under the gradient bar. The numeric min/max
+        // labels still show the actual (experiment − baseline) extremes;
+        // these labels make the directionality unambiguous at a glance.
+        diffLegendLabels: { left: 'base is higher', right: 'exp is higher' },
         xAxisFormatter: relativeTimeFormatter,
     };
 
