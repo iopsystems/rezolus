@@ -33,11 +33,12 @@ const TopNav = {
                     class: recording ? 'recording' : 'stopped',
                 }, recording ? 'REC' : 'STOPPED'),
             ]),
-            // Hide the whole compare badge in WASM mode. Load handlers
-            // are absent there (same signal we use to hide the Load
-            // Parquet / Load Report buttons); the badge's swatches and
-            // filenames alone don't earn the nav space.
-            compareMode && (attrs.onLoadBaseline || attrs.onLoadExperiment) && (() => {
+            // Always render the compare badge in compare mode — in WASM
+            // mode the Load buttons inside each row are naturally skipped
+            // because onLoad handlers aren't provided, but the dots +
+            // filenames stay visible so the user can see which captures
+            // are being compared.
+            compareMode && (() => {
                 const pickFile = (onPick) => () => {
                     const input = document.createElement('input');
                     input.type = 'file';

@@ -351,6 +351,30 @@ body::after {
     flex-shrink: 0;
 }
 
+/* In compare mode the nav is already crowded with the per-capture
+ * filenames + Load icons; drop the "REZOLUS" wordmark and keep just
+ * the logo glyph on narrow viewports so the capture info stays
+ * visible. The :has() selector scopes this to navs that actually
+ * contain a compare badge — no JS body-class toggle needed. */
+@media (max-width: 900px) {
+    #topnav:has(.compare-badge) .logo {
+        font-size: 0;   /* hides the "REZOLUS" text node */
+        gap: 0;
+    }
+    #topnav:has(.compare-badge) .logo::before {
+        /* ::before glyph has no font-size dependency — stays visible */
+        width: 20px;
+        height: 20px;
+    }
+    #topnav .compare-badge {
+        gap: 8px;
+        padding: 4px 6px;
+    }
+    #topnav .compare-badge .compare-capture-name {
+        max-width: 140px;
+    }
+}
+
 /* Logo mark - abstract waveform */
 #topnav .logo::before {
     content: '';
