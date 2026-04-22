@@ -322,7 +322,15 @@ const CompareChartWrapper = {
         if (result._splitSpecs) {
             const specs = result._splitSpecs;
             if (!specs || specs.length === 0) {
-                return m('div.chart-error', 'compare: no shared labels between captures');
+                const bKeys = [...(extractBaselineCapture(spec).seriesMap?.keys() || [])];
+                const eKeys = [...(extractExperimentCapture(spec, vnode.state.experimentResult).seriesMap?.keys() || [])];
+                return m('div.chart-error', [
+                    m('div', 'compare: no shared labels between captures'),
+                    m('div', { style: 'font-size:11px;opacity:0.7;margin-top:4px' },
+                        `baseline: [${bKeys.join(', ') || '(empty)'}]`),
+                    m('div', { style: 'font-size:11px;opacity:0.7' },
+                        `experiment: [${eKeys.join(', ') || '(empty)'}]`),
+                ]);
             }
             return m('div.compare-split-subgroup',
                 specs.map((s) => m('div.chart-wrapper',
