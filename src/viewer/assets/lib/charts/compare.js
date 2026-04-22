@@ -161,38 +161,42 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
  * diverging palette and a symmetric visualMap. Null cells are painted
  * with a theme-aware neutral color instead of falling through to the
  * color scale at zero.
+ *
+ * heatmap.js ingests its `data` as a flat array of `[timeIdx, y, value]`
+ * triples (not a 2D matrix), so we emit that shape directly — including
+ * null-valued triples so the null-cell color path in heatmap.js can
+ * paint them.
  */
 const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart }) => {
     const [a, b] = captures;
-    const aData = a.heatmapData || spec.data || [];
-    const bData = b.heatmapData || spec.data || [];
+    const aMatrix = a.heatmapMatrix || null;
+    const bMatrix = b.heatmapMatrix || null;
 
-    // Intersect shape conservatively: use the min row and bin counts.
-    // The intersection rule in the design spec requires both captures to
-    // share a topology for heatmap diffs — this is a defensive guard only.
-    const rows = Math.min(aData.length, bData.length);
+    // Guard: diff requires both captures to provide a normalized matrix
+    // (rows × time bins). The normalization step lives in the caller
+    // (viewer_core). Without it, bail and fall through to no-data.
+    if (!aMatrix || !bMatrix) return false;
+
+    const rows = Math.min(aMatrix.length, bMatrix.length);
     const bins = Math.min(
-        (aData[0] || []).length,
-        (bData[0] || []).length,
+        (aMatrix[0] || []).length,
+        (bMatrix[0] || []).length,
     );
 
-    const diff = Array.from({ length: rows }, (_, r) =>
-        Array.from({ length: bins }, (_, c) => {
-            const av = aData[r] ? aData[r][c] : undefined;
-            const bv = bData[r] ? bData[r][c] : undefined;
-            return nullDiff(bv, av); // experiment − baseline
-        }),
-    );
-
+    const triples = [];
     let absMax = 0;
-    for (const row of diff) {
-        for (const v of row) {
-            if (v != null && Math.abs(v) > absMax) absMax = Math.abs(v);
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < bins; c++) {
+            const av = aMatrix[r][c];
+            const bv = bMatrix[r][c];
+            const d = nullDiff(bv, av); // experiment − baseline
+            if (d != null && Math.abs(d) > absMax) absMax = Math.abs(d);
+            triples.push([c, r, d]);
         }
     }
 
     const baselineAnchorSec = anchorSecondsFor(anchors, 'baseline');
-    const timeData = a.timeData || spec.time_data || [];
+    const timeData = (a.timeData || spec.time_data || []).slice(0, bins);
 
     const isDark = typeof document !== 'undefined'
         && document.body
@@ -201,8 +205,8 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     const diffSpec = {
         ...spec,
         opts: { ...spec.opts, title: `${spec.opts.title} (experiment − baseline)` },
-        time_data: rebase(timeData.slice(0, bins), baselineAnchorSec),
-        data: diff,
+        time_data: rebase(timeData, baselineAnchorSec),
+        data: triples,
         min_value: -absMax,
         max_value: absMax,
         colormap: DIVERGING_BLUE_GREEN,
