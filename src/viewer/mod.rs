@@ -42,6 +42,8 @@ pub use metriken_query::tsdb;
 use promql::QueryEngine;
 use tsdb::*;
 
+pub mod capture_registry;
+
 /// The input source for the viewer.
 enum Source {
     /// A parquet file on disk.
