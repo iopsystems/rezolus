@@ -3142,7 +3142,9 @@ main {
    Compare mode — side-by-side + diff layouts
    ========================================================================== */
 
-/* Pair of heatmap charts (baseline | experiment) */
+/* Pair of heatmap charts (baseline | experiment). Side-by-side on
+ * wide viewports, stacked vertically on narrow viewports so each
+ * heatmap still has enough horizontal room for the time axis. */
 .compare-heatmap-pair {
     display: flex;
     gap: 8px;
@@ -3152,6 +3154,14 @@ main {
     flex: 1 1 0;
     min-width: 0;
     position: relative;
+}
+@media (max-width: 900px) {
+    .compare-heatmap-pair {
+        flex-direction: column;
+    }
+    .compare-heatmap-pair .compare-slot {
+        width: 100%;
+    }
 }
 /* Pin the baseline/experiment label just above the heatmap canvas —
  * same treatment as the percentile split label, so it sits above the
