@@ -3241,6 +3241,17 @@ main {
     cursor: pointer;
     margin: 0;
     transform: translateY(2px);
+    /* Default is dark theme. Tell the UA to use dark chrome for the
+     * native checkbox (background, border, check mark) and set the
+     * accent-color so the "checked" fill picks up the same deep tone
+     * as the rest of the dark palette. */
+    color-scheme: dark;
+    accent-color: var(--bg-tertiary);
+}
+
+[data-theme="light"] .compare-toggle input[type=checkbox] {
+    color-scheme: light;
+    accent-color: var(--accent);
 }
 
 /* Transient states for async compare-mode fetches */
