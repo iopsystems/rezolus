@@ -83,10 +83,12 @@ pub fn command() -> Command {
         )
         .arg(
             clap::Arg::new("LISTEN")
-                .help("Viewer listen address")
+                .long("listen")
+                .short('l')
+                .value_name("ADDR")
+                .help("Viewer listen address (e.g. 127.0.0.1:8080)")
                 .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(SocketAddr))
-                .index(3),
+                .value_parser(value_parser!(SocketAddr)),
         )
         .arg(
             clap::Arg::new("templates")

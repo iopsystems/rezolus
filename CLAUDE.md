@@ -57,9 +57,9 @@ target/release/rezolus record --metadata source=llm-perf http://host:9090/metric
 # --metadata key=value (repeatable), --interval, --duration.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
-target/release/rezolus view output.parquet [listen_address]
-target/release/rezolus view http://localhost:4241 [listen_address]  # live agent connection
-target/release/rezolus view [listen_address]                        # upload-only mode (no file)
+target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
+target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
+target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
 
 # Hindsight - rolling ring buffer for incident analysis
 target/release/rezolus hindsight config/hindsight.toml
