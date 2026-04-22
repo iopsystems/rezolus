@@ -452,7 +452,14 @@ const SectionContent = {
                             m.redraw();
                         },
                     }, 'RESET SELECTION'),
-                    m('button.section-action-btn', {
+                    // Hide the percentile↔heatmap toggle in compare
+                    // mode — the compare adapter's histogram-heatmap
+                    // side-by-side path doesn't yet populate experiment
+                    // bucket data through fetchHeatmapsForGroups, so
+                    // toggling renders the baseline heatmap next to an
+                    // empty experiment pane. Re-enable when that gap
+                    // is closed.
+                    !compareMode && m('button.section-action-btn', {
                         onclick: () => toggleGlobalHeatmap(sectionRoute, attrs.groups),
                         disabled: heatmapLoading || !hasHistogramCharts,
                     }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
