@@ -1322,9 +1322,9 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "histogram"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12e53e81ca5f30edbe74ce380afa4c3572954aa615fd5b83b787b21f012743b8"
+checksum = "df2b5fe6dcc3f27467d78bebc976c7ffb20fc693ad53627ceb0bc58dc6871513"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -2084,9 +2084,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d02889c2e600a8a8c748deb141629f0208604c473245f61fcd3d678eac304579"
+checksum = "8a255e38870562f827388bb244c50d34d6cdc064bd32abbc59ebd0c26b98472e"
 dependencies = [
  "arrow",
  "axum",
