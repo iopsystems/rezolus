@@ -253,8 +253,7 @@ const CompareChartWrapper = {
         // different hostnames or instance IDs.
         const query = buildEffectiveQuery(spec, {
             sectionRoute,
-            injectNodeLabel: false,
-            injectInstanceLabel: false,
+            crossCapture: true,
         });
         if (query == null) {
             vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';

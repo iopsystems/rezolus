@@ -293,8 +293,11 @@ const createDataApi = ({
     //   sectionRoute       — route string, used for the service/node rule.
     //   activeCgroupPattern — resolved cgroup selector, if any.
     //   serviceName        — section's service_name, if any.
-    //   injectNodeLabel    — default true; compare path passes false.
-    //   injectInstanceLabel — default true; compare path passes false.
+    //   crossCapture       — default false. When true, skip BOTH node and
+    //                        instance label injection. Compare path sets
+    //                        this because the experiment capture's
+    //                        topology is independent of the baseline's,
+    //                        and the injected labels would mis-target.
     //   stepOverride       — nullable; when > 1 triggers histogram-stride /
     //                        counter-rate rewriting. Defaults to the
     //                        module-level _stepOverride.
@@ -304,10 +307,10 @@ const createDataApi = ({
             sectionRoute = null,
             activeCgroupPattern = null,
             serviceName = null,
-            injectNodeLabel = true,
-            injectInstanceLabel = true,
+            crossCapture = false,
             stepOverride = _stepOverride,
         } = opts;
+        const injectTopologyLabels = !crossCapture;
 
         let q = plot.promql_query;
         const stepActive = stepOverride && stepOverride > 1;
@@ -330,10 +333,10 @@ const createDataApi = ({
                 return null;
             }
         }
-        if (injectNodeLabel && _selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
+        if (injectTopologyLabels && _selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
             q = injectLabel(q, 'node', _selectedNode);
         }
-        if (injectInstanceLabel && serviceName) {
+        if (injectTopologyLabels && serviceName) {
             const inst = _selectedInstances[serviceName];
             if (inst) q = injectLabel(q, 'instance', inst);
         }
