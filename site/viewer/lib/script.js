@@ -13,10 +13,26 @@ let splashLabel = null;   // non-null = show splash, null = show landing
 let splashProgress = -1;  // -1 = indeterminate, 0–1 = determinate
 let landingError = null;
 
-const demos = [
-    { label: 'vLLM + System', file: 'vllm.parquet' },
-    { label: 'Cachecannon + System', file: 'cachecannon.parquet' },
-    { label: 'System Metrics', file: 'demo.parquet' },
+const demoSections = [
+    {
+        label: 'Rezolus only',
+        demos: [
+            { label: 'demo.parquet', file: 'demo.parquet' },
+        ],
+    },
+    {
+        label: 'Rezolus + service',
+        demos: [
+            { label: 'cachecannon.parquet', file: 'cachecannon.parquet' },
+            { label: 'vllm.parquet', file: 'vllm.parquet' },
+        ],
+    },
+    {
+        label: 'Side-by-side comparison',
+        demos: [
+            { label: 'AB_base.parquet + AB_base_pin.parquet', files: ['AB_base.parquet', 'AB_base_pin.parquet'] },
+        ],
+    },
 ];
 
 // ── WASM + template initialization ─────────────────────────────────
@@ -241,8 +257,14 @@ const Root = {
             ]));
         }
         return m('div', m(FileUpload, {
-            onDemo: loadDemo,
-            demos,
+            onDemo: (demo) => {
+                if (demo && Array.isArray(demo.files) && demo.files.length === 2) {
+                    loadCompareDemo(demo.files[0], demo.files[1]);
+                } else if (demo && demo.file) {
+                    loadDemo(demo.file);
+                }
+            },
+            demoSections,
             loading: false,
             error: landingError,
         }));

@@ -188,18 +188,36 @@ const FileUpload = {
                         onclick: () => onConnect(connectUrl.trim()),
                     }, 'Connect'),
                 ]),
-                (attrs.demos || (onDemo ? [{ label: 'Try Demo' }] : [])).length > 0 &&
-                    m('div', { style: 'margin-top: 1.5rem' }, [
+                // Demo area — either grouped by section (demoSections)
+                // or a flat row (demos). A demo entry may carry either a
+                // single `file` string or a `files` array (for compare
+                // demos); onDemo receives the whole entry so the caller
+                // can route single vs compare appropriately.
+                (attrs.demoSections || attrs.demos || (onDemo ? [{ label: 'Try Demo' }] : [])).length > 0 &&
+                    m('div.upload-demo-area', [
                         onFile && m('p.upload-or', 'or'),
-                        m('div', { style: 'display: flex; gap: 0.5rem; justify-content: center; margin-top: 0.75rem; flex-wrap: wrap' },
-                            (attrs.demos || [{ label: 'Try Demo' }]).map(demo =>
-                                m('button.upload-btn', {
-                                    style: 'background: #6c757d',
-                                    onclick: () => onDemo(demo.file),
-                                    disabled: loading,
-                                }, demo.label),
-                            ),
-                        ),
+                        ...(attrs.demoSections
+                            ? attrs.demoSections.map(section => m('div.upload-demo-section', [
+                                m('p.upload-section-label', section.label),
+                                m('div.upload-demo-row',
+                                    (section.demos || []).map(demo =>
+                                        m('button.upload-btn', {
+                                            onclick: () => onDemo(demo),
+                                            disabled: loading,
+                                        }, demo.label),
+                                    ),
+                                ),
+                            ]))
+                            : [
+                                m('div.upload-demo-row',
+                                    (attrs.demos || [{ label: 'Try Demo' }]).map(demo =>
+                                        m('button.upload-btn', {
+                                            onclick: () => onDemo(demo),
+                                            disabled: loading,
+                                        }, demo.label),
+                                    ),
+                                ),
+                            ]),
                     ]),
                 error && m('p.upload-error', error),
                 loading && m('p.upload-loading', 'Loading...'),
