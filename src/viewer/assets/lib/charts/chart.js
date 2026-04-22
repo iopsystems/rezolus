@@ -102,7 +102,18 @@ export class ChartsState {
      */
     setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
         const next = normalizeZoom(zoom);
-        if (zoomEqual(this.zoomLevel, next)) return false;
+        // TEMP diagnostic — remove once root cause found
+        if (window.location.search.includes('zoomdbg')) {
+            console.log('[setZoom] proposed=', zoom, 'normalized=', next,
+                'current=', this.zoomLevel, 'source=', source,
+                'origin=', originChart?.chartId,
+                'charts.size=', this.charts.size,
+                'ids=', Array.from(this.charts.keys()));
+        }
+        if (zoomEqual(this.zoomLevel, next)) {
+            if (window.location.search.includes('zoomdbg')) console.log('[setZoom] equal, skip');
+            return false;
+        }
         this.zoomLevel = next;
         this.zoomSource = source;
         if (source === 'global') {
@@ -112,18 +123,15 @@ export class ChartsState {
         }
         // Fan out via the chart registry directly. Skip the origin
         // chart (when provided) because its toolbox already applied the
-        // zoom before firing the datazoom event that led us here. For
-        // heatmap-type charts, re-dispatching to the origin cascades
-        // through heatmap.js's downsample-swap setOption — which fires
-        // a secondary datazoom event whose batch contents can drift
-        // from the value we just wrote, triggering a re-entrant
-        // setZoom that fans out drifted percentages to every sibling.
-        // Skipping origin breaks that loop at its source.
+        // zoom before firing the datazoom event that led us here.
         this.charts.forEach(chart => {
-            if (chart === originChart) return;
+            if (chart === originChart) {
+                if (window.location.search.includes('zoomdbg')) console.log('[setZoom] skip origin', chart.chartId);
+                return;
+            }
+            if (window.location.search.includes('zoomdbg')) console.log('[setZoom] dispatch to', chart.chartId);
             if (chart._applyZoom) chart._applyZoom(this.zoomLevel);
         });
-        // Then notify any non-chart subscribers (future consumers).
         for (const fn of this._zoomSubs) fn(this.zoomLevel, this.zoomSource);
         return true;
     }
