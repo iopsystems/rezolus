@@ -3121,15 +3121,25 @@ main {
     width: 100%;
 }
 
-/* Sub-grid for split multi/scatter charts (one sub-chart per shared label) */
+/* Sub-grid for split multi/scatter charts (one sub-chart per shared label).
+ * Caps at 3 columns per row regardless of container width; at narrow
+ * widths auto-fit can still drop to 2 or 1 per the minmax() floor. */
 .compare-split-subgroup {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-auto-columns: 1fr;
     gap: 8px;
     width: 100%;
 }
 .compare-split-subgroup > .chart-wrapper {
     min-width: 0;
+}
+/* Hard cap at 3 columns when the container is wide enough that auto-fit
+ * would otherwise pack 4+ across. */
+@media (min-width: 900px) {
+    .compare-split-subgroup {
+        grid-template-columns: repeat(3, 1fr);
+    }
 }
 
 /* Per-chart "diff" toggle shown in compare mode for heatmaps */
