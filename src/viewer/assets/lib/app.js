@@ -313,7 +313,14 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     selectedNode,
     nodeVersions,
     onNodeChange: changeNode,
-    extra,
+    extra: {
+        // Default compare state so TopNav renders the badge in every
+        // code path (Main.view, single-chart route). Callers may
+        // override via their own `extra`.
+        compareMode,
+        onDetachExperiment: compareMode ? () => { detachExperiment(); } : null,
+        ...(extra || {}),
+    },
 });
 
 // ── SectionContent component ───────────────────────────────────────

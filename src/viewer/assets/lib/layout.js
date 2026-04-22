@@ -20,6 +20,7 @@ const TopNav = {
     view({ attrs }) {
         const liveMode = attrs.liveMode;
         const recording = attrs.recording;
+        const compareMode = attrs.compareMode;
 
         return m('div#topnav', [
             m('button.hamburger-btn', {
@@ -31,6 +32,19 @@ const TopNav = {
                 liveMode && m('span.live-indicator', {
                     class: recording ? 'recording' : 'stopped',
                 }, recording ? 'REC' : 'STOPPED'),
+            ]),
+            compareMode && m('div.compare-badge', [
+                m('span.compare-badge-label', [
+                    m('span.compare-baseline-dot', '\u25CF'),
+                    ' baseline',
+                    m('span.compare-arrow-char', ' \u2194 '),
+                    m('span.compare-experiment-dot', '\u25CF'),
+                    ' experiment',
+                ]),
+                attrs.onDetachExperiment && m('button.compare-detach', {
+                    onclick: () => attrs.onDetachExperiment(),
+                    title: 'Detach experiment and return to single-capture mode',
+                }, 'Detach'),
             ]),
             // Node selector / filename display
             (() => {

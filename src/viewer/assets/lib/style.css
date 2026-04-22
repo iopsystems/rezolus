@@ -3165,6 +3165,36 @@ main {
 }
 
 /* ==========================================================================
+   Compare mode — header badge
+   ========================================================================== */
+.compare-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 10px;
+    margin-left: 8px;
+    background: var(--bg-subtle, rgba(46, 91, 255, 0.08));
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.compare-badge .compare-baseline-dot { color: #2E5BFF; }
+.compare-badge .compare-experiment-dot { color: #00C46A; }
+.compare-badge .compare-arrow-char { color: var(--fg-muted, #888); }
+.compare-badge .compare-detach {
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid var(--border, #ccc);
+    background: transparent;
+    border-radius: 3px;
+    color: inherit;
+}
+.compare-badge .compare-detach:hover {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+/* ==========================================================================
    Compare mode — systeminfo diff banner
    ========================================================================== */
 .compare-banner {
