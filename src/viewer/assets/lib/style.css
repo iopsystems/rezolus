@@ -3113,16 +3113,24 @@ main {
 .compare-heatmap-pair .compare-slot {
     flex: 1 1 0;
     min-width: 0;
+    position: relative;
 }
+/* Pin the baseline/experiment label just above the heatmap canvas —
+ * same treatment as the percentile split label, so it sits above the
+ * Y-axis tick labels rather than at the very top of the slot. */
 .compare-heatmap-pair .compare-slot-label {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    position: absolute;
+    top: 44px;
+    left: 12px;
     font-size: 12px;
     font-weight: 600;
     color: var(--fg-secondary, #444);
     letter-spacing: 0.02em;
-    padding: 0 8px 4px 8px;
+    pointer-events: none;
+    z-index: 1;
 }
 .compare-heatmap-pair .compare-slot-label .compare-dot { font-size: 10px; line-height: 1; }
 .compare-heatmap-pair .compare-slot-label .compare-baseline-dot { color: #2E5BFF; }
