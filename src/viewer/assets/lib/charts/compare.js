@@ -39,7 +39,7 @@
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
 import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
-import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
+import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_ALPHA_V, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { resolvedStyle } from './metric_types.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 
@@ -307,7 +307,14 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     // lands on value=0 — one-sided ranges collapse to the relevant half
     // of the palette (blue-to-neutral or neutral-to-green) and mixed
     // ranges preserve neutral at zero's natural fraction.
-    const resampledPalette = resampleDivergingForRange(DIVERGING_BLUE_GREEN, dMin, dMax);
+    //
+    // The V-shaped alpha curve fades cells near zero into whatever
+    // background is underneath (card bg on either theme) and keeps
+    // extreme cells saturated so outliers pop. No separate dark-mode
+    // opacity blanket needed — the palette stops carry their own alpha.
+    const resampledPalette = resampleDivergingForRange(
+        DIVERGING_BLUE_GREEN, dMin, dMax, 21, DIVERGING_BLUE_GREEN_ALPHA_V,
+    );
 
     const diffSpec = {
         ...spec,
@@ -318,10 +325,6 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         max_value: dMax,
         colormap: resampledPalette,
         nullCellColor: nullCellColor(isDark),
-        // In dark mode the diverging blue/green reads too stark against the
-        // black canvas — drop cell opacity to 60% to soften without losing
-        // the sign + magnitude signal. Light mode keeps full opacity.
-        cellOpacity: isDark ? 0.6 : 1,
         // Directional caption under the gradient bar. The numeric min/max
         // labels still show the actual (experiment − baseline) extremes;
         // these labels make the directionality unambiguous at a glance.
