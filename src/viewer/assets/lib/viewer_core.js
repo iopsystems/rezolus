@@ -423,18 +423,11 @@ export function createGroupComponent(getState) {
 
             const renderChart = (spec) => {
                 const isHistogramChart = isHistogramPlot(spec);
-                // Compare mode splits multi/scatter into N sub-charts and
-                // renders heatmap/histogram_heatmap side-by-side. Any of
-                // those needs the full chart-grid row; otherwise the
-                // default half-width leaves no room for even two columns.
-                const resolvedStyle = spec.opts?.style || spec._resolvedStyle;
-                const compareNeedsFullWidth = compareMode && spec.promql_query && (
-                    resolvedStyle === 'multi'
-                    || resolvedStyle === 'scatter'
-                    || resolvedStyle === 'heatmap'
-                    || resolvedStyle === 'histogram_heatmap'
-                );
-                const wrapperClass = (spec.width === 'full' || compareNeedsFullWidth)
+                // In compare mode, every chart takes the full chart-grid
+                // row. Single line overlays benefit from the wider x-axis
+                // to distinguish blue/green traces; split multi/scatter
+                // and side-by-side heatmaps need the room structurally.
+                const wrapperClass = (spec.width === 'full' || compareMode)
                     ? 'div.chart-wrapper.full-width'
                     : 'div.chart-wrapper';
 

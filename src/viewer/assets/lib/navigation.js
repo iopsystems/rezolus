@@ -47,12 +47,9 @@ const createMainComponent = ({
     Sidebar,
     SaveModal,
     SectionContent,
-    CompareBanner,
     sectionResponseCache,
     getHasSystemInfo,
     getHasFileMetadata,
-    getBaselineSysinfo,
-    getExperimentSysinfo,
     getCompareBadgeAttrs,
     buildAttrs,
 }) => ({
@@ -76,11 +73,6 @@ const createMainComponent = ({
                     onLoadExperiment: badgeAttrs?.onLoadExperiment,
                 },
             )),
-            CompareBanner && m(CompareBanner, {
-                compareMode: !!compareMode,
-                baselineSysinfo: typeof getBaselineSysinfo === 'function' ? getBaselineSysinfo() : null,
-                experimentSysinfo: typeof getExperimentSysinfo === 'function' ? getExperimentSysinfo() : null,
-            }),
             m('main', [
                 m(Sidebar, {
                     activeSection,

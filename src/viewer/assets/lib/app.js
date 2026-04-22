@@ -7,7 +7,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
-import { CpuTopology, CompareBanner } from './topology.js';
+import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
 import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
@@ -541,22 +541,19 @@ const initDashboard = (config = {}) => {
         Sidebar,
         SaveModal,
         SectionContent,
-        CompareBanner,
         sectionResponseCache,
         getHasSystemInfo: () => systemInfoData,
         getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
-        getBaselineSysinfo: () => systemInfoData,
-        getExperimentSysinfo: () => experimentSystemInfo,
         getCompareBadgeAttrs: () => ({
             compareMode,
             // Baseline filename comes from TopNav's existing attrs.filename.
             experimentFilename,
-            // Re-loading baseline swaps the server's baseline TSDB in place;
-            // the experiment slot is untouched, so compareMode survives.
+            // The WASM viewer has no onUploadParquet handler — that path
+            // is how the site viewer loads its initial parquet on its own.
+            // Use its absence as the "WASM mode" signal and hide both
+            // per-capture Load buttons there. Server viewer always has it.
             onLoadBaseline: onUploadParquet ? (file) => onUploadParquet(file) : null,
-            // Re-loading experiment detaches the current slot and attaches
-            // the new parquet. compareMode persists across the swap.
-            onLoadExperiment: (file) => { loadExperiment(file); },
+            onLoadExperiment: onUploadParquet ? (file) => { loadExperiment(file); } : null,
         }),
         buildAttrs: topNavAttrs,
     });

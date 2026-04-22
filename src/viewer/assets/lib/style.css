@@ -3213,14 +3213,18 @@ main {
     font-variant-numeric: tabular-nums;
 }
 .compare-badge .compare-load {
-    padding: 2px 8px;
-    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 6px;
+    height: 22px;
     cursor: pointer;
     border: 1px solid var(--border, #ccc);
     background: transparent;
     border-radius: 3px;
     color: inherit;
 }
+.compare-badge .compare-load svg { display: block; }
 .compare-badge .compare-load:hover {
     background: var(--bg-hover, rgba(0, 0, 0, 0.05));
 }
