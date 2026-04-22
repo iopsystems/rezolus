@@ -3190,7 +3190,11 @@ main {
 }
 /* Pin the baseline/experiment label just above the heatmap canvas —
  * same treatment as the percentile split label, so it sits above the
- * Y-axis tick labels rather than at the very top of the slot. */
+ * Y-axis tick labels rather than at the very top of the slot.
+ *
+ * `top: 44px` sits inside the chart's header band (44px = chart header
+ * height). The echarts grid starts at 71px (CHART_GRID_TOP_WITH_LEGEND
+ * in charts/base.js); if that constant moves, this value moves too. */
 .compare-heatmap-pair .compare-slot-label {
     display: inline-flex;
     align-items: center;

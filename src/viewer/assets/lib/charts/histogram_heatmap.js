@@ -14,6 +14,7 @@ import {
     getDataZoomConfig,
     applyChartOption,
     TIME_AXIS_FORMATTER,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
     FONTS,
 } from './base.js';
@@ -267,7 +268,7 @@ export function configureHistogramHeatmap(chart) {
         grid: {
             left: '12',
             right: '17',
-            top: '71',
+            top: String(CHART_GRID_TOP_WITH_LEGEND),
             bottom: '24',
             containLabel: true,
         },

@@ -16,6 +16,7 @@ import {
     getDataZoomConfig,
     applyChartOption,
     buildOverlayLegendOption,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
 } from './base.js';
 import { SCATTER_PALETTE } from './util/colormap.js';
@@ -196,7 +197,7 @@ export function configureScatterChart(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '71' },
+        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
         legend: buildOverlayLegendOption(uniqueNamesForLayout, {
             tooltipFormatter: () => 'Click to pin, ⌘/Ctrl+click to multi-select',
         }),

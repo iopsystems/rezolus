@@ -13,6 +13,7 @@ import {
     getTooltipFormatter,
     applyNoData,
     applyChartOption,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
     FONTS,
 } from './base.js';
@@ -121,7 +122,7 @@ export function configureMultiSeriesChart(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '71' },
+        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
         legend: {
             show: true,
             top: '42',

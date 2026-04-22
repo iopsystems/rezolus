@@ -11,6 +11,7 @@ import {
     getTooltipFreezeFooter,
     applyChartOption,
     overrideXAxisFormatter,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
     FONTS,
 } from './base.js';
@@ -277,7 +278,7 @@ export function configureHeatmap(chart) {
     const option = {
         ...baseOption,
         ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
-        grid: { ...baseOption.grid, top: '71' },
+        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.

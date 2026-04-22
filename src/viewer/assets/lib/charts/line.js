@@ -15,6 +15,7 @@ import {
     applyChartOption,
     buildOverlayLegendOption,
     overrideXAxisFormatter,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
 } from './base.js';
 
@@ -140,7 +141,7 @@ export function configureLineChart(chart) {
         }
         // Push the plot grid down so the legend has room above it,
         // matching scatter's layout.
-        option.grid = { ...(baseOption.grid || {}), top: '71' };
+        option.grid = { ...(baseOption.grid || {}), top: String(CHART_GRID_TOP_WITH_LEGEND) };
     }
 
     applyChartOption(chart, option);

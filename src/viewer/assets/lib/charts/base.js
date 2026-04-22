@@ -129,6 +129,16 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
     }
 }
 
+// Plot-area top offset (pixels from the top of the Chart component
+// div to the top of the echarts grid). Chart modules that add a
+// legend above the plot (multi, scatter, line-overlay, heatmap,
+// histogram_heatmap) push the grid down by this amount.
+//
+// Keep in sync with the .compare-slot-label / .compare-split-label
+// `top: 44px` rules in style.css — those labels sit in the header
+// band that precedes the grid.
+export const CHART_GRID_TOP_WITH_LEGEND = 71;
+
 export function getBaseOption() {
     return {
         grid: {
