@@ -557,9 +557,16 @@ const initDashboard = (config = {}) => {
         liveRefreshInterval = setInterval(onRefresh, 5000);
     }
 
-    // Mount router with hash-based routing
+    // Mount router with hash-based routing. When the capture carries a
+    // service extension, default to that service's section instead of
+    // the generic overview — the service KPIs are usually what the
+    // user came to look at.
+    const serviceNames = Object.keys(serviceInstances || {});
+    const defaultRoute = serviceNames.length > 0
+        ? `/service/${serviceNames[0]}`
+        : '/overview';
     m.route.prefix = '#';
-    m.route(document.body, '/overview', {
+    m.route(document.body, defaultRoute, {
         '/:section/chart/:chartId': {
             onmatch(params) {
                 const sectionKey = params.section;
