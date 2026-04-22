@@ -3375,7 +3375,11 @@ main {
     .compare-badge[open] .compare-capture-list {
         position: absolute;
         top: calc(100% + 4px);
-        right: 0;
+        /* Anchor to the summary's left edge so the first dot lines up
+         * with the baseline row's dot inside the card. Right is free
+         * so the card grows rightward within the viewport. */
+        left: 0;
+        right: auto;
         display: flex;
         flex-direction: column;
         align-items: stretch;
@@ -3388,6 +3392,11 @@ main {
         z-index: 50;
         min-width: 240px;
         max-width: min(90vw, 360px);
+        /* Match summary's horizontal padding so the first dot in the
+         * card lines up with the first dot in the summary trigger
+         * above (8px from the badge's left edge). */
+        padding-left: 8px;
+        padding-right: 8px;
     }
     .compare-badge[open] .compare-capture {
         /* Stack: dots beside the label+name block, Load icon trailing */
