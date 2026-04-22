@@ -40,10 +40,15 @@ const extractBaselineCapture = (spec) => {
                 if (style === 'scatter') {
                     // Normalize pXX label form to match quantile-derived keys
                     // from the experiment query (percentileLabel in compare.js).
+                    // PromQL's histogram_percentiles() returns quantile as a
+                    // fraction (e.g. "0.5", "0.99"); a value <= 1 is treated
+                    // as a fraction, anything larger is assumed already in
+                    // percent form (e.g. "50").
                     const m = typeof label === 'string' ? label.match(/^p?(\d+(?:\.\d+)?)$/) : null;
                     if (m) {
                         const q = Number(m[1]);
-                        label = `p${(q).toFixed(2).replace(/\.?0+$/, '')}`;
+                        const pct = q <= 1 ? q * 100 : q;
+                        label = `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
                     }
                 }
                 if (label == null) continue;
@@ -98,14 +103,18 @@ const extractExperimentCapture = (spec, promqlResult) => {
     }
 
     if (style === 'multi') {
+        // Match baseline's label convention: series_names[i] is the first
+        // non-__name__ metric label's value (see applyResultToPlot's
+        // allData branch in data.js). For a gauge like cpu_usage with
+        // labels {cpu="0"}, both sides will produce "0".
         const map = new Map();
         for (const item of results) {
             const mm = item.metric || {};
-            const key = Object.keys(mm)
-                .sort()
-                .filter((k) => k !== '__name__')
-                .map((k) => `${k}=${mm[k]}`)
-                .join(',');
+            let key = null;
+            for (const [k, v] of Object.entries(mm)) {
+                if (k !== '__name__') { key = String(v); break; }
+            }
+            if (key == null) continue;
             const values = Array.isArray(item.values) ? item.values : [];
             map.set(key, {
                 timeData: values.map((p) => Number(p[0])),
@@ -126,9 +135,10 @@ const extractExperimentCapture = (spec, promqlResult) => {
         for (const item of results) {
             const q = Number(item.metric && item.metric.quantile);
             if (!Number.isFinite(q)) continue;
-            const key = `p${q * 100}`.replace(/\.?0+$/, '').replace(/p$/, 'p0');
-            // Re-canonicalize to match baseline's labelling
-            const canonical = `p${(q * 100).toFixed(2).replace(/\.?0+$/, '')}`;
+            // Always present as percent form ("p50", "p99.9") to match
+            // the baseline normalizer in extractBaselineCapture.
+            const pct = q <= 1 ? q * 100 : q;
+            const canonical = `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
             const values = Array.isArray(item.values) ? item.values : [];
             map.set(canonical, {
                 timeData: values.map((p) => Number(p[0])),
@@ -139,7 +149,6 @@ const extractExperimentCapture = (spec, promqlResult) => {
                     return Number.isNaN(n) ? null : n;
                 }),
             });
-            void key; // silence unused-variable lint (kept for clarity)
         }
         cap.seriesMap = map;
         return cap;
