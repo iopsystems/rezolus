@@ -163,6 +163,28 @@ export function infernoColor(t) {
     return interpolateRamp(INFERNO_RGB, t);
 }
 
+// ── Compare-mode palette ─────────────────────────────────────────────
+
+/**
+ * Diverging blue→neutral→green scale for compare-mode diff heatmaps.
+ * Caller maps values symmetrically around 0 (−absMax..0..+absMax).
+ * Baseline-heavy cells read blue, experiment-heavy cells read green.
+ */
+export const DIVERGING_BLUE_GREEN = [
+    '#2E5BFF', '#6A8BFF', '#A5BBFF', '#D5DFFF',
+    '#F2F2F2',
+    '#CFEBD7', '#9ED6B2', '#5FBD83', '#00C46A',
+];
+
+/** Theme-aware null cell color for diff heatmaps — distinct from zero. */
+export const NULL_CELL_COLOR_DARK = 'rgba(255,255,255,0.04)';
+export const NULL_CELL_COLOR_LIGHT = 'rgba(0,0,0,0.04)';
+
+/** Returns the null cell color for the active theme. */
+export function nullCellColor(isDark) {
+    return isDark ? NULL_CELL_COLOR_DARK : NULL_CELL_COLOR_LIGHT;
+}
+
 // ── Cgroup color mapper ──────────────────────────────────────────────
 
 /**
