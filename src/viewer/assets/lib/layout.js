@@ -128,6 +128,7 @@ const TopNav = {
                     start_time: attrs.start_time,
                     end_time: attrs.end_time,
                     chartsState: attrs.chartsState,
+                    compareMode: !!attrs.compareMode,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
             // Granularity (step) selector

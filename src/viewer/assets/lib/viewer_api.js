@@ -17,8 +17,9 @@ const ViewerApi = {
         return backendRequest({ method: 'GET', url: '/api/v1/mode' });
     },
 
-    async getMetadata() {
-        return backendRequest({ method: 'GET', url: '/api/v1/metadata' });
+    async getMetadata(captureId = 'baseline') {
+        const q = captureId === 'experiment' ? '?capture=experiment' : '';
+        return backendRequest({ method: 'GET', url: `/api/v1/metadata${q}` });
     },
 
     async getSystemInfo(captureId = 'baseline') {

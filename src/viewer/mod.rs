@@ -1234,8 +1234,18 @@ async fn label_values(
 
 async fn metadata(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
 ) -> axum::response::Json<ApiResponse<serde_json::Value>> {
-    let tsdb_handle = state.baseline_tsdb();
+    let capture = p.capture_id();
+    let tsdb_handle = match state.captures.get(capture) {
+        Some(t) => t,
+        None => {
+            return axum::response::Json(ApiResponse::error(
+                format!("capture {:?} not attached", capture),
+                "capture_not_found".to_string(),
+            ));
+        }
+    };
     let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
     let time_range = engine.get_time_range();
@@ -1243,8 +1253,11 @@ async fn metadata(
         "minTime": time_range.0,
         "maxTime": time_range.1
     });
-    if let Some(checksum) = &*state.file_checksum.read() {
-        metadata["fileChecksum"] = serde_json::json!(checksum);
+    // File checksum is only tracked for the baseline capture today.
+    if matches!(capture, capture_registry::CaptureId::Baseline) {
+        if let Some(checksum) = &*state.file_checksum.read() {
+            metadata["fileChecksum"] = serde_json::json!(checksum);
+        }
     }
     axum::response::Json(ApiResponse::success(metadata))
 }

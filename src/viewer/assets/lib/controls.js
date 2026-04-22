@@ -13,6 +13,21 @@ const formatDate = (ms) => {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
 
+// Relative-time formatter for compare mode. `offsetMs` is the time since
+// the baseline anchor (start of selection). Mirrors the axis-label style
+// used elsewhere in compare mode: +XhYm, +XmYs, or +Xs.
+const formatRelative = (offsetMs) => {
+    const totalSec = Math.round(offsetMs / 1000);
+    const sign = totalSec < 0 ? '-' : '+';
+    const s = Math.abs(totalSec);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${sign}${h}h${m}m`;
+    if (m > 0) return `${sign}${m}m${sec}s`;
+    return `${sign}${sec}s`;
+};
+
 /**
  * Parse a user-entered time string and return ms since epoch, or null on failure.
  * Accepts "HH:MM:SS" or "MMM DD HH:MM:SS" (e.g. "Mar 29 14:30:00").
@@ -215,6 +230,13 @@ const TimeRangeBar = {
         const timeLabel = (which, ms) => {
             if (vnode.state.editing === which) {
                 return editInput(which);
+            }
+            // In compare mode, render labels as relative offsets from the
+            // recording's start; suppress the date prefix entirely.
+            if (vnode.attrs.compareMode) {
+                return m('span.time-label', {
+                    title: 'Relative to baseline start',
+                }, formatRelative(ms - startTime));
             }
             return m('span.time-label', {
                 ondblclick: () => startEditing(which, ms),
