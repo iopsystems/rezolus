@@ -163,7 +163,14 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
         const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
         return {
             ...spec,
-            opts: { ...spec.opts, title: `${spec.opts.title} — ${cap.id}` },
+            // Per-slot id: Chart registers itself in chartsState.charts
+            // keyed by opts.id. Without this suffix both slots collide
+            // under the same key and datazoom only dispatches to one.
+            opts: {
+                ...spec.opts,
+                id: `${spec.opts.id || 'chart'}::${cap.id}`,
+                title: `${spec.opts.title} — ${cap.id}`,
+            },
             time_data: rebase(timeData, anchorSec),
             data: cap.heatmapData || spec.data,
             min_value: sharedMin,
@@ -413,6 +420,9 @@ const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, inte
             ...spec,
             opts: {
                 ...spec.opts,
+                // Per-slot id so Chart's chartsState.charts map keeps
+                // both slots registered (see sideBySideHeatmap).
+                id: `${spec.opts.id || 'chart'}::${cap.id}`,
                 title: `${spec.opts.title} — ${cap.id}`,
                 style: 'histogram_heatmap',
             },
