@@ -190,9 +190,9 @@ export const DIVERGING_BLUE_GREEN = [
  * saturated and demand attention.
  */
 export const DIVERGING_BLUE_GREEN_ALPHA_V = [
-    0.9, 0.7, 0.5, 0.3,
-    0.1,
-    0.3, 0.5, 0.7, 0.9,
+    0.9, 0.8, 0.7, 0.6,
+    0.5,
+    0.6, 0.7, 0.8, 0.9,
 ];
 
 /** Theme-aware null cell color for diff heatmaps — distinct from zero. */
