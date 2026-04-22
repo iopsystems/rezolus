@@ -383,7 +383,8 @@ export function configureHeatmap(chart) {
         ? buildRampColorFn(chart.spec.colormap)
         : viridisColor;
     const barCanvas = buildGradientCanvas(legendColorFn);
-    const { minLabel, maxLabel } = ensureLegendBar(chart.domNode, barCanvas);
+    const { minLabel, maxLabel, leftCaption, rightCaption, captionRow } =
+        ensureLegendBar(chart.domNode, barCanvas);
     const sig = (v) => {
         if (!Number.isFinite(v) || v === 0) return v;
         return parseFloat(v.toPrecision(2));
@@ -391,29 +392,18 @@ export function configureHeatmap(chart) {
     minLabel.textContent = formatter(sig(visualMapMin));
     maxLabel.textContent = formatter(sig(visualMapMax));
 
-    // Diff-heatmap directional caption: two labels pinned above the
-    // gradient bar's left and right ends. Uses fg-secondary (not muted)
-    // so the directional signal reads clearly; the numeric min/max
-    // below the bar still carry magnitude.
+    // Diff-heatmap directional caption above the gradient bar. The
+    // captions share the legend row's width, so each sits directly
+    // above its numeric counterpart (min/max label).
     const diffLabels = chart.spec.diffLegendLabels;
     if (diffLabels) {
-        let sub = chart.domNode.querySelector('.heatmap-diff-sublabels');
-        if (!sub) {
-            sub = document.createElement('div');
-            sub.className = 'heatmap-diff-sublabels';
-            sub.style.cssText = `${FONTS.cssFootnote} position: absolute; top: 32px; right: 4px; width: 144px; display: flex; justify-content: space-between; color: ${COLORS.fgSecondary}; font-size: 10px; pointer-events: none; z-index: 10;`;
-            const leftEl = document.createElement('span');
-            leftEl.className = 'heatmap-diff-sublabel-left';
-            const rightEl = document.createElement('span');
-            rightEl.className = 'heatmap-diff-sublabel-right';
-            sub.appendChild(leftEl);
-            sub.appendChild(rightEl);
-            chart.domNode.appendChild(sub);
-        }
-        sub.querySelector('.heatmap-diff-sublabel-left').textContent = diffLabels.left;
-        sub.querySelector('.heatmap-diff-sublabel-right').textContent = diffLabels.right;
+        leftCaption.textContent = diffLabels.left;
+        rightCaption.textContent = diffLabels.right;
+        captionRow.style.display = 'flex';
     } else {
-        chart.domNode.querySelector('.heatmap-diff-sublabels')?.remove();
+        leftCaption.textContent = '';
+        rightCaption.textContent = '';
+        captionRow.style.display = 'none';
     }
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.

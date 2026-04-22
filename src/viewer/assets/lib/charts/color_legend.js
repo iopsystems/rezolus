@@ -31,8 +31,17 @@ export function buildGradientCanvas(colorFn) {
 /**
  * Create or reuse the legend bar container.
  *
- * On first call, builds: [minLabel] [colorBar] [maxLabel] + any extraElements,
- * appends the container to `wrapper`, and returns element references.
+ * On first call, builds:
+ *
+ *   ┌──────────── optional caption row ────────────┐
+ *   │ [leftCaption]                  [rightCaption] │
+ *   ├──────────────── legend row ───────────────────┤
+ *   │ [minLabel]  [colorBar]  [maxLabel] [extras]   │
+ *   └───────────────────────────────────────────────┘
+ *
+ * The caption row spans the same width as the legend row below, so the
+ * left caption sits directly above minLabel's left edge and the right
+ * caption sits directly above maxLabel's right edge.
  *
  * On subsequent calls (same wrapper), repaints the gradient from the
  * (possibly new) barCanvas and returns existing element references. The
@@ -43,7 +52,9 @@ export function buildGradientCanvas(colorFn) {
  *     div; owned by Mithril so Mithril removes the legend on unmount)
  * @param {HTMLCanvasElement} barCanvas - pre-rendered gradient canvas
  * @param {HTMLElement[]} [extraElements] - additional elements appended after maxLabel
- * @returns {{ minLabel: HTMLElement, maxLabel: HTMLElement }}
+ * @returns {{ minLabel, maxLabel, leftCaption, rightCaption }} -
+ *     leftCaption/rightCaption are always present (empty by default);
+ *     callers that want a caption set their textContent.
  */
 export function ensureLegendBar(wrapper, barCanvas, extraElements) {
     let container = wrapper.querySelector('.heatmap-legend-bar');
@@ -53,19 +64,58 @@ export function ensureLegendBar(wrapper, barCanvas, extraElements) {
         return {
             minLabel: container.querySelector('.heatmap-label-min'),
             maxLabel: container.querySelector('.heatmap-label-max'),
+            leftCaption: container.querySelector('.heatmap-caption-left'),
+            rightCaption: container.querySelector('.heatmap-caption-right'),
+            captionRow: container.querySelector('.heatmap-caption-row'),
         };
     }
 
     container = document.createElement('div');
     container.className = 'heatmap-legend-bar';
+    // BAR_TOP lines up the GRADIENT ROW's top edge with the previous
+    // single-row layout's position; the caption row (when visible) sits
+    // above via negative margin so the gradient stays put whether or
+    // not captions are rendered.
     container.style.cssText = `
         position: absolute;
         top: ${BAR_TOP}px;
         right: 16px;
         display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 2px;
+        z-index: 10;
+    `;
+
+    // Caption row: same width as the legend row below, so left/right
+    // captions anchor to minLabel's left edge and maxLabel's right edge.
+    // Defaults to display: none — callers that want a caption set text
+    // on leftCaption/rightCaption and toggle captionRow.style.display.
+    const captionRow = document.createElement('div');
+    captionRow.className = 'heatmap-caption-row';
+    captionRow.style.cssText = `
+        display: none;
+        justify-content: space-between;
+        align-items: center;
+        ${FONTS.cssFootnote}
+        font-size: 10px;
+        color: ${COLORS.fgSecondary};
+        pointer-events: none;
+        margin-top: -14px;
+    `;
+    const leftCaption = document.createElement('span');
+    leftCaption.className = 'heatmap-caption-left';
+    const rightCaption = document.createElement('span');
+    rightCaption.className = 'heatmap-caption-right';
+    captionRow.appendChild(leftCaption);
+    captionRow.appendChild(rightCaption);
+
+    // Legend row: [min] [gradient] [max] [extras]
+    const legendRow = document.createElement('div');
+    legendRow.style.cssText = `
+        display: flex;
         align-items: center;
         gap: ${LABEL_GAP}px;
-        z-index: 10;
     `;
 
     const minLabel = document.createElement('span');
@@ -82,13 +132,16 @@ export function ensureLegendBar(wrapper, barCanvas, extraElements) {
     maxLabel.className = 'heatmap-label-max';
     maxLabel.style.cssText = `${FONTS.cssFootnote} color: ${COLORS.fgSecondary}; pointer-events: none;`;
 
-    container.appendChild(minLabel);
-    container.appendChild(bar);
-    container.appendChild(maxLabel);
+    legendRow.appendChild(minLabel);
+    legendRow.appendChild(bar);
+    legendRow.appendChild(maxLabel);
     if (extraElements) {
-        for (const el of extraElements) container.appendChild(el);
+        for (const el of extraElements) legendRow.appendChild(el);
     }
+
+    container.appendChild(captionRow);
+    container.appendChild(legendRow);
     wrapper.appendChild(container);
 
-    return { minLabel, maxLabel };
+    return { minLabel, maxLabel, leftCaption, rightCaption, captionRow };
 }
