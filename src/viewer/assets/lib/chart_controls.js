@@ -13,7 +13,7 @@ import { isSelected, toggleSelection } from './selection.js';
  */
 export const compareToggle = (spec, state) => {
     if (!state || !state.compareMode) return null;
-    const style = spec?.opts?.style;
+    const style = spec?.opts?.style || spec?._resolvedStyle;
     if (style !== 'heatmap') return null;
     const chartId = spec?.opts?.id;
     if (!chartId) return null;

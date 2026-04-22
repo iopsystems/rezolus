@@ -58,7 +58,7 @@ export const relativeTimeFormatter = (ms) => {
  * single-capture rendering).
  */
 export const renderCompareChart = (opts) => {
-    const style = opts.spec?.opts?.style;
+    const style = opts.spec?.opts?.style || opts.spec?._resolvedStyle;
     switch (style) {
         case 'line':              return overlayLine(opts);
         case 'heatmap':           return sideBySideHeatmap(opts);

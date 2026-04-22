@@ -2,18 +2,324 @@
 // viewer (script.js) and the static site viewer (site script.js).
 
 import { Chart } from './charts/chart.js';
-import { expandLink, selectButton } from './chart_controls.js';
+import { expandLink, selectButton, compareToggle } from './chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
+import { renderCompareChart, BASELINE_COLOR } from './charts/compare.js';
+import { queryRangeForCapture } from './data.js';
+import { ViewerApi } from './viewer_api.js';
+
+// ── Normalization helpers for compare-mode captures ────────────────
+
+// Convert the baseline plot spec's already-populated data into a
+// capture-shaped object keyed by `id: 'baseline'`. The shape depends on
+// chart style so the compare strategies can consume it uniformly.
+const extractBaselineCapture = (spec) => {
+    const style = spec.opts?.style || spec._resolvedStyle;
+    const cap = { id: 'baseline' };
+
+    if (style === 'line') {
+        const data = spec.data;
+        if (Array.isArray(data) && data.length >= 2) {
+            cap.timeData = data[0] || [];
+            cap.valueData = data[1] || [];
+        } else {
+            cap.timeData = [];
+            cap.valueData = [];
+        }
+        return cap;
+    }
+
+    if (style === 'multi' || style === 'scatter') {
+        const data = spec.data;
+        const names = spec.series_names || [];
+        const map = new Map();
+        if (Array.isArray(data) && data.length >= 2) {
+            const timeData = data[0] || [];
+            for (let i = 1; i < data.length; i++) {
+                let label = names[i - 1];
+                if (style === 'scatter') {
+                    // Normalize pXX label form to match quantile-derived keys
+                    // from the experiment query (percentileLabel in compare.js).
+                    const m = typeof label === 'string' ? label.match(/^p?(\d+(?:\.\d+)?)$/) : null;
+                    if (m) {
+                        const q = Number(m[1]);
+                        label = `p${(q).toFixed(2).replace(/\.?0+$/, '')}`;
+                    }
+                }
+                if (label == null) continue;
+                map.set(String(label), { timeData, valueData: data[i] || [] });
+            }
+        }
+        cap.seriesMap = map;
+        return cap;
+    }
+
+    if (style === 'heatmap' || style === 'histogram_heatmap') {
+        cap.timeData = spec.time_data || [];
+        cap.heatmapData = spec.data || [];
+        cap.bucketBounds = spec.bucket_bounds;
+        cap.minValue = spec.min_value;
+        cap.maxValue = spec.max_value;
+        cap.heatmapMatrix = heatmapTriplesToMatrix(cap.heatmapData, cap.timeData.length);
+        return cap;
+    }
+
+    return cap;
+};
+
+// Convert an experiment PromQL range result (same JSON shape as the
+// baseline got through applyResultToPlot) into the same capture shape
+// produced by extractBaselineCapture.
+const extractExperimentCapture = (spec, promqlResult) => {
+    const style = spec.opts?.style || spec._resolvedStyle;
+    const cap = { id: 'experiment' };
+    const results = promqlResult?.data?.result;
+    if (!Array.isArray(results) || results.length === 0) {
+        if (style === 'multi' || style === 'scatter') cap.seriesMap = new Map();
+        else if (style === 'heatmap' || style === 'histogram_heatmap') {
+            cap.timeData = []; cap.heatmapData = []; cap.heatmapMatrix = [];
+        } else {
+            cap.timeData = []; cap.valueData = [];
+        }
+        return cap;
+    }
+
+    if (style === 'line') {
+        const first = results[0];
+        const values = Array.isArray(first?.values) ? first.values : [];
+        cap.timeData = values.map((pair) => Number(pair[0]));
+        cap.valueData = values.map((pair) => {
+            const v = pair[1];
+            if (v === null || v === undefined) return null;
+            const n = Number(v);
+            return Number.isNaN(n) ? null : n;
+        });
+        return cap;
+    }
+
+    if (style === 'multi') {
+        const map = new Map();
+        for (const item of results) {
+            const mm = item.metric || {};
+            const key = Object.keys(mm)
+                .sort()
+                .filter((k) => k !== '__name__')
+                .map((k) => `${k}=${mm[k]}`)
+                .join(',');
+            const values = Array.isArray(item.values) ? item.values : [];
+            map.set(key, {
+                timeData: values.map((p) => Number(p[0])),
+                valueData: values.map((p) => {
+                    const v = p[1];
+                    if (v === null || v === undefined) return null;
+                    const n = Number(v);
+                    return Number.isNaN(n) ? null : n;
+                }),
+            });
+        }
+        cap.seriesMap = map;
+        return cap;
+    }
+
+    if (style === 'scatter') {
+        const map = new Map();
+        for (const item of results) {
+            const q = Number(item.metric && item.metric.quantile);
+            if (!Number.isFinite(q)) continue;
+            const key = `p${q * 100}`.replace(/\.?0+$/, '').replace(/p$/, 'p0');
+            // Re-canonicalize to match baseline's labelling
+            const canonical = `p${(q * 100).toFixed(2).replace(/\.?0+$/, '')}`;
+            const values = Array.isArray(item.values) ? item.values : [];
+            map.set(canonical, {
+                timeData: values.map((p) => Number(p[0])),
+                valueData: values.map((p) => {
+                    const v = p[1];
+                    if (v === null || v === undefined) return null;
+                    const n = Number(v);
+                    return Number.isNaN(n) ? null : n;
+                }),
+            });
+            void key; // silence unused-variable lint (kept for clarity)
+        }
+        cap.seriesMap = map;
+        return cap;
+    }
+
+    if (style === 'heatmap') {
+        // Build a flat-triple table + 2D matrix from the PromQL result,
+        // using the same transform applyResultToPlot uses for baseline.
+        const timeSet = new Set();
+        for (const item of results) {
+            for (const [ts] of item.values || []) timeSet.add(ts);
+        }
+        const timestamps = Array.from(timeSet).sort((a, b) => Number(a) - Number(b));
+        const timeIndex = new Map();
+        timestamps.forEach((ts, idx) => timeIndex.set(ts, idx));
+        const heatmapData = [];
+        for (let idx = 0; idx < results.length; idx++) {
+            const item = results[idx];
+            let cpuId = idx;
+            if (item.metric && item.metric.id != null) {
+                const parsed = parseInt(item.metric.id, 10);
+                if (!Number.isNaN(parsed)) cpuId = parsed;
+            }
+            for (const [ts, val] of item.values || []) {
+                const ti = timeIndex.get(ts);
+                if (ti === undefined) continue;
+                const v = val === null || val === undefined ? null : parseFloat(val);
+                heatmapData.push([ti, cpuId, v]);
+            }
+        }
+        cap.timeData = timestamps.map(Number);
+        cap.heatmapData = heatmapData;
+        cap.heatmapMatrix = heatmapTriplesToMatrix(heatmapData, cap.timeData.length);
+        return cap;
+    }
+
+    // histogram_heatmap — handled via a separate endpoint in the real
+    // app; for compare mode we best-effort pass the raw PromQL result,
+    // understanding the side-by-side strategy may degrade to no-data if
+    // the shape doesn't match. Full support is follow-up work.
+    cap.timeData = [];
+    cap.heatmapData = [];
+    cap.heatmapMatrix = [];
+    return cap;
+};
+
+// Build a rows × bins matrix from a flat [timeIdx, y, value] triple
+// array. Gaps fill with null. Used by the diff-heatmap strategy.
+function heatmapTriplesToMatrix(triples, binCount) {
+    if (!Array.isArray(triples) || triples.length === 0) return [];
+    let maxY = -1;
+    for (const t of triples) {
+        const y = Number(t?.[1]);
+        if (Number.isFinite(y) && y > maxY) maxY = y;
+    }
+    if (maxY < 0) return [];
+    const rows = maxY + 1;
+    const cols = Math.max(1, binCount || 0);
+    const matrix = Array.from({ length: rows }, () =>
+        new Array(cols).fill(null));
+    for (const [ti, y, v] of triples) {
+        const r = Number(y);
+        const c = Number(ti);
+        if (!Number.isFinite(r) || !Number.isFinite(c)) continue;
+        if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
+        matrix[r][c] = (v === null || v === undefined) ? null : Number(v);
+    }
+    return matrix;
+}
+
+/**
+ * Mithril component that fetches experiment data asynchronously and
+ * then delegates rendering to the compare adapter. Renders a loading
+ * placeholder until the experiment fetch resolves; an error
+ * placeholder on fetch failure. When the fetch succeeds but the
+ * strategy returns `false` (unsupported / not enough data), falls
+ * back to rendering baseline-only.
+ */
+const CompareChartWrapper = {
+    oninit(vnode) {
+        const { spec } = vnode.attrs;
+        vnode.state.experimentResult = null;
+        vnode.state.error = null;
+        const query = spec.promql_query;
+        if (!query) {
+            vnode.state.error = 'no PromQL query';
+            return;
+        }
+        // Query the experiment over its own time range. `getFileMetadata`
+        // returns start/end/duration for the specified capture; fall
+        // back to a wide default when unavailable.
+        (async () => {
+            try {
+                let start = 0;
+                let end = 0;
+                let step = vnode.attrs.step || 1;
+                try {
+                    const meta = await ViewerApi.getFileMetadata('experiment');
+                    const minT = meta?.minTime ?? meta?.min_time ?? meta?.start_time;
+                    const maxT = meta?.maxTime ?? meta?.max_time ?? meta?.end_time;
+                    if (minT != null && maxT != null) {
+                        start = Math.floor(minT / 1000);
+                        end = Math.ceil(maxT / 1000);
+                        const dur = Math.max(1, end - start);
+                        if (!step || step <= 0) step = Math.max(1, Math.floor(dur / 500));
+                    }
+                } catch (_) { /* best effort; fall through to request anyway */ }
+                const res = await queryRangeForCapture('experiment', query, start, end, step);
+                vnode.state.experimentResult = res;
+                m.redraw();
+            } catch (e) {
+                vnode.state.error = e?.message || String(e);
+                m.redraw();
+            }
+        })();
+    },
+
+    view(vnode) {
+        const { spec, chartsState, interval, anchors, toggles, setChartToggle } = vnode.attrs;
+
+        if (vnode.state.error) {
+            return m('div.chart-error', `compare error: ${vnode.state.error}`);
+        }
+        if (!vnode.state.experimentResult) {
+            return m('div.chart-loading', 'Loading experiment\u2026');
+        }
+
+        const baselineCap = extractBaselineCapture(spec);
+        const experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult);
+
+        const result = renderCompareChart({
+            spec,
+            captures: [baselineCap, experimentCap],
+            anchors: anchors || { baseline: 0, experiment: 0 },
+            toggles: toggles || {},
+            setChartToggle,
+            chartsState,
+            interval,
+            Chart,
+        });
+
+        if (result === false || result == null) {
+            // Fall through to baseline-only rendering.
+            return m(Chart, { spec, chartsState, interval });
+        }
+        // `_splitSpecs` marker: render each sub-spec as its own Chart in
+        // a grid wrapper so a multi/scatter split lays out cleanly.
+        if (result._splitSpecs) {
+            const specs = result._splitSpecs;
+            if (!specs || specs.length === 0) {
+                return m('div.chart-error', 'compare: no shared labels between captures');
+            }
+            return m('div.compare-split-subgroup',
+                specs.map((s) => m('div.chart-wrapper',
+                    m(Chart, { spec: s, chartsState, interval }))));
+        }
+        // Mithril vnode (has a `tag` or is an array) — render directly.
+        if (Array.isArray(result) || (result && (result.tag || result.view || result.children))) {
+            return result;
+        }
+        // Otherwise treat as a transformed spec.
+        return m(Chart, { spec: result, chartsState, interval });
+    },
+};
+
 /**
  * Factory for the Group component.
  *
  * @param {Function} getState - Returns { chartsState, heatmapEnabled,
- *     heatmapLoading, heatmapDataCache } with current values.
+ *     heatmapLoading, heatmapDataCache, compareMode?, toggles?,
+ *     setChartToggle?, anchors? } with current values.
  */
 export function createGroupComponent(getState) {
     return {
         view({ attrs }) {
-            const { chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache } = getState();
+            const state = getState();
+            const {
+                chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
+                compareMode, toggles, setChartToggle, anchors,
+            } = state;
             const sectionRoute = attrs.sectionRoute;
             const sectionName = attrs.sectionName;
             const interval = attrs.interval;
@@ -26,9 +332,12 @@ export function createGroupComponent(getState) {
                 ? { ...opts, title: `${titlePrefix}: ${opts.title}` }
                 : opts;
 
-            const chartHeader = (opts) => m('div.chart-header', [
+            const chartHeader = (opts, spec) => m('div.chart-header', [
                 m('span.chart-title', opts.title),
                 opts.description && m('span.chart-subtitle', opts.description),
+                compareMode && spec && compareToggle(spec, {
+                    compareMode, toggles, setChartToggle,
+                }),
             ]);
 
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
@@ -63,16 +372,44 @@ export function createGroupComponent(getState) {
                     const heatmapData = sectionHeatmapData.get(spec.opts.id);
                     const heatmapSpec = buildHistogramHeatmapSpec(spec, heatmapData, prefixTitle(spec.opts));
                     return m(wrapperClass, [
-                        chartHeader(heatmapSpec.opts),
-                        m(Chart, { spec: heatmapSpec, chartsState, interval }),
+                        chartHeader(heatmapSpec.opts, heatmapSpec),
+                        compareMode && spec.promql_query
+                            ? m(CompareChartWrapper, {
+                                spec: heatmapSpec,
+                                chartsState,
+                                interval,
+                                anchors,
+                                toggles,
+                                setChartToggle,
+                                step: interval,
+                            })
+                            : m(Chart, { spec: heatmapSpec, chartsState, interval }),
                         expandLink(spec, sectionRoute),
                         selectButton(spec, sectionRoute, sectionName),
                     ]);
                 }
 
                 const prefixedSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
+
+                if (compareMode && spec.promql_query) {
+                    return m(wrapperClass, [
+                        chartHeader(prefixedSpec.opts, prefixedSpec),
+                        m(CompareChartWrapper, {
+                            spec: prefixedSpec,
+                            chartsState,
+                            interval,
+                            anchors,
+                            toggles,
+                            setChartToggle,
+                            step: interval,
+                        }),
+                        expandLink(spec, sectionRoute),
+                        selectButton(spec, sectionRoute, sectionName),
+                    ]);
+                }
+
                 return m(wrapperClass, [
-                    chartHeader(prefixedSpec.opts),
+                    chartHeader(prefixedSpec.opts, prefixedSpec),
                     m(Chart, { spec: prefixedSpec, chartsState, interval }),
                     expandLink(spec, sectionRoute),
                     selectButton(spec, sectionRoute, sectionName),
@@ -139,3 +476,6 @@ export function buildClientOnlySectionView(Main, sectionResponseCache, activeSec
         },
     };
 }
+
+// silence lint for unused re-export BASELINE_COLOR (retained for future use)
+void BASELINE_COLOR;

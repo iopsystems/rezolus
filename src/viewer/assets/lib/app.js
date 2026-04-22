@@ -69,6 +69,12 @@ let Group;
 const initComponents = () => {
     Group = createGroupComponent(() => ({
         chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
+        compareMode,
+        toggles: chartToggles,
+        setChartToggle,
+        // Task 26 will land real anchor values in selectionStore; until
+        // then fall through to zero-offsets (absolute wall-clock time).
+        anchors: { baseline: 0, experiment: 0 },
     }));
 
     SystemInfoView = createSystemInfoView({
