@@ -3099,3 +3099,67 @@ main {
     color: var(--fg-muted);
     opacity: 0.6;
 }
+
+/* ==========================================================================
+   Compare mode — side-by-side + diff layouts
+   ========================================================================== */
+
+/* Pair of heatmap charts (baseline | experiment) */
+.compare-heatmap-pair {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+}
+.compare-heatmap-pair .compare-slot {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+/* Single diff heatmap wrapper — occupies full chart width */
+.compare-heatmap-diff {
+    display: block;
+    width: 100%;
+}
+
+/* Sub-grid for split multi/scatter charts (one sub-chart per shared label) */
+.compare-split-subgroup {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 8px;
+    width: 100%;
+}
+.compare-split-subgroup > .chart-wrapper {
+    min-width: 0;
+}
+
+/* Per-chart "diff" toggle shown in compare mode for heatmaps */
+.compare-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--fg-secondary);
+    user-select: none;
+}
+.compare-toggle input[type=checkbox] {
+    cursor: pointer;
+    margin: 0;
+}
+
+/* Transient states for async compare-mode fetches */
+.chart-loading,
+.chart-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 160px;
+    padding: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--fg-muted);
+}
+.chart-error {
+    color: var(--danger-fg);
+}
