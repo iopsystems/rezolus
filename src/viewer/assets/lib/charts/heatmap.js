@@ -357,18 +357,22 @@ export function configureHeatmap(chart) {
 
     applyChartOption(chart, option);
 
-    // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row
-    const formatter = createAxisLabelFormatter(unitSystem || 'count');
-    const wrapper = chart.domNode.parentNode;
-    // If the spec overrides the colormap (e.g. compare-mode diff heatmap),
-    // build a gradient from that palette; otherwise use viridis.
-    const legendColorFn = chart.spec.colormap
-        ? buildRampColorFn(chart.spec.colormap)
-        : viridisColor;
-    const barCanvas = buildGradientCanvas(legendColorFn);
-    const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
-    minLabel.textContent = formatter(visualMapMin);
-    maxLabel.textContent = formatter(visualMapMax);
+    // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row.
+    // Suppressed in compare mode for the right-hand slot so the shared
+    // color scale isn't rendered twice.
+    if (!chart.spec.suppressLegendBar) {
+        const formatter = createAxisLabelFormatter(unitSystem || 'count');
+        const wrapper = chart.domNode.parentNode;
+        // If the spec overrides the colormap (e.g. compare-mode diff heatmap),
+        // build a gradient from that palette; otherwise use viridis.
+        const legendColorFn = chart.spec.colormap
+            ? buildRampColorFn(chart.spec.colormap)
+            : viridisColor;
+        const barCanvas = buildGradientCanvas(legendColorFn);
+        const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
+        minLabel.textContent = formatter(visualMapMin);
+        maxLabel.textContent = formatter(visualMapMax);
+    }
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {

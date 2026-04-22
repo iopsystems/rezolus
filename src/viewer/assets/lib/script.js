@@ -259,11 +259,16 @@ const bootstrap = async () => {
 
     let experimentSystemInfo = null;
     let experimentFileMetadata = null;
+    let experimentFilename = null;
     if (compareMode) {
         try { experimentSystemInfo = await ViewerApi.getSystemInfo('experiment'); }
         catch (_) { /* optional */ }
         try { experimentFileMetadata = await ViewerApi.getFileMetadata('experiment'); }
         catch (_) { /* optional */ }
+        try {
+            const expMeta = await ViewerApi.getMetadata('experiment');
+            experimentFilename = expMeta?.data?.filename || null;
+        } catch (_) { /* optional */ }
     }
 
     initDashboard({
@@ -275,6 +280,7 @@ const bootstrap = async () => {
         compareMode,
         experimentSystemInfo,
         experimentFileMetadata,
+        experimentFilename,
         recording: true,
         onStartRecording: startRecording,
         onStopRecording: stopRecording,

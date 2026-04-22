@@ -352,8 +352,10 @@ const CompareChartWrapper = {
                 ]);
             }
             return m('div.compare-split-subgroup',
-                specs.map((s) => m('div.chart-wrapper',
-                    m(Chart, { spec: s, chartsState, interval }))));
+                specs.map((s) => m('div.chart-wrapper', [
+                    s._splitLabel && m('div.compare-split-label', s._splitLabel),
+                    m(Chart, { spec: s, chartsState, interval }),
+                ])));
         }
         // Mithril vnode (has a `tag` or is an array) — render directly.
         if (Array.isArray(result) || (result && (result.tag || result.view || result.children))) {

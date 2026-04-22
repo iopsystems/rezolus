@@ -3114,6 +3114,19 @@ main {
     flex: 1 1 0;
     min-width: 0;
 }
+.compare-heatmap-pair .compare-slot-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-secondary, #444);
+    letter-spacing: 0.02em;
+    padding: 0 8px 4px 8px;
+}
+.compare-heatmap-pair .compare-slot-label .compare-dot { font-size: 10px; line-height: 1; }
+.compare-heatmap-pair .compare-slot-label .compare-baseline-dot { color: #2E5BFF; }
+.compare-heatmap-pair .compare-slot-label .compare-experiment-dot { color: #00C46A; }
 
 /* Single diff heatmap wrapper — occupies full chart width */
 .compare-heatmap-diff {
@@ -3133,6 +3146,15 @@ main {
 }
 .compare-split-subgroup > .chart-wrapper {
     min-width: 0;
+}
+/* Small label above each disaggregated sub-chart (e.g. "p50"). */
+.compare-split-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-secondary, #444);
+    letter-spacing: 0.02em;
+    padding: 4px 8px 0 8px;
+    font-variant-numeric: tabular-nums;
 }
 /* Hard cap at 3 columns when the container is wide enough that auto-fit
  * would otherwise pack 4+ across. */

@@ -146,7 +146,10 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
     }
 
     const [a, b] = captures;
-    const makeSlotSpec = (cap) => {
+    // Unify color domain across both slots: same visualMap min/max so a
+    // cell of equal intensity reads the same color on both sides.
+    const { min: sharedMin, max: sharedMax } = unifiedHeatmapRange(a, b, spec);
+    const makeSlotSpec = (cap, suppressLegend) => {
         const timeData = cap.timeData || spec.time_data || [];
         const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
         return {
@@ -154,18 +157,52 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
             opts: { ...spec.opts, title: `${spec.opts.title} — ${cap.id}` },
             time_data: rebase(timeData, anchorSec),
             data: cap.heatmapData || spec.data,
-            min_value: cap.minValue != null ? cap.minValue : spec.min_value,
-            max_value: cap.maxValue != null ? cap.maxValue : spec.max_value,
+            min_value: sharedMin,
+            max_value: sharedMax,
+            suppressLegendBar: suppressLegend,
             xAxisFormatter: relativeTimeFormatter,
         };
     };
 
-    return m('div.compare-heatmap-pair', [
-        m('div.compare-slot',
-            m(Chart, { spec: makeSlotSpec(a), chartsState, interval })),
-        m('div.compare-slot',
-            m(Chart, { spec: makeSlotSpec(b), chartsState, interval })),
+    const slot = (cap, dotCls, suppressLegend) => m('div.compare-slot', [
+        m('div.compare-slot-label', [
+            m(`span.compare-dot.${dotCls}`, '\u25CF'),
+            m('span', cap.id),
+        ]),
+        m(Chart, { spec: makeSlotSpec(cap, suppressLegend), chartsState, interval }),
     ]);
+    // Keep the legend bar on the left slot only; the shared color scale
+    // makes a second legend redundant.
+    return m('div.compare-heatmap-pair', [
+        slot(a, 'compare-baseline-dot', false),
+        slot(b, 'compare-experiment-dot', true),
+    ]);
+};
+
+// Scan both captures' heatmap triples and return a unified (min, max)
+// for the visualMap. Falls back to the spec's own bounds if a capture
+// has no numeric samples.
+const unifiedHeatmapRange = (a, b, spec) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    const visit = (triples) => {
+        if (!Array.isArray(triples)) return;
+        for (const t of triples) {
+            const v = Array.isArray(t) ? t[2] : null;
+            if (v == null || Number.isNaN(v)) continue;
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+    };
+    visit(a?.heatmapData);
+    visit(b?.heatmapData);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+        return {
+            min: spec.min_value != null ? spec.min_value : 0,
+            max: spec.max_value != null ? spec.max_value : 1,
+        };
+    }
+    return { min: lo, max: hi };
 };
 
 /**
@@ -269,6 +306,10 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
                 title: `${spec.opts.title} — ${label}`,
                 style: 'line',
             },
+            // Bare sub-chart label (e.g. "p50") for the caller to render
+            // as a small header above this sub-chart. The full opts.title
+            // stays around for tooltip/fallback use.
+            _splitLabel: label,
             multiSeries: [
                 {
                     name: 'baseline',
@@ -314,7 +355,8 @@ const percentileLabel = (r) => {
  */
 const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart }) => {
     const [a, b] = captures;
-    const makeSlotSpec = (cap) => {
+    const { min: sharedMin, max: sharedMax } = unifiedHeatmapRange(a, b, spec);
+    const makeSlotSpec = (cap, suppressLegend) => {
         const timeData = cap.timeData || spec.time_data || [];
         const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
         return {
@@ -327,17 +369,23 @@ const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, inte
             time_data: rebase(timeData, anchorSec),
             data: cap.heatmapData || spec.data,
             bucket_bounds: cap.bucketBounds || spec.bucket_bounds,
-            min_value: cap.minValue != null ? cap.minValue : spec.min_value,
-            max_value: cap.maxValue != null ? cap.maxValue : spec.max_value,
+            min_value: sharedMin,
+            max_value: sharedMax,
+            suppressLegendBar: suppressLegend,
             xAxisFormatter: relativeTimeFormatter,
         };
     };
 
+    const slot = (cap, dotCls, suppressLegend) => m('div.compare-slot', [
+        m('div.compare-slot-label', [
+            m(`span.compare-dot.${dotCls}`, '\u25CF'),
+            m('span', cap.id),
+        ]),
+        m(Chart, { spec: makeSlotSpec(cap, suppressLegend), chartsState, interval }),
+    ]);
     return m('div.compare-heatmap-pair', [
-        m('div.compare-slot',
-            m(Chart, { spec: makeSlotSpec(a), chartsState, interval })),
-        m('div.compare-slot',
-            m(Chart, { spec: makeSlotSpec(b), chartsState, interval })),
+        slot(a, 'compare-baseline-dot', false),
+        slot(b, 'compare-experiment-dot', true),
     ]);
 };
 

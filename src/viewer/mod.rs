@@ -233,7 +233,15 @@ pub fn run(config: Config) {
                 let (exp_sysinfo, _exp_selection, exp_file_meta) =
                     extract_parquet_metadata(exp_path);
                 match Tsdb::load(exp_path) {
-                    Ok(exp_tsdb) => {
+                    Ok(mut exp_tsdb) => {
+                        // Stamp the Tsdb with its filename (basename) so
+                        // the viewer can surface it in the compare badge.
+                        let base = exp_path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("experiment.parquet")
+                            .to_string();
+                        exp_tsdb.set_filename(base);
                         state
                             .captures
                             .attach_experiment(exp_tsdb, exp_sysinfo, exp_file_meta);
@@ -1255,7 +1263,8 @@ async fn metadata(
     let time_range = engine.get_time_range();
     let mut metadata = serde_json::json!({
         "minTime": time_range.0,
-        "maxTime": time_range.1
+        "maxTime": time_range.1,
+        "filename": tsdb.filename(),
     });
     // File checksum is only tracked for the baseline capture today.
     if matches!(capture, capture_registry::CaptureId::Baseline) {
@@ -1364,7 +1373,7 @@ async fn upload_parquet(
 /// Returns 409 if an experiment is already attached (caller must DELETE first).
 async fn attach_experiment(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    _headers: axum::http::HeaderMap,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
@@ -1381,6 +1390,12 @@ async fn attach_experiment(
         return (StatusCode::BAD_REQUEST, "missing parquet bytes").into_response();
     }
 
+    let filename = headers
+        .get("x-rezolus-filename")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "experiment.parquet".to_string());
+
     let temp_path =
         std::env::temp_dir().join(format!("rezolus-experiment-{}.parquet", std::process::id(),));
     if let Err(e) = std::fs::write(&temp_path, &body) {
@@ -1391,7 +1406,7 @@ async fn attach_experiment(
             .into_response();
     }
 
-    let tsdb = match Tsdb::load(&temp_path) {
+    let mut tsdb = match Tsdb::load(&temp_path) {
         Ok(t) => t,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
@@ -1402,6 +1417,9 @@ async fn attach_experiment(
                 .into_response();
         }
     };
+    // Stamp with the uploader's filename so the viewer can display it
+    // in the compare badge.
+    tsdb.set_filename(filename);
 
     let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
     state

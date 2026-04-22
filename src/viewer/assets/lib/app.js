@@ -106,11 +106,17 @@ const durationFromFileMetadata = (fileMeta) => {
 const attachExperiment = async (file) => {
     const sysinfo = await ViewerApi.attachExperiment(file);
     let expFileMeta = null;
+    let expMeta = null;
     try { expFileMeta = await ViewerApi.getFileMetadata('experiment'); }
+    catch (_) { /* optional */ }
+    try { expMeta = await ViewerApi.getMetadata('experiment'); }
     catch (_) { /* optional */ }
     experimentSystemInfo = sysinfo || null;
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
-    experimentFilename = (file && file.name)
+    // Prefer server-stamped filename (works in both file-drop and CLI paths);
+    // fall back to the dropped File's name.
+    experimentFilename = (expMeta?.data?.filename)
+        || (file && file.name)
         || (expFileMeta && (expFileMeta.filename || expFileMeta.file_name))
         || null;
     experimentAttached = true;
@@ -504,8 +510,9 @@ const initDashboard = (config = {}) => {
     experimentAttached = compareMode;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
-    experimentFilename = (config.experimentFileMetadata
-        && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))
+    experimentFilename = config.experimentFilename
+        || (config.experimentFileMetadata
+            && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))
         || null;
     baselineDurationMs = durationFromFileMetadata(fileMetadata);
 

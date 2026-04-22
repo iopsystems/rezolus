@@ -354,7 +354,12 @@ export function configureHistogramHeatmap(chart) {
     const pctMinLabel = pctMin.toFixed(1) + '%';
     const pctMaxLabel = pctMax.toFixed(1) + '%';
 
-    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row
+    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row.
+    // Suppressed on the right-hand slot of a compare pair so the shared
+    // color scale isn't rendered twice.
+    if (chart.spec.suppressLegendBar) {
+        return;
+    }
     const wrapper = chart.domNode.parentNode;
     const barCanvas = buildGradientCanvas(infernoColor);
 
