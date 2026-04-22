@@ -366,13 +366,8 @@ body::after {
         width: 20px;
         height: 20px;
     }
-    #topnav .compare-badge {
-        gap: 8px;
-        padding: 4px 6px;
-    }
-    #topnav .compare-badge .compare-capture-name {
-        max-width: 140px;
-    }
+    /* Badge-specific narrow-viewport styling now lives with the badge
+     * rules further down (dropdown card behavior). */
 }
 
 /* Logo mark - abstract waveform */
@@ -3282,17 +3277,44 @@ main {
 
 /* ==========================================================================
    Compare mode — header badge
+
+   Rendered as <details> so the same DOM serves both presentations:
+   - Wide viewports (> 900px): the <summary> is hidden; the capture
+     rows render inline next to each other, always visible.
+   - Narrow viewports: the <summary> becomes a compact dot-only
+     trigger; clicking opens a dropdown card below with the rows
+     stacked and filenames wrapping.
    ========================================================================== */
 .compare-badge {
+    /* `details` is block by default; flatten to inline-flex so it
+     * participates in the navbar's horizontal layout. */
     display: inline-flex;
     align-items: center;
-    gap: 12px;
     padding: 4px 10px;
     margin-left: 8px;
     background: var(--compare-baseline-bg);
     border-radius: 4px;
     font-size: 12px;
-    white-space: nowrap;
+    position: relative;
+    max-width: 50vw;   /* never take more than half the nav width */
+}
+.compare-badge-summary {
+    /* Hidden on wide; the capture list below shows inline instead. */
+    display: none;
+    list-style: none;
+    cursor: pointer;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+    outline: none;
+}
+.compare-badge-summary::-webkit-details-marker { display: none; }
+.compare-badge-summary::marker { content: ''; }
+
+.compare-badge .compare-capture-list {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
 }
 .compare-badge .compare-capture {
     display: inline-flex;
@@ -3326,10 +3348,65 @@ main {
     border: none;
     background: transparent;
     border-radius: 3px;
+    flex-shrink: 0;
 }
 .compare-badge .compare-load svg { display: block; }
 .compare-badge .compare-load:hover {
     background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+/* Narrow-viewport layout: collapse the badge into a dot-only trigger,
+ * pop the rows out as a dropdown card below. */
+@media (max-width: 900px) {
+    .compare-badge {
+        padding: 0;
+        background: transparent;
+        max-width: none;
+    }
+    .compare-badge-summary {
+        display: inline-flex;
+        padding: 4px 8px;
+        background: var(--compare-baseline-bg);
+        border-radius: 4px;
+    }
+    .compare-badge:not([open]) .compare-capture-list {
+        display: none;
+    }
+    .compare-badge[open] .compare-capture-list {
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--bg-card, var(--bg-tertiary));
+        border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+        border-radius: 6px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+        z-index: 50;
+        min-width: 240px;
+        max-width: min(90vw, 360px);
+    }
+    .compare-badge[open] .compare-capture {
+        /* Stack: dots beside the label+name block, Load icon trailing */
+        flex-wrap: wrap;
+        gap: 6px 10px;
+    }
+    .compare-badge[open] .compare-capture + .compare-capture {
+        padding-left: 0;
+        border-left: none;
+        border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+        padding-top: 8px;
+    }
+    .compare-badge[open] .compare-capture-name {
+        max-width: none;
+        flex: 1 1 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-all;
+    }
 }
 
 /* Capture-color dots + icons. Parent-agnostic so they pick up the
