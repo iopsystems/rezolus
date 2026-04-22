@@ -100,7 +100,7 @@ export class ChartsState {
      * @param {{ source?: 'global' | 'local' | null }} opts
      * @returns {boolean} true when the store was updated, false on no-op.
      */
-    setZoom(zoom, { source = this.zoomSource } = {}) {
+    setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
         const next = normalizeZoom(zoom);
         if (zoomEqual(this.zoomLevel, next)) return false;
         this.zoomLevel = next;
@@ -110,13 +110,17 @@ export class ChartsState {
                 ? null
                 : { start: next.start ?? 0, end: next.end ?? 100 };
         }
-        // Fan out via the chart registry directly. We keep the
-        // subscribeZoom API for new callers (TimeRangeBar view, future
-        // features), but also apply the zoom to every registered chart
-        // imperatively — matches the pre-observable behavior and avoids
-        // a class of lazy-init bugs where a chart was in `charts` but
-        // its subscribeZoom hadn't yet run when the first setZoom fired.
+        // Fan out via the chart registry directly. Skip the origin
+        // chart (when provided) because its toolbox already applied the
+        // zoom before firing the datazoom event that led us here. For
+        // heatmap-type charts, re-dispatching to the origin cascades
+        // through heatmap.js's downsample-swap setOption — which fires
+        // a secondary datazoom event whose batch contents can drift
+        // from the value we just wrote, triggering a re-entrant
+        // setZoom that fans out drifted percentages to every sibling.
+        // Skipping origin breaks that loop at its source.
         this.charts.forEach(chart => {
+            if (chart === originChart) return;
             if (chart._applyZoom) chart._applyZoom(this.zoomLevel);
         });
         // Then notify any non-chart subscribers (future consumers).
@@ -577,17 +581,14 @@ export class Chart {
             if (!hasPct && !hasValues) return;
 
             // Route the user-initiated zoom through the single
-            // chartsState.setZoom writer. setZoom's diff check short-
-            // circuits echoes: the dispatch fan-out below will trigger
-            // secondary datazoom events on sibling heatmaps (via
-            // heatmap.js's downsample-swap setOption), those events
-            // re-enter this handler with effectively the same values
-            // we just proposed, and setZoom returns false instead of
-            // re-notifying. No skip-self, no write-gate, no re-entry
-            // flag — the diff is the echo guard by construction.
+            // chartsState.setZoom writer. Mark `this` as the origin so
+            // setZoom's fan-out doesn't dispatch back to us — our
+            // echart already has the zoom from the toolbox drag, and
+            // re-dispatching to self would cascade through
+            // heatmap.js's downsample-swap setOption (the old #822 bug).
             const changed = this.chartsState.setZoom(
                 { start, end, startValue, endValue },
-                { source: 'local' },
+                { source: 'local', originChart: this },
             );
             if (changed) m.redraw();
         });
