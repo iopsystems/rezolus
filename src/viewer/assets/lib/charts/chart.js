@@ -422,8 +422,26 @@ export class Chart {
         // Only for chart types with a value/log Y-axis
         if (style === 'heatmap' || style === 'histogram_heatmap') return;
 
+        // In compare-mode overlays, spec.data holds only the baseline's
+        // [timeData, valueData]; the experiment values live in
+        // spec.multiSeries[1]. Collect all series' (timeData, valueData)
+        // pairs so the Y-rescale considers both captures and doesn't
+        // clip the higher-valued trace.
+        const multi = Array.isArray(this.spec.multiSeries) && this.spec.multiSeries.length > 0
+            ? this.spec.multiSeries
+            : null;
         const data = this.spec.data;
-        if (!data || data.length < 2 || !data[0] || data[0].length === 0) return;
+        const seriesPairs = multi
+            ? multi.map((s) => ({ timeData: s.timeData, valueData: s.valueData }))
+            : (data && data.length >= 2 && data[0] && data[0].length > 0
+                ? (() => {
+                    const timeData = data[0];
+                    const out = [];
+                    for (let i = 1; i < data.length; i++) out.push({ timeData, valueData: data[i] });
+                    return out;
+                })()
+                : []);
+        if (seriesPairs.length === 0) return;
 
         const format = this.spec.opts.format || {};
         const option = this.echart.getOption();
@@ -441,43 +459,47 @@ export class Chart {
             return;
         }
 
-        // Compute visible time range from zoom state
-        const timeData = data[0]; // seconds
+        // Compute visible time range from zoom state. Use the widest
+        // series' timeData as the reference (matches what line.js uses
+        // for dataZoom).
+        const refTimeData = seriesPairs.reduce(
+            (a, s) => (s.timeData.length > a.length ? s.timeData : a),
+            seriesPairs[0].timeData,
+        );
         const zoom = this.chartsState.zoomLevel;
 
         let visibleMinMs, visibleMaxMs;
         if (!zoom) {
-            // No zoom state (default view) — scan full time range
-            visibleMinMs = timeData[0] * 1000;
-            visibleMaxMs = timeData[timeData.length - 1] * 1000;
+            visibleMinMs = refTimeData[0] * 1000;
+            visibleMaxMs = refTimeData[refTimeData.length - 1] * 1000;
         } else if (zoom.startValue !== undefined && zoom.endValue !== undefined) {
             visibleMinMs = zoom.startValue;
             visibleMaxMs = zoom.endValue;
         } else {
-            const totalMinMs = timeData[0] * 1000;
-            const totalMaxMs = timeData[timeData.length - 1] * 1000;
+            const totalMinMs = refTimeData[0] * 1000;
+            const totalMaxMs = refTimeData[refTimeData.length - 1] * 1000;
             const totalRange = totalMaxMs - totalMinMs;
             visibleMinMs = totalMinMs + (zoom.start / 100) * totalRange;
             visibleMaxMs = totalMinMs + (zoom.end / 100) * totalRange;
         }
 
-        // Scan raw data for min/max Y in visible range.
-        // When percentile series are pinned, only consider pinned series.
+        // Scan each series' data for min/max Y in visible range.
+        // When percentile series are pinned, only consider pinned series
+        // (legacy spec.data path — multiSeries doesn't carry labels).
         let yMin = Infinity;
         let yMax = -Infinity;
 
-        for (let seriesIdx = 1; seriesIdx < data.length; seriesIdx++) {
-            // Skip faded (non-pinned) series so Y-axis rescales to selection
+        for (let pairIdx = 0; pairIdx < seriesPairs.length; pairIdx++) {
             if (hasPins && labels) {
-                const name = labels[seriesIdx - 1];
+                const name = labels[pairIdx];
                 if (name && !this.pinnedSet.has(name)) continue;
             }
-            const values = data[seriesIdx];
+            const { timeData, valueData } = seriesPairs[pairIdx];
             for (let i = 0; i < timeData.length; i++) {
                 const tMs = timeData[i] * 1000;
                 if (tMs < visibleMinMs) continue;
                 if (tMs > visibleMaxMs) break;
-                const y = values[i];
+                const y = valueData[i];
                 if (y !== null && y !== undefined && !isNaN(y)) {
                     if (y < yMin) yMin = y;
                     if (y > yMax) yMax = y;
