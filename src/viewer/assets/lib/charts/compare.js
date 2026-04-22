@@ -76,8 +76,18 @@ export const renderCompareChart = (opts) => {
 // Returns a new array; never mutates the input.
 const rebase = (timeDataSec, anchorSec) => timeDataSec.map((t) => t - anchorSec);
 
-const anchorSecondsFor = (anchors, id) =>
-    ((anchors && anchors[id]) || 0) / 1000;
+// The per-capture anchor in seconds. Each capture's effective anchor is
+// the capture's natural start (first sample) plus a user-configured
+// offset. `anchors[id]` is stored as a signed ms offset from that start
+// (0 = "no user shift"). This keeps `rebase` producing small relative
+// offsets even when the raw timestamps are absolute-epoch seconds.
+const anchorSecondsFor = (anchors, id, timeDataSec) => {
+    const naturalStart = Array.isArray(timeDataSec) && timeDataSec.length > 0
+        ? timeDataSec[0]
+        : 0;
+    const userOffsetMs = (anchors && anchors[id]) || 0;
+    return naturalStart + userOffsetMs / 1000;
+};
 
 // ── Strategies ───────────────────────────────────────────────────────
 
@@ -92,8 +102,8 @@ const overlayLine = ({ spec, captures, anchors }) => {
     const experiment = captures.find((c) => c.id === 'experiment');
     if (!baseline || !experiment) return false;
 
-    const baseSec = anchorSecondsFor(anchors, 'baseline');
-    const expSec = anchorSecondsFor(anchors, 'experiment');
+    const baseSec = anchorSecondsFor(anchors, 'baseline', baseline.timeData);
+    const expSec = anchorSecondsFor(anchors, 'experiment', experiment.timeData);
 
     const seriesList = [];
     if (Array.isArray(baseline.timeData) && baseline.timeData.length > 0) {
@@ -137,8 +147,8 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
 
     const [a, b] = captures;
     const makeSlotSpec = (cap) => {
-        const anchorSec = anchorSecondsFor(anchors, cap.id);
         const timeData = cap.timeData || spec.time_data || [];
+        const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
         return {
             ...spec,
             opts: { ...spec.opts, title: `${spec.opts.title} — ${cap.id}` },
@@ -197,8 +207,8 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         }
     }
 
-    const baselineAnchorSec = anchorSecondsFor(anchors, 'baseline');
     const timeData = (a.timeData || spec.time_data || []).slice(0, bins);
+    const baselineAnchorSec = anchorSecondsFor(anchors, 'baseline', timeData);
 
     const isDark = typeof document !== 'undefined'
         && document.body
@@ -246,12 +256,11 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
     const labelsB = new Set(mapB.keys());
     const shared = [...intersectLabels(labelsA, labelsB)].sort();
 
-    const baseSec = anchorSecondsFor(anchors, 'baseline');
-    const expSec = anchorSecondsFor(anchors, 'experiment');
-
     const specs = shared.map((label) => {
         const a = mapA.get(label);
         const b = mapB.get(label);
+        const baseSec = anchorSecondsFor(anchors, 'baseline', a.timeData);
+        const expSec = anchorSecondsFor(anchors, 'experiment', b.timeData);
         return {
             ...spec,
             opts: {
@@ -303,8 +312,8 @@ const percentileLabel = (r) => {
 const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart }) => {
     const [a, b] = captures;
     const makeSlotSpec = (cap) => {
-        const anchorSec = anchorSecondsFor(anchors, cap.id);
         const timeData = cap.timeData || spec.time_data || [];
+        const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
         return {
             ...spec,
             opts: {

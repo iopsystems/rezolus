@@ -250,17 +250,17 @@ const CompareChartWrapper = {
                 let start = 0;
                 let end = 0;
                 let step = vnode.attrs.step || 1;
-                // getMetadata (not getFileMetadata) returns minTime / maxTime
-                // from the TSDB's own time range; these are the bounds the
-                // query engine expects for a range query.
+                // /api/v1/metadata returns minTime/maxTime in SECONDS (PromQL
+                // native format, same as plot.data[0] timestamps). Do not
+                // divide by 1000.
                 try {
                     const meta = await ViewerApi.getMetadata('experiment');
                     const data = meta?.data ?? meta;
                     const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
                     const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
                     if (minT != null && maxT != null) {
-                        start = Math.floor(minT / 1000);
-                        end = Math.ceil(maxT / 1000);
+                        start = Number(minT);
+                        end = Number(maxT);
                         const dur = Math.max(1, end - start);
                         if (!step || step <= 0) step = Math.max(1, Math.floor(dur / 500));
                     }
