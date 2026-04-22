@@ -20,21 +20,23 @@ import { resolveStyle, resolvedStyle } from './metric_types.js';
 
 
 export class ChartsState {
-    // Zoom state for synchronization across charts
-    // {
-    //     start?: number, // 0-100
-    //     end?: number, // 0-100
-    //     startValue?: number, // raw x axis data value (ms)
-    //     endValue?: number,   // raw x axis data value (ms)
-    // }
+    // Zoom state for synchronization across charts.
+    // Shape: { start?: 0-100, end?: 0-100, startValue?: ms, endValue?: ms }
+    // Treated as a whole — consumers should read via the observable
+    // subscribeZoom() callback when they need to react to changes.
+    // Direct reads (TimeRangeBar's `.globalZoom`, `isDefaultZoom`, etc.)
+    // stay fine, but `zoomLevel` MUST ONLY be mutated via setZoom().
     zoomLevel = null;
     // 'global' (time bar) | 'local' (chart drag/scroll) | null
     zoomSource = null;
     // Global zoom — always percentage-based { start, end } (0-100).
-    // Tracks what the time bar shows. Never updated by local chart zooms.
+    // Tracks what the time bar shows. Only updated when source === 'global'.
     globalZoom = null;
     // All `Chart` instances, mapped by id
     charts = new Map();
+    // Zoom subscribers. Each entry receives (zoom, source) synchronously
+    // after setZoom produces a diff.
+    _zoomSubs = new Set();
     // Global color mapper - for consistent cgroup colors
     colorMapper = globalColorMapper;
 
@@ -45,6 +47,7 @@ export class ChartsState {
         this.zoomSource = null;
         this.globalZoom = null;
         this.charts.clear();
+        this._zoomSubs.clear();
     }
 
     isDefaultZoom() {
@@ -59,19 +62,52 @@ export class ChartsState {
                 c => c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0));
     }
 
-    // Reset zoom level on all charts
+    /**
+     * Subscribe to zoom changes. The callback fires synchronously from
+     * inside setZoom() with (zoom, source) whenever setZoom produces an
+     * actual change. Idempotent writes (same zoom as current) do not
+     * fire subscribers — that's how echo events from echarts' own
+     * programmatic dispatches are suppressed by construction.
+     * Returns an unsubscribe function.
+     */
+    subscribeZoom(fn) {
+        this._zoomSubs.add(fn);
+        return () => { this._zoomSubs.delete(fn); };
+    }
+
+    /**
+     * The ONE writer for zoomLevel / zoomSource / globalZoom. Any path
+     * that changes zoom — user drag on a chart, TimeRangeBar drag,
+     * selection restore, reset — goes through here.
+     *
+     * Diffs against the current zoomLevel. When the proposed zoom is
+     * effectively identical to the current one, returns false without
+     * notifying subscribers (this is the echo guard). Otherwise writes
+     * the new zoom and notifies every zoom subscriber synchronously.
+     *
+     * @param {{start?: number, end?: number, startValue?: number, endValue?: number} | null} zoom
+     * @param {{ source?: 'global' | 'local' | null }} opts
+     * @returns {boolean} true when the store was updated, false on no-op.
+     */
+    setZoom(zoom, { source = this.zoomSource } = {}) {
+        const next = normalizeZoom(zoom);
+        if (zoomEqual(this.zoomLevel, next)) return false;
+        this.zoomLevel = next;
+        this.zoomSource = source;
+        if (source === 'global') {
+            this.globalZoom = next == null
+                ? null
+                : { start: next.start ?? 0, end: next.end ?? 100 };
+        }
+        for (const fn of this._zoomSubs) fn(this.zoomLevel, this.zoomSource);
+        return true;
+    }
+
+    // Reset zoom level on all charts — same writer path as every other
+    // zoom change, so subscribers see a single {start:0, end:100}
+    // notification rather than an ad-hoc forEach dispatch.
     resetZoom() {
-        this.zoomLevel = { start: 0, end: 100 };
-        this.zoomSource = null;
-        this.globalZoom = { start: 0, end: 100 };
-        this.charts.forEach(chart => {
-            chart.dispatchAction({
-                type: 'dataZoom',
-                start: 0,
-                end: 100,
-            });
-            chart._rescaleYAxis();
-        });
+        this.setZoom({ start: 0, end: 100 }, { source: 'global' });
     }
 
     // Reset zoom and clear all pin selections and frozen tooltips
@@ -91,6 +127,40 @@ export class ChartsState {
             }
         });
     }
+}
+
+// Normalize a caller-supplied zoom value into the canonical shape
+// stored on ChartsState. null means "no zoom"; an object with only
+// NaN/undefined fields also collapses to null so callers don't have
+// to pre-sanitize.
+function normalizeZoom(zoom) {
+    if (zoom == null) return null;
+    const out = {};
+    if (Number.isFinite(zoom.start)) out.start = zoom.start;
+    if (Number.isFinite(zoom.end)) out.end = zoom.end;
+    if (Number.isFinite(zoom.startValue)) out.startValue = zoom.startValue;
+    if (Number.isFinite(zoom.endValue)) out.endValue = zoom.endValue;
+    if (Object.keys(out).length === 0) return null;
+    return out;
+}
+
+// Zoom equality with a tiny epsilon, so programmatic echoes that
+// round-trip through echarts' internal arithmetic don't count as a
+// real change. Prefer percentage comparison when both sides have it.
+const ZOOM_EPS = 1e-6;
+function zoomEqual(a, b) {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    const near = (x, y) => Math.abs(x - y) <= ZOOM_EPS;
+    if (Number.isFinite(a.start) && Number.isFinite(b.start)
+        && Number.isFinite(a.end) && Number.isFinite(b.end)) {
+        return near(a.start, b.start) && near(a.end, b.end);
+    }
+    if (Number.isFinite(a.startValue) && Number.isFinite(b.startValue)
+        && Number.isFinite(a.endValue) && Number.isFinite(b.endValue)) {
+        return near(a.startValue, b.startValue) && near(a.endValue, b.endValue);
+    }
+    return false;
 }
 
 // Cheap same-shape heuristic for detecting "structurally identical"
@@ -186,26 +256,15 @@ export class Chart {
             this.configureChartByType();
 
             // Restore zoom state after re-render (notMerge wipes the
-            // dataZoom range). Applies to every reconfigure — not just
-            // theme changes — because in compare mode each Mithril
-            // redraw hands in a fresh spec object and therefore
-            // triggers a full reconfigure, which would otherwise clear
-            // the user's zoom on the non-source slot.
-            if (this.chartsState.zoomLevel !== null) {
-                const z = this.chartsState.zoomLevel;
-                if (z.start !== 0 || z.end !== 100) {
-                    const p = { type: 'dataZoom' };
-                    if (z.start !== undefined && z.end !== undefined
-                        && !Number.isNaN(z.start) && !Number.isNaN(z.end)) {
-                        p.start = z.start;
-                        p.end = z.end;
-                    } else if (z.startValue !== undefined && z.endValue !== undefined) {
-                        p.startValue = z.startValue;
-                        p.endValue = z.endValue;
-                    }
-                    this.echart.dispatchAction(p);
-                    this._rescaleYAxis();
-                }
+            // dataZoom range). In compare mode each Mithril redraw
+            // hands in a fresh spec object and therefore triggers a
+            // full reconfigure, which would otherwise clear the user's
+            // zoom on the non-source slot. _applyZoom is the single
+            // entrypoint for writing the zoom onto echarts; skip when
+            // there's no zoom set or we're at default.
+            const z = this.chartsState.zoomLevel;
+            if (z != null && !(z.start === 0 && z.end === 100)) {
+                this._applyZoom(z);
             }
             // Re-arm drag-to-zoom. applyChartOption inside
             // configureChartByType already dispatches takeGlobalCursor,
@@ -234,6 +293,13 @@ export class Chart {
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
         if (this._pinCleanup) this._pinCleanup();
 
+        // Drop our zoom subscription so setZoom stops notifying a
+        // disposed echart. Also remove ourselves from the charts
+        // registry so iterations in resetAll / hasActiveSelection /
+        // similar don't walk stale entries.
+        if (this._unsubZoom) { this._unsubZoom(); this._unsubZoom = null; }
+        this.chartsState.charts.delete(this.chartId);
+
         if (this.echart) {
             this.echart.dispose();
             this.echart = null;
@@ -251,6 +317,39 @@ export class Chart {
         if (this.echart) {
             this.echart.dispatchAction(action);
         }
+    }
+
+    /**
+     * Apply a zoom to THIS chart's echart. The single place that calls
+     * dispatchAction({type: 'dataZoom', …}). Called both from the
+     * chartsState subscribeZoom callback (when any writer updates the
+     * shared zoom) and from the onupdate reconfigure path (where
+     * applyChartOption's notMerge wipes the dataZoom component and we
+     * need to restore it).
+     *
+     * Building the payload prefers percentages; falls back to absolute
+     * axis values. Passing an undefined field to dispatchAction would
+     * clear that slot on the component (which for heatmaps snaps back
+     * to the data range), so only populate the pair we actually have.
+     */
+    _applyZoom(zoom) {
+        if (!this.echart) return;
+        const payload = { type: 'dataZoom' };
+        if (zoom == null) {
+            payload.start = 0;
+            payload.end = 100;
+        } else if (Number.isFinite(zoom.start) && Number.isFinite(zoom.end)) {
+            payload.start = zoom.start;
+            payload.end = zoom.end;
+        } else if (Number.isFinite(zoom.startValue) && Number.isFinite(zoom.endValue)) {
+            payload.startValue = zoom.startValue;
+            payload.endValue = zoom.endValue;
+        } else {
+            // No usable zoom info — nothing to apply.
+            return;
+        }
+        this.echart.dispatchAction(payload);
+        this._rescaleYAxis();
     }
 
     /**
@@ -324,25 +423,21 @@ export class Chart {
         // Store chart instance for cleanup and to prevent re-initialization
         this.chartsState.charts.set(this.chartId, this);
 
+        // Subscribe to zoom-state changes. Every writer — TimeRangeBar
+        // drag, selection restore, ChartsState.resetZoom, and other
+        // charts' datazoom handlers via setZoom — notifies subscribers
+        // with the new zoom. We just apply it to our echart; the diff
+        // guard inside setZoom ensures idempotent echoes don't fire us.
+        this._unsubZoom = this.chartsState.subscribeZoom((zoom) => this._applyZoom(zoom));
+
         // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
         this.configureChartByType();
 
-        // Match existing zoom state.
-        if (this.chartsState.zoomLevel !== null) {
-            const z = this.chartsState.zoomLevel;
-            if (z.start !== 0 || z.end !== 100) {
-                const p = { type: 'dataZoom' };
-                if (z.start !== undefined && z.end !== undefined
-                    && !Number.isNaN(z.start) && !Number.isNaN(z.end)) {
-                    p.start = z.start;
-                    p.end = z.end;
-                } else if (z.startValue !== undefined && z.endValue !== undefined) {
-                    p.startValue = z.startValue;
-                    p.endValue = z.endValue;
-                }
-                this.echart.dispatchAction(p);
-                this._rescaleYAxis();
-            }
+        // Match existing zoom state on first mount. Equivalent to
+        // replaying the last setZoom against only this chart.
+        const existingZoom = this.chartsState.zoomLevel;
+        if (existingZoom != null && !(existingZoom.start === 0 && existingZoom.end === 100)) {
+            this._applyZoom(existingZoom);
         }
 
         this.echart.on('datazoom', (event) => {
@@ -419,54 +514,20 @@ export class Chart {
                 endValue = undefined;
             }
 
-            // Don't let an event with no usable zoom info (empty batch,
-            // or batch details with all-undefined coords) overwrite a
-            // zoom that was just set — this shape shows up as an echo
-            // when heatmap.js's downsample-swap setOption triggers a
-            // secondary datazoom event on a sibling chart that received
-            // our cross-dispatch.
-            const hasPct = start !== undefined && end !== undefined
-                && !Number.isNaN(start) && !Number.isNaN(end);
-            const hasValues = startValue !== undefined && endValue !== undefined;
-            if (!hasPct && !hasValues) return;
-
-            this.chartsState.zoomLevel = {
-                start,
-                end,
-                startValue,
-                endValue,
-            };
-            this.chartsState.zoomSource = 'local';
-            // Build a dispatch payload containing only the fields that
-            // are actually defined. Passing `startValue: undefined` (or
-            // `end: undefined`) into echarts' dispatchAction clears
-            // those slots on the existing dataZoom component, which for
-            // heatmaps snaps the axis back to its data range. Pick the
-            // percentage pair when both are available; fall back to
-            // absolute values otherwise.
-            const payload = { type: 'dataZoom' };
-            if (start !== undefined && end !== undefined
-                && !Number.isNaN(start) && !Number.isNaN(end)) {
-                payload.start = start;
-                payload.end = end;
-            } else if (startValue !== undefined && endValue !== undefined) {
-                payload.startValue = startValue;
-                payload.endValue = endValue;
-            }
-            // Skip the source chart: its dataZoom is already at these
-            // values (the toolbox drag set it before firing this event).
-            // Re-dispatching to self is at best redundant; at worst, for
-            // heatmap-type charts, it can cascade through heatmap.js's
-            // own datazoom listener (which calls setOption to swap
-            // downsample level) and re-fire a batch-carrying datazoom
-            // event, clobbering chartsState.zoomLevel. Excluding self
-            // from the cross-dispatch breaks that loop without needing
-            // a re-entrancy guard.
-            this.chartsState.charts.forEach(chart => {
-                if (chart !== this) chart.dispatchAction(payload);
-                chart._rescaleYAxis();
-            });
-            m.redraw();
+            // Route the user-initiated zoom through the single
+            // chartsState.setZoom writer. setZoom's diff check short-
+            // circuits echoes: the dispatch fan-out below will trigger
+            // secondary datazoom events on sibling heatmaps (via
+            // heatmap.js's downsample-swap setOption), those events
+            // re-enter this handler with effectively the same values
+            // we just proposed, and setZoom returns false instead of
+            // re-notifying. No skip-self, no write-gate, no re-entry
+            // flag — the diff is the echo guard by construction.
+            const changed = this.chartsState.setZoom(
+                { start, end, startValue, endValue },
+                { source: 'local' },
+            );
+            if (changed) m.redraw();
         });
 
         // Enable drag-to-zoom
