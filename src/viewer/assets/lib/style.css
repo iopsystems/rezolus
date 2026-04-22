@@ -3147,14 +3147,24 @@ main {
 .compare-split-subgroup > .chart-wrapper {
     min-width: 0;
 }
-/* Small label above each disaggregated sub-chart (e.g. "p50"). */
+/* Small label above each disaggregated sub-chart (e.g. "p50").
+ * Positioned just above the chart canvas, slightly inset from the left
+ * so it sits above the Y-axis tick labels rather than spanning the
+ * full wrapper width at the very top. */
+.compare-split-subgroup > .chart-wrapper {
+    position: relative;
+}
 .compare-split-label {
+    position: absolute;
+    top: 44px;
+    left: 12px;
     font-size: 12px;
     font-weight: 600;
     color: var(--fg-secondary, #444);
     letter-spacing: 0.02em;
-    padding: 4px 8px 0 8px;
     font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    z-index: 1;
 }
 /* Hard cap at 3 columns when the container is wide enough that auto-fit
  * would otherwise pack 4+ across. */
