@@ -9,7 +9,7 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology, CompareBanner } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
-import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
+import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
@@ -45,9 +45,9 @@ let experimentSystemInfo = null;
 let experimentDurationMs = null;
 let baselineDurationMs = null;
 
-// Per-chart compare-mode toggles (e.g. { 'cpu.usage': { diff: true } }).
-// Module-local until Task 26 moves persistence into selection.js.
-const chartToggles = {};
+// Compare-mode per-chart toggles + anchors live in `selectionStore` so
+// they persist across page reloads. See selection_migration.js for the
+// schema. The accessors below read-through to the store.
 
 // Config-driven state (set by initDashboard)
 let liveMode = false;
@@ -70,11 +70,9 @@ const initComponents = () => {
     Group = createGroupComponent(() => ({
         chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
         compareMode,
-        toggles: chartToggles,
+        toggles: selectionStore.chartToggles || {},
         setChartToggle,
-        // Task 26 will land real anchor values in selectionStore; until
-        // then fall through to zero-offsets (absolute wall-clock time).
-        anchors: { baseline: 0, experiment: 0 },
+        anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -113,6 +111,18 @@ const attachExperiment = async (file) => {
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
     experimentAttached = true;
     compareMode = true;
+
+    // Clamp a stale anchor when the newly-attached experiment is
+    // shorter than the previously-saved offset. Avoids a chart starting
+    // past the end of its data.
+    const anchors = selectionStore.anchors || { baseline: 0, experiment: 0 };
+    if (experimentDurationMs != null && anchors.experiment > experimentDurationMs) {
+        setAnchor('experiment', experimentDurationMs);
+        console.info(
+            `[compare] experiment anchor clamped to ${experimentDurationMs}ms to fit capture duration`,
+        );
+    }
+
     m.redraw();
 };
 
@@ -134,13 +144,12 @@ const getCompareState = () => ({
 });
 
 // Chart-toggle accessors for compare mode (e.g. heatmap `diff` flag).
-// Persistence lives in selection.js in a later task; for now state is
-// held in-memory and cleared on page reload.
-const getChartToggles = () => chartToggles;
+// State lives in `selectionStore.chartToggles` so it persists across
+// reloads and rides along with exported/annotated selections. These
+// accessors are thin passthroughs to selection.js.
+const getChartToggles = () => selectionStore.chartToggles || {};
 const setChartToggle = (chartId, key, value) => {
-    if (!chartToggles[chartId]) chartToggles[chartId] = {};
-    chartToggles[chartId][key] = value;
-    m.redraw();
+    setChartToggleInStore(chartId, key, value);
 };
 
 const clearViewerCaches = () => {
