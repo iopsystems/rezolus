@@ -5,7 +5,11 @@ import { Chart } from './charts/chart.js';
 import { expandLink, selectButton, compareToggle } from './chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
-import { queryRangeForCapture, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
+import {
+    queryRangeForCapture, buildEffectiveQuery,
+    promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
+    CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
+} from './data.js';
 import { canonicalQuantileLabel } from './charts/util/compare_math.js';
 import { ViewerApi } from './viewer_api.js';
 
@@ -82,97 +86,37 @@ const extractExperimentCapture = (spec, promqlResult) => {
     }
 
     if (style === 'line') {
-        const first = results[0];
-        const values = Array.isArray(first?.values) ? first.values : [];
-        cap.timeData = values.map((pair) => Number(pair[0]));
-        cap.valueData = values.map((pair) => {
-            const v = pair[1];
-            if (v === null || v === undefined) return null;
-            const n = Number(v);
-            return Number.isNaN(n) ? null : n;
-        });
+        const pair = promqlResultToLinePair(results);
+        cap.timeData = pair.timeData;
+        cap.valueData = pair.valueData;
         return cap;
     }
 
     if (style === 'multi') {
-        // Match baseline's label convention: series_names[i] is the first
-        // non-__name__ metric label's value (see applyResultToPlot's
-        // allData branch in data.js). For a gauge like cpu_usage with
-        // labels {cpu="0"}, both sides will produce "0".
-        const map = new Map();
-        for (const item of results) {
+        // Match baseline's label convention: first non-__name__ metric
+        // label's value (see applyResultToPlot's series-name loop).
+        cap.seriesMap = promqlResultToSeriesMap(results, (item) => {
             const mm = item.metric || {};
-            let key = null;
             for (const [k, v] of Object.entries(mm)) {
-                if (k !== '__name__') { key = String(v); break; }
+                if (k !== '__name__') return String(v);
             }
-            if (key == null) continue;
-            const values = Array.isArray(item.values) ? item.values : [];
-            map.set(key, {
-                timeData: values.map((p) => Number(p[0])),
-                valueData: values.map((p) => {
-                    const v = p[1];
-                    if (v === null || v === undefined) return null;
-                    const n = Number(v);
-                    return Number.isNaN(n) ? null : n;
-                }),
-            });
-        }
-        cap.seriesMap = map;
+            return null;
+        });
         return cap;
     }
 
     if (style === 'scatter') {
-        const map = new Map();
-        for (const item of results) {
-            const canonical = canonicalQuantileLabel(item);
-            if (canonical == null) continue;
-            const values = Array.isArray(item.values) ? item.values : [];
-            map.set(canonical, {
-                timeData: values.map((p) => Number(p[0])),
-                valueData: values.map((p) => {
-                    const v = p[1];
-                    if (v === null || v === undefined) return null;
-                    const n = Number(v);
-                    return Number.isNaN(n) ? null : n;
-                }),
-            });
-        }
-        cap.seriesMap = map;
+        cap.seriesMap = promqlResultToSeriesMap(results, (item) => canonicalQuantileLabel(item));
         return cap;
     }
 
     if (style === 'heatmap') {
-        // Build a flat-triple table + 2D matrix from the PromQL result,
-        // using the same transform applyResultToPlot uses for baseline.
-        const timeSet = new Set();
-        for (const item of results) {
-            for (const [ts] of item.values || []) timeSet.add(ts);
-        }
-        const timestamps = Array.from(timeSet).sort((a, b) => Number(a) - Number(b));
-        const timeIndex = new Map();
-        timestamps.forEach((ts, idx) => timeIndex.set(ts, idx));
-        const heatmapData = [];
-        for (let idx = 0; idx < results.length; idx++) {
-            const item = results[idx];
-            let cpuId = idx;
-            if (item.metric && item.metric.id != null) {
-                const parsed = parseInt(item.metric.id, 10);
-                if (!Number.isNaN(parsed)) cpuId = parsed;
-            }
-            for (const [ts, val] of item.values || []) {
-                const ti = timeIndex.get(ts);
-                if (ti === undefined) continue;
-                const v = val === null || val === undefined ? null : parseFloat(val);
-                heatmapData.push([ti, cpuId, v]);
-            }
-        }
+        const { timestamps, triples, minValue, maxValue } = promqlResultToHeatmapTriples(results);
         cap.timeData = timestamps.map(Number);
-        cap.heatmapData = heatmapData;
-        cap.heatmapMatrix = heatmapTriplesToMatrix(heatmapData, cap.timeData.length);
-        const scanned = heatmapTriplesMinMax(heatmapData);
-        cap.minValue = scanned.min;
-        cap.maxValue = scanned.max;
+        cap.heatmapData = triples;
+        cap.heatmapMatrix = heatmapTriplesToMatrix(triples, cap.timeData.length);
+        cap.minValue = minValue;
+        cap.maxValue = maxValue;
         return cap;
     }
 

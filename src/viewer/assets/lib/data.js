@@ -130,6 +130,88 @@ const substituteCgroupPattern = (query, pattern) => {
     return query;
 };
 
+// ── PromQL result → plot-data shape helpers (pure) ───────────────────
+// These are the same transforms the baseline path (applyResultToPlot)
+// and the compare path (extractExperimentCapture in viewer_core) apply.
+// Extracted so the two callers can't drift.
+
+const parseNumeric = (v) => {
+    if (v === null || v === undefined) return null;
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isNaN(n) ? null : n;
+};
+
+// Convert `result.data.result` (a PromQL range-query series array) into
+// a flat [timeIdx, y, value] triple table plus the sorted timestamps.
+// `y` is parsed from `item.metric.id` when present, else the series
+// index. Missing/NaN values are preserved as null so null-cell paths
+// can paint them. Returns null-valued min/max when no numeric samples.
+export const promqlResultToHeatmapTriples = (results) => {
+    const timeSet = new Set();
+    for (const item of results) {
+        for (const [ts] of item.values || []) timeSet.add(ts);
+    }
+    const timestamps = Array.from(timeSet).sort((a, b) => a - b);
+    const timestampToIndex = new Map();
+    timestamps.forEach((ts, idx) => timestampToIndex.set(ts, idx));
+
+    const triples = [];
+    let minValue = Infinity;
+    let maxValue = -Infinity;
+    results.forEach((item, idx) => {
+        let y = idx;
+        if (item.metric && item.metric.id != null) {
+            const parsed = parseInt(item.metric.id, 10);
+            if (!Number.isNaN(parsed)) y = parsed;
+        }
+        for (const [ts, rawVal] of item.values || []) {
+            const ti = timestampToIndex.get(ts);
+            if (ti === undefined) continue;
+            const v = parseNumeric(rawVal);
+            if (v != null) {
+                if (v < minValue) minValue = v;
+                if (v > maxValue) maxValue = v;
+            }
+            triples.push([ti, y, v]);
+        }
+    });
+    return {
+        timestamps,
+        triples,
+        minValue: Number.isFinite(minValue) ? minValue : null,
+        maxValue: Number.isFinite(maxValue) ? maxValue : null,
+    };
+};
+
+// Convert the first series in a PromQL range-query result into a pair
+// of parallel timeData / valueData arrays. Missing/NaN values are
+// preserved as null.
+export const promqlResultToLinePair = (results) => {
+    const first = results[0];
+    const values = Array.isArray(first?.values) ? first.values : [];
+    return {
+        timeData: values.map((pair) => Number(pair[0])),
+        valueData: values.map((pair) => parseNumeric(pair[1])),
+    };
+};
+
+// Build a Map<label, {timeData, valueData}> from a PromQL range-query
+// result. `labelFor(item, idx)` picks the series label; returning null
+// skips the series.
+export const promqlResultToSeriesMap = (results, labelFor) => {
+    const map = new Map();
+    results.forEach((item, idx) => {
+        const label = labelFor(item, idx);
+        if (label == null) return;
+        const values = Array.isArray(item.values) ? item.values : [];
+        map.set(String(label), {
+            timeData: values.map((pair) => Number(pair[0])),
+            valueData: values.map((pair) => parseNumeric(pair[1])),
+        });
+    });
+    return map;
+};
+
 const applyResultToPlot = (plot, result) => {
     if (
         result.status === 'success' &&
@@ -154,48 +236,12 @@ const applyResultToPlot = (plot, result) => {
 
         if (hasMultipleSeries) {
             if (style === 'heatmap') {
-                const heatmapData = [];
-                const timeSet = new Set();
-
-                result.data.result.forEach((item) => {
-                    if (item.values && Array.isArray(item.values)) {
-                        item.values.forEach(([timestamp, _]) => {
-                            timeSet.add(timestamp);
-                        });
-                    }
-                });
-
-                const timestamps = Array.from(timeSet).sort((a, b) => a - b);
-                const timestampToIndex = new Map();
-                timestamps.forEach((ts, idx) => {
-                    timestampToIndex.set(ts, idx);
-                });
-
-                result.data.result.forEach((item, idx) => {
-                    if (item.values && Array.isArray(item.values)) {
-                        let cpuId = idx;
-                        if (item.metric && item.metric.id) {
-                            cpuId = parseInt(item.metric.id);
-                        }
-
-                        item.values.forEach(([timestamp, value]) => {
-                            const timeIndex = timestampToIndex.get(timestamp);
-                            heatmapData.push([timeIndex, cpuId, parseFloat(value)]);
-                        });
-                    }
-                });
-
-                let minValue = Infinity;
-                let maxValue = -Infinity;
-                heatmapData.forEach(([_, __, value]) => {
-                    minValue = Math.min(minValue, value);
-                    maxValue = Math.max(maxValue, value);
-                });
-
-                plot.data = heatmapData;
+                const { timestamps, triples, minValue, maxValue } =
+                    promqlResultToHeatmapTriples(result.data.result);
+                plot.data = triples;
                 plot.time_data = timestamps;
-                plot.min_value = minValue;
-                plot.max_value = maxValue;
+                plot.min_value = minValue != null ? minValue : Infinity;
+                plot.max_value = maxValue != null ? maxValue : -Infinity;
             } else {
                 const allData = [];
                 const seriesNames = [];
