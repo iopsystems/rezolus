@@ -3,7 +3,7 @@
 
 import { Chart } from './charts/chart.js';
 import { expandLink, selectButton, compareToggle } from './chart_controls.js';
-import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
+import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
 import { queryRangeForCapture, buildEffectiveQuery } from './data.js';
 import { ViewerApi } from './viewer_api.js';
@@ -14,7 +14,7 @@ import { ViewerApi } from './viewer_api.js';
 // capture-shaped object keyed by `id: 'baseline'`. The shape depends on
 // chart style so the compare strategies can consume it uniformly.
 const extractBaselineCapture = (spec) => {
-    const style = spec.opts?.style || spec._resolvedStyle;
+    const style = resolvedStyle(spec);
     const cap = { id: 'baseline' };
 
     if (style === 'line') {
@@ -76,7 +76,7 @@ const extractBaselineCapture = (spec) => {
 // baseline got through applyResultToPlot) into the same capture shape
 // produced by extractBaselineCapture.
 const extractExperimentCapture = (spec, promqlResult) => {
-    const style = spec.opts?.style || spec._resolvedStyle;
+    const style = resolvedStyle(spec);
     const cap = { id: 'experiment' };
     const results = promqlResult?.data?.result;
     if (!Array.isArray(results) || results.length === 0) {

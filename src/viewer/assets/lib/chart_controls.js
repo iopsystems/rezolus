@@ -2,6 +2,7 @@
 // regular Group component and the cgroup section renderer.
 
 import { isSelected, toggleSelection } from './selection.js';
+import { resolvedStyle } from './charts/metric_types.js';
 
 /**
  * Compact per-chart toggle rendered in the chart header when compare
@@ -13,7 +14,7 @@ import { isSelected, toggleSelection } from './selection.js';
  */
 export const compareToggle = (spec, state) => {
     if (!state || !state.compareMode) return null;
-    const style = spec?.opts?.style || spec?._resolvedStyle;
+    const style = resolvedStyle(spec);
     if (style !== 'heatmap') return null;
     const chartId = spec?.opts?.id;
     if (!chartId) return null;

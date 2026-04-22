@@ -32,6 +32,7 @@
 
 import { nullDiff, intersectLabels } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
+import { resolvedStyle } from './metric_types.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
 // style.css. The getter reads CSS custom properties lazily so a theme
@@ -66,7 +67,7 @@ export const relativeTimeFormatter = (ms) => {
  * single-capture rendering).
  */
 export const renderCompareChart = (opts) => {
-    const style = opts.spec?.opts?.style || opts.spec?._resolvedStyle;
+    const style = resolvedStyle(opts.spec);
     switch (style) {
         case 'line':              return overlayLine(opts);
         case 'heatmap':           return sideBySideHeatmap(opts);
