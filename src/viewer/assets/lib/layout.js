@@ -156,13 +156,18 @@ const Sidebar = {
     view({ attrs }) {
         const sectionResponseCache = attrs.sectionResponseCache;
 
+        // In compare mode, cgroup section is hidden from navigation (v1 scope).
+        const visibleSections = attrs.compareMode
+            ? attrs.sections.filter((s) => s.route !== '/cgroups')
+            : attrs.sections;
+
         // Separate special sections from sampler sections
-        const queryExplorer = attrs.sections.find(
+        const queryExplorer = visibleSections.find(
             (s) => s.name === 'Query Explorer',
         );
-        const overviewSection = attrs.sections.find((s) => s.name === 'Overview');
-        const serviceSections = attrs.sections.filter((s) => s.route.startsWith('/service/'));
-        const samplerSections = attrs.sections.filter(
+        const overviewSection = visibleSections.find((s) => s.name === 'Overview');
+        const serviceSections = visibleSections.filter((s) => s.route.startsWith('/service/'));
+        const samplerSections = visibleSections.filter(
             (s) => s.name !== 'Query Explorer' && s.name !== 'Overview' && !s.route.startsWith('/service/'),
         );
 

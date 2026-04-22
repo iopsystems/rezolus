@@ -572,22 +572,22 @@ const initDashboard = (config = {}) => {
 
                 if (params.section === 'systeminfo') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, systemInfoSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, systemInfoSection, () => compareMode);
                 }
 
                 if (params.section === 'metadata') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, metadataSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, metadataSection, () => compareMode);
                 }
 
                 if (params.section === 'selection') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, selectionSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, selectionSection, () => compareMode);
                 }
 
                 if (params.section === 'report') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, reportSection);
+                    return buildClientOnlySectionView(Main, sectionResponseCache, reportSection, () => compareMode);
                 }
 
                 const cachedView = (sectionKey, path) => ({
@@ -597,7 +597,7 @@ const initDashboard = (config = {}) => {
                         const activeSection = data.sections.find(
                             (section) => section.route === path,
                         );
-                        return m(Main, { ...data, activeSection });
+                        return m(Main, { ...data, activeSection, compareMode });
                     },
                 });
 

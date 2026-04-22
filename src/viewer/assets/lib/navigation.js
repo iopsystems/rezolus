@@ -53,7 +53,7 @@ const createMainComponent = ({
     buildAttrs,
 }) => ({
     view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series, metadata },
+        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series, metadata, compareMode },
     }) {
         return m(
             'div',
@@ -67,6 +67,7 @@ const createMainComponent = ({
                     activeSection,
                     sections,
                     sectionResponseCache,
+                    compareMode,
                     hasSystemInfo: !!getHasSystemInfo(),
                     hasFileMetadata: !!(getHasFileMetadata && getHasFileMetadata()),
                 }),

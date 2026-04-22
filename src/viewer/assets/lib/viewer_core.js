@@ -117,7 +117,7 @@ export function getCachedSectionMeta(sectionResponseCache, interval) {
  * Build a Mithril component for a client-only section (System Info,
  * Metadata, Selection, Report) that has no backend data of its own.
  */
-export function buildClientOnlySectionView(Main, sectionResponseCache, activeSection) {
+export function buildClientOnlySectionView(Main, sectionResponseCache, activeSection, getCompareMode) {
     return {
         view() {
             const anyCached = Object.values(sectionResponseCache)[0];
@@ -126,6 +126,7 @@ export function buildClientOnlySectionView(Main, sectionResponseCache, activeSec
                 activeSection,
                 groups: [],
                 sections,
+                compareMode: typeof getCompareMode === 'function' ? getCompareMode() : false,
                 source: anyCached?.source,
                 version: anyCached?.version,
                 filename: anyCached?.filename,
