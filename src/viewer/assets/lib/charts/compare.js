@@ -149,7 +149,7 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
     // Unify color domain across both slots: same visualMap min/max so a
     // cell of equal intensity reads the same color on both sides.
     const { min: sharedMin, max: sharedMax } = unifiedHeatmapRange(a, b, spec);
-    const makeSlotSpec = (cap, suppressLegend) => {
+    const makeSlotSpec = (cap) => {
         const timeData = cap.timeData || spec.time_data || [];
         const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
         return {
@@ -159,23 +159,26 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
             data: cap.heatmapData || spec.data,
             min_value: sharedMin,
             max_value: sharedMax,
-            suppressLegendBar: suppressLegend,
             xAxisFormatter: relativeTimeFormatter,
         };
     };
 
-    const slot = (cap, dotCls, suppressLegend) => m('div.compare-slot', [
+    const slot = (cap, dotCls) => m('div.compare-slot', [
         m('div.compare-slot-label', [
             m(`span.compare-dot.${dotCls}`, '\u25CF'),
             m('span', cap.id),
         ]),
-        m(Chart, { spec: makeSlotSpec(cap, suppressLegend), chartsState, interval }),
+        m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    // Keep the legend bar on the left slot only; the shared color scale
-    // makes a second legend redundant.
-    return m('div.compare-heatmap-pair', [
-        slot(a, 'compare-baseline-dot', false),
-        slot(b, 'compare-experiment-dot', true),
+    // Both slots render their legend — visual symmetry, and with the
+    // unified color domain both legends display the same scale.
+    // `key` forces a full remount when toggling from diff view so the
+    // imperatively-injected legend bar from the diff wrapper doesn't
+    // survive the view swap (Mithril would otherwise reuse the outer
+    // div and retain non-Mithril-managed children).
+    return m('div.compare-heatmap-pair', { key: 'side-by-side' }, [
+        slot(a, 'compare-baseline-dot'),
+        slot(b, 'compare-experiment-dot'),
     ]);
 };
 
@@ -285,7 +288,10 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         xAxisFormatter: relativeTimeFormatter,
     };
 
-    return m('div.compare-heatmap-diff',
+    // `key` forces a full remount when toggling into/out of diff view
+    // so the previous view's imperatively-injected legend bar goes away
+    // with its outer wrapper instead of surviving a Mithril class swap.
+    return m('div.compare-heatmap-diff', { key: 'diff' },
         m(Chart, { spec: diffSpec, chartsState, interval }));
 };
 
@@ -377,7 +383,7 @@ const percentileLabel = (r) => {
 const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart }) => {
     const [a, b] = captures;
     const { min: sharedMin, max: sharedMax } = unifiedHeatmapRange(a, b, spec);
-    const makeSlotSpec = (cap, suppressLegend) => {
+    const makeSlotSpec = (cap) => {
         const timeData = cap.timeData || spec.time_data || [];
         const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
         return {
@@ -392,21 +398,20 @@ const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, inte
             bucket_bounds: cap.bucketBounds || spec.bucket_bounds,
             min_value: sharedMin,
             max_value: sharedMax,
-            suppressLegendBar: suppressLegend,
             xAxisFormatter: relativeTimeFormatter,
         };
     };
 
-    const slot = (cap, dotCls, suppressLegend) => m('div.compare-slot', [
+    const slot = (cap, dotCls) => m('div.compare-slot', [
         m('div.compare-slot-label', [
             m(`span.compare-dot.${dotCls}`, '\u25CF'),
             m('span', cap.id),
         ]),
-        m(Chart, { spec: makeSlotSpec(cap, suppressLegend), chartsState, interval }),
+        m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    return m('div.compare-heatmap-pair', [
-        slot(a, 'compare-baseline-dot', false),
-        slot(b, 'compare-experiment-dot', true),
+    return m('div.compare-heatmap-pair', { key: 'histogram-side-by-side' }, [
+        slot(a, 'compare-baseline-dot'),
+        slot(b, 'compare-experiment-dot'),
     ]);
 };
 

@@ -383,8 +383,15 @@ export function configureHeatmap(chart) {
         const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
         const bar = wrapper.querySelector('.heatmap-legend-bar');
         if (bar) bar.dataset.palette = paletteSig;
-        minLabel.textContent = formatter(visualMapMin);
-        maxLabel.textContent = formatter(visualMapMax);
+        // Round to 2 significant digits before formatting so the legend
+        // shows compact numbers like "1.2", "12", "120" rather than the
+        // full precision of the visualMap bounds.
+        const sig = (v) => {
+            if (!Number.isFinite(v) || v === 0) return v;
+            return parseFloat(v.toPrecision(2));
+        };
+        minLabel.textContent = formatter(sig(visualMapMin));
+        maxLabel.textContent = formatter(sig(visualMapMax));
     }
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
