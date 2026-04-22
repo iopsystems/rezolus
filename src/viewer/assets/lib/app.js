@@ -45,6 +45,10 @@ let experimentSystemInfo = null;
 let experimentDurationMs = null;
 let baselineDurationMs = null;
 
+// Per-chart compare-mode toggles (e.g. { 'cpu.usage': { diff: true } }).
+// Module-local until Task 26 moves persistence into selection.js.
+const chartToggles = {};
+
 // Config-driven state (set by initDashboard)
 let liveMode = false;
 let recording = false;
@@ -122,6 +126,16 @@ const getCompareState = () => ({
     experimentDurationMs,
     baselineDurationMs,
 });
+
+// Chart-toggle accessors for compare mode (e.g. heatmap `diff` flag).
+// Persistence lives in selection.js in a later task; for now state is
+// held in-memory and cleared on page reload.
+const getChartToggles = () => chartToggles;
+const setChartToggle = (chartId, key, value) => {
+    if (!chartToggles[chartId]) chartToggles[chartId] = {};
+    chartToggles[chartId][key] = value;
+    m.redraw();
+};
 
 const clearViewerCaches = () => {
     Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
@@ -634,4 +648,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, getCompareState, durationFromFileMetadata };
+export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, getCompareState, durationFromFileMetadata, getChartToggles, setChartToggle };
