@@ -310,21 +310,12 @@ impl WasmCaptureRegistry {
 
     /// Attach a parquet capture under the given slot ("baseline" or
     /// "experiment").  Replaces any previously attached capture in that slot.
-    pub fn attach(
-        &mut self,
-        capture: &str,
-        data: &[u8],
-        filename: &str,
-    ) -> Result<(), JsValue> {
+    pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
         let viewer = Viewer::new(data, filename)?;
         match capture {
             "baseline" => self.baseline = Some(viewer),
             "experiment" => self.experiment = Some(viewer),
-            other => {
-                return Err(JsValue::from_str(&format!(
-                    "unknown capture id: {other}"
-                )))
-            }
+            other => return Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
         }
         Ok(())
     }
@@ -381,19 +372,11 @@ impl WasmCaptureRegistry {
 
     /// Initialise ServiceExtension templates for the given capture.  Mirrors
     /// `Viewer::init_templates`.
-    pub fn init_templates(
-        &mut self,
-        capture: &str,
-        templates_json: &str,
-    ) -> Result<(), JsValue> {
+    pub fn init_templates(&mut self, capture: &str, templates_json: &str) -> Result<(), JsValue> {
         let slot = match capture {
             "baseline" => self.baseline.as_mut(),
             "experiment" => self.experiment.as_mut(),
-            other => {
-                return Err(JsValue::from_str(&format!(
-                    "unknown capture id: {other}"
-                )))
-            }
+            other => return Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
         };
         let viewer = slot.ok_or_else(|| JsValue::from_str("capture not attached"))?;
         viewer.init_templates(templates_json)
@@ -420,9 +403,7 @@ impl WasmCaptureRegistry {
             "baseline" | "experiment" => self
                 .slot(capture)
                 .ok_or_else(|| JsValue::from_str("capture not attached")),
-            other => Err(JsValue::from_str(&format!(
-                "unknown capture id: {other}"
-            ))),
+            other => Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
         }
     }
 }
