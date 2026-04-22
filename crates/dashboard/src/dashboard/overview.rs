@@ -192,11 +192,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
         // core on multi-core workloads, unlike the old utilization-
         // fraction formulation.
         efficiency.plot_promql(
-            PlotOpts::counter(
-                "CPU Time / Throughput",
-                "normalized-cpu-busy",
-                Unit::Time,
-            ),
+            PlotOpts::counter("CPU Time / Throughput", "normalized-cpu-busy", Unit::Time),
             format!("sum(irate(cpu_usage[5m])) / ({tq})"),
         );
         efficiency.plot_promql(
