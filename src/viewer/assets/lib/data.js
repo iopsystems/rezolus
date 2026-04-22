@@ -280,6 +280,61 @@ const createDataApi = ({
         return queryRange(query, start, maxTime, step);
     };
 
+    // Apply the same per-plot query transforms the baseline path applies.
+    // Returns the query to actually execute, or `null` when the plot should
+    // be skipped (e.g. cgroup pattern without a resolved selector).
+    //
+    // `opts`:
+    //   sectionRoute       — route string, used for the service/node rule.
+    //   activeCgroupPattern — resolved cgroup selector, if any.
+    //   serviceName        — section's service_name, if any.
+    //   injectNodeLabel    — default true; compare path passes false.
+    //   injectInstanceLabel — default true; compare path passes false.
+    //   stepOverride       — nullable; when > 1 triggers histogram-stride /
+    //                        counter-rate rewriting. Defaults to the
+    //                        module-level _stepOverride.
+    const buildEffectiveQuery = (plot, opts = {}) => {
+        if (!plot.promql_query) return null;
+        const {
+            sectionRoute = null,
+            activeCgroupPattern = null,
+            serviceName = null,
+            injectNodeLabel = true,
+            injectInstanceLabel = true,
+            stepOverride = _stepOverride,
+        } = opts;
+
+        let q = plot.promql_query;
+        const stepActive = stepOverride && stepOverride > 1;
+
+        if (plot.opts.type === 'histogram') {
+            q = buildHistogramQuery(
+                q, plot.opts.subtype, plot.opts.percentiles,
+                stepActive ? stepOverride : undefined,
+            );
+        }
+        if (stepActive && plot.opts.type === 'delta_counter') {
+            q = rewriteCounterQuery(q, stepOverride);
+        }
+        if (q.includes('__SELECTED_CGROUPS__')) {
+            if (activeCgroupPattern) {
+                q = substituteCgroupPattern(q, activeCgroupPattern);
+            } else if (q.includes('!~')) {
+                q = substituteCgroupPattern(q, null);
+            } else {
+                return null;
+            }
+        }
+        if (injectNodeLabel && _selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
+            q = injectLabel(q, 'node', _selectedNode);
+        }
+        if (injectInstanceLabel && serviceName) {
+            const inst = _selectedInstances[serviceName];
+            if (inst) q = injectLabel(q, 'instance', inst);
+        }
+        return q;
+    };
+
     const processDashboardData = async (data, activeCgroupPattern, sectionRoute) => {
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
@@ -288,53 +343,12 @@ const createDataApi = ({
         for (const group of data.groups || []) {
             for (const plot of collectGroupPlots(group)) {
                 if (plot.promql_query) {
-                    let queryToRun = plot.promql_query;
-                    const stepActive = _stepOverride && _stepOverride > 1;
-
-                    // Wrap histogram queries with the appropriate function,
-                    // passing stride when a coarser step is selected.
-                    if (plot.opts.type === 'histogram') {
-                        queryToRun = buildHistogramQuery(
-                            queryToRun, plot.opts.subtype, plot.opts.percentiles,
-                            stepActive ? _stepOverride : undefined,
-                        );
-                    }
-
-                    // Rewrite counter/gauge queries for coarser granularity
-                    if (stepActive) {
-                        if (plot.opts.type === 'delta_counter') {
-                            queryToRun = rewriteCounterQuery(queryToRun, _stepOverride);
-                        }
-                    }
-
-                    if (queryToRun.includes('__SELECTED_CGROUPS__')) {
-                        if (activeCgroupPattern) {
-                            queryToRun = substituteCgroupPattern(
-                                queryToRun,
-                                activeCgroupPattern,
-                            );
-                        } else if (queryToRun.includes('!~')) {
-                            queryToRun = substituteCgroupPattern(
-                                queryToRun,
-                                null,
-                            );
-                        } else {
-                            continue;
-                        }
-                    }
-                    // Inject node label filter for non-service sections only.
-                    if (_selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
-                        queryToRun = injectLabel(queryToRun, 'node', _selectedNode);
-                    }
-
-                    // Inject instance label filter when a specific instance is selected
-                    if (data.metadata?.service_name) {
-                        const inst = _selectedInstances[data.metadata.service_name];
-                        if (inst) {
-                            queryToRun = injectLabel(queryToRun, 'instance', inst);
-                        }
-                    }
-
+                    const queryToRun = buildEffectiveQuery(plot, {
+                        sectionRoute,
+                        activeCgroupPattern,
+                        serviceName: data.metadata?.service_name,
+                    });
+                    if (queryToRun == null) continue;
                     queryPlots.push({ plot, query: queryToRun });
                 }
             }
@@ -431,6 +445,7 @@ const createDataApi = ({
         substituteCgroupPattern,
         processDashboardData,
         clearMetadataCache,
+        buildEffectiveQuery,
     };
 };
 
@@ -442,6 +457,7 @@ const {
     fetchHeatmapsForGroups,
     processDashboardData,
     clearMetadataCache,
+    buildEffectiveQuery,
 } = defaultDataApi;
 
 export {
@@ -460,4 +476,5 @@ export {
     setSelectedInstance,
     getSelectedInstance,
     injectLabel,
+    buildEffectiveQuery,
 };

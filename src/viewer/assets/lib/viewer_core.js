@@ -5,7 +5,7 @@ import { Chart } from './charts/chart.js';
 import { expandLink, selectButton, compareToggle } from './chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
 import { renderCompareChart, BASELINE_COLOR } from './charts/compare.js';
-import { queryRangeForCapture } from './data.js';
+import { queryRangeForCapture, buildEffectiveQuery } from './data.js';
 import { ViewerApi } from './viewer_api.js';
 
 // ── Normalization helpers for compare-mode captures ────────────────
@@ -220,12 +220,26 @@ function heatmapTriplesToMatrix(triples, binCount) {
  */
 const CompareChartWrapper = {
     oninit(vnode) {
-        const { spec } = vnode.attrs;
+        const { spec, sectionRoute } = vnode.attrs;
         vnode.state.experimentResult = null;
         vnode.state.error = null;
-        const query = spec.promql_query;
-        if (!query) {
+        if (!spec.promql_query) {
             vnode.state.error = 'no PromQL query';
+            return;
+        }
+        // Apply the same transforms the baseline path applies (histogram
+        // wrap, counter rewrite, cgroup substitution), but deliberately
+        // SKIP node/instance label injection: those labels are tied to the
+        // baseline's topology and would return zero matches on the
+        // experiment in the common case where the two recordings have
+        // different hostnames or instance IDs.
+        const query = buildEffectiveQuery(spec, {
+            sectionRoute,
+            injectNodeLabel: false,
+            injectInstanceLabel: false,
+        });
+        if (query == null) {
+            vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
             return;
         }
         // Query the experiment over its own time range. `getFileMetadata`
@@ -390,6 +404,7 @@ export function createGroupComponent(getState) {
                                 anchors,
                                 toggles,
                                 setChartToggle,
+                                sectionRoute,
                                 step: interval,
                             })
                             : m(Chart, { spec: heatmapSpec, chartsState, interval }),
@@ -410,6 +425,7 @@ export function createGroupComponent(getState) {
                             anchors,
                             toggles,
                             setChartToggle,
+                            sectionRoute,
                             step: interval,
                         }),
                         expandLink(spec, sectionRoute),
