@@ -5,8 +5,9 @@ import { formatDateTime } from './util/utils.js';
 import { COLORS, CHART_PALETTE } from './util/colormap.js';
 import { FONTS } from './util/fonts.js';
 
-function isDarkTheme() {
-    return document.documentElement.getAttribute('data-theme') !== 'light';
+export function isDarkTheme() {
+    return typeof document !== 'undefined'
+        && document.documentElement?.getAttribute('data-theme') !== 'light';
 }
 
 // Shared x-axis time label format used by all chart types
@@ -129,6 +130,16 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
     }
 }
 
+// Plot-area top offset (pixels from the top of the Chart component
+// div to the top of the echarts grid). Chart modules that add a
+// legend above the plot (multi, scatter, line-overlay, heatmap,
+// histogram_heatmap) push the grid down by this amount.
+//
+// Keep in sync with the .compare-slot-label / .compare-split-label
+// `top: 44px` rules in style.css — those labels sit in the header
+// band that precedes the grid.
+export const CHART_GRID_TOP_WITH_LEGEND = 71;
+
 export function getBaseOption() {
     return {
         grid: {
@@ -246,6 +257,72 @@ export function getBaseYAxisOption(logScale, unitSystem) {
             }
         }
     };
+}
+
+/**
+ * Merge a custom x-axis label formatter over baseOption.xAxis,
+ * preserving the surrounding axisLabel config. Returns null when the
+ * formatter is falsy, matching the `? xAxisOverride : null` pattern
+ * used at call sites so `{ xAxis: override }` only materializes when
+ * there's an override to apply.
+ */
+export function overrideXAxisFormatter(baseXAxis, customFormatter) {
+    if (!customFormatter) return null;
+    return {
+        ...baseXAxis,
+        axisLabel: {
+            ...(baseXAxis.axisLabel || {}),
+            formatter: customFormatter,
+        },
+    };
+}
+
+/**
+ * Build the right-aligned circle-swatch legend shared by scatter and
+ * multi-series line overlays. Pass `{ tooltipFormatter }` when the
+ * legend should show hover tooltips (scatter); omit it for bare line
+ * overlays. The caller is responsible for pairing this with
+ * `grid: { ..., top: '71' }` on the plot's option.
+ */
+export function buildOverlayLegendOption(names, { tooltipFormatter, top = '42' } = {}) {
+    const legendItemW = 56;
+    const textStyleBase = {
+        color: COLORS.fgSecondary,
+        ...FONTS.legend,
+        width: legendItemW,
+        borderColor: 'transparent',
+        borderWidth: 1,
+        borderRadius: 3,
+        padding: [2, 4],
+    };
+    const legend = {
+        show: true,
+        right: '16',
+        top,
+        icon: 'circle',
+        itemWidth: 8,
+        itemHeight: 8,
+        itemGap: 0,
+        formatter: (name) => name.padEnd(6),
+        textStyle: textStyleBase,
+        data: names.map((name) => ({
+            name,
+            itemStyle: { borderColor: 'transparent', borderWidth: 2 },
+            textStyle: {
+                color: COLORS.fgSecondary,
+                backgroundColor: 'transparent',
+                borderColor: 'transparent',
+                borderWidth: 1,
+                borderRadius: 3,
+                padding: [2, 4],
+                width: legendItemW,
+            },
+        })),
+    };
+    if (tooltipFormatter) {
+        legend.tooltip = { show: true, formatter: tooltipFormatter };
+    }
+    return legend;
 }
 
 /**

@@ -3,7 +3,7 @@
 // Report: loaded from JSON import or parquet metadata (read-only mode).
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { executePromQLRangeQuery, applyResultToPlot } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
@@ -160,7 +160,7 @@ const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStor
  * `experiment` keys are recognized. Persists + triggers a redraw.
  */
 const setAnchor = (captureId, ms) => {
-    if (captureId !== 'baseline' && captureId !== 'experiment') return;
+    if (captureId !== CAPTURE_BASELINE && captureId !== CAPTURE_EXPERIMENT) return;
     if (!selectionStore.anchors) selectionStore.anchors = { baseline: 0, experiment: 0 };
     selectionStore.anchors[captureId] = Number(ms) || 0;
     persistSelection();

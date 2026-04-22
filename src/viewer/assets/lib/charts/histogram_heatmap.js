@@ -14,6 +14,7 @@ import {
     getDataZoomConfig,
     applyChartOption,
     TIME_AXIS_FORMATTER,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
     FONTS,
 } from './base.js';
@@ -267,7 +268,7 @@ export function configureHistogramHeatmap(chart) {
         grid: {
             left: '12',
             right: '17',
-            top: '71',
+            top: String(CHART_GRID_TOP_WITH_LEGEND),
             bottom: '24',
             containLabel: true,
         },
@@ -355,11 +356,11 @@ export function configureHistogramHeatmap(chart) {
     const pctMaxLabel = pctMax.toFixed(1) + '%';
 
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row.
-    const wrapper = chart.domNode.parentNode;
+    // Mounted inside chart.domNode so Mithril owns the legend's lifetime.
     const barCanvas = buildGradientCanvas(infernoColor);
 
     // Build the checkbox element to pass as an extra element into the shared legend bar
-    let checkboxEl = wrapper.querySelector('.heatmap-legend-bar .histogram-toggle');
+    let checkboxEl = chart.domNode.querySelector('.heatmap-legend-bar .histogram-toggle');
     const checkboxExtra = [];
     if (!checkboxEl) {
         checkboxEl = document.createElement('span');
@@ -369,7 +370,7 @@ export function configureHistogramHeatmap(chart) {
     }
 
     const { minLabel: minLabelEl, maxLabel: maxLabelEl } =
-        ensureLegendBar(wrapper, barCanvas, checkboxExtra);
+        ensureLegendBar(chart.domNode, barCanvas, checkboxExtra);
 
     const updateLabels = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';

@@ -1031,10 +1031,7 @@ struct CaptureParam {
 
 impl CaptureParam {
     fn capture_id(&self) -> CaptureId {
-        self.capture
-            .as_deref()
-            .and_then(CaptureId::parse)
-            .unwrap_or_default()
+        CaptureId::parse_opt(self.capture.as_deref())
     }
 }
 
@@ -1113,12 +1110,6 @@ struct RangeQueryParams {
     capture: Option<String>,
 }
 
-fn capture_id_from(opt: &Option<String>) -> CaptureId {
-    opt.as_deref()
-        .and_then(CaptureId::parse)
-        .unwrap_or_default()
-}
-
 #[derive(serde::Serialize)]
 struct ApiResponse<T: serde::Serialize> {
     status: String,
@@ -1164,7 +1155,7 @@ async fn instant_query(
     axum::extract::Query(params): axum::extract::Query<QueryParams>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<promql::QueryResult>> {
-    let capture = capture_id_from(&params.capture);
+    let capture = CaptureId::parse_opt(params.capture.as_deref());
     let tsdb_handle = match state.captures.get(capture) {
         Some(t) => t,
         None => {
@@ -1189,7 +1180,7 @@ async fn range_query(
     axum::extract::Query(params): axum::extract::Query<RangeQueryParams>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<ApiResponse<promql::QueryResult>> {
-    let capture = capture_id_from(&params.capture);
+    let capture = CaptureId::parse_opt(params.capture.as_deref());
     let tsdb_handle = match state.captures.get(capture) {
         Some(t) => t,
         None => {

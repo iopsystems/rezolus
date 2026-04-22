@@ -12,19 +12,22 @@ const backendRequest = (opts) => m.request({
 
 const sectionUrl = (section) => `/data/${section}.json`;
 
+// Return '?capture=<id>' for non-baseline captures, '' otherwise. The
+// backend treats the absence of the param as "baseline".
+const captureQS = (captureId) =>
+    (captureId && captureId !== 'baseline') ? `?capture=${captureId}` : '';
+
 const ViewerApi = {
     async getMode() {
         return backendRequest({ method: 'GET', url: '/api/v1/mode' });
     },
 
     async getMetadata(captureId = 'baseline') {
-        const q = captureId === 'experiment' ? '?capture=experiment' : '';
-        return backendRequest({ method: 'GET', url: `/api/v1/metadata${q}` });
+        return backendRequest({ method: 'GET', url: `/api/v1/metadata${captureQS(captureId)}` });
     },
 
     async getSystemInfo(captureId = 'baseline') {
-        const q = captureId === 'experiment' ? '?capture=experiment' : '';
-        return backendRequest({ method: 'GET', url: `/api/v1/systeminfo${q}` });
+        return backendRequest({ method: 'GET', url: `/api/v1/systeminfo${captureQS(captureId)}` });
     },
 
     async getSelection() {
@@ -32,8 +35,7 @@ const ViewerApi = {
     },
 
     async getFileMetadata(captureId = 'baseline') {
-        const q = captureId === 'experiment' ? '?capture=experiment' : '';
-        return backendRequest({ method: 'GET', url: `/api/v1/file_metadata${q}` });
+        return backendRequest({ method: 'GET', url: `/api/v1/file_metadata${captureQS(captureId)}` });
     },
 
     async reset() {

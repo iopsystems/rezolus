@@ -24,6 +24,10 @@ cargo test test_name
 # Run tests for a specific package
 cargo test -p package_name
 
+# Run pure-JS viewer tests (compare-math, selection-migration) — no
+# bundler, no jsdom, just node's built-in test runner
+node --test tests/*.mjs
+
 # Format code (runs rustfmt and clang-format on .c/.h files)
 cargo xtask fmt
 

@@ -12,6 +12,24 @@ const formatSize = (bytes) => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 };
 
+// Shared 14px upload arrow used by every Load-parquet trigger (topnav
+// Load Parquet, Load Report, compare badge per-capture Load buttons).
+export const UPLOAD_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>';
+
+// Open a one-shot hidden <input type=file> and forward the selected
+// file to the caller's onPick. Returns an onclick handler so the site
+// can wire it directly to a button.
+export const openParquetPicker = (onPick) => () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.parquet,application/octet-stream';
+    input.onchange = async () => {
+        const file = input.files && input.files[0];
+        if (file && onPick) await onPick(file);
+    };
+    input.click();
+};
+
 // Mobile sidebar drawer state
 let sidebarOpen = false;
 
@@ -39,16 +57,6 @@ const TopNav = {
             // filenames stay visible so the user can see which captures
             // are being compared.
             compareMode && (() => {
-                const pickFile = (onPick) => () => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = '.parquet,application/octet-stream';
-                    input.onchange = async () => {
-                        const f = input.files && input.files[0];
-                        if (f) await onPick(f);
-                    };
-                    input.click();
-                };
                 const row = (cls, label, fname, onLoad) => m('div.compare-capture', [
                     m(`span.compare-dot.${cls}`, '\u25CF'),
                     m('span.compare-capture-label', label),
@@ -56,9 +64,9 @@ const TopNav = {
                         title: fname || 'No file loaded',
                     }, fname || '—'),
                     onLoad && m(`button.compare-load.${cls}`, {
-                        onclick: pickFile(onLoad),
+                        onclick: openParquetPicker(onLoad),
                         title: `Replace ${label} parquet`,
-                    }, m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>')),
+                    }, m.trust(UPLOAD_ICON_SVG)),
                 ]);
                 // <details> wraps both views: on wide viewports CSS hides
                 // the <summary> and always renders the rows inline (via
@@ -112,22 +120,11 @@ const TopNav = {
                 // Hidden in compare mode — use the per-capture Load buttons
                 // in the compare badge instead.
                 attrs.onUploadParquet && !liveMode && !compareMode && m('button.transport-btn.import-btn', {
-                    onclick: () => {
-                        const input = document.createElement('input');
-                        input.type = 'file';
-                        input.accept = '.parquet,application/octet-stream';
-                        input.onchange = async () => {
-                            const file = input.files && input.files[0];
-                            if (file && attrs.onUploadParquet) {
-                                await attrs.onUploadParquet(file);
-                            }
-                        };
-                        input.click();
-                    },
+                    onclick: openParquetPicker(attrs.onUploadParquet),
                     title: 'Upload parquet file',
                 }, [
                     m('span', 'Load Parquet'),
-                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>'),
+                    m.trust(UPLOAD_ICON_SVG),
                 ]),
                 // Import report JSON (server viewer only). Hidden in
                 // compare mode — reports are single-capture today.
@@ -142,7 +139,7 @@ const TopNav = {
                         : 'Load a parquet file first',
                 }, [
                     m('span', 'Load Report'),
-                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>'),
+                    m.trust(UPLOAD_ICON_SVG),
                 ]),
                 // Transport controls (live mode only)
                 liveMode && m('div.transport-controls', [

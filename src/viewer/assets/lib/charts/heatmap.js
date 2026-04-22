@@ -10,6 +10,10 @@ import {
     applyNoData,
     getTooltipFreezeFooter,
     applyChartOption,
+    overrideXAxisFormatter,
+    calculateMinZoomSpan,
+    getDataZoomConfig,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
     FONTS,
 } from './base.js';
@@ -164,6 +168,7 @@ export function configureHeatmap(chart) {
 
     // Configure tooltip with unit formatting if specified
     const customXFormatterForTooltip = chart.spec.xAxisFormatter;
+    const diffMatrices = chart.spec.diffMatrices;
     let tooltipFormatter = function (params) {
         if (params.data === undefined) {
             return '';
@@ -201,6 +206,35 @@ export function configureHeatmap(chart) {
         const fmt = unitSystem
             ? createAxisLabelFormatter(unitSystem)
             : (v) => v.toFixed(6);
+
+        // Diff heatmap: pull baseline + experiment absolute values from
+        // the side-channel matrices and render both instead of the
+        // computed delta. The delta itself is one subtraction away and
+        // the user can read it off the color already; the absolute
+        // values tell them where on the scale each capture actually sat.
+        if (diffMatrices) {
+            const bv = diffMatrices.baseline?.[cpu]?.[timeIndex];
+            const ev = diffMatrices.experiment?.[cpu]?.[timeIndex];
+            const fmtCell = (v) => (v == null || Number.isNaN(v)) ? '—' : fmt(v);
+            return `<div style="${FONTS.cssSans}">
+                        <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
+                            ${formattedTime}
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
+                            <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
+                                CPU ${cpu}
+                            </span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
+                            <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">baseline</span>
+                            <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(bv)}</span>
+                            <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">experiment</span>
+                            <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(ev)}</span>
+                        </div>
+                        ${getTooltipFreezeFooter(chart)}
+                    </div>`;
+        }
+
         const label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
 
         const [clampedVal, rawVal] = clampToRange(value, range);
@@ -270,24 +304,19 @@ export function configureHeatmap(chart) {
 
     // Compare-mode renderers override the x-axis formatter so labels
     // read as relative offsets (`+Xs`, `+XmYs`) instead of absolute
-    // wall-clock times. When the spec sets `xAxisFormatter`, build a
-    // merged xAxis that swaps only the `axisLabel.formatter` field.
-    const customXFormatter = chart.spec.xAxisFormatter;
-    const xAxisOverride = customXFormatter
-        ? {
-            ...baseOption.xAxis,
-            axisLabel: {
-                ...(baseOption.xAxis.axisLabel || {}),
-                formatter: customXFormatter,
-            },
-        }
-        : null;
+    // wall-clock times.
+    const xAxisOverride = overrideXAxisFormatter(baseOption.xAxis, chart.spec.xAxisFormatter);
 
     const option = {
         ...baseOption,
         ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
-        grid: { ...baseOption.grid, top: '71' },
+        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
         yAxis,
+        // dataZoom is the component takeGlobalCursor's dataZoomSelect
+        // attaches to when the user drags a selection on the canvas.
+        // Without this, the drag does nothing on heatmaps — which was
+        // the long-standing heatmap-drag-zoom bug.
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.
         // When above this threshold, it draws them onto a separate canvas element (zrender's
@@ -353,30 +382,43 @@ export function configureHeatmap(chart) {
     applyChartOption(chart, option);
 
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row.
+    // Mounted inside chart.domNode (Chart's own Mithril-managed div) so
+    // the legend is removed with the Chart on unmount/swap — no scrubber,
+    // no palette-signature dance.
     const formatter = createAxisLabelFormatter(unitSystem || 'count');
-    const wrapper = chart.domNode.parentNode;
     const legendColorFn = chart.spec.colormap
         ? buildRampColorFn(chart.spec.colormap)
         : viridisColor;
-    // Invalidate a retained legend bar whose gradient no longer matches
-    // the current colormap (e.g. side-by-side → diff toggle).
-    const paletteSig = Array.isArray(chart.spec.colormap)
-        ? chart.spec.colormap.join(',')
-        : 'viridis';
-    const existing = wrapper.querySelector('.heatmap-legend-bar');
-    if (existing && existing.dataset.palette !== paletteSig) {
-        existing.remove();
-    }
     const barCanvas = buildGradientCanvas(legendColorFn);
-    const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
-    const bar = wrapper.querySelector('.heatmap-legend-bar');
-    if (bar) bar.dataset.palette = paletteSig;
+    const { minLabel, maxLabel, leftCaption, rightCaption, captionRow } =
+        ensureLegendBar(chart.domNode, barCanvas);
     const sig = (v) => {
         if (!Number.isFinite(v) || v === 0) return v;
         return parseFloat(v.toPrecision(2));
     };
-    minLabel.textContent = formatter(sig(visualMapMin));
-    maxLabel.textContent = formatter(sig(visualMapMax));
+    // Diff heatmap: the left end is "baseline higher by X"; the right
+    // end is "experiment higher by Y". The sign is already carried by
+    // the caption row, so show magnitudes (absolute values) on both
+    // ends instead of a negative number on the left.
+    const isDiff = !!chart.spec.diffLegendLabels;
+    const minForLabel = isDiff ? Math.abs(visualMapMin) : visualMapMin;
+    const maxForLabel = isDiff ? Math.abs(visualMapMax) : visualMapMax;
+    minLabel.textContent = formatter(sig(minForLabel));
+    maxLabel.textContent = formatter(sig(maxForLabel));
+
+    // Diff-heatmap directional caption above the gradient bar. The
+    // captions share the legend row's width, so each sits directly
+    // above its numeric counterpart (min/max label).
+    const diffLabels = chart.spec.diffLegendLabels;
+    if (diffLabels) {
+        leftCaption.textContent = diffLabels.left;
+        rightCaption.textContent = diffLabels.right;
+        captionRow.style.display = 'flex';
+    } else {
+        leftCaption.textContent = '';
+        rightCaption.textContent = '';
+        captionRow.style.display = 'none';
+    }
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {

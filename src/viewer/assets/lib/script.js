@@ -6,7 +6,7 @@ import { ViewerApi } from './viewer_api.js';
 import { FileUpload, CompareLanding } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
-import { clearMetadataCache, processDashboardData } from './data.js';
+import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // ── Backend state fetching ─────────────────────────────────────────
@@ -260,15 +260,30 @@ const bootstrap = async () => {
     let experimentSystemInfo = null;
     let experimentFileMetadata = null;
     let experimentFilename = null;
+    let experimentQueryRange = null;
     if (compareMode) {
-        try { experimentSystemInfo = await ViewerApi.getSystemInfo('experiment'); }
-        catch (_) { /* optional */ }
-        try { experimentFileMetadata = await ViewerApi.getFileMetadata('experiment'); }
-        catch (_) { /* optional */ }
-        try {
-            const expMeta = await ViewerApi.getMetadata('experiment');
-            experimentFilename = expMeta?.data?.filename || null;
-        } catch (_) { /* optional */ }
+        const [sysinfo, fileMeta, expMeta] = await Promise.all([
+            ViewerApi.getSystemInfo(CAPTURE_EXPERIMENT).catch(() => null),
+            ViewerApi.getFileMetadata(CAPTURE_EXPERIMENT).catch(() => null),
+            ViewerApi.getMetadata(CAPTURE_EXPERIMENT).catch(() => null),
+        ]);
+        experimentSystemInfo = sysinfo;
+        experimentFileMetadata = fileMeta;
+        experimentFilename = expMeta?.data?.filename || null;
+        const data = expMeta?.data ?? expMeta;
+        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+        if (minT != null && maxT != null) {
+            const start = Number(minT);
+            const end = Number(maxT);
+            if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+                experimentQueryRange = {
+                    start,
+                    end,
+                    step: Math.max(1, Math.floor((end - start) / 500)),
+                };
+            }
+        }
     }
 
     initDashboard({
@@ -281,6 +296,7 @@ const bootstrap = async () => {
         experimentSystemInfo,
         experimentFileMetadata,
         experimentFilename,
+        experimentQueryRange,
         recording: true,
         onStartRecording: startRecording,
         onStopRecording: stopRecording,

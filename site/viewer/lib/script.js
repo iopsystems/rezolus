@@ -182,17 +182,23 @@ async function loadCompareDemo(fileA, fileB) {
 
         // Fetch baseline + experiment state for initDashboard.
         const base = await fetchInitialState();
-        let experimentSystemInfo = null;
-        let experimentFileMetadata = null;
-        let experimentFilename = fileB;
-        try { experimentSystemInfo = await ViewerApi.getSystemInfo('experiment'); }
-        catch (_) { /* optional */ }
-        try { experimentFileMetadata = await ViewerApi.getFileMetadata('experiment'); }
-        catch (_) { /* optional */ }
-        try {
-            const expMeta = await ViewerApi.getMetadata('experiment');
-            experimentFilename = expMeta?.data?.filename || fileB;
-        } catch (_) { /* optional */ }
+        const [experimentSystemInfo, experimentFileMetadata, expMeta] = await Promise.all([
+            ViewerApi.getSystemInfo('experiment').catch(() => null),
+            ViewerApi.getFileMetadata('experiment').catch(() => null),
+            ViewerApi.getMetadata('experiment').catch(() => null),
+        ]);
+        const experimentFilename = expMeta?.data?.filename || fileB;
+        let experimentQueryRange = null;
+        const data = expMeta?.data ?? expMeta;
+        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+        if (minT != null && maxT != null) {
+            const start = Number(minT);
+            const end = Number(maxT);
+            if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+                experimentQueryRange = { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+            }
+        }
 
         initDashboard({
             systemInfo: base.systemInfo,
@@ -202,6 +208,7 @@ async function loadCompareDemo(fileA, fileB) {
             experimentSystemInfo,
             experimentFileMetadata,
             experimentFilename,
+            experimentQueryRange,
         });
 
         // Keep the URL shape stable so refreshes reload the same pair.

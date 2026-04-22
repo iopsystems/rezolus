@@ -176,6 +176,24 @@ export const DIVERGING_BLUE_GREEN = [
     '#CFEBD7', '#9ED6B2', '#5FBD83', '#00C46A',
 ];
 
+/**
+ * Dark-theme sibling of DIVERGING_BLUE_GREEN. Same extreme hues so the
+ * "blue == baseline higher, green == experiment higher" signal is
+ * consistent across themes. Mid stops are interpolated toward the dark
+ * card-bg neutral so near-zero cells fade into the canvas without
+ * needing per-stop alpha (which dilutes toward whatever happens to be
+ * behind the canvas, not toward the perceptual neutral).
+ *
+ * Derivation: RGB-linear interpolation from each extreme toward
+ * `#1C2128` (--bg-elevated) at 25%/50%/75% steps. The extreme stops
+ * (0 and 8) are unchanged so saturated outliers stay vivid.
+ */
+export const DIVERGING_BLUE_GREEN_DARK = [
+    '#2E5BFF', '#294DC9', '#253E94', '#202F5E',
+    '#1C2128',
+    '#154A39', '#0E7249', '#079B5A', '#00C46A',
+];
+
 /** Theme-aware null cell color for diff heatmaps — distinct from zero. */
 export const NULL_CELL_COLOR_DARK = 'rgba(255,255,255,0.04)';
 export const NULL_CELL_COLOR_LIGHT = 'rgba(0,0,0,0.04)';

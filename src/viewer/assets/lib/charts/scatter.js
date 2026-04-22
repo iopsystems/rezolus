@@ -15,8 +15,9 @@ import {
     calculateMinZoomSpan,
     getDataZoomConfig,
     applyChartOption,
+    buildOverlayLegendOption,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
-    FONTS,
 } from './base.js';
 import { SCATTER_PALETTE } from './util/colormap.js';
 import { DEFAULT_PERCENTILES } from './metric_types.js';
@@ -194,47 +195,12 @@ export function configureScatterChart(chart) {
         yAxisConfig = baseYAxis;
     }
 
-    // Build legend config — will be adjusted for narrow charts after first render
-    const legendItemW = 56;
-    const legendShared = {
-        show: true,
-        right: '16',
-        icon: 'circle',
-        itemWidth: 8,
-        itemHeight: 8,
-        itemGap: 0,
-        tooltip: {
-            show: true,
-            formatter: () => 'Click to pin, ⌘/Ctrl+click to multi-select',
-        },
-        formatter: (name) => name.padEnd(6),
-        textStyle: {
-            color: COLORS.fgSecondary,
-            ...FONTS.legend,
-            width: legendItemW,
-            borderColor: 'transparent',
-            borderWidth: 1,
-            borderRadius: 3,
-            padding: [2, 4],
-        },
-    };
-    const legendInitData = (names) => names.map(name => ({
-        name,
-        itemStyle: { borderColor: 'transparent', borderWidth: 2 },
-        textStyle: {
-            color: COLORS.fgSecondary,
-            backgroundColor: 'transparent',
-            borderColor: 'transparent',
-            borderWidth: 1,
-            borderRadius: 3,
-            padding: [2, 4],
-            width: legendItemW,
-        },
-    }));
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: '71' },
-        legend: { ...legendShared, top: '42', data: legendInitData(uniqueNamesForLayout) },
+        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
+        legend: buildOverlayLegendOption(uniqueNamesForLayout, {
+            tooltipFormatter: () => 'Click to pin, ⌘/Ctrl+click to multi-select',
+        }),
         dataZoom: getDataZoomConfig(minZoomSpan),
         yAxis: yAxisConfig,
         tooltip: {

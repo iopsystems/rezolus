@@ -13,9 +13,11 @@ import {
     calculateMinZoomSpan,
     getDataZoomConfig,
     applyChartOption,
+    buildOverlayLegendOption,
+    overrideXAxisFormatter,
+    CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
 } from './base.js';
-import { FONTS } from './util/fonts.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -64,13 +66,45 @@ export function configureLineChart(chart) {
         seriesList[0].timeData,
     );
 
-    const echartsSeries = seriesList.map((s) => {
-        let zipped = s.timeData.map((t, i) => {
+    const echartsSeries = seriesList.flatMap((s) => {
+        const zippedRaw = s.timeData.map((t, i) => {
             const [v, raw] = clampToRange(s.valueData[i], range);
             return [t * 1000, v, raw];
         });
-        zipped = insertGapNulls(zipped, chart.interval);
 
+        // Scatter-mode series: faded connecting line underneath + crisp
+        // dots on top, matching single-capture scatter.js's treatment of
+        // percentile series. The line is a visual guide (opacity 0.4,
+        // tooltip suppressed) so the eye follows the trend; hovering
+        // triggers only the scatter series.
+        if (s.scatter) {
+            const guideLine = insertGapNulls(zippedRaw, chart.interval);
+            return [
+                {
+                    name: s.name,
+                    type: 'line',
+                    data: guideLine,
+                    showSymbol: false,
+                    lineStyle: { color: s.color, width: 1.5, opacity: 0.4 },
+                    itemStyle: { color: s.color },
+                    tooltip: { show: false },
+                    connectNulls: false,
+                    animationDuration: 0,
+                },
+                {
+                    name: s.name,
+                    type: 'scatter',
+                    data: zippedRaw,
+                    symbol: 'circle',
+                    symbolSize: 3,
+                    itemStyle: { color: s.color },
+                    emphasis: { focus: 'series' },
+                    animationDuration: 0,
+                },
+            ];
+        }
+
+        const zipped = insertGapNulls(zippedRaw, chart.interval);
         const base = {
             data: zipped,
             type: 'line',
@@ -97,22 +131,13 @@ export function configureLineChart(chart) {
                 },
             };
         }
-        return base;
+        return [base];
     });
 
     // Compare-mode line overlays want relative-time labels (+Xs) on
     // the x-axis. Honor `spec.xAxisFormatter` if set; otherwise use
     // the base time formatter.
-    const customXFormatter = chart.spec.xAxisFormatter;
-    const xAxisOverride = customXFormatter
-        ? {
-            ...baseOption.xAxis,
-            axisLabel: {
-                ...(baseOption.xAxis.axisLabel || {}),
-                formatter: customXFormatter,
-            },
-        }
-        : null;
+    const xAxisOverride = overrideXAxisFormatter(baseOption.xAxis, chart.spec.xAxisFormatter);
 
     // TODO(compare): when `xAxisFormatter` is set we should prepend the
     // relative offset to the tooltip timestamp too. Today the tooltip
@@ -136,43 +161,8 @@ export function configureLineChart(chart) {
 
     // Multi-series charts get the same legend treatment scatter uses
     // (right-aligned circle swatches, padded names, grid pushed down).
-    // This is the style the user expects for A/B overlays — no new
-    // compare-specific legend invented.
     if (seriesList.length > 1) {
-        const legendItemW = 56;
-        const names = seriesList.map((s) => s.name);
-        option.legend = {
-            show: true,
-            right: '16',
-            top: '42',
-            icon: 'circle',
-            itemWidth: 8,
-            itemHeight: 8,
-            itemGap: 0,
-            formatter: (name) => name.padEnd(6),
-            textStyle: {
-                color: COLORS.fgSecondary,
-                ...FONTS.legend,
-                width: legendItemW,
-                borderColor: 'transparent',
-                borderWidth: 1,
-                borderRadius: 3,
-                padding: [2, 4],
-            },
-            data: names.map((name) => ({
-                name,
-                itemStyle: { borderColor: 'transparent', borderWidth: 2 },
-                textStyle: {
-                    color: COLORS.fgSecondary,
-                    backgroundColor: 'transparent',
-                    borderColor: 'transparent',
-                    borderWidth: 1,
-                    borderRadius: 3,
-                    padding: [2, 4],
-                    width: legendItemW,
-                },
-            })),
-        };
+        option.legend = buildOverlayLegendOption(seriesList.map((s) => s.name));
         // Preserve user's show/hide toggles across re-renders.
         // applyChartOption uses setOption(..., {notMerge: true}), which
         // otherwise wipes echarts' internal legend.selected state on
@@ -183,7 +173,7 @@ export function configureLineChart(chart) {
         }
         // Push the plot grid down so the legend has room above it,
         // matching scatter's layout.
-        option.grid = { ...(baseOption.grid || {}), top: '71' };
+        option.grid = { ...(baseOption.grid || {}), top: String(CHART_GRID_TOP_WITH_LEGEND) };
     }
 
     applyChartOption(chart, option);

@@ -1,19 +1,27 @@
 // Compare-mode chart adapter.
 //
 // Strategies convert a normal single-capture plot spec plus two normalized
-// per-capture payloads into a rendering. Each strategy returns one of:
+// per-capture payloads into a tagged-union rendering result:
 //
-//   1. A transformed plot spec (plain object) — the caller passes it to
-//      `m(Chart, {spec, ...})` exactly like a single-capture spec. This is
-//      the overlay path, used by line charts.
+//   { kind: 'spec',     spec }    — caller renders `m(Chart, {spec, ...})`.
+//                                   Overlay path, used by line charts.
 //
-//   2. A Mithril vnode — the caller renders it directly. Used when a single
-//      chart slot becomes multiple sibling charts (side-by-side heatmaps,
-//      histogram heatmaps) or a single diff chart composed in-place.
+//   { kind: 'vnode',    vnode }   — caller renders the vnode directly.
+//                                   Used when a single chart slot becomes
+//                                   multiple sibling charts (side-by-side
+//                                   heatmaps, histogram heatmaps) or a
+//                                   single diff chart composed in-place.
 //
-//   3. An object `{ _splitSpecs: Spec[] }` — the caller iterates and wraps
-//      each spec in its own `m(Chart, ...)` sibling. Used when multi-series
-//      or percentile charts split into one sub-chart per intersected label.
+//   { kind: 'split',    specs }   — caller iterates and wraps each spec
+//                                   in its own `m(Chart, ...)` sibling.
+//                                   Used when multi-series or percentile
+//                                   charts split into one sub-chart per
+//                                   intersected label.
+//
+//   { kind: 'fallback' }          — style not handled, or the captures
+//                                   can't be combined (missing data).
+//                                   Caller falls back to single-capture
+//                                   baseline-only rendering.
 //
 // Timestamp translation, null propagation for diff math, and the label
 // intersection rule for multi/scatter are owned here. No DOM, no echarts
@@ -30,9 +38,11 @@
 //   anchors: { baseline: ms, experiment: ms }  — subtracted from each
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
-import { nullDiff, intersectLabels } from './util/compare_math.js';
-import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
+import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
+import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { resolvedStyle } from './metric_types.js';
+import { isDarkTheme } from './base.js';
+import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
 // style.css. The getter reads CSS custom properties lazily so a theme
@@ -60,11 +70,14 @@ export const relativeTimeFormatter = (ms) => {
     return `${sign}${sec}s`;
 };
 
+// Shared fallback sentinel — tells the caller to render the baseline
+// single-capture spec instead. Frozen so no strategy can mutate it.
+const FALLBACK = Object.freeze({ kind: 'fallback' });
+
 /**
  * Dispatch on chart style and delegate to the matching strategy.
- * Returns a transformed spec, a Mithril vnode, a `{ _splitSpecs }` marker,
- * or `false` when the style is not handled (caller should fall back to
- * single-capture rendering).
+ * Returns a tagged-union result; see the module docstring above for
+ * the four kinds.
  */
 export const renderCompareChart = (opts) => {
     const style = resolvedStyle(opts.spec);
@@ -75,7 +88,7 @@ export const renderCompareChart = (opts) => {
         case 'scatter':           return splitScatterToSubgroup(opts);
         case 'histogram_heatmap': return sideBySideHistogramHeatmap(opts);
         default:
-            return false;
+            return FALLBACK;
     }
 };
 
@@ -107,17 +120,17 @@ const anchorSecondsFor = (anchors, id, timeDataSec) => {
  * capture is unusable — the caller can then render baseline-only.
  */
 const overlayLine = ({ spec, captures, anchors }) => {
-    const baseline = captures.find((c) => c.id === 'baseline');
-    const experiment = captures.find((c) => c.id === 'experiment');
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline || !experiment) return false;
 
-    const baseSec = anchorSecondsFor(anchors, 'baseline', baseline.timeData);
-    const expSec = anchorSecondsFor(anchors, 'experiment', experiment.timeData);
+    const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, baseline.timeData);
+    const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, experiment.timeData);
 
     const seriesList = [];
     if (Array.isArray(baseline.timeData) && baseline.timeData.length > 0) {
         seriesList.push({
-            name: 'baseline',
+            name: CAPTURE_BASELINE,
             color: BASELINE_COLOR,
             timeData: rebase(baseline.timeData, baseSec),
             valueData: baseline.valueData || [],
@@ -126,19 +139,22 @@ const overlayLine = ({ spec, captures, anchors }) => {
     }
     if (Array.isArray(experiment.timeData) && experiment.timeData.length > 0) {
         seriesList.push({
-            name: 'experiment',
+            name: CAPTURE_EXPERIMENT,
             color: EXPERIMENT_COLOR,
             timeData: rebase(experiment.timeData, expSec),
             valueData: experiment.valueData || [],
             fill: false,
         });
     }
-    if (seriesList.length === 0) return false;
+    if (seriesList.length === 0) return FALLBACK;
 
     return {
-        ...spec,
-        multiSeries: seriesList,
-        xAxisFormatter: relativeTimeFormatter,
+        kind: 'spec',
+        spec: {
+            ...spec,
+            multiSeries: seriesList,
+            xAxisFormatter: relativeTimeFormatter,
+        },
     };
 };
 
@@ -147,13 +163,11 @@ const overlayLine = ({ spec, captures, anchors }) => {
  * When the per-chart `diff` toggle is on, renders a single diff heatmap
  * instead via `renderDiffHeatmap`.
  */
-const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, interval, Chart }) => {
-    const chartId = spec?.opts?.id;
-    const diffMode = !!(toggles && chartId && toggles[chartId] && toggles[chartId].diff);
-    if (diffMode) {
-        return renderDiffHeatmap({ spec, captures, anchors, chartsState, interval, Chart });
-    }
-
+// Build a side-by-side pair (baseline + experiment as sibling charts)
+// with a unified color domain. `styleOverride` swaps the per-slot
+// `opts.style`; `extraSlotFields(cap)` contributes additional
+// top-level spec fields (e.g. bucket_bounds for histogram heatmaps).
+const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart, styleOverride, extraSlotFields }) => {
     const [a, b] = captures;
     // Unify color domain across both slots: same visualMap min/max so a
     // cell of equal intensity reads the same color on both sides.
@@ -161,16 +175,19 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
     const makeSlotSpec = (cap) => {
         const timeData = cap.timeData || spec.time_data || [];
         const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
+        // Per-slot id: Chart registers itself in chartsState.charts
+        // keyed by opts.id. Without this suffix both slots collide
+        // under the same key and datazoom only dispatches to one.
+        const opts = {
+            ...spec.opts,
+            id: `${spec.opts.id || 'chart'}::${cap.id}`,
+            title: `${spec.opts.title} — ${cap.id}`,
+        };
+        if (styleOverride) opts.style = styleOverride;
         return {
             ...spec,
-            // Per-slot id: Chart registers itself in chartsState.charts
-            // keyed by opts.id. Without this suffix both slots collide
-            // under the same key and datazoom only dispatches to one.
-            opts: {
-                ...spec.opts,
-                id: `${spec.opts.id || 'chart'}::${cap.id}`,
-                title: `${spec.opts.title} — ${cap.id}`,
-            },
+            ...(extraSlotFields ? extraSlotFields(cap) : null),
+            opts,
             time_data: rebase(timeData, anchorSec),
             data: cap.heatmapData || spec.data,
             min_value: sharedMin,
@@ -186,47 +203,37 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
         ]),
         m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    // Both slots render their legend — with the unified color domain
-    // both display the same scale (visual symmetry).
-    // scrubStaleLegend removes any diff-view legend bar that was
-    // imperatively injected as a direct child of the previous wrapper
-    // and survived Mithril's class-swap on the reused outer div. The
-    // direct-child selector leaves per-slot legends (inside .compare-
-    // slot) alone.
-    return m('div.compare-heatmap-pair', {
-        oncreate: scrubStaleLegend,
-        onupdate: scrubStaleLegend,
-    }, [
-        slot(a, 'compare-baseline-dot'),
-        slot(b, 'compare-experiment-dot'),
-    ]);
-};
-
-// Remove any .heatmap-legend-bar that's a DIRECT child of this wrapper
-// — left over from a previous strategy's imperative injection when
-// Mithril reused the outer div across a view-tree swap.
-const scrubStaleLegend = (vnode) => {
-    if (!vnode.dom) return;
-    vnode.dom.querySelectorAll(':scope > .heatmap-legend-bar').forEach((el) => el.remove());
-};
-
-// Scan both captures' heatmap triples and return a unified (min, max)
-// for the visualMap. Falls back to the spec's own bounds if a capture
-// has no numeric samples.
-const unifiedHeatmapRange = (a, b, spec) => {
-    let lo = Infinity;
-    let hi = -Infinity;
-    const visit = (triples) => {
-        if (!Array.isArray(triples)) return;
-        for (const t of triples) {
-            const v = Array.isArray(t) ? t[2] : null;
-            if (v == null || Number.isNaN(v)) continue;
-            if (v < lo) lo = v;
-            if (v > hi) hi = v;
-        }
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-pair', [
+            slot(a, 'compare-baseline-dot'),
+            slot(b, 'compare-experiment-dot'),
+        ]),
     };
-    visit(a?.heatmapData);
-    visit(b?.heatmapData);
+};
+
+const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, interval, Chart }) => {
+    const chartId = spec?.opts?.id;
+    const diffMode = !!(toggles && chartId && toggles[chartId] && toggles[chartId].diff);
+    if (diffMode) {
+        return renderDiffHeatmap({ spec, captures, anchors, chartsState, interval, Chart });
+    }
+    return sideBySidePair({ spec, captures, anchors, chartsState, interval, Chart });
+};
+
+// Unified (min, max) across both captures for the shared visualMap.
+// Each capture's extract* stashed its own scanned min/max, so this is
+// just Math.min/Math.max of the two pairs. Falls back to the spec's
+// own bounds if neither capture had numeric samples.
+const unifiedHeatmapRange = (a, b, spec) => {
+    const lo = Math.min(
+        a?.minValue != null ? a.minValue : Infinity,
+        b?.minValue != null ? b.minValue : Infinity,
+    );
+    const hi = Math.max(
+        a?.maxValue != null ? a.maxValue : -Infinity,
+        b?.maxValue != null ? b.maxValue : -Infinity,
+    );
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
         return {
             min: spec.min_value != null ? spec.min_value : 0,
@@ -255,7 +262,7 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     // Guard: diff requires both captures to provide a normalized matrix
     // (rows × time bins). The normalization step lives in the caller
     // (viewer_core). Without it, bail and fall through to no-data.
-    if (!aMatrix || !bMatrix) return false;
+    if (!aMatrix || !bMatrix) return FALLBACK;
 
     const rows = Math.min(aMatrix.length, bMatrix.length);
     const bins = Math.min(
@@ -290,18 +297,27 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     }
 
     const timeData = (a.timeData || spec.time_data || []).slice(0, bins);
-    const baselineAnchorSec = anchorSecondsFor(anchors, 'baseline', timeData);
+    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, timeData);
 
-    const isDark = typeof document !== 'undefined'
-        && document.body
-        && document.body.classList.contains('theme-dark');
+    // Theme is applied as `data-theme` on <html> (see theme.js); the
+    // body-class probe this used to use was always false, which
+    // silently pinned both nullCellColor and the diff palette to the
+    // light-theme variant.
+    const isDark = isDarkTheme();
 
     // Use the data's actual [min, max] rather than forcing a symmetric
     // band around 0. Resample the diverging palette so neutral still
     // lands on value=0 — one-sided ranges collapse to the relevant half
     // of the palette (blue-to-neutral or neutral-to-green) and mixed
     // ranges preserve neutral at zero's natural fraction.
-    const resampledPalette = resampleDivergingForRange(DIVERGING_BLUE_GREEN, dMin, dMax);
+    //
+    // Theme-specific base palette: the light variant fades to
+    // near-white at neutral, the dark variant fades to the dark card
+    // bg. Either way near-zero cells visually blend into the canvas
+    // while extremes stay saturated — without the per-stop alpha
+    // dilution that muddied the extreme hues in earlier attempts.
+    const basePalette = isDark ? DIVERGING_BLUE_GREEN_DARK : DIVERGING_BLUE_GREEN;
+    const resampledPalette = resampleDivergingForRange(basePalette, dMin, dMax);
 
     const diffSpec = {
         ...spec,
@@ -312,17 +328,21 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         max_value: dMax,
         colormap: resampledPalette,
         nullCellColor: nullCellColor(isDark),
+        // Directional caption under the gradient bar. The numeric min/max
+        // labels still show the actual (experiment − baseline) extremes;
+        // these labels make the directionality unambiguous at a glance.
+        diffLegendLabels: { left: 'base is higher', right: 'exp is higher' },
+        // Side-channel so heatmap.js's tooltip can show the original
+        // baseline + experiment values for a hovered cell instead of the
+        // computed delta. Indexed as matrix[row][bin].
+        diffMatrices: { baseline: aMatrix, experiment: bMatrix },
         xAxisFormatter: relativeTimeFormatter,
     };
 
-    // On mount/update, scrub any stale legend bar inherited from a
-    // prior side-by-side render of this same chart slot (Mithril
-    // reuses the outer div across class swaps; see scrubStaleLegend).
-    return m('div.compare-heatmap-diff', {
-        oncreate: scrubStaleLegend,
-        onupdate: scrubStaleLegend,
-    },
-        m(Chart, { spec: diffSpec, chartsState, interval }));
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-diff', m(Chart, { spec: diffSpec, chartsState, interval })),
+    };
 };
 
 /**
@@ -333,28 +353,33 @@ const splitMultiToSubgroup = ({ spec, captures, anchors }) =>
     splitIntoOverlayLines({ spec, captures, anchors, labelFor: multiLabel });
 
 /**
- * Split a `scatter` chart (histogram percentiles) into one overlay line
- * chart per shared quantile label.
+ * Split a `scatter` chart (histogram percentiles) into one overlay
+ * scatter chart per shared quantile label. Percentile series are
+ * naturally discrete samples, not continuous measurements — points
+ * read more honestly than a connecting line suggests.
  */
 const splitScatterToSubgroup = ({ spec, captures, anchors }) =>
-    splitIntoOverlayLines({ spec, captures, anchors, labelFor: percentileLabel });
+    splitIntoOverlayLines({
+        spec, captures, anchors, labelFor: percentileLabel, seriesType: 'scatter',
+    });
 
-const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor }) => {
-    const baseline = captures.find((c) => c.id === 'baseline');
-    const experiment = captures.find((c) => c.id === 'experiment');
-    if (!baseline || !experiment) return false;
+const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor, seriesType = 'line' }) => {
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
+    if (!baseline || !experiment) return FALLBACK;
 
     const mapA = baseline.seriesMap || new Map();
     const mapB = experiment.seriesMap || new Map();
     const labelsA = new Set(mapA.keys());
     const labelsB = new Set(mapB.keys());
     const shared = [...intersectLabels(labelsA, labelsB)].sort();
+    const asScatter = seriesType === 'scatter';
 
     const specs = shared.map((label) => {
         const a = mapA.get(label);
         const b = mapB.get(label);
-        const baseSec = anchorSecondsFor(anchors, 'baseline', a.timeData);
-        const expSec = anchorSecondsFor(anchors, 'experiment', b.timeData);
+        const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, a.timeData);
+        const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, b.timeData);
         return {
             ...spec,
             opts: {
@@ -369,25 +394,27 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
             _splitLabel: label,
             multiSeries: [
                 {
-                    name: 'baseline',
+                    name: CAPTURE_BASELINE,
                     color: BASELINE_COLOR,
                     timeData: rebase(a.timeData, baseSec),
                     valueData: a.valueData,
                     fill: false,
+                    scatter: asScatter,
                 },
                 {
-                    name: 'experiment',
+                    name: CAPTURE_EXPERIMENT,
                     color: EXPERIMENT_COLOR,
                     timeData: rebase(b.timeData, expSec),
                     valueData: b.valueData,
                     fill: false,
+                    scatter: asScatter,
                 },
             ],
             xAxisFormatter: relativeTimeFormatter,
         };
     });
 
-    return { _splitSpecs: specs };
+    return { kind: 'split', specs };
 };
 
 const multiLabel = (r) => {
@@ -396,58 +423,18 @@ const multiLabel = (r) => {
         .map((k) => `${k}=${mm[k]}`).join(',');
 };
 
-const percentileLabel = (r) => {
-    const mm = (r && r.metric) || {};
-    const raw = mm.percentile != null ? mm.percentile : mm.quantile;
-    const q = Number(raw);
-    if (!Number.isFinite(q)) return 'unknown';
-    const pct = q <= 1 ? q * 100 : q;
-    return `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
-};
+const percentileLabel = (r) => canonicalQuantileLabel(r) || 'unknown';
 
 /**
  * Render baseline and experiment histogram heatmaps side-by-side. No
  * diff variant — a meaningful diff would need a per-bucket log-scale
  * divergence metric that's out of scope for this iteration.
  */
-const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart }) => {
-    const [a, b] = captures;
-    const { min: sharedMin, max: sharedMax } = unifiedHeatmapRange(a, b, spec);
-    const makeSlotSpec = (cap) => {
-        const timeData = cap.timeData || spec.time_data || [];
-        const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
-        return {
-            ...spec,
-            opts: {
-                ...spec.opts,
-                // Per-slot id so Chart's chartsState.charts map keeps
-                // both slots registered (see sideBySideHeatmap).
-                id: `${spec.opts.id || 'chart'}::${cap.id}`,
-                title: `${spec.opts.title} — ${cap.id}`,
-                style: 'histogram_heatmap',
-            },
-            time_data: rebase(timeData, anchorSec),
-            data: cap.heatmapData || spec.data,
-            bucket_bounds: cap.bucketBounds || spec.bucket_bounds,
-            min_value: sharedMin,
-            max_value: sharedMax,
-            xAxisFormatter: relativeTimeFormatter,
-        };
-    };
-
-    const slot = (cap, dotCls) => m('div.compare-slot', [
-        m('div.compare-slot-label', [
-            m(`span.compare-dot.${dotCls}`, '\u25CF'),
-            m('span', cap.id),
-        ]),
-        m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
-    ]);
-    return m('div.compare-heatmap-pair', {
-        oncreate: scrubStaleLegend,
-        onupdate: scrubStaleLegend,
-    }, [
-        slot(a, 'compare-baseline-dot'),
-        slot(b, 'compare-experiment-dot'),
-    ]);
-};
+const sideBySideHistogramHeatmap = (opts) => sideBySidePair({
+    ...opts,
+    styleOverride: 'histogram_heatmap',
+    extraSlotFields: (cap) => ({
+        bucket_bounds: cap.bucketBounds || opts.spec.bucket_bounds,
+    }),
+});
 

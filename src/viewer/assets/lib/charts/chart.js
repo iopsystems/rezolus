@@ -419,6 +419,17 @@ export class Chart {
                 endValue = undefined;
             }
 
+            // Don't let an event with no usable zoom info (empty batch,
+            // or batch details with all-undefined coords) overwrite a
+            // zoom that was just set — this shape shows up as an echo
+            // when heatmap.js's downsample-swap setOption triggers a
+            // secondary datazoom event on a sibling chart that received
+            // our cross-dispatch.
+            const hasPct = start !== undefined && end !== undefined
+                && !Number.isNaN(start) && !Number.isNaN(end);
+            const hasValues = startValue !== undefined && endValue !== undefined;
+            if (!hasPct && !hasValues) return;
+
             this.chartsState.zoomLevel = {
                 start,
                 end,
@@ -442,8 +453,17 @@ export class Chart {
                 payload.startValue = startValue;
                 payload.endValue = endValue;
             }
+            // Skip the source chart: its dataZoom is already at these
+            // values (the toolbox drag set it before firing this event).
+            // Re-dispatching to self is at best redundant; at worst, for
+            // heatmap-type charts, it can cascade through heatmap.js's
+            // own datazoom listener (which calls setOption to swap
+            // downsample level) and re-fire a batch-carrying datazoom
+            // event, clobbering chartsState.zoomLevel. Excluding self
+            // from the cross-dispatch breaks that loop without needing
+            // a re-entrancy guard.
             this.chartsState.charts.forEach(chart => {
-                chart.dispatchAction(payload);
+                if (chart !== this) chart.dispatchAction(payload);
                 chart._rescaleYAxis();
             });
             m.redraw();
@@ -628,8 +648,10 @@ export class Chart {
             || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
 
         // Clean up heatmap DOM legend bar when switching to a different chart type
+        // (e.g. heatmap-mode toggle off). The legend lives inside chart.domNode
+        // now, so clear it from the same scope.
         if (style !== 'histogram_heatmap' && style !== 'heatmap') {
-            this.domNode?.parentNode?.querySelector('.heatmap-legend-bar')?.remove();
+            this.domNode?.querySelector('.heatmap-legend-bar')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules

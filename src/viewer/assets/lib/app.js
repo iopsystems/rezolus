@@ -8,7 +8,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
 import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -44,6 +44,11 @@ let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
 let experimentFilename = null;
+// {start, end, step} in PromQL-native seconds, cached at compare-mode
+// entry so every CompareChartWrapper skips its per-chart
+// ViewerApi.getMetadata round-trip. Cleared on detach.
+let experimentQueryRange = null;
+export const getExperimentQueryRange = () => experimentQueryRange;
 
 // Compare-mode per-chart toggles + anchors live in `selectionStore` so
 // they persist across page reloads. See selection_migration.js for the
@@ -73,6 +78,7 @@ const initComponents = () => {
         toggles: selectionStore.chartToggles || {},
         setChartToggle,
         anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
+        experimentQueryRange,
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -100,18 +106,32 @@ const durationFromFileMetadata = (fileMeta) => {
     return null;
 };
 
+// Parse /api/v1/metadata response shape into a compare-mode query range.
+// /api/v1/metadata returns minTime/maxTime in PromQL-native seconds
+// (same scale as plot.data[0] timestamps). Returns null when the
+// response shape doesn't include a recognisable time range.
+const queryRangeFromMeta = (meta) => {
+    const data = meta?.data ?? meta;
+    const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+    const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+    if (minT == null || maxT == null) return null;
+    const start = Number(minT);
+    const end = Number(maxT);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+};
+
 // ── Compare-mode actions ───────────────────────────────────────────
 
 const attachExperiment = async (file) => {
     const sysinfo = await ViewerApi.attachExperiment(file);
-    let expFileMeta = null;
-    let expMeta = null;
-    try { expFileMeta = await ViewerApi.getFileMetadata('experiment'); }
-    catch (_) { /* optional */ }
-    try { expMeta = await ViewerApi.getMetadata('experiment'); }
-    catch (_) { /* optional */ }
+    const [expFileMeta, expMeta] = await Promise.all([
+        ViewerApi.getFileMetadata(CAPTURE_EXPERIMENT).catch(() => null),
+        ViewerApi.getMetadata(CAPTURE_EXPERIMENT).catch(() => null),
+    ]);
     experimentSystemInfo = sysinfo || null;
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
+    experimentQueryRange = queryRangeFromMeta(expMeta);
     // Prefer server-stamped filename (works in both file-drop and CLI paths);
     // fall back to the dropped File's name.
     experimentFilename = (expMeta?.data?.filename)
@@ -126,7 +146,7 @@ const attachExperiment = async (file) => {
     // past the end of its data.
     const anchors = selectionStore.anchors || { baseline: 0, experiment: 0 };
     if (experimentDurationMs != null && anchors.experiment > experimentDurationMs) {
-        setAnchor('experiment', experimentDurationMs);
+        setAnchor(CAPTURE_EXPERIMENT, experimentDurationMs);
         console.info(
             `[compare] experiment anchor clamped to ${experimentDurationMs}ms to fit capture duration`,
         );
@@ -136,10 +156,12 @@ const attachExperiment = async (file) => {
 };
 
 const detachExperiment = async () => {
-    try { await ViewerApi.detachExperiment(); } catch (_) { /* best effort */ }
+    try { await ViewerApi.detachExperiment(); }
+    catch (err) { console.warn('[compare] detachExperiment failed; server may leak a temp file', err); }
     experimentSystemInfo = null;
     experimentDurationMs = null;
     experimentFilename = null;
+    experimentQueryRange = null;
     experimentAttached = false;
     compareMode = false;
     m.redraw();
@@ -505,6 +527,7 @@ const initDashboard = (config = {}) => {
     experimentAttached = compareMode;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
+    experimentQueryRange = config.experimentQueryRange || null;
     experimentFilename = config.experimentFilename
         || (config.experimentFileMetadata
             && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))

@@ -4,6 +4,25 @@ use metriken_query::{Bytes, QueryEngine, Tsdb};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+/// Parse a JS-side capture id into an internal slot selector. Mirrors
+/// the server-side CaptureId::parse but lives here to avoid pulling
+/// the viewer crate dependency graph into the wasm module.
+#[derive(Copy, Clone)]
+enum Slot {
+    Baseline,
+    Experiment,
+}
+
+impl Slot {
+    fn parse(capture: &str) -> Result<Self, JsValue> {
+        match capture {
+            "baseline" => Ok(Slot::Baseline),
+            "experiment" => Ok(Slot::Experiment),
+            other => Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
+        }
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();
@@ -312,20 +331,14 @@ impl WasmCaptureRegistry {
     /// "experiment").  Replaces any previously attached capture in that slot.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
         let viewer = Viewer::new(data, filename)?;
-        match capture {
-            "baseline" => self.baseline = Some(viewer),
-            "experiment" => self.experiment = Some(viewer),
-            other => return Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
-        }
+        *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
         Ok(())
     }
 
     /// Drop the capture in the given slot (no-op if unknown or empty).
     pub fn detach(&mut self, capture: &str) {
-        match capture {
-            "baseline" => self.baseline = None,
-            "experiment" => self.experiment = None,
-            _ => {}
+        if let Ok(slot) = Slot::parse(capture) {
+            *self.slot_mut(slot) = None;
         }
     }
 
@@ -373,13 +386,11 @@ impl WasmCaptureRegistry {
     /// Initialise ServiceExtension templates for the given capture.  Mirrors
     /// `Viewer::init_templates`.
     pub fn init_templates(&mut self, capture: &str, templates_json: &str) -> Result<(), JsValue> {
-        let slot = match capture {
-            "baseline" => self.baseline.as_mut(),
-            "experiment" => self.experiment.as_mut(),
-            other => return Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
-        };
-        let viewer = slot.ok_or_else(|| JsValue::from_str("capture not attached"))?;
-        viewer.init_templates(templates_json)
+        let slot = Slot::parse(capture)?;
+        self.slot_mut(slot)
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("capture not attached"))?
+            .init_templates(templates_json)
     }
 
     pub fn get_sections(&self, capture: &str) -> Option<String> {
@@ -391,20 +402,23 @@ impl WasmCaptureRegistry {
     }
 
     fn slot(&self, capture: &str) -> Option<&Viewer> {
-        match capture {
-            "baseline" => self.baseline.as_ref(),
-            "experiment" => self.experiment.as_ref(),
-            _ => None,
+        match Slot::parse(capture).ok()? {
+            Slot::Baseline => self.baseline.as_ref(),
+            Slot::Experiment => self.experiment.as_ref(),
+        }
+    }
+
+    fn slot_mut(&mut self, slot: Slot) -> &mut Option<Viewer> {
+        match slot {
+            Slot::Baseline => &mut self.baseline,
+            Slot::Experiment => &mut self.experiment,
         }
     }
 
     fn require_slot(&self, capture: &str) -> Result<&Viewer, JsValue> {
-        match capture {
-            "baseline" | "experiment" => self
-                .slot(capture)
-                .ok_or_else(|| JsValue::from_str("capture not attached")),
-            other => Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
-        }
+        Slot::parse(capture)?;
+        self.slot(capture)
+            .ok_or_else(|| JsValue::from_str("capture not attached"))
     }
 }
 
