@@ -150,8 +150,13 @@ export class Chart {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 
-            // Restore zoom state after re-render (notMerge wipes dataZoom range)
-            if (themeChanged && this.chartsState.zoomLevel !== null) {
+            // Restore zoom state after re-render (notMerge wipes the
+            // dataZoom range). Applies to every reconfigure — not just
+            // theme changes — because in compare mode each Mithril
+            // redraw hands in a fresh spec object and therefore
+            // triggers a full reconfigure, which would otherwise clear
+            // the user's zoom on the non-source slot.
+            if (this.chartsState.zoomLevel !== null) {
                 const z = this.chartsState.zoomLevel;
                 if (z.start !== 0 || z.end !== 100) {
                     this.echart.dispatchAction({
