@@ -318,19 +318,34 @@ export class Chart {
 
             // Toolbox drag-to-zoom sometimes only emits startValue /
             // endValue (absolute axis coords) and omits the percentage
-            // pair. Downstream code (TimeRangeBar's Match Selection
-            // button, onupdate's zoom restore) relies on the percentage
-            // form, and in compare mode the absolute-coord fallback is
+            // pair. Downstream code (TimeRangeBar's Match Selection,
+            // onupdate's zoom restore) relies on the percentage form,
+            // and in compare mode the absolute-coord fallback is
             // broken because the chart axis is in relative ms but the
             // TimeRangeBar's start_time is wall-clock ms. Derive the
             // percentages from the chart's own time range when missing.
+            //
+            // The axis time-reference depends on chart style:
+            //   - Line compare:   multiSeries[*].timeData (rebased)
+            //   - Line single:    spec.data[0] (absolute)
+            //   - Heatmap any:    spec.time_data (matches the rendered axis)
+            // Pick the widest reference so the percentage math lines up
+            // with whatever echarts used to draw the axis.
             if ((start === undefined || Number.isNaN(start))
+                && (end === undefined || Number.isNaN(end))
                 && startValue !== undefined
                 && endValue !== undefined) {
-                const td = this.spec.time_data
-                    || (Array.isArray(this.spec.data) ? this.spec.data[0] : null);
+                let td = this.spec.time_data;
+                if (!td && Array.isArray(this.spec.multiSeries) && this.spec.multiSeries.length > 0) {
+                    td = this.spec.multiSeries.reduce(
+                        (a, s) => (s.timeData && s.timeData.length > (a?.length || 0) ? s.timeData : a),
+                        this.spec.multiSeries[0].timeData,
+                    );
+                }
+                if (!td && Array.isArray(this.spec.data)) {
+                    td = this.spec.data[0];
+                }
                 if (td && td.length >= 2) {
-                    // Chart x-axis values are timeData[i] * 1000 (ms).
                     const axisMin = td[0] * 1000;
                     const axisMax = td[td.length - 1] * 1000;
                     const total = axisMax - axisMin;
