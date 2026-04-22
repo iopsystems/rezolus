@@ -261,14 +261,14 @@ const bootstrap = async () => {
     let experimentFileMetadata = null;
     let experimentFilename = null;
     if (compareMode) {
-        try { experimentSystemInfo = await ViewerApi.getSystemInfo('experiment'); }
-        catch (_) { /* optional */ }
-        try { experimentFileMetadata = await ViewerApi.getFileMetadata('experiment'); }
-        catch (_) { /* optional */ }
-        try {
-            const expMeta = await ViewerApi.getMetadata('experiment');
-            experimentFilename = expMeta?.data?.filename || null;
-        } catch (_) { /* optional */ }
+        const [sysinfo, fileMeta, expMeta] = await Promise.all([
+            ViewerApi.getSystemInfo('experiment').catch(() => null),
+            ViewerApi.getFileMetadata('experiment').catch(() => null),
+            ViewerApi.getMetadata('experiment').catch(() => null),
+        ]);
+        experimentSystemInfo = sysinfo;
+        experimentFileMetadata = fileMeta;
+        experimentFilename = expMeta?.data?.filename || null;
     }
 
     initDashboard({

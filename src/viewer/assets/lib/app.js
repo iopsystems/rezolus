@@ -104,12 +104,10 @@ const durationFromFileMetadata = (fileMeta) => {
 
 const attachExperiment = async (file) => {
     const sysinfo = await ViewerApi.attachExperiment(file);
-    let expFileMeta = null;
-    let expMeta = null;
-    try { expFileMeta = await ViewerApi.getFileMetadata('experiment'); }
-    catch (_) { /* optional */ }
-    try { expMeta = await ViewerApi.getMetadata('experiment'); }
-    catch (_) { /* optional */ }
+    const [expFileMeta, expMeta] = await Promise.all([
+        ViewerApi.getFileMetadata('experiment').catch(() => null),
+        ViewerApi.getMetadata('experiment').catch(() => null),
+    ]);
     experimentSystemInfo = sysinfo || null;
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
     // Prefer server-stamped filename (works in both file-drop and CLI paths);
@@ -136,7 +134,8 @@ const attachExperiment = async (file) => {
 };
 
 const detachExperiment = async () => {
-    try { await ViewerApi.detachExperiment(); } catch (_) { /* best effort */ }
+    try { await ViewerApi.detachExperiment(); }
+    catch (err) { console.warn('[compare] detachExperiment failed; server may leak a temp file', err); }
     experimentSystemInfo = null;
     experimentDurationMs = null;
     experimentFilename = null;
