@@ -347,12 +347,21 @@ export class Chart {
 
         this.echart.on('datazoom', (event) => {
             // 'datazoom' events triggered by the user vs dispatched by us have different formats:
-            // User-triggered events have a non-empty batch array with the details under it.
-            // Programmatic dispatches (the forEach below, or compare-mode
-            // zoom sync) emit either a missing batch or an empty-batch
-            // event — either case would destructure to all-undefined
-            // below and silently reset chartsState.zoomLevel. Filter both.
-            if (!Array.isArray(event.batch) || event.batch.length === 0) {
+            // User-triggered events have a batch property with the details under it.
+            // (We don't want to trigger on our own dispatched zoom actions, so this is convenient.)
+            if (!event.batch) {
+                return;
+            }
+            // Re-entrancy guard: when the forEach below dispatches to a
+            // sibling chart (the compare-mode side-by-side case), that
+            // sibling's toolbox internally re-fires a datazoom event WITH
+            // a batch payload — and if we let that sibling run the full
+            // handler, it would clobber chartsState.zoomLevel with its
+            // own axis-relative interpretation and re-dispatch back,
+            // causing the zoom to appear to reset. Mark the
+            // cross-dispatch window on chartsState and skip re-entry
+            // while it's active.
+            if (this.chartsState._inHandlerDispatch) {
                 return;
             }
 
@@ -422,15 +431,6 @@ export class Chart {
                 endValue = undefined;
             }
 
-            // Only persist a zoom if we actually extracted meaningful
-            // values. A stray empty-batch or malformed event would
-            // otherwise write undefineds into zoomLevel and clobber a
-            // legitimate zoom on the next onupdate restore.
-            const hasPct = start !== undefined && end !== undefined
-                && !Number.isNaN(start) && !Number.isNaN(end);
-            const hasValues = startValue !== undefined && endValue !== undefined;
-            if (!hasPct && !hasValues) return;
-
             this.chartsState.zoomLevel = {
                 start,
                 end,
@@ -454,10 +454,15 @@ export class Chart {
                 payload.startValue = startValue;
                 payload.endValue = endValue;
             }
-            this.chartsState.charts.forEach(chart => {
-                chart.dispatchAction(payload);
-                chart._rescaleYAxis();
-            });
+            this.chartsState._inHandlerDispatch = true;
+            try {
+                this.chartsState.charts.forEach(chart => {
+                    chart.dispatchAction(payload);
+                    chart._rescaleYAxis();
+                });
+            } finally {
+                this.chartsState._inHandlerDispatch = false;
+            }
             m.redraw();
         });
 
