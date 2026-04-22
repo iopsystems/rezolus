@@ -332,6 +332,10 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         // labels still show the actual (experiment − baseline) extremes;
         // these labels make the directionality unambiguous at a glance.
         diffLegendLabels: { left: 'base is higher', right: 'exp is higher' },
+        // Side-channel so heatmap.js's tooltip can show the original
+        // baseline + experiment values for a hovered cell instead of the
+        // computed delta. Indexed as matrix[row][bin].
+        diffMatrices: { baseline: aMatrix, experiment: bMatrix },
         xAxisFormatter: relativeTimeFormatter,
     };
 

@@ -166,6 +166,7 @@ export function configureHeatmap(chart) {
 
     // Configure tooltip with unit formatting if specified
     const customXFormatterForTooltip = chart.spec.xAxisFormatter;
+    const diffMatrices = chart.spec.diffMatrices;
     let tooltipFormatter = function (params) {
         if (params.data === undefined) {
             return '';
@@ -203,6 +204,35 @@ export function configureHeatmap(chart) {
         const fmt = unitSystem
             ? createAxisLabelFormatter(unitSystem)
             : (v) => v.toFixed(6);
+
+        // Diff heatmap: pull baseline + experiment absolute values from
+        // the side-channel matrices and render both instead of the
+        // computed delta. The delta itself is one subtraction away and
+        // the user can read it off the color already; the absolute
+        // values tell them where on the scale each capture actually sat.
+        if (diffMatrices) {
+            const bv = diffMatrices.baseline?.[cpu]?.[timeIndex];
+            const ev = diffMatrices.experiment?.[cpu]?.[timeIndex];
+            const fmtCell = (v) => (v == null || Number.isNaN(v)) ? '—' : fmt(v);
+            return `<div style="${FONTS.cssSans}">
+                        <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
+                            ${formattedTime}
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
+                            <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
+                                CPU ${cpu}
+                            </span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
+                            <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">baseline</span>
+                            <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(bv)}</span>
+                            <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">experiment</span>
+                            <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(ev)}</span>
+                        </div>
+                        ${getTooltipFreezeFooter(chart)}
+                    </div>`;
+        }
+
         const label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
 
         const [clampedVal, rawVal] = clampToRange(value, range);
