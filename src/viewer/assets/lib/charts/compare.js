@@ -162,13 +162,11 @@ const overlayLine = ({ spec, captures, anchors }) => {
  * When the per-chart `diff` toggle is on, renders a single diff heatmap
  * instead via `renderDiffHeatmap`.
  */
-const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, interval, Chart }) => {
-    const chartId = spec?.opts?.id;
-    const diffMode = !!(toggles && chartId && toggles[chartId] && toggles[chartId].diff);
-    if (diffMode) {
-        return renderDiffHeatmap({ spec, captures, anchors, chartsState, interval, Chart });
-    }
-
+// Build a side-by-side pair (baseline + experiment as sibling charts)
+// with a unified color domain. `styleOverride` swaps the per-slot
+// `opts.style`; `extraSlotFields(cap)` contributes additional
+// top-level spec fields (e.g. bucket_bounds for histogram heatmaps).
+const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart, styleOverride, extraSlotFields }) => {
     const [a, b] = captures;
     // Unify color domain across both slots: same visualMap min/max so a
     // cell of equal intensity reads the same color on both sides.
@@ -176,16 +174,19 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
     const makeSlotSpec = (cap) => {
         const timeData = cap.timeData || spec.time_data || [];
         const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
+        // Per-slot id: Chart registers itself in chartsState.charts
+        // keyed by opts.id. Without this suffix both slots collide
+        // under the same key and datazoom only dispatches to one.
+        const opts = {
+            ...spec.opts,
+            id: `${spec.opts.id || 'chart'}::${cap.id}`,
+            title: `${spec.opts.title} — ${cap.id}`,
+        };
+        if (styleOverride) opts.style = styleOverride;
         return {
             ...spec,
-            // Per-slot id: Chart registers itself in chartsState.charts
-            // keyed by opts.id. Without this suffix both slots collide
-            // under the same key and datazoom only dispatches to one.
-            opts: {
-                ...spec.opts,
-                id: `${spec.opts.id || 'chart'}::${cap.id}`,
-                title: `${spec.opts.title} — ${cap.id}`,
-            },
+            ...(extraSlotFields ? extraSlotFields(cap) : null),
+            opts,
             time_data: rebase(timeData, anchorSec),
             data: cap.heatmapData || spec.data,
             min_value: sharedMin,
@@ -201,8 +202,6 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
         ]),
         m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    // Both slots render their legend — with the unified color domain
-    // both display the same scale (visual symmetry).
     // scrubStaleLegend removes any diff-view legend bar that was
     // imperatively injected as a direct child of the previous wrapper
     // and survived Mithril's class-swap on the reused outer div. The
@@ -218,6 +217,15 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
             slot(b, 'compare-experiment-dot'),
         ]),
     };
+};
+
+const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, interval, Chart }) => {
+    const chartId = spec?.opts?.id;
+    const diffMode = !!(toggles && chartId && toggles[chartId] && toggles[chartId].diff);
+    if (diffMode) {
+        return renderDiffHeatmap({ spec, captures, anchors, chartsState, interval, Chart });
+    }
+    return sideBySidePair({ spec, captures, anchors, chartsState, interval, Chart });
 };
 
 // Remove any .heatmap-legend-bar that's a DIRECT child of this wrapper
@@ -419,47 +427,11 @@ const percentileLabel = (r) => canonicalQuantileLabel(r) || 'unknown';
  * diff variant — a meaningful diff would need a per-bucket log-scale
  * divergence metric that's out of scope for this iteration.
  */
-const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart }) => {
-    const [a, b] = captures;
-    const { min: sharedMin, max: sharedMax } = unifiedHeatmapRange(a, b, spec);
-    const makeSlotSpec = (cap) => {
-        const timeData = cap.timeData || spec.time_data || [];
-        const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
-        return {
-            ...spec,
-            opts: {
-                ...spec.opts,
-                // Per-slot id so Chart's chartsState.charts map keeps
-                // both slots registered (see sideBySideHeatmap).
-                id: `${spec.opts.id || 'chart'}::${cap.id}`,
-                title: `${spec.opts.title} — ${cap.id}`,
-                style: 'histogram_heatmap',
-            },
-            time_data: rebase(timeData, anchorSec),
-            data: cap.heatmapData || spec.data,
-            bucket_bounds: cap.bucketBounds || spec.bucket_bounds,
-            min_value: sharedMin,
-            max_value: sharedMax,
-            xAxisFormatter: relativeTimeFormatter,
-        };
-    };
-
-    const slot = (cap, dotCls) => m('div.compare-slot', [
-        m('div.compare-slot-label', [
-            m(`span.compare-dot.${dotCls}`, '\u25CF'),
-            m('span', cap.id),
-        ]),
-        m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
-    ]);
-    return {
-        kind: 'vnode',
-        vnode: m('div.compare-heatmap-pair', {
-            oncreate: scrubStaleLegend,
-            onupdate: scrubStaleLegend,
-        }, [
-            slot(a, 'compare-baseline-dot'),
-            slot(b, 'compare-experiment-dot'),
-        ]),
-    };
-};
+const sideBySideHistogramHeatmap = (opts) => sideBySidePair({
+    ...opts,
+    styleOverride: 'histogram_heatmap',
+    extraSlotFields: (cap) => ({
+        bucket_bounds: cap.bucketBounds || opts.spec.bucket_bounds,
+    }),
+});
 
