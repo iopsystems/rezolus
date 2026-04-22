@@ -34,9 +34,13 @@ export function buildGradientCanvas(colorFn) {
  * On first call, builds: [minLabel] [colorBar] [maxLabel] + any extraElements,
  * appends the container to `wrapper`, and returns element references.
  *
- * On subsequent calls (same wrapper), returns existing element references.
+ * On subsequent calls (same wrapper), repaints the gradient from the
+ * (possibly new) barCanvas and returns existing element references. The
+ * repaint lets callers swap palettes (e.g. diff-mode diverging palette)
+ * without tearing down the container.
  *
- * @param {HTMLElement} wrapper - parent element (chart-wrapper)
+ * @param {HTMLElement} wrapper - parent element (Chart component's own
+ *     div; owned by Mithril so Mithril removes the legend on unmount)
  * @param {HTMLCanvasElement} barCanvas - pre-rendered gradient canvas
  * @param {HTMLElement[]} [extraElements] - additional elements appended after maxLabel
  * @returns {{ minLabel: HTMLElement, maxLabel: HTMLElement }}
@@ -44,6 +48,8 @@ export function buildGradientCanvas(colorFn) {
 export function ensureLegendBar(wrapper, barCanvas, extraElements) {
     let container = wrapper.querySelector('.heatmap-legend-bar');
     if (container) {
+        const bar = container.querySelector('canvas');
+        if (bar && barCanvas) bar.getContext('2d').drawImage(barCanvas, 0, 0);
         return {
             minLabel: container.querySelector('.heatmap-label-min'),
             maxLabel: container.querySelector('.heatmap-label-max'),

@@ -345,24 +345,15 @@ export function configureHeatmap(chart) {
     applyChartOption(chart, option);
 
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row.
+    // Mounted inside chart.domNode (Chart's own Mithril-managed div) so
+    // the legend is removed with the Chart on unmount/swap — no scrubber,
+    // no palette-signature dance.
     const formatter = createAxisLabelFormatter(unitSystem || 'count');
-    const wrapper = chart.domNode.parentNode;
     const legendColorFn = chart.spec.colormap
         ? buildRampColorFn(chart.spec.colormap)
         : viridisColor;
-    // Invalidate a retained legend bar whose gradient no longer matches
-    // the current colormap (e.g. side-by-side → diff toggle).
-    const paletteSig = Array.isArray(chart.spec.colormap)
-        ? chart.spec.colormap.join(',')
-        : 'viridis';
-    const existing = wrapper.querySelector('.heatmap-legend-bar');
-    if (existing && existing.dataset.palette !== paletteSig) {
-        existing.remove();
-    }
     const barCanvas = buildGradientCanvas(legendColorFn);
-    const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
-    const bar = wrapper.querySelector('.heatmap-legend-bar');
-    if (bar) bar.dataset.palette = paletteSig;
+    const { minLabel, maxLabel } = ensureLegendBar(chart.domNode, barCanvas);
     const sig = (v) => {
         if (!Number.isFinite(v) || v === 0) return v;
         return parseFloat(v.toPrecision(2));

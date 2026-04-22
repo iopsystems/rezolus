@@ -202,17 +202,9 @@ const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart,
         ]),
         m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    // scrubStaleLegend removes any diff-view legend bar that was
-    // imperatively injected as a direct child of the previous wrapper
-    // and survived Mithril's class-swap on the reused outer div. The
-    // direct-child selector leaves per-slot legends (inside .compare-
-    // slot) alone.
     return {
         kind: 'vnode',
-        vnode: m('div.compare-heatmap-pair', {
-            oncreate: scrubStaleLegend,
-            onupdate: scrubStaleLegend,
-        }, [
+        vnode: m('div.compare-heatmap-pair', [
             slot(a, 'compare-baseline-dot'),
             slot(b, 'compare-experiment-dot'),
         ]),
@@ -226,14 +218,6 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
         return renderDiffHeatmap({ spec, captures, anchors, chartsState, interval, Chart });
     }
     return sideBySidePair({ spec, captures, anchors, chartsState, interval, Chart });
-};
-
-// Remove any .heatmap-legend-bar that's a DIRECT child of this wrapper
-// — left over from a previous strategy's imperative injection when
-// Mithril reused the outer div across a view-tree swap.
-const scrubStaleLegend = (vnode) => {
-    if (!vnode.dom) return;
-    vnode.dom.querySelectorAll(':scope > .heatmap-legend-bar').forEach((el) => el.remove());
 };
 
 // Unified (min, max) across both captures for the shared visualMap.
@@ -337,15 +321,9 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         xAxisFormatter: relativeTimeFormatter,
     };
 
-    // On mount/update, scrub any stale legend bar inherited from a
-    // prior side-by-side render of this same chart slot (Mithril
-    // reuses the outer div across class swaps; see scrubStaleLegend).
     return {
         kind: 'vnode',
-        vnode: m('div.compare-heatmap-diff', {
-            oncreate: scrubStaleLegend,
-            onupdate: scrubStaleLegend,
-        }, m(Chart, { spec: diffSpec, chartsState, interval })),
+        vnode: m('div.compare-heatmap-diff', m(Chart, { spec: diffSpec, chartsState, interval })),
     };
 };
 

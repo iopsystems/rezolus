@@ -628,8 +628,10 @@ export class Chart {
             || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
 
         // Clean up heatmap DOM legend bar when switching to a different chart type
+        // (e.g. heatmap-mode toggle off). The legend lives inside chart.domNode
+        // now, so clear it from the same scope.
         if (style !== 'histogram_heatmap' && style !== 'heatmap') {
-            this.domNode?.parentNode?.querySelector('.heatmap-legend-bar')?.remove();
+            this.domNode?.querySelector('.heatmap-legend-bar')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules

@@ -356,11 +356,11 @@ export function configureHistogramHeatmap(chart) {
     const pctMaxLabel = pctMax.toFixed(1) + '%';
 
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row.
-    const wrapper = chart.domNode.parentNode;
+    // Mounted inside chart.domNode so Mithril owns the legend's lifetime.
     const barCanvas = buildGradientCanvas(infernoColor);
 
     // Build the checkbox element to pass as an extra element into the shared legend bar
-    let checkboxEl = wrapper.querySelector('.heatmap-legend-bar .histogram-toggle');
+    let checkboxEl = chart.domNode.querySelector('.heatmap-legend-bar .histogram-toggle');
     const checkboxExtra = [];
     if (!checkboxEl) {
         checkboxEl = document.createElement('span');
@@ -370,7 +370,7 @@ export function configureHistogramHeatmap(chart) {
     }
 
     const { minLabel: minLabelEl, maxLabel: maxLabelEl } =
-        ensureLegendBar(wrapper, barCanvas, checkboxExtra);
+        ensureLegendBar(chart.domNode, barCanvas, checkboxExtra);
 
     const updateLabels = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
