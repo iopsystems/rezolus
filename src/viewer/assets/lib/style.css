@@ -373,6 +373,15 @@ body::after {
     #topnav:has(.compare-badge) .time-range-bar {
         flex: 1 1 100%;
         order: 99;
+        justify-content: center;
+        margin-left: 0;
+        margin-right: 0;
+    }
+    #topnav:has(.compare-badge) .time-range-bar .time-track {
+        width: auto;
+        flex: 1 1 auto;
+        min-width: 160px;
+        max-width: 480px;
     }
 }
 
