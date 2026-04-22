@@ -27,8 +27,11 @@ const rewriteCounterQuery = (query, stepSecs) => {
 // instantaneous value at each step point, which is correct for gauges.
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
-const defaultQueryRange = (query, start, end, step) =>
-    ViewerApi.queryRange(query, start, end, step);
+const defaultQueryRange = (query, start, end, step, captureId = 'baseline') =>
+    ViewerApi.queryRange(query, start, end, step, captureId);
+
+export const queryRangeForCapture = (captureId, query, start, end, step) =>
+    defaultQueryRange(query, start, end, step, captureId);
 
 // Module-level state for label injection
 let _selectedNode = null;
