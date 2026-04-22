@@ -26,7 +26,7 @@ wasm-bindgen = "0.2"
 
 [package]
 name = "rezolus"
-version = "5.11.1-alpha.3"
+version = "5.11.1-alpha.4"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

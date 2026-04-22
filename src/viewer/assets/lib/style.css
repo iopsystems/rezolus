@@ -3046,12 +3046,13 @@ main {
 
 .upload-card {
     background: var(--bg-secondary);
-    border: 1px solid var(--border-default);
+    border: 1px solid var(--border-emphasis);
     border-radius: 12px;
     padding: 3rem;
     max-width: 520px;
     width: 100%;
     text-align: center;
+    box-shadow: var(--shadow-lg), 0 0 0 1px var(--accent-subtle);
 }
 
 .upload-title {
@@ -3120,6 +3121,34 @@ main {
 
 .upload-btn:hover {
     opacity: 0.85;
+}
+
+/* Landing-page demo area: either a flat row (.upload-demo-row) or
+ * grouped by section (.upload-demo-section). Sections get a heading
+ * and a horizontal divider against the previous section. */
+.upload-demo-area {
+    margin-top: 1.5rem;
+}
+.upload-demo-section {
+    margin-top: 1rem;
+}
+.upload-demo-section + .upload-demo-section {
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border-subtle);
+}
+.upload-section-label {
+    margin: 0 0 0.75rem;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--fg);
+    letter-spacing: 0.01em;
+}
+.upload-demo-row {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    flex-wrap: wrap;
 }
 
 .upload-error {
