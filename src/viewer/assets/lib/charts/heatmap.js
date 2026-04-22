@@ -114,12 +114,11 @@ export function configureHeatmap(chart) {
     // These are ordered from highest to lowest resolution. So, usage is to iterate through
     // them until one is low enough resolution.
     const nullColor = chart.spec.nullCellColor || null;
-    const cellOpacity = chart.spec.cellOpacity != null ? chart.spec.cellOpacity : 1;
     chart.downsampleCache = [];
     chart.downsampleCache.push({
         factor: 1,
         data: processedData,
-        renderItem: createRenderItemFunc(timeData, 1, nullColor, cellOpacity),
+        renderItem: createRenderItemFunc(timeData, 1, nullColor),
     });
     const originalRatioOfDataPointsToMax = xCount * yCount / MAX_DATA_POINT_DISPLAY;
 
@@ -142,7 +141,7 @@ export function configureHeatmap(chart) {
         chart.downsampleCache.push({
             factor,
             data: processedDownsampledData,
-            renderItem: createRenderItemFunc(timeData, factor, nullColor, cellOpacity),
+            renderItem: createRenderItemFunc(timeData, factor, nullColor),
         });
     }
 
@@ -479,12 +478,9 @@ const zoomLevelToFactor = (zoomLevel, originalRatioOfDataPointsToMax, originalXD
  * @param {number} factor the downsampling factor
  * @param {string|null} nullColor fill color for null cells (compare-mode
  *        diff heatmaps). When null, null cells are skipped entirely.
- * @param {number} cellOpacity 0..1 alpha applied to every painted cell.
- *        Defaults to 1 (opaque); diff heatmap in dark mode drops to 0.6
- *        so the diverging palette reads softer against the dark bg.
  * @returns {function} renderItem function for echarts
  */
-const createRenderItemFunc = (timeData, factor, nullColor, cellOpacity = 1) => {
+const createRenderItemFunc = (timeData, factor, nullColor) => {
     return function (params, api) {
         const x = api.value(0);
         const y = api.value(1);
@@ -515,7 +511,6 @@ const createRenderItemFunc = (timeData, factor, nullColor, cellOpacity = 1) => {
                     // Use the appropriate fill color from the color scale,
                     // or the configured null color for missing data.
                     fill: isNull ? nullColor : api.style().fill,
-                    opacity: cellOpacity,
                 }
             }
         );

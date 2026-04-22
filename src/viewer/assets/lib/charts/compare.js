@@ -39,7 +39,7 @@
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
 import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
-import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_ALPHA_V, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
+import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { resolvedStyle } from './metric_types.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 
@@ -308,13 +308,13 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     // of the palette (blue-to-neutral or neutral-to-green) and mixed
     // ranges preserve neutral at zero's natural fraction.
     //
-    // The V-shaped alpha curve fades cells near zero into whatever
-    // background is underneath (card bg on either theme) and keeps
-    // extreme cells saturated so outliers pop. No separate dark-mode
-    // opacity blanket needed — the palette stops carry their own alpha.
-    const resampledPalette = resampleDivergingForRange(
-        DIVERGING_BLUE_GREEN, dMin, dMax, 21, DIVERGING_BLUE_GREEN_ALPHA_V,
-    );
+    // Theme-specific base palette: the light variant fades to
+    // near-white at neutral, the dark variant fades to the dark card
+    // bg. Either way near-zero cells visually blend into the canvas
+    // while extremes stay saturated — without the per-stop alpha
+    // dilution that muddied the extreme hues in earlier attempts.
+    const basePalette = isDark ? DIVERGING_BLUE_GREEN_DARK : DIVERGING_BLUE_GREEN;
+    const resampledPalette = resampleDivergingForRange(basePalette, dMin, dMax);
 
     const diffSpec = {
         ...spec,

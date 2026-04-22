@@ -105,33 +105,27 @@ function interpolateRamp(ramp, t) {
     const idx = t * (ramp.length - 1);
     const i = Math.floor(idx);
     const f = idx - i;
-    const clampIdx = Math.min(i, ramp.length - 1);
-    const c0 = ramp[clampIdx];
-    const c1 = ramp[Math.min(clampIdx + 1, ramp.length - 1)];
-    const hasAlpha = c0.length === 4;
+
+    if (i >= ramp.length - 1) {
+        return `rgb(${ramp[ramp.length - 1].join(',')})`;
+    }
+
+    const c0 = ramp[i];
+    const c1 = ramp[i + 1];
     const r = Math.round(c0[0] + f * (c1[0] - c0[0]));
     const g = Math.round(c0[1] + f * (c1[1] - c0[1]));
     const b = Math.round(c0[2] + f * (c1[2] - c0[2]));
-    if (!hasAlpha) return `rgb(${r},${g},${b})`;
-    const a = c0[3] + f * (c1[3] - c0[3]);
-    return `rgba(${r},${g},${b},${a.toFixed(3)})`;
+
+    return `rgb(${r},${g},${b})`;
 }
 
-/**
- * Parse a hex color array into an RGB(A) ramp for interpolateRamp.
- * When `alphas` is supplied, its length must match `colors` — each hex
- * stop is paired with the matching alpha, yielding rgba interpolation.
- */
-function hexToRgbRamp(colors, alphas) {
-    return colors.map((hex, i) => {
-        const stop = [
-            parseInt(hex.slice(1, 3), 16),
-            parseInt(hex.slice(3, 5), 16),
-            parseInt(hex.slice(5, 7), 16),
-        ];
-        if (alphas) stop.push(alphas[i]);
-        return stop;
-    });
+/** Parse a hex color array into an RGB ramp for interpolateRamp. */
+function hexToRgbRamp(colors) {
+    return colors.map(hex => [
+        parseInt(hex.slice(1, 3), 16),
+        parseInt(hex.slice(3, 5), 16),
+        parseInt(hex.slice(5, 7), 16),
+    ]);
 }
 
 /** Viridis hex ramp (darkest stops removed for visibility on dark bg) */
@@ -183,16 +177,21 @@ export const DIVERGING_BLUE_GREEN = [
 ];
 
 /**
- * V-shaped alpha curve matched to DIVERGING_BLUE_GREEN's 9 stops.
- * Neutral sits at 0.1 so cells near zero-diff fade into whatever
- * background they're painted against (white on light theme, near-black
- * on dark theme). Extremes ramp to 0.9 so the interesting values stay
- * saturated and demand attention.
+ * Dark-theme sibling of DIVERGING_BLUE_GREEN. Same extreme hues so the
+ * "blue == baseline higher, green == experiment higher" signal is
+ * consistent across themes. Mid stops are interpolated toward the dark
+ * card-bg neutral so near-zero cells fade into the canvas without
+ * needing per-stop alpha (which dilutes toward whatever happens to be
+ * behind the canvas, not toward the perceptual neutral).
+ *
+ * Derivation: RGB-linear interpolation from each extreme toward
+ * `#1C2128` (--bg-elevated) at 25%/50%/75% steps. The extreme stops
+ * (0 and 8) are unchanged so saturated outliers stay vivid.
  */
-export const DIVERGING_BLUE_GREEN_ALPHA_V = [
-    0.9, 0.8, 0.7, 0.6,
-    0.5,
-    0.6, 0.7, 0.8, 0.9,
+export const DIVERGING_BLUE_GREEN_DARK = [
+    '#2E5BFF', '#294DC9', '#253E94', '#202F5E',
+    '#1C2128',
+    '#154A39', '#0E7249', '#079B5A', '#00C46A',
 ];
 
 /** Theme-aware null cell color for diff heatmaps — distinct from zero. */
@@ -225,11 +224,11 @@ export function nullCellColor(isDark) {
  * @param {number} [sampleCount] - number of output stops (defaults to 21).
  * @returns {string[]} resampled hex/rgb color array for echarts `inRange.color`.
  */
-export function resampleDivergingForRange(palette, min, max, sampleCount = 21, alphas) {
+export function resampleDivergingForRange(palette, min, max, sampleCount = 21) {
     if (!Array.isArray(palette) || palette.length === 0 || !(max > min)) {
         return palette;
     }
-    const ramp = hexToRgbRamp(palette, alphas);
+    const ramp = hexToRgbRamp(palette);
     const clamp = (t) => Math.max(0, Math.min(1, t));
     // Map value to the palette's native t in [0,1]:
     //   min >= 0  → only the upper half of the palette (neutral..green)
