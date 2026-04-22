@@ -357,16 +357,14 @@ body::after {
  * visible. The :has() selector scopes this to navs that actually
  * contain a compare badge — no JS body-class toggle needed. */
 @media (max-width: 900px) {
+    /* Drop the whole REZOLUS logo — wordmark AND glyph — on narrow
+     * viewports when a compare badge is in the nav. The capture dots
+     * already brand the header visually, and keeping the glyph
+     * around pushes the step / time bar onto a second row. */
     #topnav:has(.compare-badge) .logo {
-        font-size: 0;   /* hides the "REZOLUS" text node */
-        gap: 0;
+        display: none;
     }
-    #topnav:has(.compare-badge) .logo::before {
-        /* ::before glyph has no font-size dependency — stays visible */
-        width: 20px;
-        height: 20px;
-    }
-    /* Badge-specific narrow-viewport styling now lives with the badge
+    /* Badge-specific narrow-viewport styling lives with the badge
      * rules further down (dropdown card behavior). */
 }
 
