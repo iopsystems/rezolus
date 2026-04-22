@@ -13,9 +13,9 @@ import {
     calculateMinZoomSpan,
     getDataZoomConfig,
     applyChartOption,
+    buildOverlayLegendOption,
     COLORS,
 } from './base.js';
-import { FONTS } from './util/fonts.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -136,43 +136,8 @@ export function configureLineChart(chart) {
 
     // Multi-series charts get the same legend treatment scatter uses
     // (right-aligned circle swatches, padded names, grid pushed down).
-    // This is the style the user expects for A/B overlays — no new
-    // compare-specific legend invented.
     if (seriesList.length > 1) {
-        const legendItemW = 56;
-        const names = seriesList.map((s) => s.name);
-        option.legend = {
-            show: true,
-            right: '16',
-            top: '42',
-            icon: 'circle',
-            itemWidth: 8,
-            itemHeight: 8,
-            itemGap: 0,
-            formatter: (name) => name.padEnd(6),
-            textStyle: {
-                color: COLORS.fgSecondary,
-                ...FONTS.legend,
-                width: legendItemW,
-                borderColor: 'transparent',
-                borderWidth: 1,
-                borderRadius: 3,
-                padding: [2, 4],
-            },
-            data: names.map((name) => ({
-                name,
-                itemStyle: { borderColor: 'transparent', borderWidth: 2 },
-                textStyle: {
-                    color: COLORS.fgSecondary,
-                    backgroundColor: 'transparent',
-                    borderColor: 'transparent',
-                    borderWidth: 1,
-                    borderRadius: 3,
-                    padding: [2, 4],
-                    width: legendItemW,
-                },
-            })),
-        };
+        option.legend = buildOverlayLegendOption(seriesList.map((s) => s.name));
         // Preserve user's show/hide toggles across re-renders.
         // applyChartOption uses setOption(..., {notMerge: true}), which
         // otherwise wipes echarts' internal legend.selected state on

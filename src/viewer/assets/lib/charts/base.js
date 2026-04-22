@@ -249,6 +249,54 @@ export function getBaseYAxisOption(logScale, unitSystem) {
 }
 
 /**
+ * Build the right-aligned circle-swatch legend shared by scatter and
+ * multi-series line overlays. Pass `{ tooltipFormatter }` when the
+ * legend should show hover tooltips (scatter); omit it for bare line
+ * overlays. The caller is responsible for pairing this with
+ * `grid: { ..., top: '71' }` on the plot's option.
+ */
+export function buildOverlayLegendOption(names, { tooltipFormatter, top = '42' } = {}) {
+    const legendItemW = 56;
+    const textStyleBase = {
+        color: COLORS.fgSecondary,
+        ...FONTS.legend,
+        width: legendItemW,
+        borderColor: 'transparent',
+        borderWidth: 1,
+        borderRadius: 3,
+        padding: [2, 4],
+    };
+    const legend = {
+        show: true,
+        right: '16',
+        top,
+        icon: 'circle',
+        itemWidth: 8,
+        itemHeight: 8,
+        itemGap: 0,
+        formatter: (name) => name.padEnd(6),
+        textStyle: textStyleBase,
+        data: names.map((name) => ({
+            name,
+            itemStyle: { borderColor: 'transparent', borderWidth: 2 },
+            textStyle: {
+                color: COLORS.fgSecondary,
+                backgroundColor: 'transparent',
+                borderColor: 'transparent',
+                borderWidth: 1,
+                borderRadius: 3,
+                padding: [2, 4],
+                width: legendItemW,
+            },
+        })),
+    };
+    if (tooltipFormatter) {
+        legend.tooltip = { show: true, formatter: tooltipFormatter };
+    }
+    return legend;
+}
+
+/**
  * Calculate the minimum zoom span (as a percentage of total duration)
  * to prevent zooming tighter than 5x the sample interval.
  */
