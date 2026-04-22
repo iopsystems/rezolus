@@ -419,6 +419,17 @@ export class Chart {
                 endValue = undefined;
             }
 
+            // Don't let an event with no usable zoom info (empty batch,
+            // or batch details with all-undefined coords) overwrite a
+            // zoom that was just set — this shape shows up as an echo
+            // when heatmap.js's downsample-swap setOption triggers a
+            // secondary datazoom event on a sibling chart that received
+            // our cross-dispatch.
+            const hasPct = start !== undefined && end !== undefined
+                && !Number.isNaN(start) && !Number.isNaN(end);
+            const hasValues = startValue !== undefined && endValue !== undefined;
+            if (!hasPct && !hasValues) return;
+
             this.chartsState.zoomLevel = {
                 start,
                 end,
