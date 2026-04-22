@@ -93,6 +93,32 @@ export class ChartsState {
     }
 }
 
+// Cheap same-shape heuristic for detecting "structurally identical"
+// data arrays. Compare-mode strategies rebuild triples/matrix arrays
+// on every Mithril redraw even when the underlying capture data hasn't
+// changed; comparing array reference alone would force a reconfigure
+// (and wipe the zoom) on every render. Sample length + first/last
+// element; if those match we treat the arrays as equivalent for the
+// purposes of triggering a re-configure. False positives just mean
+// "zoom preserved through a genuine data swap" which is still
+// recoverable via the Reset button.
+function shallowSameShape(a, b) {
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    if (a.length === 0) return true;
+    return sameHead(a[0], b[0]) && sameHead(a[a.length - 1], b[b.length - 1]);
+}
+function sameHead(a, b) {
+    if (a === b) return true;
+    if (Array.isArray(a) && Array.isArray(b)) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+    }
+    return false;
+}
+
 // Chart component - uses echarts to render a chart
 export class Chart {
     constructor(vnode) {
@@ -143,10 +169,19 @@ export class Chart {
         this.spec = vnode.attrs.spec;
         this.interval = vnode.attrs.interval;
 
-        // Re-render if data changed, format changed, or theme was toggled
+        // Re-render if data changed, format changed, or theme was toggled.
+        // A new spec.data *reference* alone isn't enough to justify a
+        // full reconfigure — compare-mode strategies rebuild the triples
+        // array on every Mithril redraw, which would otherwise wipe the
+        // echarts zoom/cursor state on the experiment slot after every
+        // tooltip / scroll / hover. Treat equal-length arrays with
+        // identical head elements as "same data" to skip the reconfigure
+        // in the common case. Theme/format changes still force it.
         const themeChanged = this._themeVersion !== themeVersion;
         const formatChanged = oldSpec.opts?.format !== this.spec.opts?.format;
-        if (this.echart && (oldSpec.data !== this.spec.data || formatChanged || themeChanged)) {
+        const dataChanged = oldSpec.data !== this.spec.data
+            && !shallowSameShape(oldSpec.data, this.spec.data);
+        if (this.echart && (dataChanged || formatChanged || themeChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 
