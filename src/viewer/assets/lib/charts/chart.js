@@ -442,8 +442,17 @@ export class Chart {
                 payload.startValue = startValue;
                 payload.endValue = endValue;
             }
+            // Skip the source chart: its dataZoom is already at these
+            // values (the toolbox drag set it before firing this event).
+            // Re-dispatching to self is at best redundant; at worst, for
+            // heatmap-type charts, it can cascade through heatmap.js's
+            // own datazoom listener (which calls setOption to swap
+            // downsample level) and re-fire a batch-carrying datazoom
+            // event, clobbering chartsState.zoomLevel. Excluding self
+            // from the cross-dispatch breaks that loop without needing
+            // a re-entrancy guard.
             this.chartsState.charts.forEach(chart => {
-                chart.dispatchAction(payload);
+                if (chart !== this) chart.dispatchAction(payload);
                 chart._rescaleYAxis();
             });
             m.redraw();
