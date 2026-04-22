@@ -223,6 +223,11 @@ pub fn run(config: Config) {
             state.captures.set_baseline_file_metadata(file_meta);
 
             // Attach the optional experiment capture for A/B comparison.
+            // NOTE: we deliberately do NOT stash `exp_path` in
+            // `state.experiment_parquet_path` here. That field tracks
+            // server-owned temp files written by the HTTP attach handler
+            // so they can be cleaned up on detach. The CLI path is the
+            // user's own file on disk — detaching must not delete it.
             if let Some(exp_path) = &config.experiment_path {
                 info!("Loading experiment from parquet file...");
                 let (exp_sysinfo, _exp_selection, exp_file_meta) =
@@ -232,7 +237,6 @@ pub fn run(config: Config) {
                         state
                             .captures
                             .attach_experiment(exp_tsdb, exp_sysinfo, exp_file_meta);
-                        *state.experiment_parquet_path.write() = Some(exp_path.clone());
                         info!("Attached experiment capture: {}", exp_path.display());
                     }
                     Err(e) => {
