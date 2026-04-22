@@ -322,29 +322,26 @@ const CompareChartWrapper = {
             Chart,
         });
 
-        if (result === false || result == null) {
-            // Fall through to baseline-only rendering.
-            return m(Chart, { spec, chartsState, interval });
-        }
-        // `_splitSpecs` marker: render each sub-spec as its own Chart in
-        // a grid wrapper so a multi/scatter split lays out cleanly.
-        if (result._splitSpecs) {
-            const specs = result._splitSpecs;
-            if (!specs || specs.length === 0) {
-                return m('div.chart-error', 'compare: no shared labels between captures');
+        switch (result && result.kind) {
+            case 'spec':
+                return m(Chart, { spec: result.spec, chartsState, interval });
+            case 'vnode':
+                return result.vnode;
+            case 'split': {
+                const specs = result.specs;
+                if (!specs || specs.length === 0) {
+                    return m('div.chart-error', 'compare: no shared labels between captures');
+                }
+                return m('div.compare-split-subgroup',
+                    specs.map((s) => m('div.chart-wrapper', [
+                        s._splitLabel && m('div.compare-split-label', s._splitLabel),
+                        m(Chart, { spec: s, chartsState, interval }),
+                    ])));
             }
-            return m('div.compare-split-subgroup',
-                specs.map((s) => m('div.chart-wrapper', [
-                    s._splitLabel && m('div.compare-split-label', s._splitLabel),
-                    m(Chart, { spec: s, chartsState, interval }),
-                ])));
+            case 'fallback':
+            default:
+                return m(Chart, { spec, chartsState, interval });
         }
-        // Mithril vnode (has a `tag` or is an array) — render directly.
-        if (Array.isArray(result) || (result && (result.tag || result.view || result.children))) {
-            return result;
-        }
-        // Otherwise treat as a transformed spec.
-        return m(Chart, { spec: result, chartsState, interval });
     },
 };
 

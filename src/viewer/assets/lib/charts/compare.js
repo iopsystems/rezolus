@@ -1,19 +1,27 @@
 // Compare-mode chart adapter.
 //
 // Strategies convert a normal single-capture plot spec plus two normalized
-// per-capture payloads into a rendering. Each strategy returns one of:
+// per-capture payloads into a tagged-union rendering result:
 //
-//   1. A transformed plot spec (plain object) — the caller passes it to
-//      `m(Chart, {spec, ...})` exactly like a single-capture spec. This is
-//      the overlay path, used by line charts.
+//   { kind: 'spec',     spec }    — caller renders `m(Chart, {spec, ...})`.
+//                                   Overlay path, used by line charts.
 //
-//   2. A Mithril vnode — the caller renders it directly. Used when a single
-//      chart slot becomes multiple sibling charts (side-by-side heatmaps,
-//      histogram heatmaps) or a single diff chart composed in-place.
+//   { kind: 'vnode',    vnode }   — caller renders the vnode directly.
+//                                   Used when a single chart slot becomes
+//                                   multiple sibling charts (side-by-side
+//                                   heatmaps, histogram heatmaps) or a
+//                                   single diff chart composed in-place.
 //
-//   3. An object `{ _splitSpecs: Spec[] }` — the caller iterates and wraps
-//      each spec in its own `m(Chart, ...)` sibling. Used when multi-series
-//      or percentile charts split into one sub-chart per intersected label.
+//   { kind: 'split',    specs }   — caller iterates and wraps each spec
+//                                   in its own `m(Chart, ...)` sibling.
+//                                   Used when multi-series or percentile
+//                                   charts split into one sub-chart per
+//                                   intersected label.
+//
+//   { kind: 'fallback' }          — style not handled, or the captures
+//                                   can't be combined (missing data).
+//                                   Caller falls back to single-capture
+//                                   baseline-only rendering.
 //
 // Timestamp translation, null propagation for diff math, and the label
 // intersection rule for multi/scatter are owned here. No DOM, no echarts
@@ -61,11 +69,14 @@ export const relativeTimeFormatter = (ms) => {
     return `${sign}${sec}s`;
 };
 
+// Shared fallback sentinel — tells the caller to render the baseline
+// single-capture spec instead. Frozen so no strategy can mutate it.
+const FALLBACK = Object.freeze({ kind: 'fallback' });
+
 /**
  * Dispatch on chart style and delegate to the matching strategy.
- * Returns a transformed spec, a Mithril vnode, a `{ _splitSpecs }` marker,
- * or `false` when the style is not handled (caller should fall back to
- * single-capture rendering).
+ * Returns a tagged-union result; see the module docstring above for
+ * the four kinds.
  */
 export const renderCompareChart = (opts) => {
     const style = resolvedStyle(opts.spec);
@@ -76,7 +87,7 @@ export const renderCompareChart = (opts) => {
         case 'scatter':           return splitScatterToSubgroup(opts);
         case 'histogram_heatmap': return sideBySideHistogramHeatmap(opts);
         default:
-            return false;
+            return FALLBACK;
     }
 };
 
@@ -134,12 +145,15 @@ const overlayLine = ({ spec, captures, anchors }) => {
             fill: false,
         });
     }
-    if (seriesList.length === 0) return false;
+    if (seriesList.length === 0) return FALLBACK;
 
     return {
-        ...spec,
-        multiSeries: seriesList,
-        xAxisFormatter: relativeTimeFormatter,
+        kind: 'spec',
+        spec: {
+            ...spec,
+            multiSeries: seriesList,
+            xAxisFormatter: relativeTimeFormatter,
+        },
     };
 };
 
@@ -194,13 +208,16 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
     // and survived Mithril's class-swap on the reused outer div. The
     // direct-child selector leaves per-slot legends (inside .compare-
     // slot) alone.
-    return m('div.compare-heatmap-pair', {
-        oncreate: scrubStaleLegend,
-        onupdate: scrubStaleLegend,
-    }, [
-        slot(a, 'compare-baseline-dot'),
-        slot(b, 'compare-experiment-dot'),
-    ]);
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-pair', {
+            oncreate: scrubStaleLegend,
+            onupdate: scrubStaleLegend,
+        }, [
+            slot(a, 'compare-baseline-dot'),
+            slot(b, 'compare-experiment-dot'),
+        ]),
+    };
 };
 
 // Remove any .heatmap-legend-bar that's a DIRECT child of this wrapper
@@ -252,7 +269,7 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     // Guard: diff requires both captures to provide a normalized matrix
     // (rows × time bins). The normalization step lives in the caller
     // (viewer_core). Without it, bail and fall through to no-data.
-    if (!aMatrix || !bMatrix) return false;
+    if (!aMatrix || !bMatrix) return FALLBACK;
 
     const rows = Math.min(aMatrix.length, bMatrix.length);
     const bins = Math.min(
@@ -315,11 +332,13 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     // On mount/update, scrub any stale legend bar inherited from a
     // prior side-by-side render of this same chart slot (Mithril
     // reuses the outer div across class swaps; see scrubStaleLegend).
-    return m('div.compare-heatmap-diff', {
-        oncreate: scrubStaleLegend,
-        onupdate: scrubStaleLegend,
-    },
-        m(Chart, { spec: diffSpec, chartsState, interval }));
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-diff', {
+            oncreate: scrubStaleLegend,
+            onupdate: scrubStaleLegend,
+        }, m(Chart, { spec: diffSpec, chartsState, interval })),
+    };
 };
 
 /**
@@ -339,7 +358,7 @@ const splitScatterToSubgroup = ({ spec, captures, anchors }) =>
 const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor }) => {
     const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
     const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
-    if (!baseline || !experiment) return false;
+    if (!baseline || !experiment) return FALLBACK;
 
     const mapA = baseline.seriesMap || new Map();
     const mapB = experiment.seriesMap || new Map();
@@ -384,7 +403,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
         };
     });
 
-    return { _splitSpecs: specs };
+    return { kind: 'split', specs };
 };
 
 const multiLabel = (r) => {
@@ -432,12 +451,15 @@ const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, inte
         ]),
         m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    return m('div.compare-heatmap-pair', {
-        oncreate: scrubStaleLegend,
-        onupdate: scrubStaleLegend,
-    }, [
-        slot(a, 'compare-baseline-dot'),
-        slot(b, 'compare-experiment-dot'),
-    ]);
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-pair', {
+            oncreate: scrubStaleLegend,
+            onupdate: scrubStaleLegend,
+        }, [
+            slot(a, 'compare-baseline-dot'),
+            slot(b, 'compare-experiment-dot'),
+        ]),
+    };
 };
 
