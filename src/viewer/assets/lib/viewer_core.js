@@ -279,6 +279,8 @@ const CompareChartWrapper = {
                     m.redraw();
                     return;
                 }
+                vnode.state.experimentQuery = query;
+                vnode.state.experimentWindow = { start, end, step };
                 const res = await queryRangeForCapture('experiment', query, start, end, step);
                 vnode.state.experimentResult = res;
                 m.redraw();
@@ -324,12 +326,18 @@ const CompareChartWrapper = {
             if (!specs || specs.length === 0) {
                 const bKeys = [...(extractBaselineCapture(spec).seriesMap?.keys() || [])];
                 const eKeys = [...(extractExperimentCapture(spec, vnode.state.experimentResult).seriesMap?.keys() || [])];
+                const resultsLen = vnode.state.experimentResult?.data?.result?.length ?? 'n/a';
+                const win = vnode.state.experimentWindow;
                 return m('div.chart-error', [
                     m('div', 'compare: no shared labels between captures'),
                     m('div', { style: 'font-size:11px;opacity:0.7;margin-top:4px' },
                         `baseline: [${bKeys.join(', ') || '(empty)'}]`),
                     m('div', { style: 'font-size:11px;opacity:0.7' },
                         `experiment: [${eKeys.join(', ') || '(empty)'}]`),
+                    m('div', { style: 'font-size:11px;opacity:0.7;margin-top:4px;word-break:break-all' },
+                        `query: ${vnode.state.experimentQuery || '(n/a)'}`),
+                    m('div', { style: 'font-size:11px;opacity:0.7' },
+                        `window: ${win ? `[${win.start}, ${win.end}] step=${win.step}` : '(n/a)'}, raw series: ${resultsLen}`),
                 ]);
             }
             return m('div.compare-split-subgroup',
