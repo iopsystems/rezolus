@@ -2885,6 +2885,12 @@ main {
         margin-left: auto;
         margin-right: 0;
     }
+    /* Hide the "Step" label text on narrow viewports — the dropdown
+     * value (Auto / 1s / 5s / …) is enough; the label just steals
+     * horizontal room from the compare badge and time range bar. */
+    .granularity-label {
+        display: none;
+    }
 
     /* ── Sidebar as slide-out drawer ── */
     #sidebar {
