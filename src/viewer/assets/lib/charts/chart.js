@@ -352,18 +352,6 @@ export class Chart {
             if (!event.batch) {
                 return;
             }
-            // Re-entrancy guard: when the forEach below dispatches to a
-            // sibling chart (the compare-mode side-by-side case), that
-            // sibling's toolbox internally re-fires a datazoom event WITH
-            // a batch payload — and if we let that sibling run the full
-            // handler, it would clobber chartsState.zoomLevel with its
-            // own axis-relative interpretation and re-dispatch back,
-            // causing the zoom to appear to reset. Mark the
-            // cross-dispatch window on chartsState and skip re-entry
-            // while it's active.
-            if (this.chartsState._inHandlerDispatch) {
-                return;
-            }
 
             const details = event.batch[0];
 
@@ -454,15 +442,10 @@ export class Chart {
                 payload.startValue = startValue;
                 payload.endValue = endValue;
             }
-            this.chartsState._inHandlerDispatch = true;
-            try {
-                this.chartsState.charts.forEach(chart => {
-                    chart.dispatchAction(payload);
-                    chart._rescaleYAxis();
-                });
-            } finally {
-                this.chartsState._inHandlerDispatch = false;
-            }
+            this.chartsState.charts.forEach(chart => {
+                chart.dispatchAction(payload);
+                chart._rescaleYAxis();
+            });
             m.redraw();
         });
 
