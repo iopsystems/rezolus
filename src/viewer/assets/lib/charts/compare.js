@@ -41,6 +41,7 @@
 import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { resolvedStyle } from './metric_types.js';
+import { isDarkTheme } from './base.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
@@ -298,9 +299,11 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     const timeData = (a.timeData || spec.time_data || []).slice(0, bins);
     const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, timeData);
 
-    const isDark = typeof document !== 'undefined'
-        && document.body
-        && document.body.classList.contains('theme-dark');
+    // Theme is applied as `data-theme` on <html> (see theme.js); the
+    // body-class probe this used to use was always false, which
+    // silently pinned both nullCellColor and the diff palette to the
+    // light-theme variant.
+    const isDark = isDarkTheme();
 
     // Use the data's actual [min, max] rather than forcing a symmetric
     // band around 0. Resample the diverging palette so neutral still

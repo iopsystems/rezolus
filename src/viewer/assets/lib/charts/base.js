@@ -5,8 +5,9 @@ import { formatDateTime } from './util/utils.js';
 import { COLORS, CHART_PALETTE } from './util/colormap.js';
 import { FONTS } from './util/fonts.js';
 
-function isDarkTheme() {
-    return document.documentElement.getAttribute('data-theme') !== 'light';
+export function isDarkTheme() {
+    return typeof document !== 'undefined'
+        && document.documentElement?.getAttribute('data-theme') !== 'light';
 }
 
 // Shared x-axis time label format used by all chart types
