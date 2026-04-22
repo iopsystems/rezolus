@@ -30,18 +30,20 @@ const loadTemplates = async () => {
         .filter(r => r.status === 'fulfilled' && r.value)
         .map(r => r.value);
     if (templates.length > 0) {
-        window.viewer.init_templates(JSON.stringify(templates));
+        ViewerApi.initTemplates(JSON.stringify(templates));
     }
 };
 
 const initWasmViewer = async (data, filename) => {
     const wasmModule = await import('../pkg/wasm_viewer.js');
     await wasmModule.default();
-    window.viewer = new wasmModule.Viewer(data, filename);
-    ViewerApi.setViewer(window.viewer);
+    if (!ViewerApi.registry()) {
+        ViewerApi.setRegistry(new wasmModule.WasmCaptureRegistry());
+    }
+    await ViewerApi.attachBaseline(data, filename);
     await loadTemplates();
 
-    const info = JSON.parse(window.viewer.info());
+    const info = await ViewerApi.getInfo('baseline');
     setStorageScope({
         filename: info.filename,
         minTime: info.minTime,
