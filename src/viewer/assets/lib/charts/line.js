@@ -173,10 +173,27 @@ export function configureLineChart(chart) {
                 },
             })),
         };
+        // Preserve user's show/hide toggles across re-renders.
+        // applyChartOption uses setOption(..., {notMerge: true}), which
+        // otherwise wipes echarts' internal legend.selected state on
+        // every redraw — the net effect was that toggling a series off
+        // appeared to hide both series until the user interacted again.
+        if (chart._legendSelected) {
+            option.legend.selected = { ...chart._legendSelected };
+        }
         // Push the plot grid down so the legend has room above it,
         // matching scatter's layout.
         option.grid = { ...(baseOption.grid || {}), top: '71' };
     }
 
     applyChartOption(chart, option);
+
+    // Track future legend toggles so subsequent re-renders preserve them.
+    if (seriesList.length > 1) {
+        chart.echart.off('legendselectchanged', chart._legendSelectHandler);
+        chart._legendSelectHandler = (params) => {
+            chart._legendSelected = { ...params.selected };
+        };
+        chart.echart.on('legendselectchanged', chart._legendSelectHandler);
+    }
 }
