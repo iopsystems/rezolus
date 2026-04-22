@@ -10,8 +10,6 @@ import {
     applyNoData,
     getTooltipFreezeFooter,
     applyChartOption,
-    calculateMinZoomSpan,
-    getDataZoomConfig,
     COLORS,
     FONTS,
 } from './base.js';
@@ -288,12 +286,6 @@ export function configureHeatmap(chart) {
     const option = {
         ...baseOption,
         ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
-        // Explicit dataZoom component so toolbox drag-to-zoom has a
-        // known target to commit to, and our own dispatchAction calls
-        // (zoom-restore in Chart.onupdate, sync across charts in the
-        // shared chartsState) land on the same component instead of
-        // fighting an echarts-implicit one.
-        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
         grid: { ...baseOption.grid, top: '71' },
         yAxis,
         // Echarts has two render modes for hover effects. When number of chart elements is
