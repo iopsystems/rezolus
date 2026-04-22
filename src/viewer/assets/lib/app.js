@@ -7,7 +7,7 @@ import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
-import { CpuTopology } from './topology.js';
+import { CpuTopology, CompareBanner } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
 import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView } from './selection.js';
 import { SaveModal } from './overlays.js';
@@ -507,9 +507,16 @@ const initDashboard = (config = {}) => {
         Sidebar,
         SaveModal,
         SectionContent,
+        CompareBanner,
         sectionResponseCache,
         getHasSystemInfo: () => systemInfoData,
         getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
+        getBaselineSysinfo: () => systemInfoData,
+        getExperimentSysinfo: () => experimentSystemInfo,
+        getCompareBadgeAttrs: () => ({
+            compareMode,
+            onDetachExperiment: () => { detachExperiment(); },
+        }),
         buildAttrs: topNavAttrs,
     });
 

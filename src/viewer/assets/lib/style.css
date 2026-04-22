@@ -3165,6 +3165,35 @@ main {
 }
 
 /* ==========================================================================
+   Compare mode — systeminfo diff banner
+   ========================================================================== */
+.compare-banner {
+    padding: 8px 12px;
+    margin: 8px 0;
+    background: var(--bg-warn, #fff8e1);
+    color: var(--fg-warn, #795548);
+    border-left: 4px solid var(--accent, #2E5BFF);
+    font-size: 13px;
+}
+.compare-banner-list {
+    margin: 4px 0 0 16px;
+    padding: 0;
+}
+.compare-banner-list li {
+    margin: 2px 0;
+}
+.compare-banner .compare-baseline { color: #2E5BFF; }
+.compare-banner .compare-experiment { color: #00C46A; }
+.compare-banner .compare-arrow {
+    color: var(--fg-muted, #888);
+    margin: 0 4px;
+}
+.compare-banner code {
+    background: transparent;
+    padding: 0;
+}
+
+/* ==========================================================================
    Compare mode — landing (dual dropzone)
    ========================================================================== */
 .landing-dual {
