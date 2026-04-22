@@ -514,6 +514,17 @@ export class Chart {
                 endValue = undefined;
             }
 
+            // Reject events whose batch exists but carries no usable
+            // zoom info (all four fields undefined or NaN). echarts
+            // emits these in edge cases — notably when
+            // setOption({series:[...]}) re-fires datazoom after a
+            // heatmap downsample swap — and without this guard they'd
+            // normalize to null, diff as "changed" against an active
+            // zoom, and fan out a 0..100% reset to every subscriber.
+            const hasPct = Number.isFinite(start) && Number.isFinite(end);
+            const hasValues = Number.isFinite(startValue) && Number.isFinite(endValue);
+            if (!hasPct && !hasValues) return;
+
             // Route the user-initiated zoom through the single
             // chartsState.setZoom writer. setZoom's diff check short-
             // circuits echoes: the dispatch fan-out below will trigger
