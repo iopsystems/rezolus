@@ -30,7 +30,7 @@
 //   anchors: { baseline: ms, experiment: ms }  — subtracted from each
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
-import { toRelative, nullDiff, intersectLabels, longerDuration } from './util/compare_math.js';
+import { nullDiff, intersectLabels } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 
 export const BASELINE_COLOR = '#2E5BFF';
@@ -295,7 +295,6 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         min_value: dMin,
         max_value: dMax,
         colormap: resampledPalette,
-        symmetricBounds: false,
         nullCellColor: nullCellColor(isDark),
         xAxisFormatter: relativeTimeFormatter,
     };
@@ -433,5 +432,3 @@ const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, inte
     ]);
 };
 
-// Re-export utilities consumed by strategies.
-export { toRelative, nullDiff, intersectLabels, longerDuration, DIVERGING_BLUE_GREEN, nullCellColor };

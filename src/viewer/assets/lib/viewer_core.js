@@ -4,7 +4,7 @@
 import { Chart } from './charts/chart.js';
 import { expandLink, selectButton, compareToggle } from './chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
-import { renderCompareChart, BASELINE_COLOR } from './charts/compare.js';
+import { renderCompareChart } from './charts/compare.js';
 import { queryRangeForCapture, buildEffectiveQuery } from './data.js';
 import { ViewerApi } from './viewer_api.js';
 
@@ -290,8 +290,6 @@ const CompareChartWrapper = {
                     m.redraw();
                     return;
                 }
-                vnode.state.experimentQuery = query;
-                vnode.state.experimentWindow = { start, end, step };
                 const res = await queryRangeForCapture('experiment', query, start, end, step);
                 vnode.state.experimentResult = res;
                 m.redraw();
@@ -335,21 +333,7 @@ const CompareChartWrapper = {
         if (result._splitSpecs) {
             const specs = result._splitSpecs;
             if (!specs || specs.length === 0) {
-                const bKeys = [...(extractBaselineCapture(spec).seriesMap?.keys() || [])];
-                const eKeys = [...(extractExperimentCapture(spec, vnode.state.experimentResult).seriesMap?.keys() || [])];
-                const resultsLen = vnode.state.experimentResult?.data?.result?.length ?? 'n/a';
-                const win = vnode.state.experimentWindow;
-                return m('div.chart-error', [
-                    m('div', 'compare: no shared labels between captures'),
-                    m('div', { style: 'font-size:11px;opacity:0.7;margin-top:4px' },
-                        `baseline: [${bKeys.join(', ') || '(empty)'}]`),
-                    m('div', { style: 'font-size:11px;opacity:0.7' },
-                        `experiment: [${eKeys.join(', ') || '(empty)'}]`),
-                    m('div', { style: 'font-size:11px;opacity:0.7;margin-top:4px;word-break:break-all' },
-                        `query: ${vnode.state.experimentQuery || '(n/a)'}`),
-                    m('div', { style: 'font-size:11px;opacity:0.7' },
-                        `window: ${win ? `[${win.start}, ${win.end}] step=${win.step}` : '(n/a)'}, raw series: ${resultsLen}`),
-                ]);
+                return m('div.chart-error', 'compare: no shared labels between captures');
             }
             return m('div.compare-split-subgroup',
                 specs.map((s) => m('div.chart-wrapper', [
@@ -546,5 +530,3 @@ export function buildClientOnlySectionView(Main, sectionResponseCache, activeSec
     };
 }
 
-// silence lint for unused re-export BASELINE_COLOR (retained for future use)
-void BASELINE_COLOR;

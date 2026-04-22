@@ -264,13 +264,8 @@ export function configureHeatmap(chart) {
     };
 
     const effectiveMax = range?.max != null ? Math.min(maxValue, range.max) : maxValue;
-
-    // Compare-mode diff heatmaps force symmetric bounds around 0 so the
-    // diverging colormap maps baseline-heavy cells to one end and
-    // experiment-heavy cells to the other.
-    const symmetric = chart.spec.symmetricBounds === true;
-    const visualMapMin = symmetric ? -Math.max(Math.abs(minValue), Math.abs(effectiveMax)) : minValue;
-    const visualMapMax = symmetric ? Math.max(Math.abs(minValue), Math.abs(effectiveMax)) : effectiveMax;
+    const visualMapMin = minValue;
+    const visualMapMax = effectiveMax;
     const visualMapColor = chart.spec.colormap || VIRIDIS_COLORS;
 
     // Compare-mode renderers override the x-axis formatter so labels
@@ -358,41 +353,30 @@ export function configureHeatmap(chart) {
     applyChartOption(chart, option);
 
     // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row.
-    // Suppressed in compare mode for the right-hand slot so the shared
-    // color scale isn't rendered twice.
-    if (!chart.spec.suppressLegendBar) {
-        const formatter = createAxisLabelFormatter(unitSystem || 'count');
-        const wrapper = chart.domNode.parentNode;
-        // If the spec overrides the colormap (e.g. compare-mode diff heatmap),
-        // build a gradient from that palette; otherwise use viridis.
-        const legendColorFn = chart.spec.colormap
-            ? buildRampColorFn(chart.spec.colormap)
-            : viridisColor;
-        // Invalidate any retained legend bar whose gradient doesn't match
-        // the current colormap. Without this, toggling side-by-side → diff
-        // reuses the stale viridis canvas in the existing bar and the
-        // diverging palette never renders.
-        const paletteSig = Array.isArray(chart.spec.colormap)
-            ? chart.spec.colormap.join(',')
-            : 'viridis';
-        const existing = wrapper.querySelector('.heatmap-legend-bar');
-        if (existing && existing.dataset.palette !== paletteSig) {
-            existing.remove();
-        }
-        const barCanvas = buildGradientCanvas(legendColorFn);
-        const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
-        const bar = wrapper.querySelector('.heatmap-legend-bar');
-        if (bar) bar.dataset.palette = paletteSig;
-        // Round to 2 significant digits before formatting so the legend
-        // shows compact numbers like "1.2", "12", "120" rather than the
-        // full precision of the visualMap bounds.
-        const sig = (v) => {
-            if (!Number.isFinite(v) || v === 0) return v;
-            return parseFloat(v.toPrecision(2));
-        };
-        minLabel.textContent = formatter(sig(visualMapMin));
-        maxLabel.textContent = formatter(sig(visualMapMax));
+    const formatter = createAxisLabelFormatter(unitSystem || 'count');
+    const wrapper = chart.domNode.parentNode;
+    const legendColorFn = chart.spec.colormap
+        ? buildRampColorFn(chart.spec.colormap)
+        : viridisColor;
+    // Invalidate a retained legend bar whose gradient no longer matches
+    // the current colormap (e.g. side-by-side → diff toggle).
+    const paletteSig = Array.isArray(chart.spec.colormap)
+        ? chart.spec.colormap.join(',')
+        : 'viridis';
+    const existing = wrapper.querySelector('.heatmap-legend-bar');
+    if (existing && existing.dataset.palette !== paletteSig) {
+        existing.remove();
     }
+    const barCanvas = buildGradientCanvas(legendColorFn);
+    const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
+    const bar = wrapper.querySelector('.heatmap-legend-bar');
+    if (bar) bar.dataset.palette = paletteSig;
+    const sig = (v) => {
+        if (!Number.isFinite(v) || v === 0) return v;
+        return parseFloat(v.toPrecision(2));
+    };
+    minLabel.textContent = formatter(sig(visualMapMin));
+    maxLabel.textContent = formatter(sig(visualMapMax));
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {

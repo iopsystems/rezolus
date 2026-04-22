@@ -44,7 +44,6 @@ let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
 let experimentFilename = null;
-let baselineDurationMs = null;
 
 // Compare-mode per-chart toggles + anchors live in `selectionStore` so
 // they persist across page reloads. See selection_migration.js for the
@@ -156,19 +155,8 @@ const loadExperiment = async (file) => {
     await attachExperiment(file);
 };
 
-const getCompareState = () => ({
-    compareMode,
-    experimentAttached,
-    experimentSystemInfo,
-    experimentDurationMs,
-    baselineDurationMs,
-});
-
-// Chart-toggle accessors for compare mode (e.g. heatmap `diff` flag).
-// State lives in `selectionStore.chartToggles` so it persists across
-// reloads and rides along with exported/annotated selections. These
-// accessors are thin passthroughs to selection.js.
-const getChartToggles = () => selectionStore.chartToggles || {};
+// Thin passthrough to selection.js; kept because it reads cleanly at
+// the call sites in createGroupComponent.
 const setChartToggle = (chartId, key, value) => {
     setChartToggleInStore(chartId, key, value);
 };
@@ -514,7 +502,6 @@ const initDashboard = (config = {}) => {
         || (config.experimentFileMetadata
             && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))
         || null;
-    baselineDurationMs = durationFromFileMetadata(fileMetadata);
 
     if (config.selectionPayload && Array.isArray(config.selectionPayload.entries)) {
         loadPayloadIntoStore(reportStore, config.selectionPayload);
@@ -707,4 +694,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, getCompareState, durationFromFileMetadata, getChartToggles, setChartToggle };
+export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
