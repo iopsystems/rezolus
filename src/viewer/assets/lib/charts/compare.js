@@ -33,8 +33,16 @@
 import { nullDiff, intersectLabels } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 
-export const BASELINE_COLOR = '#2E5BFF';
-export const EXPERIMENT_COLOR = '#00C46A';
+// Colors sourced from --compare-baseline / --compare-experiment in
+// style.css. The getter reads CSS custom properties lazily so a theme
+// swap (light/dark) would pick up new values without a full reload.
+const cssColor = (name, fallback) => {
+    if (typeof getComputedStyle === 'undefined' || typeof document === 'undefined') return fallback;
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+};
+export const BASELINE_COLOR = cssColor('--compare-baseline', '#2E5BFF');
+export const EXPERIMENT_COLOR = cssColor('--compare-experiment', '#00C46A');
 
 /**
  * Format a relative offset in milliseconds as `+Xs`, `+XmYs`, or `+XhYm`.
