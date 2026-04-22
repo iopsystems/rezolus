@@ -2892,6 +2892,24 @@ main {
         display: none;
     }
 
+    /* Keep the theme toggle anchored to the first row's top-right on
+     * narrow viewports. With #topnav's flex-wrap: wrap, the button
+     * (as the last child) would otherwise wrap onto a second line
+     * whenever the first row runs out of space. Pulling it out of
+     * flex flow pins it there. The nav's min-height + padding keep
+     * everything vertically aligned. */
+    #topnav {
+        position: relative;
+        /* Reserve space on the right so nothing flows under the button. */
+        padding-right: calc(0.5rem + 32px + 0.5rem);
+    }
+    #topnav .theme-toggle-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        margin-left: 0;
+    }
+
     /* ── Sidebar as slide-out drawer ── */
     #sidebar {
         transform: translateX(-100%);
