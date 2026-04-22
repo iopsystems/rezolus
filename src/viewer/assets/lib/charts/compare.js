@@ -170,16 +170,28 @@ const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, inte
         ]),
         m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    // Both slots render their legend — visual symmetry, and with the
-    // unified color domain both legends display the same scale.
-    // `key` forces a full remount when toggling from diff view so the
-    // imperatively-injected legend bar from the diff wrapper doesn't
-    // survive the view swap (Mithril would otherwise reuse the outer
-    // div and retain non-Mithril-managed children).
-    return m('div.compare-heatmap-pair', { key: 'side-by-side' }, [
+    // Both slots render their legend — with the unified color domain
+    // both display the same scale (visual symmetry).
+    // scrubStaleLegend removes any diff-view legend bar that was
+    // imperatively injected as a direct child of the previous wrapper
+    // and survived Mithril's class-swap on the reused outer div. The
+    // direct-child selector leaves per-slot legends (inside .compare-
+    // slot) alone.
+    return m('div.compare-heatmap-pair', {
+        oncreate: scrubStaleLegend,
+        onupdate: scrubStaleLegend,
+    }, [
         slot(a, 'compare-baseline-dot'),
         slot(b, 'compare-experiment-dot'),
     ]);
+};
+
+// Remove any .heatmap-legend-bar that's a DIRECT child of this wrapper
+// — left over from a previous strategy's imperative injection when
+// Mithril reused the outer div across a view-tree swap.
+const scrubStaleLegend = (vnode) => {
+    if (!vnode.dom) return;
+    vnode.dom.querySelectorAll(':scope > .heatmap-legend-bar').forEach((el) => el.remove());
 };
 
 // Scan both captures' heatmap triples and return a unified (min, max)
@@ -288,10 +300,13 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         xAxisFormatter: relativeTimeFormatter,
     };
 
-    // `key` forces a full remount when toggling into/out of diff view
-    // so the previous view's imperatively-injected legend bar goes away
-    // with its outer wrapper instead of surviving a Mithril class swap.
-    return m('div.compare-heatmap-diff', { key: 'diff' },
+    // On mount/update, scrub any stale legend bar inherited from a
+    // prior side-by-side render of this same chart slot (Mithril
+    // reuses the outer div across class swaps; see scrubStaleLegend).
+    return m('div.compare-heatmap-diff', {
+        oncreate: scrubStaleLegend,
+        onupdate: scrubStaleLegend,
+    },
         m(Chart, { spec: diffSpec, chartsState, interval }));
 };
 
@@ -409,7 +424,10 @@ const sideBySideHistogramHeatmap = ({ spec, captures, anchors, chartsState, inte
         ]),
         m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
-    return m('div.compare-heatmap-pair', { key: 'histogram-side-by-side' }, [
+    return m('div.compare-heatmap-pair', {
+        oncreate: scrubStaleLegend,
+        onupdate: scrubStaleLegend,
+    }, [
         slot(a, 'compare-baseline-dot'),
         slot(b, 'compare-experiment-dot'),
     ]);
