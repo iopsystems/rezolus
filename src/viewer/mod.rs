@@ -61,10 +61,18 @@ pub fn command() -> Command {
         .about("View a Rezolus artifact or live agent")
         .arg(
             clap::Arg::new("INPUT")
-                .help("Rezolus parquet file or agent URL (e.g. http://localhost:4241)")
+                .help("Rezolus parquet file (baseline) or agent URL (e.g. http://localhost:4241)")
                 .action(clap::ArgAction::Set)
                 .required(false)
                 .index(1),
+        )
+        .arg(
+            clap::Arg::new("EXPERIMENT")
+                .help("Optional second parquet file for A/B comparison (experiment)")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf))
+                .required(false)
+                .index(2),
         )
         .arg(
             clap::Arg::new("VERBOSE")
@@ -78,7 +86,7 @@ pub fn command() -> Command {
                 .help("Viewer listen address")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(SocketAddr))
-                .index(2),
+                .index(3),
         )
         .arg(
             clap::Arg::new("templates")
@@ -92,6 +100,7 @@ pub fn command() -> Command {
 
 pub struct Config {
     source: Source,
+    experiment_path: Option<PathBuf>,
     verbose: u8,
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
@@ -120,6 +129,7 @@ impl TryFrom<ArgMatches> for Config {
 
         Ok(Config {
             source,
+            experiment_path: args.get_one::<PathBuf>("EXPERIMENT").cloned(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
             listen: *args
                 .get_one::<SocketAddr>("LISTEN")
@@ -209,6 +219,29 @@ pub fn run(config: Config) {
             *state.selection.write() = selection;
             *state.file_checksum.write() = file_checksum;
             state.captures.set_baseline_file_metadata(file_meta);
+
+            // Attach the optional experiment capture for A/B comparison.
+            if let Some(exp_path) = &config.experiment_path {
+                info!("Loading experiment from parquet file...");
+                let (exp_sysinfo, _exp_selection, exp_file_meta) =
+                    extract_parquet_metadata(exp_path);
+                match Tsdb::load(exp_path) {
+                    Ok(exp_tsdb) => {
+                        state
+                            .captures
+                            .attach_experiment(exp_tsdb, exp_sysinfo, exp_file_meta);
+                        *state.experiment_parquet_path.write() = Some(exp_path.clone());
+                        info!("Attached experiment capture: {}", exp_path.display());
+                    }
+                    Err(e) => {
+                        warn!(
+                            "failed to load experiment '{}': {e}. Starting in single-capture mode.",
+                            exp_path.display(),
+                        );
+                    }
+                }
+            }
+
             state
         }
         Source::Live(url) => {
@@ -294,6 +327,15 @@ pub fn run(config: Config) {
             AppState::new(Tsdb::default(), registry.clone())
         }
     };
+
+    // The experiment CLI arg is only honored when the baseline is a parquet
+    // file. Live and upload-only modes manage the experiment slot via the
+    // HTTP attach endpoint instead.
+    if config.experiment_path.is_some() && !matches!(config.source, Source::File(_)) {
+        warn!(
+            "--experiment ignored outside of file mode (v1 compare requires a baseline parquet file)"
+        );
+    }
 
     // open the tcp listener
     let listener = std::net::TcpListener::bind(config.listen).expect("failed to listen");
@@ -962,6 +1004,7 @@ async fn mode(
     axum::response::Json(serde_json::json!({
         "live": state.live.load(Ordering::Relaxed),
         "loaded": loaded,
+        "compare_mode": state.captures.experiment_attached(),
     }))
 }
 
