@@ -260,6 +260,7 @@ const bootstrap = async () => {
     let experimentSystemInfo = null;
     let experimentFileMetadata = null;
     let experimentFilename = null;
+    let experimentQueryRange = null;
     if (compareMode) {
         const [sysinfo, fileMeta, expMeta] = await Promise.all([
             ViewerApi.getSystemInfo(CAPTURE_EXPERIMENT).catch(() => null),
@@ -269,6 +270,20 @@ const bootstrap = async () => {
         experimentSystemInfo = sysinfo;
         experimentFileMetadata = fileMeta;
         experimentFilename = expMeta?.data?.filename || null;
+        const data = expMeta?.data ?? expMeta;
+        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+        if (minT != null && maxT != null) {
+            const start = Number(minT);
+            const end = Number(maxT);
+            if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+                experimentQueryRange = {
+                    start,
+                    end,
+                    step: Math.max(1, Math.floor((end - start) / 500)),
+                };
+            }
+        }
     }
 
     initDashboard({
@@ -281,6 +296,7 @@ const bootstrap = async () => {
         experimentSystemInfo,
         experimentFileMetadata,
         experimentFilename,
+        experimentQueryRange,
         recording: true,
         onStartRecording: startRecording,
         onStopRecording: stopRecording,

@@ -44,6 +44,11 @@ let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
 let experimentFilename = null;
+// {start, end, step} in PromQL-native seconds, cached at compare-mode
+// entry so every CompareChartWrapper skips its per-chart
+// ViewerApi.getMetadata round-trip. Cleared on detach.
+let experimentQueryRange = null;
+export const getExperimentQueryRange = () => experimentQueryRange;
 
 // Compare-mode per-chart toggles + anchors live in `selectionStore` so
 // they persist across page reloads. See selection_migration.js for the
@@ -73,6 +78,7 @@ const initComponents = () => {
         toggles: selectionStore.chartToggles || {},
         setChartToggle,
         anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
+        experimentQueryRange,
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -100,6 +106,21 @@ const durationFromFileMetadata = (fileMeta) => {
     return null;
 };
 
+// Parse /api/v1/metadata response shape into a compare-mode query range.
+// /api/v1/metadata returns minTime/maxTime in PromQL-native seconds
+// (same scale as plot.data[0] timestamps). Returns null when the
+// response shape doesn't include a recognisable time range.
+const queryRangeFromMeta = (meta) => {
+    const data = meta?.data ?? meta;
+    const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+    const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+    if (minT == null || maxT == null) return null;
+    const start = Number(minT);
+    const end = Number(maxT);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+};
+
 // ── Compare-mode actions ───────────────────────────────────────────
 
 const attachExperiment = async (file) => {
@@ -110,6 +131,7 @@ const attachExperiment = async (file) => {
     ]);
     experimentSystemInfo = sysinfo || null;
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
+    experimentQueryRange = queryRangeFromMeta(expMeta);
     // Prefer server-stamped filename (works in both file-drop and CLI paths);
     // fall back to the dropped File's name.
     experimentFilename = (expMeta?.data?.filename)
@@ -139,6 +161,7 @@ const detachExperiment = async () => {
     experimentSystemInfo = null;
     experimentDurationMs = null;
     experimentFilename = null;
+    experimentQueryRange = null;
     experimentAttached = false;
     compareMode = false;
     m.redraw();
@@ -504,6 +527,7 @@ const initDashboard = (config = {}) => {
     experimentAttached = compareMode;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
+    experimentQueryRange = config.experimentQueryRange || null;
     experimentFilename = config.experimentFilename
         || (config.experimentFileMetadata
             && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))

@@ -259,35 +259,35 @@ const CompareChartWrapper = {
             vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
             return;
         }
-        // Query the experiment over its own time range. `getFileMetadata`
-        // returns start/end/duration for the specified capture; fall
-        // back to a wide default when unavailable.
+        // Query the experiment over its own time range. The compare-mode
+        // bootstrap cached {start, end, step} at attach time; fall back
+        // to a one-off metadata fetch only if the cache is missing
+        // (e.g. legacy entry paths that don't thread it through).
         (async () => {
             try {
-                let start = 0;
-                let end = 0;
-                let step = vnode.attrs.step || 1;
-                // /api/v1/metadata returns minTime/maxTime in SECONDS (PromQL
-                // native format, same as plot.data[0] timestamps). Do not
-                // divide by 1000.
-                try {
-                    const meta = await ViewerApi.getMetadata(CAPTURE_EXPERIMENT);
-                    const data = meta?.data ?? meta;
-                    const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
-                    const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
-                    if (minT != null && maxT != null) {
-                        start = Number(minT);
-                        end = Number(maxT);
-                        const dur = Math.max(1, end - start);
-                        if (!step || step <= 0) step = Math.max(1, Math.floor(dur / 500));
-                    }
-                } catch (_) { /* best effort; fall through to request anyway */ }
-                if (end <= start) {
+                let range = vnode.attrs.experimentQueryRange;
+                if (!range) {
+                    try {
+                        const meta = await ViewerApi.getMetadata(CAPTURE_EXPERIMENT);
+                        const data = meta?.data ?? meta;
+                        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+                        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+                        if (minT != null && maxT != null) {
+                            const start = Number(minT);
+                            const end = Number(maxT);
+                            if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+                                range = { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+                            }
+                        }
+                    } catch (_) { /* best effort */ }
+                }
+                if (!range) {
                     vnode.state.error = 'experiment metadata missing time range';
                     m.redraw();
                     return;
                 }
-                const res = await queryRangeForCapture(CAPTURE_EXPERIMENT, query, start, end, step);
+                const step = vnode.attrs.step && vnode.attrs.step > 0 ? vnode.attrs.step : range.step;
+                const res = await queryRangeForCapture(CAPTURE_EXPERIMENT, query, range.start, range.end, step);
                 vnode.state.experimentResult = res;
                 m.redraw();
             } catch (e) {
@@ -370,7 +370,7 @@ export function createGroupComponent(getState) {
             const state = getState();
             const {
                 chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
-                compareMode, toggles, setChartToggle, anchors,
+                compareMode, toggles, setChartToggle, anchors, experimentQueryRange,
             } = state;
             const sectionRoute = attrs.sectionRoute;
             const sectionName = attrs.sectionName;
@@ -441,6 +441,7 @@ export function createGroupComponent(getState) {
                                 setChartToggle,
                                 sectionRoute,
                                 step: interval,
+                                experimentQueryRange,
                             })
                             : m(Chart, { spec: heatmapSpec, chartsState, interval }),
                         expandLink(spec, sectionRoute),
@@ -462,6 +463,7 @@ export function createGroupComponent(getState) {
                             setChartToggle,
                             sectionRoute,
                             step: interval,
+                            experimentQueryRange,
                         }),
                         expandLink(spec, sectionRoute),
                         selectButton(spec, sectionRoute, sectionName),
