@@ -3180,7 +3180,7 @@ main {
 .compare-badge {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     padding: 4px 10px;
     margin-left: 8px;
     background: var(--bg-subtle, rgba(46, 91, 255, 0.08));
@@ -3188,10 +3188,31 @@ main {
     font-size: 12px;
     white-space: nowrap;
 }
+.compare-badge .compare-capture {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.compare-badge .compare-capture + .compare-capture {
+    padding-left: 12px;
+    border-left: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+}
+.compare-badge .compare-dot { font-size: 10px; line-height: 1; }
 .compare-badge .compare-baseline-dot { color: #2E5BFF; }
 .compare-badge .compare-experiment-dot { color: #00C46A; }
-.compare-badge .compare-arrow-char { color: var(--fg-muted, #888); }
-.compare-badge .compare-detach {
+.compare-badge .compare-capture-label {
+    color: var(--fg-muted, #888);
+    letter-spacing: 0.02em;
+}
+.compare-badge .compare-capture-name {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.compare-badge .compare-load {
     padding: 2px 8px;
     font-size: 11px;
     cursor: pointer;
@@ -3200,7 +3221,7 @@ main {
     border-radius: 3px;
     color: inherit;
 }
-.compare-badge .compare-detach:hover {
+.compare-badge .compare-load:hover {
     background: var(--bg-hover, rgba(0, 0, 0, 0.05));
 }
 

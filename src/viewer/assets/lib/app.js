@@ -43,6 +43,7 @@ let compareMode = false;
 let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
+let experimentFilename = null;
 let baselineDurationMs = null;
 
 // Compare-mode per-chart toggles + anchors live in `selectionStore` so
@@ -109,6 +110,9 @@ const attachExperiment = async (file) => {
     catch (_) { /* optional */ }
     experimentSystemInfo = sysinfo || null;
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
+    experimentFilename = (file && file.name)
+        || (expFileMeta && (expFileMeta.filename || expFileMeta.file_name))
+        || null;
     experimentAttached = true;
     compareMode = true;
 
@@ -130,9 +134,20 @@ const detachExperiment = async () => {
     try { await ViewerApi.detachExperiment(); } catch (_) { /* best effort */ }
     experimentSystemInfo = null;
     experimentDurationMs = null;
+    experimentFilename = null;
     experimentAttached = false;
     compareMode = false;
     m.redraw();
+};
+
+// Replace the currently attached experiment with a new parquet. Unlike
+// detachExperiment + attachExperiment, this preserves compareMode across
+// the transition so the UI doesn't bounce back to single-capture mode.
+const loadExperiment = async (file) => {
+    if (experimentAttached) {
+        try { await ViewerApi.detachExperiment(); } catch (_) { /* best effort */ }
+    }
+    await attachExperiment(file);
 };
 
 const getCompareState = () => ({
@@ -489,6 +504,9 @@ const initDashboard = (config = {}) => {
     experimentAttached = compareMode;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
+    experimentFilename = (config.experimentFileMetadata
+        && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))
+        || null;
     baselineDurationMs = durationFromFileMetadata(fileMetadata);
 
     if (config.selectionPayload && Array.isArray(config.selectionPayload.entries)) {
@@ -531,7 +549,14 @@ const initDashboard = (config = {}) => {
         getExperimentSysinfo: () => experimentSystemInfo,
         getCompareBadgeAttrs: () => ({
             compareMode,
-            onDetachExperiment: () => { detachExperiment(); },
+            // Baseline filename comes from TopNav's existing attrs.filename.
+            experimentFilename,
+            // Re-loading baseline swaps the server's baseline TSDB in place;
+            // the experiment slot is untouched, so compareMode survives.
+            onLoadBaseline: onUploadParquet ? (file) => onUploadParquet(file) : null,
+            // Re-loading experiment detaches the current slot and attaches
+            // the new parquet. compareMode persists across the swap.
+            onLoadExperiment: (file) => { loadExperiment(file); },
         }),
         buildAttrs: topNavAttrs,
     });

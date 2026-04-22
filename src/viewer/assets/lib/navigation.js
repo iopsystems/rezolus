@@ -71,7 +71,9 @@ const createMainComponent = ({
                     start_time,
                     end_time,
                     compareMode: !!compareMode,
-                    onDetachExperiment: badgeAttrs?.onDetachExperiment,
+                    experimentFilename: badgeAttrs?.experimentFilename,
+                    onLoadBaseline: badgeAttrs?.onLoadBaseline,
+                    onLoadExperiment: badgeAttrs?.onLoadExperiment,
                 },
             )),
             CompareBanner && m(CompareBanner, {
