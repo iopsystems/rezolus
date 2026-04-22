@@ -3136,10 +3136,13 @@ main {
 .compare-heatmap-pair .compare-slot-label .compare-baseline-dot { color: #2E5BFF; }
 .compare-heatmap-pair .compare-slot-label .compare-experiment-dot { color: #00C46A; }
 
-/* Single diff heatmap wrapper — occupies full chart width */
+/* Single diff heatmap wrapper — occupies full chart width. Needs
+ * positioning context so the absolute-positioned color legend bar
+ * anchors inside this wrapper. */
 .compare-heatmap-diff {
     display: block;
     width: 100%;
+    position: relative;
 }
 
 /* Sub-grid for split multi/scatter charts (one sub-chart per shared label).

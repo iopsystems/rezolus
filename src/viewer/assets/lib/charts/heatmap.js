@@ -368,8 +368,21 @@ export function configureHeatmap(chart) {
         const legendColorFn = chart.spec.colormap
             ? buildRampColorFn(chart.spec.colormap)
             : viridisColor;
+        // Invalidate any retained legend bar whose gradient doesn't match
+        // the current colormap. Without this, toggling side-by-side → diff
+        // reuses the stale viridis canvas in the existing bar and the
+        // diverging palette never renders.
+        const paletteSig = Array.isArray(chart.spec.colormap)
+            ? chart.spec.colormap.join(',')
+            : 'viridis';
+        const existing = wrapper.querySelector('.heatmap-legend-bar');
+        if (existing && existing.dataset.palette !== paletteSig) {
+            existing.remove();
+        }
         const barCanvas = buildGradientCanvas(legendColorFn);
         const { minLabel, maxLabel } = ensureLegendBar(wrapper, barCanvas);
+        const bar = wrapper.querySelector('.heatmap-legend-bar');
+        if (bar) bar.dataset.palette = paletteSig;
         minLabel.textContent = formatter(visualMapMin);
         maxLabel.textContent = formatter(visualMapMax);
     }
