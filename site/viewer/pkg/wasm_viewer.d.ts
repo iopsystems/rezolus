@@ -59,6 +59,47 @@ export class Viewer {
     systeminfo(): string | undefined;
 }
 
+/**
+ * Registry wrapping up to two `Viewer` instances keyed by capture id
+ * ("baseline" / "experiment").  Mirrors the server-side `CaptureRegistry`
+ * shape so the JS transport layer can address either capture uniformly.
+ *
+ * This type is additive — existing single-capture `Viewer` consumers are
+ * unaffected.
+ */
+export class WasmCaptureRegistry {
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Attach a parquet capture under the given slot ("baseline" or
+     * "experiment").  Replaces any previously attached capture in that slot.
+     */
+    attach(capture: string, data: Uint8Array, filename: string): void;
+    /**
+     * Drop the capture in the given slot (no-op if unknown or empty).
+     */
+    detach(capture: string): void;
+    file_metadata_json(capture: string): string | undefined;
+    get_section(capture: string, section: string): string | undefined;
+    get_sections(capture: string): string | undefined;
+    /**
+     * Whether a capture is currently attached in the given slot.
+     */
+    has(capture: string): boolean;
+    info(capture: string): string;
+    /**
+     * Initialise ServiceExtension templates for the given capture.  Mirrors
+     * `Viewer::init_templates`.
+     */
+    init_templates(capture: string, templates_json: string): void;
+    metadata(capture: string): string;
+    constructor();
+    query(capture: string, query: string, time: number): string;
+    query_range(capture: string, query: string, start: number, end: number, step: number): string;
+    selection(capture: string): string | undefined;
+    systeminfo(capture: string): string | undefined;
+}
+
 export function init(): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -66,6 +107,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_viewer_free: (a: number, b: number) => void;
+    readonly __wbg_wasmcaptureregistry_free: (a: number, b: number) => void;
     readonly init: () => void;
     readonly viewer_file_metadata_json: (a: number) => [number, number];
     readonly viewer_get_section: (a: number, b: number, c: number) => [number, number];
@@ -78,6 +120,20 @@ export interface InitOutput {
     readonly viewer_query_range: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly viewer_selection: (a: number) => [number, number];
     readonly viewer_systeminfo: (a: number) => [number, number];
+    readonly wasmcaptureregistry_attach: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly wasmcaptureregistry_detach: (a: number, b: number, c: number) => void;
+    readonly wasmcaptureregistry_file_metadata_json: (a: number, b: number, c: number) => [number, number];
+    readonly wasmcaptureregistry_get_section: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly wasmcaptureregistry_get_sections: (a: number, b: number, c: number) => [number, number];
+    readonly wasmcaptureregistry_has: (a: number, b: number, c: number) => number;
+    readonly wasmcaptureregistry_info: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly wasmcaptureregistry_init_templates: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly wasmcaptureregistry_metadata: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly wasmcaptureregistry_new: () => number;
+    readonly wasmcaptureregistry_query: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
+    readonly wasmcaptureregistry_query_range: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly wasmcaptureregistry_selection: (a: number, b: number, c: number) => [number, number];
+    readonly wasmcaptureregistry_systeminfo: (a: number, b: number, c: number) => [number, number];
     readonly rust_zstd_wasm_shim_calloc: (a: number, b: number) => number;
     readonly rust_zstd_wasm_shim_free: (a: number) => void;
     readonly rust_zstd_wasm_shim_malloc: (a: number) => number;
