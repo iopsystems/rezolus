@@ -6,6 +6,7 @@ import { expandLink, selectButton, compareToggle } from './chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
 import { queryRangeForCapture, buildEffectiveQuery } from './data.js';
+import { canonicalQuantileLabel } from './charts/util/compare_math.js';
 import { ViewerApi } from './viewer_api.js';
 
 // ── Normalization helpers for compare-mode captures ────────────────
@@ -38,18 +39,8 @@ const extractBaselineCapture = (spec) => {
             for (let i = 1; i < data.length; i++) {
                 let label = names[i - 1];
                 if (style === 'scatter') {
-                    // Normalize pXX label form to match quantile-derived keys
-                    // from the experiment query (percentileLabel in compare.js).
-                    // PromQL's histogram_percentiles() returns quantile as a
-                    // fraction (e.g. "0.5", "0.99"); a value <= 1 is treated
-                    // as a fraction, anything larger is assumed already in
-                    // percent form (e.g. "50").
-                    const m = typeof label === 'string' ? label.match(/^p?(\d+(?:\.\d+)?)$/) : null;
-                    if (m) {
-                        const q = Number(m[1]);
-                        const pct = q <= 1 ? q * 100 : q;
-                        label = `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
-                    }
+                    const canonical = canonicalQuantileLabel(label);
+                    if (canonical) label = canonical;
                 }
                 if (label == null) continue;
                 map.set(String(label), { timeData, valueData: data[i] || [] });
@@ -131,25 +122,10 @@ const extractExperimentCapture = (spec, promqlResult) => {
     }
 
     if (style === 'scatter') {
-        // metriken_query's histogram_percentiles labels series with
-        // `percentile` (e.g. "0.5"), not `quantile`. Fall through to any
-        // named quantile/percentile label, then to the first non-__name__
-        // label value (matches applyResultToPlot's seriesName selection
-        // for baseline). Always present as percent form ("p50", "p99.9")
-        // to match the baseline normalizer in extractBaselineCapture.
         const map = new Map();
         for (const item of results) {
-            const mm = item.metric || {};
-            let raw = mm.percentile != null ? mm.percentile : mm.quantile;
-            if (raw == null) {
-                for (const [k, v] of Object.entries(mm)) {
-                    if (k !== '__name__') { raw = v; break; }
-                }
-            }
-            const q = Number(raw);
-            if (!Number.isFinite(q)) continue;
-            const pct = q <= 1 ? q * 100 : q;
-            const canonical = `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
+            const canonical = canonicalQuantileLabel(item);
+            if (canonical == null) continue;
             const values = Array.isArray(item.values) ? item.values : [];
             map.set(canonical, {
                 timeData: values.map((p) => Number(p[0])),

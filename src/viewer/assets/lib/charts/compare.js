@@ -30,7 +30,7 @@
 //   anchors: { baseline: ms, experiment: ms }  — subtracted from each
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
-import { nullDiff, intersectLabels } from './util/compare_math.js';
+import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { resolvedStyle } from './metric_types.js';
 
@@ -396,14 +396,7 @@ const multiLabel = (r) => {
         .map((k) => `${k}=${mm[k]}`).join(',');
 };
 
-const percentileLabel = (r) => {
-    const mm = (r && r.metric) || {};
-    const raw = mm.percentile != null ? mm.percentile : mm.quantile;
-    const q = Number(raw);
-    if (!Number.isFinite(q)) return 'unknown';
-    const pct = q <= 1 ? q * 100 : q;
-    return `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
-};
+const percentileLabel = (r) => canonicalQuantileLabel(r) || 'unknown';
 
 /**
  * Render baseline and experiment histogram heatmaps side-by-side. No
