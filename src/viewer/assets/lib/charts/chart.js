@@ -347,9 +347,12 @@ export class Chart {
 
         this.echart.on('datazoom', (event) => {
             // 'datazoom' events triggered by the user vs dispatched by us have different formats:
-            // User-triggered events have a batch property with the details under it.
-            // (We don't want to trigger on our own dispatched zoom actions, so this is convenient.)
-            if (!event.batch) {
+            // User-triggered events have a non-empty batch array with the details under it.
+            // Programmatic dispatches (the forEach below, or compare-mode
+            // zoom sync) emit either a missing batch or an empty-batch
+            // event — either case would destructure to all-undefined
+            // below and silently reset chartsState.zoomLevel. Filter both.
+            if (!Array.isArray(event.batch) || event.batch.length === 0) {
                 return;
             }
 
@@ -418,6 +421,15 @@ export class Chart {
                 startValue = undefined;
                 endValue = undefined;
             }
+
+            // Only persist a zoom if we actually extracted meaningful
+            // values. A stray empty-batch or malformed event would
+            // otherwise write undefineds into zoomLevel and clobber a
+            // legitimate zoom on the next onupdate restore.
+            const hasPct = start !== undefined && end !== undefined
+                && !Number.isNaN(start) && !Number.isNaN(end);
+            const hasValues = startValue !== undefined && endValue !== undefined;
+            if (!hasPct && !hasValues) return;
 
             this.chartsState.zoomLevel = {
                 start,
