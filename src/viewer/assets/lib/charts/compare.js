@@ -33,6 +33,7 @@
 import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { resolvedStyle } from './metric_types.js';
+import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
 // style.css. The getter reads CSS custom properties lazily so a theme
@@ -107,17 +108,17 @@ const anchorSecondsFor = (anchors, id, timeDataSec) => {
  * capture is unusable — the caller can then render baseline-only.
  */
 const overlayLine = ({ spec, captures, anchors }) => {
-    const baseline = captures.find((c) => c.id === 'baseline');
-    const experiment = captures.find((c) => c.id === 'experiment');
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline || !experiment) return false;
 
-    const baseSec = anchorSecondsFor(anchors, 'baseline', baseline.timeData);
-    const expSec = anchorSecondsFor(anchors, 'experiment', experiment.timeData);
+    const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, baseline.timeData);
+    const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, experiment.timeData);
 
     const seriesList = [];
     if (Array.isArray(baseline.timeData) && baseline.timeData.length > 0) {
         seriesList.push({
-            name: 'baseline',
+            name: CAPTURE_BASELINE,
             color: BASELINE_COLOR,
             timeData: rebase(baseline.timeData, baseSec),
             valueData: baseline.valueData || [],
@@ -126,7 +127,7 @@ const overlayLine = ({ spec, captures, anchors }) => {
     }
     if (Array.isArray(experiment.timeData) && experiment.timeData.length > 0) {
         seriesList.push({
-            name: 'experiment',
+            name: CAPTURE_EXPERIMENT,
             color: EXPERIMENT_COLOR,
             timeData: rebase(experiment.timeData, expSec),
             valueData: experiment.valueData || [],
@@ -290,7 +291,7 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     }
 
     const timeData = (a.timeData || spec.time_data || []).slice(0, bins);
-    const baselineAnchorSec = anchorSecondsFor(anchors, 'baseline', timeData);
+    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, timeData);
 
     const isDark = typeof document !== 'undefined'
         && document.body
@@ -340,8 +341,8 @@ const splitScatterToSubgroup = ({ spec, captures, anchors }) =>
     splitIntoOverlayLines({ spec, captures, anchors, labelFor: percentileLabel });
 
 const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor }) => {
-    const baseline = captures.find((c) => c.id === 'baseline');
-    const experiment = captures.find((c) => c.id === 'experiment');
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline || !experiment) return false;
 
     const mapA = baseline.seriesMap || new Map();
@@ -353,8 +354,8 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
     const specs = shared.map((label) => {
         const a = mapA.get(label);
         const b = mapB.get(label);
-        const baseSec = anchorSecondsFor(anchors, 'baseline', a.timeData);
-        const expSec = anchorSecondsFor(anchors, 'experiment', b.timeData);
+        const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, a.timeData);
+        const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, b.timeData);
         return {
             ...spec,
             opts: {
@@ -369,14 +370,14 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor })
             _splitLabel: label,
             multiSeries: [
                 {
-                    name: 'baseline',
+                    name: CAPTURE_BASELINE,
                     color: BASELINE_COLOR,
                     timeData: rebase(a.timeData, baseSec),
                     valueData: a.valueData,
                     fill: false,
                 },
                 {
-                    name: 'experiment',
+                    name: CAPTURE_EXPERIMENT,
                     color: EXPERIMENT_COLOR,
                     timeData: rebase(b.timeData, expSec),
                     valueData: b.valueData,

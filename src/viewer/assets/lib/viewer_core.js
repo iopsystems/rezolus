@@ -5,7 +5,7 @@ import { Chart } from './charts/chart.js';
 import { expandLink, selectButton, compareToggle } from './chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
-import { queryRangeForCapture, buildEffectiveQuery } from './data.js';
+import { queryRangeForCapture, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 import { canonicalQuantileLabel } from './charts/util/compare_math.js';
 import { ViewerApi } from './viewer_api.js';
 
@@ -16,7 +16,7 @@ import { ViewerApi } from './viewer_api.js';
 // chart style so the compare strategies can consume it uniformly.
 const extractBaselineCapture = (spec) => {
     const style = resolvedStyle(spec);
-    const cap = { id: 'baseline' };
+    const cap = { id: CAPTURE_BASELINE };
 
     if (style === 'line') {
         const data = spec.data;
@@ -68,7 +68,7 @@ const extractBaselineCapture = (spec) => {
 // produced by extractBaselineCapture.
 const extractExperimentCapture = (spec, promqlResult) => {
     const style = resolvedStyle(spec);
-    const cap = { id: 'experiment' };
+    const cap = { id: CAPTURE_EXPERIMENT };
     const results = promqlResult?.data?.result;
     if (!Array.isArray(results) || results.length === 0) {
         if (style === 'multi' || style === 'scatter') cap.seriesMap = new Map();
@@ -250,7 +250,7 @@ const CompareChartWrapper = {
                 // native format, same as plot.data[0] timestamps). Do not
                 // divide by 1000.
                 try {
-                    const meta = await ViewerApi.getMetadata('experiment');
+                    const meta = await ViewerApi.getMetadata(CAPTURE_EXPERIMENT);
                     const data = meta?.data ?? meta;
                     const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
                     const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
@@ -266,7 +266,7 @@ const CompareChartWrapper = {
                     m.redraw();
                     return;
                 }
-                const res = await queryRangeForCapture('experiment', query, start, end, step);
+                const res = await queryRangeForCapture(CAPTURE_EXPERIMENT, query, start, end, step);
                 vnode.state.experimentResult = res;
                 m.redraw();
             } catch (e) {

@@ -8,7 +8,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
 import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -105,8 +105,8 @@ const durationFromFileMetadata = (fileMeta) => {
 const attachExperiment = async (file) => {
     const sysinfo = await ViewerApi.attachExperiment(file);
     const [expFileMeta, expMeta] = await Promise.all([
-        ViewerApi.getFileMetadata('experiment').catch(() => null),
-        ViewerApi.getMetadata('experiment').catch(() => null),
+        ViewerApi.getFileMetadata(CAPTURE_EXPERIMENT).catch(() => null),
+        ViewerApi.getMetadata(CAPTURE_EXPERIMENT).catch(() => null),
     ]);
     experimentSystemInfo = sysinfo || null;
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
@@ -124,7 +124,7 @@ const attachExperiment = async (file) => {
     // past the end of its data.
     const anchors = selectionStore.anchors || { baseline: 0, experiment: 0 };
     if (experimentDurationMs != null && anchors.experiment > experimentDurationMs) {
-        setAnchor('experiment', experimentDurationMs);
+        setAnchor(CAPTURE_EXPERIMENT, experimentDurationMs);
         console.info(
             `[compare] experiment anchor clamped to ${experimentDurationMs}ms to fit capture duration`,
         );

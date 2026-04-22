@@ -6,7 +6,7 @@ import { ViewerApi } from './viewer_api.js';
 import { FileUpload, CompareLanding } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
-import { clearMetadataCache, processDashboardData } from './data.js';
+import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // ── Backend state fetching ─────────────────────────────────────────
@@ -262,9 +262,9 @@ const bootstrap = async () => {
     let experimentFilename = null;
     if (compareMode) {
         const [sysinfo, fileMeta, expMeta] = await Promise.all([
-            ViewerApi.getSystemInfo('experiment').catch(() => null),
-            ViewerApi.getFileMetadata('experiment').catch(() => null),
-            ViewerApi.getMetadata('experiment').catch(() => null),
+            ViewerApi.getSystemInfo(CAPTURE_EXPERIMENT).catch(() => null),
+            ViewerApi.getFileMetadata(CAPTURE_EXPERIMENT).catch(() => null),
+            ViewerApi.getMetadata(CAPTURE_EXPERIMENT).catch(() => null),
         ]);
         experimentSystemInfo = sysinfo;
         experimentFileMetadata = fileMeta;

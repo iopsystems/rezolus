@@ -2,6 +2,11 @@ import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
 
+// Capture-id constants. Typos become grep-able; use these in place of
+// raw 'baseline' / 'experiment' string literals.
+export const CAPTURE_BASELINE = 'baseline';
+export const CAPTURE_EXPERIMENT = 'experiment';
+
 let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
