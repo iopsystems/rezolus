@@ -445,6 +445,8 @@ struct AppState {
     live: AtomicBool,
     /// Original parquet file path (file mode only).
     parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
+    /// Temp parquet path for the attached experiment capture (cleared on detach).
+    experiment_parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
     /// Serialized selection JSON from parquet metadata.
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
@@ -460,6 +462,7 @@ impl AppState {
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: AtomicBool::new(false),
             parquet_path: parking_lot::RwLock::new(None),
+            experiment_parquet_path: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
         }
@@ -846,6 +849,12 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route(
             "/upload",
             axum::routing::post(upload_parquet)
+                .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
+        .route(
+            "/captures/experiment",
+            axum::routing::post(attach_experiment)
+                .delete(detach_experiment)
                 .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
         .route("/connect", axum::routing::post(connect_agent))
@@ -1287,6 +1296,76 @@ async fn upload_parquet(
     axum::response::Json(ApiResponse::success(serde_json::json!({
         "filename": filename,
     })))
+}
+
+/// Attach an experiment parquet for A/B comparison. Body is raw parquet bytes.
+/// Returns 409 if an experiment is already attached (caller must DELETE first).
+async fn attach_experiment(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    _headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if state.captures.experiment_attached() {
+        return (
+            StatusCode::CONFLICT,
+            "experiment already attached; DELETE first",
+        )
+            .into_response();
+    }
+
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing parquet bytes").into_response();
+    }
+
+    let temp_path =
+        std::env::temp_dir().join(format!("rezolus-experiment-{}.parquet", std::process::id(),));
+    if let Err(e) = std::fs::write(&temp_path, &body) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to store upload: {e}"),
+        )
+            .into_response();
+    }
+
+    let tsdb = match Tsdb::load(&temp_path) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_path);
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("failed to load parquet: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
+    state
+        .captures
+        .attach_experiment(tsdb, sysinfo.clone(), file_meta);
+    *state.experiment_parquet_path.write() = Some(temp_path);
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        sysinfo.unwrap_or_else(|| "{}".into()),
+    )
+        .into_response()
+}
+
+/// Detach the currently attached experiment (if any) and clean up its temp file.
+async fn detach_experiment(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    state.captures.detach_experiment();
+    if let Some(path) = state.experiment_parquet_path.write().take() {
+        let _ = std::fs::remove_file(&path);
+    }
+    StatusCode::OK.into_response()
 }
 
 /// Connect to a live Rezolus agent at runtime.

@@ -96,7 +96,6 @@ impl CaptureRegistry {
         *self.baseline.file_metadata.write() = file_metadata;
     }
 
-    #[allow(dead_code)]
     pub fn attach_experiment(
         &self,
         tsdb: Tsdb,
@@ -110,12 +109,10 @@ impl CaptureRegistry {
         });
     }
 
-    #[allow(dead_code)]
     pub fn detach_experiment(&self) {
         *self.experiment.write() = None;
     }
 
-    #[allow(dead_code)]
     pub fn experiment_attached(&self) -> bool {
         self.experiment.read().is_some()
     }
