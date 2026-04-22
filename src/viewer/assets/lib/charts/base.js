@@ -249,6 +249,24 @@ export function getBaseYAxisOption(logScale, unitSystem) {
 }
 
 /**
+ * Merge a custom x-axis label formatter over baseOption.xAxis,
+ * preserving the surrounding axisLabel config. Returns null when the
+ * formatter is falsy, matching the `? xAxisOverride : null` pattern
+ * used at call sites so `{ xAxis: override }` only materializes when
+ * there's an override to apply.
+ */
+export function overrideXAxisFormatter(baseXAxis, customFormatter) {
+    if (!customFormatter) return null;
+    return {
+        ...baseXAxis,
+        axisLabel: {
+            ...(baseXAxis.axisLabel || {}),
+            formatter: customFormatter,
+        },
+    };
+}
+
+/**
  * Build the right-aligned circle-swatch legend shared by scatter and
  * multi-series line overlays. Pass `{ tooltipFormatter }` when the
  * legend should show hover tooltips (scatter); omit it for bare line

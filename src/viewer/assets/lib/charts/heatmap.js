@@ -10,6 +10,7 @@ import {
     applyNoData,
     getTooltipFreezeFooter,
     applyChartOption,
+    overrideXAxisFormatter,
     COLORS,
     FONTS,
 } from './base.js';
@@ -270,18 +271,8 @@ export function configureHeatmap(chart) {
 
     // Compare-mode renderers override the x-axis formatter so labels
     // read as relative offsets (`+Xs`, `+XmYs`) instead of absolute
-    // wall-clock times. When the spec sets `xAxisFormatter`, build a
-    // merged xAxis that swaps only the `axisLabel.formatter` field.
-    const customXFormatter = chart.spec.xAxisFormatter;
-    const xAxisOverride = customXFormatter
-        ? {
-            ...baseOption.xAxis,
-            axisLabel: {
-                ...(baseOption.xAxis.axisLabel || {}),
-                formatter: customXFormatter,
-            },
-        }
-        : null;
+    // wall-clock times.
+    const xAxisOverride = overrideXAxisFormatter(baseOption.xAxis, chart.spec.xAxisFormatter);
 
     const option = {
         ...baseOption,

@@ -14,6 +14,7 @@ import {
     getDataZoomConfig,
     applyChartOption,
     buildOverlayLegendOption,
+    overrideXAxisFormatter,
     COLORS,
 } from './base.js';
 
@@ -103,16 +104,7 @@ export function configureLineChart(chart) {
     // Compare-mode line overlays want relative-time labels (+Xs) on
     // the x-axis. Honor `spec.xAxisFormatter` if set; otherwise use
     // the base time formatter.
-    const customXFormatter = chart.spec.xAxisFormatter;
-    const xAxisOverride = customXFormatter
-        ? {
-            ...baseOption.xAxis,
-            axisLabel: {
-                ...(baseOption.xAxis.axisLabel || {}),
-                formatter: customXFormatter,
-            },
-        }
-        : null;
+    const xAxisOverride = overrideXAxisFormatter(baseOption.xAxis, chart.spec.xAxisFormatter);
 
     // TODO(compare): when `xAxisFormatter` is set we should prepend the
     // relative offset to the tooltip timestamp too. Today the tooltip
