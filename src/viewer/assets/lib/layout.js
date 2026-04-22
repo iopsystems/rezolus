@@ -33,11 +33,12 @@ const TopNav = {
                     class: recording ? 'recording' : 'stopped',
                 }, recording ? 'REC' : 'STOPPED'),
             ]),
-            // Hide the whole compare badge in WASM mode. Load handlers
-            // are absent there (same signal we use to hide the Load
-            // Parquet / Load Report buttons); the badge's swatches and
-            // filenames alone don't earn the nav space.
-            compareMode && (attrs.onLoadBaseline || attrs.onLoadExperiment) && (() => {
+            // Always render the compare badge in compare mode — in WASM
+            // mode the Load buttons inside each row are naturally skipped
+            // because onLoad handlers aren't provided, but the dots +
+            // filenames stay visible so the user can see which captures
+            // are being compared.
+            compareMode && (() => {
                 const pickFile = (onPick) => () => {
                     const input = document.createElement('input');
                     input.type = 'file';
@@ -59,9 +60,22 @@ const TopNav = {
                         title: `Replace ${label} parquet`,
                     }, m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>')),
                 ]);
-                return m('div.compare-badge', [
-                    row('compare-baseline-dot', 'baseline', attrs.filename, attrs.onLoadBaseline),
-                    row('compare-experiment-dot', 'experiment', attrs.experimentFilename, attrs.onLoadExperiment),
+                // <details> wraps both views: on wide viewports CSS hides
+                // the <summary> and always renders the rows inline (via
+                // :not([open]) override). On narrow viewports, the
+                // summary becomes a compact swatch-only trigger; clicking
+                // opens the rows as an absolute-positioned dropdown card.
+                return m('details.compare-badge', [
+                    m('summary.compare-badge-summary', {
+                        title: 'Show baseline / experiment details',
+                    }, [
+                        m('span.compare-dot.compare-baseline-dot', '\u25CF'),
+                        m('span.compare-dot.compare-experiment-dot', '\u25CF'),
+                    ]),
+                    m('div.compare-capture-list', [
+                        row('compare-baseline-dot', 'baseline', attrs.filename, attrs.onLoadBaseline),
+                        row('compare-experiment-dot', 'experiment', attrs.experimentFilename, attrs.onLoadExperiment),
+                    ]),
                 ]);
             })(),
             // Node selector / filename display. In compare mode the

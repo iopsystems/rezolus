@@ -183,13 +183,17 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
         efficiency.describe(
             "Resource consumption normalized by service throughput — lower is more efficient.",
         );
+        // CPU time per throughput unit. cpu_usage is a ns counter; irate
+        // gives ns/s of CPU consumed, divided by throughput yields
+        // ns-of-CPU per request. The viewer's time formatter picks the
+        // best scale (ns/µs/ms/s) based on magnitude — for typical RPC
+        // workloads (100s of µs per request) this displays as µs, which
+        // is more legible than fractional seconds. Scales past one full
+        // core on multi-core workloads, unlike the old utilization-
+        // fraction formulation.
         efficiency.plot_promql(
-            PlotOpts::counter(
-                "CPU Busy % / Throughput",
-                "normalized-cpu-busy",
-                Unit::Count,
-            ),
-            format!("(sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000) / ({tq})"),
+            PlotOpts::counter("CPU Time / Throughput", "normalized-cpu-busy", Unit::Time),
+            format!("sum(irate(cpu_usage[5m])) / ({tq})"),
         );
         efficiency.plot_promql(
             PlotOpts::counter(

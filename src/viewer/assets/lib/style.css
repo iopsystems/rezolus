@@ -351,6 +351,31 @@ body::after {
     flex-shrink: 0;
 }
 
+/* In compare mode the nav is already crowded with the per-capture
+ * filenames + Load icons; drop the "REZOLUS" wordmark and keep just
+ * the logo glyph on narrow viewports so the capture info stays
+ * visible. The :has() selector scopes this to navs that actually
+ * contain a compare badge — no JS body-class toggle needed. */
+@media (max-width: 900px) {
+    /* On narrow compare navs: hide the REZOLUS wordmark (keep the
+     * glyph for branding) and let the time range bar wrap to its
+     * own row below the rest of the first-row controls. Step stays
+     * on row 1 because it's pushed before the wrapped time bar via
+     * the flex order below. */
+    #topnav:has(.compare-badge) .logo {
+        font-size: 0;
+        gap: 0;
+    }
+    #topnav:has(.compare-badge) .logo::before {
+        width: 20px;
+        height: 20px;
+    }
+    #topnav:has(.compare-badge) .time-range-bar {
+        flex: 1 1 100%;
+        order: 99;
+    }
+}
+
 /* Logo mark - abstract waveform */
 #topnav .logo::before {
     content: '';
@@ -2866,6 +2891,30 @@ main {
         margin-left: auto;
         margin-right: 0;
     }
+    /* Hide the "Step" label text on narrow viewports — the dropdown
+     * value (Auto / 1s / 5s / …) is enough; the label just steals
+     * horizontal room from the compare badge and time range bar. */
+    .granularity-label {
+        display: none;
+    }
+
+    /* Keep the theme toggle anchored to the first row's top-right on
+     * narrow viewports. With #topnav's flex-wrap: wrap, the button
+     * (as the last child) would otherwise wrap onto a second line
+     * whenever the first row runs out of space. Pulling it out of
+     * flex flow pins it there. The nav's min-height + padding keep
+     * everything vertically aligned. */
+    #topnav {
+        position: relative;
+        /* Reserve space on the right so nothing flows under the button. */
+        padding-right: calc(0.5rem + 32px + 0.5rem);
+    }
+    #topnav .theme-toggle-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        margin-left: 0;
+    }
 
     /* ── Sidebar as slide-out drawer ── */
     #sidebar {
@@ -3118,7 +3167,9 @@ main {
    Compare mode — side-by-side + diff layouts
    ========================================================================== */
 
-/* Pair of heatmap charts (baseline | experiment) */
+/* Pair of heatmap charts (baseline | experiment). Side-by-side on
+ * wide viewports, stacked vertically on narrow viewports so each
+ * heatmap still has enough horizontal room for the time axis. */
 .compare-heatmap-pair {
     display: flex;
     gap: 8px;
@@ -3128,6 +3179,14 @@ main {
     flex: 1 1 0;
     min-width: 0;
     position: relative;
+}
+@media (max-width: 900px) {
+    .compare-heatmap-pair {
+        flex-direction: column;
+    }
+    .compare-heatmap-pair .compare-slot {
+        width: 100%;
+    }
 }
 /* Pin the baseline/experiment label just above the heatmap canvas —
  * same treatment as the percentile split label, so it sits above the
@@ -3217,6 +3276,17 @@ main {
     cursor: pointer;
     margin: 0;
     transform: translateY(2px);
+    /* Default is dark theme. Tell the UA to use dark chrome for the
+     * native checkbox (background, border, check mark) and set the
+     * accent-color so the "checked" fill picks up the same deep tone
+     * as the rest of the dark palette. */
+    color-scheme: dark;
+    accent-color: var(--bg-tertiary);
+}
+
+[data-theme="light"] .compare-toggle input[type=checkbox] {
+    color-scheme: light;
+    accent-color: var(--accent);
 }
 
 /* Transient states for async compare-mode fetches */
@@ -3237,17 +3307,44 @@ main {
 
 /* ==========================================================================
    Compare mode — header badge
+
+   Rendered as <details> so the same DOM serves both presentations:
+   - Wide viewports (> 900px): the <summary> is hidden; the capture
+     rows render inline next to each other, always visible.
+   - Narrow viewports: the <summary> becomes a compact dot-only
+     trigger; clicking opens a dropdown card below with the rows
+     stacked and filenames wrapping.
    ========================================================================== */
 .compare-badge {
+    /* `details` is block by default; flatten to inline-flex so it
+     * participates in the navbar's horizontal layout. */
     display: inline-flex;
     align-items: center;
-    gap: 12px;
     padding: 4px 10px;
     margin-left: 8px;
     background: var(--compare-baseline-bg);
     border-radius: 4px;
     font-size: 12px;
-    white-space: nowrap;
+    position: relative;
+    max-width: 50vw;   /* never take more than half the nav width */
+}
+.compare-badge-summary {
+    /* Hidden on wide; the capture list below shows inline instead. */
+    display: none;
+    list-style: none;
+    cursor: pointer;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+    outline: none;
+}
+.compare-badge-summary::-webkit-details-marker { display: none; }
+.compare-badge-summary::marker { content: ''; }
+
+.compare-badge .compare-capture-list {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
 }
 .compare-badge .compare-capture {
     display: inline-flex;
@@ -3281,10 +3378,74 @@ main {
     border: none;
     background: transparent;
     border-radius: 3px;
+    flex-shrink: 0;
 }
 .compare-badge .compare-load svg { display: block; }
 .compare-badge .compare-load:hover {
     background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+/* Narrow-viewport layout: collapse the badge into a dot-only trigger,
+ * pop the rows out as a dropdown card below. */
+@media (max-width: 900px) {
+    .compare-badge {
+        padding: 0;
+        background: transparent;
+        max-width: none;
+    }
+    .compare-badge-summary {
+        display: inline-flex;
+        padding: 4px 8px;
+        background: var(--compare-baseline-bg);
+        border-radius: 4px;
+    }
+    .compare-badge:not([open]) .compare-capture-list {
+        display: none;
+    }
+    .compare-badge[open] .compare-capture-list {
+        position: absolute;
+        top: calc(100% + 4px);
+        /* Anchor to the summary's left edge so the first dot lines up
+         * with the baseline row's dot inside the card. Right is free
+         * so the card grows rightward within the viewport. */
+        left: 0;
+        right: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--bg-card, var(--bg-tertiary));
+        border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+        border-radius: 6px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+        z-index: 50;
+        min-width: 240px;
+        max-width: min(90vw, 360px);
+        /* Match summary's horizontal padding so the first dot in the
+         * card lines up with the first dot in the summary trigger
+         * above (8px from the badge's left edge). */
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+    .compare-badge[open] .compare-capture {
+        /* Stack: dots beside the label+name block, Load icon trailing */
+        flex-wrap: wrap;
+        gap: 6px 10px;
+    }
+    .compare-badge[open] .compare-capture + .compare-capture {
+        padding-left: 0;
+        border-left: none;
+        border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+        padding-top: 8px;
+    }
+    .compare-badge[open] .compare-capture-name {
+        max-width: none;
+        flex: 1 1 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-all;
+    }
 }
 
 /* Capture-color dots + icons. Parent-agnostic so they pick up the

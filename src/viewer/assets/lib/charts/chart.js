@@ -93,6 +93,32 @@ export class ChartsState {
     }
 }
 
+// Cheap same-shape heuristic for detecting "structurally identical"
+// data arrays. Compare-mode strategies rebuild triples/matrix arrays
+// on every Mithril redraw even when the underlying capture data hasn't
+// changed; comparing array reference alone would force a reconfigure
+// (and wipe the zoom) on every render. Sample length + first/last
+// element; if those match we treat the arrays as equivalent for the
+// purposes of triggering a re-configure. False positives just mean
+// "zoom preserved through a genuine data swap" which is still
+// recoverable via the Reset button.
+function shallowSameShape(a, b) {
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    if (a.length === 0) return true;
+    return sameHead(a[0], b[0]) && sameHead(a[a.length - 1], b[b.length - 1]);
+}
+function sameHead(a, b) {
+    if (a === b) return true;
+    if (Array.isArray(a) && Array.isArray(b)) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+    }
+    return false;
+}
+
 // Chart component - uses echarts to render a chart
 export class Chart {
     constructor(vnode) {
@@ -143,27 +169,55 @@ export class Chart {
         this.spec = vnode.attrs.spec;
         this.interval = vnode.attrs.interval;
 
-        // Re-render if data changed, format changed, or theme was toggled
+        // Re-render if data changed, format changed, or theme was toggled.
+        // A new spec.data *reference* alone isn't enough to justify a
+        // full reconfigure — compare-mode strategies rebuild the triples
+        // array on every Mithril redraw, which would otherwise wipe the
+        // echarts zoom/cursor state on the experiment slot after every
+        // tooltip / scroll / hover. Treat equal-length arrays with
+        // identical head elements as "same data" to skip the reconfigure
+        // in the common case. Theme/format changes still force it.
         const themeChanged = this._themeVersion !== themeVersion;
         const formatChanged = oldSpec.opts?.format !== this.spec.opts?.format;
-        if (this.echart && (oldSpec.data !== this.spec.data || formatChanged || themeChanged)) {
+        const dataChanged = oldSpec.data !== this.spec.data
+            && !shallowSameShape(oldSpec.data, this.spec.data);
+        if (this.echart && (dataChanged || formatChanged || themeChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 
-            // Restore zoom state after re-render (notMerge wipes dataZoom range)
-            if (themeChanged && this.chartsState.zoomLevel !== null) {
+            // Restore zoom state after re-render (notMerge wipes the
+            // dataZoom range). Applies to every reconfigure — not just
+            // theme changes — because in compare mode each Mithril
+            // redraw hands in a fresh spec object and therefore
+            // triggers a full reconfigure, which would otherwise clear
+            // the user's zoom on the non-source slot.
+            if (this.chartsState.zoomLevel !== null) {
                 const z = this.chartsState.zoomLevel;
                 if (z.start !== 0 || z.end !== 100) {
-                    this.echart.dispatchAction({
-                        type: 'dataZoom',
-                        start: z.start,
-                        end: z.end,
-                        startValue: z.startValue,
-                        endValue: z.endValue,
-                    });
+                    const p = { type: 'dataZoom' };
+                    if (z.start !== undefined && z.end !== undefined
+                        && !Number.isNaN(z.start) && !Number.isNaN(z.end)) {
+                        p.start = z.start;
+                        p.end = z.end;
+                    } else if (z.startValue !== undefined && z.endValue !== undefined) {
+                        p.startValue = z.startValue;
+                        p.endValue = z.endValue;
+                    }
+                    this.echart.dispatchAction(p);
                     this._rescaleYAxis();
                 }
             }
+            // Re-arm drag-to-zoom. applyChartOption inside
+            // configureChartByType already dispatches takeGlobalCursor,
+            // but the subsequent dataZoom restore above can leave
+            // echarts' internal cursor state in a stale position
+            // (noticeable on heatmaps, where the toolbox rectangle
+            // select stops responding). Re-arm unconditionally.
+            this.echart.dispatchAction({
+                type: 'takeGlobalCursor',
+                key: 'dataZoomSelect',
+                dataZoomSelectActive: true,
+            });
         }
     }
 
@@ -275,15 +329,18 @@ export class Chart {
 
         // Match existing zoom state.
         if (this.chartsState.zoomLevel !== null) {
-            if (this.chartsState.zoomLevel.start !== 0 || this.chartsState.zoomLevel.end !== 100) {
-                // Apply the zoom state to the new chart
-                this.echart.dispatchAction({
-                    type: 'dataZoom',
-                    start: this.chartsState.zoomLevel.start,
-                    end: this.chartsState.zoomLevel.end,
-                    startValue: this.chartsState.zoomLevel.startValue,
-                    endValue: this.chartsState.zoomLevel.endValue,
-                });
+            const z = this.chartsState.zoomLevel;
+            if (z.start !== 0 || z.end !== 100) {
+                const p = { type: 'dataZoom' };
+                if (z.start !== undefined && z.end !== undefined
+                    && !Number.isNaN(z.start) && !Number.isNaN(z.end)) {
+                    p.start = z.start;
+                    p.end = z.end;
+                } else if (z.startValue !== undefined && z.endValue !== undefined) {
+                    p.startValue = z.startValue;
+                    p.endValue = z.endValue;
+                }
+                this.echart.dispatchAction(p);
                 this._rescaleYAxis();
             }
         }
@@ -299,6 +356,46 @@ export class Chart {
             const details = event.batch[0];
 
             let { start, end, startValue, endValue } = details;
+
+            // Toolbox drag-to-zoom sometimes only emits startValue /
+            // endValue (absolute axis coords) and omits the percentage
+            // pair. Downstream code (TimeRangeBar's Match Selection,
+            // onupdate's zoom restore) relies on the percentage form,
+            // and in compare mode the absolute-coord fallback is
+            // broken because the chart axis is in relative ms but the
+            // TimeRangeBar's start_time is wall-clock ms. Derive the
+            // percentages from the chart's own time range when missing.
+            //
+            // The axis time-reference depends on chart style:
+            //   - Line compare:   multiSeries[*].timeData (rebased)
+            //   - Line single:    spec.data[0] (absolute)
+            //   - Heatmap any:    spec.time_data (matches the rendered axis)
+            // Pick the widest reference so the percentage math lines up
+            // with whatever echarts used to draw the axis.
+            if ((start === undefined || Number.isNaN(start))
+                && (end === undefined || Number.isNaN(end))
+                && startValue !== undefined
+                && endValue !== undefined) {
+                let td = this.spec.time_data;
+                if (!td && Array.isArray(this.spec.multiSeries) && this.spec.multiSeries.length > 0) {
+                    td = this.spec.multiSeries.reduce(
+                        (a, s) => (s.timeData && s.timeData.length > (a?.length || 0) ? s.timeData : a),
+                        this.spec.multiSeries[0].timeData,
+                    );
+                }
+                if (!td && Array.isArray(this.spec.data)) {
+                    td = this.spec.data[0];
+                }
+                if (td && td.length >= 2) {
+                    const axisMin = td[0] * 1000;
+                    const axisMax = td[td.length - 1] * 1000;
+                    const total = axisMax - axisMin;
+                    if (total > 0) {
+                        start = Math.max(0, Math.min(100, ((startValue - axisMin) / total) * 100));
+                        end = Math.max(0, Math.min(100, ((endValue - axisMin) / total) * 100));
+                    }
+                }
+            }
 
             // Enforce minimum zoom level (5x sample interval)
             const zoomRange = end - start;
@@ -329,14 +426,24 @@ export class Chart {
                 endValue,
             };
             this.chartsState.zoomSource = 'local';
+            // Build a dispatch payload containing only the fields that
+            // are actually defined. Passing `startValue: undefined` (or
+            // `end: undefined`) into echarts' dispatchAction clears
+            // those slots on the existing dataZoom component, which for
+            // heatmaps snaps the axis back to its data range. Pick the
+            // percentage pair when both are available; fall back to
+            // absolute values otherwise.
+            const payload = { type: 'dataZoom' };
+            if (start !== undefined && end !== undefined
+                && !Number.isNaN(start) && !Number.isNaN(end)) {
+                payload.start = start;
+                payload.end = end;
+            } else if (startValue !== undefined && endValue !== undefined) {
+                payload.startValue = startValue;
+                payload.endValue = endValue;
+            }
             this.chartsState.charts.forEach(chart => {
-                chart.dispatchAction({
-                    type: 'dataZoom',
-                    start,
-                    end,
-                    startValue,
-                    endValue,
-                });
+                chart.dispatchAction(payload);
                 chart._rescaleYAxis();
             });
             m.redraw();
@@ -392,8 +499,26 @@ export class Chart {
         // Only for chart types with a value/log Y-axis
         if (style === 'heatmap' || style === 'histogram_heatmap') return;
 
+        // In compare-mode overlays, spec.data holds only the baseline's
+        // [timeData, valueData]; the experiment values live in
+        // spec.multiSeries[1]. Collect all series' (timeData, valueData)
+        // pairs so the Y-rescale considers both captures and doesn't
+        // clip the higher-valued trace.
+        const multi = Array.isArray(this.spec.multiSeries) && this.spec.multiSeries.length > 0
+            ? this.spec.multiSeries
+            : null;
         const data = this.spec.data;
-        if (!data || data.length < 2 || !data[0] || data[0].length === 0) return;
+        const seriesPairs = multi
+            ? multi.map((s) => ({ timeData: s.timeData, valueData: s.valueData }))
+            : (data && data.length >= 2 && data[0] && data[0].length > 0
+                ? (() => {
+                    const timeData = data[0];
+                    const out = [];
+                    for (let i = 1; i < data.length; i++) out.push({ timeData, valueData: data[i] });
+                    return out;
+                })()
+                : []);
+        if (seriesPairs.length === 0) return;
 
         const format = this.spec.opts.format || {};
         const option = this.echart.getOption();
@@ -411,43 +536,47 @@ export class Chart {
             return;
         }
 
-        // Compute visible time range from zoom state
-        const timeData = data[0]; // seconds
+        // Compute visible time range from zoom state. Use the widest
+        // series' timeData as the reference (matches what line.js uses
+        // for dataZoom).
+        const refTimeData = seriesPairs.reduce(
+            (a, s) => (s.timeData.length > a.length ? s.timeData : a),
+            seriesPairs[0].timeData,
+        );
         const zoom = this.chartsState.zoomLevel;
 
         let visibleMinMs, visibleMaxMs;
         if (!zoom) {
-            // No zoom state (default view) — scan full time range
-            visibleMinMs = timeData[0] * 1000;
-            visibleMaxMs = timeData[timeData.length - 1] * 1000;
+            visibleMinMs = refTimeData[0] * 1000;
+            visibleMaxMs = refTimeData[refTimeData.length - 1] * 1000;
         } else if (zoom.startValue !== undefined && zoom.endValue !== undefined) {
             visibleMinMs = zoom.startValue;
             visibleMaxMs = zoom.endValue;
         } else {
-            const totalMinMs = timeData[0] * 1000;
-            const totalMaxMs = timeData[timeData.length - 1] * 1000;
+            const totalMinMs = refTimeData[0] * 1000;
+            const totalMaxMs = refTimeData[refTimeData.length - 1] * 1000;
             const totalRange = totalMaxMs - totalMinMs;
             visibleMinMs = totalMinMs + (zoom.start / 100) * totalRange;
             visibleMaxMs = totalMinMs + (zoom.end / 100) * totalRange;
         }
 
-        // Scan raw data for min/max Y in visible range.
-        // When percentile series are pinned, only consider pinned series.
+        // Scan each series' data for min/max Y in visible range.
+        // When percentile series are pinned, only consider pinned series
+        // (legacy spec.data path — multiSeries doesn't carry labels).
         let yMin = Infinity;
         let yMax = -Infinity;
 
-        for (let seriesIdx = 1; seriesIdx < data.length; seriesIdx++) {
-            // Skip faded (non-pinned) series so Y-axis rescales to selection
+        for (let pairIdx = 0; pairIdx < seriesPairs.length; pairIdx++) {
             if (hasPins && labels) {
-                const name = labels[seriesIdx - 1];
+                const name = labels[pairIdx];
                 if (name && !this.pinnedSet.has(name)) continue;
             }
-            const values = data[seriesIdx];
+            const { timeData, valueData } = seriesPairs[pairIdx];
             for (let i = 0; i < timeData.length; i++) {
                 const tMs = timeData[i] * 1000;
                 if (tMs < visibleMinMs) continue;
                 if (tMs > visibleMaxMs) break;
-                const y = values[i];
+                const y = valueData[i];
                 if (y !== null && y !== undefined && !isNaN(y)) {
                     if (y < yMin) yMin = y;
                     if (y > yMax) yMax = y;
