@@ -131,12 +131,23 @@ const extractExperimentCapture = (spec, promqlResult) => {
     }
 
     if (style === 'scatter') {
+        // metriken_query's histogram_percentiles labels series with
+        // `percentile` (e.g. "0.5"), not `quantile`. Fall through to any
+        // named quantile/percentile label, then to the first non-__name__
+        // label value (matches applyResultToPlot's seriesName selection
+        // for baseline). Always present as percent form ("p50", "p99.9")
+        // to match the baseline normalizer in extractBaselineCapture.
         const map = new Map();
         for (const item of results) {
-            const q = Number(item.metric && item.metric.quantile);
+            const mm = item.metric || {};
+            let raw = mm.percentile != null ? mm.percentile : mm.quantile;
+            if (raw == null) {
+                for (const [k, v] of Object.entries(mm)) {
+                    if (k !== '__name__') { raw = v; break; }
+                }
+            }
+            const q = Number(raw);
             if (!Number.isFinite(q)) continue;
-            // Always present as percent form ("p50", "p99.9") to match
-            // the baseline normalizer in extractBaselineCapture.
             const pct = q <= 1 ? q * 100 : q;
             const canonical = `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
             const values = Array.isArray(item.values) ? item.values : [];

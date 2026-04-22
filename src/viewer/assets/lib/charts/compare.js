@@ -299,9 +299,12 @@ const multiLabel = (r) => {
 };
 
 const percentileLabel = (r) => {
-    const q = Number(r.metric && r.metric.quantile);
+    const mm = (r && r.metric) || {};
+    const raw = mm.percentile != null ? mm.percentile : mm.quantile;
+    const q = Number(raw);
     if (!Number.isFinite(q)) return 'unknown';
-    return `p${(q * 100).toFixed(2).replace(/\.?0+$/, '')}`;
+    const pct = q <= 1 ? q * 100 : q;
+    return `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
 };
 
 /**
