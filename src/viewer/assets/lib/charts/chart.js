@@ -169,6 +169,17 @@ export class Chart {
                     this._rescaleYAxis();
                 }
             }
+            // Re-arm drag-to-zoom. applyChartOption inside
+            // configureChartByType already dispatches takeGlobalCursor,
+            // but the subsequent dataZoom restore above can leave
+            // echarts' internal cursor state in a stale position
+            // (noticeable on heatmaps, where the toolbox rectangle
+            // select stops responding). Re-arm unconditionally.
+            this.echart.dispatchAction({
+                type: 'takeGlobalCursor',
+                key: 'dataZoomSelect',
+                dataZoomSelectActive: true,
+            });
         }
     }
 
