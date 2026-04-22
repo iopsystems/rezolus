@@ -305,6 +305,31 @@ export class Chart {
 
             let { start, end, startValue, endValue } = details;
 
+            // Toolbox drag-to-zoom sometimes only emits startValue /
+            // endValue (absolute axis coords) and omits the percentage
+            // pair. Downstream code (TimeRangeBar's Match Selection
+            // button, onupdate's zoom restore) relies on the percentage
+            // form, and in compare mode the absolute-coord fallback is
+            // broken because the chart axis is in relative ms but the
+            // TimeRangeBar's start_time is wall-clock ms. Derive the
+            // percentages from the chart's own time range when missing.
+            if ((start === undefined || Number.isNaN(start))
+                && startValue !== undefined
+                && endValue !== undefined) {
+                const td = this.spec.time_data
+                    || (Array.isArray(this.spec.data) ? this.spec.data[0] : null);
+                if (td && td.length >= 2) {
+                    // Chart x-axis values are timeData[i] * 1000 (ms).
+                    const axisMin = td[0] * 1000;
+                    const axisMax = td[td.length - 1] * 1000;
+                    const total = axisMax - axisMin;
+                    if (total > 0) {
+                        start = Math.max(0, Math.min(100, ((startValue - axisMin) / total) * 100));
+                        end = Math.max(0, Math.min(100, ((endValue - axisMin) / total) * 100));
+                    }
+                }
+            }
+
             // Enforce minimum zoom level (5x sample interval)
             const zoomRange = end - start;
             const minZoom = this.minZoomPercent || 0.1;
