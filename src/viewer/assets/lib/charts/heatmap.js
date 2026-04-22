@@ -391,16 +391,17 @@ export function configureHeatmap(chart) {
     minLabel.textContent = formatter(sig(visualMapMin));
     maxLabel.textContent = formatter(sig(visualMapMax));
 
-    // Diff-heatmap directional caption: two small muted labels pinned
-    // under the gradient bar's left and right ends. Keeps the numeric
-    // min/max above for magnitude; the sub-labels carry the sign.
+    // Diff-heatmap directional caption: two labels pinned above the
+    // gradient bar's left and right ends. Uses fg-secondary (not muted)
+    // so the directional signal reads clearly; the numeric min/max
+    // below the bar still carry magnitude.
     const diffLabels = chart.spec.diffLegendLabels;
     if (diffLabels) {
         let sub = chart.domNode.querySelector('.heatmap-diff-sublabels');
         if (!sub) {
             sub = document.createElement('div');
             sub.className = 'heatmap-diff-sublabels';
-            sub.style.cssText = `${FONTS.cssFootnote} position: absolute; top: 64px; right: 4px; width: 144px; display: flex; justify-content: space-between; color: ${COLORS.fgMuted}; font-size: 10px; pointer-events: none; z-index: 10;`;
+            sub.style.cssText = `${FONTS.cssFootnote} position: absolute; top: 32px; right: 4px; width: 144px; display: flex; justify-content: space-between; color: ${COLORS.fgSecondary}; font-size: 10px; pointer-events: none; z-index: 10;`;
             const leftEl = document.createElement('span');
             leftEl.className = 'heatmap-diff-sublabel-left';
             const rightEl = document.createElement('span');
