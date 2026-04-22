@@ -3200,7 +3200,7 @@ main {
     left: 12px;
     font-size: 12px;
     font-weight: 600;
-    color: var(--fg-secondary, #444);
+    color: var(--fg-secondary);
     letter-spacing: 0.02em;
     pointer-events: none;
     z-index: 1;
@@ -3242,7 +3242,7 @@ main {
     left: 12px;
     font-size: 12px;
     font-weight: 600;
-    color: var(--fg-secondary, #444);
+    color: var(--fg-secondary);
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
     pointer-events: none;
@@ -3354,11 +3354,11 @@ main {
 }
 .compare-badge .compare-capture + .compare-capture {
     padding-left: 12px;
-    border-left: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+    border-left: 1px solid var(--border-subtle);
 }
 .compare-badge .compare-dot { font-size: 10px; line-height: 1; }
 .compare-badge .compare-capture-label {
-    color: var(--fg-muted, #888);
+    color: var(--fg-muted);
     letter-spacing: 0.02em;
 }
 .compare-badge .compare-capture-name {
@@ -3382,7 +3382,7 @@ main {
 }
 .compare-badge .compare-load svg { display: block; }
 .compare-badge .compare-load:hover {
-    background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+    background: var(--bg-card-hover);
 }
 
 /* Narrow-viewport layout: collapse the badge into a dot-only trigger,
@@ -3415,8 +3415,8 @@ main {
         align-items: stretch;
         gap: 8px;
         padding: 10px 12px;
-        background: var(--bg-card, var(--bg-tertiary));
-        border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
         border-radius: 6px;
         box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
         z-index: 50;
@@ -3436,7 +3436,7 @@ main {
     .compare-badge[open] .compare-capture + .compare-capture {
         padding-left: 0;
         border-left: none;
-        border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+        border-top: 1px solid var(--border-subtle);
         padding-top: 8px;
     }
     .compare-badge[open] .compare-capture-name {
@@ -3476,7 +3476,7 @@ main {
     margin: 0;
     text-align: center;
     font-size: 14px;
-    color: var(--fg-muted, #888);
+    color: var(--fg-muted);
 }
 .landing-dual .upload-dropzone.disabled {
     opacity: 0.6;
