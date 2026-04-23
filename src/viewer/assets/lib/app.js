@@ -385,6 +385,18 @@ const SectionContent = {
                 const isDefault = gz.start === 0 && gz.end === 100;
                 chartsState.setZoom(gz, { source: isDefault ? null : 'global' });
             }
+            // Re-apply the current zoom to whichever charts are
+            // registered after the new section's mount + echart init
+            // settles. Chart.initEchart already tries to apply on its
+            // own when it runs, but its IntersectionObserver is async,
+            // compare-mode experiment queries are async, and the order
+            // isn't guaranteed relative to Mithril's redraw cadence —
+            // deferring a replay here ensures the new charts show the
+            // zoom the user had in the old section. Idempotent, so
+            // wasted calls against already-synced charts are harmless.
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => chartsState.replayZoom());
+            });
         }
 
         if (sectionName === 'Query Explorer') {

@@ -102,12 +102,6 @@ export class ChartsState {
      */
     setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
         const next = normalizeZoom(zoom);
-        if (window.location.search.includes('zoomdbg')) {
-            console.log('[setZoom]', 'proposed=', zoom,
-                'next=', next, 'current=', this.zoomLevel,
-                'source=', source, 'origin=', originChart?.chartId,
-                'trace=', new Error().stack?.split('\n').slice(1, 5).join(' | '));
-        }
         if (zoomEqual(this.zoomLevel, next)) return false;
         this.zoomLevel = next;
         this.zoomSource = source;
@@ -134,6 +128,22 @@ export class ChartsState {
     // notification rather than an ad-hoc forEach dispatch.
     resetZoom() {
         this.setZoom({ start: 0, end: 100 }, { source: 'global' });
+    }
+
+    /**
+     * Re-apply the current zoomLevel to every registered chart
+     * without changing state. Zoom application is idempotent (diff in
+     * setZoom, same on echart.dispatchAction), so this is safe to call
+     * any time a set of charts may have mounted out of sync with the
+     * store — most importantly on section switch, where the new
+     * section's charts mount fresh and need the current zoom written
+     * onto their echart instances. Cheap no-op when zoomLevel is null.
+     */
+    replayZoom() {
+        const z = this.zoomLevel;
+        this.charts.forEach(chart => {
+            if (chart._applyZoom) chart._applyZoom(z);
+        });
     }
 
     /**
