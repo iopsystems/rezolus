@@ -169,13 +169,24 @@ export class ChartsState {
 
     /**
      * The single writer for `pinnedLabels`. Diffs against the current
-     * set; on no-op returns false without notifying. On a change,
-     * writes a fresh clone and notifies every subscriber.
+     * set; on no-op returns false. On a change, stores a fresh clone,
+     * fans out to every registered chart by calling its `_applyPins`
+     * method (when defined — only scatter charts respond), skipping
+     * `originChart` if supplied. Non-chart subscribers registered via
+     * subscribePins are then notified.
+     *
+     * Symmetric with setZoom: charts Map is the primary fan-out
+     * channel; `_pinSubs` is the secondary API for future non-chart
+     * consumers.
      */
-    setPins(labels) {
+    setPins(labels, { originChart = null } = {}) {
         const next = labels instanceof Set ? new Set(labels) : new Set(labels ?? []);
         if (setsEqual(this.pinnedLabels, next)) return false;
         this.pinnedLabels = next;
+        this.charts.forEach(chart => {
+            if (chart === originChart) return;
+            if (chart._applyPins) chart._applyPins(this.pinnedLabels);
+        });
         for (const fn of this._pinSubs) fn(this.pinnedLabels);
         return true;
     }

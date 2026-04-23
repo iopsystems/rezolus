@@ -264,26 +264,21 @@ export function configureScatterChart(chart) {
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     chart.domNode.addEventListener('mousedown', onMouseDown, true);
-    // Subscribe to cross-chart pin changes. The callback re-derives
-    // our local `chart.pinnedSet` as the intersection of the global
-    // pinned labels and our own series names, then rebuilds the
-    // pinned visual state. setPins' diff guard means a pin click in
-    // one scatter doesn't echo back to us as a separate no-op write.
-    const unsubPins = chart.chartsState.subscribePins((globalPins) => {
-        chart.pinnedSet = intersectPins(globalPins, uniqueNames);
-        applyPinState();
-        chart._rescaleYAxis();
-    });
     chart._pinCleanup = () => {
         document.removeEventListener('keydown', onKeyDown);
         document.removeEventListener('keyup', onKeyUp);
         chart.domNode.removeEventListener('mousedown', onMouseDown, true);
-        unsubPins();
+        // Drop the chart-side pin applicator on teardown so setPins'
+        // fan-out skips this chart after it's been destroyed or is
+        // about to reconfigure.
+        chart._applyPins = null;
     };
 
-    // Seed the derived local set from the current global labels, in
-    // case this chart is mounting into a section that already has
-    // pins active (e.g. compare-mode redraw, route reload, etc.).
+    // Seed the derived local set from the current global labels so
+    // tooltip formatters / Y-axis rescale see a valid Set even before
+    // the user's first pin. Compare-mode redraws and route reloads
+    // may also mount this chart while pinnedLabels is already
+    // populated.
     chart.pinnedSet = intersectPins(chart.chartsState.pinnedLabels, uniqueNames);
 
     const applyPinState = () => {
@@ -340,6 +335,18 @@ export function configureScatterChart(chart) {
         chart.echart.setOption({ series: updatedSeries, legend: legendUpdate });
     };
 
+    // chart._applyPins is scatter's end of the setPins observable —
+    // the direct counterpart to _applyZoom for zoom. ChartsState's
+    // charts.forEach fan-out invokes it when the global pin set
+    // changes. Closes over series/legend machinery from this
+    // configure call; reconfigures replace it via _pinCleanup →
+    // this reassignment.
+    chart._applyPins = (globalPins) => {
+        chart.pinnedSet = intersectPins(globalPins, uniqueNames);
+        applyPinState();
+        chart._rescaleYAxis();
+    };
+
     // Remove any previously stacked handler before adding a new one
     chart.echart.off('legendselectchanged');
     chart.echart.on('legendselectchanged', (params) => {
@@ -349,11 +356,13 @@ export function configureScatterChart(chart) {
         chart.echart.setOption({ legend: { selected } });
 
         // Compute the next global pin set based on the gesture, then
-        // route through chartsState.setPins. The subscription above
-        // fires back synchronously to update this chart's visual
-        // state; every other scatter chart in the section gets the
-        // same notification and pins/unpins the same label in
-        // lock-step when they carry it.
+        // route through chartsState.setPins with `this` as the
+        // origin. setPins fans out to every OTHER chart's _applyPins
+        // (via the charts registry, matching setZoom's shape); we
+        // update our own visual state directly after so the active
+        // chart never double-renders. Every other scatter chart in
+        // the section that carries the same label pins/unpins in
+        // lock-step.
         const name = params.name;
         const current = chart.chartsState.pinnedLabels;
         const next = new Set(current);
@@ -366,7 +375,12 @@ export function configureScatterChart(chart) {
             if (next.size === 1 && next.has(name)) next.clear();
             else { next.clear(); next.add(name); }
         }
-        chart.chartsState.setPins(next);
+        const changed = chart.chartsState.setPins(next, { originChart: chart });
+        if (changed) {
+            // Apply our own visual state locally — setPins skipped us
+            // because we're the origin (same semantics as setZoom).
+            chart._applyPins(chart.chartsState.pinnedLabels);
+        }
     });
 
     // Initial mount: if the section already carries pinned labels
