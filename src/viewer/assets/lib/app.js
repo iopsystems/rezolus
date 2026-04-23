@@ -296,8 +296,11 @@ const changeGranularity = async (step) => {
         delete sectionResponseCache[key];
     }
     heatmapDataCache.clear();
-    chartsState.zoomLevel = null;
-    chartsState.zoomSource = null;
+    // Route zoom clear through the observable setter so any charts
+    // that are still alive at this point (explorers etc.) see the
+    // reset via their subscription — setZoom accepts null as "no
+    // zoom" and notifies subscribers with it.
+    chartsState.setZoom(null, { source: null });
     chartsState.globalZoom = null;
 
     // Data sections refetch themselves; client-only sections (Selection,
@@ -373,11 +376,27 @@ const SectionContent = {
 
         if (sectionRoute !== activeSectionRoute) {
             activeSectionRoute = sectionRoute;
+            // When leaving a section with a local chart zoom, snap back
+            // to the most recent global zoom. Route through setZoom so
+            // the new section's charts (freshly mounted, freshly
+            // subscribed) also see the snap via their subscription.
             if (chartsState.zoomSource === 'local') {
                 const gz = chartsState.globalZoom || { start: 0, end: 100 };
-                chartsState.zoomLevel = gz;
-                chartsState.zoomSource = gz.start === 0 && gz.end === 100 ? null : 'global';
+                const isDefault = gz.start === 0 && gz.end === 100;
+                chartsState.setZoom(gz, { source: isDefault ? null : 'global' });
             }
+            // Re-apply the current zoom to whichever charts are
+            // registered after the new section's mount + echart init
+            // settles. Chart.initEchart already tries to apply on its
+            // own when it runs, but its IntersectionObserver is async,
+            // compare-mode experiment queries are async, and the order
+            // isn't guaranteed relative to Mithril's redraw cadence —
+            // deferring a replay here ensures the new charts show the
+            // zoom the user had in the old section. Idempotent, so
+            // wasted calls against already-synced charts are harmless.
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => chartsState.replayZoom());
+            });
         }
 
         if (sectionName === 'Query Explorer') {

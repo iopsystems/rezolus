@@ -461,18 +461,9 @@ const chartLoaderMixin = (store, component) => ({
     _applyZoom(attrs) {
         if (!this._zoomApplied && !this.loading && store.zoom && attrs.chartsState) {
             this._zoomApplied = true;
-            const z = store.zoom;
-            attrs.chartsState.zoomLevel = z;
-            attrs.chartsState.zoomSource = 'global';
-            attrs.chartsState.charts.forEach(chart => {
-                chart.dispatchAction({
-                    type: 'dataZoom',
-                    start: z.start,
-                    end: z.end,
-                    startValue: z.startValue,
-                    endValue: z.endValue,
-                });
-            });
+            // Single-writer path: setZoom updates state and fans out
+            // to every chart's zoom subscriber. No local forEach.
+            attrs.chartsState.setZoom(store.zoom, { source: 'global' });
         }
     },
 });

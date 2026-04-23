@@ -85,13 +85,10 @@ const TimeRangeBar = {
             if (end - start < 0.5) return;
             vnode.state.barStart = start;
             vnode.state.barEnd = end;
-            chartsState.zoomLevel = { start, end };
-            chartsState.zoomSource = 'global';
-            chartsState.globalZoom = { start, end };
-            chartsState.charts.forEach(chart => {
-                chart.dispatchAction({ type: 'dataZoom', start, end });
-                chart._rescaleYAxis();
-            });
+            // The single writer. setZoom writes zoomLevel/zoomSource/
+            // globalZoom atomically and notifies every chart's zoom
+            // subscriber; no need for a local forEach dispatch here.
+            chartsState.setZoom({ start, end }, { source: 'global' });
             m.redraw();
         };
 
