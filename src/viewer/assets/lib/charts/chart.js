@@ -102,6 +102,17 @@ export class ChartsState {
      */
     setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
         const next = normalizeZoom(zoom);
+        if (window.location.search.includes('zoomdbg')) {
+            const stack = new Error().stack?.split('\n').slice(2, 6).map(s => s.trim()).join(' ← ');
+            console.log('[setZoom]',
+                'new=', JSON.stringify(next),
+                'was=', JSON.stringify(this.zoomLevel),
+                'globalWas=', JSON.stringify(this.globalZoom),
+                'srcWas=', this.zoomSource,
+                'srcNew=', source,
+                'origin=', originChart?.chartId ?? '—',
+                '\n  ← ' + stack);
+        }
         if (zoomEqual(this.zoomLevel, next)) return false;
         this.zoomLevel = next;
         this.zoomSource = source;
@@ -109,6 +120,9 @@ export class ChartsState {
             this.globalZoom = next == null
                 ? null
                 : { start: next.start ?? 0, end: next.end ?? 100 };
+            if (window.location.search.includes('zoomdbg')) {
+                console.log('  → globalZoom written to', JSON.stringify(this.globalZoom));
+            }
         }
         // Fan out via the chart registry directly. Skip the origin
         // chart (when provided) because its toolbox already applied
