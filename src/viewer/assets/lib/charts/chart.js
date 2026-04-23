@@ -416,7 +416,22 @@ export class Chart {
             // No usable zoom info — nothing to apply.
             return;
         }
-        this.echart.dispatchAction(payload);
+        // Suppress zoom-event propagation for the duration of this
+        // dispatch. dispatchAction synchronously fires a 'datazoom'
+        // event on our echart, and for heatmap charts that triggers
+        // heatmap.js's downsample-swap listener which calls setOption
+        // — THAT can synchronously fire a SECOND datazoom event with
+        // a full-range batch payload. Without suppression, that
+        // second event re-enters our handler, calls setZoom with
+        // {0,100}, and clobbers zoomLevel + fans out a reset to
+        // every sibling. The flag makes every inner datazoom event
+        // a no-op regardless of payload shape.
+        this._suppressZoomEvents = true;
+        try {
+            this.echart.dispatchAction(payload);
+        } finally {
+            this._suppressZoomEvents = false;
+        }
         this._rescaleYAxis();
     }
 
