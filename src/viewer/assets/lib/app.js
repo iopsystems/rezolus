@@ -300,10 +300,6 @@ const changeGranularity = async (step) => {
     // that are still alive at this point (explorers etc.) see the
     // reset via their subscription — setZoom accepts null as "no
     // zoom" and notifies subscribers with it.
-    if (window.location.search.includes('zoomdbg')) {
-        console.log('[globalZoom=null @ clearViewerCaches] stack=',
-            new Error().stack?.split('\n').slice(2, 6).map(s => s.trim()).join(' ← '));
-    }
     chartsState.setZoom(null, { source: null });
     chartsState.globalZoom = null;
 

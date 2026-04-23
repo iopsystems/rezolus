@@ -102,37 +102,33 @@ export class ChartsState {
      */
     setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
         const next = normalizeZoom(zoom);
-        if (window.location.search.includes('zoomdbg')) {
-            const stack = new Error().stack?.split('\n').slice(2, 6).map(s => s.trim()).join(' ← ');
-            console.log('[setZoom]',
-                'new=', JSON.stringify(next),
-                'was=', JSON.stringify(this.zoomLevel),
-                'globalWas=', JSON.stringify(this.globalZoom),
-                'srcWas=', this.zoomSource,
-                'srcNew=', source,
-                'origin=', originChart?.chartId ?? '—',
-                '\n  ← ' + stack);
-        }
-        if (zoomEqual(this.zoomLevel, next)) return false;
+        const zoomLevelChanged = !zoomEqual(this.zoomLevel, next);
+        const sourceChanged = source !== this.zoomSource;
+        // Bail only if NEITHER the zoom value NOR the source changed.
+        // A pure source promotion (e.g. Match Selection taking a local
+        // chart zoom to 'global') must go through so globalZoom is
+        // written — even though the percentages match what the local
+        // zoom already recorded. zoomEqual alone was bailing on that
+        // case, leaving globalZoom=null and desyncing TimeRangeBar +
+        // the section-switch snap branch.
+        if (!zoomLevelChanged && !sourceChanged) return false;
         this.zoomLevel = next;
         this.zoomSource = source;
         if (source === 'global') {
             this.globalZoom = next == null
                 ? null
                 : { start: next.start ?? 0, end: next.end ?? 100 };
-            if (window.location.search.includes('zoomdbg')) {
-                console.log('  → globalZoom written to', JSON.stringify(this.globalZoom));
-            }
         }
-        // Fan out via the chart registry directly. Skip the origin
-        // chart (when provided) because its toolbox already applied
-        // the zoom before firing the datazoom event that led us here;
-        // re-dispatching to self cascades through heatmap.js's
-        // downsample-swap setOption.
-        this.charts.forEach(chart => {
-            if (chart === originChart) return;
-            if (chart._applyZoom) chart._applyZoom(this.zoomLevel);
-        });
+        // Fan-out only when the zoom value actually changed. On a
+        // pure source promotion, every chart is already at this zoom
+        // and re-dispatching would be a wasted round-trip through
+        // every echart + downsample handler.
+        if (zoomLevelChanged) {
+            this.charts.forEach(chart => {
+                if (chart === originChart) return;
+                if (chart._applyZoom) chart._applyZoom(this.zoomLevel);
+            });
+        }
         for (const fn of this._zoomSubs) fn(this.zoomLevel, this.zoomSource);
         return true;
     }
