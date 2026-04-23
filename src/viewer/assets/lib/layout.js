@@ -57,32 +57,42 @@ const TopNav = {
             // filenames stay visible so the user can see which captures
             // are being compared.
             compareMode && (() => {
+                const baselineLabel = attrs.baselineAlias || 'baseline';
+                const experimentLabel = attrs.experimentAlias || 'experiment';
                 const row = (cls, label, fname, onLoad) => m('div.compare-capture', [
-                    m(`span.compare-dot.${cls}`, '\u25CF'),
-                    m('span.compare-capture-label', label),
-                    m('span.compare-capture-name', {
-                        title: fname || 'No file loaded',
-                    }, fname || '—'),
+                    m('div.compare-capture-info', [
+                        m('div.compare-capture-head', [
+                            m(`span.compare-dot.${cls}`, '\u25CF'),
+                            m('span.compare-capture-label', label),
+                        ]),
+                        m('div.compare-capture-name', {
+                            title: fname || 'No file loaded',
+                        }, fname || '—'),
+                    ]),
                     onLoad && m(`button.compare-load.${cls}`, {
                         onclick: openParquetPicker(onLoad),
                         title: `Replace ${label} parquet`,
                     }, m.trust(UPLOAD_ICON_SVG)),
                 ]);
-                // <details> wraps both views: on wide viewports CSS hides
-                // the <summary> and always renders the rows inline (via
-                // :not([open]) override). On narrow viewports, the
-                // summary becomes a compact swatch-only trigger; clicking
-                // opens the rows as an absolute-positioned dropdown card.
+                // Summary (always visible): dot + label for each capture.
+                // Filenames live in the dropdown card — their lengths are
+                // unpredictable and would crowd the navbar.
                 return m('details.compare-badge', [
                     m('summary.compare-badge-summary', {
-                        title: 'Show baseline / experiment details',
+                        title: `Show ${baselineLabel} / ${experimentLabel} details`,
                     }, [
-                        m('span.compare-dot.compare-baseline-dot', '\u25CF'),
-                        m('span.compare-dot.compare-experiment-dot', '\u25CF'),
+                        m('span.compare-badge-chip', [
+                            m('span.compare-dot.compare-baseline-dot', '\u25CF'),
+                            m('span.compare-badge-label', baselineLabel),
+                        ]),
+                        m('span.compare-badge-chip', [
+                            m('span.compare-dot.compare-experiment-dot', '\u25CF'),
+                            m('span.compare-badge-label', experimentLabel),
+                        ]),
                     ]),
                     m('div.compare-capture-list', [
-                        row('compare-baseline-dot', 'baseline', attrs.filename, attrs.onLoadBaseline),
-                        row('compare-experiment-dot', 'experiment', attrs.experimentFilename, attrs.onLoadExperiment),
+                        row('compare-baseline-dot', baselineLabel, attrs.filename, attrs.onLoadBaseline),
+                        row('compare-experiment-dot', experimentLabel, attrs.experimentFilename, attrs.onLoadExperiment),
                     ]),
                 ]);
             })(),
@@ -166,6 +176,7 @@ const TopNav = {
                     end_time: attrs.end_time,
                     chartsState: attrs.chartsState,
                     compareMode: !!attrs.compareMode,
+                    baselineAlias: attrs.baselineAlias,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
             // Granularity (step) selector

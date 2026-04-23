@@ -184,6 +184,17 @@ export class Viewer {
         return v1;
     }
     /**
+     * Set or clear the display alias for this capture. Pass `None`
+     * (via JS passing `null`/`undefined`) to clear. Cheap — just a
+     * field assignment.
+     * @param {string | null} [alias]
+     */
+    set_alias(alias) {
+        var ptr0 = isLikeNone(alias) ? 0 : passStringToWasm0(alias, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len0 = WASM_VECTOR_LEN;
+        wasm.viewer_set_alias(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * Returns systeminfo JSON from parquet file metadata.
      *
      * For multi-node combined files (>1 node in per_source_metadata), returns
@@ -453,6 +464,22 @@ export class WasmCaptureRegistry {
         return v2;
     }
     /**
+     * Set or clear the display alias for a capture slot. No-op when
+     * the slot is empty.
+     * @param {string} capture
+     * @param {string | null} [alias]
+     */
+    set_alias(capture, alias) {
+        const ptr0 = passStringToWasm0(capture, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(alias) ? 0 : passStringToWasm0(alias, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_set_alias(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @param {string} capture
      * @returns {string | undefined}
      */
@@ -548,6 +575,10 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
 }
 
 function passArray8ToWasm0(arg, malloc) {

@@ -16,6 +16,7 @@ let fileChecksum = null;
 let fileMetadata = null;
 let selectionPayload = null;
 let liveMode = false;
+let baselineAlias = null;
 
 const fetchBackendState = async () => {
     const [metaResult, sysResult, selResult, fmResult] = await Promise.allSettled([
@@ -28,6 +29,11 @@ const fetchBackendState = async () => {
         const r = metaResult.value;
         if (r.status === 'success' && r.data?.fileChecksum) {
             fileChecksum = r.data.fileChecksum;
+        }
+        // Display alias carried in /api/v1/metadata response when the
+        // CLI was launched with `alias=path`. Absent field = no alias.
+        if (r.status === 'success' && r.data?.alias) {
+            baselineAlias = r.data.alias;
         }
     }
     if (sysResult.status === 'fulfilled') {
@@ -260,6 +266,7 @@ const bootstrap = async () => {
     let experimentSystemInfo = null;
     let experimentFileMetadata = null;
     let experimentFilename = null;
+    let experimentAlias = null;
     let experimentQueryRange = null;
     if (compareMode) {
         const [sysinfo, fileMeta, expMeta] = await Promise.all([
@@ -270,6 +277,7 @@ const bootstrap = async () => {
         experimentSystemInfo = sysinfo;
         experimentFileMetadata = fileMeta;
         experimentFilename = expMeta?.data?.filename || null;
+        experimentAlias = expMeta?.data?.alias || null;
         const data = expMeta?.data ?? expMeta;
         const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
         const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
@@ -293,9 +301,11 @@ const bootstrap = async () => {
         selectionPayload,
         liveMode,
         compareMode,
+        baselineAlias,
         experimentSystemInfo,
         experimentFileMetadata,
         experimentFilename,
+        experimentAlias,
         experimentQueryRange,
         recording: true,
         onStartRecording: startRecording,

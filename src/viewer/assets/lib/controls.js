@@ -231,8 +231,9 @@ const TimeRangeBar = {
             // In compare mode, render labels as relative offsets from the
             // recording's start; suppress the date prefix entirely.
             if (vnode.attrs.compareMode) {
+                const baselineLabel = vnode.attrs.baselineAlias || 'baseline';
                 return m('span.time-label', {
-                    title: 'Relative to baseline start',
+                    title: `Relative to ${baselineLabel} start`,
                 }, formatRelative(ms - startTime));
             }
             return m('span.time-label', {

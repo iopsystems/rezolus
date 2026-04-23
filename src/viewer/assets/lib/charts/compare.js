@@ -98,6 +98,11 @@ export const renderCompareChart = (opts) => {
 // Returns a new array; never mutates the input.
 const rebase = (timeDataSec, anchorSec) => timeDataSec.map((t) => t - anchorSec);
 
+// Display label for a capture id. `captureLabels` comes from the app
+// state via getState(); absent entries fall back to the identifier so
+// the UI stays readable when no alias is set.
+const labelFor = (captureLabels, id) => (captureLabels && captureLabels[id]) || id;
+
 // The per-capture anchor in seconds. Each capture's effective anchor is
 // the capture's natural start (first sample) plus a user-configured
 // offset. `anchors[id]` is stored as a signed ms offset from that start
@@ -119,7 +124,7 @@ const anchorSecondsFor = (anchors, id, timeDataSec) => {
  * already understands. Falls back to returning `false` when either
  * capture is unusable — the caller can then render baseline-only.
  */
-const overlayLine = ({ spec, captures, anchors }) => {
+const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
     const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
     const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline || !experiment) return false;
@@ -130,7 +135,7 @@ const overlayLine = ({ spec, captures, anchors }) => {
     const seriesList = [];
     if (Array.isArray(baseline.timeData) && baseline.timeData.length > 0) {
         seriesList.push({
-            name: CAPTURE_BASELINE,
+            name: labelFor(captureLabels, CAPTURE_BASELINE),
             color: BASELINE_COLOR,
             timeData: rebase(baseline.timeData, baseSec),
             valueData: baseline.valueData || [],
@@ -139,7 +144,7 @@ const overlayLine = ({ spec, captures, anchors }) => {
     }
     if (Array.isArray(experiment.timeData) && experiment.timeData.length > 0) {
         seriesList.push({
-            name: CAPTURE_EXPERIMENT,
+            name: labelFor(captureLabels, CAPTURE_EXPERIMENT),
             color: EXPERIMENT_COLOR,
             timeData: rebase(experiment.timeData, expSec),
             valueData: experiment.valueData || [],
@@ -167,7 +172,7 @@ const overlayLine = ({ spec, captures, anchors }) => {
 // with a unified color domain. `styleOverride` swaps the per-slot
 // `opts.style`; `extraSlotFields(cap)` contributes additional
 // top-level spec fields (e.g. bucket_bounds for histogram heatmaps).
-const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart, styleOverride, extraSlotFields }) => {
+const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels, styleOverride, extraSlotFields }) => {
     const [a, b] = captures;
     // Unify color domain across both slots: same visualMap min/max so a
     // cell of equal intensity reads the same color on both sides.
@@ -178,10 +183,12 @@ const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart,
         // Per-slot id: Chart registers itself in chartsState.charts
         // keyed by opts.id. Without this suffix both slots collide
         // under the same key and datazoom only dispatches to one.
+        // Internal id stays identifier-based; only the visible title uses
+        // the alias.
         const opts = {
             ...spec.opts,
             id: `${spec.opts.id || 'chart'}::${cap.id}`,
-            title: `${spec.opts.title} — ${cap.id}`,
+            title: `${spec.opts.title} — ${labelFor(captureLabels, cap.id)}`,
         };
         if (styleOverride) opts.style = styleOverride;
         return {
@@ -199,7 +206,7 @@ const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart,
     const slot = (cap, dotCls) => m('div.compare-slot', [
         m('div.compare-slot-label', [
             m(`span.compare-dot.${dotCls}`, '\u25CF'),
-            m('span', cap.id),
+            m('span', labelFor(captureLabels, cap.id)),
         ]),
         m(Chart, { spec: makeSlotSpec(cap), chartsState, interval }),
     ]);
@@ -212,13 +219,13 @@ const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart,
     };
 };
 
-const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, interval, Chart }) => {
+const sideBySideHeatmap = ({ spec, captures, anchors, toggles, chartsState, interval, Chart, captureLabels }) => {
     const chartId = spec?.opts?.id;
     const diffMode = !!(toggles && chartId && toggles[chartId] && toggles[chartId].diff);
     if (diffMode) {
-        return renderDiffHeatmap({ spec, captures, anchors, chartsState, interval, Chart });
+        return renderDiffHeatmap({ spec, captures, anchors, chartsState, interval, Chart, captureLabels });
     }
-    return sideBySidePair({ spec, captures, anchors, chartsState, interval, Chart });
+    return sideBySidePair({ spec, captures, anchors, chartsState, interval, Chart, captureLabels });
 };
 
 // Unified (min, max) across both captures for the shared visualMap.
@@ -254,7 +261,7 @@ const unifiedHeatmapRange = (a, b, spec) => {
  * null-valued triples so the null-cell color path in heatmap.js can
  * paint them.
  */
-const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart }) => {
+const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
     const [a, b] = captures;
     const aMatrix = a.heatmapMatrix || null;
     const bMatrix = b.heatmapMatrix || null;
@@ -319,9 +326,12 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     const basePalette = isDark ? DIVERGING_BLUE_GREEN_DARK : DIVERGING_BLUE_GREEN;
     const resampledPalette = resampleDivergingForRange(basePalette, dMin, dMax);
 
+    const baselineLabel = labelFor(captureLabels, CAPTURE_BASELINE);
+    const experimentLabel = labelFor(captureLabels, CAPTURE_EXPERIMENT);
+
     const diffSpec = {
         ...spec,
-        opts: { ...spec.opts, title: `${spec.opts.title} (experiment − baseline)` },
+        opts: { ...spec.opts, title: `${spec.opts.title} (${experimentLabel} − ${baselineLabel})` },
         time_data: rebase(timeData, baselineAnchorSec),
         data: triples,
         min_value: dMin,
@@ -331,11 +341,12 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         // Directional caption under the gradient bar. The numeric min/max
         // labels still show the actual (experiment − baseline) extremes;
         // these labels make the directionality unambiguous at a glance.
-        diffLegendLabels: { left: 'base is higher', right: 'exp is higher' },
+        diffLegendLabels: { left: `${baselineLabel} is higher`, right: `${experimentLabel} is higher` },
         // Side-channel so heatmap.js's tooltip can show the original
         // baseline + experiment values for a hovered cell instead of the
         // computed delta. Indexed as matrix[row][bin].
         diffMatrices: { baseline: aMatrix, experiment: bMatrix },
+        diffCaptureLabels: { baseline: baselineLabel, experiment: experimentLabel },
         xAxisFormatter: relativeTimeFormatter,
     };
 
@@ -349,8 +360,8 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
  * Split a `multi` chart (e.g. per-CPU, per-cgroup line) into one overlay
  * line chart per shared label.
  */
-const splitMultiToSubgroup = ({ spec, captures, anchors }) =>
-    splitIntoOverlayLines({ spec, captures, anchors, labelFor: multiLabel });
+const splitMultiToSubgroup = ({ spec, captures, anchors, captureLabels }) =>
+    splitIntoOverlayLines({ spec, captures, anchors, captureLabels, labelFor: multiLabel });
 
 /**
  * Split a `scatter` chart (histogram percentiles) into one overlay
@@ -358,12 +369,12 @@ const splitMultiToSubgroup = ({ spec, captures, anchors }) =>
  * naturally discrete samples, not continuous measurements — points
  * read more honestly than a connecting line suggests.
  */
-const splitScatterToSubgroup = ({ spec, captures, anchors }) =>
+const splitScatterToSubgroup = ({ spec, captures, anchors, captureLabels }) =>
     splitIntoOverlayLines({
-        spec, captures, anchors, labelFor: percentileLabel, seriesType: 'scatter',
+        spec, captures, anchors, captureLabels, labelFor: percentileLabel, seriesType: 'scatter',
     });
 
-const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor, seriesType = 'line' }) => {
+const splitIntoOverlayLines = ({ spec, captures, anchors, captureLabels, labelFor: _labelFor, seriesType = 'line' }) => {
     const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
     const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline || !experiment) return FALLBACK;
@@ -394,7 +405,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor, s
             _splitLabel: label,
             multiSeries: [
                 {
-                    name: CAPTURE_BASELINE,
+                    name: labelFor(captureLabels, CAPTURE_BASELINE),
                     color: BASELINE_COLOR,
                     timeData: rebase(a.timeData, baseSec),
                     valueData: a.valueData,
@@ -402,7 +413,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, labelFor: _labelFor, s
                     scatter: asScatter,
                 },
                 {
-                    name: CAPTURE_EXPERIMENT,
+                    name: labelFor(captureLabels, CAPTURE_EXPERIMENT),
                     color: EXPERIMENT_COLOR,
                     timeData: rebase(b.timeData, expSec),
                     valueData: b.valueData,

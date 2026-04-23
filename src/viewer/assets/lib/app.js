@@ -50,6 +50,15 @@ let experimentFilename = null;
 let experimentQueryRange = null;
 export const getExperimentQueryRange = () => experimentQueryRange;
 
+// Optional display aliases for the two captures, threaded in via
+// initDashboard when the CLI was launched with `alias=path` or the
+// static-site WASM Viewer had set_alias() called on it. null means
+// "no alias set, UI falls back to the capture id (baseline / experiment)".
+let baselineAlias = null;
+let experimentAlias = null;
+export const getBaselineAlias = () => baselineAlias;
+export const getExperimentAlias = () => experimentAlias;
+
 // Compare-mode per-chart toggles + anchors live in `selectionStore` so
 // they persist across page reloads. See selection_migration.js for the
 // schema. The accessors below read-through to the store.
@@ -79,6 +88,8 @@ const initComponents = () => {
         setChartToggle,
         anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
         experimentQueryRange,
+        baselineAlias,
+        experimentAlias,
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -138,6 +149,7 @@ const attachExperiment = async (file) => {
         || (file && file.name)
         || (expFileMeta && (expFileMeta.filename || expFileMeta.file_name))
         || null;
+    experimentAlias = expMeta?.data?.alias || null;
     experimentAttached = true;
     compareMode = true;
 
@@ -162,6 +174,7 @@ const detachExperiment = async () => {
     experimentDurationMs = null;
     experimentFilename = null;
     experimentQueryRange = null;
+    experimentAlias = null;
     experimentAttached = false;
     compareMode = false;
     m.redraw();
@@ -358,10 +371,15 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onNodeChange: changeNode,
     extra: {
         // Default compare state so TopNav renders the badge in every
-        // code path (Main.view, single-chart route). Callers may
-        // override via their own `extra`.
+        // code path (Main.view, single-chart route, service route).
+        // Callers may override via their own `extra`.
         compareMode,
         onDetachExperiment: compareMode ? () => { detachExperiment(); } : null,
+        experimentFilename,
+        baselineAlias,
+        experimentAlias,
+        onLoadBaseline: onUploadParquet ? (file) => onUploadParquet(file) : null,
+        onLoadExperiment: onUploadParquet ? (file) => { loadExperiment(file); } : null,
         ...(extra || {}),
     },
 });
@@ -551,6 +569,8 @@ const initDashboard = (config = {}) => {
         || (config.experimentFileMetadata
             && (config.experimentFileMetadata.filename || config.experimentFileMetadata.file_name))
         || null;
+    baselineAlias = config.baselineAlias || null;
+    experimentAlias = config.experimentAlias || null;
 
     if (config.selectionPayload && Array.isArray(config.selectionPayload.entries)) {
         loadPayloadIntoStore(reportStore, config.selectionPayload);
@@ -591,6 +611,8 @@ const initDashboard = (config = {}) => {
             compareMode,
             // Baseline filename comes from TopNav's existing attrs.filename.
             experimentFilename,
+            baselineAlias,
+            experimentAlias,
             // The WASM viewer has no onUploadParquet handler — that path
             // is how the site viewer loads its initial parquet on its own.
             // Use its absence as the "WASM mode" signal and hide both

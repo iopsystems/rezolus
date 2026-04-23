@@ -3357,65 +3357,108 @@ main {
      trigger; clicking opens a dropdown card below with the rows
      stacked and filenames wrapping.
    ========================================================================== */
+/* Compare badge — always a compact dot-only trigger; clicking opens a
+ * dropdown card with per-capture filename + Load button. Same behavior
+ * at every viewport width so filenames don't crowd the navbar. */
 .compare-badge {
-    /* `details` is block by default; flatten to inline-flex so it
-     * participates in the navbar's horizontal layout. */
     display: inline-flex;
     align-items: center;
-    padding: 4px 10px;
     margin-left: 8px;
-    background: var(--compare-baseline-bg);
-    border-radius: 4px;
     font-size: 12px;
     position: relative;
-    max-width: 50vw;   /* never take more than half the nav width */
 }
 .compare-badge-summary {
-    /* Hidden on wide; the capture list below shows inline instead. */
-    display: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: var(--compare-baseline-bg);
+    border-radius: 4px;
     list-style: none;
     cursor: pointer;
-    align-items: center;
-    gap: 6px;
-    padding: 0 2px;
     outline: none;
 }
 .compare-badge-summary::-webkit-details-marker { display: none; }
 .compare-badge-summary::marker { content: ''; }
+.compare-badge-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.compare-badge-chip + .compare-badge-chip {
+    padding-left: 8px;
+    border-left: 1px solid var(--border-subtle);
+}
+.compare-badge-label {
+    color: var(--fg);
+    letter-spacing: 0.02em;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 .compare-badge .compare-capture-list {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    z-index: 50;
+    min-width: 240px;
+    max-width: min(90vw, 360px);
 }
+/* Row = info-cell (stacked: swatch+label on top, filename below) + tall
+ * upload button centered in the trailing column. */
 .compare-badge .compare-capture {
-    display: inline-flex;
+    display: grid;
+    grid-template-columns: 1fr auto;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     min-width: 0;
 }
 .compare-badge .compare-capture + .compare-capture {
-    padding-left: 12px;
-    border-left: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 8px;
+}
+.compare-badge .compare-capture-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.compare-badge .compare-capture-head {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 .compare-badge .compare-dot { font-size: 10px; line-height: 1; }
 .compare-badge .compare-capture-label {
-    color: var(--fg-muted);
+    color: var(--fg);
     letter-spacing: 0.02em;
 }
 .compare-badge .compare-capture-name {
-    max-width: 220px;
+    color: var(--fg-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+    font-size: 11px;
 }
 .compare-badge .compare-load {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 2px 6px;
-    height: 22px;
+    padding: 6px 8px;
+    align-self: stretch;   /* match row height so icon centers vertically */
+    min-height: 36px;
     cursor: pointer;
     border: none;
     background: transparent;
@@ -3425,69 +3468,6 @@ main {
 .compare-badge .compare-load svg { display: block; }
 .compare-badge .compare-load:hover {
     background: var(--bg-card-hover);
-}
-
-/* Narrow-viewport layout: collapse the badge into a dot-only trigger,
- * pop the rows out as a dropdown card below. */
-@media (max-width: 900px) {
-    .compare-badge {
-        padding: 0;
-        background: transparent;
-        max-width: none;
-    }
-    .compare-badge-summary {
-        display: inline-flex;
-        padding: 4px 8px;
-        background: var(--compare-baseline-bg);
-        border-radius: 4px;
-    }
-    .compare-badge:not([open]) .compare-capture-list {
-        display: none;
-    }
-    .compare-badge[open] .compare-capture-list {
-        position: absolute;
-        top: calc(100% + 4px);
-        /* Anchor to the summary's left edge so the first dot lines up
-         * with the baseline row's dot inside the card. Right is free
-         * so the card grows rightward within the viewport. */
-        left: 0;
-        right: auto;
-        display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 8px;
-        padding: 10px 12px;
-        background: var(--bg-card);
-        border: 1px solid var(--border-subtle);
-        border-radius: 6px;
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-        z-index: 50;
-        min-width: 240px;
-        max-width: min(90vw, 360px);
-        /* Match summary's horizontal padding so the first dot in the
-         * card lines up with the first dot in the summary trigger
-         * above (8px from the badge's left edge). */
-        padding-left: 8px;
-        padding-right: 8px;
-    }
-    .compare-badge[open] .compare-capture {
-        /* Stack: dots beside the label+name block, Load icon trailing */
-        flex-wrap: wrap;
-        gap: 6px 10px;
-    }
-    .compare-badge[open] .compare-capture + .compare-capture {
-        padding-left: 0;
-        border-left: none;
-        border-top: 1px solid var(--border-subtle);
-        padding-top: 8px;
-    }
-    .compare-badge[open] .compare-capture-name {
-        max-width: none;
-        flex: 1 1 100%;
-        white-space: normal;
-        overflow-wrap: anywhere;
-        word-break: break-all;
-    }
 }
 
 /* Capture-color dots + icons. Parent-agnostic so they pick up the
