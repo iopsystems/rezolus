@@ -351,10 +351,26 @@ export function getDataZoomConfig(minZoomSpan) {
 
 /**
  * Apply a chart option with notMerge and re-enable drag-to-zoom.
+ *
+ * setOption({notMerge:true}) wipes the dataZoom component and the
+ * fresh component synchronously fires a 'datazoom' event with the
+ * default {start:0, end:100} range. That event is indistinguishable
+ * from a user dragging their selection to cover the full axis
+ * (both are batch-carrying events with the same payload), so we
+ * tag the chart with `_suppressZoomEvents` around the setOption
+ * call. The datazoom handler on chart.js checks this flag and
+ * short-circuits — keeping the reconfigure's side-effect event
+ * out of chartsState.setZoom() without needing a payload-shape
+ * heuristic that might misclassify a genuine user reset.
  */
 export function applyChartOption(chart, option) {
     chart.domNode.classList.remove('no-data');
-    chart.echart.setOption(option, { notMerge: true });
+    chart._suppressZoomEvents = true;
+    try {
+        chart.echart.setOption(option, { notMerge: true });
+    } finally {
+        chart._suppressZoomEvents = false;
+    }
     chart.echart.dispatchAction({
         type: 'takeGlobalCursor',
         key: 'dataZoomSelect',

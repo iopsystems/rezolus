@@ -235,7 +235,15 @@ const CompareChartWrapper = {
                 vnode.state.experimentResult = res;
                 m.redraw();
             } catch (e) {
-                vnode.state.error = e?.message || String(e);
+                // Some rejection paths throw primitives (null for bare
+                // aborts, undefined for empty responses). The generic
+                // `String(e)` fallback would then surface "null" /
+                // "undefined" to the user. Prefer a readable message
+                // and log the raw value for diagnosis.
+                console.error('[compare] experiment query failed', e);
+                vnode.state.error = e?.message
+                    || (typeof e === 'string' && e)
+                    || 'experiment query failed';
                 m.redraw();
             }
         })();

@@ -491,6 +491,16 @@ export class Chart {
         }
 
         this.echart.on('datazoom', (event) => {
+            // Reconfigure (applyChartOption → setOption({notMerge:true}))
+            // wipes and rebuilds the dataZoom component, which fires a
+            // synthetic datazoom event with the default {0,100} range.
+            // base.js sets _suppressZoomEvents around that setOption
+            // call; short-circuit while it's in flight so the synthetic
+            // event doesn't clobber chartsState.zoomLevel with the
+            // reset and fan out a full-range snap to every sibling.
+            if (this._suppressZoomEvents) {
+                return;
+            }
             // 'datazoom' events triggered by the user vs dispatched by us have different formats:
             // User-triggered events have a batch property with the details under it.
             // (We don't want to trigger on our own dispatched zoom actions, so this is convenient.)
@@ -574,19 +584,6 @@ export class Chart {
             const hasPct = Number.isFinite(start) && Number.isFinite(end);
             const hasValues = Number.isFinite(startValue) && Number.isFinite(endValue);
             if (!hasPct && !hasValues) return;
-
-            // Reject re-init datazoom events: when Mithril's
-            // onupdate-driven reconfigure runs setOption({notMerge:true}),
-            // the dataZoom component is wiped and reinitialized at its
-            // default {start:0, end:100} range. echarts fires a
-            // datazoom event for that initialization with an empty
-            // startValue/endValue pair and full-range percentages.
-            // Treating it as a real user event resets every sibling to
-            // 0..100 right after the source was just dragged. Real user
-            // drags always carry absolute axis values too, so the
-            // combination of exactly (0, 100) WITH no startValue /
-            // endValue reliably identifies the re-init artifact.
-            if (hasPct && start === 0 && end === 100 && !hasValues) return;
 
             // Route the user-initiated zoom through the single
             // chartsState.setZoom writer. Mark `this` as the origin so
