@@ -102,18 +102,7 @@ export class ChartsState {
      */
     setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
         const next = normalizeZoom(zoom);
-        // TEMP diagnostic — remove once root cause found
-        if (window.location.search.includes('zoomdbg')) {
-            console.log('[setZoom] proposed=', zoom, 'normalized=', next,
-                'current=', this.zoomLevel, 'source=', source,
-                'origin=', originChart?.chartId,
-                'charts.size=', this.charts.size,
-                'ids=', Array.from(this.charts.keys()));
-        }
-        if (zoomEqual(this.zoomLevel, next)) {
-            if (window.location.search.includes('zoomdbg')) console.log('[setZoom] equal, skip');
-            return false;
-        }
+        if (zoomEqual(this.zoomLevel, next)) return false;
         this.zoomLevel = next;
         this.zoomSource = source;
         if (source === 'global') {
@@ -122,14 +111,12 @@ export class ChartsState {
                 : { start: next.start ?? 0, end: next.end ?? 100 };
         }
         // Fan out via the chart registry directly. Skip the origin
-        // chart (when provided) because its toolbox already applied the
-        // zoom before firing the datazoom event that led us here.
+        // chart (when provided) because its toolbox already applied
+        // the zoom before firing the datazoom event that led us here;
+        // re-dispatching to self cascades through heatmap.js's
+        // downsample-swap setOption.
         this.charts.forEach(chart => {
-            if (chart === originChart) {
-                if (window.location.search.includes('zoomdbg')) console.log('[setZoom] skip origin', chart.chartId);
-                return;
-            }
-            if (window.location.search.includes('zoomdbg')) console.log('[setZoom] dispatch to', chart.chartId);
+            if (chart === originChart) return;
             if (chart._applyZoom) chart._applyZoom(this.zoomLevel);
         });
         for (const fn of this._zoomSubs) fn(this.zoomLevel, this.zoomSource);
@@ -504,18 +491,6 @@ export class Chart {
         }
 
         this.echart.on('datazoom', (event) => {
-            // TEMP diag — log every datazoom event echarts emits on this
-            // chart, before any filtering, so we can see what user drags
-            // actually look like on the wire.
-            if (window.location.search.includes('zoomdbg')) {
-                console.log('[datazoom raw]', this.chartId,
-                    'hasBatch=', !!event.batch,
-                    'batch=', event.batch,
-                    'top-level=', {
-                        start: event.start, end: event.end,
-                        startValue: event.startValue, endValue: event.endValue,
-                    });
-            }
             // 'datazoom' events triggered by the user vs dispatched by us have different formats:
             // User-triggered events have a batch property with the details under it.
             // (We don't want to trigger on our own dispatched zoom actions, so this is convenient.)
