@@ -160,12 +160,10 @@ export function configureScatterChart(chart) {
         chart._oobAxisMax = oobMax;
     }
 
-    // `chart.pinnedSet` is the DERIVED local view used by the tooltip
-    // formatter, Y-axis rescale, etc. — the SOURCE of truth lives on
-    // `chart.chartsState.pinnedLabels`. Populate it here (empty-set
-    // fallback when no global pins exist yet) so downstream reads
-    // never observe undefined. The proper re-derivation happens in
-    // the `applyPinState` + subscribeZoom callbacks below.
+    // `chart.pinnedSet` is the per-chart Set<string> of pinned series
+    // labels. Pins are intentionally local: clicking p99 on one scatter
+    // does not affect p99 on a sibling scatter. `resetAll` clears this
+    // via chart._clearPins below.
     if (!chart.pinnedSet) {
         chart.pinnedSet = new Set();
     }
@@ -264,27 +262,17 @@ export function configureScatterChart(chart) {
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
     chart.domNode.addEventListener('mousedown', onMouseDown, true);
-    // Subscribe to cross-chart pin changes. The callback re-derives
-    // our local `chart.pinnedSet` as the intersection of the global
-    // pinned labels and our own series names, then rebuilds the
-    // pinned visual state. setPins' diff guard means a pin click in
-    // one scatter doesn't echo back to us as a separate no-op write.
-    const unsubPins = chart.chartsState.subscribePins((globalPins) => {
-        chart.pinnedSet = intersectPins(globalPins, uniqueNames);
-        applyPinState();
-        chart._rescaleYAxis();
-    });
     chart._pinCleanup = () => {
         document.removeEventListener('keydown', onKeyDown);
         document.removeEventListener('keyup', onKeyUp);
         chart.domNode.removeEventListener('mousedown', onMouseDown, true);
-        unsubPins();
     };
 
-    // Seed the derived local set from the current global labels, in
-    // case this chart is mounting into a section that already has
-    // pins active (e.g. compare-mode redraw, route reload, etc.).
-    chart.pinnedSet = intersectPins(chart.chartsState.pinnedLabels, uniqueNames);
+    // Drop pins that no longer correspond to a rendered series (e.g.
+    // after a reconfigure with a different percentile set).
+    for (const name of chart.pinnedSet) {
+        if (!uniqueNames.includes(name)) chart.pinnedSet.delete(name);
+    }
 
     const applyPinState = () => {
         const pinned = chart.pinnedSet;
@@ -348,43 +336,40 @@ export function configureScatterChart(chart) {
         uniqueNames.forEach(name => { selected[name] = true; });
         chart.echart.setOption({ legend: { selected } });
 
-        // Compute the next global pin set based on the gesture, then
-        // route through chartsState.setPins. The subscription above
-        // fires back synchronously to update this chart's visual
-        // state; every other scatter chart in the section gets the
-        // same notification and pins/unpins the same label in
-        // lock-step when they carry it.
+        // Local-only pin update: mutate chart.pinnedSet directly and
+        // repaint. No fan-out to sibling charts.
         const name = params.name;
-        const current = chart.chartsState.pinnedLabels;
-        const next = new Set(current);
         if (ctrlHeld) {
             // Ctrl/Cmd+click: toggle this series in the multi-select set
-            if (next.has(name)) next.delete(name); else next.add(name);
+            if (chart.pinnedSet.has(name)) chart.pinnedSet.delete(name);
+            else chart.pinnedSet.add(name);
         } else {
             // Plain click: solo toggle (clear others and pin this one,
             // or unpin if it was already the lone pinned label).
-            if (next.size === 1 && next.has(name)) next.clear();
-            else { next.clear(); next.add(name); }
+            if (chart.pinnedSet.size === 1 && chart.pinnedSet.has(name)) {
+                chart.pinnedSet.clear();
+            } else {
+                chart.pinnedSet.clear();
+                chart.pinnedSet.add(name);
+            }
         }
-        chart.chartsState.setPins(next);
+        applyPinState();
+        chart._rescaleYAxis();
     });
 
-    // Initial mount: if the section already carries pinned labels
-    // (e.g. the user pinned p99 on a sibling chart before this one
-    // became visible), draw our derived visual state immediately.
+    // resetAll() hook: chartsState.resetAll iterates charts and calls
+    // this to clear per-chart pin state. We repaint here so the legend
+    // + series styling drop back to the unpinned look immediately.
+    chart._clearPins = () => {
+        if (chart.pinnedSet.size === 0) return;
+        chart.pinnedSet.clear();
+        applyPinState();
+        chart._rescaleYAxis();
+    };
+
+    // Redraw if any pins carried over from a previous configure.
     if (chart.pinnedSet.size > 0) {
         applyPinState();
     }
 }
 
-// Restrict a global pin set to the labels that this chart actually
-// renders. Keeps chart-local consumers (tooltip fade, Y-axis rescale)
-// from referencing labels that belong to a sibling chart only.
-function intersectPins(globalPins, uniqueNames) {
-    const out = new Set();
-    if (!globalPins || globalPins.size === 0) return out;
-    for (const name of uniqueNames) {
-        if (globalPins.has(name)) out.add(name);
-    }
-    return out;
-}

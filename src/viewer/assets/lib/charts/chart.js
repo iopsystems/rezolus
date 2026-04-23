@@ -37,15 +37,6 @@ export class ChartsState {
     // Zoom subscribers. Each entry receives (zoom, source) synchronously
     // after setZoom produces a diff.
     _zoomSubs = new Set();
-    // Global set of pinned series labels (percentile names like "p50",
-    // "p99"). A label lives here once; individual scatter charts
-    // intersect this set with their own uniqueNames to compute what
-    // they render as pinned. That gives free cross-chart pin sync
-    // (pinning p99 on one latency scatter highlights p99 on every
-    // latency scatter in the section) while charts that don't carry
-    // the label simply ignore it.
-    pinnedLabels = new Set();
-    _pinSubs = new Set();
     // Global color mapper - for consistent cgroup colors
     colorMapper = globalColorMapper;
 
@@ -57,8 +48,6 @@ export class ChartsState {
         this.globalZoom = null;
         this.charts.clear();
         this._zoomSubs.clear();
-        this.pinnedLabels = new Set();
-        this._pinSubs.clear();
     }
 
     isDefaultZoom() {
@@ -69,8 +58,9 @@ export class ChartsState {
     hasActiveSelection() {
         const hasLocalZoom = this.zoomSource === 'local' && !this.isDefaultZoom();
         if (hasLocalZoom) return true;
-        if (this.pinnedLabels.size > 0) return true;
-        return Array.from(this.charts.values()).some(c => c._tooltipFrozen);
+        return Array.from(this.charts.values()).some(c =>
+            c._tooltipFrozen || (c.pinnedSet && c.pinnedSet.size > 0)
+        );
     }
 
     /**
@@ -156,40 +146,13 @@ export class ChartsState {
         });
     }
 
-    /**
-     * Subscribe to pinned-label changes. Callback fires synchronously
-     * from setPins() with the new (cloned) `Set<string>` of pinned
-     * labels whenever setPins produces an actual change.
-     * Returns an unsubscribe function.
-     */
-    subscribePins(fn) {
-        this._pinSubs.add(fn);
-        return () => { this._pinSubs.delete(fn); };
-    }
-
-    /**
-     * The single writer for `pinnedLabels`. Diffs against the current
-     * set; on no-op returns false without notifying. On a change,
-     * writes a fresh clone and notifies every subscriber.
-     */
-    setPins(labels) {
-        const next = labels instanceof Set ? new Set(labels) : new Set(labels ?? []);
-        if (setsEqual(this.pinnedLabels, next)) return false;
-        this.pinnedLabels = next;
-        for (const fn of this._pinSubs) fn(this.pinnedLabels);
-        return true;
-    }
-
     // Reset zoom and clear all pin selections and frozen tooltips
-    // (preserves heatmap/percentile toggle)
+    // (preserves heatmap/percentile toggle). Pin state is per-chart;
+    // scatter charts that own a pinnedSet clear it in _clearPins below.
     resetAll() {
         this.resetZoom();
-        // Pin clear routes through the observable setter; subscribers
-        // (scatter charts) rebuild their legend + series styling and
-        // drop their derived pinnedSet. No explicit forEach reconfigure
-        // needed — that's the whole point of the subscribe model.
-        this.setPins(new Set());
         this.charts.forEach(chart => {
+            if (chart._clearPins) chart._clearPins();
             if (chart._tooltipFrozen) {
                 chart._toggleTooltipFreeze(false);
             }
@@ -198,15 +161,6 @@ export class ChartsState {
             chart.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
         });
     }
-}
-
-// Shallow Set equality — fine for the modest pin-label sets (handful of
-// percentile names at most).
-function setsEqual(a, b) {
-    if (a === b) return true;
-    if (a.size !== b.size) return false;
-    for (const x of a) if (!b.has(x)) return false;
-    return true;
 }
 
 // Normalize a caller-supplied zoom value into the canonical shape
