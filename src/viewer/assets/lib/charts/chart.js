@@ -102,6 +102,12 @@ export class ChartsState {
      */
     setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
         const next = normalizeZoom(zoom);
+        if (window.location.search.includes('zoomdbg')) {
+            console.log('[setZoom]', 'proposed=', zoom,
+                'next=', next, 'current=', this.zoomLevel,
+                'source=', source, 'origin=', originChart?.chartId,
+                'trace=', new Error().stack?.split('\n').slice(1, 5).join(' | '));
+        }
         if (zoomEqual(this.zoomLevel, next)) return false;
         this.zoomLevel = next;
         this.zoomSource = source;
