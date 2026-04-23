@@ -33,6 +33,10 @@ pub struct Viewer {
     engine: QueryEngine<Arc<Tsdb>>,
     file_metadata: std::collections::HashMap<String, String>,
     dashboard_sections: std::collections::HashMap<String, String>,
+    /// Display alias for this capture, when the JS caller supplied
+    /// one (e.g. via an `alias=path` static-site URL param). None
+    /// means the UI falls back to the capture id.
+    alias: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -49,6 +53,8 @@ struct MetadataData {
     max_time: f64,
     #[serde(rename = "fileChecksum")]
     file_checksum: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alias: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -83,7 +89,15 @@ impl Viewer {
             engine,
             file_metadata,
             dashboard_sections,
+            alias: None,
         })
+    }
+
+    /// Set or clear the display alias for this capture. Pass `None`
+    /// (via JS passing `null`/`undefined`) to clear. Cheap — just a
+    /// field assignment.
+    pub fn set_alias(&mut self, alias: Option<String>) {
+        self.alias = alias;
     }
 
     /// Returns JSON metadata compatible with /api/v1/metadata
@@ -100,6 +114,7 @@ impl Viewer {
                 min_time,
                 max_time,
                 file_checksum: String::new(),
+                alias: self.alias.clone(),
             },
         })
         .unwrap()
@@ -332,6 +347,15 @@ impl WasmCaptureRegistry {
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
         let viewer = Viewer::new(data, filename)?;
         *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
+        Ok(())
+    }
+
+    /// Set or clear the display alias for a capture slot. No-op when
+    /// the slot is empty.
+    pub fn set_alias(&mut self, capture: &str, alias: Option<String>) -> Result<(), JsValue> {
+        if let Some(viewer) = self.slot_mut(Slot::parse(capture)?).as_mut() {
+            viewer.set_alias(alias);
+        }
         Ok(())
     }
 

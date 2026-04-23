@@ -250,7 +250,7 @@ const CompareChartWrapper = {
     },
 
     view(vnode) {
-        const { spec, chartsState, interval, anchors, toggles, setChartToggle } = vnode.attrs;
+        const { spec, chartsState, interval, anchors, toggles, setChartToggle, captureLabels } = vnode.attrs;
 
         if (vnode.state.error) {
             return m('div.chart-error', `compare error: ${vnode.state.error}`);
@@ -284,6 +284,7 @@ const CompareChartWrapper = {
             chartsState,
             interval,
             Chart,
+            captureLabels,
         });
 
         switch (result && result.kind) {
@@ -323,7 +324,12 @@ export function createGroupComponent(getState) {
             const {
                 chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
                 compareMode, toggles, setChartToggle, anchors, experimentQueryRange,
+                baselineAlias, experimentAlias,
             } = state;
+            const captureLabels = {
+                baseline: baselineAlias || 'baseline',
+                experiment: experimentAlias || 'experiment',
+            };
             const sectionRoute = attrs.sectionRoute;
             const sectionName = attrs.sectionName;
             const interval = attrs.interval;
@@ -383,6 +389,7 @@ export function createGroupComponent(getState) {
                     sectionRoute,
                     step: interval,
                     experimentQueryRange,
+                    captureLabels,
                 })
                 : m(Chart, { spec: renderSpec, chartsState, interval });
 

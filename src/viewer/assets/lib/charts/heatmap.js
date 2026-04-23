@@ -169,6 +169,7 @@ export function configureHeatmap(chart) {
     // Configure tooltip with unit formatting if specified
     const customXFormatterForTooltip = chart.spec.xAxisFormatter;
     const diffMatrices = chart.spec.diffMatrices;
+    const diffCaptureLabels = chart.spec.diffCaptureLabels;
     let tooltipFormatter = function (params) {
         if (params.data === undefined) {
             return '';
@@ -226,9 +227,9 @@ export function configureHeatmap(chart) {
                             </span>
                         </div>
                         <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
-                            <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">baseline</span>
+                            <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${diffCaptureLabels?.baseline || 'baseline'}</span>
                             <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(bv)}</span>
-                            <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">experiment</span>
+                            <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${diffCaptureLabels?.experiment || 'experiment'}</span>
                             <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(ev)}</span>
                         </div>
                         ${getTooltipFreezeFooter(chart)}

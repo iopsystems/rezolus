@@ -61,16 +61,22 @@ pub fn command() -> Command {
         .about("View a Rezolus artifact or live agent")
         .arg(
             clap::Arg::new("INPUT")
-                .help("Rezolus parquet file (baseline) or agent URL (e.g. http://localhost:4241)")
+                .help(
+                    "First capture: parquet file, agent URL (http://…), or \
+                     alias=parquet (e.g. redis=./a.parquet). The alias is a \
+                     display label; internal identifiers stay baseline/experiment.",
+                )
                 .action(clap::ArgAction::Set)
                 .required(false)
                 .index(1),
         )
         .arg(
             clap::Arg::new("EXPERIMENT")
-                .help("Optional second parquet file for A/B comparison (experiment)")
+                .help(
+                    "Optional second capture for A/B comparison: parquet path \
+                     or alias=parquet (e.g. valkey=./b.parquet).",
+                )
                 .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(PathBuf))
                 .required(false)
                 .index(2),
         )
@@ -103,9 +109,37 @@ pub fn command() -> Command {
 pub struct Config {
     source: Source,
     experiment_path: Option<PathBuf>,
+    baseline_alias: Option<String>,
+    experiment_alias: Option<String>,
     verbose: u8,
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
+}
+
+/// Split a positional input into an optional alias and the remaining
+/// path-or-url. The alias prefix must look "identifier-like" — no
+/// path separators, no colon (which would collide with URL schemes),
+/// no whitespace. Anything else parses as a bare path.
+///
+/// Examples:
+///   "redis=./a.parquet"          → (Some("redis"), "./a.parquet")
+///   "./a.parquet"                → (None,          "./a.parquet")
+///   "http://localhost:4241"      → (None,          "http://localhost:4241")  (colon guard)
+///   "/abs/path=weird.parquet"    → (None,          "/abs/path=weird.parquet") (slash guard)
+fn split_alias(raw: &str) -> (Option<String>, &str) {
+    if let Some(eq) = raw.find('=') {
+        let (lhs, rest) = raw.split_at(eq);
+        let rhs = &rest[1..]; // skip the '=' itself
+        let lhs_ok = !lhs.is_empty()
+            && !lhs.contains('/')
+            && !lhs.contains('\\')
+            && !lhs.contains(':')
+            && !lhs.contains(char::is_whitespace);
+        if lhs_ok {
+            return (Some(lhs.to_string()), rhs);
+        }
+    }
+    (None, raw)
 }
 
 impl TryFrom<ArgMatches> for Config {
@@ -114,24 +148,35 @@ impl TryFrom<ArgMatches> for Config {
     fn try_from(
         args: ArgMatches,
     ) -> Result<Self, <Self as std::convert::TryFrom<clap::ArgMatches>>::Error> {
-        let source = match args.get_one::<String>("INPUT") {
-            Some(input) => {
-                if input.starts_with("http://") || input.starts_with("https://") {
+        let (baseline_alias, source) = match args.get_one::<String>("INPUT") {
+            Some(raw) => {
+                let (alias, body) = split_alias(raw);
+                let source = if body.starts_with("http://") || body.starts_with("https://") {
                     Source::Live(
-                        input
-                            .parse::<Url>()
+                        body.parse::<Url>()
                             .map_err(|e| format!("invalid URL: {e}"))?,
                     )
                 } else {
-                    Source::File(PathBuf::from(input))
-                }
+                    Source::File(PathBuf::from(body))
+                };
+                (alias, source)
             }
-            None => Source::Empty,
+            None => (None, Source::Empty),
+        };
+
+        let (experiment_alias, experiment_path) = match args.get_one::<String>("EXPERIMENT") {
+            Some(raw) => {
+                let (alias, body) = split_alias(raw);
+                (alias, Some(PathBuf::from(body)))
+            }
+            None => (None, None),
         };
 
         Ok(Config {
             source,
-            experiment_path: args.get_one::<PathBuf>("EXPERIMENT").cloned(),
+            experiment_path,
+            baseline_alias,
+            experiment_alias,
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
             listen: *args
                 .get_one::<SocketAddr>("LISTEN")
@@ -221,6 +266,9 @@ pub fn run(config: Config) {
             *state.selection.write() = selection;
             *state.file_checksum.write() = file_checksum;
             state.captures.set_baseline_file_metadata(file_meta);
+            state
+                .captures
+                .set_baseline_alias(config.baseline_alias.clone());
 
             // Attach the optional experiment capture for A/B comparison.
             // NOTE: we deliberately do NOT stash `exp_path` in
@@ -242,9 +290,12 @@ pub fn run(config: Config) {
                             .unwrap_or("experiment.parquet")
                             .to_string();
                         exp_tsdb.set_filename(base);
-                        state
-                            .captures
-                            .attach_experiment(exp_tsdb, exp_sysinfo, exp_file_meta);
+                        state.captures.attach_experiment(
+                            exp_tsdb,
+                            exp_sysinfo,
+                            exp_file_meta,
+                            config.experiment_alias.clone(),
+                        );
                         info!("Attached experiment capture: {}", exp_path.display());
                     }
                     Err(e) => {
@@ -513,7 +564,7 @@ impl AppState {
     pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
         Self {
             sections: Default::default(),
-            captures: Arc::new(CaptureRegistry::new(tsdb, None, None)),
+            captures: Arc::new(CaptureRegistry::new(tsdb, None, None, None)),
             templates,
             snapshots: Arc::new(parking_lot::Mutex::new(VecDeque::new())),
             live: AtomicBool::new(false),
@@ -1257,6 +1308,12 @@ async fn metadata(
         "maxTime": time_range.1,
         "filename": tsdb.filename(),
     });
+    // Display alias, when the CLI provided one (e.g. `redis=./a.parquet`).
+    // Present to the frontend as `alias` alongside `filename`; absent
+    // when no alias was set, so the UI falls back to the capture id.
+    if let Some(alias) = state.captures.alias(capture) {
+        metadata["alias"] = serde_json::json!(alias);
+    }
     // File checksum is only tracked for the baseline capture today.
     if matches!(capture, capture_registry::CaptureId::Baseline) {
         if let Some(checksum) = &*state.file_checksum.read() {
@@ -1413,9 +1470,13 @@ async fn attach_experiment(
     tsdb.set_filename(filename);
 
     let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
+    // HTTP-attached experiments don't carry an alias — aliases only
+    // come in via the CLI today. Keep None for now; this parameter is
+    // here so a future `x-rezolus-alias` upload header can thread one
+    // through without further signature changes.
     state
         .captures
-        .attach_experiment(tsdb, sysinfo.clone(), file_meta);
+        .attach_experiment(tsdb, sysinfo.clone(), file_meta, None);
     *state.experiment_parquet_path.write() = Some(temp_path);
 
     (

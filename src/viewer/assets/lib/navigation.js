@@ -69,6 +69,8 @@ const createMainComponent = ({
                     end_time,
                     compareMode: !!compareMode,
                     experimentFilename: badgeAttrs?.experimentFilename,
+                    baselineAlias: badgeAttrs?.baselineAlias,
+                    experimentAlias: badgeAttrs?.experimentAlias,
                     onLoadBaseline: badgeAttrs?.onLoadBaseline,
                     onLoadExperiment: badgeAttrs?.onLoadExperiment,
                 },

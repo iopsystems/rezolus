@@ -35,6 +35,9 @@ pub struct CaptureSlot {
     pub tsdb: Arc<RwLock<Tsdb>>,
     pub systeminfo: RwLock<Option<String>>,
     pub file_metadata: RwLock<Option<String>>,
+    /// Optional display alias for this capture (e.g. "redis", "valkey").
+    /// Purely cosmetic — internal identifiers stay "baseline"/"experiment".
+    pub alias: RwLock<Option<String>>,
 }
 
 pub struct CaptureRegistry {
@@ -47,12 +50,14 @@ impl CaptureRegistry {
         baseline_tsdb: Tsdb,
         baseline_systeminfo: Option<String>,
         baseline_file_metadata: Option<String>,
+        baseline_alias: Option<String>,
     ) -> Self {
         Self {
             baseline: CaptureSlot {
                 tsdb: Arc::new(RwLock::new(baseline_tsdb)),
                 systeminfo: RwLock::new(baseline_systeminfo),
                 file_metadata: RwLock::new(baseline_file_metadata),
+                alias: RwLock::new(baseline_alias),
             },
             experiment: RwLock::new(None),
         }
@@ -91,6 +96,27 @@ impl CaptureRegistry {
         }
     }
 
+    /// Display alias for the given capture, when one was provided on the
+    /// command line (or via attach). None = fall back to the identifier
+    /// name on the UI side.
+    pub fn alias(&self, id: CaptureId) -> Option<String> {
+        match id {
+            CaptureId::Baseline => self.baseline.alias.read().clone(),
+            CaptureId::Experiment => self
+                .experiment
+                .read()
+                .as_ref()
+                .and_then(|slot| slot.alias.read().clone()),
+        }
+    }
+
+    /// Overwrite the baseline slot's alias. Useful when the agent mode
+    /// swaps in a newly-recorded baseline without tearing the registry
+    /// down.
+    pub fn set_baseline_alias(&self, alias: Option<String>) {
+        *self.baseline.alias.write() = alias;
+    }
+
     /// Overwrite the baseline slot's systeminfo. The baseline TSDB Arc is
     /// unaffected so callers holding it keep working across updates.
     pub fn set_baseline_systeminfo(&self, systeminfo: Option<String>) {
@@ -107,11 +133,13 @@ impl CaptureRegistry {
         tsdb: Tsdb,
         systeminfo: Option<String>,
         file_metadata: Option<String>,
+        alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
             tsdb: Arc::new(RwLock::new(tsdb)),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
+            alias: RwLock::new(alias),
         });
     }
 

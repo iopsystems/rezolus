@@ -50,6 +50,12 @@ export class Viewer {
      */
     selection(): string | undefined;
     /**
+     * Set or clear the display alias for this capture. Pass `None`
+     * (via JS passing `null`/`undefined`) to clear. Cheap — just a
+     * field assignment.
+     */
+    set_alias(alias?: string | null): void;
+    /**
      * Returns systeminfo JSON from parquet file metadata.
      *
      * For multi-node combined files (>1 node in per_source_metadata), returns
@@ -97,6 +103,11 @@ export class WasmCaptureRegistry {
     query(capture: string, query: string, time: number): string;
     query_range(capture: string, query: string, start: number, end: number, step: number): string;
     selection(capture: string): string | undefined;
+    /**
+     * Set or clear the display alias for a capture slot. No-op when
+     * the slot is empty.
+     */
+    set_alias(capture: string, alias?: string | null): void;
     systeminfo(capture: string): string | undefined;
 }
 
@@ -119,6 +130,7 @@ export interface InitOutput {
     readonly viewer_query: (a: number, b: number, c: number, d: number) => [number, number];
     readonly viewer_query_range: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly viewer_selection: (a: number) => [number, number];
+    readonly viewer_set_alias: (a: number, b: number, c: number) => void;
     readonly viewer_systeminfo: (a: number) => [number, number];
     readonly wasmcaptureregistry_attach: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly wasmcaptureregistry_detach: (a: number, b: number, c: number) => void;
@@ -133,6 +145,7 @@ export interface InitOutput {
     readonly wasmcaptureregistry_query: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasmcaptureregistry_query_range: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly wasmcaptureregistry_selection: (a: number, b: number, c: number) => [number, number];
+    readonly wasmcaptureregistry_set_alias: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasmcaptureregistry_systeminfo: (a: number, b: number, c: number) => [number, number];
     readonly rust_zstd_wasm_shim_calloc: (a: number, b: number) => number;
     readonly rust_zstd_wasm_shim_free: (a: number) => void;
