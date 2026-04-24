@@ -142,6 +142,31 @@ impl TemplateRegistry {
         }
     }
 
+    /// Parse every `*.json` file in an embedded `include_dir::Dir` as
+    /// `ServiceExtension` and index them. Used in release builds where
+    /// the templates are baked into the binary via `include_dir!`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_embedded(dir: &include_dir::Dir<'_>) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut templates = HashMap::new();
+        for file in dir.files() {
+            let path = file.path();
+            if !path.extension().is_some_and(|e| e == "json") {
+                continue;
+            }
+            let content = file
+                .contents_utf8()
+                .ok_or_else(|| format!("{} is not valid UTF-8", path.display()))?;
+            let ext: ServiceExtension = serde_json::from_str(content)
+                .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+
+            insert_template_key(&mut templates, ext.service_name.clone(), path, &ext)?;
+            for alias in &ext.aliases {
+                insert_template_key(&mut templates, alias.clone(), path, &ext)?;
+            }
+        }
+        Ok(Self { templates })
+    }
+
     /// Scan `dir` for `*.json` files, parse each as `ServiceExtension`,
     /// and index by `service_name` and each alias.
     #[cfg(not(target_arch = "wasm32"))]

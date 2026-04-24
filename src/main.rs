@@ -28,6 +28,15 @@ mod common;
 
 pub use common::*;
 
+/// Service extension templates baked into the release binary from
+/// `config/templates/*.json`. Used by viewer and `parquet annotate`
+/// when the user hasn't passed an explicit `--templates` path.
+/// Developer-mode builds fall back to reading the same directory off
+/// disk so template edits don't require a rebuild.
+#[cfg(not(feature = "developer-mode"))]
+pub static EMBEDDED_TEMPLATES: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/config/templates");
+
 static STATE: AtomicUsize = AtomicUsize::new(RUNNING);
 
 static RUNNING: usize = 0;
