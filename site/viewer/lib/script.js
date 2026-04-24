@@ -15,22 +15,23 @@ let landingError = null;
 
 const demoSections = [
     {
-        label: 'Rezolus only',
+        label: 'Host (System) Metrics',
         demos: [
-            { label: 'demo.parquet', file: 'demo.parquet' },
+            { label: 'Host-1', file: 'demo.parquet' },
         ],
     },
     {
-        label: 'Rezolus + service',
+        label: 'Host and Client Metrics',
         demos: [
-            { label: 'cachecannon.parquet', file: 'cachecannon.parquet' },
-            { label: 'vllm.parquet', file: 'vllm.parquet' },
+            { label: 'Cache (Valkey)', file: 'cachecannon.parquet' },
+            { label: 'Inference (vLLM)', file: 'vllm.parquet' },
         ],
     },
     {
-        label: 'Side-by-side comparison',
+        label: 'A/B Testing',
         demos: [
-            { label: 'AB_base.parquet + AB_base_pin.parquet', files: ['AB_base.parquet', 'AB_base_pin.parquet'] },
+            { label: 'Cache (Default vs Pinned Interrupts)', files: ['AB_base.parquet', 'AB_base_pin.parquet'] },
+            { label: 'Inference (vLLM vs SGLang)', files: ['vllm_gemma3.parquet', 'sglang_gemma3.parquet'] },
         ],
     },
 ];
