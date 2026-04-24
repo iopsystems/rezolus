@@ -31,6 +31,30 @@ use tower_http::services::{ServeDir, ServeFile};
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
+/// Shared entry point for loading the template registry. Both the
+/// viewer (`rezolus view`) and `rezolus parquet annotate/filter` call
+/// this. Precedence: explicit `--templates <path>` > env var /
+/// `config/templates/` default (developer-mode or explicit path only).
+/// Release builds fall back to templates baked into the binary via
+/// `include_dir!`; developer-mode continues to read from disk so
+/// template edits don't require a rebuild.
+pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
+    if cli_path.is_some() {
+        return TemplateRegistry::resolve_and_load(cli_path);
+    }
+    #[cfg(not(feature = "developer-mode"))]
+    {
+        TemplateRegistry::from_embedded(&crate::EMBEDDED_TEMPLATES).unwrap_or_else(|e| {
+            warn!("failed to parse embedded templates: {e}");
+            TemplateRegistry::empty()
+        })
+    }
+    #[cfg(feature = "developer-mode")]
+    {
+        TemplateRegistry::resolve_and_load(None)
+    }
+}
+
 #[cfg(test)]
 pub use dashboard::Kpi;
 pub use dashboard::{ServiceExtension, TemplateRegistry};
@@ -205,7 +229,7 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    let registry = TemplateRegistry::resolve_and_load(config.templates_dir.as_deref());
+    let registry = load_template_registry(config.templates_dir.as_deref());
 
     let state = match &config.source {
         Source::File(path) => {

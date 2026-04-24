@@ -924,6 +924,7 @@ dependencies = [
 name = "dashboard"
 version = "0.1.0"
 dependencies = [
+ "include_dir",
  "metriken-query",
  "serde",
  "serde_json",
@@ -2793,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.11.1-alpha.7"
+version = "5.11.1-alpha.8"
 dependencies = [
  "allan",
  "anyhow",

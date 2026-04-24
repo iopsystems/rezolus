@@ -171,11 +171,11 @@ pub fn command() -> Command {
 }
 
 pub fn run(args: ArgMatches) {
-    use crate::viewer::TemplateRegistry;
+    use crate::viewer::load_template_registry;
 
     let result = match args.subcommand() {
         Some(("annotate", sub_args)) => {
-            let registry = TemplateRegistry::resolve_and_load(
+            let registry = load_template_registry(
                 sub_args
                     .get_one::<PathBuf>("templates")
                     .map(|p| p.as_path()),
@@ -185,7 +185,7 @@ pub fn run(args: ArgMatches) {
         }
         Some(("combine", sub_args)) => combine::run(sub_args),
         Some(("filter", sub_args)) => {
-            let registry = TemplateRegistry::resolve_and_load(
+            let registry = load_template_registry(
                 sub_args
                     .get_one::<PathBuf>("templates")
                     .map(|p| p.as_path()),
