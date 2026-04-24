@@ -31,7 +31,11 @@ const demoSections = [
         label: 'A/B Testing',
         demos: [
             { label: 'Cache (Default vs Pinned Interrupts)', files: ['AB_base.parquet', 'AB_base_pin.parquet'] },
-            { label: 'Inference (vLLM vs SGLang)', files: ['vllm_gemma3.parquet', 'sglang_gemma3.parquet'] },
+            {
+                label: 'Inference (vLLM vs SGLang)',
+                files: ['vllm_gemma3.parquet', 'sglang_gemma3.parquet'],
+                legends: { baseline: 'vLLM', experiment: 'SGLang' },
+            },
         ],
     },
 ];
@@ -163,7 +167,7 @@ async function loadDemo(filename = 'demo.parquet') {
 
 // Load a pair of demo parquets as baseline + experiment and launch the
 // viewer in compare mode. Triggered by ?demoA=<file>&demoB=<file>.
-async function loadCompareDemo(fileA, fileB) {
+async function loadCompareDemo(fileA, fileB, legends = null) {
     splashLabel = `${fileA} vs ${fileB}`;
     splashProgress = -1;
     landingError = null;
@@ -222,7 +226,9 @@ async function loadCompareDemo(fileA, fileB) {
             fileMetadata: base.fileMetadata,
             selectionPayload: base.selectionPayload,
             compareMode: true,
+            baselineAlias: legends?.baseline || null,
             experimentSystemInfo,
+            experimentAlias: legends?.experiment || null,
             experimentFileMetadata,
             experimentFilename,
             experimentQueryRange,
@@ -260,7 +266,7 @@ const Root = {
         return m('div', m(FileUpload, {
             onDemo: (demo) => {
                 if (demo && Array.isArray(demo.files) && demo.files.length === 2) {
-                    loadCompareDemo(demo.files[0], demo.files[1]);
+                    loadCompareDemo(demo.files[0], demo.files[1], demo.legends || null);
                 } else if (demo && demo.file) {
                     loadDemo(demo.file);
                 }
