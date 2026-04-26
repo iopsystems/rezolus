@@ -13,6 +13,19 @@ let splashLabel = null;   // non-null = show splash, null = show landing
 let splashProgress = -1;  // -1 = indeterminate, 0–1 = determinate
 let landingError = null;
 
+// Split a "alias=path" string into [alias, path]. Mirrors the Rust
+// split_alias in src/viewer/mod.rs: alias must be non-empty, free of
+// path separators, ':' (URL-scheme guard), and whitespace. Anything
+// else parses as a bare path with alias=null.
+const splitAlias = (raw) => {
+    const eq = raw.indexOf('=');
+    if (eq <= 0) return [null, raw];
+    const lhs = raw.slice(0, eq);
+    const rhs = raw.slice(eq + 1);
+    if (/[\/\\:\s]/.test(lhs)) return [null, raw];
+    return [lhs, rhs];
+};
+
 const demoSections = [
     {
         label: 'Host (System) Metrics',
@@ -234,11 +247,18 @@ async function loadCompareDemo(fileA, fileB, legends = null) {
             experimentQueryRange,
         });
 
-        // Keep the URL shape stable so refreshes reload the same pair.
+        // Canonicalize the URL: repeated `capture=alias=path` (or bare
+        // `capture=path` when no alias). Order encodes role — first is
+        // baseline, second is experiment. Mirrors the CLI positional
+        // shape and scales naturally to N captures in the future.
         const url = new URL(window.location);
-        url.searchParams.set('demoA', fileA);
-        url.searchParams.set('demoB', fileB);
+        const encode = (file, alias) => alias ? `${alias}=${file}` : file;
         url.searchParams.delete('demo');
+        url.searchParams.delete('demoA');
+        url.searchParams.delete('demoB');
+        url.searchParams.delete('capture');
+        url.searchParams.append('capture', encode(fileA, legends?.baseline));
+        url.searchParams.append('capture', encode(fileB, legends?.experiment));
         window.history.replaceState(null, '', url);
     } catch (e) {
         splashLabel = null;
@@ -280,16 +300,37 @@ const Root = {
 
 // ── Initial mount ──────────────────────────────────────────────────
 
+// Canonical compare URL: `?capture=alias=path&capture=alias=path` (each
+// `alias=` prefix optional). Order encodes role: 1st = baseline,
+// 2nd = experiment. Legacy: `?demoA=…&demoB=…` is parsed as a fallback
+// for one release; on first load we rewrite to the canonical shape.
 const _params = new URLSearchParams(window.location.search);
+const _captureRaw = _params.getAll('capture');
 const _demoA = _params.get('demoA');
 const _demoB = _params.get('demoB');
 const _demoParam = _params.get('demo');
 
-if (_demoA && _demoB) {
-    // A/B compare demo.
-    splashLabel = `${_demoA} vs ${_demoB}`;
+const parsePair = (rawA, rawB) => {
+    const [aliasA, fileA] = splitAlias(rawA);
+    const [aliasB, fileB] = splitAlias(rawB);
+    const legends = (aliasA || aliasB)
+        ? { baseline: aliasA, experiment: aliasB }
+        : null;
+    return { fileA, fileB, legends };
+};
+
+if (_captureRaw.length >= 2) {
+    const { fileA, fileB, legends } = parsePair(_captureRaw[0], _captureRaw[1]);
+    splashLabel = `${legends?.baseline || fileA} vs ${legends?.experiment || fileB}`;
     m.mount(document.body, Root);
-    loadCompareDemo(_demoA, _demoB);
+    loadCompareDemo(fileA, fileB, legends);
+} else if (_demoA && _demoB) {
+    // Legacy A/B compare URL — parsed for one release, rewritten to
+    // canonical `?capture=…&capture=…` on load by loadCompareDemo.
+    const { fileA, fileB, legends } = parsePair(_demoA, _demoB);
+    splashLabel = `${legends?.baseline || fileA} vs ${legends?.experiment || fileB}`;
+    m.mount(document.body, Root);
+    loadCompareDemo(fileA, fileB, legends);
 } else if (_demoParam !== null) {
     splashLabel = _demoParam || 'demo.parquet';
     m.mount(document.body, Root);
