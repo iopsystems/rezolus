@@ -8,7 +8,7 @@ import { renderCompareChart } from './charts/compare.js';
 import {
     queryRangeForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
-    CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
+    getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
 } from './data.js';
 import { canonicalQuantileLabel } from './charts/util/compare_math.js';
 import { ViewerApi } from './viewer_api.js';
@@ -180,76 +180,116 @@ function heatmapTriplesToMatrix(triples, binCount) {
  * strategy returns `false` (unsupported / not enough data), falls
  * back to rendering baseline-only.
  */
+// Effective experiment-query step: explicit user override (granularity
+// selector) > caller-supplied step prop > range-derived auto-step.
+const effectiveExperimentStep = (attrs, range) => {
+    const override = getStepOverride();
+    if (override && override > 0) return override;
+    if (attrs.step && attrs.step > 0) return attrs.step;
+    return range.step;
+};
+
+// Fetch the experiment-side PromQL result and stash it on vnode.state.
+// Records `_lastFetchedStep` so the component's view can detect when
+// the granularity selector has moved and trigger another fetch.
+const fetchExperimentResult = (vnode) => {
+    const { spec, sectionRoute } = vnode.attrs;
+    if (!spec.promql_query) {
+        vnode.state.error = 'no PromQL query';
+        return;
+    }
+    // Apply the same transforms the baseline path applies (histogram
+    // wrap, counter rewrite, cgroup substitution), but deliberately
+    // SKIP node/instance label injection: those labels are tied to the
+    // baseline's topology and would return zero matches on the
+    // experiment in the common case where the two recordings have
+    // different hostnames or instance IDs.
+    const query = buildEffectiveQuery(spec, {
+        sectionRoute,
+        crossCapture: true,
+    });
+    if (query == null) {
+        vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
+        return;
+    }
+    vnode.state._fetchInFlight = true;
+    (async () => {
+        try {
+            // Range cached at compare-mode entry; fall back to a one-off
+            // metadata fetch if absent (legacy entry paths).
+            let range = vnode.attrs.experimentQueryRange;
+            if (!range) {
+                try {
+                    const meta = await ViewerApi.getMetadata(CAPTURE_EXPERIMENT);
+                    const data = meta?.data ?? meta;
+                    const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+                    const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+                    if (minT != null && maxT != null) {
+                        const start = Number(minT);
+                        const end = Number(maxT);
+                        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+                            range = { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+                        }
+                    }
+                } catch (_) { /* best effort */ }
+            }
+            if (!range) {
+                vnode.state.error = 'experiment metadata missing time range';
+                vnode.state._fetchInFlight = false;
+                m.redraw();
+                return;
+            }
+            const step = effectiveExperimentStep(vnode.attrs, range);
+            const res = await queryRangeForCapture(
+                CAPTURE_EXPERIMENT, query, range.start, range.end, step,
+            );
+            vnode.state.experimentResult = res;
+            vnode.state._lastFetchedStep = step;
+            // Invalidate the memoized capture so view() re-extracts
+            // against the freshly fetched result.
+            vnode.state._capExpResult = null;
+        } catch (e) {
+            // Some rejection paths throw primitives (null for bare
+            // aborts, undefined for empty responses). String(e) would
+            // surface "null"/"undefined" to the user; prefer a readable
+            // message and log the raw value.
+            console.error('[compare] experiment query failed', e);
+            vnode.state.error = e?.message
+                || (typeof e === 'string' && e)
+                || 'experiment query failed';
+        } finally {
+            vnode.state._fetchInFlight = false;
+            m.redraw();
+        }
+    })();
+};
+
 const CompareChartWrapper = {
     oninit(vnode) {
-        const { spec, sectionRoute } = vnode.attrs;
         vnode.state.experimentResult = null;
         vnode.state.error = null;
-        if (!spec.promql_query) {
-            vnode.state.error = 'no PromQL query';
-            return;
-        }
-        // Apply the same transforms the baseline path applies (histogram
-        // wrap, counter rewrite, cgroup substitution), but deliberately
-        // SKIP node/instance label injection: those labels are tied to the
-        // baseline's topology and would return zero matches on the
-        // experiment in the common case where the two recordings have
-        // different hostnames or instance IDs.
-        const query = buildEffectiveQuery(spec, {
-            sectionRoute,
-            crossCapture: true,
-        });
-        if (query == null) {
-            vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
-            return;
-        }
-        // Query the experiment over its own time range. The compare-mode
-        // bootstrap cached {start, end, step} at attach time; fall back
-        // to a one-off metadata fetch only if the cache is missing
-        // (e.g. legacy entry paths that don't thread it through).
-        (async () => {
-            try {
-                let range = vnode.attrs.experimentQueryRange;
-                if (!range) {
-                    try {
-                        const meta = await ViewerApi.getMetadata(CAPTURE_EXPERIMENT);
-                        const data = meta?.data ?? meta;
-                        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
-                        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
-                        if (minT != null && maxT != null) {
-                            const start = Number(minT);
-                            const end = Number(maxT);
-                            if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-                                range = { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
-                            }
-                        }
-                    } catch (_) { /* best effort */ }
-                }
-                if (!range) {
-                    vnode.state.error = 'experiment metadata missing time range';
-                    m.redraw();
-                    return;
-                }
-                const step = vnode.attrs.step && vnode.attrs.step > 0 ? vnode.attrs.step : range.step;
-                const res = await queryRangeForCapture(CAPTURE_EXPERIMENT, query, range.start, range.end, step);
-                vnode.state.experimentResult = res;
-                m.redraw();
-            } catch (e) {
-                // Some rejection paths throw primitives (null for bare
-                // aborts, undefined for empty responses). The generic
-                // `String(e)` fallback would then surface "null" /
-                // "undefined" to the user. Prefer a readable message
-                // and log the raw value for diagnosis.
-                console.error('[compare] experiment query failed', e);
-                vnode.state.error = e?.message
-                    || (typeof e === 'string' && e)
-                    || 'experiment query failed';
-                m.redraw();
-            }
-        })();
+        // The step at which experimentResult was last fetched. View-side
+        // checks this against the current effective step on every redraw
+        // and re-fetches when they diverge (granularity selector change).
+        vnode.state._lastFetchedStep = null;
+        vnode.state._fetchInFlight = false;
+        // Kick off the initial fetch.
+        fetchExperimentResult(vnode);
     },
 
     view(vnode) {
+        // Re-fetch if the user changed the granularity selector since the
+        // last fetch. CompareChartWrapper's oninit only runs once per
+        // component lifetime; without this check the cached result from
+        // the previous step would render forever.
+        if (!vnode.state.error && !vnode.state._fetchInFlight) {
+            const want = effectiveExperimentStep(vnode.attrs, { step: 0 });
+            if (want > 0 && vnode.state._lastFetchedStep != null
+                && want !== vnode.state._lastFetchedStep) {
+                fetchExperimentResult(vnode);
+            }
+        }
+
         const { spec, chartsState, interval, anchors, toggles, setChartToggle, captureLabels } = vnode.attrs;
 
         if (vnode.state.error) {
@@ -387,7 +427,11 @@ export function createGroupComponent(getState) {
                     toggles,
                     setChartToggle,
                     sectionRoute,
-                    step: interval,
+                    // Pass the user-effective step. CompareChartWrapper
+                    // also consults _stepOverride internally, but
+                    // including it in attrs keeps the value visible in
+                    // the vnode.attrs trail for any future debugging.
+                    step: getStepOverride() || interval,
                     experimentQueryRange,
                     captureLabels,
                 })

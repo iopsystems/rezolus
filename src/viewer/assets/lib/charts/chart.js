@@ -223,6 +223,28 @@ function sameHead(a, b) {
     return false;
 }
 
+// Compare two compare-mode `multiSeries` arrays for a meaningful change.
+// Each entry has its own `timeData` / `valueData`; a refetch produces
+// fresh arrays. Reference equality on the entry pair is enough for the
+// happy "no change" case; otherwise probe length + head/tail of each
+// series's valueData (timeData heads are usually rebased so changes
+// there mirror valueData changes one-for-one). Returns `true` when
+// reconfigure is warranted.
+function multiSeriesDiffers(a, b) {
+    if (a === b) return false;
+    if (!Array.isArray(a) || !Array.isArray(b)) return Array.isArray(a) !== Array.isArray(b);
+    if (a.length !== b.length) return true;
+    for (let i = 0; i < a.length; i++) {
+        const ai = a[i];
+        const bi = b[i];
+        if (ai === bi) continue;
+        if (!ai || !bi) return true;
+        if (ai.valueData !== bi.valueData
+            && !shallowSameShape([ai.valueData], [bi.valueData])) return true;
+    }
+    return false;
+}
+
 // Chart component - uses echarts to render a chart
 export class Chart {
     constructor(vnode) {
@@ -285,7 +307,15 @@ export class Chart {
         const formatChanged = oldSpec.opts?.format !== this.spec.opts?.format;
         const dataChanged = oldSpec.data !== this.spec.data
             && !shallowSameShape(oldSpec.data, this.spec.data);
-        if (this.echart && (dataChanged || formatChanged || themeChanged)) {
+        // Compare-mode line/scatter sub-charts carry their per-capture
+        // series in `spec.multiSeries`, not `spec.data`. An experiment
+        // refetch (granularity change) only swaps the multiSeries
+        // entries — `spec.data` (the baseline arrays) often look
+        // identical across renders, so shallowSameShape would say "no
+        // change" and the chart would render stale experiment dots.
+        // Detect a multiSeries swap explicitly.
+        const multiSeriesChanged = multiSeriesDiffers(oldSpec.multiSeries, this.spec.multiSeries);
+        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 
