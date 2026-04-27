@@ -18,6 +18,14 @@ import { initTheme } from './theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './service.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
+import {
+    createSectionCacheState,
+    storeSectionResponse,
+    getSections,
+    withSharedSections,
+    clearSectionResponses,
+    resetSectionCacheState,
+} from './section_cache.js';
 
 // ── State ──────────────────────────────────────────────────────────
 
@@ -36,7 +44,12 @@ let heatmapLoading = false;
 const heatmapDataCache = new Map();
 const chartsState = new ChartsState();
 let currentGranularity = null;
-const sectionResponseCache = {};
+const sectionCacheState = createSectionCacheState();
+const sectionResponseCache = sectionCacheState.responses;
+const cacheSectionResponse = (section, data) =>
+    storeSectionResponse(sectionCacheState, section, data);
+const withCachedSections = (data) => withSharedSections(sectionCacheState, data);
+const getCachedSections = () => getSections(sectionCacheState);
 
 // Compare-mode state (Stage 4 of A/B compare plan)
 let compareMode = false;
@@ -197,7 +210,7 @@ const setChartToggle = (chartId, key, value) => {
 };
 
 const clearViewerCaches = () => {
-    Object.keys(sectionResponseCache).forEach((k) => delete sectionResponseCache[k]);
+    resetSectionCacheState(sectionCacheState);
     heatmapDataCache.clear();
     chartsState.clear();
 };
@@ -236,19 +249,13 @@ const loadSection = async (section) => {
     if (!data) return null;
 
     const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
-    sectionResponseCache[section] = processedData;
-    return processedData;
+    return cacheSectionResponse(section, processedData);
 };
 
 const preloadSections = (allSections) => {
-    for (const section of allSections) {
-        const key = section.route.substring(1);
-        if (!sectionResponseCache[key]) {
-            // Skip preloading in live mode — data flows dynamically
-            if (liveMode) continue;
-            loadSection(key).then(() => m.redraw()).catch(() => {});
-        }
-    }
+    // Section bodies now load on demand. Keep this hook as a no-op so
+    // existing callers don't eagerly materialize every section payload.
+    void allSections;
 };
 
 const reloadCurrentSection = async () => {
@@ -305,9 +312,7 @@ const changeGranularity = async (step) => {
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
 
     // All cached section data is stale against the new step.
-    for (const key of Object.keys(sectionResponseCache)) {
-        delete sectionResponseCache[key];
-    }
+    clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
     // Route zoom clear through the observable setter so any charts
     // that are still alive at this point (explorers etc.) see the
@@ -645,7 +650,8 @@ const initDashboard = (config = {}) => {
                     view() {
                         const data = sectionResponseCache[sectionKey];
                         if (!data) return m('div', 'Loading...');
-                        const activeSection = data.sections.find(s => s.route === `/${sectionKey}`);
+                        const activeSection = getCachedSections()
+                            .find(s => s.route === `/${sectionKey}`);
                         return m('div', [
                             m(TopNav, topNavAttrs(data, activeSection?.route)),
                             m('main.single-chart-main', [
@@ -677,6 +683,8 @@ const initDashboard = (config = {}) => {
             SingleChartView,
             applyResultToPlot,
             getCompareMode: () => compareMode,
+            getSections: getCachedSections,
+            withSharedSections: withCachedSections,
         }),
         '/about': {
             render() {
@@ -710,32 +718,60 @@ const initDashboard = (config = {}) => {
 
                 if (params.section === 'systeminfo') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, systemInfoSection, () => compareMode);
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        systemInfoSection,
+                        () => compareMode,
+                    );
                 }
 
                 if (params.section === 'metadata') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, metadataSection, () => compareMode);
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        metadataSection,
+                        () => compareMode,
+                    );
                 }
 
                 if (params.section === 'selection') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, selectionSection, () => compareMode);
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        selectionSection,
+                        () => compareMode,
+                    );
                 }
 
                 if (params.section === 'report') {
                     bootstrapCacheIfNeeded();
-                    return buildClientOnlySectionView(Main, sectionResponseCache, reportSection, () => compareMode);
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        reportSection,
+                        () => compareMode,
+                    );
                 }
 
                 const cachedView = (sectionKey, path) => ({
                     view() {
                         const data = sectionResponseCache[sectionKey];
                         if (!data) return m('div', 'Loading...');
-                        const activeSection = data.sections.find(
+                        const activeSection = getCachedSections().find(
                             (section) => section.route === path,
                         );
-                        return m(Main, { ...data, activeSection, compareMode });
+                        return m(Main, {
+                            ...withCachedSections(data),
+                            activeSection,
+                            compareMode,
+                        });
                     },
                 });
 
@@ -772,4 +808,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, sectionResponseCache, cacheSectionResponse, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

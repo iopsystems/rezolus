@@ -40,6 +40,7 @@
 
 import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
+import { ensureHeatmapMatrix } from './util/heatmap_data.js';
 import { resolvedStyle } from './metric_types.js';
 import { isDarkTheme } from './base.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
@@ -263,19 +264,15 @@ const unifiedHeatmapRange = (a, b, spec) => {
  */
 const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
     const [a, b] = captures;
-    const aMatrix = a.heatmapMatrix || null;
-    const bMatrix = b.heatmapMatrix || null;
-
-    // Guard: diff requires both captures to provide a normalized matrix
-    // (rows × time bins). The normalization step lives in the caller
-    // (viewer_core). Without it, bail and fall through to no-data.
-    if (!aMatrix || !bMatrix) return FALLBACK;
+    const aMatrix = ensureHeatmapMatrix(a);
+    const bMatrix = ensureHeatmapMatrix(b);
 
     const rows = Math.min(aMatrix.length, bMatrix.length);
     const bins = Math.min(
         (aMatrix[0] || []).length,
         (bMatrix[0] || []).length,
     );
+    if (rows === 0 || bins === 0) return FALLBACK;
 
     const triples = [];
     let dMin = Infinity;
@@ -448,4 +445,3 @@ const sideBySideHistogramHeatmap = (opts) => sideBySidePair({
         bucket_bounds: cap.bucketBounds || opts.spec.bucket_bounds,
     }),
 });
-

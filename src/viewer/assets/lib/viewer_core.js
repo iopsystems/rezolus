@@ -11,6 +11,7 @@ import {
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
 } from './data.js';
 import { canonicalQuantileLabel } from './charts/util/compare_math.js';
+import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
 
 // ── Normalization helpers for compare-mode captures ────────────────
@@ -58,7 +59,6 @@ const extractBaselineCapture = (spec) => {
         cap.timeData = spec.time_data || [];
         cap.heatmapData = spec.data || [];
         cap.bucketBounds = spec.bucket_bounds;
-        cap.heatmapMatrix = heatmapTriplesToMatrix(cap.heatmapData, cap.timeData.length);
         const scanned = heatmapTriplesMinMax(cap.heatmapData);
         cap.minValue = scanned.min != null ? scanned.min : spec.min_value;
         cap.maxValue = scanned.max != null ? scanned.max : spec.max_value;
@@ -78,7 +78,7 @@ const extractExperimentCapture = (spec, promqlResult) => {
     if (!Array.isArray(results) || results.length === 0) {
         if (style === 'multi' || style === 'scatter') cap.seriesMap = new Map();
         else if (style === 'heatmap' || style === 'histogram_heatmap') {
-            cap.timeData = []; cap.heatmapData = []; cap.heatmapMatrix = [];
+            cap.timeData = []; cap.heatmapData = [];
         } else {
             cap.timeData = []; cap.valueData = [];
         }
@@ -114,7 +114,6 @@ const extractExperimentCapture = (spec, promqlResult) => {
         const { timestamps, triples, minValue, maxValue } = promqlResultToHeatmapTriples(results);
         cap.timeData = timestamps.map(Number);
         cap.heatmapData = triples;
-        cap.heatmapMatrix = heatmapTriplesToMatrix(triples, cap.timeData.length);
         cap.minValue = minValue;
         cap.maxValue = maxValue;
         return cap;
@@ -126,51 +125,8 @@ const extractExperimentCapture = (spec, promqlResult) => {
     // the shape doesn't match. Full support is follow-up work.
     cap.timeData = [];
     cap.heatmapData = [];
-    cap.heatmapMatrix = [];
     return cap;
 };
-
-// Scan a flat [timeIdx, y, value] triple array for the numeric value
-// bounds. Returns { min: null, max: null } when there are no numeric
-// samples. Used once at extract time so unifiedHeatmapRange can just
-// Math.min/Math.max the two pre-computed pairs.
-function heatmapTriplesMinMax(triples) {
-    if (!Array.isArray(triples) || triples.length === 0) return { min: null, max: null };
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (const t of triples) {
-        const v = Array.isArray(t) ? t[2] : null;
-        if (v == null || Number.isNaN(v)) continue;
-        if (v < lo) lo = v;
-        if (v > hi) hi = v;
-    }
-    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { min: null, max: null };
-    return { min: lo, max: hi };
-}
-
-// Build a rows × bins matrix from a flat [timeIdx, y, value] triple
-// array. Gaps fill with null. Used by the diff-heatmap strategy.
-function heatmapTriplesToMatrix(triples, binCount) {
-    if (!Array.isArray(triples) || triples.length === 0) return [];
-    let maxY = -1;
-    for (const t of triples) {
-        const y = Number(t?.[1]);
-        if (Number.isFinite(y) && y > maxY) maxY = y;
-    }
-    if (maxY < 0) return [];
-    const rows = maxY + 1;
-    const cols = Math.max(1, binCount || 0);
-    const matrix = Array.from({ length: rows }, () =>
-        new Array(cols).fill(null));
-    for (const [ti, y, v] of triples) {
-        const r = Number(y);
-        const c = Number(ti);
-        if (!Number.isFinite(r) || !Number.isFinite(c)) continue;
-        if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
-        matrix[r][c] = (v === null || v === undefined) ? null : Number(v);
-    }
-    return matrix;
-}
 
 /**
  * Mithril component that fetches experiment data asynchronously and
@@ -500,15 +456,14 @@ export function getCachedSectionMeta(sectionResponseCache, interval) {
  * Build a Mithril component for a client-only section (System Info,
  * Metadata, Selection, Report) that has no backend data of its own.
  */
-export function buildClientOnlySectionView(Main, sectionResponseCache, activeSection, getCompareMode) {
+export function buildClientOnlySectionView(Main, sectionResponseCache, getSections, activeSection, getCompareMode) {
     return {
         view() {
             const anyCached = Object.values(sectionResponseCache)[0];
-            const sections = anyCached?.sections || [];
             return m(Main, {
                 activeSection,
                 groups: [],
-                sections,
+                sections: typeof getSections === 'function' ? getSections() : [],
                 compareMode: typeof getCompareMode === 'function' ? getCompareMode() : false,
                 source: anyCached?.source,
                 version: anyCached?.version,
@@ -522,4 +477,3 @@ export function buildClientOnlySectionView(Main, sectionResponseCache, activeSec
         },
     };
 }
-

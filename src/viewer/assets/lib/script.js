@@ -7,7 +7,7 @@ import { FileUpload, CompareLanding } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, sectionResponseCache, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // ── Backend state fetching ─────────────────────────────────────────
 
@@ -99,7 +99,7 @@ const uploadParquet = async (file) => {
 
         const data = await ViewerApi.getSection('overview');
         const processed = await processDashboardData(data, null, '/overview');
-        sectionResponseCache['overview'] = processed;
+        cacheSectionResponse('overview', processed);
         if (processed.sections) preloadSections(processed.sections);
 
         if (m.route.get() !== '/overview') {
@@ -135,7 +135,7 @@ const refreshCurrentSection = async () => {
         }
         const [processed] = await Promise.all(promises);
 
-        sectionResponseCache[section] = processed;
+        cacheSectionResponse(section, processed);
         m.redraw();
     } catch (e) {
         // Keep existing data on error

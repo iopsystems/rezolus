@@ -1,0 +1,99 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServiceRoutes } from '../src/viewer/assets/lib/service.js';
+
+const setupGlobals = () => {
+    const previousM = globalThis.m;
+    const previousWindow = globalThis.window;
+
+    globalThis.m = (tag, attrs, children) => ({ tag, attrs, children });
+    globalThis.m.route = {
+        get: () => '/overview',
+    };
+    globalThis.window = {
+        scrollTo() {},
+    };
+
+    return () => {
+        globalThis.m = previousM;
+        globalThis.window = previousWindow;
+    };
+};
+
+const baseDeps = (sectionResponseCache) => ({
+    sectionResponseCache,
+    loadSection: async () => null,
+    preloadSections: () => {},
+    chartsState: { charts: new Map() },
+    Main: 'Main',
+    TopNav: 'TopNav',
+    topNavAttrs: (data, route, extra) => ({ data, route, extra }),
+    SingleChartView: 'SingleChartView',
+    applyResultToPlot: () => {},
+    getCompareMode: () => false,
+});
+
+test('service section route hydrates lean cached payloads with shared sections', async () => {
+    const restore = setupGlobals();
+    const sections = [
+        { name: 'Overview', route: '/overview' },
+        { name: 'API', route: '/service/api' },
+    ];
+
+    try {
+        const routes = createServiceRoutes({
+            ...baseDeps({
+                'service/api': {
+                    groups: [{ id: 'latency' }],
+                    interval: 1,
+                    metadata: {},
+                },
+            }),
+            getSections: () => sections,
+            withSharedSections: (data) => ({ ...data, sections }),
+        });
+
+        const view = await routes['/service/:serviceName'].onmatch(
+            { serviceName: 'api' },
+            '/service/api',
+        );
+        const vnode = view.view();
+
+        assert.equal(vnode.tag, 'Main');
+        assert.deepEqual(vnode.attrs.sections, sections);
+        assert.equal(vnode.attrs.activeSection.route, '/service/api');
+    } finally {
+        restore();
+    }
+});
+
+test('service section route falls back to embedded sections when shared-section helpers are absent', async () => {
+    const restore = setupGlobals();
+    const sections = [
+        { name: 'Overview', route: '/overview' },
+        { name: 'API', route: '/service/api' },
+    ];
+
+    try {
+        const routes = createServiceRoutes(baseDeps({
+            'service/api': {
+                groups: [{ id: 'latency' }],
+                interval: 1,
+                metadata: {},
+                sections,
+            },
+        }));
+
+        const view = await routes['/service/:serviceName'].onmatch(
+            { serviceName: 'api' },
+            '/service/api',
+        );
+        const vnode = view.view();
+
+        assert.equal(vnode.tag, 'Main');
+        assert.deepEqual(vnode.attrs.sections, sections);
+        assert.equal(vnode.attrs.activeSection.route, '/service/api');
+    } finally {
+        restore();
+    }
+});
