@@ -104,6 +104,97 @@ impl ServiceExtension {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Bridge extension — ties two ServiceExtensions together for compare-mode
+// A/B rendering across heterogeneous services. See
+// docs/superpowers/specs/2026-04-27-inference-library-bridge-template-design.md.
+// ─────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeExtension {
+    pub service_name: String,
+    /// Always `true` on a bridge file. The shared loader uses this flag
+    /// to route the parsed JSON into the bridge map instead of services.
+    #[serde(default)]
+    pub bridge: bool,
+    /// Exactly two member service names. Order is irrelevant for matching;
+    /// the dashboard generator passes the live capture ordering at gen time.
+    pub members: Vec<String>,
+    pub kpis: Vec<BridgeKpi>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeKpi {
+    pub role: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub metric_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_system: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percentiles: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub denominator: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subgroup: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subgroup_description: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full_width: bool,
+    /// Per-member source title. When a member is omitted, the bridge KPI's
+    /// own `title` is used as the lookup key into that member's template.
+    #[serde(default)]
+    pub member_titles: HashMap<String, String>,
+}
+
+impl BridgeKpi {
+    /// Title to look up in the given member's template. Defaults to the
+    /// bridge KPI's own `title` when the member is absent from
+    /// `member_titles`.
+    pub fn member_title<'a>(&'a self, member: &str) -> &'a str {
+        self.member_titles
+            .get(member)
+            .map(String::as_str)
+            .unwrap_or(self.title.as_str())
+    }
+
+    /// Build the same effective query string that a regular `Kpi` would
+    /// produce given the supplied raw query. Mirrors `Kpi::effective_query`
+    /// — histogram_percentiles wrapping, histogram_heatmap for buckets,
+    /// passthrough for everything else.
+    pub fn effective_query(&self, raw_query: &str) -> String {
+        if self.metric_type == "histogram" {
+            let subtype = self.subtype.as_deref().unwrap_or("percentiles");
+            if subtype == "buckets" {
+                format!("histogram_heatmap({})", raw_query)
+            } else {
+                let quantiles = match &self.percentiles {
+                    Some(p) => format!(
+                        "[{}]",
+                        p.iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    None => format!(
+                        "[{}]",
+                        crate::DEFAULT_PERCENTILES
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                };
+                format!("histogram_percentiles({}, {})", quantiles, raw_query)
+            }
+        } else {
+            raw_query.to_string()
+        }
+    }
+}
+
 /// Registry of service extension templates loaded from a directory at runtime.
 ///
 /// Templates are indexed by `service_name` and each entry in `aliases`.
@@ -314,5 +405,39 @@ mod tests {
 
         assert!(err.contains("duplicate template key"));
         assert!(err.contains("redis"));
+    }
+
+    #[test]
+    fn parses_bridge_extension_json() {
+        let json = r#"{
+            "service_name": "inference-library",
+            "bridge": true,
+            "members": ["vllm", "sglang"],
+            "kpis": [
+                {
+                    "role": "throughput",
+                    "title": "Generation Token Rate",
+                    "type": "delta_counter",
+                    "unit_system": "rate",
+                    "denominator": true,
+                    "member_titles": {
+                        "vllm":   "Generation Token Rate",
+                        "sglang": "Generation Token Rate"
+                    }
+                }
+            ]
+        }"#;
+        let bridge: BridgeExtension = serde_json::from_str(json).expect("parse");
+        assert_eq!(bridge.service_name, "inference-library");
+        assert_eq!(bridge.members, ["vllm".to_string(), "sglang".to_string()]);
+        assert_eq!(bridge.kpis.len(), 1);
+        let k = &bridge.kpis[0];
+        assert_eq!(k.title, "Generation Token Rate");
+        assert_eq!(k.metric_type, "delta_counter");
+        assert!(k.denominator);
+        assert_eq!(
+            k.member_titles.get("vllm").map(String::as_str),
+            Some("Generation Token Rate"),
+        );
     }
 }
