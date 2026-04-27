@@ -18,6 +18,10 @@ import {
     FONTS,
 } from './base.js';
 import { VIRIDIS_COLORS, viridisColor } from './util/colormap.js';
+import {
+    createHeatmapResolutionStore,
+    ensureHeatmapResolution,
+} from './util/heatmap_data.js';
 import { buildGradientCanvas, ensureLegendBar } from './color_legend.js';
 
 /**
@@ -65,87 +69,22 @@ export function configureHeatmap(chart) {
 
     const baseOption = getBaseOption();
 
-    // Extract all unique CPU IDs
-    const yIndices = new Set();
-    data.forEach(item => {
-        yIndices.add(item[1]); // CPU ID
-    });
-
-    // Convert to array and sort numerically
-    const cpuIds = Array.from(yIndices).sort((a, b) => a - b);
-
-    // Ensure we have a continuous range of CPUs from 0 to max
-    const maxCpuId = cpuIds.length > 0 ? Math.max(...cpuIds) : 0;
-    const continuousCpuIds = Array.from({
-        length: maxCpuId + 1
-    }, (_, i) => i);
-
-    if (continuousCpuIds.length !== cpuIds.length) {
-        console.error('CPU IDs are not continuous', cpuIds);
-    }
-
-    // First, transform data into a simple 2d matrix of values.
-    // dataMatrix[cpuId][timeIndex] = value
     const xCount = timeData.length;
-    const yCount = continuousCpuIds.length;
-    const dataMatrix = new Array(yCount).fill(null).map(() => new Array(xCount).fill(null));
-    for (let i = 0; i < data.length; i++) {
-        const [timeIndex, y, value] = data[i];
-        dataMatrix[y][timeIndex] = value;
-    }
-
-    // Build data ordered by time (columns) first, then CPU (rows),
-    // so that ECharts' progressive rendering fills left-to-right. When
-    // the spec supplies a `nullCellColor`, emit null cells too so that
-    // renderItem can paint them distinctly.
     const emitNullCells = !!chart.spec.nullCellColor;
-    const processedData = [];
-    for (let t = 0; t < xCount; t++) {
-        for (let y = 0; y < yCount; y++) {
-            const v = dataMatrix[y][t];
-            if (v !== null) {
-                processedData.push([timeData[t] * 1000, y, t, null, v]);
-            } else if (emitNullCells) {
-                processedData.push([timeData[t] * 1000, y, t, null, null]);
-            }
-        }
+    const resolutionStore = createHeatmapResolutionStore(data, timeData, emitNullCells);
+    chart.heatmapResolutionStore = resolutionStore;
+    const yCount = resolutionStore.yCount;
+    const continuousCpuIds = Array.from({ length: yCount }, (_, i) => i);
+    if (continuousCpuIds.length !== resolutionStore.cpuIds.length) {
+        console.error('CPU IDs are not continuous', resolutionStore.cpuIds);
     }
 
     const MAX_DATA_POINT_DISPLAY = 50000;
-    // Create a list of options for data to display at different levels of downsampling.
-    // These are ordered from highest to lowest resolution. So, usage is to iterate through
-    // them until one is low enough resolution.
     const nullColor = chart.spec.nullCellColor || null;
-    chart.downsampleCache = [];
-    chart.downsampleCache.push({
-        factor: 1,
-        data: processedData,
-        renderItem: createRenderItemFunc(timeData, 1, nullColor),
-    });
     const originalRatioOfDataPointsToMax = xCount * yCount / MAX_DATA_POINT_DISPLAY;
-
-    if (originalRatioOfDataPointsToMax > 1) {
-        const factor = Math.ceil(originalRatioOfDataPointsToMax);
-        const downsampledData = downsample(dataMatrix, factor);
-        const downsampledXCount = downsampledData[0].length;
-        const processedDownsampledData = [];
-        // Iterate time-first so progressive rendering fills left-to-right
-        for (let x = 0; x < downsampledXCount; x++) {
-            for (let y = 0; y < yCount; y++) {
-                const minAndMax = downsampledData[y][x];
-                if (minAndMax !== null) {
-                    processedDownsampledData.push([timeData[x * factor] * 1000, y, x * factor, minAndMax[0], minAndMax[1]]);
-                } else if (emitNullCells) {
-                    processedDownsampledData.push([timeData[x * factor] * 1000, y, x * factor, null, null]);
-                }
-            }
-        }
-        chart.downsampleCache.push({
-            factor,
-            data: processedDownsampledData,
-            renderItem: createRenderItemFunc(timeData, factor, nullColor),
-        });
-    }
+    const initialFactor = Math.max(1, Math.ceil(originalRatioOfDataPointsToMax));
+    const initialResolution = ensureHeatmapResolution(resolutionStore, initialFactor);
+    chart._heatmapRenderedFactor = initialResolution.factor;
 
     // Y axis labels: if more than Y_MAX_LABELS, show every 2nd, 4th, 8th, 16th, or etc.
     const Y_MAX_LABELS = 16;
@@ -360,9 +299,9 @@ export function configureHeatmap(chart) {
         series: [{
             name: chart.spec.opts.title,
             type: 'custom',
-            renderItem: chart.downsampleCache[chart.downsampleCache.length - 1].renderItem,
+            renderItem: createRenderItemFunc(timeData, initialResolution.factor, nullColor),
             clip: true,
-            data: chart.downsampleCache[chart.downsampleCache.length - 1].data,
+            data: initialResolution.data,
             emphasis: {
                 itemStyle: {
                     shadowBlur: 10,
@@ -427,59 +366,17 @@ export function configureHeatmap(chart) {
         // User-triggered events have a batch property with the details under it.
         const zoomLevel = event.batch ? event.batch[0] : event;
         const factor = zoomLevelToFactor(zoomLevel, originalRatioOfDataPointsToMax, 1000 * (timeData[timeData.length - 1] - timeData[0]));
-        for (let i = 0; i < chart.downsampleCache.length; i++) {
-            const downsampleCacheItem = chart.downsampleCache[i];
-            if (downsampleCacheItem.factor >= factor) {
-                const data = downsampleCacheItem.data;
-                const renderItem = downsampleCacheItem.renderItem;
-                // Only update the echarts object if the data has changed.
-                if (chart.echart.getOption().series[0].data.length !== data.length) {
-                    chart.echart.setOption({
-                        series: [{
-                            data: data,
-                            renderItem: renderItem
-                        }]
-                    });
-                }
-                break;
-            }
+        const resolution = ensureHeatmapResolution(resolutionStore, factor);
+        if (chart._heatmapRenderedFactor !== resolution.factor) {
+            chart._heatmapRenderedFactor = resolution.factor;
+            chart.echart.setOption({
+                series: [{
+                    data: resolution.data,
+                    renderItem: createRenderItemFunc(timeData, resolution.factor, nullColor),
+                }],
+            });
         }
     });
-}
-
-/**
- * Create a downsampled version of the data matrix.
- * Combines every `factor` data points along the x axis into a single data point with a min and max value.
- * @param {Array<Array<number>>} dataMatrix
- * @param {number} factor
- * @returns {Array<Array<number>>}
- */
-const downsample = (dataMatrix, factor) => {
-    const yCount = dataMatrix.length;
-    const xCount = dataMatrix[0].length;
-    const downsampledXCount = Math.ceil(xCount / factor);
-    const downsampledDataMatrix = new Array(yCount).fill(null).map(() => new Array(downsampledXCount).fill(null));
-    for (let y = 0; y < yCount; y++) {
-        for (let x = 0; x < Math.ceil(xCount / factor); x++) {
-            let max = null;
-            let min = null;
-            for (let origX = x * factor; origX < (x + 1) * factor && origX < xCount; origX++) {
-                if (dataMatrix[y][origX] !== null) {
-                    if (max === null) {
-                        max = dataMatrix[y][origX];
-                        min = dataMatrix[y][origX];
-                    } else {
-                        max = Math.max(max, dataMatrix[y][origX]);
-                        min = Math.min(min, dataMatrix[y][origX]);
-                    }
-                }
-            }
-            if (max !== null) {
-                downsampledDataMatrix[y][x] = [min, max];
-            }
-        }
-    }
-    return downsampledDataMatrix;
 }
 
 /**

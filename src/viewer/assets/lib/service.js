@@ -76,6 +76,8 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
  * @param {Function} deps.topNavAttrs - (data, route) => attrs
  * @param {object} deps.SingleChartView
  * @param {Function} deps.applyResultToPlot
+ * @param {Function} deps.getSections - () => shared sections array
+ * @param {Function} deps.withSharedSections - (data) => data + shared sections
  * @returns {object} route map with '/service/:serviceName' and '/service/:serviceName/chart/:chartId'
  */
 const createServiceRoutes = (deps) => {
@@ -90,6 +92,8 @@ const createServiceRoutes = (deps) => {
         SingleChartView,
         applyResultToPlot,
         getCompareMode,
+        getSections,
+        withSharedSections,
     } = deps;
     const readCompareMode = () => (typeof getCompareMode === 'function' ? !!getCompareMode() : false);
 
@@ -102,7 +106,8 @@ const createServiceRoutes = (deps) => {
                     view() {
                         const data = sectionResponseCache[svcKey];
                         if (!data) return m('div', 'Loading...');
-                        const activeSection = data.sections.find(s => s.route === `/service/${params.serviceName}`);
+                        const activeSection = getSections()
+                            .find(s => s.route === `/service/${params.serviceName}`);
                         return m('div', [
                             m(TopNav, topNavAttrs(data, activeSection?.route, { compareMode: readCompareMode() })),
                             m('main.single-chart-main', [
@@ -138,10 +143,14 @@ const createServiceRoutes = (deps) => {
                     view() {
                         const data = sectionResponseCache[svcKey];
                         if (!data) return m('div', 'Loading...');
-                        const activeSection = data.sections.find(
+                        const activeSection = getSections().find(
                             (section) => section.route === `/service/${params.serviceName}`,
                         );
-                        return m(Main, { ...data, activeSection, compareMode: readCompareMode() });
+                        return m(Main, {
+                            ...withSharedSections(data),
+                            activeSection,
+                            compareMode: readCompareMode(),
+                        });
                     },
                 });
 
