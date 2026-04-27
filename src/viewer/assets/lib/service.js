@@ -96,6 +96,37 @@ const createServiceRoutes = (deps) => {
         withSharedSections,
     } = deps;
     const readCompareMode = () => (typeof getCompareMode === 'function' ? !!getCompareMode() : false);
+    const readSections = (data) => {
+        const sharedSections = typeof getSections === 'function' ? getSections() : [];
+        if (Array.isArray(sharedSections) && sharedSections.length > 0) {
+            return sharedSections;
+        }
+        if (Array.isArray(data?.sections)) {
+            return data.sections;
+        }
+        return [];
+    };
+    const hydrateSections = (data) => {
+        if (!data || typeof data !== 'object') return data;
+
+        const hydrated = typeof withSharedSections === 'function'
+            ? withSharedSections(data)
+            : data;
+
+        if (Array.isArray(hydrated?.sections)) {
+            return hydrated;
+        }
+
+        const sections = readSections(data);
+        if (sections.length === 0) {
+            return hydrated;
+        }
+
+        return {
+            ...hydrated,
+            sections,
+        };
+    };
 
     return {
         '/service/:serviceName/chart/:chartId': {
@@ -106,13 +137,14 @@ const createServiceRoutes = (deps) => {
                     view() {
                         const data = sectionResponseCache[svcKey];
                         if (!data) return m('div', 'Loading...');
-                        const activeSection = getSections()
+                        const viewData = hydrateSections(data);
+                        const activeSection = readSections(viewData)
                             .find(s => s.route === `/service/${params.serviceName}`);
                         return m('div', [
-                            m(TopNav, topNavAttrs(data, activeSection?.route, { compareMode: readCompareMode() })),
+                            m(TopNav, topNavAttrs(viewData, activeSection?.route, { compareMode: readCompareMode() })),
                             m('main.single-chart-main', [
                                 m(SingleChartView, {
-                                    data,
+                                    data: viewData,
                                     chartId: decodeURIComponent(params.chartId),
                                     applyResultToPlot,
                                 }),
@@ -143,11 +175,12 @@ const createServiceRoutes = (deps) => {
                     view() {
                         const data = sectionResponseCache[svcKey];
                         if (!data) return m('div', 'Loading...');
-                        const activeSection = getSections().find(
+                        const viewData = hydrateSections(data);
+                        const activeSection = readSections(viewData).find(
                             (section) => section.route === `/service/${params.serviceName}`,
                         );
                         return m(Main, {
-                            ...withSharedSections(data),
+                            ...viewData,
                             activeSection,
                             compareMode: readCompareMode(),
                         });
@@ -158,7 +191,8 @@ const createServiceRoutes = (deps) => {
                     return makeView();
                 }
                 return loadSection(svcKey).then((data) => {
-                    if (data?.sections) preloadSections(data.sections);
+                    const sections = readSections(data);
+                    if (sections.length > 0) preloadSections(sections);
                     return makeView();
                 });
             },
