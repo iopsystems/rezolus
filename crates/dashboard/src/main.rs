@@ -13,7 +13,7 @@ use std::collections::HashMap;
 fn main() {
     let output_dir = std::env::args().nth(1);
 
-    let rendered: HashMap<String, String> = generate(&Tsdb::default(), None, &[], None);
+    let rendered: HashMap<String, String> = generate(&Tsdb::default(), None, &[], None, None);
 
     match output_dir {
         Some(dir) => write_to_dir(&dir, &rendered),

@@ -280,6 +280,7 @@ pub fn run(config: Config) {
                 filesize,
                 &service_refs,
                 None,
+                None,
             );
             state.sections.write().extend(rendered);
             *state.parquet_path.write() = Some(path.clone());
@@ -388,8 +389,13 @@ pub fn run(config: Config) {
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
             let state = AppState::new(tsdb, registry.clone());
-            let rendered =
-                dashboard::dashboard::generate(&state.baseline_tsdb().read(), None, &[], None);
+            let rendered = dashboard::dashboard::generate(
+                &state.baseline_tsdb().read(),
+                None,
+                &[],
+                None,
+                None,
+            );
             state.sections.write().extend(rendered);
             state.live.store(true, Ordering::Relaxed);
 
@@ -1414,7 +1420,7 @@ async fn upload_parquet(
         .ok()
         .expect("Arc still shared");
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None);
+    let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None, None);
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
@@ -1603,7 +1609,7 @@ async fn connect_agent(
     tsdb.set_source(source.clone());
     tsdb.set_version(version.clone());
     tsdb.set_filename(url.to_string());
-    let rendered = dashboard::dashboard::generate(&tsdb, None, &[], None);
+    let rendered = dashboard::dashboard::generate(&tsdb, None, &[], None, None);
 
     // Update shared state
     {

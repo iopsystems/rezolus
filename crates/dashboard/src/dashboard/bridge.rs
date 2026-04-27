@@ -2,10 +2,6 @@ use crate::Tsdb;
 use crate::plot::*;
 use crate::service_extension::{BridgeExtension, ServiceExtension};
 
-// Wired into the top-level dashboard generator in Task 7. Until then,
-// only the cfg(test) module references this fn, which doesn't prevent
-// the lib build's dead_code lint. Drop this attribute when Task 7 lands.
-#[allow(dead_code)]
 pub fn generate(
     data: &Tsdb,
     all_sections: Vec<Section>,

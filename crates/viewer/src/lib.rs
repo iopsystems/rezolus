@@ -82,7 +82,7 @@ impl Viewer {
         tsdb.set_filename(filename.to_string());
 
         let file_metadata = tsdb.file_metadata().clone();
-        let dashboard_sections = dashboard::dashboard::generate(&tsdb, None, &[], None);
+        let dashboard_sections = dashboard::dashboard::generate(&tsdb, None, &[], None, None);
         let engine = QueryEngine::new(Arc::new(tsdb));
 
         Ok(Viewer {
@@ -294,7 +294,7 @@ impl Viewer {
             .collect();
 
         self.dashboard_sections =
-            dashboard::dashboard::generate(&*self.engine.tsdb(), None, &service_refs, None);
+            dashboard::dashboard::generate(&*self.engine.tsdb(), None, &service_refs, None, None);
 
         Ok(())
     }

@@ -1,6 +1,6 @@
 use crate::Tsdb;
 use crate::plot::*;
-use crate::service_extension::ServiceExtension;
+use crate::service_extension::{BridgeExtension, ServiceExtension};
 
 mod blockio;
 mod bridge;
@@ -37,8 +37,19 @@ pub fn generate(
     data: &Tsdb,
     filesize: Option<u64>,
     service_exts: &[(&str, &ServiceExtension)],
+    bridge: Option<(&str, &BridgeExtension)>,
     _descriptions: Option<&std::collections::HashMap<String, String>>,
 ) -> std::collections::HashMap<String, String> {
+    // A bridge requires exactly two member service exts. If a caller
+    // passes Some(bridge) without that, the bridge can't be rendered;
+    // fall back to per-member sections so the section list and the
+    // rendered map stay in agreement (no nav entry for a route the map
+    // doesn't have, no orphaned member sections).
+    let bridge_active = bridge.is_some() && service_exts.len() == 2;
+
+    // Build the section list. In bridge mode, a single bridge section
+    // replaces the per-member sections; otherwise the per-member loop
+    // runs as before.
     let mut all_sections: Vec<Section> = std::iter::once(Section {
         name: "Overview".to_string(),
         route: "/overview".to_string(),
@@ -49,14 +60,25 @@ pub fn generate(
     }))
     .collect();
 
-    for (i, (source_name, _)) in service_exts.iter().enumerate() {
+    if bridge_active {
+        let (bridge_name, _) = bridge.unwrap();
         all_sections.insert(
-            1 + i,
+            1,
             Section {
-                name: source_name.to_string(),
-                route: format!("/service/{source_name}"),
+                name: bridge_name.to_string(),
+                route: format!("/service/{bridge_name}"),
             },
         );
+    } else {
+        for (i, (source_name, _)) in service_exts.iter().enumerate() {
+            all_sections.insert(
+                1 + i,
+                Section {
+                    name: source_name.to_string(),
+                    route: format!("/service/{source_name}"),
+                },
+            );
+        }
     }
 
     let mut rendered = std::collections::HashMap::new();
@@ -85,10 +107,27 @@ pub fn generate(
         rendered.insert(key, serde_json::to_string(&view).unwrap());
     }
 
-    for (source_name, ext) in service_exts {
-        let view = service::generate(data, all_sections.clone(), ext);
-        let key = format!("service/{source_name}.json");
+    if bridge_active {
+        let (bridge_name, bridge_ext) = bridge.unwrap();
+        let (a_name, a_ext) = service_exts[0];
+        let (b_name, b_ext) = service_exts[1];
+        let view = bridge::generate(
+            data,
+            all_sections.clone(),
+            bridge_ext,
+            a_name,
+            a_ext,
+            b_name,
+            b_ext,
+        );
+        let key = format!("service/{bridge_name}.json");
         rendered.insert(key, serde_json::to_string(&view).unwrap());
+    } else {
+        for (source_name, ext) in service_exts {
+            let view = service::generate(data, all_sections.clone(), ext);
+            let key = format!("service/{source_name}.json");
+            rendered.insert(key, serde_json::to_string(&view).unwrap());
+        }
     }
 
     rendered
@@ -101,7 +140,7 @@ mod tests {
     #[test]
     fn generate_produces_expected_keys() {
         let data = Tsdb::default();
-        let result = generate(&data, None, &[], None);
+        let result = generate(&data, None, &[], None, None);
 
         let mut keys: Vec<_> = result.keys().cloned().collect();
         keys.sort();
@@ -123,5 +162,74 @@ mod tests {
                 "syscall.json",
             ]
         );
+    }
+
+    #[test]
+    fn generate_emits_bridge_section_when_bridge_supplied() {
+        use crate::service_extension::{BridgeExtension, BridgeKpi, Kpi, ServiceExtension};
+        use std::collections::HashMap;
+
+        let kpi = |role: &str, title: &str, query: &str| Kpi {
+            role: role.to_string(),
+            title: title.to_string(),
+            description: None,
+            query: query.to_string(),
+            metric_type: "delta_counter".to_string(),
+            subtype: None,
+            unit_system: Some("rate".to_string()),
+            percentiles: None,
+            available: true,
+            denominator: false,
+            subgroup: None,
+            subgroup_description: None,
+            full_width: false,
+        };
+        let vllm = ServiceExtension {
+            service_name: "vllm".to_string(),
+            aliases: vec![],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: vec![kpi("throughput", "Generation Token Rate", "vllm_q")],
+        };
+        let sglang = ServiceExtension {
+            service_name: "sglang".to_string(),
+            aliases: vec![],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
+        };
+        let bridge = BridgeExtension {
+            service_name: "inference-library".to_string(),
+            bridge: true,
+            members: vec!["vllm".to_string(), "sglang".to_string()],
+            kpis: vec![BridgeKpi {
+                role: "throughput".to_string(),
+                title: "Generation Token Rate".to_string(),
+                metric_type: "delta_counter".to_string(),
+                subtype: None,
+                unit_system: Some("rate".to_string()),
+                percentiles: None,
+                denominator: false,
+                subgroup: None,
+                subgroup_description: None,
+                full_width: false,
+                member_titles: HashMap::new(),
+            }],
+        };
+
+        let data = Tsdb::default();
+        let result = generate(
+            &data,
+            None,
+            &[("vllm", &vllm), ("sglang", &sglang)],
+            Some(("inference-library", &bridge)),
+            None,
+        );
+
+        // Bridge section present.
+        assert!(result.contains_key("service/inference-library.json"));
+        // Per-member sections absent.
+        assert!(!result.contains_key("service/vllm.json"));
+        assert!(!result.contains_key("service/sglang.json"));
     }
 }
