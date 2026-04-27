@@ -30,6 +30,7 @@ pub fn generate(
     );
 
     let mut groups: Vec<(String, Group)> = Vec::new();
+    let mut unavailable: Vec<serde_json::Value> = Vec::new();
 
     for kpi in &bridge.kpis {
         let baseline_title = kpi.member_title(baseline_member);
@@ -39,12 +40,41 @@ pub fn generate(
             .kpis
             .iter()
             .find(|k| k.title == experiment_title);
-        let (Some(baseline_kpi), Some(experiment_kpi)) = (baseline_kpi, experiment_kpi) else {
-            continue;
+
+        let (baseline_kpi, experiment_kpi) = match (baseline_kpi, experiment_kpi) {
+            (Some(a), Some(b)) => (a, b),
+            (None, _) => {
+                unavailable.push(serde_json::json!({
+                    "title": kpi.title,
+                    "missing_member": baseline_member,
+                }));
+                continue;
+            }
+            (_, None) => {
+                unavailable.push(serde_json::json!({
+                    "title": kpi.title,
+                    "missing_member": experiment_member,
+                }));
+                continue;
+            }
         };
-        // Skip when either member marked the KPI unavailable (validate_service_extensions
-        // sets this when the metric isn't present in the recording).
-        if !baseline_kpi.available || !experiment_kpi.available {
+
+        // Skip when either member marked the KPI unavailable
+        // (validate_service_extensions sets this when the metric is
+        // missing from the recording). Treat as missing for unavailable
+        // tracking, because the user perceives it the same way.
+        if !baseline_kpi.available {
+            unavailable.push(serde_json::json!({
+                "title": kpi.title,
+                "missing_member": baseline_member,
+            }));
+            continue;
+        }
+        if !experiment_kpi.available {
+            unavailable.push(serde_json::json!({
+                "title": kpi.title,
+                "missing_member": experiment_member,
+            }));
             continue;
         }
 
@@ -111,6 +141,13 @@ pub fn generate(
         {
             plot.promql_query_experiment = Some(experiment_query);
         }
+    }
+
+    if !unavailable.is_empty() {
+        view.metadata.insert(
+            "bridge_unavailable".to_string(),
+            serde_json::Value::Array(unavailable),
+        );
     }
 
     for (_, group) in groups {
@@ -215,5 +252,86 @@ mod tests {
             plot["opts"]["title"].as_str(),
             Some("Generation Token Rate")
         );
+    }
+
+    #[test]
+    fn bridge_generate_records_unavailable_when_member_lookup_misses() {
+        let bridge = BridgeExtension {
+            service_name: "ifx".to_string(),
+            bridge: true,
+            members: vec!["a".to_string(), "b".to_string()],
+            kpis: vec![BridgeKpi {
+                role: "throughput".to_string(),
+                title: "Token Rate".to_string(),
+                metric_type: "delta_counter".to_string(),
+                subtype: None,
+                unit_system: Some("rate".to_string()),
+                percentiles: None,
+                denominator: false,
+                subgroup: None,
+                subgroup_description: None,
+                full_width: false,
+                member_titles: HashMap::new(),
+            }],
+        };
+        let a = ext("a", vec![kpi("throughput", "Token Rate", "a_q")]);
+        let b = ext("b", vec![]); // missing the bridged title
+
+        let view = generate(&Tsdb::default(), vec![], &bridge, "a", &a, "b", &b);
+        let json = serde_json::to_value(&view).unwrap();
+
+        let unavailable = json
+            .get("metadata")
+            .and_then(|m| m.get("bridge_unavailable"))
+            .and_then(|v| v.as_array())
+            .expect("bridge_unavailable present");
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0]["title"].as_str(), Some("Token Rate"));
+        assert_eq!(unavailable[0]["missing_member"].as_str(), Some("b"));
+
+        // No groups were emitted (the only KPI was skipped).
+        let groups = json.get("groups").and_then(|g| g.as_array()).unwrap();
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn bridge_generate_records_unavailable_when_member_kpi_marked_unavailable() {
+        let bridge = BridgeExtension {
+            service_name: "ifx".to_string(),
+            bridge: true,
+            members: vec!["a".to_string(), "b".to_string()],
+            kpis: vec![BridgeKpi {
+                role: "throughput".to_string(),
+                title: "Token Rate".to_string(),
+                metric_type: "delta_counter".to_string(),
+                subtype: None,
+                unit_system: Some("rate".to_string()),
+                percentiles: None,
+                denominator: false,
+                subgroup: None,
+                subgroup_description: None,
+                full_width: false,
+                member_titles: HashMap::new(),
+            }],
+        };
+        let a = ext("a", vec![kpi("throughput", "Token Rate", "a_q")]);
+        let mut b_kpi = kpi("throughput", "Token Rate", "b_q");
+        b_kpi.available = false;
+        let b = ext("b", vec![b_kpi]);
+
+        let view = generate(&Tsdb::default(), vec![], &bridge, "a", &a, "b", &b);
+        let json = serde_json::to_value(&view).unwrap();
+
+        let unavailable = json
+            .get("metadata")
+            .and_then(|m| m.get("bridge_unavailable"))
+            .and_then(|v| v.as_array())
+            .expect("bridge_unavailable present");
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0]["title"].as_str(), Some("Token Rate"));
+        assert_eq!(unavailable[0]["missing_member"].as_str(), Some("b"));
+
+        let groups = json.get("groups").and_then(|g| g.as_array()).unwrap();
+        assert!(groups.is_empty());
     }
 }
