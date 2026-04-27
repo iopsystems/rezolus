@@ -57,7 +57,7 @@ pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
 
 #[cfg(test)]
 pub use dashboard::Kpi;
-pub use dashboard::{ServiceExtension, TemplateRegistry};
+pub use dashboard::{BridgeExtension, ServiceExtension, TemplateRegistry};
 
 // Re-export from metriken-query crate
 pub use metriken_query::promql;
@@ -241,18 +241,15 @@ pub fn run(config: Config) {
                 })
                 .unwrap();
 
-            let filesize = std::fs::metadata(path).map(|m| m.len()).ok();
-
             let (systeminfo, selection, file_meta) = extract_parquet_metadata(path);
             let mut service_exts = extract_service_extension_metadata(path, &registry);
 
             // Validate KPI availability against the loaded data so that
-            // template-derived dashboards hide KPIs with no data.
-            let data_arc = std::sync::Arc::new(data);
-            validate_service_extensions(&data_arc, &mut service_exts);
-            let data = std::sync::Arc::try_unwrap(data_arc)
-                .ok()
-                .expect("Arc still shared");
+            // template-derived dashboards hide KPIs with no data. The
+            // `service_exts` here is consumed only for the startup log
+            // below; `regenerate_dashboards` re-extracts and re-validates
+            // per-capture once the experiment (if any) has been attached.
+            validate_service_extensions(&data, &mut service_exts);
 
             // Compute SHA-256 checksum of the parquet data (excluding footer metadata).
             // Parquet layout: [magic 4B] [row groups...] [footer] [footer_len 4B] [magic 4B]
@@ -272,17 +269,7 @@ pub fn run(config: Config) {
                 );
             }
 
-            info!("Generating dashboards...");
-            let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
             let state = AppState::new(data, registry.clone());
-            let rendered = dashboard::dashboard::generate(
-                &state.baseline_tsdb().read(),
-                filesize,
-                &service_refs,
-                None,
-                None,
-            );
-            state.sections.write().extend(rendered);
             *state.parquet_path.write() = Some(path.clone());
             let multinode_sysinfo = build_multinode_systeminfo(path);
             state
@@ -296,11 +283,13 @@ pub fn run(config: Config) {
                 .set_baseline_alias(config.baseline_alias.clone());
 
             // Attach the optional experiment capture for A/B comparison.
-            // NOTE: we deliberately do NOT stash `exp_path` in
-            // `state.experiment_parquet_path` here. That field tracks
-            // server-owned temp files written by the HTTP attach handler
-            // so they can be cleaned up on detach. The CLI path is the
-            // user's own file on disk — detaching must not delete it.
+            // The experiment path is recorded in `cli_experiment_path`
+            // (NOT `experiment_parquet_path`). That separation
+            // matters: `experiment_parquet_path` is for server-owned
+            // temp files written by the HTTP attach handler so they
+            // can be cleaned up on detach. The CLI path is the user's
+            // own file on disk — detaching must not delete it.
+            // `regenerate_dashboards` consults both fields.
             if let Some(exp_path) = &config.experiment_path {
                 info!("Loading experiment from parquet file...");
                 let (exp_sysinfo, _exp_selection, exp_file_meta) =
@@ -321,6 +310,7 @@ pub fn run(config: Config) {
                             exp_file_meta,
                             config.experiment_alias.clone(),
                         );
+                        *state.cli_experiment_path.write() = Some(exp_path.clone());
                         info!("Attached experiment capture: {}", exp_path.display());
                     }
                     Err(e) => {
@@ -331,6 +321,13 @@ pub fn run(config: Config) {
                     }
                 }
             }
+
+            // Now that BOTH captures (baseline + optional experiment)
+            // are attached, generate the dashboard once. This is the
+            // single place that picks up a bridge when the registry
+            // has one whose members match the two service extensions.
+            info!("Generating dashboards...");
+            regenerate_dashboards(&state);
 
             state
         }
@@ -583,7 +580,16 @@ struct AppState {
     /// Original parquet file path (file mode only).
     parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
     /// Temp parquet path for the attached experiment capture (cleared on detach).
+    /// Populated by the HTTP attach handler, which owns the temp file and
+    /// deletes it on detach. The CLI startup path uses `cli_experiment_path`
+    /// instead so detach never touches the user's own file.
     experiment_parquet_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
+    /// User-supplied experiment parquet path from the CLI (e.g.
+    /// `rezolus view a.parquet b.parquet`). Read-only — not deleted on
+    /// detach. Detach only clears `experiment_parquet_path`. Kept
+    /// separate from that field so `regenerate_dashboards` can find
+    /// the experiment metadata without risking the user's file.
+    cli_experiment_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
     /// Serialized selection JSON from parquet metadata.
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
@@ -600,6 +606,7 @@ impl AppState {
             live: AtomicBool::new(false),
             parquet_path: parking_lot::RwLock::new(None),
             experiment_parquet_path: parking_lot::RwLock::new(None),
+            cli_experiment_path: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
         }
@@ -799,6 +806,88 @@ fn build_multinode_systeminfo(path: &Path) -> Option<String> {
     }
 }
 
+/// Look up a bridge whose members exactly match the two service
+/// extensions, in any order. Returns `None` for 0/1/3+ extensions or
+/// when the registry has no matching bridge.
+fn lookup_bridge<'a>(
+    registry: &'a TemplateRegistry,
+    service_refs: &[(&str, &ServiceExtension)],
+) -> Option<(&'a str, &'a BridgeExtension)> {
+    if service_refs.len() != 2 {
+        return None;
+    }
+    let bridge = registry.find_bridge(service_refs[0].0, service_refs[1].0)?;
+    Some((bridge.service_name.as_str(), bridge))
+}
+
+/// Regenerate the dashboard sections from the currently attached
+/// captures. Pulls service extensions from each capture's parquet
+/// metadata, validates them against the live tsdb data, looks up a
+/// bridge in the registry when both captures are present, and renders
+/// the resulting section map into `state.sections`. Called at CLI
+/// startup after the experiment attaches, and on every HTTP attach /
+/// detach so the section list stays in sync with which captures are
+/// loaded.
+fn regenerate_dashboards(state: &AppState) {
+    let registry = &state.templates;
+    let baseline_path = state.parquet_path.read().clone();
+    // Prefer the HTTP-owned temp path; fall back to the CLI-supplied
+    // user path. The two are stored in separate fields so that
+    // `detach_experiment` can safely delete only server-owned temp
+    // files — see `cli_experiment_path` for the rationale.
+    let experiment_path = state
+        .experiment_parquet_path
+        .read()
+        .clone()
+        .or_else(|| state.cli_experiment_path.read().clone());
+
+    // Extract service extensions per-capture; baseline-source exts
+    // validate against the baseline tsdb, experiment-source exts
+    // against the experiment tsdb, so a KPI present only in one
+    // recording isn't wrongly marked unavailable.
+    let mut baseline_exts: Vec<(String, ServiceExtension)> = baseline_path
+        .as_ref()
+        .map(|p| extract_service_extension_metadata(p, registry))
+        .unwrap_or_default();
+    let mut experiment_exts: Vec<(String, ServiceExtension)> = experiment_path
+        .as_ref()
+        .map(|p| extract_service_extension_metadata(p, registry))
+        .unwrap_or_default();
+
+    {
+        let baseline_handle = state.baseline_tsdb();
+        let baseline_data = baseline_handle.read();
+        validate_service_extensions(&baseline_data, &mut baseline_exts);
+    }
+    if !experiment_exts.is_empty() {
+        if let Some(experiment_handle) = state.captures.get(CaptureId::Experiment) {
+            let experiment_data = experiment_handle.read();
+            validate_service_extensions(&experiment_data, &mut experiment_exts);
+        }
+    }
+
+    let mut service_exts = baseline_exts;
+    service_exts.extend(experiment_exts);
+
+    let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
+    let bridge = lookup_bridge(registry, &service_refs);
+
+    let filesize = baseline_path
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
+
+    let rendered = dashboard::dashboard::generate(
+        &state.baseline_tsdb().read(),
+        filesize,
+        &service_refs,
+        bridge,
+        None,
+    );
+
+    let mut sections = state.sections.write();
+    *sections = rendered;
+}
+
 /// Extract service extension metadata from a parquet file.
 ///
 /// Checks in order:
@@ -906,11 +995,8 @@ fn extract_service_extension_metadata(
 /// Validate KPI availability for service extensions by running each KPI's
 /// PromQL query against the loaded TSDB. Sets `available = false` on KPIs
 /// whose queries return empty results (e.g. zero-traffic histograms).
-fn validate_service_extensions(
-    tsdb: &std::sync::Arc<Tsdb>,
-    exts: &mut [(String, ServiceExtension)],
-) {
-    let engine = QueryEngine::new(tsdb.clone());
+fn validate_service_extensions(tsdb: &Tsdb, exts: &mut [(String, ServiceExtension)]) {
+    let engine = QueryEngine::new(tsdb);
     let (start, end) = engine.get_time_range();
 
     for (_source, ext) in exts.iter_mut() {
@@ -1414,11 +1500,7 @@ async fn upload_parquet(
     data.set_filename(filename.clone());
 
     let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
-    let data_arc = std::sync::Arc::new(data);
-    validate_service_extensions(&data_arc, &mut service_exts);
-    let data = std::sync::Arc::try_unwrap(data_arc)
-        .ok()
-        .expect("Arc still shared");
+    validate_service_extensions(&data, &mut service_exts);
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
     let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None, None);
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
@@ -1509,6 +1591,11 @@ async fn attach_experiment(
         .attach_experiment(tsdb, sysinfo.clone(), file_meta, None);
     *state.experiment_parquet_path.write() = Some(temp_path);
 
+    // Rebuild the section map now that both captures are present.
+    // Picks up a bridge when the registry has one whose members match
+    // the two service extensions.
+    regenerate_dashboards(&state);
+
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
@@ -1527,6 +1614,16 @@ async fn detach_experiment(
     if let Some(path) = state.experiment_parquet_path.write().take() {
         let _ = std::fs::remove_file(&path);
     }
+    // Also clear the CLI-supplied experiment path so the section
+    // regeneration below doesn't rebuild the bridge against a
+    // detached capture. Note: we only clear the path reference, not
+    // the file itself — the user's parquet on disk is left alone.
+    state.cli_experiment_path.write().take();
+
+    // Rebuild the section map back to baseline-only (drops bridge /
+    // experiment service section).
+    regenerate_dashboards(&state);
+
     StatusCode::OK.into_response()
 }
 
