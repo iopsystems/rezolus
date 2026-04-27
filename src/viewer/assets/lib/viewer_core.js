@@ -8,7 +8,7 @@ import { renderCompareChart } from './charts/compare.js';
 import {
     queryRangeForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
-    getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
+    fetchPlotData, getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
 } from './data.js';
 import { canonicalQuantileLabel } from './charts/util/compare_math.js';
 import { ViewerApi } from './viewer_api.js';
@@ -264,6 +264,60 @@ const fetchExperimentResult = (vnode) => {
     })();
 };
 
+// IntersectionObserver options shared by lazy fetch wrappers. 200px
+// rootMargin gives a head-start so a chart's data is in flight just
+// before it scrolls into view, masking pool latency.
+const LAZY_VIEWPORT_OPTS = { rootMargin: '200px', threshold: 0.01 };
+
+// Wrap a baseline-only chart in an IntersectionObserver-gated fetcher.
+// processDashboardData no longer fires queries up front; this component
+// fires them on the first render where the chart is near the viewport
+// (or already inside it). Routes through the shared concurrency pool.
+const LazyChart = {
+    oncreate(vnode) {
+        this.dom = vnode.dom;
+        this.observer = new IntersectionObserver((entries) => {
+            if (!entries.some((e) => e.isIntersecting)) return;
+            this.observer.unobserve(this.dom);
+            this._fetchIfNeeded(vnode);
+        }, LAZY_VIEWPORT_OPTS);
+        this.observer.observe(this.dom);
+        // Edge case: a chart that's already on screen at mount time gets
+        // an immediate intersection callback, but if the page is
+        // backgrounded or the observer is delayed, fall through to a
+        // manual visibility nudge on the first redraw.
+        this._fetchIfNeeded(vnode);
+    },
+    onupdate(vnode) {
+        // Granularity change / experiment swap clears _fetched on the
+        // plot (see processDashboardData). Re-arm the observer so the
+        // chart refetches when next visible — but if it's still on
+        // screen, fire immediately.
+        const plot = vnode.attrs.plot;
+        if (plot && !plot._fetched && !plot._fetchInFlight) {
+            this._fetchIfNeeded(vnode);
+        }
+    },
+    onremove() {
+        if (this.observer) this.observer.disconnect();
+    },
+    _fetchIfNeeded(vnode) {
+        const { plot } = vnode.attrs;
+        if (!plot || plot._fetched || plot._fetchInFlight) return;
+        const rect = this.dom?.getBoundingClientRect();
+        // Same 200px head-start as the observer's rootMargin so manual
+        // nudges and observer-driven calls agree on "near viewport".
+        if (rect) {
+            const view = window.innerHeight || document.documentElement.clientHeight;
+            if (rect.bottom < -200 || rect.top > view + 200) return;
+        }
+        fetchPlotData(plot).then(() => m.redraw());
+    },
+    view(vnode) {
+        return m('div.lazy-chart-host', vnode.children);
+    },
+};
+
 const CompareChartWrapper = {
     oninit(vnode) {
         vnode.state.experimentResult = null;
@@ -273,8 +327,36 @@ const CompareChartWrapper = {
         // and re-fetches when they diverge (granularity selector change).
         vnode.state._lastFetchedStep = null;
         vnode.state._fetchInFlight = false;
-        // Kick off the initial fetch.
-        fetchExperimentResult(vnode);
+        // Initial fetch is deferred to oncreate where we have a DOM node
+        // for IntersectionObserver. Off-screen compare wrappers stay
+        // pending until they scroll into view.
+    },
+    oncreate(vnode) {
+        this.dom = vnode.dom;
+        this.observer = new IntersectionObserver((entries) => {
+            if (!entries.some((e) => e.isIntersecting)) return;
+            this.observer.unobserve(this.dom);
+            if (!vnode.state.experimentResult && !vnode.state.error
+                && !vnode.state._fetchInFlight) {
+                fetchExperimentResult(vnode);
+            }
+        }, LAZY_VIEWPORT_OPTS);
+        this.observer.observe(this.dom);
+        // Already on screen at mount? IntersectionObserver fires async;
+        // kick off the fetch synchronously when the rect overlaps.
+        const rect = this.dom?.getBoundingClientRect();
+        if (rect) {
+            const view = window.innerHeight || document.documentElement.clientHeight;
+            if (rect.bottom >= -200 && rect.top <= view + 200) {
+                if (!vnode.state.experimentResult && !vnode.state.error
+                    && !vnode.state._fetchInFlight) {
+                    fetchExperimentResult(vnode);
+                }
+            }
+        }
+    },
+    onremove() {
+        if (this.observer) this.observer.disconnect();
     },
 
     view(vnode) {
@@ -405,37 +487,55 @@ export function createGroupComponent(getState) {
             // the group title + subgroup headers when the whole cluster is
             // empty (e.g. a section querying metrics that don't exist on
             // the host, like GPU on a CPU-only box).
+            // A plot is "renderable" if it has data OR is still pending a
+            // lazy fetch. After all pending fetches resolve, plots whose
+            // queries returned nothing report renderable=false, which
+            // collapses sections that target metrics not present on the
+            // host (e.g. GPU on a CPU-only box). During loading, pending
+            // plots keep their groups visible so the user sees skeletons
+            // instead of a blank scroll.
+            const plotPending = (plot) =>
+                plot.promql_query && !plot._fetched;
             const plotHasData = (plot) =>
                 Array.isArray(plot.data) && plot.data.some((series) =>
                     Array.isArray(series) && series.length > 0
                 );
+            const plotRenderable = (plot) => plotHasData(plot) || plotPending(plot);
             const subgroupHasData = (sg) => (sg.plots || []).some(plotHasData);
-            const groupHasData = subgroups.some(subgroupHasData);
+            const subgroupRenderable = (sg) => (sg.plots || []).some(plotRenderable);
+            const groupRenderable = subgroups.some(subgroupRenderable);
 
-            if (!groupHasData) return null;
+            if (!groupRenderable) return null;
 
             // Build the chart-body vnode for a given (maybe-prefixed) spec.
-            // Picks the compare wrapper when in compare mode AND the spec has
-            // a promql_query (service-template charts without one fall through
-            // to the single-capture path even in compare mode).
-            const chartBody = (renderSpec, sourceSpec) => (compareMode && sourceSpec.promql_query)
-                ? m(CompareChartWrapper, {
-                    spec: renderSpec,
-                    chartsState,
-                    interval,
-                    anchors,
-                    toggles,
-                    setChartToggle,
-                    sectionRoute,
-                    // Pass the user-effective step. CompareChartWrapper
-                    // also consults _stepOverride internally, but
-                    // including it in attrs keeps the value visible in
-                    // the vnode.attrs trail for any future debugging.
-                    step: getStepOverride() || interval,
-                    experimentQueryRange,
-                    captureLabels,
-                })
-                : m(Chart, { spec: renderSpec, chartsState, interval });
+            // Compare mode + promql_query: CompareChartWrapper (which now
+            // lazy-fetches the experiment side via its own
+            // IntersectionObserver). Single-capture + promql_query: wrap
+            // the Chart in LazyChart so the baseline query also fires only
+            // when scrolled into view. Service-template / pre-baked plots
+            // (no promql_query) skip both wrappers — their data is
+            // populated upstream.
+            const chartBody = (renderSpec, sourceSpec) => {
+                if (compareMode && sourceSpec.promql_query) {
+                    return m(CompareChartWrapper, {
+                        spec: renderSpec,
+                        chartsState,
+                        interval,
+                        anchors,
+                        toggles,
+                        setChartToggle,
+                        sectionRoute,
+                        step: getStepOverride() || interval,
+                        experimentQueryRange,
+                        captureLabels,
+                    });
+                }
+                if (sourceSpec.promql_query) {
+                    return m(LazyChart, { plot: sourceSpec },
+                        m(Chart, { spec: renderSpec, chartsState, interval }));
+                }
+                return m(Chart, { spec: renderSpec, chartsState, interval });
+            };
 
             const renderChart = (spec) => {
                 const isHistogramChart = isHistogramPlot(spec);
@@ -468,10 +568,13 @@ export function createGroupComponent(getState) {
                 [
                     m('h2', `${attrs.name}`),
                     subgroups.map((sg) => {
-                        const hasData = subgroupHasData(sg);
+                        // Show the subgroup header while plots are still
+                        // pending. After fetches settle, hide it if no
+                        // plot ended up with data.
+                        const showHeader = subgroupRenderable(sg);
                         return m('div.subgroup', [
-                            hasData && sg.name && m('h3.subgroup-title', sg.name),
-                            hasData && sg.description && m('p.subgroup-description', sg.description),
+                            showHeader && sg.name && m('h3.subgroup-title', sg.name),
+                            showHeader && sg.description && m('p.subgroup-description', sg.description),
                             m('div.charts', (sg.plots || []).map(renderChart)),
                         ]);
                     }),

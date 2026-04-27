@@ -12,6 +12,59 @@ const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
 // ---------------------------------------------------------------------------
+// Concurrency-capped query pool. Shared by every fetch path (baseline
+// per-plot, compare-mode experiment, heatmap) so we never have more than
+// `_cap` PromQL evaluations running concurrently. Tasks queued past the
+// cap run as earlier ones drain. The pool returns the original promise
+// resolution / rejection — callers handle errors as if they had run the
+// task directly.
+// ---------------------------------------------------------------------------
+
+class QueryPool {
+    constructor(cap) {
+        this._cap = Math.max(1, cap | 0);
+        this._running = 0;
+        this._queue = [];
+    }
+    setCap(cap) {
+        this._cap = Math.max(1, cap | 0);
+        this._drain();
+    }
+    enqueue(taskFn) {
+        return new Promise((resolve, reject) => {
+            const run = () => {
+                this._running++;
+                let result;
+                try {
+                    result = taskFn();
+                } catch (e) {
+                    this._running--;
+                    this._drain();
+                    reject(e);
+                    return;
+                }
+                Promise.resolve(result).then(resolve, reject).finally(() => {
+                    this._running--;
+                    this._drain();
+                });
+            };
+            if (this._running < this._cap) run();
+            else this._queue.push(run);
+        });
+    }
+    _drain() {
+        while (this._running < this._cap && this._queue.length > 0) {
+            const next = this._queue.shift();
+            next();
+        }
+    }
+    get pending() { return this._queue.length + this._running; }
+}
+
+const queryPool = new QueryPool(8);
+const setQueryConcurrencyCap = (cap) => queryPool.setCap(cap);
+
+// ---------------------------------------------------------------------------
 // Query rewriting for non-default granularity (step override)
 // ---------------------------------------------------------------------------
 // When the user picks a coarser step (e.g. 15s instead of auto ~1s), raw
@@ -389,46 +442,92 @@ const createDataApi = ({
         return q;
     };
 
+    // Walk every plot in the section's groups, run the per-plot query
+    // transforms (histogram wrap, counter rewrite, cgroup substitution,
+    // topology label injection), and stash the result on
+    // `plot._effectiveQuery`. Plots that should be skipped (e.g. cgroup
+    // pattern with no resolved selector) get `_effectiveQuery: null` so
+    // the lazy fetch path can short-circuit.
+    //
+    // The fetch ITSELF runs lazily — see `fetchPlotData` and the
+    // `LazyChart` wrapper that calls it on viewport intersection.
+    // Returns the data unchanged so callers can still cache it.
     const processDashboardData = async (data, activeCgroupPattern, sectionRoute) => {
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
-
-        const queryPlots = [];
         for (const group of data.groups || []) {
             for (const plot of collectGroupPlots(group)) {
-                if (plot.promql_query) {
-                    const queryToRun = buildEffectiveQuery(plot, {
-                        sectionRoute,
-                        activeCgroupPattern,
-                        serviceName: data.metadata?.service_name,
-                    });
-                    if (queryToRun == null) continue;
-                    queryPlots.push({ plot, query: queryToRun });
-                }
+                if (!plot.promql_query) continue;
+                plot._effectiveQuery = buildEffectiveQuery(plot, {
+                    sectionRoute,
+                    activeCgroupPattern,
+                    serviceName: data.metadata?.service_name,
+                });
+                // Drop any prior fetch state so a re-process (granularity
+                // change, cgroup pattern resolution, etc.) re-fetches.
+                plot._fetched = false;
+                plot._fetchInFlight = false;
+                plot._fetchGen = (plot._fetchGen | 0) + 1;
             }
         }
-
-        const results = await Promise.allSettled(
-            queryPlots.map(({ query }) =>
-                executePromQLRangeQuery(query, metadata),
-            ),
-        );
-
-        for (let i = 0; i < queryPlots.length; i++) {
-            const { plot } = queryPlots[i];
-            const outcome = results[i];
-            if (outcome.status === 'fulfilled') {
-                applyResultToPlot(plot, outcome.value);
-            } else {
-                console.error(
-                    `Failed to execute PromQL query "${plot.promql_query}":`,
-                    outcome.reason,
-                );
-                plot.data = [];
-            }
-        }
-
         return data;
+    };
+
+    // Fetch a single plot's PromQL result through the shared concurrency
+    // pool and apply it to the plot. Idempotent per generation: a plot
+    // already fetched (or in flight) is skipped. Returns the in-flight
+    // promise so callers (e.g. `flushAll` for save) can await completion.
+    const fetchPlotData = (plot) => {
+        if (!plot || !plot.promql_query) return Promise.resolve();
+        if (plot._effectiveQuery == null) {
+            // Pattern unresolved (e.g. cgroup) — render empty.
+            plot.data = [];
+            plot._fetched = true;
+            return Promise.resolve();
+        }
+        if (plot._fetched && !plot._fetchInFlight) return Promise.resolve();
+        if (plot._fetchInFlight) return plot._fetchPromise || Promise.resolve();
+        const gen = plot._fetchGen | 0;
+        plot._fetchInFlight = true;
+        const p = queryPool
+            .enqueue(() => executePromQLRangeQuery(plot._effectiveQuery))
+            .then(
+                (result) => {
+                    if ((plot._fetchGen | 0) !== gen) return;
+                    applyResultToPlot(plot, result);
+                },
+                (err) => {
+                    if ((plot._fetchGen | 0) !== gen) return;
+                    console.error(
+                        `Failed to execute PromQL query "${plot.promql_query}":`,
+                        err,
+                    );
+                    plot.data = [];
+                },
+            )
+            .finally(() => {
+                if ((plot._fetchGen | 0) === gen) {
+                    plot._fetched = true;
+                    plot._fetchInFlight = false;
+                    plot._fetchPromise = null;
+                }
+            });
+        plot._fetchPromise = p;
+        return p;
+    };
+
+    // Force every plot in the given groups to fetch (queueing through the
+    // pool) and return a promise that resolves when all are done. Used by
+    // the save-with-selection path which needs every chart's plot.data
+    // populated before serializing.
+    const flushAll = async (groups) => {
+        const plots = [];
+        for (const group of groups || []) {
+            for (const plot of collectGroupPlots(group)) {
+                if (plot.promql_query) plots.push(plot);
+            }
+        }
+        await Promise.allSettled(plots.map(fetchPlotData));
     };
 
     const fetchHeatmapForPlot = async (plot) => {
@@ -449,7 +548,9 @@ const createDataApi = ({
         }
 
         const strideSuffix = (_stepOverride && _stepOverride > 1) ? `, ${_stepOverride}` : '';
-        const result = await executePromQLRangeQuery(`histogram_heatmap(${metricSelector}${strideSuffix})`);
+        const result = await queryPool.enqueue(
+            () => executePromQLRangeQuery(`histogram_heatmap(${metricSelector}${strideSuffix})`),
+        );
 
         if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
             const hr = result.data.result;
@@ -474,6 +575,8 @@ const createDataApi = ({
             }
         }
 
+        // Each fetchHeatmapForPlot already routes through the pool, so
+        // Promise.allSettled here just collects the cap-throttled results.
         const results = await Promise.allSettled(plots.map((p) => fetchHeatmapForPlot(p)));
 
         const heatmapData = new Map();
@@ -496,6 +599,8 @@ const createDataApi = ({
         applyResultToPlot,
         fetchHeatmapForPlot,
         fetchHeatmapsForGroups,
+        fetchPlotData,
+        flushAll,
         substituteCgroupPattern,
         processDashboardData,
         clearMetadataCache,
@@ -509,6 +614,8 @@ const {
     executePromQLRangeQuery,
     fetchHeatmapForPlot,
     fetchHeatmapsForGroups,
+    fetchPlotData,
+    flushAll,
     processDashboardData,
     clearMetadataCache,
     buildEffectiveQuery,
@@ -519,12 +626,15 @@ export {
     applyResultToPlot,
     fetchHeatmapForPlot,
     fetchHeatmapsForGroups,
+    fetchPlotData,
+    flushAll,
     substituteCgroupPattern,
     processDashboardData,
     clearMetadataCache,
     createDataApi,
     setStepOverride,
     getStepOverride,
+    setQueryConcurrencyCap,
     setSelectedNode,
     getSelectedNode,
     setSelectedInstance,
