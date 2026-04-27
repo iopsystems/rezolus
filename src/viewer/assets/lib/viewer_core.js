@@ -160,10 +160,15 @@ const fetchExperimentResult = (vnode) => {
     // baseline's topology and would return zero matches on the
     // experiment in the common case where the two recordings have
     // different hostnames or instance IDs.
-    const query = buildEffectiveQuery(spec, {
-        sectionRoute,
-        crossCapture: true,
-    });
+    // Bridge templates supply a per-side experiment query via
+    // spec.promql_query_experiment. When present, route it through
+    // buildEffectiveQuery instead of spec.promql_query so the same
+    // histogram/counter rewrites and step substitutions apply.
+    const baseQuery = spec.promql_query_experiment || spec.promql_query;
+    const query = buildEffectiveQuery(
+        { ...spec, promql_query: baseQuery },
+        { sectionRoute, crossCapture: true },
+    );
     if (query == null) {
         vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
         return;
