@@ -195,6 +195,33 @@ impl BridgeKpi {
     }
 }
 
+// Parse a single template JSON string. Returns either a service-extension
+// or a bridge based on the top-level `bridge` field.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_template(
+    content: &str,
+    source: &str,
+) -> Result<ParsedTemplate, Box<dyn std::error::Error>> {
+    let v: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| format!("failed to parse {source}: {e}"))?;
+    let is_bridge = v.get("bridge").and_then(|b| b.as_bool()).unwrap_or(false);
+    if is_bridge {
+        let bridge: BridgeExtension = serde_json::from_value(v)
+            .map_err(|e| format!("failed to parse bridge {source}: {e}"))?;
+        Ok(ParsedTemplate::Bridge(bridge))
+    } else {
+        let ext: ServiceExtension =
+            serde_json::from_value(v).map_err(|e| format!("failed to parse {source}: {e}"))?;
+        Ok(ParsedTemplate::Service(ext))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum ParsedTemplate {
+    Service(ServiceExtension),
+    Bridge(BridgeExtension),
+}
+
 /// Registry of service extension templates loaded from a directory at runtime.
 ///
 /// Templates are indexed by `service_name` and each entry in `aliases`.
@@ -202,6 +229,7 @@ impl BridgeKpi {
 #[derive(Debug, Clone)]
 pub struct TemplateRegistry {
     templates: HashMap<String, ServiceExtension>,
+    bridges: HashMap<String, BridgeExtension>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -239,6 +267,7 @@ impl TemplateRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_embedded(dir: &include_dir::Dir<'_>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut templates = HashMap::new();
+        let mut bridges = HashMap::new();
         for file in dir.files() {
             let path = file.path();
             if path.extension().is_none_or(|e| e != "json") {
@@ -247,15 +276,19 @@ impl TemplateRegistry {
             let content = file
                 .contents_utf8()
                 .ok_or_else(|| format!("{} is not valid UTF-8", path.display()))?;
-            let ext: ServiceExtension = serde_json::from_str(content)
-                .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
-
-            insert_template_key(&mut templates, ext.service_name.clone(), path, &ext)?;
-            for alias in &ext.aliases {
-                insert_template_key(&mut templates, alias.clone(), path, &ext)?;
+            match parse_template(content, &path.display().to_string())? {
+                ParsedTemplate::Service(ext) => {
+                    insert_template_key(&mut templates, ext.service_name.clone(), path, &ext)?;
+                    for alias in &ext.aliases {
+                        insert_template_key(&mut templates, alias.clone(), path, &ext)?;
+                    }
+                }
+                ParsedTemplate::Bridge(bridge) => {
+                    bridges.insert(bridge.service_name.clone(), bridge);
+                }
             }
         }
-        Ok(Self { templates })
+        Ok(Self { templates, bridges })
     }
 
     /// Scan `dir` for `*.json` files, parse each as `ServiceExtension`,
@@ -263,6 +296,7 @@ impl TemplateRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let mut templates = HashMap::new();
+        let mut bridges = HashMap::new();
 
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
@@ -273,26 +307,31 @@ impl TemplateRegistry {
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
-
-            if path.extension().is_some_and(|e| e == "json") {
-                let content = std::fs::read_to_string(&path)?;
-                let ext: ServiceExtension = serde_json::from_str(&content)
-                    .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
-
-                insert_template_key(&mut templates, ext.service_name.clone(), &path, &ext)?;
-                for alias in &ext.aliases {
-                    insert_template_key(&mut templates, alias.clone(), &path, &ext)?;
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path)?;
+            match parse_template(&content, &path.display().to_string())? {
+                ParsedTemplate::Service(ext) => {
+                    insert_template_key(&mut templates, ext.service_name.clone(), &path, &ext)?;
+                    for alias in &ext.aliases {
+                        insert_template_key(&mut templates, alias.clone(), &path, &ext)?;
+                    }
+                }
+                ParsedTemplate::Bridge(bridge) => {
+                    bridges.insert(bridge.service_name.clone(), bridge);
                 }
             }
         }
 
-        Ok(Self { templates })
+        Ok(Self { templates, bridges })
     }
 
     /// Create an empty registry (no templates).
     pub fn empty() -> Self {
         Self {
             templates: HashMap::new(),
+            bridges: HashMap::new(),
         }
     }
 
@@ -306,12 +345,25 @@ impl TemplateRegistry {
             }
             map.insert(ext.service_name.clone(), ext);
         }
-        Self { templates: map }
+        Self {
+            templates: map,
+            bridges: HashMap::new(),
+        }
     }
 
     /// Look up a template by service name or alias.
     pub fn get(&self, source: &str) -> Option<&ServiceExtension> {
         self.templates.get(source)
+    }
+
+    /// Look up a bridge whose `members` set equals `{member_a, member_b}`
+    /// (order-insensitive). Returns `None` when no matching bridge exists.
+    pub fn find_bridge(&self, member_a: &str, member_b: &str) -> Option<&BridgeExtension> {
+        self.bridges.values().find(|b| {
+            b.members.len() == 2
+                && ((b.members[0] == member_a && b.members[1] == member_b)
+                    || (b.members[0] == member_b && b.members[1] == member_a))
+        })
     }
 }
 
@@ -405,6 +457,56 @@ mod tests {
 
         assert!(err.contains("duplicate template key"));
         assert!(err.contains("redis"));
+    }
+
+    #[test]
+    fn registry_loads_service_and_bridge_separately() {
+        let dir = tempfile::tempdir().unwrap();
+        write_template(
+            &dir,
+            "vllm.json",
+            r#"{
+                "service_name": "vllm",
+                "service_metadata": {},
+                "slo": null,
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+        write_template(
+            &dir,
+            "sglang.json",
+            r#"{
+                "service_name": "sglang",
+                "service_metadata": {},
+                "slo": null,
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+        write_template(
+            &dir,
+            "inference-library.json",
+            r#"{
+                "service_name": "inference-library",
+                "bridge": true,
+                "members": ["vllm", "sglang"],
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+
+        let registry = TemplateRegistry::load(dir.path()).unwrap();
+
+        // Service templates remain accessible via `get`.
+        assert!(registry.get("vllm").is_some());
+        assert!(registry.get("sglang").is_some());
+        // Bridge files do NOT pollute the service map.
+        assert!(registry.get("inference-library").is_none());
+        // The bridge IS reachable via find_bridge in either order.
+        assert!(registry.find_bridge("vllm", "sglang").is_some());
+        assert!(registry.find_bridge("sglang", "vllm").is_some());
+        assert!(registry.find_bridge("vllm", "valkey").is_none());
     }
 
     #[test]
