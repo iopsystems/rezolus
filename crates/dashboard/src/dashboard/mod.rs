@@ -40,12 +40,24 @@ pub fn generate(
     category: Option<(&str, &CategoryExtension)>,
     _descriptions: Option<&std::collections::HashMap<String, String>>,
 ) -> std::collections::HashMap<String, String> {
-    // A category requires exactly two member service exts. If a caller
-    // passes Some(category) without that, the category can't be rendered;
-    // fall back to per-member sections so the section list and the
-    // rendered map stay in agreement (no nav entry for a route the map
-    // doesn't have, no orphaned member sections).
-    let category_active = category.is_some() && service_exts.len() == 2;
+    // Two captures of the same service collapse into a single nav entry —
+    // both render through the same template and the existing compare-mode
+    // overlay handles the per-capture pairing. Without this dedup the nav
+    // shows the same route twice and the rendered map double-generates
+    // (then HashMap-collapses) the same section.
+    let mut seen = std::collections::HashSet::new();
+    let unique_service_exts: Vec<(&str, &ServiceExtension)> = service_exts
+        .iter()
+        .copied()
+        .filter(|(name, _)| seen.insert(*name))
+        .collect();
+
+    // A category requires exactly two distinct member service exts. If a
+    // caller passes Some(category) without that, the category can't be
+    // rendered; fall back to per-member sections so the section list and
+    // the rendered map stay in agreement (no nav entry for a route the
+    // map doesn't have, no orphaned member sections).
+    let category_active = category.is_some() && unique_service_exts.len() == 2;
 
     // Build the section list. In category mode, a single category section
     // replaces the per-member sections; otherwise the per-member loop
@@ -70,7 +82,7 @@ pub fn generate(
             },
         );
     } else {
-        for (i, (source_name, _)) in service_exts.iter().enumerate() {
+        for (i, (source_name, _)) in unique_service_exts.iter().enumerate() {
             all_sections.insert(
                 1 + i,
                 Section {
@@ -83,7 +95,7 @@ pub fn generate(
 
     let mut rendered = std::collections::HashMap::new();
 
-    let throughput_query = service_exts
+    let throughput_query = unique_service_exts
         .first()
         .and_then(|(_, e)| e.throughput_query())
         .map(str::to_string);
@@ -109,8 +121,8 @@ pub fn generate(
 
     if category_active {
         let (category_name, category_ext) = category.unwrap();
-        let (a_name, a_ext) = service_exts[0];
-        let (b_name, b_ext) = service_exts[1];
+        let (a_name, a_ext) = unique_service_exts[0];
+        let (b_name, b_ext) = unique_service_exts[1];
         let view = category::generate(
             data,
             all_sections.clone(),
@@ -123,7 +135,7 @@ pub fn generate(
         let key = format!("service/{category_name}.json");
         rendered.insert(key, serde_json::to_string(&view).unwrap());
     } else {
-        for (source_name, ext) in service_exts {
+        for (source_name, ext) in &unique_service_exts {
             let view = service::generate(data, all_sections.clone(), ext);
             let key = format!("service/{source_name}.json");
             rendered.insert(key, serde_json::to_string(&view).unwrap());
@@ -231,5 +243,61 @@ mod tests {
         // Per-member sections absent.
         assert!(!result.contains_key("service/vllm.json"));
         assert!(!result.contains_key("service/sglang.json"));
+    }
+
+    #[test]
+    fn generate_dedupes_section_when_two_captures_share_service_name() {
+        use crate::service_extension::{Kpi, ServiceExtension};
+        use std::collections::HashMap;
+
+        let kpi = Kpi {
+            role: "throughput".to_string(),
+            title: "Generation Token Rate".to_string(),
+            description: None,
+            query: "vllm_q".to_string(),
+            metric_type: "delta_counter".to_string(),
+            subtype: None,
+            unit_system: Some("rate".to_string()),
+            percentiles: None,
+            available: true,
+            denominator: false,
+            subgroup: None,
+            subgroup_description: None,
+            full_width: false,
+        };
+        let vllm_a = ServiceExtension {
+            service_name: "vllm".to_string(),
+            aliases: vec![],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: vec![kpi.clone()],
+        };
+        let vllm_b = vllm_a.clone();
+
+        let data = Tsdb::default();
+        let result = generate(
+            &data,
+            None,
+            &[("vllm", &vllm_a), ("vllm", &vllm_b)],
+            None,
+            None,
+        );
+
+        assert!(result.contains_key("service/vllm.json"));
+
+        let overview_str = result.get("overview.json").expect("overview rendered");
+        let overview: serde_json::Value = serde_json::from_str(overview_str).unwrap();
+        let sections = overview
+            .get("sections")
+            .and_then(|s| s.as_array())
+            .expect("sections present");
+        let vllm_count = sections
+            .iter()
+            .filter(|s| s.get("route").and_then(|r| r.as_str()) == Some("/service/vllm"))
+            .count();
+        assert_eq!(
+            vllm_count, 1,
+            "expected one /service/vllm entry in nav, got {vllm_count}"
+        );
     }
 }
