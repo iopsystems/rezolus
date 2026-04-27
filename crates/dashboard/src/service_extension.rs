@@ -208,12 +208,41 @@ fn parse_template(
     if is_bridge {
         let bridge: BridgeExtension = serde_json::from_value(v)
             .map_err(|e| format!("failed to parse bridge {source}: {e}"))?;
+        validate_bridge(&bridge, source)?;
         Ok(ParsedTemplate::Bridge(bridge))
     } else {
         let ext: ServiceExtension =
             serde_json::from_value(v).map_err(|e| format!("failed to parse {source}: {e}"))?;
         Ok(ParsedTemplate::Service(ext))
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_bridge(
+    bridge: &BridgeExtension,
+    source: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if bridge.members.len() != 2 {
+        return Err(format!(
+            "{source}: bridge must have exactly 2 members, got {}",
+            bridge.members.len()
+        )
+        .into());
+    }
+    let allowed: std::collections::HashSet<&str> =
+        bridge.members.iter().map(String::as_str).collect();
+    for kpi in &bridge.kpis {
+        for key in kpi.member_titles.keys() {
+            if !allowed.contains(key.as_str()) {
+                return Err(format!(
+                    "{source}: bridge KPI '{}' has member_titles key '{}' that is not in members {:?}",
+                    kpi.title, key, bridge.members,
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -540,6 +569,53 @@ mod tests {
         assert_eq!(
             k.member_titles.get("vllm").map(String::as_str),
             Some("Generation Token Rate"),
+        );
+    }
+
+    #[test]
+    fn registry_rejects_bridge_with_wrong_member_count() {
+        let dir = tempfile::tempdir().unwrap();
+        write_template(
+            &dir,
+            "bad.json",
+            r#"{
+                "service_name": "broken-bridge",
+                "bridge": true,
+                "members": ["only-one"],
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+        let err = TemplateRegistry::load(dir.path()).expect_err("should reject");
+        assert!(err.to_string().contains("exactly 2 members"), "got: {err}");
+    }
+
+    #[test]
+    fn registry_rejects_bridge_with_unknown_member_titles_key() {
+        let dir = tempfile::tempdir().unwrap();
+        write_template(
+            &dir,
+            "bad.json",
+            r#"{
+                "service_name": "broken-bridge",
+                "bridge": true,
+                "members": ["vllm", "sglang"],
+                "kpis": [
+                    {
+                        "role": "throughput",
+                        "title": "X",
+                        "type": "delta_counter",
+                        "member_titles": { "tensorrt": "X" }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+        let err = TemplateRegistry::load(dir.path()).expect_err("should reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("member_titles") && msg.contains("tensorrt"),
+            "got: {msg}",
         );
     }
 }
