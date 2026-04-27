@@ -3,6 +3,7 @@ use crate::plot::*;
 use crate::service_extension::ServiceExtension;
 
 mod blockio;
+mod bridge;
 mod cgroups;
 mod cpu;
 mod gpu;

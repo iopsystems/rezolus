@@ -103,7 +103,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
 }
 
 /// Convert a title into a kebab-case slug for use as a DOM id.
-fn slug(s: &str) -> String {
+pub(crate) fn slug(s: &str) -> String {
     s.to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
@@ -115,7 +115,7 @@ fn slug(s: &str) -> String {
 }
 
 /// Capitalize the first letter of a string (for group titles).
-fn capitalize(s: &str) -> String {
+pub(crate) fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
         None => String::new(),
