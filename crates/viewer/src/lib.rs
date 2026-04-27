@@ -258,7 +258,9 @@ impl Viewer {
             .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
 
-        let service_exts = self.detect_and_validate_service_exts(&registry);
+        // Per-capture init runs before compare-mode `regenerate_combined`,
+        // which is the path that supplies an alias. Pass None here.
+        let service_exts = self.detect_and_validate_service_exts(&registry, None);
 
         let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
             .iter()
@@ -283,28 +285,38 @@ impl Viewer {
     fn detect_and_validate_service_exts(
         &self,
         registry: &dashboard::TemplateRegistry,
+        alias: Option<&str>,
     ) -> Vec<(String, dashboard::ServiceExtension)> {
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
 
-        if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
-            if let Ok(psm) =
-                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-            {
-                for (source_type, _group) in &psm {
-                    if source_type == "rezolus" {
-                        continue;
-                    }
-                    if let Some(ext) = registry.get(source_type) {
-                        service_exts.push((source_type.clone(), ext.clone()));
+        // Alias overrides parquet metadata for template lookup. The
+        // returned source key is the alias, since downstream category
+        // member checks use it directly.
+        if let Some(alias) = alias {
+            if let Some(ext) = registry.get(alias) {
+                service_exts.push((alias.to_string(), ext.clone()));
+            }
+        } else {
+            if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
+                if let Ok(psm) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
+                {
+                    for (source_type, _group) in &psm {
+                        if source_type == "rezolus" {
+                            continue;
+                        }
+                        if let Some(ext) = registry.get(source_type) {
+                            service_exts.push((source_type.clone(), ext.clone()));
+                        }
                     }
                 }
             }
-        }
-        if service_exts.is_empty() {
-            let tsdb = self.engine.tsdb();
-            let source = tsdb.source().to_string();
-            if let Some(ext) = registry.get(&source) {
-                service_exts.push((source, ext.clone()));
+            if service_exts.is_empty() {
+                let tsdb = self.engine.tsdb();
+                let source = tsdb.source().to_string();
+                if let Some(ext) = registry.get(&source) {
+                    service_exts.push((source, ext.clone()));
+                }
             }
         }
 
@@ -433,16 +445,30 @@ impl WasmCaptureRegistry {
             .init_templates(templates_json)
     }
 
-    /// Regenerate the BASELINE viewer's `dashboard_sections` using
-    /// service extensions from BOTH attached captures and any matching
-    /// category in the parsed templates JSON. When the experiment slot is
+    /// Regenerate BOTH viewers' `dashboard_sections` using service
+    /// extensions from BOTH attached captures and the explicitly named
+    /// category template (when provided). When the experiment slot is
     /// empty, this is a no-op (the per-capture `init_templates` call
     /// already populated baseline's sections).
     ///
-    /// Called by the frontend after the experiment attaches in compare
-    /// mode, so the category section appears in the baseline's section
-    /// list (which is what the sidebar reads).
-    pub fn regenerate_combined(&mut self, templates_json: &str) -> Result<(), JsValue> {
+    /// Both slots get the same combined map: compare-mode chart fetches
+    /// query both slots for the active section route, so a category
+    /// route like `/service/inference-library` must resolve in the
+    /// experiment slot too — otherwise the experiment fetch 404s and
+    /// the chart surfaces "Error: null".
+    ///
+    /// `category_name` activates category mode. When set, both aliases
+    /// must be present and each must appear in the category template's
+    /// `members` list — otherwise this returns an error and the caller
+    /// should refuse to proceed. A None category is treated as plain
+    /// per-member compare mode (no bridging).
+    pub fn regenerate_combined(
+        &mut self,
+        templates_json: &str,
+        category_name: Option<String>,
+        baseline_alias: Option<String>,
+        experiment_alias: Option<String>,
+    ) -> Result<(), JsValue> {
         // Both captures must be attached; otherwise nothing to combine.
         if self.experiment.is_none() || self.baseline.is_none() {
             return Ok(());
@@ -461,12 +487,12 @@ impl WasmCaptureRegistry {
         let baseline_exts = self
             .baseline
             .as_ref()
-            .map(|v| v.detect_and_validate_service_exts(&registry))
+            .map(|v| v.detect_and_validate_service_exts(&registry, baseline_alias.as_deref()))
             .unwrap_or_default();
         let experiment_exts = self
             .experiment
             .as_ref()
-            .map(|v| v.detect_and_validate_service_exts(&registry))
+            .map(|v| v.detect_and_validate_service_exts(&registry, experiment_alias.as_deref()))
             .unwrap_or_default();
 
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
@@ -478,22 +504,43 @@ impl WasmCaptureRegistry {
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
 
-        let category = if service_refs.len() == 2 {
-            registry
-                .find_category(service_refs[0].0, service_refs[1].0)
-                .map(|b| (b.service_name.as_str(), b))
-        } else {
-            None
+        let category = match category_name.as_deref() {
+            Some(name) => {
+                let cat = registry.get_category(name).ok_or_else(|| {
+                    JsValue::from_str(&format!(
+                        "category template {name:?} not found in templates"
+                    ))
+                })?;
+                if service_refs.len() != 2 {
+                    return Err(JsValue::from_str(
+                        "category mode requires exactly two attached captures",
+                    ));
+                }
+                for (alias, _) in &service_refs {
+                    if !cat.members.iter().any(|m| m == alias) {
+                        return Err(JsValue::from_str(&format!(
+                            "alias {alias:?} is not a member of category {name:?} (members: {:?})",
+                            cat.members,
+                        )));
+                    }
+                }
+                Some((cat.service_name.as_str(), cat))
+            }
+            None => None,
         };
 
+        let combined = dashboard::dashboard::generate(
+            self.baseline.as_ref().unwrap().engine.tsdb(),
+            None,
+            &service_refs,
+            category,
+            None,
+        );
         if let Some(baseline) = self.baseline.as_mut() {
-            baseline.dashboard_sections = dashboard::dashboard::generate(
-                baseline.engine.tsdb(),
-                None,
-                &service_refs,
-                category,
-                None,
-            );
+            baseline.dashboard_sections = combined.clone();
+        }
+        if let Some(experiment) = self.experiment.as_mut() {
+            experiment.dashboard_sections = combined;
         }
         Ok(())
     }

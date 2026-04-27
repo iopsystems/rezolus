@@ -103,17 +103,25 @@ export class WasmCaptureRegistry {
     query(capture: string, query: string, time: number): string;
     query_range(capture: string, query: string, start: number, end: number, step: number): string;
     /**
-     * Regenerate the BASELINE viewer's `dashboard_sections` using
-     * service extensions from BOTH attached captures and any matching
-     * category in the parsed templates JSON. When the experiment slot is
+     * Regenerate BOTH viewers' `dashboard_sections` using service
+     * extensions from BOTH attached captures and the explicitly named
+     * category template (when provided). When the experiment slot is
      * empty, this is a no-op (the per-capture `init_templates` call
      * already populated baseline's sections).
      *
-     * Called by the frontend after the experiment attaches in compare
-     * mode, so the category section appears in the baseline's section
-     * list (which is what the sidebar reads).
+     * Both slots get the same combined map: compare-mode chart fetches
+     * query both slots for the active section route, so a category
+     * route like `/service/inference-library` must resolve in the
+     * experiment slot too — otherwise the experiment fetch 404s and
+     * the chart surfaces "Error: null".
+     *
+     * `category_name` activates category mode. When set, both aliases
+     * must be present and each must appear in the category template's
+     * `members` list — otherwise this returns an error and the caller
+     * should refuse to proceed. A None category is treated as plain
+     * per-member compare mode (no bridging).
      */
-    regenerate_combined(templates_json: string): void;
+    regenerate_combined(templates_json: string, category_name?: string | null, baseline_alias?: string | null, experiment_alias?: string | null): void;
     selection(capture: string): string | undefined;
     /**
      * Set or clear the display alias for a capture slot. No-op when
@@ -156,7 +164,7 @@ export interface InitOutput {
     readonly wasmcaptureregistry_new: () => number;
     readonly wasmcaptureregistry_query: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasmcaptureregistry_query_range: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-    readonly wasmcaptureregistry_regenerate_combined: (a: number, b: number, c: number) => [number, number];
+    readonly wasmcaptureregistry_regenerate_combined: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly wasmcaptureregistry_selection: (a: number, b: number, c: number) => [number, number];
     readonly wasmcaptureregistry_set_alias: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasmcaptureregistry_systeminfo: (a: number, b: number, c: number) => [number, number];

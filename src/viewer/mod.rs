@@ -128,6 +128,17 @@ pub fn command() -> Command {
                 .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set),
         )
+        .arg(
+            clap::Arg::new("CATEGORY")
+                .long("category")
+                .value_name("NAME")
+                .help(
+                    "Activate category mode using the named category template \
+                     (e.g. `inference-library`). Each capture's CLI alias must \
+                     appear in the category template's `members` list.",
+                )
+                .action(clap::ArgAction::Set),
+        )
 }
 
 pub struct Config {
@@ -135,6 +146,7 @@ pub struct Config {
     experiment_path: Option<PathBuf>,
     baseline_alias: Option<String>,
     experiment_alias: Option<String>,
+    category_name: Option<String>,
     verbose: u8,
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
@@ -201,6 +213,7 @@ impl TryFrom<ArgMatches> for Config {
             experiment_path,
             baseline_alias,
             experiment_alias,
+            category_name: args.get_one::<String>("CATEGORY").cloned(),
             verbose: *args.get_one::<u8>("VERBOSE").unwrap_or(&0),
             listen: *args
                 .get_one::<SocketAddr>("LISTEN")
@@ -242,7 +255,15 @@ pub fn run(config: Config) {
                 .unwrap();
 
             let (systeminfo, selection, file_meta) = extract_parquet_metadata(path);
-            let mut service_exts = extract_service_extension_metadata(path, &registry);
+            // CLI startup log only — the canonical extraction with
+            // alias-aware lookup happens inside `regenerate_dashboards`
+            // below. Pass the baseline alias here too so the startup
+            // log reports what the dashboard will actually use.
+            let mut service_exts = extract_service_extension_metadata(
+                path,
+                &registry,
+                config.baseline_alias.as_deref(),
+            );
 
             // Validate KPI availability against the loaded data so that
             // template-derived dashboards hide KPIs with no data. The
@@ -258,10 +279,18 @@ pub fn run(config: Config) {
             info!("Computing file checksum...");
             let file_checksum = compute_file_checksum(path);
 
+            if service_exts.is_empty()
+                && (config.baseline_alias.is_some() || config.category_name.is_some())
+            {
+                warn!(
+                    "no service extension matched baseline alias {:?} or its parquet source",
+                    config.baseline_alias
+                );
+            }
             for (source, ext) in &service_exts {
                 let available = ext.kpis.iter().filter(|k| k.available).count();
                 info!(
-                    "Found service extension for {:?} from source {:?} ({}/{} KPIs available)",
+                    "Found service extension for {:?} from source {:?} ({}/{} KPIs available) — baseline",
                     ext.service_name,
                     source,
                     available,
@@ -281,6 +310,45 @@ pub fn run(config: Config) {
             state
                 .captures
                 .set_baseline_alias(config.baseline_alias.clone());
+
+            // --category requires both captures to carry CLI aliases AND
+            // each alias to appear in the category template's members
+            // list. Refuse to launch on misconfiguration; silently
+            // falling back hides user intent and produces a confusing
+            // dashboard. The check is bundled here at startup so the
+            // user finds out before the browser opens.
+            if let Some(ref cat_name) = config.category_name {
+                let category = registry.get_category(cat_name).unwrap_or_else(|| {
+                    eprintln!("no category template named {cat_name:?} found in the registry");
+                    std::process::exit(1);
+                });
+                let baseline_alias = config.baseline_alias.as_deref().unwrap_or_else(|| {
+                    eprintln!(
+                        "--category {cat_name:?} requires the baseline capture to have an alias (e.g. `vllm=path.parquet`)"
+                    );
+                    std::process::exit(1);
+                });
+                let experiment_alias = config.experiment_alias.as_deref().unwrap_or_else(|| {
+                    eprintln!(
+                        "--category {cat_name:?} requires the experiment capture to have an alias (e.g. `sglang=path.parquet`)"
+                    );
+                    std::process::exit(1);
+                });
+                for alias in [baseline_alias, experiment_alias] {
+                    if !category.members.iter().any(|m| m == alias) {
+                        eprintln!(
+                            "alias {alias:?} is not a member of category {cat_name:?} (members: {:?})",
+                            category.members
+                        );
+                        std::process::exit(1);
+                    }
+                }
+                info!(
+                    "Activated category {:?} (members: {:?}) — baseline {:?}, experiment {:?}",
+                    cat_name, category.members, baseline_alias, experiment_alias,
+                );
+                *state.category_name.write() = Some(cat_name.clone());
+            }
 
             // Attach the optional experiment capture for A/B comparison.
             // The experiment path is recorded in `cli_experiment_path`
@@ -312,6 +380,35 @@ pub fn run(config: Config) {
                         );
                         *state.cli_experiment_path.write() = Some(exp_path.clone());
                         info!("Attached experiment capture: {}", exp_path.display());
+
+                        // Mirror the baseline log line for the
+                        // experiment so the user can see whether the
+                        // alias-keyed template lookup succeeded.
+                        let mut exp_exts = extract_service_extension_metadata(
+                            exp_path,
+                            &registry,
+                            config.experiment_alias.as_deref(),
+                        );
+                        if let Some(handle) = state.captures.get(CaptureId::Experiment) {
+                            let exp_data = handle.read();
+                            validate_service_extensions(&exp_data, &mut exp_exts);
+                        }
+                        if exp_exts.is_empty() {
+                            warn!(
+                                "no service extension matched experiment alias {:?} or its parquet source",
+                                config.experiment_alias
+                            );
+                        }
+                        for (source, ext) in &exp_exts {
+                            let available = ext.kpis.iter().filter(|k| k.available).count();
+                            info!(
+                                "Found service extension for {:?} from source {:?} ({}/{} KPIs available) — experiment",
+                                ext.service_name,
+                                source,
+                                available,
+                                ext.kpis.len()
+                            );
+                        }
                     }
                     Err(e) => {
                         warn!(
@@ -590,6 +687,11 @@ struct AppState {
     /// separate from that field so `regenerate_dashboards` can find
     /// the experiment metadata without risking the user's file.
     cli_experiment_path: parking_lot::RwLock<Option<std::path::PathBuf>>,
+    /// Active category template name (when `--category` was supplied at
+    /// startup). `regenerate_dashboards` resolves this against the
+    /// registry on every regen and validates the attached aliases
+    /// against the category's `members` list. None = no category mode.
+    category_name: parking_lot::RwLock<Option<String>>,
     /// Serialized selection JSON from parquet metadata.
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
@@ -607,6 +709,7 @@ impl AppState {
             parquet_path: parking_lot::RwLock::new(None),
             experiment_parquet_path: parking_lot::RwLock::new(None),
             cli_experiment_path: parking_lot::RwLock::new(None),
+            category_name: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
         }
@@ -806,17 +909,29 @@ fn build_multinode_systeminfo(path: &Path) -> Option<String> {
     }
 }
 
-/// Look up a category whose members exactly match the two service
-/// extensions, in any order. Returns `None` for 0/1/3+ extensions or
-/// when the registry has no matching category.
+/// Resolve the active category for a regen pass. Activation requires:
+/// `state.category_name` is Some, the named category exists in the
+/// registry, exactly two service refs are attached, and each ref's
+/// source name (== CLI alias when one was provided) appears in the
+/// category's `members` list. Returns None when any of those fail —
+/// the caller falls back to per-member rendering. CLI startup ran
+/// stricter checks, so silent fall-back here only happens at runtime
+/// (e.g. mid-session experiment detach) and that's the correct UX.
 fn lookup_category<'a>(
+    state: &AppState,
     registry: &'a TemplateRegistry,
     service_refs: &[(&str, &ServiceExtension)],
 ) -> Option<(&'a str, &'a CategoryExtension)> {
+    let cat_name = state.category_name.read().clone()?;
     if service_refs.len() != 2 {
         return None;
     }
-    let category = registry.find_category(service_refs[0].0, service_refs[1].0)?;
+    let category = registry.get_category(&cat_name)?;
+    for (alias, _) in service_refs {
+        if !category.members.iter().any(|m| m == alias) {
+            return None;
+        }
+    }
     Some((category.service_name.as_str(), category))
 }
 
@@ -845,13 +960,19 @@ fn regenerate_dashboards(state: &AppState) {
     // validate against the baseline tsdb, experiment-source exts
     // against the experiment tsdb, so a KPI present only in one
     // recording isn't wrongly marked unavailable.
+    //
+    // When the CLI provided an alias, the alias overrides whatever
+    // `source` the parquet's metadata carries. That alias is also the
+    // member key used to verify against the active category template.
+    let baseline_alias = state.captures.alias(CaptureId::Baseline);
+    let experiment_alias = state.captures.alias(CaptureId::Experiment);
     let mut baseline_exts: Vec<(String, ServiceExtension)> = baseline_path
         .as_ref()
-        .map(|p| extract_service_extension_metadata(p, registry))
+        .map(|p| extract_service_extension_metadata(p, registry, baseline_alias.as_deref()))
         .unwrap_or_default();
     let mut experiment_exts: Vec<(String, ServiceExtension)> = experiment_path
         .as_ref()
-        .map(|p| extract_service_extension_metadata(p, registry))
+        .map(|p| extract_service_extension_metadata(p, registry, experiment_alias.as_deref()))
         .unwrap_or_default();
 
     {
@@ -870,7 +991,7 @@ fn regenerate_dashboards(state: &AppState) {
     service_exts.extend(experiment_exts);
 
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let category = lookup_category(registry, &service_refs);
+    let category = lookup_category(state, registry, &service_refs);
 
     let filesize = baseline_path
         .as_ref()
@@ -897,12 +1018,28 @@ fn regenerate_dashboards(state: &AppState) {
 fn extract_service_extension_metadata(
     path: &Path,
     registry: &TemplateRegistry,
+    alias: Option<&str>,
 ) -> Vec<(String, ServiceExtension)> {
     use crate::parquet_metadata::{
         KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
     };
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
+
+    // When the user provided a CLI alias, that alias is the source of
+    // truth for template lookup AND for the returned source key (the
+    // key drives category member matching downstream). The parquet's
+    // own `source`/`service_queries` are ignored — useful when a
+    // capture was produced by a generic benchmarking tool whose source
+    // metadata doesn't match a service template name.
+    if let Some(alias) = alias {
+        if let Some(ext) = registry.get(alias) {
+            return vec![(alias.to_string(), ext.clone())];
+        }
+        // Alias supplied but no matching template — leave results empty
+        // so `lookup_category`'s membership check fails cleanly.
+        return Vec::new();
+    }
 
     let mut results = Vec::new();
 
@@ -1186,6 +1323,7 @@ async fn mode(
         "live": state.live.load(Ordering::Relaxed),
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
+        "category": state.category_name.read().clone(),
     }))
 }
 
@@ -1499,7 +1637,9 @@ async fn upload_parquet(
     // embeds the original name instead of the temp path.
     data.set_filename(filename.clone());
 
-    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+    // HTTP upload path has no alias plumbing (yet); template lookup
+    // falls back to the parquet's embedded `source` metadata.
+    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates, None);
     validate_service_extensions(&data, &mut service_exts);
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
     let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None, None);

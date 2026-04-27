@@ -636,11 +636,28 @@ const initDashboard = (config = {}) => {
     // Mount router with hash-based routing. When the capture carries a
     // service extension, default to that service's section instead of
     // the generic overview — the service KPIs are usually what the
-    // user came to look at.
+    // user came to look at. In category mode the canonical section is
+    // the category itself (e.g. `/service/inference-library`); the
+    // per-member sections from `serviceInstances` don't exist in the
+    // rendered map at all.
+    const categoryName = config.categoryName || null;
     const serviceNames = Object.keys(serviceInstances || {});
-    const defaultRoute = serviceNames.length > 0
-        ? `/service/${serviceNames[0]}`
-        : '/overview';
+    const defaultRoute = categoryName
+        ? `/service/${categoryName}`
+        : (serviceNames.length > 0 ? `/service/${serviceNames[0]}` : '/overview');
+
+    // A stale hash (e.g. `#/service/vllm` from a previous session)
+    // would otherwise drive mithril to a route whose data fetch 404s
+    // and surfaces as a confusing "Error: null" toast. If the URL is
+    // pointing at a per-service route that isn't the canonical default
+    // for this load, drop the hash so the defaultRoute kicks in.
+    if (categoryName) {
+        const hash = window.location.hash || '';
+        if (hash.startsWith('#/service/') && hash !== `#${defaultRoute}`) {
+            window.location.hash = '';
+        }
+    }
+
     m.route.prefix = '#';
     m.route(document.body, defaultRoute, {
         '/:section/chart/:chartId': {

@@ -118,8 +118,11 @@ pub struct CategoryExtension {
     /// to route the parsed JSON into the category map instead of services.
     #[serde(default)]
     pub category: bool,
-    /// Exactly two member service names. Order is irrelevant for matching;
-    /// the dashboard generator passes the live capture ordering at gen time.
+    /// Member service names declared by this category. The runtime
+    /// requires ≥2; today's bridge generator pairs exactly two captures,
+    /// but extra members in the list are tolerated for forward-compat.
+    /// At dashboard-gen time, every attached capture's CLI alias must
+    /// appear in this list — that's the verification gate.
     pub members: Vec<String>,
     pub kpis: Vec<CategoryKpi>,
 }
@@ -223,9 +226,9 @@ fn validate_category(
     category: &CategoryExtension,
     source: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if category.members.len() != 2 {
+    if category.members.len() < 2 {
         return Err(format!(
-            "{source}: category must have exactly 2 members, got {}",
+            "{source}: category must have at least 2 members, got {}",
             category.members.len()
         )
         .into());
@@ -427,14 +430,10 @@ impl TemplateRegistry {
             .insert(category.service_name.clone(), category);
     }
 
-    /// Look up a category whose `members` set equals `{member_a, member_b}`
-    /// (order-insensitive). Returns `None` when no matching category exists.
-    pub fn find_category(&self, member_a: &str, member_b: &str) -> Option<&CategoryExtension> {
-        self.categories.values().find(|b| {
-            b.members.len() == 2
-                && ((b.members[0] == member_a && b.members[1] == member_b)
-                    || (b.members[0] == member_b && b.members[1] == member_a))
-        })
+    /// Look up a category by name (the category template's `service_name`).
+    /// Returns `None` when no category with that name was loaded.
+    pub fn get_category(&self, name: &str) -> Option<&CategoryExtension> {
+        self.categories.get(name)
     }
 }
 
@@ -574,10 +573,9 @@ mod tests {
         assert!(registry.get("sglang").is_some());
         // Category files do NOT pollute the service map.
         assert!(registry.get("inference-library").is_none());
-        // The category IS reachable via find_category in either order.
-        assert!(registry.find_category("vllm", "sglang").is_some());
-        assert!(registry.find_category("sglang", "vllm").is_some());
-        assert!(registry.find_category("vllm", "valkey").is_none());
+        // The category IS reachable by name via get_category.
+        assert!(registry.get_category("inference-library").is_some());
+        assert!(registry.get_category("nonexistent").is_none());
     }
 
     #[test]
@@ -615,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_rejects_category_with_wrong_member_count() {
+    fn registry_rejects_category_with_too_few_members() {
         let dir = tempfile::tempdir().unwrap();
         write_template(
             &dir,
@@ -629,7 +627,7 @@ mod tests {
         )
         .unwrap();
         let err = TemplateRegistry::load(dir.path()).expect_err("should reject");
-        assert!(err.to_string().contains("exactly 2 members"), "got: {err}");
+        assert!(err.to_string().contains("at least 2 members"), "got: {err}");
     }
 
     #[test]
@@ -661,7 +659,7 @@ mod tests {
         let registry = TemplateRegistry::load(dir.path()).unwrap();
 
         // The category dropped silently because tensorrt-llm isn't loaded.
-        assert!(registry.find_category("vllm", "tensorrt-llm").is_none());
+        assert!(registry.get_category("orphan-category").is_none());
     }
 
     #[test]
