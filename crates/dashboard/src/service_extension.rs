@@ -246,6 +246,30 @@ fn validate_bridge(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn finalize_bridges(
+    candidates: Vec<BridgeExtension>,
+    services: &HashMap<String, ServiceExtension>,
+) -> HashMap<String, BridgeExtension> {
+    let mut out = HashMap::new();
+    for bridge in candidates {
+        let missing: Vec<&String> = bridge
+            .members
+            .iter()
+            .filter(|m| !services.contains_key(m.as_str()))
+            .collect();
+        if !missing.is_empty() {
+            eprintln!(
+                "warning: dropping bridge '{}' — unknown member template(s): {:?}",
+                bridge.service_name, missing
+            );
+            continue;
+        }
+        out.insert(bridge.service_name.clone(), bridge);
+    }
+    out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 enum ParsedTemplate {
     Service(ServiceExtension),
     Bridge(BridgeExtension),
@@ -296,7 +320,7 @@ impl TemplateRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_embedded(dir: &include_dir::Dir<'_>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut templates = HashMap::new();
-        let mut bridges = HashMap::new();
+        let mut bridge_candidates: Vec<BridgeExtension> = Vec::new();
         for file in dir.files() {
             let path = file.path();
             if path.extension().is_none_or(|e| e != "json") {
@@ -313,10 +337,11 @@ impl TemplateRegistry {
                     }
                 }
                 ParsedTemplate::Bridge(bridge) => {
-                    bridges.insert(bridge.service_name.clone(), bridge);
+                    bridge_candidates.push(bridge);
                 }
             }
         }
+        let bridges = finalize_bridges(bridge_candidates, &templates);
         Ok(Self { templates, bridges })
     }
 
@@ -325,7 +350,7 @@ impl TemplateRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let mut templates = HashMap::new();
-        let mut bridges = HashMap::new();
+        let mut bridge_candidates: Vec<BridgeExtension> = Vec::new();
 
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
@@ -348,11 +373,12 @@ impl TemplateRegistry {
                     }
                 }
                 ParsedTemplate::Bridge(bridge) => {
-                    bridges.insert(bridge.service_name.clone(), bridge);
+                    bridge_candidates.push(bridge);
                 }
             }
         }
 
+        let bridges = finalize_bridges(bridge_candidates, &templates);
         Ok(Self { templates, bridges })
     }
 
@@ -588,6 +614,38 @@ mod tests {
         .unwrap();
         let err = TemplateRegistry::load(dir.path()).expect_err("should reject");
         assert!(err.to_string().contains("exactly 2 members"), "got: {err}");
+    }
+
+    #[test]
+    fn registry_drops_bridge_when_member_template_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        write_template(
+            &dir,
+            "vllm.json",
+            r#"{
+                "service_name": "vllm",
+                "service_metadata": {},
+                "slo": null,
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+        write_template(
+            &dir,
+            "orphan-bridge.json",
+            r#"{
+                "service_name": "orphan-bridge",
+                "bridge": true,
+                "members": ["vllm", "tensorrt-llm"],
+                "kpis": []
+            }"#,
+        )
+        .unwrap();
+
+        let registry = TemplateRegistry::load(dir.path()).unwrap();
+
+        // The bridge dropped silently because tensorrt-llm isn't loaded.
+        assert!(registry.find_bridge("vllm", "tensorrt-llm").is_none());
     }
 
     #[test]
