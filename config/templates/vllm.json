@@ -50,15 +50,6 @@
     },
     {
       "role": "latency",
-      "title": "Time per Output Token (TPOT)",
-      "query": "vllm_request_time_per_output_token_seconds",
-      "type": "histogram",
-      "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
-    },
-    {
-      "role": "latency",
       "title": "Inter-Token Latency (ITL)",
       "query": "vllm_inter_token_latency_seconds",
       "type": "histogram",
