@@ -185,7 +185,7 @@ impl SubGroup {
 
     /// Mutable access to the most recently pushed plot. Used by callers
     /// that mutate per-plot fields (e.g. `promql_query_experiment` on the
-    /// bridge generator) right after `plot_promql*`.
+    /// category generator) right after `plot_promql*`.
     pub fn plots_mut_last(&mut self) -> Option<&mut Plot> {
         self.plots.last_mut()
     }

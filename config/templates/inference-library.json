@@ -1,6 +1,6 @@
 {
   "service_name": "inference-library",
-  "bridge": true,
+  "category": true,
   "members": ["vllm", "sglang"],
   "kpis": [
     {

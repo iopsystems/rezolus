@@ -160,7 +160,7 @@ const fetchExperimentResult = (vnode) => {
     // baseline's topology and would return zero matches on the
     // experiment in the common case where the two recordings have
     // different hostnames or instance IDs.
-    // Bridge templates supply a per-side experiment query via
+    // Category templates supply a per-side experiment query via
     // spec.promql_query_experiment. When present, route it through
     // buildEffectiveQuery instead of spec.promql_query so the same
     // histogram/counter rewrites and step substitutions apply.

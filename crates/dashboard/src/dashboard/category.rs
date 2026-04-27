@@ -1,11 +1,11 @@
 use crate::Tsdb;
 use crate::plot::*;
-use crate::service_extension::{BridgeExtension, ServiceExtension};
+use crate::service_extension::{CategoryExtension, ServiceExtension};
 
 pub fn generate(
     data: &Tsdb,
     all_sections: Vec<Section>,
-    bridge: &BridgeExtension,
+    category: &CategoryExtension,
     baseline_member: &str,
     baseline_ext: &ServiceExtension,
     experiment_member: &str,
@@ -15,10 +15,10 @@ pub fn generate(
 
     view.metadata.insert(
         "service_name".to_string(),
-        serde_json::Value::String(bridge.service_name.clone()),
+        serde_json::Value::String(category.service_name.clone()),
     );
     view.metadata.insert(
-        "bridge_members".to_string(),
+        "category_members".to_string(),
         serde_json::Value::Array(vec![
             serde_json::Value::String(baseline_member.to_string()),
             serde_json::Value::String(experiment_member.to_string()),
@@ -28,7 +28,7 @@ pub fn generate(
     let mut groups: Vec<(String, Group)> = Vec::new();
     let mut unavailable: Vec<serde_json::Value> = Vec::new();
 
-    for kpi in &bridge.kpis {
+    for kpi in &category.kpis {
         let baseline_title = kpi.member_title(baseline_member);
         let experiment_title = kpi.member_title(experiment_member);
         let baseline_kpi = baseline_ext.kpis.iter().find(|k| k.title == baseline_title);
@@ -141,7 +141,7 @@ pub fn generate(
 
     if !unavailable.is_empty() {
         view.metadata.insert(
-            "bridge_unavailable".to_string(),
+            "category_unavailable".to_string(),
             serde_json::Value::Array(unavailable),
         );
     }
@@ -155,7 +155,7 @@ pub fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service_extension::{BridgeKpi, Kpi};
+    use crate::service_extension::{CategoryKpi, Kpi};
     use std::collections::HashMap;
 
     fn kpi(role: &str, title: &str, query: &str) -> Kpi {
@@ -187,12 +187,12 @@ mod tests {
     }
 
     #[test]
-    fn bridge_generate_emits_section_with_paired_queries() {
-        let bridge = BridgeExtension {
+    fn category_generate_emits_section_with_paired_queries() {
+        let category = CategoryExtension {
             service_name: "inference-library".to_string(),
-            bridge: true,
+            category: true,
             members: vec!["vllm".to_string(), "sglang".to_string()],
-            kpis: vec![BridgeKpi {
+            kpis: vec![CategoryKpi {
                 role: "throughput".to_string(),
                 title: "Generation Token Rate".to_string(),
                 metric_type: "delta_counter".to_string(),
@@ -220,7 +220,7 @@ mod tests {
         let view = generate(
             &data,
             vec![],
-            &bridge,
+            &category,
             "vllm",
             &vllm_ext,
             "sglang",
@@ -251,12 +251,12 @@ mod tests {
     }
 
     #[test]
-    fn bridge_generate_records_unavailable_when_member_lookup_misses() {
-        let bridge = BridgeExtension {
+    fn category_generate_records_unavailable_when_member_lookup_misses() {
+        let category = CategoryExtension {
             service_name: "ifx".to_string(),
-            bridge: true,
+            category: true,
             members: vec!["a".to_string(), "b".to_string()],
-            kpis: vec![BridgeKpi {
+            kpis: vec![CategoryKpi {
                 role: "throughput".to_string(),
                 title: "Token Rate".to_string(),
                 metric_type: "delta_counter".to_string(),
@@ -271,16 +271,16 @@ mod tests {
             }],
         };
         let a = ext("a", vec![kpi("throughput", "Token Rate", "a_q")]);
-        let b = ext("b", vec![]); // missing the bridged title
+        let b = ext("b", vec![]); // missing the categorized title
 
-        let view = generate(&Tsdb::default(), vec![], &bridge, "a", &a, "b", &b);
+        let view = generate(&Tsdb::default(), vec![], &category, "a", &a, "b", &b);
         let json = serde_json::to_value(&view).unwrap();
 
         let unavailable = json
             .get("metadata")
-            .and_then(|m| m.get("bridge_unavailable"))
+            .and_then(|m| m.get("category_unavailable"))
             .and_then(|v| v.as_array())
-            .expect("bridge_unavailable present");
+            .expect("category_unavailable present");
         assert_eq!(unavailable.len(), 1);
         assert_eq!(unavailable[0]["title"].as_str(), Some("Token Rate"));
         assert_eq!(unavailable[0]["missing_member"].as_str(), Some("b"));
@@ -291,12 +291,12 @@ mod tests {
     }
 
     #[test]
-    fn bridge_generate_records_unavailable_when_member_kpi_marked_unavailable() {
-        let bridge = BridgeExtension {
+    fn category_generate_records_unavailable_when_member_kpi_marked_unavailable() {
+        let category = CategoryExtension {
             service_name: "ifx".to_string(),
-            bridge: true,
+            category: true,
             members: vec!["a".to_string(), "b".to_string()],
-            kpis: vec![BridgeKpi {
+            kpis: vec![CategoryKpi {
                 role: "throughput".to_string(),
                 title: "Token Rate".to_string(),
                 metric_type: "delta_counter".to_string(),
@@ -315,14 +315,14 @@ mod tests {
         b_kpi.available = false;
         let b = ext("b", vec![b_kpi]);
 
-        let view = generate(&Tsdb::default(), vec![], &bridge, "a", &a, "b", &b);
+        let view = generate(&Tsdb::default(), vec![], &category, "a", &a, "b", &b);
         let json = serde_json::to_value(&view).unwrap();
 
         let unavailable = json
             .get("metadata")
-            .and_then(|m| m.get("bridge_unavailable"))
+            .and_then(|m| m.get("category_unavailable"))
             .and_then(|v| v.as_array())
-            .expect("bridge_unavailable present");
+            .expect("category_unavailable present");
         assert_eq!(unavailable.len(), 1);
         assert_eq!(unavailable[0]["title"].as_str(), Some("Token Rate"));
         assert_eq!(unavailable[0]["missing_member"].as_str(), Some("b"));

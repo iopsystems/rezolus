@@ -16,13 +16,13 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
     const serviceName = meta.service_name || 'Service';
     const serviceMeta = meta.service_metadata || {};
     const unavailable = meta.unavailable_kpis || [];
-    const bridgeMembers = Array.isArray(meta.bridge_members) ? meta.bridge_members : null;
-    const bridgeUnavailable = Array.isArray(meta.bridge_unavailable) ? meta.bridge_unavailable : [];
+    const categoryMembers = Array.isArray(meta.category_members) ? meta.category_members : null;
+    const categoryUnavailable = Array.isArray(meta.category_unavailable) ? meta.category_unavailable : [];
     const { instances = [], selectedInstance = null, onInstanceChange } = instanceOpts;
     const hasMultiInstance = instances.length > 1;
 
-    const headerTitle = bridgeMembers
-        ? `${serviceName} — ${bridgeMembers.join(' vs ')}`
+    const headerTitle = categoryMembers
+        ? `${serviceName} — ${categoryMembers.join(' vs ')}`
         : serviceName;
 
     return m('div#section-content', [
@@ -64,10 +64,10 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
                 m('li', [m('strong', kpi.title), ` (${kpi.role})`])
             )),
         ]),
-        bridgeUnavailable.length > 0 && m('div.section-notes', [
-            m('h3', 'Bridge Skipped'),
-            m('p', 'The following bridge KPIs were skipped because one member did not have a matching chart:'),
-            m('ul', bridgeUnavailable.map((entry) =>
+        categoryUnavailable.length > 0 && m('div.section-notes', [
+            m('h3', 'Skipped Comparisons'),
+            m('p', 'The following category KPIs were skipped because one member did not have a matching chart:'),
+            m('ul', categoryUnavailable.map((entry) =>
                 m('li', [
                     m('strong', entry.title),
                     ' — missing in ',

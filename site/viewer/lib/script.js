@@ -223,7 +223,7 @@ async function loadCompareDemo(fileA, fileB, legends = null) {
         // Templates were initialized for baseline inside initWasmViewer
         // via loadTemplates (which stashes the JSON in loadedTemplatesJson).
         // Now also init for the experiment slot, then trigger the
-        // combined-regen pass that picks up a matching bridge and
+        // combined-regen pass that picks up a matching category and
         // rewrites baseline's section list.
         if (typeof loadedTemplatesJson === 'string' && loadedTemplatesJson.length > 0) {
             ViewerApi.initTemplates(loadedTemplatesJson, 'experiment');

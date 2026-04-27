@@ -1,9 +1,9 @@
 use crate::Tsdb;
 use crate::plot::*;
-use crate::service_extension::{BridgeExtension, ServiceExtension};
+use crate::service_extension::{CategoryExtension, ServiceExtension};
 
 mod blockio;
-mod bridge;
+mod category;
 mod cgroups;
 mod cpu;
 mod gpu;
@@ -37,17 +37,17 @@ pub fn generate(
     data: &Tsdb,
     filesize: Option<u64>,
     service_exts: &[(&str, &ServiceExtension)],
-    bridge: Option<(&str, &BridgeExtension)>,
+    category: Option<(&str, &CategoryExtension)>,
     _descriptions: Option<&std::collections::HashMap<String, String>>,
 ) -> std::collections::HashMap<String, String> {
-    // A bridge requires exactly two member service exts. If a caller
-    // passes Some(bridge) without that, the bridge can't be rendered;
+    // A category requires exactly two member service exts. If a caller
+    // passes Some(category) without that, the category can't be rendered;
     // fall back to per-member sections so the section list and the
     // rendered map stay in agreement (no nav entry for a route the map
     // doesn't have, no orphaned member sections).
-    let bridge_active = bridge.is_some() && service_exts.len() == 2;
+    let category_active = category.is_some() && service_exts.len() == 2;
 
-    // Build the section list. In bridge mode, a single bridge section
+    // Build the section list. In category mode, a single category section
     // replaces the per-member sections; otherwise the per-member loop
     // runs as before.
     let mut all_sections: Vec<Section> = std::iter::once(Section {
@@ -60,13 +60,13 @@ pub fn generate(
     }))
     .collect();
 
-    if bridge_active {
-        let (bridge_name, _) = bridge.unwrap();
+    if category_active {
+        let (category_name, _) = category.unwrap();
         all_sections.insert(
             1,
             Section {
-                name: bridge_name.to_string(),
-                route: format!("/service/{bridge_name}"),
+                name: category_name.to_string(),
+                route: format!("/service/{category_name}"),
             },
         );
     } else {
@@ -107,20 +107,20 @@ pub fn generate(
         rendered.insert(key, serde_json::to_string(&view).unwrap());
     }
 
-    if bridge_active {
-        let (bridge_name, bridge_ext) = bridge.unwrap();
+    if category_active {
+        let (category_name, category_ext) = category.unwrap();
         let (a_name, a_ext) = service_exts[0];
         let (b_name, b_ext) = service_exts[1];
-        let view = bridge::generate(
+        let view = category::generate(
             data,
             all_sections.clone(),
-            bridge_ext,
+            category_ext,
             a_name,
             a_ext,
             b_name,
             b_ext,
         );
-        let key = format!("service/{bridge_name}.json");
+        let key = format!("service/{category_name}.json");
         rendered.insert(key, serde_json::to_string(&view).unwrap());
     } else {
         for (source_name, ext) in service_exts {
@@ -165,8 +165,8 @@ mod tests {
     }
 
     #[test]
-    fn generate_emits_bridge_section_when_bridge_supplied() {
-        use crate::service_extension::{BridgeExtension, BridgeKpi, Kpi, ServiceExtension};
+    fn generate_emits_category_section_when_category_supplied() {
+        use crate::service_extension::{CategoryExtension, CategoryKpi, Kpi, ServiceExtension};
         use std::collections::HashMap;
 
         let kpi = |role: &str, title: &str, query: &str| Kpi {
@@ -198,11 +198,11 @@ mod tests {
             slo: None,
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
         };
-        let bridge = BridgeExtension {
+        let category = CategoryExtension {
             service_name: "inference-library".to_string(),
-            bridge: true,
+            category: true,
             members: vec!["vllm".to_string(), "sglang".to_string()],
-            kpis: vec![BridgeKpi {
+            kpis: vec![CategoryKpi {
                 role: "throughput".to_string(),
                 title: "Generation Token Rate".to_string(),
                 metric_type: "delta_counter".to_string(),
@@ -222,11 +222,11 @@ mod tests {
             &data,
             None,
             &[("vllm", &vllm), ("sglang", &sglang)],
-            Some(("inference-library", &bridge)),
+            Some(("inference-library", &category)),
             None,
         );
 
-        // Bridge section present.
+        // Category section present.
         assert!(result.contains_key("service/inference-library.json"));
         // Per-member sections absent.
         assert!(!result.contains_key("service/vllm.json"));

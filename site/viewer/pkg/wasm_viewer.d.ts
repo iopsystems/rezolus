@@ -105,12 +105,12 @@ export class WasmCaptureRegistry {
     /**
      * Regenerate the BASELINE viewer's `dashboard_sections` using
      * service extensions from BOTH attached captures and any matching
-     * bridge in the parsed templates JSON. When the experiment slot is
+     * category in the parsed templates JSON. When the experiment slot is
      * empty, this is a no-op (the per-capture `init_templates` call
      * already populated baseline's sections).
      *
      * Called by the frontend after the experiment attaches in compare
-     * mode, so the bridge section appears in the baseline's section
+     * mode, so the category section appears in the baseline's section
      * list (which is what the sidebar reads).
      */
     regenerate_combined(templates_json: string): void;

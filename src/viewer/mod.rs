@@ -57,7 +57,7 @@ pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
 
 #[cfg(test)]
 pub use dashboard::Kpi;
-pub use dashboard::{BridgeExtension, ServiceExtension, TemplateRegistry};
+pub use dashboard::{CategoryExtension, ServiceExtension, TemplateRegistry};
 
 // Re-export from metriken-query crate
 pub use metriken_query::promql;
@@ -324,7 +324,7 @@ pub fn run(config: Config) {
 
             // Now that BOTH captures (baseline + optional experiment)
             // are attached, generate the dashboard once. This is the
-            // single place that picks up a bridge when the registry
+            // single place that picks up a category when the registry
             // has one whose members match the two service extensions.
             info!("Generating dashboards...");
             regenerate_dashboards(&state);
@@ -806,24 +806,24 @@ fn build_multinode_systeminfo(path: &Path) -> Option<String> {
     }
 }
 
-/// Look up a bridge whose members exactly match the two service
+/// Look up a category whose members exactly match the two service
 /// extensions, in any order. Returns `None` for 0/1/3+ extensions or
-/// when the registry has no matching bridge.
-fn lookup_bridge<'a>(
+/// when the registry has no matching category.
+fn lookup_category<'a>(
     registry: &'a TemplateRegistry,
     service_refs: &[(&str, &ServiceExtension)],
-) -> Option<(&'a str, &'a BridgeExtension)> {
+) -> Option<(&'a str, &'a CategoryExtension)> {
     if service_refs.len() != 2 {
         return None;
     }
-    let bridge = registry.find_bridge(service_refs[0].0, service_refs[1].0)?;
-    Some((bridge.service_name.as_str(), bridge))
+    let category = registry.find_category(service_refs[0].0, service_refs[1].0)?;
+    Some((category.service_name.as_str(), category))
 }
 
 /// Regenerate the dashboard sections from the currently attached
 /// captures. Pulls service extensions from each capture's parquet
 /// metadata, validates them against the live tsdb data, looks up a
-/// bridge in the registry when both captures are present, and renders
+/// category in the registry when both captures are present, and renders
 /// the resulting section map into `state.sections`. Called at CLI
 /// startup after the experiment attaches, and on every HTTP attach /
 /// detach so the section list stays in sync with which captures are
@@ -870,7 +870,7 @@ fn regenerate_dashboards(state: &AppState) {
     service_exts.extend(experiment_exts);
 
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let bridge = lookup_bridge(registry, &service_refs);
+    let category = lookup_category(registry, &service_refs);
 
     let filesize = baseline_path
         .as_ref()
@@ -880,7 +880,7 @@ fn regenerate_dashboards(state: &AppState) {
         &state.baseline_tsdb().read(),
         filesize,
         &service_refs,
-        bridge,
+        category,
         None,
     );
 
@@ -1592,7 +1592,7 @@ async fn attach_experiment(
     *state.experiment_parquet_path.write() = Some(temp_path);
 
     // Rebuild the section map now that both captures are present.
-    // Picks up a bridge when the registry has one whose members match
+    // Picks up a category when the registry has one whose members match
     // the two service extensions.
     regenerate_dashboards(&state);
 
@@ -1615,12 +1615,12 @@ async fn detach_experiment(
         let _ = std::fs::remove_file(&path);
     }
     // Also clear the CLI-supplied experiment path so the section
-    // regeneration below doesn't rebuild the bridge against a
+    // regeneration below doesn't rebuild the category against a
     // detached capture. Note: we only clear the path reference, not
     // the file itself — the user's parquet on disk is left alone.
     state.cli_experiment_path.write().take();
 
-    // Rebuild the section map back to baseline-only (drops bridge /
+    // Rebuild the section map back to baseline-only (drops category /
     // experiment service section).
     regenerate_dashboards(&state);
 

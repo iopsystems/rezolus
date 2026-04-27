@@ -269,7 +269,7 @@ impl Viewer {
             self.engine.tsdb(),
             None,
             &service_refs,
-            None, // single-capture: no bridge
+            None, // single-capture: no category
             None,
         );
         Ok(())
@@ -435,12 +435,12 @@ impl WasmCaptureRegistry {
 
     /// Regenerate the BASELINE viewer's `dashboard_sections` using
     /// service extensions from BOTH attached captures and any matching
-    /// bridge in the parsed templates JSON. When the experiment slot is
+    /// category in the parsed templates JSON. When the experiment slot is
     /// empty, this is a no-op (the per-capture `init_templates` call
     /// already populated baseline's sections).
     ///
     /// Called by the frontend after the experiment attaches in compare
-    /// mode, so the bridge section appears in the baseline's section
+    /// mode, so the category section appears in the baseline's section
     /// list (which is what the sidebar reads).
     pub fn regenerate_combined(&mut self, templates_json: &str) -> Result<(), JsValue> {
         // Both captures must be attached; otherwise nothing to combine.
@@ -452,7 +452,7 @@ impl WasmCaptureRegistry {
             .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
         // Reconstruct registry — same shape used by the per-capture
         // `init_templates`. The JSON may include both service templates
-        // and bridge templates; the loader routes them by `bridge: true`.
+        // and category templates; the loader routes them by `category: true`.
         let registry = parse_template_registry(templates_json, &templates)?;
 
         // Each capture detects its own service extensions, validates
@@ -478,9 +478,9 @@ impl WasmCaptureRegistry {
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
 
-        let bridge = if service_refs.len() == 2 {
+        let category = if service_refs.len() == 2 {
             registry
-                .find_bridge(service_refs[0].0, service_refs[1].0)
+                .find_category(service_refs[0].0, service_refs[1].0)
                 .map(|b| (b.service_name.as_str(), b))
         } else {
             None
@@ -491,7 +491,7 @@ impl WasmCaptureRegistry {
                 baseline.engine.tsdb(),
                 None,
                 &service_refs,
-                bridge,
+                category,
                 None,
             );
         }
@@ -534,27 +534,27 @@ impl Default for WasmCaptureRegistry {
 }
 
 /// Build a TemplateRegistry from a list of service extensions PLUS
-/// any bridge entries embedded in the same JSON. The frontend ships
+/// any category entries embedded in the same JSON. The frontend ships
 /// both kinds in one templates list; the per-capture init_templates
-/// path discards bridges, so we re-parse here to recover them.
+/// path discards categories, so we re-parse here to recover them.
 fn parse_template_registry(
     templates_json: &str,
     services: &[dashboard::ServiceExtension],
 ) -> Result<dashboard::TemplateRegistry, JsValue> {
     // Round-trip via TemplateRegistry::from_templates for the
-    // services, then patch in bridges by manually parsing the JSON
-    // for entries with `bridge: true`. This avoids exposing a
-    // bridge-aware constructor on TemplateRegistry that doesn't yet
+    // services, then patch in categories by manually parsing the JSON
+    // for entries with `category: true`. This avoids exposing a
+    // category-aware constructor on TemplateRegistry that doesn't yet
     // exist for WASM.
     let mut registry = dashboard::TemplateRegistry::from_templates(services.to_vec());
 
     let parsed: Vec<serde_json::Value> = serde_json::from_str(templates_json)
         .map_err(|e| JsValue::from_str(&format!("re-parse templates: {e}")))?;
     for v in parsed {
-        if v.get("bridge").and_then(|b| b.as_bool()).unwrap_or(false) {
-            let bridge: dashboard::BridgeExtension = serde_json::from_value(v)
-                .map_err(|e| JsValue::from_str(&format!("Failed to parse bridge: {e}")))?;
-            registry.insert_bridge(bridge);
+        if v.get("category").and_then(|b| b.as_bool()).unwrap_or(false) {
+            let category: dashboard::CategoryExtension = serde_json::from_value(v)
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse category: {e}")))?;
+            registry.insert_category(category);
         }
     }
     Ok(registry)

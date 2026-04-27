@@ -105,26 +105,27 @@ impl ServiceExtension {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Bridge extension — ties two ServiceExtensions together for compare-mode
-// A/B rendering across heterogeneous services. See
+// Category extension — declares that two ServiceExtensions belong to the
+// same kind of system, and exposes a unified set of KPIs for compare-mode
+// A/B rendering across them. See
 // docs/superpowers/specs/2026-04-27-inference-library-bridge-template-design.md.
 // ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BridgeExtension {
+pub struct CategoryExtension {
     pub service_name: String,
-    /// Always `true` on a bridge file. The shared loader uses this flag
-    /// to route the parsed JSON into the bridge map instead of services.
+    /// Always `true` on a category file. The shared loader uses this flag
+    /// to route the parsed JSON into the category map instead of services.
     #[serde(default)]
-    pub bridge: bool,
+    pub category: bool,
     /// Exactly two member service names. Order is irrelevant for matching;
     /// the dashboard generator passes the live capture ordering at gen time.
     pub members: Vec<String>,
-    pub kpis: Vec<BridgeKpi>,
+    pub kpis: Vec<CategoryKpi>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BridgeKpi {
+pub struct CategoryKpi {
     pub role: String,
     pub title: String,
     #[serde(rename = "type")]
@@ -143,15 +144,15 @@ pub struct BridgeKpi {
     pub subgroup_description: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub full_width: bool,
-    /// Per-member source title. When a member is omitted, the bridge KPI's
+    /// Per-member source title. When a member is omitted, the category KPI's
     /// own `title` is used as the lookup key into that member's template.
     #[serde(default)]
     pub member_titles: HashMap<String, String>,
 }
 
-impl BridgeKpi {
+impl CategoryKpi {
     /// Title to look up in the given member's template. Defaults to the
-    /// bridge KPI's own `title` when the member is absent from
+    /// category KPI's own `title` when the member is absent from
     /// `member_titles`.
     pub fn member_title<'a>(&'a self, member: &str) -> &'a str {
         self.member_titles
@@ -196,7 +197,7 @@ impl BridgeKpi {
 }
 
 // Parse a single template JSON string. Returns either a service-extension
-// or a bridge based on the top-level `bridge` field.
+// or a category based on the top-level `category` field.
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_template(
     content: &str,
@@ -204,12 +205,12 @@ fn parse_template(
 ) -> Result<ParsedTemplate, Box<dyn std::error::Error>> {
     let v: serde_json::Value =
         serde_json::from_str(content).map_err(|e| format!("failed to parse {source}: {e}"))?;
-    let is_bridge = v.get("bridge").and_then(|b| b.as_bool()).unwrap_or(false);
-    if is_bridge {
-        let bridge: BridgeExtension = serde_json::from_value(v)
-            .map_err(|e| format!("failed to parse bridge {source}: {e}"))?;
-        validate_bridge(&bridge, source)?;
-        Ok(ParsedTemplate::Bridge(bridge))
+    let is_category = v.get("category").and_then(|b| b.as_bool()).unwrap_or(false);
+    if is_category {
+        let category: CategoryExtension = serde_json::from_value(v)
+            .map_err(|e| format!("failed to parse category {source}: {e}"))?;
+        validate_category(&category, source)?;
+        Ok(ParsedTemplate::Category(category))
     } else {
         let ext: ServiceExtension =
             serde_json::from_value(v).map_err(|e| format!("failed to parse {source}: {e}"))?;
@@ -218,25 +219,25 @@ fn parse_template(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn validate_bridge(
-    bridge: &BridgeExtension,
+fn validate_category(
+    category: &CategoryExtension,
     source: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if bridge.members.len() != 2 {
+    if category.members.len() != 2 {
         return Err(format!(
-            "{source}: bridge must have exactly 2 members, got {}",
-            bridge.members.len()
+            "{source}: category must have exactly 2 members, got {}",
+            category.members.len()
         )
         .into());
     }
     let allowed: std::collections::HashSet<&str> =
-        bridge.members.iter().map(String::as_str).collect();
-    for kpi in &bridge.kpis {
+        category.members.iter().map(String::as_str).collect();
+    for kpi in &category.kpis {
         for key in kpi.member_titles.keys() {
             if !allowed.contains(key.as_str()) {
                 return Err(format!(
-                    "{source}: bridge KPI '{}' has member_titles key '{}' that is not in members {:?}",
-                    kpi.title, key, bridge.members,
+                    "{source}: category KPI '{}' has member_titles key '{}' that is not in members {:?}",
+                    kpi.title, key, category.members,
                 )
                 .into());
             }
@@ -246,25 +247,25 @@ fn validate_bridge(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn finalize_bridges(
-    candidates: Vec<BridgeExtension>,
+fn finalize_categories(
+    candidates: Vec<CategoryExtension>,
     services: &HashMap<String, ServiceExtension>,
-) -> HashMap<String, BridgeExtension> {
+) -> HashMap<String, CategoryExtension> {
     let mut out = HashMap::new();
-    for bridge in candidates {
-        let missing: Vec<&String> = bridge
+    for category in candidates {
+        let missing: Vec<&String> = category
             .members
             .iter()
             .filter(|m| !services.contains_key(m.as_str()))
             .collect();
         if !missing.is_empty() {
             eprintln!(
-                "warning: dropping bridge '{}' — unknown member template(s): {:?}",
-                bridge.service_name, missing
+                "warning: dropping category '{}' — unknown member template(s): {:?}",
+                category.service_name, missing
             );
             continue;
         }
-        out.insert(bridge.service_name.clone(), bridge);
+        out.insert(category.service_name.clone(), category);
     }
     out
 }
@@ -272,7 +273,7 @@ fn finalize_bridges(
 #[cfg(not(target_arch = "wasm32"))]
 enum ParsedTemplate {
     Service(ServiceExtension),
-    Bridge(BridgeExtension),
+    Category(CategoryExtension),
 }
 
 /// Registry of service extension templates loaded from a directory at runtime.
@@ -282,7 +283,7 @@ enum ParsedTemplate {
 #[derive(Debug, Clone)]
 pub struct TemplateRegistry {
     templates: HashMap<String, ServiceExtension>,
-    bridges: HashMap<String, BridgeExtension>,
+    categories: HashMap<String, CategoryExtension>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -320,7 +321,7 @@ impl TemplateRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_embedded(dir: &include_dir::Dir<'_>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut templates = HashMap::new();
-        let mut bridge_candidates: Vec<BridgeExtension> = Vec::new();
+        let mut category_candidates: Vec<CategoryExtension> = Vec::new();
         for file in dir.files() {
             let path = file.path();
             if path.extension().is_none_or(|e| e != "json") {
@@ -336,13 +337,16 @@ impl TemplateRegistry {
                         insert_template_key(&mut templates, alias.clone(), path, &ext)?;
                     }
                 }
-                ParsedTemplate::Bridge(bridge) => {
-                    bridge_candidates.push(bridge);
+                ParsedTemplate::Category(category) => {
+                    category_candidates.push(category);
                 }
             }
         }
-        let bridges = finalize_bridges(bridge_candidates, &templates);
-        Ok(Self { templates, bridges })
+        let categories = finalize_categories(category_candidates, &templates);
+        Ok(Self {
+            templates,
+            categories,
+        })
     }
 
     /// Scan `dir` for `*.json` files, parse each as `ServiceExtension`,
@@ -350,7 +354,7 @@ impl TemplateRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let mut templates = HashMap::new();
-        let mut bridge_candidates: Vec<BridgeExtension> = Vec::new();
+        let mut category_candidates: Vec<CategoryExtension> = Vec::new();
 
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
@@ -372,21 +376,24 @@ impl TemplateRegistry {
                         insert_template_key(&mut templates, alias.clone(), &path, &ext)?;
                     }
                 }
-                ParsedTemplate::Bridge(bridge) => {
-                    bridge_candidates.push(bridge);
+                ParsedTemplate::Category(category) => {
+                    category_candidates.push(category);
                 }
             }
         }
 
-        let bridges = finalize_bridges(bridge_candidates, &templates);
-        Ok(Self { templates, bridges })
+        let categories = finalize_categories(category_candidates, &templates);
+        Ok(Self {
+            templates,
+            categories,
+        })
     }
 
     /// Create an empty registry (no templates).
     pub fn empty() -> Self {
         Self {
             templates: HashMap::new(),
-            bridges: HashMap::new(),
+            categories: HashMap::new(),
         }
     }
 
@@ -402,7 +409,7 @@ impl TemplateRegistry {
         }
         Self {
             templates: map,
-            bridges: HashMap::new(),
+            categories: HashMap::new(),
         }
     }
 
@@ -411,19 +418,19 @@ impl TemplateRegistry {
         self.templates.get(source)
     }
 
-    /// Insert a bridge into the registry's bridges map. Used by the
-    /// WASM viewer where bridges arrive via `init_templates` rather
-    /// than the disk loader. Panics if a bridge with the same
-    /// `service_name` is already present (use the disk-loader pathway
-    /// for that route).
-    pub fn insert_bridge(&mut self, bridge: BridgeExtension) {
-        self.bridges.insert(bridge.service_name.clone(), bridge);
+    /// Insert a category into the registry's categories map. Used by the
+    /// WASM viewer where categories arrive via `init_templates` rather
+    /// than the disk loader. Overwrites any existing category with the
+    /// same `service_name`.
+    pub fn insert_category(&mut self, category: CategoryExtension) {
+        self.categories
+            .insert(category.service_name.clone(), category);
     }
 
-    /// Look up a bridge whose `members` set equals `{member_a, member_b}`
-    /// (order-insensitive). Returns `None` when no matching bridge exists.
-    pub fn find_bridge(&self, member_a: &str, member_b: &str) -> Option<&BridgeExtension> {
-        self.bridges.values().find(|b| {
+    /// Look up a category whose `members` set equals `{member_a, member_b}`
+    /// (order-insensitive). Returns `None` when no matching category exists.
+    pub fn find_category(&self, member_a: &str, member_b: &str) -> Option<&CategoryExtension> {
+        self.categories.values().find(|b| {
             b.members.len() == 2
                 && ((b.members[0] == member_a && b.members[1] == member_b)
                     || (b.members[0] == member_b && b.members[1] == member_a))
@@ -524,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_loads_service_and_bridge_separately() {
+    fn registry_loads_service_and_category_separately() {
         let dir = tempfile::tempdir().unwrap();
         write_template(
             &dir,
@@ -553,7 +560,7 @@ mod tests {
             "inference-library.json",
             r#"{
                 "service_name": "inference-library",
-                "bridge": true,
+                "category": true,
                 "members": ["vllm", "sglang"],
                 "kpis": []
             }"#,
@@ -565,19 +572,19 @@ mod tests {
         // Service templates remain accessible via `get`.
         assert!(registry.get("vllm").is_some());
         assert!(registry.get("sglang").is_some());
-        // Bridge files do NOT pollute the service map.
+        // Category files do NOT pollute the service map.
         assert!(registry.get("inference-library").is_none());
-        // The bridge IS reachable via find_bridge in either order.
-        assert!(registry.find_bridge("vllm", "sglang").is_some());
-        assert!(registry.find_bridge("sglang", "vllm").is_some());
-        assert!(registry.find_bridge("vllm", "valkey").is_none());
+        // The category IS reachable via find_category in either order.
+        assert!(registry.find_category("vllm", "sglang").is_some());
+        assert!(registry.find_category("sglang", "vllm").is_some());
+        assert!(registry.find_category("vllm", "valkey").is_none());
     }
 
     #[test]
-    fn parses_bridge_extension_json() {
+    fn parses_category_extension_json() {
         let json = r#"{
             "service_name": "inference-library",
-            "bridge": true,
+            "category": true,
             "members": ["vllm", "sglang"],
             "kpis": [
                 {
@@ -593,11 +600,11 @@ mod tests {
                 }
             ]
         }"#;
-        let bridge: BridgeExtension = serde_json::from_str(json).expect("parse");
-        assert_eq!(bridge.service_name, "inference-library");
-        assert_eq!(bridge.members, ["vllm".to_string(), "sglang".to_string()]);
-        assert_eq!(bridge.kpis.len(), 1);
-        let k = &bridge.kpis[0];
+        let category: CategoryExtension = serde_json::from_str(json).expect("parse");
+        assert_eq!(category.service_name, "inference-library");
+        assert_eq!(category.members, ["vllm".to_string(), "sglang".to_string()]);
+        assert_eq!(category.kpis.len(), 1);
+        let k = &category.kpis[0];
         assert_eq!(k.title, "Generation Token Rate");
         assert_eq!(k.metric_type, "delta_counter");
         assert!(k.denominator);
@@ -608,14 +615,14 @@ mod tests {
     }
 
     #[test]
-    fn registry_rejects_bridge_with_wrong_member_count() {
+    fn registry_rejects_category_with_wrong_member_count() {
         let dir = tempfile::tempdir().unwrap();
         write_template(
             &dir,
             "bad.json",
             r#"{
-                "service_name": "broken-bridge",
-                "bridge": true,
+                "service_name": "broken-category",
+                "category": true,
                 "members": ["only-one"],
                 "kpis": []
             }"#,
@@ -626,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_drops_bridge_when_member_template_missing() {
+    fn registry_drops_category_when_member_template_missing() {
         let dir = tempfile::tempdir().unwrap();
         write_template(
             &dir,
@@ -641,10 +648,10 @@ mod tests {
         .unwrap();
         write_template(
             &dir,
-            "orphan-bridge.json",
+            "orphan-category.json",
             r#"{
-                "service_name": "orphan-bridge",
-                "bridge": true,
+                "service_name": "orphan-category",
+                "category": true,
                 "members": ["vllm", "tensorrt-llm"],
                 "kpis": []
             }"#,
@@ -653,19 +660,19 @@ mod tests {
 
         let registry = TemplateRegistry::load(dir.path()).unwrap();
 
-        // The bridge dropped silently because tensorrt-llm isn't loaded.
-        assert!(registry.find_bridge("vllm", "tensorrt-llm").is_none());
+        // The category dropped silently because tensorrt-llm isn't loaded.
+        assert!(registry.find_category("vllm", "tensorrt-llm").is_none());
     }
 
     #[test]
-    fn registry_rejects_bridge_with_unknown_member_titles_key() {
+    fn registry_rejects_category_with_unknown_member_titles_key() {
         let dir = tempfile::tempdir().unwrap();
         write_template(
             &dir,
             "bad.json",
             r#"{
-                "service_name": "broken-bridge",
-                "bridge": true,
+                "service_name": "broken-category",
+                "category": true,
                 "members": ["vllm", "sglang"],
                 "kpis": [
                     {
