@@ -449,6 +449,26 @@ export class WasmCaptureRegistry {
         }
     }
     /**
+     * Regenerate the BASELINE viewer's `dashboard_sections` using
+     * service extensions from BOTH attached captures and any matching
+     * bridge in the parsed templates JSON. When the experiment slot is
+     * empty, this is a no-op (the per-capture `init_templates` call
+     * already populated baseline's sections).
+     *
+     * Called by the frontend after the experiment attaches in compare
+     * mode, so the bridge section appears in the baseline's section
+     * list (which is what the sidebar reads).
+     * @param {string} templates_json
+     */
+    regenerate_combined(templates_json) {
+        const ptr0 = passStringToWasm0(templates_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_regenerate_combined(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @param {string} capture
      * @returns {string | undefined}
      */

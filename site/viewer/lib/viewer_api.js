@@ -101,6 +101,11 @@ const ViewerApi = {
         ensureAttached(captureId);
         registry.init_templates(captureId, templatesJson);
     },
+
+    regenerateCombined(templatesJson) {
+        ensureRegistry();
+        registry.regenerate_combined(templatesJson);
+    },
 };
 
 export { ViewerApi };

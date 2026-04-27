@@ -55,6 +55,11 @@ const demoSections = [
 
 // ── WASM + template initialization ─────────────────────────────────
 
+// Stash the raw templates JSON on first load so the compare-mode flow
+// can re-init for the experiment slot and trigger combined regen
+// without re-fetching from disk.
+let loadedTemplatesJson = null;
+
 const loadTemplates = async () => {
     const templateNames = ['cachecannon', 'llm-perf', 'sglang', 'valkey', 'vllm'];
     const results = await Promise.allSettled(
@@ -64,7 +69,8 @@ const loadTemplates = async () => {
         .filter(r => r.status === 'fulfilled' && r.value)
         .map(r => r.value);
     if (templates.length > 0) {
-        ViewerApi.initTemplates(JSON.stringify(templates));
+        loadedTemplatesJson = JSON.stringify(templates);
+        ViewerApi.initTemplates(loadedTemplatesJson);
     }
 };
 
@@ -213,6 +219,16 @@ async function loadCompareDemo(fileA, fileB, legends = null) {
         // experiment in via the registry.
         await initWasmViewer(dataA, fileA);
         await ViewerApi.attachExperimentBytes(dataB, fileB);
+
+        // Templates were initialized for baseline inside initWasmViewer
+        // via loadTemplates (which stashes the JSON in loadedTemplatesJson).
+        // Now also init for the experiment slot, then trigger the
+        // combined-regen pass that picks up a matching bridge and
+        // rewrites baseline's section list.
+        if (typeof loadedTemplatesJson === 'string' && loadedTemplatesJson.length > 0) {
+            ViewerApi.initTemplates(loadedTemplatesJson, 'experiment');
+            ViewerApi.regenerateCombined(loadedTemplatesJson);
+        }
 
         // Fetch baseline + experiment state for initDashboard.
         const base = await fetchInitialState();

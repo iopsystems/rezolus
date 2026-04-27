@@ -102,6 +102,18 @@ export class WasmCaptureRegistry {
     constructor();
     query(capture: string, query: string, time: number): string;
     query_range(capture: string, query: string, start: number, end: number, step: number): string;
+    /**
+     * Regenerate the BASELINE viewer's `dashboard_sections` using
+     * service extensions from BOTH attached captures and any matching
+     * bridge in the parsed templates JSON. When the experiment slot is
+     * empty, this is a no-op (the per-capture `init_templates` call
+     * already populated baseline's sections).
+     *
+     * Called by the frontend after the experiment attaches in compare
+     * mode, so the bridge section appears in the baseline's section
+     * list (which is what the sidebar reads).
+     */
+    regenerate_combined(templates_json: string): void;
     selection(capture: string): string | undefined;
     /**
      * Set or clear the display alias for a capture slot. No-op when
@@ -144,6 +156,7 @@ export interface InitOutput {
     readonly wasmcaptureregistry_new: () => number;
     readonly wasmcaptureregistry_query: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasmcaptureregistry_query_range: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly wasmcaptureregistry_regenerate_combined: (a: number, b: number, c: number) => [number, number];
     readonly wasmcaptureregistry_selection: (a: number, b: number, c: number) => [number, number];
     readonly wasmcaptureregistry_set_alias: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasmcaptureregistry_systeminfo: (a: number, b: number, c: number) => [number, number];

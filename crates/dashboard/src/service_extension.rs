@@ -411,6 +411,15 @@ impl TemplateRegistry {
         self.templates.get(source)
     }
 
+    /// Insert a bridge into the registry's bridges map. Used by the
+    /// WASM viewer where bridges arrive via `init_templates` rather
+    /// than the disk loader. Panics if a bridge with the same
+    /// `service_name` is already present (use the disk-loader pathway
+    /// for that route).
+    pub fn insert_bridge(&mut self, bridge: BridgeExtension) {
+        self.bridges.insert(bridge.service_name.clone(), bridge);
+    }
+
     /// Look up a bridge whose `members` set equals `{member_a, member_b}`
     /// (order-insensitive). Returns `None` when no matching bridge exists.
     pub fn find_bridge(&self, member_a: &str, member_b: &str) -> Option<&BridgeExtension> {

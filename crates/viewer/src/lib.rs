@@ -256,13 +256,36 @@ impl Viewer {
     pub fn init_templates(&mut self, templates_json: &str) -> Result<(), JsValue> {
         let templates: Vec<dashboard::ServiceExtension> = serde_json::from_str(templates_json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
+        let registry = dashboard::TemplateRegistry::from_templates(templates);
 
-        let registry = dashboard::TemplateRegistry::from_templates(templates.clone());
+        let service_exts = self.detect_and_validate_service_exts(&registry);
 
-        // Detect which service extensions match this file's sources
+        let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
+            .iter()
+            .map(|(name, ext)| (name.as_str(), ext))
+            .collect();
+
+        self.dashboard_sections = dashboard::dashboard::generate(
+            self.engine.tsdb(),
+            None,
+            &service_refs,
+            None, // single-capture: no bridge
+            None,
+        );
+        Ok(())
+    }
+
+    /// Detect this Viewer's matching service extensions from the
+    /// registry (using `per_source_metadata` first, falling back to
+    /// `tsdb.source()`) and validate KPI availability against the
+    /// Viewer's own tsdb. Returns the validated extensions, ready to
+    /// pass to `dashboard::dashboard::generate`.
+    fn detect_and_validate_service_exts(
+        &self,
+        registry: &dashboard::TemplateRegistry,
+    ) -> Vec<(String, dashboard::ServiceExtension)> {
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
 
-        // Check per_source_metadata for multi-source files
         if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
             if let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
@@ -277,8 +300,6 @@ impl Viewer {
                 }
             }
         }
-
-        // Fall back to single-source detection via source field
         if service_exts.is_empty() {
             let tsdb = self.engine.tsdb();
             let source = tsdb.source().to_string();
@@ -287,16 +308,11 @@ impl Viewer {
             }
         }
 
-        // Regenerate dashboards with service extensions
-        let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
-            .iter()
-            .map(|(name, ext)| (name.as_str(), ext))
-            .collect();
-
-        self.dashboard_sections =
-            dashboard::dashboard::generate(&*self.engine.tsdb(), None, &service_refs, None, None);
-
-        Ok(())
+        // Validate against this capture's own tsdb so per-capture
+        // unavailability is correctly reported.
+        let tsdb = self.engine.tsdb();
+        validate_service_extensions_inline(tsdb, &mut service_exts);
+        service_exts
     }
 
     /// Returns the sections list as a JSON array.
@@ -417,6 +433,71 @@ impl WasmCaptureRegistry {
             .init_templates(templates_json)
     }
 
+    /// Regenerate the BASELINE viewer's `dashboard_sections` using
+    /// service extensions from BOTH attached captures and any matching
+    /// bridge in the parsed templates JSON. When the experiment slot is
+    /// empty, this is a no-op (the per-capture `init_templates` call
+    /// already populated baseline's sections).
+    ///
+    /// Called by the frontend after the experiment attaches in compare
+    /// mode, so the bridge section appears in the baseline's section
+    /// list (which is what the sidebar reads).
+    pub fn regenerate_combined(&mut self, templates_json: &str) -> Result<(), JsValue> {
+        // Both captures must be attached; otherwise nothing to combine.
+        if self.experiment.is_none() || self.baseline.is_none() {
+            return Ok(());
+        }
+
+        let templates: Vec<dashboard::ServiceExtension> = serde_json::from_str(templates_json)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
+        // Reconstruct registry — same shape used by the per-capture
+        // `init_templates`. The JSON may include both service templates
+        // and bridge templates; the loader routes them by `bridge: true`.
+        let registry = parse_template_registry(templates_json, &templates)?;
+
+        // Each capture detects its own service extensions, validates
+        // against its own tsdb (so a KPI present only in the experiment
+        // doesn't get marked unavailable by the baseline tsdb).
+        let baseline_exts = self
+            .baseline
+            .as_ref()
+            .map(|v| v.detect_and_validate_service_exts(&registry))
+            .unwrap_or_default();
+        let experiment_exts = self
+            .experiment
+            .as_ref()
+            .map(|v| v.detect_and_validate_service_exts(&registry))
+            .unwrap_or_default();
+
+        let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
+        service_exts.extend(baseline_exts);
+        service_exts.extend(experiment_exts);
+
+        let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
+            .iter()
+            .map(|(name, ext)| (name.as_str(), ext))
+            .collect();
+
+        let bridge = if service_refs.len() == 2 {
+            registry
+                .find_bridge(service_refs[0].0, service_refs[1].0)
+                .map(|b| (b.service_name.as_str(), b))
+        } else {
+            None
+        };
+
+        if let Some(baseline) = self.baseline.as_mut() {
+            baseline.dashboard_sections = dashboard::dashboard::generate(
+                baseline.engine.tsdb(),
+                None,
+                &service_refs,
+                bridge,
+                None,
+            );
+        }
+        Ok(())
+    }
+
     pub fn get_sections(&self, capture: &str) -> Option<String> {
         self.slot(capture).map(|v| v.get_sections())
     }
@@ -449,6 +530,61 @@ impl WasmCaptureRegistry {
 impl Default for WasmCaptureRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Build a TemplateRegistry from a list of service extensions PLUS
+/// any bridge entries embedded in the same JSON. The frontend ships
+/// both kinds in one templates list; the per-capture init_templates
+/// path discards bridges, so we re-parse here to recover them.
+fn parse_template_registry(
+    templates_json: &str,
+    services: &[dashboard::ServiceExtension],
+) -> Result<dashboard::TemplateRegistry, JsValue> {
+    // Round-trip via TemplateRegistry::from_templates for the
+    // services, then patch in bridges by manually parsing the JSON
+    // for entries with `bridge: true`. This avoids exposing a
+    // bridge-aware constructor on TemplateRegistry that doesn't yet
+    // exist for WASM.
+    let mut registry = dashboard::TemplateRegistry::from_templates(services.to_vec());
+
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(templates_json)
+        .map_err(|e| JsValue::from_str(&format!("re-parse templates: {e}")))?;
+    for v in parsed {
+        if v.get("bridge").and_then(|b| b.as_bool()).unwrap_or(false) {
+            let bridge: dashboard::BridgeExtension = serde_json::from_value(v)
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse bridge: {e}")))?;
+            registry.insert_bridge(bridge);
+        }
+    }
+    Ok(registry)
+}
+
+/// Validate KPI availability for service extensions by running each KPI's
+/// PromQL query against `tsdb`. Sets `available = false` on KPIs whose
+/// queries return empty results. WASM-targeted mirror of the server's
+/// `validate_service_extensions` in `src/viewer/mod.rs`.
+fn validate_service_extensions_inline(
+    tsdb: &Tsdb,
+    exts: &mut [(String, dashboard::ServiceExtension)],
+) {
+    use metriken_query::promql;
+    let engine = QueryEngine::new(tsdb);
+    let (start, end) = engine.get_time_range();
+    for (_source, ext) in exts.iter_mut() {
+        for kpi in &mut ext.kpis {
+            let query = kpi.effective_query();
+            let has_data = match engine.query_range(&query, start, end, 1.0) {
+                Ok(result) => match &result {
+                    promql::QueryResult::Vector { result } => !result.is_empty(),
+                    promql::QueryResult::Matrix { result } => !result.is_empty(),
+                    promql::QueryResult::Scalar { .. } => true,
+                    promql::QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
+                },
+                Err(_) => false,
+            };
+            kpi.available = has_data;
+        }
     }
 }
 
