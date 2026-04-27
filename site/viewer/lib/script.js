@@ -61,7 +61,7 @@ const demoSections = [
 let loadedTemplatesJson = null;
 
 const loadTemplates = async () => {
-    const templateNames = ['cachecannon', 'llm-perf', 'sglang', 'valkey', 'vllm'];
+    const templateNames = ['cachecannon', 'inference-library', 'llm-perf', 'sglang', 'valkey', 'vllm'];
     const results = await Promise.allSettled(
         templateNames.map(name => fetch(`templates/${name}.json`).then(r => r.ok ? r.json() : null))
     );
