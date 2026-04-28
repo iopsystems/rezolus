@@ -1259,6 +1259,16 @@ fn build_sections_metadata_payload(
     })
 }
 
+/// Strip the navigation `sections` array from a section payload before
+/// sending it to the frontend.  Each cached section body embeds the full
+/// nav list so that `sections_metadata` can extract it, but the frontend
+/// does not need that redundant data in per-section responses.
+fn strip_sections_from_section_payload(value: &mut serde_json::Value) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("sections");
+    }
+}
+
 fn compute_file_checksum(path: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     use std::io::{Read, Seek, SeekFrom};
@@ -1417,12 +1427,33 @@ async fn data(
 
     let sections = state.sections.read();
     match sections.get(&path) {
-        Some(v) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            v.to_string(),
-        )
-            .into_response(),
+        Some(v) => {
+            // Strip the redundant nav `sections` array before sending to the
+            // frontend.  The cached body keeps it so that `sections_metadata`
+            // can still extract it (Task 4); we only remove it at response time.
+            let body = match serde_json::from_str::<serde_json::Value>(v) {
+                Ok(mut parsed) => {
+                    strip_sections_from_section_payload(&mut parsed);
+                    match serde_json::to_string(&parsed) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!("section re-serialization failed for {path}: {e}");
+                            v.to_string()
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("section parse failed for {path}: {e}");
+                    v.to_string()
+                }
+            };
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -2305,6 +2336,18 @@ async fn lib(uri: Uri) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lean_section_payload_does_not_repeat_sections() {
+        let mut payload = serde_json::json!({
+            "sections": [{"name": "Overview", "route": "/overview"}],
+            "groups": [],
+            "interval": 1.0
+        });
+        strip_sections_from_section_payload(&mut payload);
+        assert!(payload.get("sections").is_none());
+        assert_eq!(payload["groups"], serde_json::json!([]));
+    }
 
     #[test]
     fn sections_metadata_json_omits_groups() {
