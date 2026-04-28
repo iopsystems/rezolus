@@ -91,5 +91,5 @@ jobs:
             echo "- Created tag: v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
             echo "- Bumped to next dev version" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The release workflow will now build packages, create the GitHub release, publish to crates.io, and update Homebrew." >> $GITHUB_STEP_SUMMARY
+            echo "The release workflow will now build packages, create the GitHub release, and update Homebrew." >> $GITHUB_STEP_SUMMARY
           fi
