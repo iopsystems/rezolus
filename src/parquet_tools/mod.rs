@@ -79,6 +79,15 @@ pub fn command() -> Command {
                         .help("Allow --source to replace an existing source value")
                         .action(clap::ArgAction::SetTrue)
                         .requires("source"),
+                )
+                .arg(
+                    clap::Arg::new("systeminfo")
+                        .long("systeminfo")
+                        .value_name("PATH")
+                        .help("Embed systeminfo JSON from PATH (or '-' for stdin) into the parquet footer")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set)
+                        .conflicts_with("undo"),
                 ),
         )
         .subcommand(
