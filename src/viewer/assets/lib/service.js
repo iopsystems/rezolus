@@ -116,9 +116,23 @@ const createServiceRoutes = (deps) => {
     // service that this capture doesn't render) by sending the user to
     // the dashboard's default route instead of letting the "Unknown
     // section" error bubble out of mithril's loop.
+    //
+    // m.route.get() returns the last *successfully resolved* path, so
+    // when this is the very first route resolution it stays empty no
+    // matter how many times we redirect. That makes the
+    // `target !== m.route.get()` guard insufficient on its own — if
+    // getDefaultRoute() itself points at a section that isn't in
+    // dashboard_sections (e.g. compare-mode-without-category, where
+    // alias-driven section keys diverge from `serviceInstances` keys
+    // derived from per_source_metadata), we'd bounce between the
+    // broken route and itself indefinitely. Fall back to /overview
+    // when the redirect target matches the failing route — overview
+    // is always generated.
     const recoverFromMissingSection = (svcKey, err) => {
         console.warn(`[viewer] section ${svcKey} not available; redirecting to default route`, err);
-        const target = typeof getDefaultRoute === 'function' ? getDefaultRoute() : '/overview';
+        const failingRoute = `/${svcKey}`;
+        let target = typeof getDefaultRoute === 'function' ? getDefaultRoute() : '/overview';
+        if (target === failingRoute) target = '/overview';
         if (target && target !== m.route.get()) {
             m.route.set(target);
         }
