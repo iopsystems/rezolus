@@ -62,7 +62,7 @@ toml = "0.8.23"
 tower = { version = "0.5.2", features = ["tokio"] }
 tower-http = { version = "0.6.6", features = ["compression-full", "decompression-full", "fs"] }
 tower-livereload = "0.9.6"
-systeminfo = { version = "0.1.0", path = "crates/systeminfo" }
+systeminfo = { path = "crates/systeminfo" }
 walkdir = "2.5.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
