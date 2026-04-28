@@ -1185,7 +1185,13 @@ fn compute_file_checksum(path: &Path) -> Option<String> {
                 }
             }
         }
-        Some(format!("{:x}", hasher.finalize()))
+        Some(
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+        )
     })()
 }
 

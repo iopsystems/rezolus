@@ -9,17 +9,17 @@ repository = "https://github.com/iopsystems/rezolus"
 homepage = "https://github.com/iopsystems/rezolus"
 
 [workspace.dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.102"
 console_error_panic_hook = "0.1"
-histogram = "1.1.0"
-libc = "0.2.172"
-log = "0.4.21"
+histogram = "1.2.0"
+libc = "0.2.186"
+log = "0.4.29"
 metriken = "0.9.2"
 metriken-exposition = "0.16.0"
 metriken-query = { version = "0.9.5", default-features = false }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-thiserror = "2.0.12"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
 dashboard = { path = "crates/dashboard" }
 include_dir = "0.7.4"
 walkdir = "2.5.0"
@@ -27,7 +27,7 @@ wasm-bindgen = "0.2"
 
 [package]
 name = "rezolus"
-version = "5.11.1-alpha.12"
+version = "5.11.1-alpha.13"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -43,78 +43,78 @@ allan = "0.3.0"
 anyhow.workspace = true
 archspec = "0.1.3"
 arrow = "58.1.0"
-async-trait = "0.1.88"
-axum = { version = "0.8.4", features = ["http2"] }
-backtrace = "0.3.75"
-chrono = "0.4.41"
-clap = { version = "4.5.40", features = ["derive"] }
-clocksource = "0.8.1"
+async-trait = "0.1.89"
+axum = { version = "0.8.9", features = ["http2"] }
+backtrace = "0.3.76"
+chrono = "0.4.44"
+clap = { version = "4.6.1", features = ["derive"] }
+clocksource = "1.0.0"
 core_affinity = "0.8.3"
-ctrlc = { version = "3.4.7", features = ["termination"] }
-futures = "0.3.31"
-h2 = "0.4.10"
+ctrlc = { version = "3.5.2", features = ["termination"] }
+futures = "0.3.32"
+h2 = "0.4.13"
 histogram.workspace = true
-http = "1.3.1"
-humantime = "2.2.0"
+http = "1.4.0"
+humantime = "2.3.0"
 include_dir.workspace = true
 lazy_static = "1.5.0"
 libc.workspace = true
-linkme = "0.3.33"
-memmap2 = "0.9.5"
+linkme = "0.3.36"
+memmap2 = "0.9.10"
 metriken.workspace = true
 metriken-exposition.workspace = true
 metriken-query = { workspace = true, features = ["ingest", "lz4", "http"] }
-notify = "8.0.0"
-open = "5.3.2"
+notify = "8.2.0"
+open = "5.3.4"
 ouroboros = "0.18.5"
-parking_lot = "0.12.4"
+parking_lot = "0.12.5"
 parquet = "58.1.0"
 prometheus-parse = "0.2.5"
 plain = "0.2.3"
-rayon = "1.10"
+rayon = "1.12"
 regex = "1"
-reqwest = { version = "0.12.20", default-features = false, features = [
+reqwest = { version = "0.13.3", default-features = false, features = [
     "blocking",
 ] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
-rmp-serde = "1.3.0"
-rustfft = "6.2.0"
-sha2 = "0.10"
+rmp-serde = "1.3.1"
+rustfft = "6.4.1"
+sha2 = "0.11"
 serde.workspace = true
 serde_json.workspace = true
-syscall-numbers = "4.0.2"
+syscall-numbers = "4.0.3"
 sysconf = "0.3.4"
-tempfile = "3.20.0"
+tempfile = "3.27.0"
 thiserror.workspace = true
-tokio = { version = "1.45.1", features = ["full"] }
-toml = "0.8.23"
-tower = { version = "0.5.2", features = ["tokio"] }
-tower-http = { version = "0.6.6", features = [
+tokio = { version = "1.52.1", features = ["full"] }
+toml = "1.1.2"
+tower = { version = "0.5.3", features = ["tokio"] }
+tower-http = { version = "0.6.8", features = [
     "compression-full",
     "decompression-full",
     "fs",
 ] }
-tower-livereload = "0.9.6"
+tower-livereload = "0.10.3"
 dashboard.workspace = true
 systeminfo = { path = "crates/systeminfo" }
 walkdir.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libbpf-rs = { version = "0.25.0" }
-libbpf-sys = { version = "1.5.1" }
+libbpf-rs = { version = "0.26.2" }
+libbpf-sys = { version = "1.7.0" }
 perf-event2 = "0.7.4"
 perf-event-open-sys2 = "5.0.6"
-nvml-wrapper = "0.12.0"
+nvml-wrapper = "0.12.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nix = { version = "0.29", features = ["signal", "process"] }
-plist = "1.8"
+nix = { version = "0.31", features = ["signal", "process"] }
+plist = "1.9"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
-libbpf-cargo = { version = "0.25.0" }
+libbpf-cargo = { version = "0.26.2" }
 
 [features]
 default = []
