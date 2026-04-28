@@ -21,6 +21,7 @@ import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView 
 import {
     createSectionCacheState,
     storeSectionResponse,
+    storeSharedSections,
     getSections,
     withSharedSections,
     clearSectionResponses,
@@ -48,6 +49,8 @@ const sectionCacheState = createSectionCacheState();
 const sectionResponseCache = sectionCacheState.responses;
 const cacheSectionResponse = (section, data) =>
     storeSectionResponse(sectionCacheState, section, data);
+const bootstrapSharedSections = (sections) =>
+    storeSharedSections(sectionCacheState, sections);
 const withCachedSections = (data) => withSharedSections(sectionCacheState, data);
 const getCachedSections = () => getSections(sectionCacheState);
 
@@ -863,4 +866,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, cacheSectionResponse, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

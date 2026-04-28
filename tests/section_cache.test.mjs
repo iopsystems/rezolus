@@ -58,3 +58,10 @@ test('shared sections can be bootstrapped without storing a section body', () =>
     ]);
     assert.deepEqual(state.responses, {});
 });
+
+test('withSharedSections uses bootstrapped metadata for lean section payloads', () => {
+    const state = createSectionCacheState();
+    storeSharedSections(state, [{ name: 'Overview', route: '/overview' }]);
+    const stitched = withSharedSections(state, { groups: [] });
+    assert.deepEqual(stitched.sections, [{ name: 'Overview', route: '/overview' }]);
+});

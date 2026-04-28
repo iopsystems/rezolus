@@ -7,7 +7,7 @@ import { FileUpload, CompareLanding } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, cacheSectionResponse, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // ── Backend state fetching ─────────────────────────────────────────
 
@@ -96,6 +96,9 @@ const uploadParquet = async (file) => {
             loadPayloadIntoStore(reportStore, selectionPayload);
             reportStore.loadedFrom = 'embedded report';
         }
+
+        const sectionsResponse = await ViewerApi.getSections();
+        bootstrapSharedSections(sectionsResponse?.data?.sections || []);
 
         const data = await ViewerApi.getSection('overview');
         const processed = await processDashboardData(data, null, '/overview');
