@@ -712,6 +712,98 @@ impl AppState {
             .get(CaptureId::Baseline)
             .expect("baseline capture is always present")
     }
+
+    /// Build the navigation + global params payload for the
+    /// `/api/v1/sections` endpoint. Reads any cached section body
+    /// (overview is the canonical fall-back) to recover the embedded
+    /// `sections` array and the global params (source, version,
+    /// filename, interval, filesize, time bounds, num_series). When no
+    /// section is cached yet — e.g. live mode before the first refresh,
+    /// or upload-only mode pre-upload — returns a minimal payload with
+    /// an empty sections array so the frontend never sees a 5xx for the
+    /// "we just don't have data yet" case.
+    ///
+    /// The `capture` argument is currently advisory: the cached section
+    /// bodies are produced by `regenerate_dashboards`, which today
+    /// generates a single section map keyed only by route. The same
+    /// nav list applies to both baseline and experiment, so we ignore
+    /// the id rather than silently 404 on `?capture=experiment`.
+    fn sections_metadata(&self, _capture: CaptureId) -> serde_json::Value {
+        let sections_guard = self.sections.read();
+
+        // Prefer overview (canonical), fall back to any cached section.
+        let body = sections_guard
+            .get("overview.json")
+            .or_else(|| sections_guard.values().next())
+            .cloned();
+        drop(sections_guard);
+
+        let parsed: Option<serde_json::Value> =
+            body.as_deref().and_then(|s| serde_json::from_str(s).ok());
+
+        let sections_array: Vec<serde_json::Value> = parsed
+            .as_ref()
+            .and_then(|v| v.get("sections"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let source = parsed
+            .as_ref()
+            .and_then(|v| v.get("source"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let version = parsed
+            .as_ref()
+            .and_then(|v| v.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let filename = parsed
+            .as_ref()
+            .and_then(|v| v.get("filename"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let interval = parsed
+            .as_ref()
+            .and_then(|v| v.get("interval"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let filesize = parsed
+            .as_ref()
+            .and_then(|v| v.get("filesize"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let start_time = parsed
+            .as_ref()
+            .and_then(|v| v.get("start_time"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let end_time = parsed
+            .as_ref()
+            .and_then(|v| v.get("end_time"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let num_series = parsed
+            .as_ref()
+            .and_then(|v| v.get("num_series"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
+        build_sections_metadata_payload(
+            sections_array,
+            &source,
+            &version,
+            &filename,
+            interval,
+            filesize,
+            start_time,
+            end_time,
+            num_series,
+        )
+    }
 }
 
 fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
@@ -1131,6 +1223,39 @@ fn validate_service_extensions(tsdb: &Tsdb, exts: &mut [(String, ServiceExtensio
     }
 }
 
+/// Assemble the JSON payload returned by `/api/v1/sections`.
+///
+/// The viewer frontend wants the navigation list and the global capture
+/// params (source, version, filename, interval, filesize, time bounds,
+/// num_series) without any of the per-section group/plot bodies. Keeping
+/// this as a pure helper makes it trivial to unit-test the shape — the
+/// route handler does the I/O of pulling values out of the cached
+/// section bodies.
+#[allow(clippy::too_many_arguments)]
+fn build_sections_metadata_payload(
+    sections: Vec<serde_json::Value>,
+    source: &str,
+    version: &str,
+    filename: &str,
+    interval: f64,
+    filesize: u64,
+    start_time: u64,
+    end_time: u64,
+    num_series: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "sections": sections,
+        "source": source,
+        "version": version,
+        "filename": filename,
+        "interval": interval,
+        "filesize": filesize,
+        "start_time": start_time,
+        "end_time": end_time,
+        "num_series": num_series,
+    })
+}
+
 fn compute_file_checksum(path: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     use std::io::{Read, Seek, SeekFrom};
@@ -1189,6 +1314,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/save", get(save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
+        .route("/sections", get(sections_handler))
         .route("/file_metadata", get(file_metadata_handler))
         .route(
             "/upload",
@@ -1356,6 +1482,20 @@ async fn selection_handler(
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Returns the navigation list plus global capture params (no section
+/// bodies). Used by the frontend to build the side nav and headline
+/// metadata without paying the cost of fetching every section JSON
+/// upfront.
+async fn sections_handler(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
+) -> axum::response::Json<serde_json::Value> {
+    axum::response::Json(serde_json::json!({
+        "status": "success",
+        "data": state.sections_metadata(p.capture_id()),
+    }))
 }
 
 async fn file_metadata_handler(
@@ -2156,5 +2296,32 @@ async fn lib(uri: Uri) -> impl IntoResponse {
             [(header::CONTENT_TYPE, "text/plain")],
             "404 Not Found".to_string(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sections_metadata_json_omits_groups() {
+        let sections = vec![
+            serde_json::json!({"name": "Overview", "route": "/overview"}),
+            serde_json::json!({"name": "CPU", "route": "/cpu"}),
+        ];
+        let payload = build_sections_metadata_payload(
+            sections.clone(),
+            "rezolus",
+            "test-version",
+            "capture.parquet",
+            1.0,
+            42,
+            1000,
+            2000,
+            99,
+        );
+
+        assert_eq!(payload["sections"], serde_json::Value::Array(sections));
+        assert!(payload.get("groups").is_none());
     }
 }
