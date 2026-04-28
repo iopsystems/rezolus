@@ -829,9 +829,18 @@ const initDashboard = (config = {}) => {
                         // Stale URL pointing at a missing section. Drop
                         // back to the dashboard's default route instead
                         // of letting the "Unknown section" error bubble.
+                        // If defaultRoute itself points at the failing
+                        // section (can happen when serviceInstances and
+                        // dashboard_sections disagree on naming), fall
+                        // through to /overview to avoid bouncing into
+                        // the same broken route — m.route.get() returns
+                        // the last successfully resolved path, which
+                        // never advances when every onmatch rejects.
                         console.warn(`[viewer] section ${params.section} not available; redirecting`, err);
-                        if (defaultRoute && defaultRoute !== m.route.get()) {
-                            m.route.set(defaultRoute);
+                        const failingRoute = `/${params.section}`;
+                        const target = defaultRoute === failingRoute ? '/overview' : defaultRoute;
+                        if (target && target !== m.route.get()) {
+                            m.route.set(target);
                         }
                         return new Promise(function () {});
                     });
