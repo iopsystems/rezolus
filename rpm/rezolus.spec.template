@@ -15,10 +15,21 @@ High resolution systems performance telemetry agent
 %build
 # Nothing to build - using pre-built binary
 
+%pre
+#!/bin/bash
+# Create rezolus system user and group for running services
+if ! getent group rezolus > /dev/null 2>&1; then
+    groupadd -r rezolus
+fi
+if ! getent passwd rezolus > /dev/null 2>&1; then
+    useradd -r -g rezolus -d /usr/share/rezolus -s /sbin/nologin -c "Rezolus metrics agent" rezolus
+fi
+
 %install
 mkdir -p %{buildroot}/usr/bin
 mkdir -p %{buildroot}/etc/rezolus
 mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}/usr/share/rezolus
 
 install -m 755 %{_sourcedir}/target/release/rezolus %{buildroot}/usr/bin/
 install -m 644 %{_sourcedir}/config/agent.toml %{buildroot}/etc/rezolus/
