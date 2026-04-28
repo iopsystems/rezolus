@@ -134,8 +134,9 @@ pub fn command() -> Command {
                 .value_name("NAME")
                 .help(
                     "Activate category mode using the named category template \
-                     (e.g. `inference-library`). Each capture's CLI alias must \
-                     appear in the category template's `members` list.",
+                     (e.g. `inference-library`). Each capture's detected source \
+                     (from the parquet metadata) must appear in the category \
+                     template's `members` list.",
                 )
                 .action(clap::ArgAction::Set),
         )
@@ -255,15 +256,9 @@ pub fn run(config: Config) {
                 .unwrap();
 
             let (systeminfo, selection, file_meta) = extract_parquet_metadata(path);
-            // CLI startup log only — the canonical extraction with
-            // alias-aware lookup happens inside `regenerate_dashboards`
-            // below. Pass the baseline alias here too so the startup
-            // log reports what the dashboard will actually use.
-            let mut service_exts = extract_service_extension_metadata(
-                path,
-                &registry,
-                config.baseline_alias.as_deref(),
-            );
+            // CLI startup log only — the canonical extraction happens
+            // inside `regenerate_dashboards` below.
+            let mut service_exts = extract_service_extension_metadata(path, &registry);
 
             // Validate KPI availability against the loaded data so that
             // template-derived dashboards hide KPIs with no data. The
@@ -279,13 +274,8 @@ pub fn run(config: Config) {
             info!("Computing file checksum...");
             let file_checksum = compute_file_checksum(path);
 
-            if service_exts.is_empty()
-                && (config.baseline_alias.is_some() || config.category_name.is_some())
-            {
-                warn!(
-                    "no service extension matched baseline alias {:?} or its parquet source",
-                    config.baseline_alias
-                );
+            if service_exts.is_empty() && config.category_name.is_some() {
+                warn!("no service extension matched the baseline parquet's source metadata");
             }
             for (source, ext) in &service_exts {
                 let available = ext.kpis.iter().filter(|k| k.available).count();
@@ -311,41 +301,45 @@ pub fn run(config: Config) {
                 .captures
                 .set_baseline_alias(config.baseline_alias.clone());
 
-            // --category requires both captures to carry CLI aliases AND
-            // each alias to appear in the category template's members
-            // list. Refuse to launch on misconfiguration; silently
-            // falling back hides user intent and produces a confusing
-            // dashboard. The check is bundled here at startup so the
-            // user finds out before the browser opens.
+            // --category requires the active category template to exist
+            // and for both captures' detected sources to appear in its
+            // `members` list. Detection comes from each capture's
+            // parquet metadata (CLI legend labels are display-only and
+            // never influence membership). Refuse to launch on
+            // misconfiguration; silently falling back hides user intent
+            // and produces a confusing dashboard.
             if let Some(ref cat_name) = config.category_name {
                 let category = registry.get_category(cat_name).unwrap_or_else(|| {
                     eprintln!("no category template named {cat_name:?} found in the registry");
                     std::process::exit(1);
                 });
-                let baseline_alias = config.baseline_alias.as_deref().unwrap_or_else(|| {
+                let baseline_sources: Vec<String> =
+                    service_exts.iter().map(|(s, _)| s.clone()).collect();
+                let experiment_path = config.experiment_path.as_ref().unwrap_or_else(|| {
                     eprintln!(
-                        "--category {cat_name:?} requires the baseline capture to have an alias (e.g. `vllm=path.parquet`)"
+                        "--category {cat_name:?} requires both a baseline and an experiment capture"
                     );
                     std::process::exit(1);
                 });
-                let experiment_alias = config.experiment_alias.as_deref().unwrap_or_else(|| {
-                    eprintln!(
-                        "--category {cat_name:?} requires the experiment capture to have an alias (e.g. `sglang=path.parquet`)"
-                    );
-                    std::process::exit(1);
-                });
-                for alias in [baseline_alias, experiment_alias] {
-                    if !category.members.iter().any(|m| m == alias) {
+                let mut experiment_exts =
+                    extract_service_extension_metadata(experiment_path, &registry);
+                if let Ok(exp_data) = Tsdb::load(experiment_path) {
+                    validate_service_extensions(&exp_data, &mut experiment_exts);
+                }
+                let experiment_sources: Vec<String> =
+                    experiment_exts.iter().map(|(s, _)| s.clone()).collect();
+                for source in baseline_sources.iter().chain(experiment_sources.iter()) {
+                    if !category.members.iter().any(|m| m == source) {
                         eprintln!(
-                            "alias {alias:?} is not a member of category {cat_name:?} (members: {:?})",
+                            "source {source:?} is not a member of category {cat_name:?} (members: {:?})",
                             category.members
                         );
                         std::process::exit(1);
                     }
                 }
                 info!(
-                    "Activated category {:?} (members: {:?}) — baseline {:?}, experiment {:?}",
-                    cat_name, category.members, baseline_alias, experiment_alias,
+                    "Activated category {:?} (members: {:?}) — baseline sources {:?}, experiment sources {:?}",
+                    cat_name, category.members, baseline_sources, experiment_sources,
                 );
                 *state.category_name.write() = Some(cat_name.clone());
             }
@@ -382,21 +376,16 @@ pub fn run(config: Config) {
                         info!("Attached experiment capture: {}", exp_path.display());
 
                         // Mirror the baseline log line for the
-                        // experiment so the user can see whether the
-                        // alias-keyed template lookup succeeded.
-                        let mut exp_exts = extract_service_extension_metadata(
-                            exp_path,
-                            &registry,
-                            config.experiment_alias.as_deref(),
-                        );
+                        // experiment so the user can see whether
+                        // template detection picked anything up.
+                        let mut exp_exts = extract_service_extension_metadata(exp_path, &registry);
                         if let Some(handle) = state.captures.get(CaptureId::Experiment) {
                             let exp_data = handle.read();
                             validate_service_extensions(&exp_data, &mut exp_exts);
                         }
                         if exp_exts.is_empty() {
                             warn!(
-                                "no service extension matched experiment alias {:?} or its parquet source",
-                                config.experiment_alias
+                                "no service extension matched the experiment parquet's source metadata"
                             );
                         }
                         for (source, ext) in &exp_exts {
@@ -912,11 +901,11 @@ fn build_multinode_systeminfo(path: &Path) -> Option<String> {
 /// Resolve the active category for a regen pass. Activation requires:
 /// `state.category_name` is Some, the named category exists in the
 /// registry, exactly two service refs are attached, and each ref's
-/// source name (== CLI alias when one was provided) appears in the
-/// category's `members` list. Returns None when any of those fail —
-/// the caller falls back to per-member rendering. CLI startup ran
-/// stricter checks, so silent fall-back here only happens at runtime
-/// (e.g. mid-session experiment detach) and that's the correct UX.
+/// source name (detected from the parquet) appears in the category's
+/// `members` list. Returns None when any of those fail — the caller
+/// falls back to per-member rendering. CLI startup ran stricter
+/// checks, so silent fall-back here only happens at runtime (e.g.
+/// mid-session experiment detach) and that's the correct UX.
 fn lookup_category<'a>(
     state: &AppState,
     registry: &'a TemplateRegistry,
@@ -927,8 +916,8 @@ fn lookup_category<'a>(
         return None;
     }
     let category = registry.get_category(&cat_name)?;
-    for (alias, _) in service_refs {
-        if !category.members.iter().any(|m| m == alias) {
+    for (source, _) in service_refs {
+        if !category.members.iter().any(|m| m == source) {
             return None;
         }
     }
@@ -961,18 +950,17 @@ fn regenerate_dashboards(state: &AppState) {
     // against the experiment tsdb, so a KPI present only in one
     // recording isn't wrongly marked unavailable.
     //
-    // When the CLI provided an alias, the alias overrides whatever
-    // `source` the parquet's metadata carries. That alias is also the
-    // member key used to verify against the active category template.
-    let baseline_alias = state.captures.alias(CaptureId::Baseline);
-    let experiment_alias = state.captures.alias(CaptureId::Experiment);
+    // Template selection is driven entirely by each capture's parquet
+    // metadata. CLI legend labels are display-only (plumbed to the
+    // viewer's compare badge) and never affect template lookup or
+    // category membership.
     let mut baseline_exts: Vec<(String, ServiceExtension)> = baseline_path
         .as_ref()
-        .map(|p| extract_service_extension_metadata(p, registry, baseline_alias.as_deref()))
+        .map(|p| extract_service_extension_metadata(p, registry))
         .unwrap_or_default();
     let mut experiment_exts: Vec<(String, ServiceExtension)> = experiment_path
         .as_ref()
-        .map(|p| extract_service_extension_metadata(p, registry, experiment_alias.as_deref()))
+        .map(|p| extract_service_extension_metadata(p, registry))
         .unwrap_or_default();
 
     {
@@ -1015,31 +1003,21 @@ fn regenerate_dashboards(state: &AppState) {
 /// 1. Top-level `service_queries` key (single-source annotated files)
 /// 2. `per_source_metadata.<source>.service_queries` (combined files)
 /// 3. Built-in template for known sources (fallback)
+///
+/// Template selection and the returned source keys come purely from
+/// the parquet's own metadata. CLI legend labels (the `label=path`
+/// prefix) never influence which template a capture binds to; they
+/// are display-only and plumbed separately via `set_baseline_alias`
+/// / `attach_experiment`.
 fn extract_service_extension_metadata(
     path: &Path,
     registry: &TemplateRegistry,
-    alias: Option<&str>,
 ) -> Vec<(String, ServiceExtension)> {
     use crate::parquet_metadata::{
         KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
     };
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
-
-    // When the user provided a CLI alias, that alias is the source of
-    // truth for template lookup AND for the returned source key (the
-    // key drives category member matching downstream). The parquet's
-    // own `source`/`service_queries` are ignored — useful when a
-    // capture was produced by a generic benchmarking tool whose source
-    // metadata doesn't match a service template name.
-    if let Some(alias) = alias {
-        if let Some(ext) = registry.get(alias) {
-            return vec![(alias.to_string(), ext.clone())];
-        }
-        // Alias supplied but no matching template — leave results empty
-        // so `lookup_category`'s membership check fails cleanly.
-        return Vec::new();
-    }
 
     let mut results = Vec::new();
 
@@ -1643,9 +1621,8 @@ async fn upload_parquet(
     // embeds the original name instead of the temp path.
     data.set_filename(filename.clone());
 
-    // HTTP upload path has no alias plumbing (yet); template lookup
-    // falls back to the parquet's embedded `source` metadata.
-    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates, None);
+    // Template lookup is driven by the parquet's source metadata.
+    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
     validate_service_extensions(&data, &mut service_exts);
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
     let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None, None);

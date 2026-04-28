@@ -119,13 +119,20 @@ export class WasmCaptureRegistry {
      * experiment slot too — otherwise the experiment fetch 404s and
      * the chart surfaces "Error: null".
      *
-     * `category_name` activates category mode. When set, both aliases
-     * must be present and each must appear in the category template's
-     * `members` list — otherwise this returns an error and the caller
-     * should refuse to proceed. A None category is treated as plain
-     * per-member compare mode (no bridging).
+     * `category_name` activates category mode when each detected
+     * source appears in the category template's `members` list. When
+     * the membership check fails (or the category template isn't
+     * found), category mode is silently skipped and the captures
+     * render as per-member sections — same fall-back shape the server
+     * runtime uses. A None category is treated as plain per-member
+     * compare mode (no bridging).
+     *
+     * Display aliases for the captures (the user-facing legend) are
+     * plumbed separately via `Viewer::set_alias` and never affect
+     * template lookup or category membership; that is determined
+     * entirely by each capture's parquet source metadata.
      */
-    regenerate_combined(templates_json: string, category_name?: string | null, baseline_alias?: string | null, experiment_alias?: string | null): void;
+    regenerate_combined(templates_json: string, category_name?: string | null): void;
     selection(capture: string): string | undefined;
     /**
      * Set or clear the display alias for a capture slot. No-op when
@@ -168,7 +175,7 @@ export interface InitOutput {
     readonly wasmcaptureregistry_new: () => number;
     readonly wasmcaptureregistry_query: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasmcaptureregistry_query_range: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-    readonly wasmcaptureregistry_regenerate_combined: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly wasmcaptureregistry_regenerate_combined: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasmcaptureregistry_selection: (a: number, b: number, c: number) => [number, number];
     readonly wasmcaptureregistry_set_alias: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly wasmcaptureregistry_systeminfo: (a: number, b: number, c: number) => [number, number];

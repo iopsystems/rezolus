@@ -465,26 +465,27 @@ export class WasmCaptureRegistry {
      * experiment slot too — otherwise the experiment fetch 404s and
      * the chart surfaces "Error: null".
      *
-     * `category_name` activates category mode. When set, both aliases
-     * must be present and each must appear in the category template's
-     * `members` list — otherwise this returns an error and the caller
-     * should refuse to proceed. A None category is treated as plain
-     * per-member compare mode (no bridging).
+     * `category_name` activates category mode when each detected
+     * source appears in the category template's `members` list. When
+     * the membership check fails (or the category template isn't
+     * found), category mode is silently skipped and the captures
+     * render as per-member sections — same fall-back shape the server
+     * runtime uses. A None category is treated as plain per-member
+     * compare mode (no bridging).
+     *
+     * Display aliases for the captures (the user-facing legend) are
+     * plumbed separately via `Viewer::set_alias` and never affect
+     * template lookup or category membership; that is determined
+     * entirely by each capture's parquet source metadata.
      * @param {string} templates_json
      * @param {string | null} [category_name]
-     * @param {string | null} [baseline_alias]
-     * @param {string | null} [experiment_alias]
      */
-    regenerate_combined(templates_json, category_name, baseline_alias, experiment_alias) {
+    regenerate_combined(templates_json, category_name) {
         const ptr0 = passStringToWasm0(templates_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         var ptr1 = isLikeNone(category_name) ? 0 : passStringToWasm0(category_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         var len1 = WASM_VECTOR_LEN;
-        var ptr2 = isLikeNone(baseline_alias) ? 0 : passStringToWasm0(baseline_alias, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len2 = WASM_VECTOR_LEN;
-        var ptr3 = isLikeNone(experiment_alias) ? 0 : passStringToWasm0(experiment_alias, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        var len3 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmcaptureregistry_regenerate_combined(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        const ret = wasm.wasmcaptureregistry_regenerate_combined(this.__wbg_ptr, ptr0, len0, ptr1, len1);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
