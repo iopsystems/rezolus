@@ -6,6 +6,8 @@ import {
     storeSharedSections,
     getSections,
     withSharedSections,
+    setSectionCacheLimit,
+    pinSectionKey,
 } from '../src/viewer/assets/lib/section_cache.js';
 
 test('storeSectionResponse strips duplicated sections and preserves shared section metadata', () => {
@@ -64,4 +66,17 @@ test('withSharedSections uses bootstrapped metadata for lean section payloads', 
     storeSharedSections(state, [{ name: 'Overview', route: '/overview' }]);
     const stitched = withSharedSections(state, { groups: [] });
     assert.deepEqual(stitched.sections, [{ name: 'Overview', route: '/overview' }]);
+});
+
+test('bounded section cache evicts oldest non-pinned section', () => {
+    const state = createSectionCacheState();
+    storeSharedSections(state, [{ name: 'Overview', route: '/overview' }]);
+    setSectionCacheLimit(state, 2);
+    pinSectionKey(state, 'overview');
+    storeSectionResponse(state, 'overview', { groups: [] });
+    storeSectionResponse(state, 'cpu', { groups: [] });
+    storeSectionResponse(state, 'memory', { groups: [] });
+    assert.equal(state.responses.overview.groups.length, 0);
+    assert.equal(state.responses.memory.groups.length, 0);
+    assert.equal(state.responses.cpu, undefined);
 });

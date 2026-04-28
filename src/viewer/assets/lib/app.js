@@ -26,6 +26,8 @@ import {
     withSharedSections,
     clearSectionResponses,
     resetSectionCacheState,
+    setSectionCacheLimit,
+    pinSectionKey,
 } from './section_cache.js';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -46,6 +48,8 @@ const heatmapDataCache = new Map();
 const chartsState = new ChartsState();
 let currentGranularity = null;
 const sectionCacheState = createSectionCacheState();
+setSectionCacheLimit(sectionCacheState, 3);
+pinSectionKey(sectionCacheState, 'overview');
 const sectionResponseCache = sectionCacheState.responses;
 const cacheSectionResponse = (section, data) =>
     storeSectionResponse(sectionCacheState, section, data);
