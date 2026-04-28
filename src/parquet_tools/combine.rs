@@ -679,9 +679,19 @@ fn concatenate_columns(input: &InputFile) -> Result<Vec<ArrayRef>, Box<dyn std::
 fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
     let mut result: Vec<KeyValue> = Vec::new();
 
-    // source: deduplicated JSON array of all source names
-    let sources: Vec<&str> = {
-        let mut s: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
+    // source: deduplicated JSON array of all source names. If an input is
+    // itself an already-combined file, its `source` field is a JSON-encoded
+    // array — flatten it in rather than pushing the array-string verbatim,
+    // so the final result is one flat array.
+    let sources: Vec<String> = {
+        let mut s: Vec<String> = Vec::new();
+        for input in inputs {
+            if let Ok(arr) = serde_json::from_str::<Vec<String>>(&input.source) {
+                s.extend(arr);
+            } else {
+                s.push(input.source.clone());
+            }
+        }
         s.sort();
         s.dedup();
         s
@@ -1772,6 +1782,45 @@ mod tests {
             .expect("vllm.0 entry should exist");
         assert_eq!(entry.get("instance").and_then(|v| v.as_str()), Some("0"));
         assert_eq!(entry.get("node").and_then(|v| v.as_str()), Some("gpu01"));
+    }
+
+    #[test]
+    fn test_merge_metadata_flattens_existing_source_array() {
+        // Simulate an already-combined input by setting its `source` field
+        // to a JSON array string. Combining it with a single-source file
+        // should yield a flat array, not a nested one.
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "m1",
+            &[Some(1), Some(2)],
+            "[\"rezolus\",\"llm-perf\"]",
+            "1000",
+            vec![("node", "web01")],
+        );
+        let (_t2, p2) = make_test_file(
+            &[SEC, 2 * SEC],
+            "m2",
+            &[Some(3), Some(4)],
+            "vllm",
+            "1000",
+        );
+
+        let inputs = vec![load(&p1), load(&p2)];
+        let kv = merge_metadata(&inputs).unwrap();
+
+        let source_val = kv
+            .iter()
+            .find(|kv| kv.key == KEY_SOURCE)
+            .and_then(|kv| kv.value.as_deref())
+            .unwrap();
+        let sources: Vec<String> = serde_json::from_str(source_val).unwrap();
+        let mut expected = vec![
+            "rezolus".to_string(),
+            "llm-perf".to_string(),
+            "vllm".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(sources, expected);
     }
 
     #[test]
