@@ -1797,13 +1797,7 @@ mod tests {
             "1000",
             vec![("node", "web01")],
         );
-        let (_t2, p2) = make_test_file(
-            &[SEC, 2 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "vllm",
-            "1000",
-        );
+        let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "vllm", "1000");
 
         let inputs = vec![load(&p1), load(&p2)];
         let kv = merge_metadata(&inputs).unwrap();
