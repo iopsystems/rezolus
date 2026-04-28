@@ -251,11 +251,14 @@ impl Viewer {
         }
     }
 
-    /// Accept a JSON array of ServiceExtension templates, detect which ones
+    /// Accept a JSON array of templates, detect which service extensions
     /// match the loaded parquet file, and regenerate dashboards accordingly.
+    /// The array may include category templates (`category: true`) — those
+    /// don't have per-KPI `query` fields and would fail to deserialize as
+    /// `ServiceExtension`. Filter them out here; compare-mode bridging
+    /// uses `regenerate_combined` which re-parses the full JSON.
     pub fn init_templates(&mut self, templates_json: &str) -> Result<(), JsValue> {
-        let templates: Vec<dashboard::ServiceExtension> = serde_json::from_str(templates_json)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
+        let templates = parse_service_templates(templates_json)?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
 
         // Per-capture init runs before compare-mode `regenerate_combined`,
@@ -474,8 +477,7 @@ impl WasmCaptureRegistry {
             return Ok(());
         }
 
-        let templates: Vec<dashboard::ServiceExtension> = serde_json::from_str(templates_json)
-            .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
+        let templates = parse_service_templates(templates_json)?;
         // Reconstruct registry — same shape used by the per-capture
         // `init_templates`. The JSON may include both service templates
         // and category templates; the loader routes them by `category: true`.
@@ -578,6 +580,26 @@ impl Default for WasmCaptureRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Parse a templates JSON array into the service-extension subset,
+/// silently skipping `category: true` entries (those have a different
+/// schema and are handled separately by `parse_template_registry`).
+fn parse_service_templates(
+    templates_json: &str,
+) -> Result<Vec<dashboard::ServiceExtension>, JsValue> {
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(templates_json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {}", e)))?;
+    let mut templates = Vec::new();
+    for v in parsed {
+        if v.get("category").and_then(|b| b.as_bool()).unwrap_or(false) {
+            continue;
+        }
+        let ext: dashboard::ServiceExtension = serde_json::from_value(v)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse template: {}", e)))?;
+        templates.push(ext);
+    }
+    Ok(templates)
 }
 
 /// Build a TemplateRegistry from a list of service extensions PLUS

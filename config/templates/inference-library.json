@@ -29,6 +29,12 @@
       "denominator": true
     },
     {
+      "role": "throughput",
+      "title": "Request Completion Rate",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
       "type": "histogram",

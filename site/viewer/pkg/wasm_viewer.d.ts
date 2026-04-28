@@ -27,8 +27,12 @@ export class Viewer {
      */
     info(): string;
     /**
-     * Accept a JSON array of ServiceExtension templates, detect which ones
+     * Accept a JSON array of templates, detect which service extensions
      * match the loaded parquet file, and regenerate dashboards accordingly.
+     * The array may include category templates (`category: true`) — those
+     * don't have per-KPI `query` fields and would fail to deserialize as
+     * `ServiceExtension`. Filter them out here; compare-mode bridging
+     * uses `regenerate_combined` which re-parses the full JSON.
      */
     init_templates(templates_json: string): void;
     /**
