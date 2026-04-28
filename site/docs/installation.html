@@ -73,8 +73,6 @@
 <div id="panel-linux">
 
 <section class="mb-16">
-<h2 class="text-xl font-bold mb-4">Quick Install</h2>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-4">The installer adds the package repository for your distro, installs Rezolus, and enables the agent, exporter, and hindsight services via systemd.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
 <div class="w-3 h-3 rounded-full bg-red-500/50"></div>
@@ -82,10 +80,14 @@
 <div class="w-3 h-3 rounded-full bg-green-500/50"></div>
 </div>
 <div class="p-6 font-mono text-sm leading-8">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -fsSL https://install.rezolus.com | bash</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">#</span><code class="text-green-400">curl -fsSL https://install.rezolus.com | sudo bash</code></div>
 </div>
 </div>
-<p class="text-xs text-slate-400 mt-3">Use <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">--disable-services</code> to install without auto-starting. Use <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded">-y</code> for non-interactive mode.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mt-4 mb-4">The installer adds the package repository for your distro, installs Rezolus, and enables the agent, exporter, and hindsight services via systemd. Run as root or with sudo.</p>
+<div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-4">
+<span class="material-symbols-outlined text-sm">info</span>
+<span class="text-slate-600 dark:text-slate-500">Full root access required for package repository configuration</span>
+</div>
 </section>
 
 <section class="mb-16">

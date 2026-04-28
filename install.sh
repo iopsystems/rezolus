@@ -53,20 +53,10 @@ done
 # Detect the operating system
 OS_TYPE="$(uname -s)"
 
-# Check for sudo access early
-if [[ "$OS_TYPE" == "Linux" ]]; then
-    echo "This installer requires sudo access to configure package repositories and install Rezolus"
-    echo "You may be prompted for your password"
-    echo ""
-
-    # Test sudo access - this will prompt for password if needed
-    if ! sudo -v; then
-        echo "Error: This installer requires sudo access" >&2
-        exit 1
-    fi
-
-    # Keep sudo alive for the duration of the script
-    while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
+# Check for root access on Linux
+if [[ "$OS_TYPE" == "Linux" ]] && [[ "$EUID" -ne 0 ]]; then
+    echo "Error: This installer must be run as root" >&2
+    exit 1
 fi
 
 if [[ "$OS_TYPE" == "Darwin" ]]; then
@@ -238,8 +228,8 @@ if [[ -z "$DISABLE_SERVICES" ]] && [[ "$SKIP_CONFIRM" == "false" ]]; then
         echo "" >&2
         echo "When piping this script, please run in a terminal that supports interaction" >&2
         echo "Or use command-line options:" >&2
-        echo "  curl -fsSL https://install.rezolus.com | bash -s -- -y" >&2
-        echo "  curl -fsSL https://install.rezolus.com | bash -s -- -y --disable-services" >&2
+        echo "  curl -fsSL https://install.rezolus.com | sudo bash -s -- -y" >&2
+        echo "  curl -fsSL https://install.rezolus.com | sudo bash -s -- -y --disable-services" >&2
         exit 1
     fi
 
@@ -262,24 +252,24 @@ fi
 case "$PACKAGE_MANAGER" in
     apt)
         echo "Adding Rezolus repository GPG signing key..."
-        if ! curl -fsSL https://us-apt.pkg.dev/doc/repo-signing-key.gpg | sudo gpg --yes --dearmor -o /etc/apt/trusted.gpg.d/rezolus-archive-keyring.gpg; then
+        if ! curl -fsSL https://us-apt.pkg.dev/doc/repo-signing-key.gpg | gpg --yes --dearmor -o /etc/apt/trusted.gpg.d/rezolus-archive-keyring.gpg; then
             echo "Error: Failed to add GPG signing key" >&2
             exit 1
         fi
 
         echo "Adding Rezolus APT repository..."
-        echo "deb [arch=amd64] https://us-apt.pkg.dev/projects/rezolus ${REPO_NAME} main" | sudo tee /etc/apt/sources.list.d/rezolus.list > /dev/null
+        echo "deb [arch=amd64] https://us-apt.pkg.dev/projects/rezolus ${REPO_NAME} main" | tee /etc/apt/sources.list.d/rezolus.list > /dev/null
 
         echo "Updating package list..."
-        sudo apt update
+        apt update
 
         echo "Installing Rezolus..."
-        sudo apt install -y rezolus
+        apt install -y rezolus
         ;;
 
     dnf|yum)
         echo "Adding Rezolus YUM repository..."
-        sudo tee /etc/yum.repos.d/rezolus.repo > /dev/null <<EOF
+        tee /etc/yum.repos.d/rezolus.repo > /dev/null <<EOF
 [rezolus]
 name=Rezolus Repository
 baseurl=https://us-yum.pkg.dev/projects/rezolus/${REPO_NAME}
@@ -291,7 +281,7 @@ gpgkey=https://us-yum.pkg.dev/doc/repo-signing-key.gpg
 EOF
 
         echo "Installing Rezolus..."
-        sudo $PACKAGE_MANAGER install -y rezolus
+        $PACKAGE_MANAGER install -y rezolus
         ;;
 esac
 
@@ -301,16 +291,16 @@ echo "Installation completed successfully"
 if [[ "$DISABLE_SERVICES" == "true" ]]; then
     echo ""
     echo "Disabling services..."
-    sudo systemctl disable --now rezolus.service
-    sudo systemctl disable --now rezolus-exporter.service
+    systemctl disable --now rezolus.service
+    systemctl disable --now rezolus-exporter.service
     echo ""
     echo "Services have been disabled"
     echo ""
     echo "Run 'rezolus --help' for usage information"
     echo ""
     echo "To enable services later:"
-    echo "  sudo systemctl enable --now rezolus"
-    echo "  sudo systemctl enable --now rezolus-exporter"
+    echo "  systemctl enable --now rezolus"
+    echo "  systemctl enable --now rezolus-exporter"
     echo ""
     echo "Installation complete"
 else
@@ -318,10 +308,10 @@ else
     echo "Enabling and starting services..."
 
     # Enable services in case they were previously disabled
-    sudo systemctl enable rezolus.service rezolus-exporter.service
+    systemctl enable rezolus.service rezolus-exporter.service
 
     # Start services if they're not already running
-    sudo systemctl start rezolus.service rezolus-exporter.service
+    systemctl start rezolus.service rezolus-exporter.service
 
     # Give services a moment to start
     sleep 2
@@ -329,8 +319,8 @@ else
     echo "Checking service status..."
 
     # Check if services are running
-    REZOLUS_STATUS=$(sudo systemctl is-active rezolus.service 2>/dev/null || echo "inactive")
-    EXPORTER_STATUS=$(sudo systemctl is-active rezolus-exporter.service 2>/dev/null || echo "inactive")
+    REZOLUS_STATUS=$(systemctl is-active rezolus.service 2>/dev/null || echo "inactive")
+    EXPORTER_STATUS=$(systemctl is-active rezolus-exporter.service 2>/dev/null || echo "inactive")
 
     if [[ "$REZOLUS_STATUS" == "active" ]] && [[ "$EXPORTER_STATUS" == "active" ]]; then
         echo "Services are running successfully:"
@@ -350,8 +340,8 @@ else
         fi
         echo ""
         echo "Check service logs for details:" >&2
-        echo "  sudo journalctl -u rezolus.service -n 50" >&2
-        echo "  sudo journalctl -u rezolus-exporter.service -n 50" >&2
+        echo "  journalctl -u rezolus.service -n 50" >&2
+        echo "  journalctl -u rezolus-exporter.service -n 50" >&2
         echo ""
         echo "Installation completed with errors - services not running"
     fi
