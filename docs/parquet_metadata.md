@@ -98,8 +98,21 @@ for viewer compatibility. A copy of each node's `systeminfo` is stashed into
 `per_source_metadata.rezolus.<node>.systeminfo` so multi-node combined files
 don't lose per-host data.
 
-**Set at record time** by the recorder when scraping a rezolus endpoint. Not
-user-editable.
+**Set at record time** by the recorder when scraping a rezolus endpoint.
+
+**Set or replace post-recording with `parquet annotate --systeminfo`:**
+
+```bash
+# From a file
+target/release/rezolus parquet annotate file.parquet --systeminfo sysinfo.json
+
+# Or piped from a live agent
+curl -s http://agent:4241/systeminfo | \
+    target/release/rezolus parquet annotate file.parquet --systeminfo -
+```
+
+The value is validated as JSON before being written. Used alone, `--systeminfo`
+won't trigger the service-template flow.
 
 ### `descriptions`
 
@@ -261,7 +274,7 @@ mutators are:
 | Tool | What it can change |
 |------|--------------------|
 | `rezolus record --node`, `--instance`, `--metadata k=v` | Anything written at recording time. The catch-all `--metadata` can set any top-level key. |
-| `rezolus parquet annotate` | Adds/replaces/removes top-level `service_queries`; with `--node NAME` sets/replaces top-level `node`; with `--source NAME` (`--overwrite` to replace) sets/replaces top-level `source`. |
+| `rezolus parquet annotate` | Adds/replaces/removes top-level `service_queries`; with `--node NAME` sets/replaces top-level `node`; with `--source NAME` (`--overwrite` to replace) sets/replaces top-level `source`; with `--systeminfo PATH` (or `-` for stdin) sets/replaces top-level `systeminfo`. |
 | `rezolus parquet combine --pinned` | Sets `pinned_node` on the output. |
 | `rezolus parquet combine` | Merges and re-derives `source`, `descriptions`, `per_source_metadata`, etc. from the inputs. |
 

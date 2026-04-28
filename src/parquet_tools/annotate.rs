@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::parquet_metadata::{KEY_NODE, KEY_SERVICE_QUERIES, KEY_SOURCE};
+use crate::parquet_metadata::{KEY_NODE, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO};
 use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::{ServiceExtension, TemplateRegistry};
@@ -12,6 +12,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
     let node = args.get_one::<String>("node");
     let new_source = args.get_one::<String>("source");
+    let sysinfo_path = args.get_one::<PathBuf>("systeminfo");
     let overwrite = args.get_flag("overwrite");
 
     if let Some(n) = node {
@@ -20,6 +21,10 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
             std::process::exit(1);
         });
         println!("Set node={:?} on {:?}", n, path);
+    }
+
+    if let Some(p) = sysinfo_path {
+        run_systeminfo(path, p);
     }
 
     if args.get_flag("undo") {
@@ -37,9 +42,11 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
 
     let custom_file = args.get_one::<PathBuf>("queries");
 
-    // If only --node and/or --source were requested, don't also auto-apply
-    // a default service template.
-    if (node.is_some() || new_source.is_some()) && custom_file.is_none() && !args.get_flag("filter")
+    // If only individual edits (--node/--source/--systeminfo) were requested,
+    // don't also auto-apply a default service template.
+    if (node.is_some() || new_source.is_some() || sysinfo_path.is_some())
+        && custom_file.is_none()
+        && !args.get_flag("filter")
     {
         return;
     }
@@ -90,6 +97,51 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
             std::process::exit(1);
         }
     }
+}
+
+/// Embed (or replace) the `systeminfo` JSON metadata in the parquet footer.
+fn run_systeminfo(path: &Path, source: &Path) {
+    let json = if source.as_os_str() == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).unwrap_or_else(|e| {
+            eprintln!("error: failed to read systeminfo from stdin: {e}");
+            std::process::exit(1);
+        });
+        buf
+    } else {
+        std::fs::read_to_string(source).unwrap_or_else(|e| {
+            eprintln!("error: failed to read {source:?}: {e}");
+            std::process::exit(1);
+        })
+    };
+
+    if let Err(e) = serde_json::from_str::<serde_json::Value>(&json) {
+        eprintln!("error: systeminfo is not valid JSON: {e}");
+        std::process::exit(1);
+    }
+
+    annotate_systeminfo(path, &json).unwrap_or_else(|e| {
+        eprintln!("error: failed to write systeminfo annotation: {e}");
+        std::process::exit(1);
+    });
+
+    println!("Annotated {path:?} with systeminfo ({} bytes)", json.len());
+}
+
+fn annotate_systeminfo(path: &Path, json: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use parquet::file::metadata::KeyValue;
+
+    let mut kv_meta = super::read_file_metadata(path)?;
+
+    kv_meta.retain(|kv| kv.key != KEY_SYSTEMINFO);
+    kv_meta.push(KeyValue {
+        key: KEY_SYSTEMINFO.to_string(),
+        value: Some(json.to_string()),
+    });
+
+    let buf = super::rewrite_parquet(path, kv_meta, None)?;
+    std::fs::write(path, &buf)?;
+    Ok(())
 }
 
 /// Remove service_queries from all sources in per_source_metadata.
@@ -496,5 +548,32 @@ mod tests {
         let mut reader = builder.build().unwrap();
         let batch = reader.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 3);
+    }
+
+    // ── annotate_systeminfo tests ──
+
+    #[test]
+    fn systeminfo_annotation_replaces_existing_key() {
+        let tmp = make_minimal_parquet(vec![("systeminfo", "\"old\"")]);
+        let new_json = r#"{"cpu":"x86_64","cores":8}"#;
+        annotate_systeminfo(tmp.path(), new_json).unwrap();
+
+        let kv = read_kv(tmp.path());
+        let entries: Vec<&str> = kv
+            .iter()
+            .filter(|(k, _)| k == KEY_SYSTEMINFO)
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(entries, vec![new_json], "exactly one systeminfo entry");
+    }
+
+    #[test]
+    fn systeminfo_annotation_preserves_other_metadata() {
+        let tmp = make_minimal_parquet(vec![("source", "rezolus"), ("node", "web01")]);
+        annotate_systeminfo(tmp.path(), r#"{"cpu":"x86_64"}"#).unwrap();
+
+        let kv = read_kv(tmp.path());
+        assert!(kv.iter().any(|(k, v)| k == "source" && v == "rezolus"));
+        assert!(kv.iter().any(|(k, v)| k == "node" && v == "web01"));
     }
 }
