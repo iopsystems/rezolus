@@ -338,12 +338,17 @@ impl Viewer {
         "[]".to_string()
     }
 
-    /// Returns the full View JSON for a dashboard section.
+    /// Returns the full View JSON for a dashboard section. The shared
+    /// `sections` navigation array is stripped on the way out — callers
+    /// fetch it once via `get_sections()`.
     pub fn get_section(&self, key: &str) -> Option<String> {
-        self.dashboard_sections
+        let raw = self
+            .dashboard_sections
             .get(&format!("{key}.json"))
-            .or_else(|| self.dashboard_sections.get(key))
-            .cloned()
+            .or_else(|| self.dashboard_sections.get(key))?;
+        let mut value: serde_json::Value = serde_json::from_str(raw).ok()?;
+        strip_sections_from_section_body(&mut value);
+        serde_json::to_string(&value).ok()
     }
 }
 
@@ -578,6 +583,15 @@ impl Default for WasmCaptureRegistry {
     }
 }
 
+/// Drop the shared `sections` navigation array from a generated section
+/// body. The full nav list is exposed separately via `Viewer::get_sections`,
+/// so per-section payloads don't need to carry it.
+fn strip_sections_from_section_body(value: &mut serde_json::Value) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("sections");
+    }
+}
+
 /// Parse a templates JSON array into the service-extension subset,
 /// silently skipping `category: true` entries (those have a different
 /// schema and are handled separately by `parse_template_registry`).
@@ -736,5 +750,21 @@ fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Val
             "service_instances".into(),
             serde_json::Value::Object(service_instances),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_sections_from_generated_section_body() {
+        let mut value = serde_json::json!({
+            "sections": [{"name": "Overview", "route": "/overview"}],
+            "groups": []
+        });
+        strip_sections_from_section_body(&mut value);
+        assert!(value.get("sections").is_none());
+        assert_eq!(value["groups"], serde_json::json!([]));
     }
 }
