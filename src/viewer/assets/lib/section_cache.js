@@ -31,6 +31,10 @@ const storeSectionResponse = (state, key, data) => {
     const { sections, ...stored } = data;
     state.responses[key] = stored;
 
+    // Evict the oldest non-pinned, non-just-inserted entry. If everything
+    // is pinned or only the just-inserted key is unpinned, the loop falls
+    // through and the cache is allowed to exceed `limit` — pinning is a
+    // hard guarantee, not a hint.
     if (state.limit && Object.keys(state.responses).length > state.limit) {
         const pinned = state.pinned || new Set();
         for (const k of Object.keys(state.responses)) {

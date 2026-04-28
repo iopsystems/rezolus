@@ -48,6 +48,9 @@ const heatmapDataCache = new Map();
 const chartsState = new ChartsState();
 let currentGranularity = null;
 const sectionCacheState = createSectionCacheState();
+// Cache limit: overview (pinned) + active route + one look-ahead. Keeps
+// memory bounded on the static-site WASM viewer where each section body
+// can be MB-scale.
 setSectionCacheLimit(sectionCacheState, 3);
 pinSectionKey(sectionCacheState, 'overview');
 const sectionResponseCache = sectionCacheState.responses;
