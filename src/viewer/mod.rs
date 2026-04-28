@@ -738,8 +738,11 @@ impl AppState {
             .cloned();
         drop(sections_guard);
 
-        let parsed: Option<serde_json::Value> =
-            body.as_deref().and_then(|s| serde_json::from_str(s).ok());
+        let parsed: Option<serde_json::Value> = body.as_deref().and_then(|s| {
+            serde_json::from_str(s)
+                .map_err(|e| warn!("sections cache parse error: {e}"))
+                .ok()
+        });
 
         let sections_array: Vec<serde_json::Value> = parsed
             .as_ref()
@@ -2323,5 +2326,13 @@ mod tests {
 
         assert_eq!(payload["sections"], serde_json::Value::Array(sections));
         assert!(payload.get("groups").is_none());
+        assert_eq!(payload["source"], serde_json::json!("rezolus"));
+        assert_eq!(payload["version"], serde_json::json!("test-version"));
+        assert_eq!(payload["filename"], serde_json::json!("capture.parquet"));
+        assert_eq!(payload["interval"], serde_json::json!(1.0));
+        assert_eq!(payload["filesize"], serde_json::json!(42u64));
+        assert_eq!(payload["start_time"], serde_json::json!(1000u64));
+        assert_eq!(payload["end_time"], serde_json::json!(2000u64));
+        assert_eq!(payload["num_series"], serde_json::json!(99usize));
     }
 }
