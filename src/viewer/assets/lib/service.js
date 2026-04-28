@@ -16,10 +16,17 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
     const serviceName = meta.service_name || 'Service';
     const serviceMeta = meta.service_metadata || {};
     const unavailable = meta.unavailable_kpis || [];
+    const categoryMembers = Array.isArray(meta.category_members) ? meta.category_members : null;
+    const categoryUnavailable = Array.isArray(meta.category_unavailable) ? meta.category_unavailable : [];
     const { instances = [], selectedInstance = null, onInstanceChange } = instanceOpts;
     const hasMultiInstance = instances.length > 1;
+
+    const headerTitle = categoryMembers
+        ? `${serviceName} — ${categoryMembers.join(' vs ')}`
+        : serviceName;
+
     return m('div#section-content', [
-        m('h1', serviceName),
+        m('h1', headerTitle),
         // Instance selector (only for multi-instance)
         hasMultiInstance && m('div.instance-selector', [
             m('select.instance-select', {
@@ -54,9 +61,17 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
             m('h3', 'Unavailable KPIs'),
             m('p', 'The following KPIs have no matching data in this recording:'),
             m('ul', unavailable.map((kpi) =>
+                m('li', [m('strong', kpi.title), ` (${kpi.role})`])
+            )),
+        ]),
+        categoryUnavailable.length > 0 && m('div.section-notes', [
+            m('h3', 'Skipped Comparisons'),
+            m('p', 'The following category KPIs were skipped because one member did not have a matching chart:'),
+            m('ul', categoryUnavailable.map((entry) =>
                 m('li', [
-                    m('strong', kpi.title),
-                    ` (${kpi.role})`,
+                    m('strong', entry.title),
+                    ' — missing in ',
+                    m('code', entry.missing_member),
                 ])
             )),
         ]),

@@ -449,6 +449,43 @@ export class WasmCaptureRegistry {
         }
     }
     /**
+     * Regenerate BOTH viewers' `dashboard_sections` using service
+     * extensions from BOTH attached captures and the explicitly named
+     * category template (when provided). When the experiment slot is
+     * empty, this is a no-op (the per-capture `init_templates` call
+     * already populated baseline's sections).
+     *
+     * Both slots get the same combined map: compare-mode chart fetches
+     * query both slots for the active section route, so a category
+     * route like `/service/inference-library` must resolve in the
+     * experiment slot too — otherwise the experiment fetch 404s and
+     * the chart surfaces "Error: null".
+     *
+     * `category_name` activates category mode. When set, both aliases
+     * must be present and each must appear in the category template's
+     * `members` list — otherwise this returns an error and the caller
+     * should refuse to proceed. A None category is treated as plain
+     * per-member compare mode (no bridging).
+     * @param {string} templates_json
+     * @param {string | null} [category_name]
+     * @param {string | null} [baseline_alias]
+     * @param {string | null} [experiment_alias]
+     */
+    regenerate_combined(templates_json, category_name, baseline_alias, experiment_alias) {
+        const ptr0 = passStringToWasm0(templates_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(category_name) ? 0 : passStringToWasm0(category_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        var ptr2 = isLikeNone(baseline_alias) ? 0 : passStringToWasm0(baseline_alias, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len2 = WASM_VECTOR_LEN;
+        var ptr3 = isLikeNone(experiment_alias) ? 0 : passStringToWasm0(experiment_alias, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len3 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmcaptureregistry_regenerate_combined(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @param {string} capture
      * @returns {string | undefined}
      */

@@ -248,6 +248,7 @@ const showCompareLanding = () => {
 
 const bootstrap = async () => {
     let compareMode = false;
+    let categoryName = null;
     try {
         const response = await ViewerApi.getMode();
         if (!response.loaded && !response.live) {
@@ -256,6 +257,7 @@ const bootstrap = async () => {
         }
         liveMode = response.live === true;
         compareMode = response.compare_mode === true;
+        categoryName = response.category || null;
     } catch (_) { /* assume loaded file mode */ }
 
     await fetchBackendState();
@@ -301,6 +303,7 @@ const bootstrap = async () => {
         selectionPayload,
         liveMode,
         compareMode,
+        categoryName,
         baselineAlias,
         experimentSystemInfo,
         experimentFileMetadata,

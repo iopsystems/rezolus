@@ -183,6 +183,13 @@ impl SubGroup {
         self.plot_promql_with_descriptions(opts, promql_query, None);
     }
 
+    /// Mutable access to the most recently pushed plot. Used by callers
+    /// that mutate per-plot fields (e.g. `promql_query_experiment` on the
+    /// category generator) right after `plot_promql*`.
+    pub fn plots_mut_last(&mut self) -> Option<&mut Plot> {
+        self.plots.last_mut()
+    }
+
     pub fn plot_promql_with_descriptions(
         &mut self,
         mut opts: PlotOpts,
@@ -220,6 +227,7 @@ impl SubGroup {
             formatted_time_data: None,
             series_names: None,
             promql_query: Some(promql_query),
+            promql_query_experiment: None,
             width: PlotWidth::default(),
         });
     }
@@ -265,6 +273,8 @@ pub struct Plot {
     series_names: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     promql_query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub promql_query_experiment: Option<String>,
     #[serde(skip_serializing_if = "plot_width_is_half", default)]
     pub width: PlotWidth,
 }
@@ -492,6 +502,7 @@ mod tests {
             formatted_time_data: None,
             series_names: None,
             promql_query: Some("up".into()),
+            promql_query_experiment: None,
             width,
         }
     }
@@ -589,5 +600,30 @@ mod tests {
             json["subgroups"][0]["description"],
             "Shows total throughput and IOPS."
         );
+    }
+}
+
+#[cfg(test)]
+mod plot_serialize_tests {
+    use super::*;
+
+    #[test]
+    fn plot_promql_query_experiment_round_trips() {
+        let mut sg = SubGroup::default();
+        sg.plot_promql(
+            PlotOpts::counter("X", "kpi-x", Unit::Count),
+            "metric_a".to_string(),
+        );
+        // Mutate the just-pushed plot to set the experiment query, then
+        // serialize and confirm it appears in the JSON.
+        let plot = sg.plots.last_mut().unwrap();
+        plot.promql_query_experiment = Some("metric_b".to_string());
+        let json = serde_json::to_string(plot).unwrap();
+        assert!(json.contains("\"promql_query_experiment\":\"metric_b\""));
+
+        // Default (None) is omitted from the JSON.
+        plot.promql_query_experiment = None;
+        let json = serde_json::to_string(plot).unwrap();
+        assert!(!json.contains("promql_query_experiment"), "got {json}");
     }
 }
