@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     createSectionCacheState,
     storeSectionResponse,
+    storeSharedSections,
     getSections,
     withSharedSections,
 } from '../src/viewer/assets/lib/section_cache.js';
@@ -42,4 +43,18 @@ test('storeSectionResponse reuses the shared sections list for later payloads wi
     assert.deepEqual(withSharedSections(state, storedCpu).sections, [
         { name: 'Overview', route: '/overview' },
     ]);
+});
+
+test('shared sections can be bootstrapped without storing a section body', () => {
+    const state = createSectionCacheState();
+    storeSharedSections(state, [
+        { name: 'Overview', route: '/overview' },
+        { name: 'CPU', route: '/cpu' },
+    ]);
+
+    assert.deepEqual(getSections(state), [
+        { name: 'Overview', route: '/overview' },
+        { name: 'CPU', route: '/cpu' },
+    ]);
+    assert.deepEqual(state.responses, {});
 });

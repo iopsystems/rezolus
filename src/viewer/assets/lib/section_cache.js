@@ -5,6 +5,10 @@ const createSectionCacheState = () => ({
 
 const getSections = (state) => state.sections || [];
 
+const storeSharedSections = (state, sections) => {
+    state.sections = Array.isArray(sections) ? sections : [];
+};
+
 const storeSectionResponse = (state, key, data) => {
     if (Array.isArray(data?.sections) && data.sections.length > 0) {
         state.sections = data.sections;
@@ -41,6 +45,7 @@ const resetSectionCacheState = (state) => {
 export {
     createSectionCacheState,
     storeSectionResponse,
+    storeSharedSections,
     getSections,
     withSharedSections,
     clearSectionResponses,
