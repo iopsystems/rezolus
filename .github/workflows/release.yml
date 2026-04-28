@@ -429,21 +429,6 @@ jobs:
             --notes-file /tmp/release-notes.md \
             target/release-artifacts/*
 
-      # Publish to crates.io
-      - name: install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: clean up GCP credential files
-        run: rm -f gha-creds-*.json
-
-      - name: publish to crates.io
-        if: steps.check-release.outputs.is_stable == 'true'
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: |
-          cargo publish
-          echo "Published to crates.io"
-
       # Update Homebrew formula
       - name: set up Homebrew
         if: steps.check-release.outputs.is_stable == 'true'
