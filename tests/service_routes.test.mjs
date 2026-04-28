@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServiceRoutes } from '../src/viewer/assets/lib/service.js';
 
-const setupGlobals = () => {
+const setupGlobals = (overrides = {}) => {
     const previousM = globalThis.m;
     const previousWindow = globalThis.window;
 
     globalThis.m = (tag, attrs, children) => ({ tag, attrs, children });
     globalThis.m.route = {
         get: () => '/overview',
+        set: overrides.routeSet || (() => {}),
     };
     globalThis.window = {
         scrollTo() {},
@@ -64,6 +65,36 @@ test('service section route hydrates lean cached payloads with shared sections',
         assert.equal(vnode.attrs.activeSection.route, '/service/api');
     } finally {
         restore();
+    }
+});
+
+test('service section route redirects to default when section is missing', async () => {
+    const setRouteCalls = [];
+    const previousWarn = console.warn;
+    console.warn = () => {};
+    const restore = setupGlobals({ routeSet: (target) => setRouteCalls.push(target) });
+
+    try {
+        const routes = createServiceRoutes({
+            ...baseDeps({}),
+            loadSection: async () => { throw new Error('Unknown section: service/llm-perf'); },
+            getDefaultRoute: () => '/service/vllm',
+        });
+
+        const result = routes['/service/:serviceName'].onmatch(
+            { serviceName: 'llm-perf' },
+            '/service/llm-perf',
+        );
+
+        // recoverFromMissingSection returns a never-resolving promise; race
+        // it against a microtask tick so we can assert on the redirect
+        // without blocking the test.
+        await Promise.race([result, new Promise((r) => setTimeout(r, 10))]);
+
+        assert.deepEqual(setRouteCalls, ['/service/vllm']);
+    } finally {
+        restore();
+        console.warn = previousWarn;
     }
 });
 

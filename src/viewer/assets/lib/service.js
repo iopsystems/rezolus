@@ -109,8 +109,21 @@ const createServiceRoutes = (deps) => {
         getCompareMode,
         getSections,
         withSharedSections,
+        getDefaultRoute,
     } = deps;
     const readCompareMode = () => (typeof getCompareMode === 'function' ? !!getCompareMode() : false);
+    // Recover from a missing service section (stale URL pointing at a
+    // service that this capture doesn't render) by sending the user to
+    // the dashboard's default route instead of letting the "Unknown
+    // section" error bubble out of mithril's loop.
+    const recoverFromMissingSection = (svcKey, err) => {
+        console.warn(`[viewer] section ${svcKey} not available; redirecting to default route`, err);
+        const target = typeof getDefaultRoute === 'function' ? getDefaultRoute() : '/overview';
+        if (target && target !== m.route.get()) {
+            m.route.set(target);
+        }
+        return new Promise(function () {});
+    };
     const readSections = (data) => {
         const sharedSections = typeof getSections === 'function' ? getSections() : [];
         if (Array.isArray(sharedSections) && sharedSections.length > 0) {
@@ -171,7 +184,9 @@ const createServiceRoutes = (deps) => {
                 if (sectionResponseCache[svcKey]) {
                     return makeView();
                 }
-                return loadSection(svcKey).then(() => makeView());
+                return loadSection(svcKey)
+                    .then(() => makeView())
+                    .catch((err) => recoverFromMissingSection(svcKey, err));
             },
         },
         '/service/:serviceName': {
@@ -205,11 +220,13 @@ const createServiceRoutes = (deps) => {
                 if (sectionResponseCache[svcKey]) {
                     return makeView();
                 }
-                return loadSection(svcKey).then((data) => {
-                    const sections = readSections(data);
-                    if (sections.length > 0) preloadSections(sections);
-                    return makeView();
-                });
+                return loadSection(svcKey)
+                    .then((data) => {
+                        const sections = readSections(data);
+                        if (sections.length > 0) preloadSections(sections);
+                        return makeView();
+                    })
+                    .catch((err) => recoverFromMissingSection(svcKey, err));
             },
         },
     };

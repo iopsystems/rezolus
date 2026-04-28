@@ -646,15 +646,32 @@ const initDashboard = (config = {}) => {
         ? `/service/${categoryName}`
         : (serviceNames.length > 0 ? `/service/${serviceNames[0]}` : '/overview');
 
-    // A stale hash (e.g. `#/service/vllm` from a previous session)
-    // would otherwise drive mithril to a route whose data fetch 404s
-    // and surfaces as a confusing "Error: null" toast. If the URL is
-    // pointing at a per-service route that isn't the canonical default
-    // for this load, drop the hash so the defaultRoute kicks in.
+    // A stale hash (e.g. `#/service/llm-perf` from a previous session
+    // or external link to a different capture) would otherwise drive
+    // mithril to a route whose data fetch throws "Unknown section" and
+    // surfaces as a confusing error. Build the set of service names
+    // that actually have a section in this load; if the hash points at
+    // anything else, drop it so `defaultRoute` kicks in.
+    const validServiceNames = new Set();
     if (categoryName) {
+        validServiceNames.add(categoryName);
+    } else {
+        for (const name of serviceNames) validServiceNames.add(name);
+        const expServiceInstances = config.experimentFileMetadata?.service_instances;
+        if (expServiceInstances) {
+            for (const name of Object.keys(expServiceInstances)) {
+                validServiceNames.add(name);
+            }
+        }
+    }
+    {
         const hash = window.location.hash || '';
-        if (hash.startsWith('#/service/') && hash !== `#${defaultRoute}`) {
-            window.location.hash = '';
+        if (hash.startsWith('#/service/')) {
+            const tail = hash.slice('#/service/'.length);
+            const requestedSvc = decodeURIComponent(tail.split('/')[0] || '');
+            if (!validServiceNames.has(requestedSvc)) {
+                window.location.hash = '';
+            }
         }
     }
 
@@ -702,6 +719,7 @@ const initDashboard = (config = {}) => {
             getCompareMode: () => compareMode,
             getSections: getCachedSections,
             withSharedSections: withCachedSections,
+            getDefaultRoute: () => defaultRoute,
         }),
         '/about': {
             render() {
@@ -799,13 +817,24 @@ const initDashboard = (config = {}) => {
                     return cachedView(params.section, requestedPath);
                 }
 
-                return loadSection(params.section).then((data) => {
-                    if (data?.sections) preloadSections(data.sections);
-                    if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
-                        fetchSectionHeatmapData(requestedPath, data.groups);
-                    }
-                    return cachedView(params.section, requestedPath);
-                });
+                return loadSection(params.section)
+                    .then((data) => {
+                        if (data?.sections) preloadSections(data.sections);
+                        if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                            fetchSectionHeatmapData(requestedPath, data.groups);
+                        }
+                        return cachedView(params.section, requestedPath);
+                    })
+                    .catch((err) => {
+                        // Stale URL pointing at a missing section. Drop
+                        // back to the dashboard's default route instead
+                        // of letting the "Unknown section" error bubble.
+                        console.warn(`[viewer] section ${params.section} not available; redirecting`, err);
+                        if (defaultRoute && defaultRoute !== m.route.get()) {
+                            m.route.set(defaultRoute);
+                        }
+                        return new Promise(function () {});
+                    });
             },
         },
     });
