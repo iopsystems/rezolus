@@ -261,9 +261,7 @@ impl Viewer {
         let templates = parse_service_templates(templates_json)?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
 
-        // Per-capture init runs before compare-mode `regenerate_combined`,
-        // which is the path that supplies an alias. Pass None here.
-        let service_exts = self.detect_and_validate_service_exts(&registry, None);
+        let service_exts = self.detect_and_validate_service_exts(&registry);
 
         let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
             .iter()
@@ -285,41 +283,39 @@ impl Viewer {
     /// `tsdb.source()`) and validate KPI availability against the
     /// Viewer's own tsdb. Returns the validated extensions, ready to
     /// pass to `dashboard::dashboard::generate`.
+    ///
+    /// Template selection is driven entirely by the parquet's source
+    /// metadata. Category membership for compare-mode follows from the
+    /// detected source names (e.g. a parquet whose `per_source_metadata`
+    /// contains `vllm` is what makes a capture the vllm member of the
+    /// inference-library category). The user-facing legend / display
+    /// alias is plumbed separately via `Viewer::set_alias` and never
+    /// influences which template a capture binds to.
     fn detect_and_validate_service_exts(
         &self,
         registry: &dashboard::TemplateRegistry,
-        alias: Option<&str>,
     ) -> Vec<(String, dashboard::ServiceExtension)> {
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
 
-        // Alias overrides parquet metadata for template lookup. The
-        // returned source key is the alias, since downstream category
-        // member checks use it directly.
-        if let Some(alias) = alias {
-            if let Some(ext) = registry.get(alias) {
-                service_exts.push((alias.to_string(), ext.clone()));
-            }
-        } else {
-            if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
-                if let Ok(psm) =
-                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-                {
-                    for (source_type, _group) in &psm {
-                        if source_type == "rezolus" {
-                            continue;
-                        }
-                        if let Some(ext) = registry.get(source_type) {
-                            service_exts.push((source_type.clone(), ext.clone()));
-                        }
+        if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
+            if let Ok(psm) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
+            {
+                for (source_type, _group) in &psm {
+                    if source_type == "rezolus" {
+                        continue;
+                    }
+                    if let Some(ext) = registry.get(source_type) {
+                        service_exts.push((source_type.clone(), ext.clone()));
                     }
                 }
             }
-            if service_exts.is_empty() {
-                let tsdb = self.engine.tsdb();
-                let source = tsdb.source().to_string();
-                if let Some(ext) = registry.get(&source) {
-                    service_exts.push((source, ext.clone()));
-                }
+        }
+        if service_exts.is_empty() {
+            let tsdb = self.engine.tsdb();
+            let source = tsdb.source().to_string();
+            if let Some(ext) = registry.get(&source) {
+                service_exts.push((source, ext.clone()));
             }
         }
 
@@ -460,17 +456,22 @@ impl WasmCaptureRegistry {
     /// experiment slot too — otherwise the experiment fetch 404s and
     /// the chart surfaces "Error: null".
     ///
-    /// `category_name` activates category mode. When set, both aliases
-    /// must be present and each must appear in the category template's
-    /// `members` list — otherwise this returns an error and the caller
-    /// should refuse to proceed. A None category is treated as plain
-    /// per-member compare mode (no bridging).
+    /// `category_name` activates category mode when each detected
+    /// source appears in the category template's `members` list. When
+    /// the membership check fails (or the category template isn't
+    /// found), category mode is silently skipped and the captures
+    /// render as per-member sections — same fall-back shape the server
+    /// runtime uses. A None category is treated as plain per-member
+    /// compare mode (no bridging).
+    ///
+    /// Display aliases for the captures (the user-facing legend) are
+    /// plumbed separately via `Viewer::set_alias` and never affect
+    /// template lookup or category membership; that is determined
+    /// entirely by each capture's parquet source metadata.
     pub fn regenerate_combined(
         &mut self,
         templates_json: &str,
         category_name: Option<String>,
-        baseline_alias: Option<String>,
-        experiment_alias: Option<String>,
     ) -> Result<(), JsValue> {
         // Both captures must be attached; otherwise nothing to combine.
         if self.experiment.is_none() || self.baseline.is_none() {
@@ -489,12 +490,12 @@ impl WasmCaptureRegistry {
         let baseline_exts = self
             .baseline
             .as_ref()
-            .map(|v| v.detect_and_validate_service_exts(&registry, baseline_alias.as_deref()))
+            .map(|v| v.detect_and_validate_service_exts(&registry))
             .unwrap_or_default();
         let experiment_exts = self
             .experiment
             .as_ref()
-            .map(|v| v.detect_and_validate_service_exts(&registry, experiment_alias.as_deref()))
+            .map(|v| v.detect_and_validate_service_exts(&registry))
             .unwrap_or_default();
 
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
@@ -506,28 +507,23 @@ impl WasmCaptureRegistry {
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
 
+        // Fall back to per-member rendering when the requested category
+        // doesn't activate cleanly — same shape as the server runtime's
+        // `lookup_category`. The user perceives this as "two per-member
+        // sections instead of one combined section," which is a less
+        // surprising failure mode than a hard error from the bootstrap.
         let category = match category_name.as_deref() {
-            Some(name) => {
-                let cat = registry.get_category(name).ok_or_else(|| {
-                    JsValue::from_str(&format!(
-                        "category template {name:?} not found in templates"
-                    ))
-                })?;
-                if service_refs.len() != 2 {
-                    return Err(JsValue::from_str(
-                        "category mode requires exactly two attached captures",
-                    ));
+            Some(name) => match registry.get_category(name) {
+                Some(cat)
+                    if service_refs.len() == 2
+                        && service_refs
+                            .iter()
+                            .all(|(source, _)| cat.members.iter().any(|m| m == source)) =>
+                {
+                    Some((cat.service_name.as_str(), cat))
                 }
-                for (alias, _) in &service_refs {
-                    if !cat.members.iter().any(|m| m == alias) {
-                        return Err(JsValue::from_str(&format!(
-                            "alias {alias:?} is not a member of category {name:?} (members: {:?})",
-                            cat.members,
-                        )));
-                    }
-                }
-                Some((cat.service_name.as_str(), cat))
-            }
+                _ => None,
+            },
             None => None,
         };
 

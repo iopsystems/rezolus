@@ -48,7 +48,6 @@ const demoSections = [
                 label: 'Inference (vLLM vs SGLang)',
                 files: ['vllm_gemma3.parquet', 'sglang_gemma3.parquet'],
                 legends: { baseline: 'vLLM', experiment: 'SGLang' },
-                aliases: { baseline: 'vllm', experiment: 'sglang' },
                 category: 'inference-library',
             },
         ],
@@ -188,7 +187,7 @@ async function loadDemo(filename = 'demo.parquet') {
 
 // Load a pair of demo parquets as baseline + experiment and launch the
 // viewer in compare mode. Triggered by ?demoA=<file>&demoB=<file>.
-async function loadCompareDemo(fileA, fileB, legends = null, aliases = null, category = null) {
+async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
     splashLabel = `${fileA} vs ${fileB}`;
     splashProgress = -1;
     landingError = null;
@@ -229,12 +228,7 @@ async function loadCompareDemo(fileA, fileB, legends = null, aliases = null, cat
         // rewrites baseline's section list.
         if (typeof loadedTemplatesJson === 'string' && loadedTemplatesJson.length > 0) {
             ViewerApi.initTemplates(loadedTemplatesJson, 'experiment');
-            ViewerApi.regenerateCombined(
-                loadedTemplatesJson,
-                category,
-                aliases?.baseline ?? null,
-                aliases?.experiment ?? null,
-            );
+            ViewerApi.regenerateCombined(loadedTemplatesJson, category);
         }
 
         // Fetch baseline + experiment state for initDashboard.
@@ -271,21 +265,22 @@ async function loadCompareDemo(fileA, fileB, legends = null, aliases = null, cat
             experimentQueryRange,
         });
 
-        // Canonicalize the URL: repeated `capture=alias=path` (or bare
-        // `capture=path` when no alias). Order encodes role — first is
+        // Canonicalize the URL: repeated `capture=label=path` (or bare
+        // `capture=path` when no label). Order encodes role — first is
         // baseline, second is experiment. Mirrors the CLI positional
         // shape and scales naturally to N captures in the future. The
-        // alias here is the *member* alias used for category lookup,
-        // not the legend label — those are intentionally distinct.
+        // label is purely the legend used for display; template
+        // selection and category membership are derived from each
+        // parquet's source metadata.
         const url = new URL(window.location);
-        const encode = (file, alias) => alias ? `${alias}=${file}` : file;
+        const encode = (file, label) => label ? `${label}=${file}` : file;
         url.searchParams.delete('demo');
         url.searchParams.delete('demoA');
         url.searchParams.delete('demoB');
         url.searchParams.delete('capture');
         url.searchParams.delete('category');
-        url.searchParams.append('capture', encode(fileA, aliases?.baseline));
-        url.searchParams.append('capture', encode(fileB, aliases?.experiment));
+        url.searchParams.append('capture', encode(fileA, legends?.baseline));
+        url.searchParams.append('capture', encode(fileB, legends?.experiment));
         if (category) url.searchParams.set('category', category);
         window.history.replaceState(null, '', url);
     } catch (e) {
@@ -318,7 +313,6 @@ const Root = {
                         demo.files[0],
                         demo.files[1],
                         demo.legends || null,
-                        demo.aliases || null,
                         demo.category || null,
                     );
                 } else if (demo && demo.file) {
@@ -334,11 +328,13 @@ const Root = {
 
 // ── Initial mount ──────────────────────────────────────────────────
 
-// Canonical compare URL: `?capture=alias=path&capture=alias=path&category=name`
-// (each `alias=` prefix optional, category optional). The alias is the
-// member key used for category verification. Order encodes role: 1st =
-// baseline, 2nd = experiment. Legacy: `?demoA=…&demoB=…` is parsed as a
-// fallback for one release; on first load we rewrite to canonical shape.
+// Canonical compare URL: `?capture=label=path&capture=label=path&category=name`
+// (each `label=` prefix optional, category optional). The label is
+// purely the legend used for display; template selection and category
+// membership come from each parquet's source metadata. Order encodes
+// role: 1st = baseline, 2nd = experiment. Legacy: `?demoA=…&demoB=…`
+// is parsed as a fallback for one release; on first load we rewrite to
+// canonical shape.
 const _params = new URLSearchParams(window.location.search);
 const _captureRaw = _params.getAll('capture');
 const _demoA = _params.get('demoA');
@@ -347,30 +343,26 @@ const _demoParam = _params.get('demo');
 const _category = _params.get('category');
 
 const parsePair = (rawA, rawB) => {
-    const [aliasA, fileA] = splitAlias(rawA);
-    const [aliasB, fileB] = splitAlias(rawB);
-    const aliases = (aliasA || aliasB)
-        ? { baseline: aliasA, experiment: aliasB }
+    const [labelA, fileA] = splitAlias(rawA);
+    const [labelB, fileB] = splitAlias(rawB);
+    const legends = (labelA || labelB)
+        ? { baseline: labelA, experiment: labelB }
         : null;
-    // Default legends to the aliases — the demo config can pass nicer
-    // display labels via demoSections, but URL-driven loads only have
-    // the alias to work with.
-    const legends = aliases;
-    return { fileA, fileB, aliases, legends };
+    return { fileA, fileB, legends };
 };
 
 if (_captureRaw.length >= 2) {
-    const { fileA, fileB, aliases, legends } = parsePair(_captureRaw[0], _captureRaw[1]);
+    const { fileA, fileB, legends } = parsePair(_captureRaw[0], _captureRaw[1]);
     splashLabel = `${legends?.baseline || fileA} vs ${legends?.experiment || fileB}`;
     m.mount(document.body, Root);
-    loadCompareDemo(fileA, fileB, legends, aliases, _category);
+    loadCompareDemo(fileA, fileB, legends, _category);
 } else if (_demoA && _demoB) {
     // Legacy A/B compare URL — parsed for one release, rewritten to
     // canonical `?capture=…&capture=…` on load by loadCompareDemo.
-    const { fileA, fileB, aliases, legends } = parsePair(_demoA, _demoB);
+    const { fileA, fileB, legends } = parsePair(_demoA, _demoB);
     splashLabel = `${legends?.baseline || fileA} vs ${legends?.experiment || fileB}`;
     m.mount(document.body, Root);
-    loadCompareDemo(fileA, fileB, legends, aliases, _category);
+    loadCompareDemo(fileA, fileB, legends, _category);
 } else if (_demoParam !== null) {
     splashLabel = _demoParam || 'demo.parquet';
     m.mount(document.body, Root);
