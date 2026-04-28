@@ -264,6 +264,12 @@ const bootstrap = async () => {
     } catch (_) { /* assume loaded file mode */ }
 
     await fetchBackendState();
+    try {
+        const sectionsResponse = await ViewerApi.getSections();
+        bootstrapSharedSections(sectionsResponse?.data?.sections || []);
+    } catch (_) {
+        bootstrapSharedSections([]);
+    }
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
     }
