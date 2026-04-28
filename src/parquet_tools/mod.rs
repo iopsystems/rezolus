@@ -55,6 +55,30 @@ pub fn command() -> Command {
                         .help("Directory containing service extension template JSON files")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("node")
+                        .long("node")
+                        .value_name("NAME")
+                        .help("Set the node attribute on this parquet file")
+                        .value_parser(value_parser!(String))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("source")
+                        .long("source")
+                        .value_name("NAME")
+                        .help("Set the source attribute (use with --overwrite to replace an existing one)")
+                        .value_parser(value_parser!(String))
+                        .action(clap::ArgAction::Set)
+                        .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("overwrite")
+                        .long("overwrite")
+                        .help("Allow --source to replace an existing source value")
+                        .action(clap::ArgAction::SetTrue)
+                        .requires("source"),
                 ),
         )
         .subcommand(
