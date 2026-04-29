@@ -138,8 +138,11 @@ pub fn build_dashboard_context(
 
 /// Render a single dashboard section by route. Returns `None` for an
 /// unknown route — callers (the viewer) treat this as a 404.
+///
+/// Filesize is not applied — callers that want a filesize on the response
+/// should call `view.set_filesize(...)` themselves.
 pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Option<View> {
-    let mut view = if route == "/overview" {
+    let view = if route == "/overview" {
         overview::generate(
             data,
             ctx.sections.clone(),
@@ -174,9 +177,6 @@ pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Opt
         return None;
     };
 
-    if let Some(size) = ctx.filesize {
-        view.set_filesize(size);
-    }
     Some(view)
 }
 
@@ -200,7 +200,14 @@ pub fn generate(
     // mirror the original layout: `<route-without-leading-slash>.json`,
     // with `/` preserved in service routes (e.g. `service/vllm.json`).
     for section in &ctx.sections {
-        if let Some(view) = generate_section(data, &section.route, &ctx) {
+        if let Some(mut view) = generate_section(data, &section.route, &ctx) {
+            // Match old behavior: filesize only on overview + SECTION_META routes,
+            // not on service/category routes.
+            let is_legacy_filesize_route = section.route == "/overview"
+                || SECTION_META.iter().any(|(_, r, _)| *r == section.route);
+            if let (Some(size), true) = (filesize, is_legacy_filesize_route) {
+                view.set_filesize(size);
+            }
             let key = format!("{}.json", &section.route[1..]);
             rendered.insert(key, serde_json::to_string(&view).unwrap());
         }
@@ -465,5 +472,29 @@ mod tests {
             vllm_count, 1,
             "expected one /service/vllm entry in nav, got {vllm_count}"
         );
+    }
+
+    #[test]
+    fn shim_filesize_applied_only_to_legacy_routes() {
+        // Build a context with a service ext so the shim renders a /service/<name> route.
+        let svc_json = r#"{"service_name":"vllm","service_metadata":{},"slo":null,"kpis":[]}"#;
+        let svc_ext: ServiceExtension = serde_json::from_str(svc_json).unwrap();
+        let data = Tsdb::default();
+        #[allow(deprecated)]
+        let rendered = generate(&data, Some(12_345), &[("vllm", &svc_ext)], None, None);
+
+        // overview and stock sections carry filesize.
+        let overview: serde_json::Value =
+            serde_json::from_str(rendered.get("overview.json").unwrap()).unwrap();
+        assert_eq!(overview["filesize"], serde_json::json!(12_345));
+
+        let cpu: serde_json::Value =
+            serde_json::from_str(rendered.get("cpu.json").unwrap()).unwrap();
+        assert_eq!(cpu["filesize"], serde_json::json!(12_345));
+
+        // Service routes do NOT carry filesize (preserves pre-Phase-2 behavior).
+        let svc: serde_json::Value =
+            serde_json::from_str(rendered.get("service/vllm.json").unwrap()).unwrap();
+        assert!(svc.get("filesize").is_none(), "service view leaked filesize");
     }
 }
