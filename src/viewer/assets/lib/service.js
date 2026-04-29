@@ -174,16 +174,26 @@ const createServiceRoutes = (deps) => {
         '/service/:serviceName/chart/:chartId': {
             onmatch(params) {
                 const svcKey = `service/${params.serviceName}`;
+                const sectionRoute = `/service/${params.serviceName}`;
 
                 const makeView = () => ({
                     view() {
                         const data = sectionResponseCache[svcKey];
-                        if (!data) return m('div', 'Loading...');
+                        const sections = readSections(data || {});
+                        const activeSection = sections.find(s => s.route === sectionRoute)
+                            || { name: params.serviceName, route: sectionRoute };
+                        if (!data) {
+                            return m('div#splash', m('div.card', [
+                                m('h1', activeSection.name),
+                                m('p.subtitle', 'Loading…'),
+                                m('div.progress-bar',
+                                    m('div.progress-fill.indeterminate'),
+                                ),
+                            ]));
+                        }
                         const viewData = hydrateSections(data);
-                        const activeSection = readSections(viewData)
-                            .find(s => s.route === `/service/${params.serviceName}`);
                         return m('div', [
-                            m(TopNav, topNavAttrs(viewData, activeSection?.route, { compareMode: readCompareMode() })),
+                            m(TopNav, topNavAttrs(viewData, activeSection.route, { compareMode: readCompareMode() })),
                             m('main.single-chart-main', [
                                 m(SingleChartView, {
                                     data: viewData,
@@ -195,12 +205,15 @@ const createServiceRoutes = (deps) => {
                     },
                 });
 
-                if (sectionResponseCache[svcKey]) {
-                    return makeView();
+                // Resolve synchronously regardless of cache state so the
+                // previous section's chart canvases unmount immediately
+                // and the splash placeholder renders without a stall.
+                if (!sectionResponseCache[svcKey]) {
+                    loadSection(svcKey)
+                        .then(() => m.redraw())
+                        .catch((err) => recoverFromMissingSection(svcKey, err));
                 }
-                return loadSection(svcKey)
-                    .then(() => makeView())
-                    .catch((err) => recoverFromMissingSection(svcKey, err));
+                return makeView();
             },
         },
         '/service/:serviceName': {
@@ -214,15 +227,25 @@ const createServiceRoutes = (deps) => {
                 }
 
                 const svcKey = `service/${params.serviceName}`;
+                const sectionRoute = `/service/${params.serviceName}`;
 
                 const makeView = () => ({
                     view() {
                         const data = sectionResponseCache[svcKey];
-                        if (!data) return m('div', 'Loading...');
+                        const sections = readSections(data || {});
+                        const activeSection = sections.find(
+                            (section) => section.route === sectionRoute,
+                        ) || { name: params.serviceName, route: sectionRoute };
+                        if (!data) {
+                            return m('div#splash', m('div.card', [
+                                m('h1', activeSection.name),
+                                m('p.subtitle', 'Loading…'),
+                                m('div.progress-bar',
+                                    m('div.progress-fill.indeterminate'),
+                                ),
+                            ]));
+                        }
                         const viewData = hydrateSections(data);
-                        const activeSection = readSections(viewData).find(
-                            (section) => section.route === `/service/${params.serviceName}`,
-                        );
                         return m(Main, {
                             ...viewData,
                             activeSection,
@@ -231,16 +254,19 @@ const createServiceRoutes = (deps) => {
                     },
                 });
 
-                if (sectionResponseCache[svcKey]) {
-                    return makeView();
+                // Resolve synchronously: same rationale as in app.js's
+                // '/:section' route — keep chart unmount and splash on the
+                // hot path.
+                if (!sectionResponseCache[svcKey]) {
+                    loadSection(svcKey)
+                        .then((data) => {
+                            const sections = readSections(data);
+                            if (sections.length > 0) preloadSections(sections);
+                            m.redraw();
+                        })
+                        .catch((err) => recoverFromMissingSection(svcKey, err));
                 }
-                return loadSection(svcKey)
-                    .then((data) => {
-                        const sections = readSections(data);
-                        if (sections.length > 0) preloadSections(sections);
-                        return makeView();
-                    })
-                    .catch((err) => recoverFromMissingSection(svcKey, err));
+                return makeView();
             },
         },
     };
