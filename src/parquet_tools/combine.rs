@@ -1296,7 +1296,10 @@ mod tests {
             .unwrap();
         let m1_field = schema.field_with_name(&m1_name).unwrap();
         // Original source metadata is preserved, NOT overwritten with "rezolus"
-        assert_eq!(m1_field.metadata().get("source").unwrap(), "original-source");
+        assert_eq!(
+            m1_field.metadata().get("source").unwrap(),
+            "original-source"
+        );
     }
 
     #[test]
