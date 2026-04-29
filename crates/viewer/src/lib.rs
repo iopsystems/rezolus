@@ -32,7 +32,16 @@ pub fn init() {
 pub struct Viewer {
     engine: QueryEngine<Arc<Tsdb>>,
     file_metadata: std::collections::HashMap<String, String>,
-    dashboard_sections: std::collections::HashMap<String, String>,
+    /// Lazy section context. Populated by `init_templates` (single
+    /// capture) or `WasmCaptureRegistry::regenerate_combined` (compare
+    /// mode). When no templates are loaded, this is `Default` (empty
+    /// nav), and `get_sections` returns `"[]"`.
+    context: dashboard::dashboard::DashboardContext,
+    /// Memoized rendered bodies keyed by route stem (e.g. `"cpu"`,
+    /// `"service/vllm"`). RefCell because WASM is single-threaded and
+    /// the wasm-bindgen surface keeps `get_section` as `&self` to avoid
+    /// churning the JS-side method binding.
+    cached_bodies: std::cell::RefCell<std::collections::HashMap<String, serde_json::Value>>,
     /// Display alias for this capture, when the JS caller supplied
     /// one (e.g. via an `alias=path` static-site URL param). None
     /// means the UI falls back to the capture id.
@@ -82,14 +91,14 @@ impl Viewer {
         tsdb.set_filename(filename.to_string());
 
         let file_metadata = tsdb.file_metadata().clone();
-        #[allow(deprecated)]
-        let dashboard_sections = dashboard::dashboard::generate(&tsdb, None, &[], None, None);
+        let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
         let engine = QueryEngine::new(Arc::new(tsdb));
 
         Ok(Viewer {
             engine,
             file_metadata,
-            dashboard_sections,
+            context,
+            cached_bodies: std::cell::RefCell::new(std::collections::HashMap::new()),
             alias: None,
         })
     }
@@ -269,16 +278,13 @@ impl Viewer {
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
 
-        #[allow(deprecated)]
-        {
-            self.dashboard_sections = dashboard::dashboard::generate(
-                self.engine.tsdb(),
-                None,
-                &service_refs,
-                None, // single-capture: no category
-                None,
-            );
-        }
+        let context = dashboard::dashboard::build_dashboard_context(
+            None,
+            &service_refs,
+            None, // single-capture: no category
+        );
+        self.context = context;
+        self.cached_bodies.borrow_mut().clear();
         Ok(())
     }
 
@@ -332,28 +338,50 @@ impl Viewer {
 
     /// Returns the sections list as a JSON array.
     pub fn get_sections(&self) -> String {
-        if let Some(json) = self.dashboard_sections.values().next() {
-            if let Ok(view) = serde_json::from_str::<serde_json::Value>(json) {
-                if let Some(sections) = view.get("sections") {
-                    return sections.to_string();
-                }
-            }
-        }
-        "[]".to_string()
+        serde_json::to_string(&self.context.sections).unwrap_or_else(|_| "[]".to_string())
     }
 
     /// Returns the full View JSON for a dashboard section. The shared
     /// `sections` navigation array is stripped on the way out — callers
     /// fetch it once via `get_sections()`.
     pub fn get_section(&self, key: &str) -> Option<String> {
-        let raw = self
-            .dashboard_sections
-            .get(&format!("{key}.json"))
-            .or_else(|| self.dashboard_sections.get(key))?;
-        let mut value: serde_json::Value = serde_json::from_str(raw).ok()?;
+        // Frontend may pass `"cpu"` or `"cpu.json"` — normalize to the
+        // bare route stem the cache uses.
+        let stem = key.strip_suffix(".json").unwrap_or(key);
+        let route = format!("/{stem}");
+
+        // Cache hit?
+        if let Some(value) = self.cached_bodies.borrow().get(stem).cloned() {
+            return serialize_lean_section(value);
+        }
+
+        // Render on demand. The engine owns the Arc<Tsdb> so we can pass
+        // `self.engine.tsdb()` as `&Tsdb`.
+        let mut view = dashboard::dashboard::generate_section(
+            self.engine.tsdb(),
+            &route,
+            &self.context,
+        )?;
+        if let Some(size) = self.context.filesize {
+            view.set_filesize(size);
+        }
+        let mut value = serde_json::to_value(&view).ok()?;
+
+        // Cache the FULL value (with sections) so a future re-render of
+        // the same route can serve from cache without re-calling
+        // generate_section. Strip on the way out so the frontend never
+        // sees the embedded sections array.
+        self.cached_bodies
+            .borrow_mut()
+            .insert(stem.to_string(), value.clone());
         strip_sections_from_section_body(&mut value);
         serde_json::to_string(&value).ok()
     }
+}
+
+fn serialize_lean_section(mut value: serde_json::Value) -> Option<String> {
+    strip_sections_from_section_body(&mut value);
+    serde_json::to_string(&value).ok()
 }
 
 /// Registry wrapping up to two `Viewer` instances keyed by capture id
@@ -453,17 +481,17 @@ impl WasmCaptureRegistry {
             .init_templates(templates_json)
     }
 
-    /// Regenerate BOTH viewers' `dashboard_sections` using service
+    /// Regenerate BOTH viewers' lazy `DashboardContext` using service
     /// extensions from BOTH attached captures and the explicitly named
     /// category template (when provided). When the experiment slot is
     /// empty, this is a no-op (the per-capture `init_templates` call
     /// already populated baseline's sections).
     ///
-    /// Both slots get the same combined map: compare-mode chart fetches
-    /// query both slots for the active section route, so a category
-    /// route like `/service/inference-library` must resolve in the
-    /// experiment slot too — otherwise the experiment fetch 404s and
-    /// the chart surfaces "Error: null".
+    /// Both slots get the same combined `DashboardContext`: compare-mode
+    /// chart fetches query both slots for the active section route, so
+    /// a category route like `/service/inference-library` must resolve
+    /// in the experiment slot too — otherwise the experiment fetch
+    /// 404s and the chart surfaces "Error: null".
     ///
     /// `category_name` activates category mode when each detected
     /// source appears in the category template's `members` list. When
@@ -536,19 +564,18 @@ impl WasmCaptureRegistry {
             None => None,
         };
 
-        #[allow(deprecated)]
-        let combined = dashboard::dashboard::generate(
-            self.baseline.as_ref().unwrap().engine.tsdb(),
+        let context = dashboard::dashboard::build_dashboard_context(
             None,
             &service_refs,
             category,
-            None,
         );
         if let Some(baseline) = self.baseline.as_mut() {
-            baseline.dashboard_sections = combined.clone();
+            baseline.context = context.clone();
+            baseline.cached_bodies.borrow_mut().clear();
         }
         if let Some(experiment) = self.experiment.as_mut() {
-            experiment.dashboard_sections = combined;
+            experiment.context = context;
+            experiment.cached_bodies.borrow_mut().clear();
         }
         Ok(())
     }
@@ -771,5 +798,13 @@ mod tests {
         strip_sections_from_section_body(&mut value);
         assert!(value.get("sections").is_none());
         assert_eq!(value["groups"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn viewer_get_sections_empty_when_no_context() {
+        // Default context = no templates loaded = empty nav.
+        let ctx: dashboard::dashboard::DashboardContext = Default::default();
+        let json = serde_json::to_string(&ctx.sections).unwrap();
+        assert_eq!(json, "[]");
     }
 }

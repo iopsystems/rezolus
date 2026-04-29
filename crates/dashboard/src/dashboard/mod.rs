@@ -36,7 +36,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
 /// Owned context produced by `build_dashboard_context`. Carries
 /// everything `generate_section` needs to render any single section on
 /// demand without re-deriving the dedup / category-fallback logic.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DashboardContext {
     /// Navigation list including overview, stock sections, and any
     /// service / category sections — same order as what the eager
