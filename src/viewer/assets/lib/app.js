@@ -709,11 +709,14 @@ const initDashboard = (config = {}) => {
                     },
                 });
 
-                if (sectionResponseCache[sectionKey]) {
-                    return makeSingleChartView();
+                // Resolve synchronously regardless of cache state — see
+                // the matching comment in '/:section' below for rationale.
+                if (!sectionResponseCache[sectionKey]) {
+                    loadSection(sectionKey)
+                        .then(() => m.redraw())
+                        .catch(() => {});
                 }
-
-                return loadSection(sectionKey).then(() => makeSingleChartView());
+                return makeSingleChartView();
             },
         },
         ...createServiceRoutes({
@@ -820,40 +823,41 @@ const initDashboard = (config = {}) => {
                     },
                 });
 
-                if (sectionResponseCache[params.section]) {
-                    if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
-                        fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
-                    }
-                    return cachedView(params.section, requestedPath);
+                // Resolve the route synchronously even on a cache miss so
+                // the old section's DOM unmounts immediately (firing each
+                // chart's onremove → echart.dispose()). cachedView falls
+                // back to a "Loading…" placeholder while data is in flight,
+                // which gets replaced by the populated view via m.redraw()
+                // once loadSection settles.
+                if (!sectionResponseCache[params.section]) {
+                    loadSection(params.section)
+                        .then((data) => {
+                            if (data?.sections) preloadSections(data.sections);
+                            if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                                fetchSectionHeatmapData(requestedPath, data.groups);
+                            }
+                            m.redraw();
+                        })
+                        .catch((err) => {
+                            // Stale URL pointing at a missing section. Drop
+                            // back to the dashboard's default route instead
+                            // of letting the "Unknown section" error bubble.
+                            // If defaultRoute itself points at the failing
+                            // section (can happen when serviceInstances and
+                            // dashboard_sections disagree on naming), fall
+                            // through to /overview to avoid bouncing into
+                            // the same broken route.
+                            console.warn(`[viewer] section ${params.section} not available; redirecting`, err);
+                            const failingRoute = `/${params.section}`;
+                            const target = defaultRoute === failingRoute ? '/overview' : defaultRoute;
+                            if (target && target !== m.route.get()) {
+                                m.route.set(target);
+                            }
+                        });
+                } else if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                    fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
                 }
-
-                return loadSection(params.section)
-                    .then((data) => {
-                        if (data?.sections) preloadSections(data.sections);
-                        if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
-                            fetchSectionHeatmapData(requestedPath, data.groups);
-                        }
-                        return cachedView(params.section, requestedPath);
-                    })
-                    .catch((err) => {
-                        // Stale URL pointing at a missing section. Drop
-                        // back to the dashboard's default route instead
-                        // of letting the "Unknown section" error bubble.
-                        // If defaultRoute itself points at the failing
-                        // section (can happen when serviceInstances and
-                        // dashboard_sections disagree on naming), fall
-                        // through to /overview to avoid bouncing into
-                        // the same broken route — m.route.get() returns
-                        // the last successfully resolved path, which
-                        // never advances when every onmatch rejects.
-                        console.warn(`[viewer] section ${params.section} not available; redirecting`, err);
-                        const failingRoute = `/${params.section}`;
-                        const target = defaultRoute === failingRoute ? '/overview' : defaultRoute;
-                        if (target && target !== m.route.get()) {
-                            m.route.set(target);
-                        }
-                        return new Promise(function () {});
-                    });
+                return cachedView(params.section, requestedPath);
             },
         },
     });
