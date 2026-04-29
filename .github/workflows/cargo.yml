@@ -101,6 +101,65 @@ jobs:
           rustup component add rustfmt
           cargo fmt --all -- --check
 
+  # WASM viewer is wasm32-only and excluded from the regular build
+  # matrix above. Two checks run here on every PR:
+  #
+  #   1. Rebuild from source via crates/viewer/build.sh so a
+  #      Rust-side breakage in crates/viewer/ surfaces at PR time.
+  #
+  #   2. Structurally validate the *committed* WASM that will ship
+  #      to rezolus.com. The static-site deploy in pages.yml copies
+  #      site/viewer/pkg/wasm_viewer_bg.wasm verbatim, so a bad
+  #      committed artifact lands in production. Building locally
+  #      with the wrong binaryen silently produces a broken WASM —
+  #      e.g. binaryen 108 mis-orders the externref table so the
+  #      `__wbindgen_externrefs` export points at the locked
+  #      funcref table, and the JS shim then fails at instantiation
+  #      with `Table.grow(): failed to grow table by 4`. This step
+  #      catches that specific failure mode regardless of which
+  #      toolchain produced the committed bytes.
+  wasm-viewer:
+    name: wasm-viewer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version ^0.14 --locked
+      - name: Install wabt
+        run: sudo apt-get update && sudo apt-get -y install wabt
+      - name: Validate committed WASM structure
+        run: |
+          wasm=site/viewer/pkg/wasm_viewer_bg.wasm
+          # Find which table index the JS shim's externref slot is
+          # exported from, then confirm that table is actually an
+          # externref table. binaryen 108 swaps these and routes the
+          # export at the locked funcref table.
+          export_idx=$(wasm-objdump -x "$wasm" \
+            | grep -E '__wbindgen_externrefs' \
+            | grep -oE 'table\[[0-9]+\]' \
+            | head -1 \
+            | grep -oE '[0-9]+')
+          if [ -z "$export_idx" ]; then
+            echo "::error file=$wasm::no __wbindgen_externrefs export found"
+            exit 1
+          fi
+          target_table=$(wasm-objdump -x "$wasm" | grep -E "^ - table\\[$export_idx\\] type=")
+          if ! echo "$target_table" | grep -q externref; then
+            echo "::error file=$wasm::__wbindgen_externrefs is exported from table[$export_idx], which is not an externref table."
+            echo ""
+            wasm-objdump -x "$wasm" | grep -E '^ - table\[|__wbindgen_externrefs' | sed 's/^/    /'
+            echo ""
+            echo "Rebuild with the canonical toolchain: ./crates/viewer/build.sh"
+            echo "(needs wasm-pack >= 0.14, which pins binaryen 117)."
+            exit 1
+          fi
+      - name: Rebuild WASM viewer
+        run: ./crates/viewer/build.sh
+
   setup:
     name: setup
     runs-on: ubuntu-latest
