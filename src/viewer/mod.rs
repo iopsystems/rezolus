@@ -472,14 +472,8 @@ pub fn run(config: Config) {
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
             let state = AppState::new(tsdb, registry.clone());
-            let rendered = dashboard::dashboard::generate(
-                &state.baseline_tsdb().read(),
-                None,
-                &[],
-                None,
-                None,
-            );
-            *state.sections.write() = build_section_store_from_rendered(rendered);
+            let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
+            *state.sections.write() = LazySectionStore::new(context);
             state.live.store(true, Ordering::Relaxed);
 
             state.captures.set_baseline_systeminfo(agent_systeminfo);
@@ -653,87 +647,69 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
         .expect("failed to run http server");
 }
 
-/// Caches the navigation `sections` list separately from per-section JSON
-/// bodies, so the `/api/v1/sections` route can read the nav list without
-/// materializing any section body, and `/data/<section>.json` can read
-/// (or generate) just the requested body.
+/// Caches the navigation list (via the owned `DashboardContext`) and
+/// memoizes per-section JSON bodies, so the `/api/v1/sections` route
+/// reads the nav list without materializing any section body, and
+/// `/data/<section>.json` generates a body on first request and serves
+/// the cached value thereafter.
 struct LazySectionStore {
-    sections: Vec<serde_json::Value>,
-    section_bodies: std::collections::HashMap<String, serde_json::Value>,
+    context: dashboard::dashboard::DashboardContext,
+    /// Memoized rendered bodies keyed by the route key the frontend
+    /// requests, e.g. `cpu.json`, `service/vllm.json`. Filesize is
+    /// already applied uniformly across all routes — Phase 2 dropped
+    /// the shim's old "filesize on stock routes only" carve-out.
+    cached_bodies: HashMap<String, serde_json::Value>,
 }
 
 impl LazySectionStore {
-    fn new(sections: Vec<serde_json::Value>) -> Self {
+    fn new(context: dashboard::dashboard::DashboardContext) -> Self {
         Self {
-            sections,
-            section_bodies: std::collections::HashMap::new(),
+            context,
+            cached_bodies: HashMap::new(),
         }
     }
 
-    fn sections(&self) -> &[serde_json::Value] {
-        &self.sections
+    /// The navigation list. Borrowed directly from the context.
+    fn sections(&self) -> &[dashboard::Section] {
+        &self.context.sections
     }
 
-    fn section(&self, key: &str) -> Option<&serde_json::Value> {
-        self.section_bodies.get(key)
-    }
-
-    fn insert_section(&mut self, key: &str, value: serde_json::Value) {
-        self.section_bodies.insert(key.to_string(), value);
-    }
-
-    /// Returns true when no nav list has been loaded yet — used by the
-    /// `mode` endpoint to advertise the "we don't have data yet" state
-    /// for live and upload-only modes pre-first-refresh.
+    /// True when no context has been loaded — used by the `mode`
+    /// endpoint to advertise the not-yet-loaded state.
     fn is_empty(&self) -> bool {
-        self.sections.is_empty()
+        self.context.sections.is_empty()
     }
 
-    /// Returns any cached section body, used by `sections_metadata` to
-    /// recover the global params (source, version, filename, ...) that
-    /// are currently embedded in every section payload.
-    fn any_body(&self) -> Option<&serde_json::Value> {
-        self.section_bodies.values().next()
+    /// Read-only access to the context (for `sections_metadata` to read
+    /// filesize and other shared params).
+    fn context(&self) -> &dashboard::dashboard::DashboardContext {
+        &self.context
+    }
+
+    /// Generate (or return the cached body for) `route`. Looks up
+    /// `route` of the form `/<route>` (e.g. `/cpu`, `/service/vllm`,
+    /// `/overview`). Returns `None` if the route is unknown OR the
+    /// section has no data. Applies `context.filesize` uniformly to
+    /// every rendered View.
+    fn get_or_generate(&mut self, route: &str, data: &Tsdb) -> Option<&serde_json::Value> {
+        // route always starts with '/', so &route[1..] is the stem.
+        let key = format!("{}.json", &route[1..]);
+        if !self.cached_bodies.contains_key(&key) {
+            let mut view = dashboard::dashboard::generate_section(data, route, &self.context)?;
+            if let Some(size) = self.context.filesize {
+                view.set_filesize(size);
+            }
+            let value = serde_json::to_value(&view).ok()?;
+            self.cached_bodies.insert(key.clone(), value);
+        }
+        self.cached_bodies.get(&key)
     }
 }
 
 impl Default for LazySectionStore {
     fn default() -> Self {
-        Self::new(Vec::new())
+        Self::new(dashboard::dashboard::DashboardContext::default())
     }
-}
-
-/// Adapt the `dashboard::dashboard::generate` output (a HashMap of route
-/// -> serialized JSON body) into a `LazySectionStore`. The nav list is
-/// recovered from the embedded `sections` array of any body — overview
-/// is canonical but any body works because they all carry the same nav.
-/// Bodies that fail to parse are logged and skipped.
-fn build_section_store_from_rendered(rendered: HashMap<String, String>) -> LazySectionStore {
-    let mut bodies: HashMap<String, serde_json::Value> = HashMap::new();
-    for (key, body) in rendered {
-        match serde_json::from_str::<serde_json::Value>(&body) {
-            Ok(v) => {
-                bodies.insert(key, v);
-            }
-            Err(e) => {
-                warn!("section cache parse failed for {key}: {e}");
-            }
-        }
-    }
-
-    let nav = bodies
-        .get("overview.json")
-        .or_else(|| bodies.values().next())
-        .and_then(|v| v.get("sections"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut store = LazySectionStore::new(nav);
-    for (key, value) in bodies {
-        store.insert_section(&key, value);
-    }
-    store
 }
 
 struct AppState {
@@ -797,80 +773,53 @@ impl AppState {
     }
 
     /// Build the navigation + global params payload for the
-    /// `/api/v1/sections` endpoint. Reads the navigation list directly
-    /// from the `LazySectionStore`, and the global params (source,
-    /// version, filename, interval, filesize, time bounds, num_series)
-    /// from any cached section body — those globals are still embedded
-    /// per-body today. When no section is cached yet — e.g. live mode
-    /// before the first refresh, or upload-only mode pre-upload —
-    /// returns a minimal payload with an empty sections array so the
-    /// frontend never sees a 5xx for the "we just don't have data yet"
-    /// case.
+    /// `/api/v1/sections` endpoint. The navigation list comes from the
+    /// `LazySectionStore`'s `DashboardContext`; the global params come
+    /// from the TSDB itself (filesize from the context). When no
+    /// context has been loaded yet — e.g. live mode before the first
+    /// refresh, or upload-only mode pre-upload — returns a minimal
+    /// payload with an empty sections array and zeroed numeric fields
+    /// so the frontend never sees a 5xx for the "we just don't have
+    /// data yet" case.
     ///
-    /// The `capture` argument is currently advisory: the cached section
-    /// bodies are produced by `regenerate_dashboards`, which today
-    /// generates a single section map keyed only by route. The same
-    /// nav list applies to both baseline and experiment, so we ignore
-    /// the id rather than silently 404 on `?capture=experiment`.
+    /// The `capture` argument is currently advisory: the same nav list
+    /// applies to both baseline and experiment, so we ignore the id
+    /// rather than silently 404 on `?capture=experiment`.
     fn sections_metadata(&self, _capture: CaptureId) -> serde_json::Value {
-        let sections_guard = self.sections.read();
+        let store = self.sections.read();
+        let sections_array: Vec<serde_json::Value> = store
+            .sections()
+            .iter()
+            .map(|s| serde_json::to_value(s).unwrap_or_default())
+            .collect();
+        let filesize = store.context().filesize.unwrap_or(0);
+        drop(store);
 
-        let sections_array: Vec<serde_json::Value> = sections_guard.sections().to_vec();
-
-        // Pull the global params off any cached body. They're
-        // duplicated per-body today; a future task can promote them
-        // onto the store directly.
-        let body = sections_guard.any_body().cloned();
-        drop(sections_guard);
-
-        let source = body
-            .as_ref()
-            .and_then(|v| v.get("source"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let version = body
-            .as_ref()
-            .and_then(|v| v.get("version"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let filename = body
-            .as_ref()
-            .and_then(|v| v.get("filename"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let interval = body
-            .as_ref()
-            .and_then(|v| v.get("interval"))
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let filesize = body
-            .as_ref()
-            .and_then(|v| v.get("filesize"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        // start_time/end_time are emitted by `View` as f64 (epoch ms), so
-        // `as_u64()` returns None even on whole-millisecond values. Read
-        // as f64 and truncate to the integer payload shape.
-        let start_time = body
-            .as_ref()
-            .and_then(|v| v.get("start_time"))
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u64)
-            .unwrap_or(0);
-        let end_time = body
-            .as_ref()
-            .and_then(|v| v.get("end_time"))
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u64)
-            .unwrap_or(0);
-        let num_series = body
-            .as_ref()
-            .and_then(|v| v.get("num_series"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let tsdb_handle = self.baseline_tsdb();
+        let data = tsdb_handle.read();
+        let interval = data.interval();
+        let source = data.source().to_string();
+        let version = data.version().to_string();
+        let filename = data.filename().to_string();
+        // Tsdb time_range is in nanoseconds; convert to milliseconds to
+        // match the View's convention.
+        let (start_time, end_time) = data
+            .time_range()
+            .map(|(min, max)| (min / 1_000_000, max / 1_000_000))
+            .unwrap_or((0, 0));
+        let num_series = {
+            let mut count = 0usize;
+            for name in data.counter_names() {
+                count += data.counter_labels(name).map_or(0, |l| l.len());
+            }
+            for name in data.gauge_names() {
+                count += data.gauge_labels(name).map_or(0, |l| l.len());
+            }
+            for name in data.histogram_names() {
+                count += data.histogram_labels(name).map_or(0, |l| l.len());
+            }
+            count
+        };
 
         build_sections_metadata_payload(
             sections_array,
@@ -1157,15 +1106,12 @@ fn regenerate_dashboards(state: &AppState) {
         .as_ref()
         .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
 
-    let rendered = dashboard::dashboard::generate(
-        &state.baseline_tsdb().read(),
+    let context = dashboard::dashboard::build_dashboard_context(
         filesize,
         &service_refs,
         category,
-        None,
     );
-
-    *state.sections.write() = build_section_store_from_rendered(rendered);
+    *state.sections.write() = LazySectionStore::new(context);
 }
 
 /// Extract service extension metadata from a parquet file.
@@ -1501,30 +1447,37 @@ async fn data(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    let sections = state.sections.read();
-    match sections.section(&path) {
-        Some(v) => {
-            // Strip the redundant nav `sections` array before sending to the
-            // frontend.  The cached body keeps it so that `sections_metadata`
-            // can still extract it (Task 4); we only remove it at response time.
-            let mut parsed = v.clone();
-            drop(sections);
-            strip_sections_from_section_payload(&mut parsed);
-            let body = match serde_json::to_string(&parsed) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("section re-serialization failed for {path}: {e}");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
-            };
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "application/json")],
-                body,
-            )
-                .into_response()
+    // path comes in as e.g. "cpu.json" or "service/vllm.json". Convert
+    // to the route form generate_section expects (e.g. "/cpu",
+    // "/service/vllm"). Tolerate a missing ".json" suffix gracefully.
+    let stem = path.strip_suffix(".json").unwrap_or(&path);
+    let route = format!("/{stem}");
+
+    let value = {
+        let tsdb_handle = state.baseline_tsdb();
+        let tsdb = tsdb_handle.read();
+        let mut store = state.sections.write();
+        store.get_or_generate(&route, &tsdb).cloned()
+    };
+
+    let Some(mut value) = value else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    // The lazy generator already produces lean bodies, but keep the
+    // strip as cheap insurance against accidental re-introduction.
+    strip_sections_from_section_payload(&mut value);
+    match serde_json::to_string(&value) {
+        Ok(body) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response(),
+        Err(e) => {
+            warn!("section response serialization failed for {path}: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
-        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -1869,7 +1822,8 @@ async fn upload_parquet(
     let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
     validate_service_extensions(&data, &mut service_exts);
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None, None);
+    let context =
+        dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None);
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
@@ -1878,7 +1832,7 @@ async fn upload_parquet(
         let mut tsdb = tsdb_handle.write();
         *tsdb = data;
     }
-    *state.sections.write() = build_section_store_from_rendered(rendered);
+    *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
     state
@@ -2070,7 +2024,7 @@ async fn connect_agent(
     tsdb.set_source(source.clone());
     tsdb.set_version(version.clone());
     tsdb.set_filename(url.to_string());
-    let rendered = dashboard::dashboard::generate(&tsdb, None, &[], None, None);
+    let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
 
     // Update shared state
     {
@@ -2078,7 +2032,7 @@ async fn connect_agent(
         let mut db = tsdb_handle.write();
         *db = tsdb;
     }
-    *state.sections.write() = build_section_store_from_rendered(rendered);
+    *state.sections.write() = LazySectionStore::new(context);
     state.captures.set_baseline_systeminfo(agent_systeminfo);
     state.live.store(true, Ordering::Relaxed);
 
@@ -2444,16 +2398,32 @@ mod tests {
     }
 
     #[test]
-    fn lazy_section_store_caches_sections_separately_from_metadata() {
-        let mut store = LazySectionStore::new(vec![
-            serde_json::json!({"name": "Overview", "route": "/overview"}),
-        ]);
-        assert!(store.section("overview").is_none());
-        store.insert_section("overview", serde_json::json!({"groups": []}));
-        assert_eq!(
-            store.section("overview").unwrap()["groups"],
-            serde_json::json!([])
-        );
-        assert_eq!(store.sections().len(), 1);
+    fn lazy_section_store_exposes_context_sections() {
+        use dashboard::dashboard::DashboardContext;
+        use dashboard::Section;
+
+        let context = DashboardContext {
+            sections: vec![
+                Section {
+                    name: "Overview".to_string(),
+                    route: "/overview".to_string(),
+                },
+                Section {
+                    name: "CPU".to_string(),
+                    route: "/cpu".to_string(),
+                },
+            ],
+            ..DashboardContext::default()
+        };
+        let store = LazySectionStore::new(context);
+        assert_eq!(store.sections().len(), 2);
+        assert!(!store.is_empty());
+    }
+
+    #[test]
+    fn lazy_section_store_default_is_empty() {
+        let store = LazySectionStore::default();
+        assert!(store.is_empty());
+        assert_eq!(store.sections().len(), 0);
     }
 }

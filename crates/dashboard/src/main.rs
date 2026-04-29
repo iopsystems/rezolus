@@ -7,13 +7,23 @@
 //! With a directory argument, writes each section as a pretty-printed JSON file.
 
 use dashboard::Tsdb;
-use dashboard::dashboard::generate;
+use dashboard::dashboard::{build_dashboard_context, generate_section};
 use std::collections::HashMap;
 
 fn main() {
     let output_dir = std::env::args().nth(1);
 
-    let rendered: HashMap<String, String> = generate(&Tsdb::default(), None, &[], None, None);
+    // Render every section in the navigation list. The lazy API replaces
+    // the old eager `generate` shim — same coverage, just hand-walked.
+    let data = Tsdb::default();
+    let ctx = build_dashboard_context(None, &[], None);
+    let mut rendered: HashMap<String, String> = HashMap::new();
+    for section in &ctx.sections {
+        if let Some(view) = generate_section(&data, &section.route, &ctx) {
+            let key = format!("{}.json", &section.route[1..]);
+            rendered.insert(key, serde_json::to_string(&view).unwrap());
+        }
+    }
 
     match output_dir {
         Some(dir) => write_to_dir(&dir, &rendered),
