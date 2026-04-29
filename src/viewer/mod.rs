@@ -853,15 +853,20 @@ impl AppState {
             .and_then(|v| v.get("filesize"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        // start_time/end_time are emitted by `View` as f64 (epoch ms), so
+        // `as_u64()` returns None even on whole-millisecond values. Read
+        // as f64 and truncate to the integer payload shape.
         let start_time = body
             .as_ref()
             .and_then(|v| v.get("start_time"))
-            .and_then(|v| v.as_u64())
+            .and_then(|v| v.as_f64())
+            .map(|v| v as u64)
             .unwrap_or(0);
         let end_time = body
             .as_ref()
             .and_then(|v| v.get("end_time"))
-            .and_then(|v| v.as_u64())
+            .and_then(|v| v.as_f64())
+            .map(|v| v as u64)
             .unwrap_or(0);
         let num_series = body
             .as_ref()
