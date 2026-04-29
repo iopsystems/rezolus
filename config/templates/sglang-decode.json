@@ -18,20 +18,6 @@
       "unit_system": "count"
     },
     {
-      "role": "load",
-      "title": "KV Cache Utilization",
-      "query": "sglang_token_usage",
-      "type": "gauge",
-      "unit_system": "percentage"
-    },
-    {
-      "role": "load",
-      "title": "Tokens In KV Cache",
-      "query": "sglang_num_used_tokens",
-      "type": "gauge",
-      "unit_system": "count"
-    },
-    {
       "role": "throughput",
       "title": "Generation Token Rate",
       "query": "sum(irate(sglang_generation_tokens_total[5s]))",
@@ -41,31 +27,10 @@
     },
     {
       "role": "throughput",
-      "title": "Generation Throughput",
-      "query": "sum(sglang_gen_throughput)",
-      "type": "gauge",
-      "unit_system": "rate"
-    },
-    {
-      "role": "throughput",
       "title": "Request Completion Rate",
       "query": "sum(irate(sglang_num_requests_total[5s])) - sum(irate(sglang_num_aborted_requests_total[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
-    },
-    {
-      "role": "throughput",
-      "title": "Estimated Memory Read Bandwidth per GPU",
-      "query": "sum(irate(sglang_estimated_read_bytes_per_gpu_total[5s]))",
-      "type": "delta_counter",
-      "unit_system": "datarate"
-    },
-    {
-      "role": "throughput",
-      "title": "Estimated Memory Write Bandwidth per GPU",
-      "query": "sum(irate(sglang_estimated_write_bytes_per_gpu_total[5s]))",
-      "type": "delta_counter",
-      "unit_system": "datarate"
     },
     {
       "role": "error",
@@ -85,26 +50,8 @@
     },
     {
       "role": "latency",
-      "title": "Time per Output Token",
-      "query": "sglang_time_per_output_token_seconds",
-      "type": "histogram",
-      "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
-    },
-    {
-      "role": "latency",
-      "title": "Decode Forward Time",
+      "title": "Decode Time",
       "query": "sglang_per_stage_req_latency_seconds{stage=\"decode_forward\"}",
-      "type": "histogram",
-      "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
-    },
-    {
-      "role": "latency",
-      "title": "Decode Bootstrap Time",
-      "query": "sglang_per_stage_req_latency_seconds{stage=\"decode_bootstrap\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],

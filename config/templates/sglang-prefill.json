@@ -25,20 +25,6 @@
       "unit_system": "count"
     },
     {
-      "role": "load",
-      "title": "KV Cache Utilization",
-      "query": "sglang_token_usage",
-      "type": "gauge",
-      "unit_system": "percentage"
-    },
-    {
-      "role": "load",
-      "title": "Prefix Cache Hit Rate",
-      "query": "sglang_cache_hit_rate",
-      "type": "gauge",
-      "unit_system": "percentage"
-    },
-    {
       "role": "throughput",
       "title": "Prompt Token Rate",
       "query": "sum(irate(sglang_prompt_tokens_total[5s]))",
@@ -48,22 +34,8 @@
     },
     {
       "role": "throughput",
-      "title": "Cached Token Rate",
-      "query": "sum(irate(sglang_cached_tokens_total[5s]))",
-      "type": "delta_counter",
-      "unit_system": "rate"
-    },
-    {
-      "role": "throughput",
       "title": "Request Rate",
       "query": "sum(irate(sglang_num_requests_total[5s]))",
-      "type": "delta_counter",
-      "unit_system": "rate"
-    },
-    {
-      "role": "throughput",
-      "title": "Estimated FLOPS per GPU",
-      "query": "sum(irate(sglang_estimated_flops_per_gpu_total[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
@@ -85,17 +57,8 @@
     },
     {
       "role": "latency",
-      "title": "Prefill Forward Time",
+      "title": "Prefill Time",
       "query": "sglang_per_stage_req_latency_seconds{stage=\"prefill_forward\"}",
-      "type": "histogram",
-      "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
-    },
-    {
-      "role": "latency",
-      "title": "Bootstrap Queue Time",
-      "query": "sglang_per_stage_req_latency_seconds{stage=\"prefill_bootstrap\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
