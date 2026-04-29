@@ -779,52 +779,63 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
             }
         }
 
-        // Determine the sub-key within this source's group
-        let sub_key = if input.source == "rezolus" {
-            input.node.as_deref().unwrap_or("unknown").to_string()
-        } else {
-            input.instance.as_deref().unwrap_or("0").to_string()
-        };
+        // Determine the source names this input contributes to. If the
+        // input was an already-combined file with a single top-level set of
+        // metadata but a JSON-array `source`, expand it into one
+        // per_source_metadata entry per array element, duplicating the
+        // top-level fields (version, node, instance) into each.
+        let source_names: Vec<String> = serde_json::from_str::<Vec<String>>(&input.source)
+            .unwrap_or_else(|_| vec![input.source.clone()]);
 
-        let source_group = per_source
-            .entry(input.source.clone())
-            .or_insert_with(|| serde_json::json!({}));
-        let serde_json::Value::Object(group_map) = source_group else {
-            continue;
-        };
-        let entry = group_map
-            .entry(sub_key)
-            .or_insert_with(|| serde_json::json!({}));
-        let serde_json::Value::Object(map) = entry else {
-            continue;
-        };
-
-        // Move top-level version into per-source entry
-        if let Some(version) = input
+        let version = input
             .kv_metadata
             .iter()
             .find(|kv| kv.key == KEY_VERSION)
-            .and_then(|kv| kv.value.clone())
-        {
-            map.entry(NESTED_VERSION.to_string())
-                .or_insert(serde_json::Value::String(version));
-        }
+            .and_then(|kv| kv.value.clone());
 
-        // Store node or instance label in per-source metadata
-        if input.source == "rezolus" {
-            if let Some(ref node) = input.node {
-                map.entry(NESTED_NODE.to_string())
-                    .or_insert(serde_json::Value::String(node.clone()));
+        for source_name in &source_names {
+            // Determine the sub-key within this source's group
+            let sub_key = if source_name == "rezolus" {
+                input.node.as_deref().unwrap_or("unknown").to_string()
+            } else {
+                input.instance.as_deref().unwrap_or("0").to_string()
+            };
+
+            let source_group = per_source
+                .entry(source_name.clone())
+                .or_insert_with(|| serde_json::json!({}));
+            let serde_json::Value::Object(group_map) = source_group else {
+                continue;
+            };
+            let entry = group_map
+                .entry(sub_key)
+                .or_insert_with(|| serde_json::json!({}));
+            let serde_json::Value::Object(map) = entry else {
+                continue;
+            };
+
+            // Move top-level version into per-source entry
+            if let Some(ref version) = version {
+                map.entry(NESTED_VERSION.to_string())
+                    .or_insert(serde_json::Value::String(version.clone()));
             }
-        } else {
-            if let Some(ref instance) = input.instance {
-                map.entry(NESTED_INSTANCE.to_string())
-                    .or_insert(serde_json::Value::String(instance.clone()));
-            }
-            // Also store node for service files if present (informational — which host it ran on)
-            if let Some(ref node) = input.node {
-                map.entry(NESTED_NODE.to_string())
-                    .or_insert(serde_json::Value::String(node.clone()));
+
+            // Store node or instance label in per-source metadata
+            if source_name == "rezolus" {
+                if let Some(ref node) = input.node {
+                    map.entry(NESTED_NODE.to_string())
+                        .or_insert(serde_json::Value::String(node.clone()));
+                }
+            } else {
+                if let Some(ref instance) = input.instance {
+                    map.entry(NESTED_INSTANCE.to_string())
+                        .or_insert(serde_json::Value::String(instance.clone()));
+                }
+                // Also store node for service files if present (informational — which host it ran on)
+                if let Some(ref node) = input.node {
+                    map.entry(NESTED_NODE.to_string())
+                        .or_insert(serde_json::Value::String(node.clone()));
+                }
             }
         }
     }
@@ -1815,6 +1826,82 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(sources, expected);
+    }
+
+    #[test]
+    fn test_merge_metadata_expands_source_array_into_per_source() {
+        // Input file has `source` as a JSON array but only top-level metadata
+        // (no per_source_metadata). Combine should produce one
+        // per_source_metadata entry per array element, duplicating the
+        // top-level fields (version, node, instance) into each.
+        let (_t1, p1) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "m1",
+            &[Some(1), Some(2)],
+            "[\"rezolus\",\"llm-perf\"]",
+            "1000",
+            vec![
+                ("node", "web01"),
+                ("instance", "primary"),
+                ("version", "1.2.3"),
+            ],
+        );
+        let (_t2, p2) = make_test_file_with_metadata(
+            &[SEC, 2 * SEC],
+            "m2",
+            &[Some(3), Some(4)],
+            "rezolus",
+            "1000",
+            vec![("node", "web02")],
+        );
+
+        let inputs = vec![load(&p1), load(&p2)];
+        let kv = merge_metadata(&inputs).unwrap();
+
+        let psm_str = kv
+            .iter()
+            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+            .and_then(|kv| kv.value.as_deref())
+            .expect("per_source_metadata should exist");
+        let psm: serde_json::Value = serde_json::from_str(psm_str).unwrap();
+
+        // The array source "rezolus" element should land under web01
+        // (the top-level `node` of the array-source input).
+        let rez_web01 = psm
+            .get("rezolus")
+            .and_then(|g| g.get("web01"))
+            .expect("rezolus.web01 entry should exist");
+        assert_eq!(
+            rez_web01.get("version").and_then(|v| v.as_str()),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            rez_web01.get("node").and_then(|v| v.as_str()),
+            Some("web01")
+        );
+
+        // The array source "llm-perf" element should land under instance
+        // "primary" with the top-level fields duplicated.
+        let llm_primary = psm
+            .get("llm-perf")
+            .and_then(|g| g.get("primary"))
+            .expect("llm-perf.primary entry should exist");
+        assert_eq!(
+            llm_primary.get("version").and_then(|v| v.as_str()),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            llm_primary.get("instance").and_then(|v| v.as_str()),
+            Some("primary")
+        );
+        assert_eq!(
+            llm_primary.get("node").and_then(|v| v.as_str()),
+            Some("web01")
+        );
+
+        // The second input (single-source rezolus, web02) should still get
+        // its own entry alongside the expanded array source's web01.
+        assert!(psm.get("rezolus").and_then(|g| g.get("web02")).is_some());
     }
 
     #[test]

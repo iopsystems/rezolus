@@ -328,38 +328,75 @@ fn build_parquet_converter(
         converter = converter.metadata("descriptions".to_string(), json.clone());
     }
 
-    // per_source_metadata with first/last sample timestamps
-    let mut psm = serde_json::Map::new();
+    // A user-supplied --metadata source=... takes precedence over the
+    // endpoint's source. If the value parses as a JSON array the stream
+    // represents multiple logical sources and we emit one
+    // per_source_metadata entry per name.
+    let effective_source = config
+        .metadata
+        .iter()
+        .find(|(k, _)| k == "source")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or(ep.config.source.as_str());
+
+    if let Some(json) = build_per_source_metadata(
+        effective_source,
+        ep.first_success_ns,
+        ep.last_success_ns,
+        ep.config.role.as_deref(),
+    ) {
+        converter = converter.metadata("per_source_metadata".to_string(), json);
+    }
+
+    converter
+}
+
+/// Build the `per_source_metadata` JSON written by the recorder.
+///
+/// When `source` is a JSON array, each name in the array becomes an entry
+/// with the same per-source fields duplicated — a single endpoint
+/// represents all the listed sources, so the timing and role apply
+/// identically to every name.
+///
+/// Returns `None` when no per-source fields are available.
+fn build_per_source_metadata(
+    source: &str,
+    first_sample_ns: Option<u64>,
+    last_sample_ns: Option<u64>,
+    role: Option<&str>,
+) -> Option<String> {
     let mut source_meta = serde_json::Map::new();
-    if let Some(ns) = ep.first_success_ns {
+    if let Some(ns) = first_sample_ns {
         source_meta.insert(
             parquet_metadata::NESTED_FIRST_SAMPLE_NS.to_string(),
             serde_json::json!(ns),
         );
     }
-    if let Some(ns) = ep.last_success_ns {
+    if let Some(ns) = last_sample_ns {
         source_meta.insert(
             parquet_metadata::NESTED_LAST_SAMPLE_NS.to_string(),
             serde_json::json!(ns),
         );
     }
-    if let Some(ref role) = ep.config.role {
+    if let Some(role) = role {
         source_meta.insert(
             parquet_metadata::NESTED_ROLE.to_string(),
             serde_json::json!(role),
         );
     }
-    if !source_meta.is_empty() {
-        psm.insert(
-            ep.config.source.clone(),
-            serde_json::Value::Object(source_meta),
-        );
-        if let Ok(json) = serde_json::to_string(&psm) {
-            converter = converter.metadata("per_source_metadata".to_string(), json);
-        }
+
+    if source_meta.is_empty() {
+        return None;
     }
 
-    converter
+    let source_names: Vec<String> =
+        serde_json::from_str::<Vec<String>>(source).unwrap_or_else(|_| vec![source.to_string()]);
+
+    let mut psm = serde_json::Map::new();
+    for name in &source_names {
+        psm.insert(name.clone(), serde_json::Value::Object(source_meta.clone()));
+    }
+    serde_json::to_string(&psm).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -847,5 +884,63 @@ mod tests {
             output_dir(&PathBuf::from("out.parquet")),
             PathBuf::from(".")
         );
+    }
+
+    #[test]
+    fn test_build_per_source_metadata_single_source() {
+        let json =
+            build_per_source_metadata("rezolus", Some(100), Some(200), Some("service")).unwrap();
+        let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            psm["rezolus"]["first_sample_ns"].as_u64(),
+            Some(100),
+            "got: {psm}"
+        );
+        assert_eq!(psm["rezolus"]["last_sample_ns"].as_u64(), Some(200));
+        assert_eq!(psm["rezolus"]["role"].as_str(), Some("service"));
+        // Only one source entry
+        assert_eq!(psm.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_build_per_source_metadata_array_source_duplicates_fields() {
+        // When the source is a JSON array, one entry per source name is
+        // emitted with the same per-source fields duplicated.
+        let json = build_per_source_metadata(
+            "[\"rezolus\",\"llm-perf\"]",
+            Some(100),
+            Some(200),
+            Some("service"),
+        )
+        .unwrap();
+        let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for name in ["rezolus", "llm-perf"] {
+            assert_eq!(
+                psm[name]["first_sample_ns"].as_u64(),
+                Some(100),
+                "missing first_sample_ns for {name}"
+            );
+            assert_eq!(psm[name]["last_sample_ns"].as_u64(), Some(200));
+            assert_eq!(psm[name]["role"].as_str(), Some("service"));
+        }
+        assert_eq!(psm.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_build_per_source_metadata_returns_none_when_empty() {
+        // No per-source fields at all → no per_source_metadata.
+        assert!(build_per_source_metadata("rezolus", None, None, None).is_none());
+    }
+
+    #[test]
+    fn test_build_per_source_metadata_array_with_partial_fields() {
+        // Array source with only a subset of per-source fields populated.
+        let json = build_per_source_metadata("[\"a\",\"b\",\"c\"]", Some(50), None, None).unwrap();
+        let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for name in ["a", "b", "c"] {
+            assert_eq!(psm[name]["first_sample_ns"].as_u64(), Some(50));
+            assert!(psm[name].get("last_sample_ns").is_none());
+            assert!(psm[name].get("role").is_none());
+        }
     }
 }
