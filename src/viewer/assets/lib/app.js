@@ -176,6 +176,12 @@ const attachExperiment = async (file) => {
     experimentAttached = true;
     compareMode = true;
 
+    // Refresh the multi-node dropdown with the union of baseline +
+    // experiment nodes. Preserves the user's prior node selection when
+    // it still exists in the union.
+    applyMultiNodeInfo(expFileMeta);
+    clearViewerCaches();
+
     // Clamp a stale anchor when the newly-attached experiment is
     // shorter than the previously-saved offset. Avoids a chart starting
     // past the end of its data.
@@ -200,6 +206,10 @@ const detachExperiment = async () => {
     experimentAlias = null;
     experimentAttached = false;
     compareMode = false;
+
+    // Drop experiment-only nodes from the dropdown.
+    applyMultiNodeInfo(null);
+    clearViewerCaches();
     m.redraw();
 };
 
@@ -225,24 +235,48 @@ const clearViewerCaches = () => {
     chartsState.clear();
 };
 
-const applyMultiNodeInfo = () => {
+const applyMultiNodeInfo = (experimentFileMetadata = null) => {
+    const previousSelection = selectedNode;
+
     nodeList = [];
     nodeVersions = {};
     selectedNode = null;
     serviceInstances = {};
     selectedInstances = {};
 
-    if (!fileMetadata) return;
+    if (!fileMetadata) {
+        setSelectedNode(null);
+        return;
+    }
 
-    nodeList = fileMetadata.nodes || [];
+    // In compare mode, the dropdown shows the union of nodes from
+    // both captures. If the user picks a node that only exists on one
+    // side, that side renders empty rather than silently fanning out
+    // across all nodes — see buildEffectiveQuery's node injection on
+    // the cross-capture path.
+    const baselineNodes = fileMetadata.nodes || [];
+    const experimentNodes = experimentFileMetadata?.nodes || [];
+    const seen = new Set();
+    nodeList = [...baselineNodes, ...experimentNodes].filter((n) => {
+        if (seen.has(n)) return false;
+        seen.add(n);
+        return true;
+    });
     nodeVersions = fileMetadata.node_versions || {};
     serviceInstances = fileMetadata.service_instances || {};
 
     if (nodeList.length > 0) {
         const pinned = fileMetadata.pinned_node;
         const defaultNode = (pinned && nodeList.includes(pinned)) ? pinned : nodeList[0];
-        selectedNode = defaultNode;
-        setSelectedNode(defaultNode);
+        // Preserve the user's prior selection if it survives the union
+        // (e.g. attach/detach on the experiment side shouldn't reset).
+        const next = (previousSelection && nodeList.includes(previousSelection))
+            ? previousSelection
+            : defaultNode;
+        selectedNode = next;
+        setSelectedNode(next);
+    } else {
+        setSelectedNode(null);
     }
 
     for (const source of Object.keys(serviceInstances)) {
@@ -602,7 +636,7 @@ const initDashboard = (config = {}) => {
         setStepOverride(restoredStep);
     }
 
-    applyMultiNodeInfo();
+    applyMultiNodeInfo(config.experimentFileMetadata);
 
     // Apply capabilities
     liveMode = config.liveMode || false;
