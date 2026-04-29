@@ -693,9 +693,17 @@ const initDashboard = (config = {}) => {
                 const makeSingleChartView = () => ({
                     view() {
                         const data = sectionResponseCache[sectionKey];
-                        if (!data) return m('div', 'Loading...');
                         const activeSection = getCachedSections()
                             .find(s => s.route === `/${sectionKey}`);
+                        if (!data) {
+                            return m('div#splash', m('div.card', [
+                                m('h1', activeSection?.name || 'Loading'),
+                                m('p.subtitle', 'Loading…'),
+                                m('div.progress-bar',
+                                    m('div.progress-fill.indeterminate'),
+                                ),
+                            ]));
+                        }
                         return m('div', [
                             m(TopNav, topNavAttrs(data, activeSection?.route)),
                             m('main.single-chart-main', [
@@ -811,10 +819,24 @@ const initDashboard = (config = {}) => {
                 const cachedView = (sectionKey, path) => ({
                     view() {
                         const data = sectionResponseCache[sectionKey];
-                        if (!data) return m('div', 'Loading...');
                         const activeSection = getCachedSections().find(
                             (section) => section.route === path,
                         );
+                        if (!data) {
+                            // Cache miss: the synchronous route resolution
+                            // above already unmounted the previous section's
+                            // chart canvases. Show a splash/progress bar
+                            // styled the same as the initial-load splash so
+                            // the user gets clear in-flight feedback until
+                            // loadSection settles and triggers a redraw.
+                            return m('div#splash', m('div.card', [
+                                m('h1', activeSection?.name || 'Loading'),
+                                m('p.subtitle', 'Loading…'),
+                                m('div.progress-bar',
+                                    m('div.progress-fill.indeterminate'),
+                                ),
+                            ]));
+                        }
                         return m(Main, {
                             ...withCachedSections(data),
                             activeSection,
