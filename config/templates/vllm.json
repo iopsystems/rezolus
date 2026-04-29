@@ -6,28 +6,28 @@
     {
       "role": "load",
       "title": "Prompt Token Rate",
-      "query": "sum(irate(vllm_prompt_tokens_total[5s]))",
+      "query": "sum(irate(vllm_prompt_tokens_total{source=\"vllm\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
       "role": "load",
       "title": "Requests Running",
-      "query": "vllm_num_requests_running",
+      "query": "vllm_num_requests_running{source=\"vllm\"}",
       "type": "gauge",
       "unit_system": "count"
     },
     {
       "role": "load",
       "title": "Requests Waiting",
-      "query": "vllm_num_requests_waiting",
+      "query": "vllm_num_requests_waiting{source=\"vllm\"}",
       "type": "gauge",
       "unit_system": "count"
     },
     {
       "role": "throughput",
       "title": "Generation Token Rate",
-      "query": "sum(irate(vllm_generation_tokens_total[5s]))",
+      "query": "sum(irate(vllm_generation_tokens_total{source=\"vllm\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "denominator": true
@@ -35,14 +35,14 @@
     {
       "role": "throughput",
       "title": "Request Completion Rate",
-      "query": "sum(irate(vllm_request_success_total[5s]))",
+      "query": "sum(irate(vllm_request_success_total{source=\"vllm\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
-      "query": "vllm_time_to_first_token_seconds",
+      "query": "vllm_time_to_first_token_seconds{source=\"vllm\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
@@ -51,7 +51,7 @@
     {
       "role": "latency",
       "title": "Inter-Token Latency (ITL)",
-      "query": "vllm_inter_token_latency_seconds",
+      "query": "vllm_inter_token_latency_seconds{source=\"vllm\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
@@ -60,7 +60,7 @@
     {
       "role": "latency",
       "title": "Prefill Time",
-      "query": "vllm_request_prefill_time_seconds",
+      "query": "vllm_request_prefill_time_seconds{source=\"vllm\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
@@ -69,7 +69,7 @@
     {
       "role": "latency",
       "title": "End-to-End Request Latency",
-      "query": "vllm_e2e_request_latency_seconds",
+      "query": "vllm_e2e_request_latency_seconds{source=\"vllm\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
@@ -78,7 +78,7 @@
     {
       "role": "error",
       "title": "Preemption Rate",
-      "query": "sum(irate(vllm_num_preemptions_total[5s]))",
+      "query": "sum(irate(vllm_num_preemptions_total{source=\"vllm\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     }
