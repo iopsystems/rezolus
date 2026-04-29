@@ -1,0 +1,79 @@
+{
+  "service_name": "sglang-router",
+  "service_metadata": {},
+  "slo": null,
+  "kpis": [
+    {
+      "role": "load",
+      "title": "Request Rate",
+      "query": "sum(irate(smg_http_requests_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "load",
+      "title": "Active Requests",
+      "query": "sum(smg_worker_requests_active)",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "throughput",
+      "title": "Token Rate",
+      "query": "sum(irate(smg_router_tokens_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate",
+      "denominator": true
+    },
+    {
+      "role": "throughput",
+      "title": "Upstream Response Rate",
+      "query": "sum(irate(smg_router_upstream_responses_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "error",
+      "title": "Request Error Rate",
+      "query": "sum(irate(smg_router_request_errors_total[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "latency",
+      "title": "Time to First Token (TTFT)",
+      "query": "smg_router_ttft_seconds",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
+      "unit_system": "time"
+    },
+    {
+      "role": "latency",
+      "title": "Time per Output Token (TPOT)",
+      "query": "smg_router_tpot_seconds",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
+      "unit_system": "time"
+    },
+    {
+      "role": "latency",
+      "title": "Generation Duration",
+      "query": "smg_router_generation_duration_seconds",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
+      "unit_system": "time"
+    },
+    {
+      "role": "latency",
+      "title": "HTTP Request Duration",
+      "query": "smg_http_request_duration_seconds",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
+      "unit_system": "time"
+    }
+  ]
+}
