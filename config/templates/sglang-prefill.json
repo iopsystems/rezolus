@@ -6,28 +6,28 @@
     {
       "role": "load",
       "title": "Prompt Token Rate",
-      "query": "sum(irate(sglang_prompt_tokens_total[5s]))",
+      "query": "sum(irate(sglang_prompt_tokens_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
       "role": "load",
       "title": "Requests Running",
-      "query": "sglang_num_running_reqs",
+      "query": "sglang_num_running_reqs{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "count"
     },
     {
       "role": "load",
       "title": "Requests Waiting",
-      "query": "sglang_num_queue_reqs",
+      "query": "sglang_num_queue_reqs{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "count"
     },
     {
       "role": "throughput",
       "title": "Prompt Token Rate",
-      "query": "sum(irate(sglang_prompt_tokens_total[5s]))",
+      "query": "sum(irate(sglang_prompt_tokens_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "denominator": true
@@ -35,21 +35,21 @@
     {
       "role": "throughput",
       "title": "Request Rate",
-      "query": "sum(irate(sglang_num_requests_total[5s]))",
+      "query": "sum(irate(sglang_num_requests_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
       "role": "error",
       "title": "Abort Rate",
-      "query": "sum(irate(sglang_num_aborted_requests_total[5s]))",
+      "query": "sum(irate(sglang_num_aborted_requests_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
-      "query": "sglang_time_to_first_token_seconds",
+      "query": "sglang_time_to_first_token_seconds{source=\"sglang-prefill\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
@@ -58,7 +58,7 @@
     {
       "role": "latency",
       "title": "Prefill Time",
-      "query": "sglang_per_stage_req_latency_seconds{stage=\"prefill_forward\"}",
+      "query": "sglang_per_stage_req_latency_seconds{stage=\"prefill_forward\",source=\"sglang-prefill\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
@@ -67,7 +67,7 @@
     {
       "role": "latency",
       "title": "End-to-End Request Latency",
-      "query": "sglang_e2e_request_latency_seconds",
+      "query": "sglang_e2e_request_latency_seconds{source=\"sglang-prefill\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],

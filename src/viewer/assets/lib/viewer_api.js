@@ -86,6 +86,13 @@ const ViewerApi = {
         return '/api/v1/save';
     },
 
+    async getSections(captureId = 'baseline') {
+        return backendRequest({
+            method: 'GET',
+            url: `/api/v1/sections${captureQS(captureId)}`,
+        });
+    },
+
     async getSection(section, background = false) {
         return backendRequest({
             method: 'GET',

@@ -21,10 +21,13 @@ import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView 
 import {
     createSectionCacheState,
     storeSectionResponse,
+    storeSharedSections,
     getSections,
     withSharedSections,
     clearSectionResponses,
     resetSectionCacheState,
+    setSectionCacheLimit,
+    pinSectionKey,
 } from './section_cache.js';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -45,9 +48,16 @@ const heatmapDataCache = new Map();
 const chartsState = new ChartsState();
 let currentGranularity = null;
 const sectionCacheState = createSectionCacheState();
+// Cache limit: overview (pinned) + active route + one look-ahead. Keeps
+// memory bounded on the static-site WASM viewer where each section body
+// can be MB-scale.
+setSectionCacheLimit(sectionCacheState, 3);
+pinSectionKey(sectionCacheState, 'overview');
 const sectionResponseCache = sectionCacheState.responses;
 const cacheSectionResponse = (section, data) =>
     storeSectionResponse(sectionCacheState, section, data);
+const bootstrapSharedSections = (sections) =>
+    storeSharedSections(sectionCacheState, sections);
 const withCachedSections = (data) => withSharedSections(sectionCacheState, data);
 const getCachedSections = () => getSections(sectionCacheState);
 
@@ -683,9 +693,17 @@ const initDashboard = (config = {}) => {
                 const makeSingleChartView = () => ({
                     view() {
                         const data = sectionResponseCache[sectionKey];
-                        if (!data) return m('div', 'Loading...');
                         const activeSection = getCachedSections()
                             .find(s => s.route === `/${sectionKey}`);
+                        if (!data) {
+                            return m('div#splash', m('div.card', [
+                                m('h1', activeSection?.name || 'Loading'),
+                                m('p.subtitle', 'Loading…'),
+                                m('div.progress-bar',
+                                    m('div.progress-fill.indeterminate'),
+                                ),
+                            ]));
+                        }
                         return m('div', [
                             m(TopNav, topNavAttrs(data, activeSection?.route)),
                             m('main.single-chart-main', [
@@ -699,11 +717,14 @@ const initDashboard = (config = {}) => {
                     },
                 });
 
-                if (sectionResponseCache[sectionKey]) {
-                    return makeSingleChartView();
+                // Resolve synchronously regardless of cache state — see
+                // the matching comment in '/:section' below for rationale.
+                if (!sectionResponseCache[sectionKey]) {
+                    loadSection(sectionKey)
+                        .then(() => m.redraw())
+                        .catch(() => {});
                 }
-
-                return loadSection(sectionKey).then(() => makeSingleChartView());
+                return makeSingleChartView();
             },
         },
         ...createServiceRoutes({
@@ -798,10 +819,24 @@ const initDashboard = (config = {}) => {
                 const cachedView = (sectionKey, path) => ({
                     view() {
                         const data = sectionResponseCache[sectionKey];
-                        if (!data) return m('div', 'Loading...');
                         const activeSection = getCachedSections().find(
                             (section) => section.route === path,
                         );
+                        if (!data) {
+                            // Cache miss: the synchronous route resolution
+                            // above already unmounted the previous section's
+                            // chart canvases. Show a splash/progress bar
+                            // styled the same as the initial-load splash so
+                            // the user gets clear in-flight feedback until
+                            // loadSection settles and triggers a redraw.
+                            return m('div#splash', m('div.card', [
+                                m('h1', activeSection?.name || 'Loading'),
+                                m('p.subtitle', 'Loading…'),
+                                m('div.progress-bar',
+                                    m('div.progress-fill.indeterminate'),
+                                ),
+                            ]));
+                        }
                         return m(Main, {
                             ...withCachedSections(data),
                             activeSection,
@@ -810,40 +845,41 @@ const initDashboard = (config = {}) => {
                     },
                 });
 
-                if (sectionResponseCache[params.section]) {
-                    if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
-                        fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
-                    }
-                    return cachedView(params.section, requestedPath);
+                // Resolve the route synchronously even on a cache miss so
+                // the old section's DOM unmounts immediately (firing each
+                // chart's onremove → echart.dispose()). cachedView falls
+                // back to a "Loading…" placeholder while data is in flight,
+                // which gets replaced by the populated view via m.redraw()
+                // once loadSection settles.
+                if (!sectionResponseCache[params.section]) {
+                    loadSection(params.section)
+                        .then((data) => {
+                            if (data?.sections) preloadSections(data.sections);
+                            if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                                fetchSectionHeatmapData(requestedPath, data.groups);
+                            }
+                            m.redraw();
+                        })
+                        .catch((err) => {
+                            // Stale URL pointing at a missing section. Drop
+                            // back to the dashboard's default route instead
+                            // of letting the "Unknown section" error bubble.
+                            // If defaultRoute itself points at the failing
+                            // section (can happen when serviceInstances and
+                            // dashboard_sections disagree on naming), fall
+                            // through to /overview to avoid bouncing into
+                            // the same broken route.
+                            console.warn(`[viewer] section ${params.section} not available; redirecting`, err);
+                            const failingRoute = `/${params.section}`;
+                            const target = defaultRoute === failingRoute ? '/overview' : defaultRoute;
+                            if (target && target !== m.route.get()) {
+                                m.route.set(target);
+                            }
+                        });
+                } else if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                    fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
                 }
-
-                return loadSection(params.section)
-                    .then((data) => {
-                        if (data?.sections) preloadSections(data.sections);
-                        if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
-                            fetchSectionHeatmapData(requestedPath, data.groups);
-                        }
-                        return cachedView(params.section, requestedPath);
-                    })
-                    .catch((err) => {
-                        // Stale URL pointing at a missing section. Drop
-                        // back to the dashboard's default route instead
-                        // of letting the "Unknown section" error bubble.
-                        // If defaultRoute itself points at the failing
-                        // section (can happen when serviceInstances and
-                        // dashboard_sections disagree on naming), fall
-                        // through to /overview to avoid bouncing into
-                        // the same broken route — m.route.get() returns
-                        // the last successfully resolved path, which
-                        // never advances when every onmatch rejects.
-                        console.warn(`[viewer] section ${params.section} not available; redirecting`, err);
-                        const failingRoute = `/${params.section}`;
-                        const target = defaultRoute === failingRoute ? '/overview' : defaultRoute;
-                        if (target && target !== m.route.get()) {
-                            m.route.set(target);
-                        }
-                        return new Promise(function () {});
-                    });
+                return cachedView(params.section, requestedPath);
             },
         },
     });
@@ -863,4 +899,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, cacheSectionResponse, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

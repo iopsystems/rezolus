@@ -479,7 +479,7 @@ pub fn run(config: Config) {
                 None,
                 None,
             );
-            state.sections.write().extend(rendered);
+            *state.sections.write() = build_section_store_from_rendered(rendered);
             state.live.store(true, Ordering::Relaxed);
 
             state.captures.set_baseline_systeminfo(agent_systeminfo);
@@ -653,8 +653,91 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
         .expect("failed to run http server");
 }
 
+/// Caches the navigation `sections` list separately from per-section JSON
+/// bodies, so the `/api/v1/sections` route can read the nav list without
+/// materializing any section body, and `/data/<section>.json` can read
+/// (or generate) just the requested body.
+struct LazySectionStore {
+    sections: Vec<serde_json::Value>,
+    section_bodies: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl LazySectionStore {
+    fn new(sections: Vec<serde_json::Value>) -> Self {
+        Self {
+            sections,
+            section_bodies: std::collections::HashMap::new(),
+        }
+    }
+
+    fn sections(&self) -> &[serde_json::Value] {
+        &self.sections
+    }
+
+    fn section(&self, key: &str) -> Option<&serde_json::Value> {
+        self.section_bodies.get(key)
+    }
+
+    fn insert_section(&mut self, key: &str, value: serde_json::Value) {
+        self.section_bodies.insert(key.to_string(), value);
+    }
+
+    /// Returns true when no nav list has been loaded yet — used by the
+    /// `mode` endpoint to advertise the "we don't have data yet" state
+    /// for live and upload-only modes pre-first-refresh.
+    fn is_empty(&self) -> bool {
+        self.sections.is_empty()
+    }
+
+    /// Returns any cached section body, used by `sections_metadata` to
+    /// recover the global params (source, version, filename, ...) that
+    /// are currently embedded in every section payload.
+    fn any_body(&self) -> Option<&serde_json::Value> {
+        self.section_bodies.values().next()
+    }
+}
+
+impl Default for LazySectionStore {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+/// Adapt the `dashboard::dashboard::generate` output (a HashMap of route
+/// -> serialized JSON body) into a `LazySectionStore`. The nav list is
+/// recovered from the embedded `sections` array of any body — overview
+/// is canonical but any body works because they all carry the same nav.
+/// Bodies that fail to parse are logged and skipped.
+fn build_section_store_from_rendered(rendered: HashMap<String, String>) -> LazySectionStore {
+    let mut bodies: HashMap<String, serde_json::Value> = HashMap::new();
+    for (key, body) in rendered {
+        match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(v) => {
+                bodies.insert(key, v);
+            }
+            Err(e) => {
+                warn!("section cache parse failed for {key}: {e}");
+            }
+        }
+    }
+
+    let nav = bodies
+        .get("overview.json")
+        .or_else(|| bodies.values().next())
+        .and_then(|v| v.get("sections"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut store = LazySectionStore::new(nav);
+    for (key, value) in bodies {
+        store.insert_section(&key, value);
+    }
+    store
+}
+
 struct AppState {
-    sections: parking_lot::RwLock<HashMap<String, String>>,
+    sections: parking_lot::RwLock<LazySectionStore>,
     /// Per-capture TSDB + metadata. Single-capture callers always target
     /// `CaptureId::Baseline`; the experiment slot is empty unless a compare
     /// mode hand-off has attached one.
@@ -711,6 +794,95 @@ impl AppState {
         self.captures
             .get(CaptureId::Baseline)
             .expect("baseline capture is always present")
+    }
+
+    /// Build the navigation + global params payload for the
+    /// `/api/v1/sections` endpoint. Reads the navigation list directly
+    /// from the `LazySectionStore`, and the global params (source,
+    /// version, filename, interval, filesize, time bounds, num_series)
+    /// from any cached section body — those globals are still embedded
+    /// per-body today. When no section is cached yet — e.g. live mode
+    /// before the first refresh, or upload-only mode pre-upload —
+    /// returns a minimal payload with an empty sections array so the
+    /// frontend never sees a 5xx for the "we just don't have data yet"
+    /// case.
+    ///
+    /// The `capture` argument is currently advisory: the cached section
+    /// bodies are produced by `regenerate_dashboards`, which today
+    /// generates a single section map keyed only by route. The same
+    /// nav list applies to both baseline and experiment, so we ignore
+    /// the id rather than silently 404 on `?capture=experiment`.
+    fn sections_metadata(&self, _capture: CaptureId) -> serde_json::Value {
+        let sections_guard = self.sections.read();
+
+        let sections_array: Vec<serde_json::Value> = sections_guard.sections().to_vec();
+
+        // Pull the global params off any cached body. They're
+        // duplicated per-body today; a future task can promote them
+        // onto the store directly.
+        let body = sections_guard.any_body().cloned();
+        drop(sections_guard);
+
+        let source = body
+            .as_ref()
+            .and_then(|v| v.get("source"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let version = body
+            .as_ref()
+            .and_then(|v| v.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let filename = body
+            .as_ref()
+            .and_then(|v| v.get("filename"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let interval = body
+            .as_ref()
+            .and_then(|v| v.get("interval"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let filesize = body
+            .as_ref()
+            .and_then(|v| v.get("filesize"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        // start_time/end_time are emitted by `View` as f64 (epoch ms), so
+        // `as_u64()` returns None even on whole-millisecond values. Read
+        // as f64 and truncate to the integer payload shape.
+        let start_time = body
+            .as_ref()
+            .and_then(|v| v.get("start_time"))
+            .and_then(|v| v.as_f64())
+            .map(|v| v as u64)
+            .unwrap_or(0);
+        let end_time = body
+            .as_ref()
+            .and_then(|v| v.get("end_time"))
+            .and_then(|v| v.as_f64())
+            .map(|v| v as u64)
+            .unwrap_or(0);
+        let num_series = body
+            .as_ref()
+            .and_then(|v| v.get("num_series"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
+        build_sections_metadata_payload(
+            sections_array,
+            &source,
+            &version,
+            &filename,
+            interval,
+            filesize,
+            start_time,
+            end_time,
+            num_series,
+        )
     }
 }
 
@@ -993,8 +1165,7 @@ fn regenerate_dashboards(state: &AppState) {
         None,
     );
 
-    let mut sections = state.sections.write();
-    *sections = rendered;
+    *state.sections.write() = build_section_store_from_rendered(rendered);
 }
 
 /// Extract service extension metadata from a parquet file.
@@ -1131,6 +1302,49 @@ fn validate_service_extensions(tsdb: &Tsdb, exts: &mut [(String, ServiceExtensio
     }
 }
 
+/// Assemble the JSON payload returned by `/api/v1/sections`.
+///
+/// The viewer frontend wants the navigation list and the global capture
+/// params (source, version, filename, interval, filesize, time bounds,
+/// num_series) without any of the per-section group/plot bodies. Keeping
+/// this as a pure helper makes it trivial to unit-test the shape — the
+/// route handler does the I/O of pulling values out of the cached
+/// section bodies.
+#[allow(clippy::too_many_arguments)]
+fn build_sections_metadata_payload(
+    sections: Vec<serde_json::Value>,
+    source: &str,
+    version: &str,
+    filename: &str,
+    interval: f64,
+    filesize: u64,
+    start_time: u64,
+    end_time: u64,
+    num_series: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "sections": sections,
+        "source": source,
+        "version": version,
+        "filename": filename,
+        "interval": interval,
+        "filesize": filesize,
+        "start_time": start_time,
+        "end_time": end_time,
+        "num_series": num_series,
+    })
+}
+
+/// Strip the navigation `sections` array from a section payload before
+/// sending it to the frontend.  Each cached section body embeds the full
+/// nav list so that `sections_metadata` can extract it, but the frontend
+/// does not need that redundant data in per-section responses.
+fn strip_sections_from_section_payload(value: &mut serde_json::Value) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("sections");
+    }
+}
+
 fn compute_file_checksum(path: &Path) -> Option<String> {
     use sha2::{Digest, Sha256};
     use std::io::{Read, Seek, SeekFrom};
@@ -1189,6 +1403,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
         .route("/save", get(save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
+        .route("/sections", get(sections_handler))
         .route("/file_metadata", get(file_metadata_handler))
         .route(
             "/upload",
@@ -1287,13 +1502,28 @@ async fn data(
     use axum::response::IntoResponse;
 
     let sections = state.sections.read();
-    match sections.get(&path) {
-        Some(v) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/json")],
-            v.to_string(),
-        )
-            .into_response(),
+    match sections.section(&path) {
+        Some(v) => {
+            // Strip the redundant nav `sections` array before sending to the
+            // frontend.  The cached body keeps it so that `sections_metadata`
+            // can still extract it (Task 4); we only remove it at response time.
+            let mut parsed = v.clone();
+            drop(sections);
+            strip_sections_from_section_payload(&mut parsed);
+            let body = match serde_json::to_string(&parsed) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("section re-serialization failed for {path}: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -1356,6 +1586,20 @@ async fn selection_handler(
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Returns the navigation list plus global capture params (no section
+/// bodies). Used by the frontend to build the side nav and headline
+/// metadata without paying the cost of fetching every section JSON
+/// upfront.
+async fn sections_handler(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(p): axum::extract::Query<CaptureParam>,
+) -> axum::response::Json<serde_json::Value> {
+    axum::response::Json(serde_json::json!({
+        "status": "success",
+        "data": state.sections_metadata(p.capture_id()),
+    }))
 }
 
 async fn file_metadata_handler(
@@ -1634,10 +1878,7 @@ async fn upload_parquet(
         let mut tsdb = tsdb_handle.write();
         *tsdb = data;
     }
-    {
-        let mut sections = state.sections.write();
-        *sections = rendered;
-    }
+    *state.sections.write() = build_section_store_from_rendered(rendered);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
     state
@@ -1837,10 +2078,7 @@ async fn connect_agent(
         let mut db = tsdb_handle.write();
         *db = tsdb;
     }
-    {
-        let mut sections = state.sections.write();
-        *sections = rendered;
-    }
+    *state.sections.write() = build_section_store_from_rendered(rendered);
     state.captures.set_baseline_systeminfo(agent_systeminfo);
     state.live.store(true, Ordering::Relaxed);
 
@@ -2156,5 +2394,66 @@ async fn lib(uri: Uri) -> impl IntoResponse {
             [(header::CONTENT_TYPE, "text/plain")],
             "404 Not Found".to_string(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lean_section_payload_does_not_repeat_sections() {
+        let mut payload = serde_json::json!({
+            "sections": [{"name": "Overview", "route": "/overview"}],
+            "groups": [],
+            "interval": 1.0
+        });
+        strip_sections_from_section_payload(&mut payload);
+        assert!(payload.get("sections").is_none());
+        assert_eq!(payload["groups"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn sections_metadata_json_omits_groups() {
+        let sections = vec![
+            serde_json::json!({"name": "Overview", "route": "/overview"}),
+            serde_json::json!({"name": "CPU", "route": "/cpu"}),
+        ];
+        let payload = build_sections_metadata_payload(
+            sections.clone(),
+            "rezolus",
+            "test-version",
+            "capture.parquet",
+            1.0,
+            42,
+            1000,
+            2000,
+            99,
+        );
+
+        assert_eq!(payload["sections"], serde_json::Value::Array(sections));
+        assert!(payload.get("groups").is_none());
+        assert_eq!(payload["source"], serde_json::json!("rezolus"));
+        assert_eq!(payload["version"], serde_json::json!("test-version"));
+        assert_eq!(payload["filename"], serde_json::json!("capture.parquet"));
+        assert_eq!(payload["interval"], serde_json::json!(1.0));
+        assert_eq!(payload["filesize"], serde_json::json!(42u64));
+        assert_eq!(payload["start_time"], serde_json::json!(1000u64));
+        assert_eq!(payload["end_time"], serde_json::json!(2000u64));
+        assert_eq!(payload["num_series"], serde_json::json!(99usize));
+    }
+
+    #[test]
+    fn lazy_section_store_caches_sections_separately_from_metadata() {
+        let mut store = LazySectionStore::new(vec![
+            serde_json::json!({"name": "Overview", "route": "/overview"}),
+        ]);
+        assert!(store.section("overview").is_none());
+        store.insert_section("overview", serde_json::json!({"groups": []}));
+        assert_eq!(
+            store.section("overview").unwrap()["groups"],
+            serde_json::json!([])
+        );
+        assert_eq!(store.sections().len(), 1);
     }
 }

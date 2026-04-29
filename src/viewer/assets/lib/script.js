@@ -7,7 +7,29 @@ import { FileUpload, CompareLanding } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, cacheSectionResponse, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+
+// ── Splash ──────────────────────────────────────────────────────────
+// Mounted on body before any async bootstrap step so the page never
+// shows a blank document while we fetch state. Replaced by the route
+// mount inside initDashboard() once we're ready to render the dashboard.
+
+let splashLabel = 'Initializing';
+
+const Splash = {
+    view: () => splashLabel === null ? null : m('div#splash', m('div.card', [
+        m('h1', 'Rezolus'),
+        m('p.subtitle', `${splashLabel}…`),
+        m('div.progress-bar', m('div.progress-fill.indeterminate')),
+    ])),
+};
+
+m.mount(document.body, Splash);
+
+const setSplashLabel = (label) => {
+    splashLabel = label;
+    m.redraw();
+};
 
 // ── Backend state fetching ─────────────────────────────────────────
 
@@ -96,6 +118,9 @@ const uploadParquet = async (file) => {
             loadPayloadIntoStore(reportStore, selectionPayload);
             reportStore.loadedFrom = 'embedded report';
         }
+
+        const sectionsResponse = await ViewerApi.getSections();
+        bootstrapSharedSections(sectionsResponse?.data?.sections || []);
 
         const data = await ViewerApi.getSection('overview');
         const processed = await processDashboardData(data, null, '/overview');
@@ -249,6 +274,7 @@ const showCompareLanding = () => {
 const bootstrap = async () => {
     let compareMode = false;
     let categoryName = null;
+    setSplashLabel('Connecting to viewer');
     try {
         const response = await ViewerApi.getMode();
         if (!response.loaded && !response.live) {
@@ -260,7 +286,15 @@ const bootstrap = async () => {
         categoryName = response.category || null;
     } catch (_) { /* assume loaded file mode */ }
 
+    setSplashLabel('Loading capture metadata');
     await fetchBackendState();
+    setSplashLabel('Loading section list');
+    try {
+        const sectionsResponse = await ViewerApi.getSections();
+        bootstrapSharedSections(sectionsResponse?.data?.sections || []);
+    } catch (_) {
+        bootstrapSharedSections([]);
+    }
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
     }
@@ -271,6 +305,7 @@ const bootstrap = async () => {
     let experimentAlias = null;
     let experimentQueryRange = null;
     if (compareMode) {
+        setSplashLabel('Loading experiment capture');
         const [sysinfo, fileMeta, expMeta] = await Promise.all([
             ViewerApi.getSystemInfo(CAPTURE_EXPERIMENT).catch(() => null),
             ViewerApi.getFileMetadata(CAPTURE_EXPERIMENT).catch(() => null),

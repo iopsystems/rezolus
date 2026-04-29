@@ -7,7 +7,7 @@
     {
       "role": "throughput",
       "title": "Response Rate",
-      "query": "sum(irate(redis/total_commands_processed[5s]))",
+      "query": "sum(irate(redis/total_commands_processed{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "denominator": true
@@ -15,28 +15,28 @@
     {
       "role": "throughput",
       "title": "Read Rate",
-      "query": "sum(irate(redis/total_reads_processed[5s]))",
+      "query": "sum(irate(redis/total_reads_processed{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
       "role": "throughput",
       "title": "Write Rate",
-      "query": "sum(irate(redis/total_writes_processed[5s]))",
+      "query": "sum(irate(redis/total_writes_processed{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
       "role": "throughput",
       "title": "Network Input Rate",
-      "query": "sum(irate(redis/total_net_input_bytes[5s]))",
+      "query": "sum(irate(redis/total_net_input_bytes{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "datarate"
     },
     {
       "role": "throughput",
       "title": "Network Output Rate",
-      "query": "sum(irate(redis/total_net_output_bytes[5s]))",
+      "query": "sum(irate(redis/total_net_output_bytes{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "datarate"
     }

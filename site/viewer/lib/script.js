@@ -5,7 +5,7 @@
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload } from './landing.js';
 import { setStorageScope } from './selection.js';
-import { initDashboard } from './app.js';
+import { initDashboard, bootstrapSharedSections } from './app.js';
 
 // ── UI state ────────────────────────────────────────────────────────
 
@@ -62,7 +62,16 @@ const demoSections = [
 let loadedTemplatesJson = null;
 
 const loadTemplates = async () => {
-    const templateNames = ['cachecannon', 'inference-library', 'llm-perf', 'sglang', 'valkey', 'vllm'];
+    // Source of truth is `templates/manifest.json`, regenerated from
+    // `config/templates/*.json` by `crates/viewer/build.sh` and the
+    // pages-deploy workflow. Adding/removing a template doesn't require
+    // editing this file.
+    let templateNames = [];
+    try {
+        const manifest = await fetch('templates/manifest.json').then(r => r.ok ? r.json() : null);
+        if (Array.isArray(manifest)) templateNames = manifest;
+    } catch (_) { /* fall through to empty registry */ }
+
     const results = await Promise.allSettled(
         templateNames.map(name => fetch(`templates/${name}.json`).then(r => r.ok ? r.json() : null))
     );
@@ -113,6 +122,12 @@ const fetchInitialState = async () => {
 async function loadParquet(data, filename) {
     await initWasmViewer(data, filename);
     const state = await fetchInitialState();
+    try {
+        const sections = await ViewerApi.getSections();
+        bootstrapSharedSections(Array.isArray(sections) ? sections : (sections?.data?.sections || []));
+    } catch (_) {
+        bootstrapSharedSections([]);
+    }
     initDashboard({
         systemInfo: state.systemInfo,
         fileMetadata: state.fileMetadata,
@@ -251,6 +266,12 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
             }
         }
 
+        try {
+            const sections = await ViewerApi.getSections();
+            bootstrapSharedSections(Array.isArray(sections) ? sections : (sections?.data?.sections || []));
+        } catch (_) {
+            bootstrapSharedSections([]);
+        }
         initDashboard({
             systemInfo: base.systemInfo,
             fileMetadata: base.fileMetadata,
