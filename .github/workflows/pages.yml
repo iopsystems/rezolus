@@ -26,6 +26,15 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Regenerate static-site templates manifest
+        run: |
+          (
+            cd config/templates
+            printf '[\n'
+            ls -1 *.json | sort | sed 's/\.json$//' \
+              | awk 'BEGIN{first=1} {if(!first)printf ",\n"; printf "  \"%s\"", $0; first=0} END{printf "\n"}'
+            printf ']\n'
+          ) > site/viewer/templates/manifest.json
       - name: Resolve symlinks
         run: cp -rL site site-resolved
       - uses: actions/configure-pages@v5

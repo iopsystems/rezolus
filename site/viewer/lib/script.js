@@ -62,17 +62,16 @@ const demoSections = [
 let loadedTemplatesJson = null;
 
 const loadTemplates = async () => {
-    const templateNames = [
-        'cachecannon',
-        'inference-library',
-        'llm-perf',
-        'sglang',
-        'sglang-decode',
-        'sglang-prefill',
-        'sglang-router',
-        'valkey',
-        'vllm',
-    ];
+    // Source of truth is `templates/manifest.json`, regenerated from
+    // `config/templates/*.json` by `crates/viewer/build.sh` and the
+    // pages-deploy workflow. Adding/removing a template doesn't require
+    // editing this file.
+    let templateNames = [];
+    try {
+        const manifest = await fetch('templates/manifest.json').then(r => r.ok ? r.json() : null);
+        if (Array.isArray(manifest)) templateNames = manifest;
+    } catch (_) { /* fall through to empty registry */ }
+
     const results = await Promise.allSettled(
         templateNames.map(name => fetch(`templates/${name}.json`).then(r => r.ok ? r.json() : null))
     );
