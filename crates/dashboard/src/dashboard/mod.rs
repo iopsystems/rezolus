@@ -181,42 +181,6 @@ pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Opt
     Some(view)
 }
 
-/// Transitional shim preserving the eager `generate` signature so
-/// `src/viewer/mod.rs` and `crates/viewer/src/lib.rs` keep building
-/// while Tasks B + C migrate them to the lazy API. Remove once those
-/// call sites are updated.
-#[deprecated(note = "use build_dashboard_context + generate_section")]
-pub fn generate(
-    data: &Tsdb,
-    filesize: Option<u64>,
-    service_exts: &[(&str, &ServiceExtension)],
-    category: Option<(&str, &CategoryExtension)>,
-    _descriptions: Option<&std::collections::HashMap<String, String>>,
-) -> std::collections::HashMap<String, String> {
-    let ctx = build_dashboard_context(filesize, service_exts, category);
-
-    let mut rendered = std::collections::HashMap::new();
-
-    // Iterate the section nav and render each one lazily. The map keys
-    // mirror the original layout: `<route-without-leading-slash>.json`,
-    // with `/` preserved in service routes (e.g. `service/vllm.json`).
-    for section in &ctx.sections {
-        if let Some(mut view) = generate_section(data, &section.route, &ctx) {
-            // Match old behavior: filesize only on overview + SECTION_META routes,
-            // not on service/category routes.
-            let is_legacy_filesize_route = section.route == "/overview"
-                || SECTION_META.iter().any(|(_, r, _)| *r == section.route);
-            if let (Some(size), true) = (filesize, is_legacy_filesize_route) {
-                view.set_filesize(size);
-            }
-            let key = format!("{}.json", &section.route[1..]);
-            rendered.insert(key, serde_json::to_string(&view).unwrap());
-        }
-    }
-
-    rendered
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,8 +313,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn generate_emits_category_section_when_category_supplied() {
+    fn build_context_emits_category_nav_entry_when_category_supplied() {
         use crate::service_extension::{CategoryExtension, CategoryKpi, Kpi, ServiceExtension};
         use std::collections::HashMap;
 
@@ -402,25 +365,28 @@ mod tests {
             }],
         };
 
-        let data = Tsdb::default();
-        let result = generate(
-            &data,
+        let ctx = build_dashboard_context(
             None,
             &[("vllm", &vllm), ("sglang", &sglang)],
             Some(("inference-library", &category)),
-            None,
         );
 
-        // Category section present.
-        assert!(result.contains_key("service/inference-library.json"));
-        // Per-member sections absent.
-        assert!(!result.contains_key("service/vllm.json"));
-        assert!(!result.contains_key("service/sglang.json"));
+        // Category nav entry present.
+        let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
+        assert!(routes.contains(&"/service/inference-library"));
+        // Per-member nav entries absent under category mode.
+        assert!(!routes.contains(&"/service/vllm"));
+        assert!(!routes.contains(&"/service/sglang"));
+
+        // generate_section honors the same: category route renders, members 404.
+        let data = Tsdb::default();
+        assert!(generate_section(&data, "/service/inference-library", &ctx).is_some());
+        assert!(generate_section(&data, "/service/vllm", &ctx).is_none());
+        assert!(generate_section(&data, "/service/sglang", &ctx).is_none());
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn generate_dedupes_section_when_two_captures_share_service_name() {
+    fn build_context_dedupes_section_when_two_captures_share_service_name() {
         use crate::service_extension::{Kpi, ServiceExtension};
         use std::collections::HashMap;
 
@@ -448,54 +414,23 @@ mod tests {
         };
         let vllm_b = vllm_a.clone();
 
-        let data = Tsdb::default();
-        let result = generate(
-            &data,
-            None,
-            &[("vllm", &vllm_a), ("vllm", &vllm_b)],
-            None,
-            None,
-        );
+        let ctx = build_dashboard_context(None, &[("vllm", &vllm_a), ("vllm", &vllm_b)], None);
 
-        assert!(result.contains_key("service/vllm.json"));
-
-        let overview_str = result.get("overview.json").expect("overview rendered");
-        let overview: serde_json::Value = serde_json::from_str(overview_str).unwrap();
-        let sections = overview
-            .get("sections")
-            .and_then(|s| s.as_array())
-            .expect("sections present");
-        let vllm_count = sections
+        // Nav contains exactly one /service/vllm entry.
+        let vllm_count = ctx
+            .sections
             .iter()
-            .filter(|s| s.get("route").and_then(|r| r.as_str()) == Some("/service/vllm"))
+            .filter(|s| s.route == "/service/vllm")
             .count();
         assert_eq!(
             vllm_count, 1,
             "expected one /service/vllm entry in nav, got {vllm_count}"
         );
-    }
 
-    #[test]
-    fn shim_filesize_applied_only_to_legacy_routes() {
-        // Build a context with a service ext so the shim renders a /service/<name> route.
-        let svc_json = r#"{"service_name":"vllm","service_metadata":{},"slo":null,"kpis":[]}"#;
-        let svc_ext: ServiceExtension = serde_json::from_str(svc_json).unwrap();
+        // The deduped service ext list also collapses to one entry, so
+        // generate_section can still render the route.
+        assert_eq!(ctx.service_exts.len(), 1);
         let data = Tsdb::default();
-        #[allow(deprecated)]
-        let rendered = generate(&data, Some(12_345), &[("vllm", &svc_ext)], None, None);
-
-        // overview and stock sections carry filesize.
-        let overview: serde_json::Value =
-            serde_json::from_str(rendered.get("overview.json").unwrap()).unwrap();
-        assert_eq!(overview["filesize"], serde_json::json!(12_345));
-
-        let cpu: serde_json::Value =
-            serde_json::from_str(rendered.get("cpu.json").unwrap()).unwrap();
-        assert_eq!(cpu["filesize"], serde_json::json!(12_345));
-
-        // Service routes do NOT carry filesize (preserves pre-Phase-2 behavior).
-        let svc: serde_json::Value =
-            serde_json::from_str(rendered.get("service/vllm.json").unwrap()).unwrap();
-        assert!(svc.get("filesize").is_none(), "service view leaked filesize");
+        assert!(generate_section(&data, "/service/vllm", &ctx).is_some());
     }
 }
