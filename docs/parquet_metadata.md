@@ -68,6 +68,12 @@ To set the source and apply the matching template in one step, follow up
 with bare `parquet annotate file.parquet`, or pass `--queries`/`--filter`
 in the same invocation.
 
+When `--overwrite` replaces the top-level `source`, any matching entry
+keyed by the *old* source name inside [`per_source_metadata`](#per_source_metadata)
+is renamed to the new value so the nested structure stays consistent.
+Other entries (e.g. `rezolus`) are left untouched. If `per_source_metadata`
+has no entry under the old source name, only the top-level key changes.
+
 ### `version`
 
 Agent/tool version string of the source that produced this file. Single-source
