@@ -570,10 +570,7 @@ mod tests {
         // by "vllm". Overwriting source to "sglang" should rename the
         // PSM entry as well so the structure stays consistent.
         let psm = r#"{"vllm":{"0":{"role":"service","instance":"0"}}}"#;
-        let tmp = make_minimal_parquet(vec![
-            ("source", "vllm"),
-            ("per_source_metadata", psm),
-        ]);
+        let tmp = make_minimal_parquet(vec![("source", "vllm"), ("per_source_metadata", psm)]);
         set_source_metadata(tmp.path(), "sglang", true).unwrap();
 
         let kv = read_kv(tmp.path());
@@ -597,10 +594,7 @@ mod tests {
         // both "vllm" and "rezolus" entries. Overwriting source should
         // rename only the matching key.
         let psm = r#"{"vllm":{"0":{"role":"service"}},"rezolus":{"web01":{"role":"service","node":"web01"}}}"#;
-        let tmp = make_minimal_parquet(vec![
-            ("source", "vllm"),
-            ("per_source_metadata", psm),
-        ]);
+        let tmp = make_minimal_parquet(vec![("source", "vllm"), ("per_source_metadata", psm)]);
         set_source_metadata(tmp.path(), "sglang", true).unwrap();
 
         let kv = read_kv(tmp.path());
@@ -613,7 +607,10 @@ mod tests {
 
         assert!(parsed.get("vllm").is_none());
         assert!(parsed.get("sglang").is_some());
-        assert_eq!(parsed["rezolus"]["web01"]["node"], serde_json::json!("web01"));
+        assert_eq!(
+            parsed["rezolus"]["web01"]["node"],
+            serde_json::json!("web01")
+        );
     }
 
     #[test]
@@ -623,10 +620,7 @@ mod tests {
         // ran a recorder that populated PSM for it). Overwriting source
         // should still update the top-level key without touching PSM.
         let psm = r#"{"rezolus":{"web01":{"role":"service"}}}"#;
-        let tmp = make_minimal_parquet(vec![
-            ("source", "vllm"),
-            ("per_source_metadata", psm),
-        ]);
+        let tmp = make_minimal_parquet(vec![("source", "vllm"), ("per_source_metadata", psm)]);
         set_source_metadata(tmp.path(), "sglang", true).unwrap();
 
         let kv = read_kv(tmp.path());
