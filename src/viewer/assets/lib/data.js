@@ -339,11 +339,16 @@ const createDataApi = ({
     //   sectionRoute       — route string, used for the service/node rule.
     //   activeCgroupPattern — resolved cgroup selector, if any.
     //   serviceName        — section's service_name, if any.
-    //   crossCapture       — default false. When true, skip BOTH node and
-    //                        instance label injection. Compare path sets
-    //                        this because the experiment capture's
-    //                        topology is independent of the baseline's,
-    //                        and the injected labels would mis-target.
+    //   crossCapture       — default false. When true, skip per-service
+    //                        instance injection because service KPIs are
+    //                        composable (e.g. sum across instances) and
+    //                        an unfiltered aggregate is the correct A/B
+    //                        baseline. Node injection still applies on
+    //                        both sides so a pinned-node compare stays
+    //                        symmetric across captures; if the selected
+    //                        node isn't present on a capture, that side
+    //                        renders empty rather than silently fanning
+    //                        out across all nodes.
     //   stepOverride       — nullable; when > 1 triggers histogram-stride /
     //                        counter-rate rewriting. Defaults to the
     //                        module-level _stepOverride.
@@ -379,7 +384,7 @@ const createDataApi = ({
                 return null;
             }
         }
-        if (injectTopologyLabels && _selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
+        if (_selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
             q = injectLabel(q, 'node', _selectedNode);
         }
         if (injectTopologyLabels && serviceName) {
