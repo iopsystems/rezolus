@@ -82,6 +82,7 @@ impl Viewer {
         tsdb.set_filename(filename.to_string());
 
         let file_metadata = tsdb.file_metadata().clone();
+        #[allow(deprecated)]
         let dashboard_sections = dashboard::dashboard::generate(&tsdb, None, &[], None, None);
         let engine = QueryEngine::new(Arc::new(tsdb));
 
@@ -268,13 +269,16 @@ impl Viewer {
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
 
-        self.dashboard_sections = dashboard::dashboard::generate(
-            self.engine.tsdb(),
-            None,
-            &service_refs,
-            None, // single-capture: no category
-            None,
-        );
+        #[allow(deprecated)]
+        {
+            self.dashboard_sections = dashboard::dashboard::generate(
+                self.engine.tsdb(),
+                None,
+                &service_refs,
+                None, // single-capture: no category
+                None,
+            );
+        }
         Ok(())
     }
 
@@ -532,6 +536,7 @@ impl WasmCaptureRegistry {
             None => None,
         };
 
+        #[allow(deprecated)]
         let combined = dashboard::dashboard::generate(
             self.baseline.as_ref().unwrap().engine.tsdb(),
             None,

@@ -7,12 +7,14 @@
 //! With a directory argument, writes each section as a pretty-printed JSON file.
 
 use dashboard::Tsdb;
+#[allow(deprecated)]
 use dashboard::dashboard::generate;
 use std::collections::HashMap;
 
 fn main() {
     let output_dir = std::env::args().nth(1);
 
+    #[allow(deprecated)]
     let rendered: HashMap<String, String> = generate(&Tsdb::default(), None, &[], None, None);
 
     match output_dir {

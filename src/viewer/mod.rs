@@ -472,6 +472,7 @@ pub fn run(config: Config) {
             tsdb.set_version(version.clone());
             tsdb.set_filename(url.to_string());
             let state = AppState::new(tsdb, registry.clone());
+            #[allow(deprecated)]
             let rendered = dashboard::dashboard::generate(
                 &state.baseline_tsdb().read(),
                 None,
@@ -1157,6 +1158,7 @@ fn regenerate_dashboards(state: &AppState) {
         .as_ref()
         .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
 
+    #[allow(deprecated)]
     let rendered = dashboard::dashboard::generate(
         &state.baseline_tsdb().read(),
         filesize,
@@ -1869,6 +1871,7 @@ async fn upload_parquet(
     let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
     validate_service_extensions(&data, &mut service_exts);
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
+    #[allow(deprecated)]
     let rendered = dashboard::dashboard::generate(&data, filesize, &service_refs, None, None);
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
@@ -2070,6 +2073,7 @@ async fn connect_agent(
     tsdb.set_source(source.clone());
     tsdb.set_version(version.clone());
     tsdb.set_filename(url.to_string());
+    #[allow(deprecated)]
     let rendered = dashboard::dashboard::generate(&tsdb, None, &[], None, None);
 
     // Update shared state
