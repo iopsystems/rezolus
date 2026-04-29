@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::parquet_metadata::{KEY_NODE, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO};
+use crate::parquet_metadata::{
+    KEY_NODE, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO,
+};
 use crate::viewer::promql::QueryEngine;
 use crate::viewer::tsdb::Tsdb;
 use crate::viewer::{ServiceExtension, TemplateRegistry};
@@ -276,7 +278,11 @@ fn annotate_parquet(
 /// - If no `source` exists: writes the value.
 /// - If `source` matches `value`: no-op (idempotent).
 /// - If `source` differs from `value` and `overwrite=false`: returns an error.
-/// - If `source` differs and `overwrite=true`: replaces the value.
+/// - If `source` differs and `overwrite=true`: replaces the top-level
+///   `source` key. If `per_source_metadata` carries an entry keyed by
+///   the old source name, that entry is renamed in place so the nested
+///   structure stays consistent with the new top-level value. Other
+///   `per_source_metadata` keys (e.g. `rezolus`) are untouched.
 fn set_source_metadata(
     path: &Path,
     value: &str,
@@ -289,9 +295,10 @@ fn set_source_metadata(
     let existing = kv_meta
         .iter()
         .find(|kv| kv.key == KEY_SOURCE)
-        .and_then(|kv| kv.value.as_deref());
+        .and_then(|kv| kv.value.as_deref())
+        .map(str::to_string);
 
-    match existing {
+    match existing.as_deref() {
         Some(cur) if cur == value => return Ok(()),
         Some(cur) if !overwrite => {
             return Err(format!(
@@ -308,6 +315,26 @@ fn set_source_metadata(
         key: KEY_SOURCE.to_string(),
         value: Some(value.to_string()),
     });
+
+    // Rename the matching per_source_metadata sub-entry, if present, so
+    // the nested structure stays in sync with the new top-level source.
+    if let Some(old_source) = existing.filter(|cur| cur != value) {
+        if let Some(idx) = kv_meta
+            .iter()
+            .position(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+        {
+            if let Some(raw) = kv_meta[idx].value.as_deref() {
+                if let Ok(mut psm) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(raw)
+                {
+                    if let Some(entry) = psm.remove(&old_source) {
+                        psm.insert(value.to_string(), entry);
+                        kv_meta[idx].value = Some(serde_json::to_string(&psm)?);
+                    }
+                }
+            }
+        }
+    }
 
     let buf = super::rewrite_parquet(path, kv_meta, None)?;
     std::fs::write(path, &buf)?;
@@ -535,6 +562,80 @@ mod tests {
 
         let kv = read_kv(tmp.path());
         assert!(kv.iter().any(|(k, v)| k == "node" && v == "gpu01"));
+    }
+
+    #[test]
+    fn set_source_overwrite_renames_per_source_metadata_key() {
+        // File has `source=vllm` and a per_source_metadata entry keyed
+        // by "vllm". Overwriting source to "sglang" should rename the
+        // PSM entry as well so the structure stays consistent.
+        let psm = r#"{"vllm":{"0":{"role":"service","instance":"0"}}}"#;
+        let tmp = make_minimal_parquet(vec![("source", "vllm"), ("per_source_metadata", psm)]);
+        set_source_metadata(tmp.path(), "sglang", true).unwrap();
+
+        let kv = read_kv(tmp.path());
+        let psm_str = kv
+            .iter()
+            .find(|(k, _)| k == "per_source_metadata")
+            .map(|(_, v)| v.as_str())
+            .expect("per_source_metadata should still be present");
+        let parsed: serde_json::Value = serde_json::from_str(psm_str).unwrap();
+
+        assert!(parsed.get("vllm").is_none(), "old key should be gone");
+        let renamed = parsed
+            .get("sglang")
+            .expect("entry should have been renamed to the new source");
+        assert_eq!(renamed["0"]["role"], serde_json::json!("service"));
+    }
+
+    #[test]
+    fn set_source_overwrite_preserves_unrelated_per_source_keys() {
+        // File has `source=vllm` and a per_source_metadata that includes
+        // both "vllm" and "rezolus" entries. Overwriting source should
+        // rename only the matching key.
+        let psm = r#"{"vllm":{"0":{"role":"service"}},"rezolus":{"web01":{"role":"service","node":"web01"}}}"#;
+        let tmp = make_minimal_parquet(vec![("source", "vllm"), ("per_source_metadata", psm)]);
+        set_source_metadata(tmp.path(), "sglang", true).unwrap();
+
+        let kv = read_kv(tmp.path());
+        let psm_str = kv
+            .iter()
+            .find(|(k, _)| k == "per_source_metadata")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(psm_str).unwrap();
+
+        assert!(parsed.get("vllm").is_none());
+        assert!(parsed.get("sglang").is_some());
+        assert_eq!(
+            parsed["rezolus"]["web01"]["node"],
+            serde_json::json!("web01")
+        );
+    }
+
+    #[test]
+    fn set_source_overwrite_when_old_source_absent_from_per_source_metadata() {
+        // File has `source=vllm` but the per_source_metadata payload
+        // has no "vllm" key (e.g. the user sourced the file but never
+        // ran a recorder that populated PSM for it). Overwriting source
+        // should still update the top-level key without touching PSM.
+        let psm = r#"{"rezolus":{"web01":{"role":"service"}}}"#;
+        let tmp = make_minimal_parquet(vec![("source", "vllm"), ("per_source_metadata", psm)]);
+        set_source_metadata(tmp.path(), "sglang", true).unwrap();
+
+        let kv = read_kv(tmp.path());
+        let psm_str = kv
+            .iter()
+            .find(|(k, _)| k == "per_source_metadata")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(psm_str).unwrap();
+
+        // Unrelated entry preserved; no spurious "sglang" key created
+        // because the rename target didn't exist in the source file.
+        assert!(parsed.get("rezolus").is_some());
+        assert!(parsed.get("vllm").is_none());
+        assert!(parsed.get("sglang").is_none());
     }
 
     #[test]
