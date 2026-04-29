@@ -708,9 +708,7 @@ impl Default for LazySectionStore {
 /// recovered from the embedded `sections` array of any body — overview
 /// is canonical but any body works because they all carry the same nav.
 /// Bodies that fail to parse are logged and skipped.
-fn build_section_store_from_rendered(
-    rendered: HashMap<String, String>,
-) -> LazySectionStore {
+fn build_section_store_from_rendered(rendered: HashMap<String, String>) -> LazySectionStore {
     let mut bodies: HashMap<String, serde_json::Value> = HashMap::new();
     for (key, body) in rendered {
         match serde_json::from_str::<serde_json::Value>(&body) {
@@ -2448,11 +2446,14 @@ mod tests {
     #[test]
     fn lazy_section_store_caches_sections_separately_from_metadata() {
         let mut store = LazySectionStore::new(vec![
-            serde_json::json!({"name": "Overview", "route": "/overview"})
+            serde_json::json!({"name": "Overview", "route": "/overview"}),
         ]);
         assert!(store.section("overview").is_none());
         store.insert_section("overview", serde_json::json!({"groups": []}));
-        assert_eq!(store.section("overview").unwrap()["groups"], serde_json::json!([]));
+        assert_eq!(
+            store.section("overview").unwrap()["groups"],
+            serde_json::json!([])
+        );
         assert_eq!(store.sections().len(), 1);
     }
 }
