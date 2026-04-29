@@ -574,7 +574,8 @@ fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
             if name != "timestamp" && name != "duration" {
                 let prefixed_name = format!("{}::{}", prefix, name);
                 let mut meta = field.metadata().clone();
-                meta.insert("source".to_string(), input.source.clone());
+                meta.entry("source".to_string())
+                    .or_insert_with(|| input.source.clone());
                 meta.insert(label_key.clone(), label_value.clone());
                 let new_field = Field::new(
                     prefixed_name,
@@ -1223,6 +1224,79 @@ mod tests {
         // Check timestamp field metadata
         let ts_field = schema.field_with_name("timestamp").unwrap();
         assert_eq!(ts_field.metadata().get("metric_type").unwrap(), "timestamp");
+    }
+
+    #[test]
+    fn test_combine_preserves_existing_field_source_metadata() {
+        // Build an input whose metric column already carries `source` in its
+        // field metadata (as happens when re-combining an already-combined
+        // file). The combiner must NOT overwrite that with the file-level
+        // source.
+        let ts_field = Field::new("timestamp", DataType::UInt64, false).with_metadata(
+            HashMap::from([("metric_type".to_string(), "timestamp".to_string())]),
+        );
+        let dur_field = Field::new("duration", DataType::UInt64, true).with_metadata(
+            HashMap::from([("metric_type".to_string(), "duration".to_string())]),
+        );
+        let metric_field = Field::new("m1", DataType::Int64, true).with_metadata(HashMap::from([
+            ("metric_type".to_string(), "gauge".to_string()),
+            ("source".to_string(), "original-source".to_string()),
+        ]));
+        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(vec![SEC, 2 * SEC])),
+                Arc::new(UInt64Array::from(vec![None::<u64>; 2])),
+                Arc::new(Int64Array::from(vec![Some(1i64), Some(2)])),
+            ],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![
+                KeyValue {
+                    key: KEY_SOURCE.to_string(),
+                    value: Some("rezolus".to_string()),
+                },
+                KeyValue {
+                    key: KEY_SAMPLING_INTERVAL_MS.to_string(),
+                    value: Some("1000".to_string()),
+                },
+            ]))
+            .build();
+        let tmp1 = NamedTempFile::new().unwrap();
+        let p1 = tmp1.path().to_path_buf();
+        let mut writer =
+            ArrowWriter::try_new(std::fs::File::create(&p1).unwrap(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let (_t2, p2) = make_test_file(
+            &[SEC, 2 * SEC],
+            "m2",
+            &[Some(3), Some(4)],
+            "llm-perf",
+            "1000",
+        );
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+        let mut inputs = vec![load(&p1), load(&p2)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, false, None).unwrap();
+
+        let file = std::fs::File::open(&out_path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+        let m1_name = schema
+            .fields()
+            .iter()
+            .find(|f| f.name().ends_with("::m1"))
+            .map(|f| f.name().clone())
+            .unwrap();
+        let m1_field = schema.field_with_name(&m1_name).unwrap();
+        // Original source metadata is preserved, NOT overwritten with "rezolus"
+        assert_eq!(m1_field.metadata().get("source").unwrap(), "original-source");
     }
 
     #[test]
