@@ -70,10 +70,8 @@ test('withSharedSections uses bootstrapped metadata for lean section payloads', 
 });
 
 test('clearSectionResponses preserves the bootstrapped sections nav list', () => {
-    // Regression: phase-2 lazy generators no longer embed `sections` in
-    // each section payload, so once the bootstrapped nav list is dropped
-    // (via resetSectionCacheState) it can't be recovered by reloading a
-    // section. clearSectionResponses must NOT touch state.sections.
+    // Lazy section payloads don't embed `sections`, so dropping it here
+    // leaves nothing to restore it.
     const state = createSectionCacheState();
     storeSharedSections(state, [
         { name: 'Overview', route: '/overview' },

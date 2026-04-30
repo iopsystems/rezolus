@@ -230,13 +230,9 @@ const setChartToggle = (chartId, key, value) => {
 };
 
 const clearViewerCaches = () => {
-    // Only drop the per-route response cache. The bootstrapped nav
-    // sections list is invariant across node/instance/granularity
-    // changes (and across compare-mode attach/detach — the WASM viewer
-    // re-bootstraps on its own), and Phase 2 section payloads no longer
-    // carry `sections` to recover from. Wiping it here used to leave
-    // `getCachedSections()` empty and crash `SectionContent.view` with
-    // `attrs.section is undefined` after the next reload.
+    // Drop responses only — keep the bootstrapped nav list. Section
+    // payloads no longer embed `sections`, so it can't be recovered
+    // by reloading.
     clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
     chartsState.clear();
