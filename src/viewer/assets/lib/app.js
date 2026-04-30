@@ -25,6 +25,7 @@ import {
     getSections,
     withSharedSections,
     clearSectionResponses,
+    clearNonServiceResponses,
     resetSectionCacheState,
     setSectionCacheLimit,
     pinSectionKey,
@@ -230,7 +231,10 @@ const setChartToggle = (chartId, key, value) => {
 };
 
 const clearViewerCaches = () => {
-    resetSectionCacheState(sectionCacheState);
+    // Drop responses only — keep the bootstrapped nav list. Section
+    // payloads no longer embed `sections`, so it can't be recovered
+    // by reloading.
+    clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
     chartsState.clear();
 };
@@ -324,9 +328,22 @@ const reloadCurrentSection = async () => {
 const changeNode = async (nodeName) => {
     selectedNode = nodeName;
     setSelectedNode(nodeName);
-    clearViewerCaches();
+    // Service routes don't depend on the node selector — keep their
+    // caches and skip reload when one is the active route.
+    clearNonServiceResponses(sectionCacheState);
+    for (const route of Array.from(heatmapDataCache.keys())) {
+        if (!route.startsWith('/service/')) {
+            heatmapDataCache.delete(route);
+        }
+    }
+    const onServiceRoute = m.route.get()?.startsWith('/service/');
+    if (!onServiceRoute) {
+        chartsState.clear();
+    }
     m.redraw();
-    await reloadCurrentSection();
+    if (!onServiceRoute) {
+        await reloadCurrentSection();
+    }
 };
 
 const changeInstance = async (serviceName, instanceId) => {
