@@ -61,6 +61,14 @@ const clearSectionResponses = (state) => {
     Object.keys(state.responses).forEach((key) => delete state.responses[key]);
 };
 
+const clearNonServiceResponses = (state) => {
+    Object.keys(state.responses).forEach((key) => {
+        if (!key.startsWith('service/')) {
+            delete state.responses[key];
+        }
+    });
+};
+
 const resetSectionCacheState = (state) => {
     clearSectionResponses(state);
     state.sections = [];
@@ -73,6 +81,7 @@ export {
     getSections,
     withSharedSections,
     clearSectionResponses,
+    clearNonServiceResponses,
     resetSectionCacheState,
     setSectionCacheLimit,
     pinSectionKey,

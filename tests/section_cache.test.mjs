@@ -9,6 +9,7 @@ import {
     setSectionCacheLimit,
     pinSectionKey,
     clearSectionResponses,
+    clearNonServiceResponses,
 } from '../src/viewer/assets/lib/section_cache.js';
 
 test('storeSectionResponse strips duplicated sections and preserves shared section metadata', () => {
@@ -87,6 +88,25 @@ test('clearSectionResponses preserves the bootstrapped sections nav list', () =>
         { name: 'Overview', route: '/overview' },
         { name: 'CPU', route: '/cpu' },
     ]);
+});
+
+test('clearNonServiceResponses drops stock entries but keeps service entries and nav', () => {
+    const state = createSectionCacheState();
+    storeSharedSections(state, [{ name: 'CPU', route: '/cpu' }]);
+    storeSectionResponse(state, 'cpu', { groups: [] });
+    storeSectionResponse(state, 'memory', { groups: [] });
+    storeSectionResponse(state, 'service/vllm', { groups: [] });
+    storeSectionResponse(state, 'service/sglang', { groups: [] });
+
+    clearNonServiceResponses(state);
+
+    assert.equal(state.responses.cpu, undefined);
+    assert.equal(state.responses.memory, undefined);
+    assert.deepEqual(
+        Object.keys(state.responses).sort(),
+        ['service/sglang', 'service/vllm'],
+    );
+    assert.deepEqual(getSections(state), [{ name: 'CPU', route: '/cpu' }]);
 });
 
 test('bounded section cache evicts oldest non-pinned section', () => {
