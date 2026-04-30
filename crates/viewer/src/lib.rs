@@ -357,11 +357,8 @@ impl Viewer {
 
         // Render on demand. The engine owns the Arc<Tsdb> so we can pass
         // `self.engine.tsdb()` as `&Tsdb`.
-        let mut view = dashboard::dashboard::generate_section(
-            self.engine.tsdb(),
-            &route,
-            &self.context,
-        )?;
+        let mut view =
+            dashboard::dashboard::generate_section(self.engine.tsdb(), &route, &self.context)?;
         if let Some(size) = self.context.filesize {
             view.set_filesize(size);
         }
@@ -564,11 +561,7 @@ impl WasmCaptureRegistry {
             None => None,
         };
 
-        let context = dashboard::dashboard::build_dashboard_context(
-            None,
-            &service_refs,
-            category,
-        );
+        let context = dashboard::dashboard::build_dashboard_context(None, &service_refs, category);
         if let Some(baseline) = self.baseline.as_mut() {
             baseline.context = context.clone();
             baseline.cached_bodies.borrow_mut().clear();

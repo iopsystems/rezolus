@@ -144,11 +144,7 @@ pub fn build_dashboard_context(
 /// should call `view.set_filesize(...)` themselves.
 pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Option<View> {
     let view = if route == "/overview" {
-        overview::generate(
-            data,
-            ctx.sections.clone(),
-            ctx.throughput_query.as_deref(),
-        )
+        overview::generate(data, ctx.sections.clone(), ctx.throughput_query.as_deref())
     } else if let Some((_, _, generator)) = SECTION_META.iter().find(|(_, r, _)| *r == route) {
         generator(data, ctx.sections.clone())
     } else if let Some(name) = route.strip_prefix("/service/") {
@@ -303,8 +299,8 @@ mod tests {
             Some(("inference-library", &category)),
         );
         // Category renders at /service/<category-name>.
-        let view = generate_section(&data, "/service/inference-library", &ctx)
-            .expect("category renders");
+        let view =
+            generate_section(&data, "/service/inference-library", &ctx).expect("category renders");
         let json = serde_json::to_string(&view).unwrap();
         assert!(json.contains("inference-library"));
         // Per-member sections are absent in category mode.

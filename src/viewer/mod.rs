@@ -1106,11 +1106,7 @@ fn regenerate_dashboards(state: &AppState) {
         .as_ref()
         .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
 
-    let context = dashboard::dashboard::build_dashboard_context(
-        filesize,
-        &service_refs,
-        category,
-    );
+    let context = dashboard::dashboard::build_dashboard_context(filesize, &service_refs, category);
     *state.sections.write() = LazySectionStore::new(context);
 }
 
@@ -1822,8 +1818,7 @@ async fn upload_parquet(
     let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
     validate_service_extensions(&data, &mut service_exts);
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let context =
-        dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None);
+    let context = dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None);
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
