@@ -8,6 +8,7 @@ import {
     withSharedSections,
     setSectionCacheLimit,
     pinSectionKey,
+    clearSectionResponses,
 } from '../src/viewer/assets/lib/section_cache.js';
 
 test('storeSectionResponse strips duplicated sections and preserves shared section metadata', () => {
@@ -66,6 +67,28 @@ test('withSharedSections uses bootstrapped metadata for lean section payloads', 
     storeSharedSections(state, [{ name: 'Overview', route: '/overview' }]);
     const stitched = withSharedSections(state, { groups: [] });
     assert.deepEqual(stitched.sections, [{ name: 'Overview', route: '/overview' }]);
+});
+
+test('clearSectionResponses preserves the bootstrapped sections nav list', () => {
+    // Regression: phase-2 lazy generators no longer embed `sections` in
+    // each section payload, so once the bootstrapped nav list is dropped
+    // (via resetSectionCacheState) it can't be recovered by reloading a
+    // section. clearSectionResponses must NOT touch state.sections.
+    const state = createSectionCacheState();
+    storeSharedSections(state, [
+        { name: 'Overview', route: '/overview' },
+        { name: 'CPU', route: '/cpu' },
+    ]);
+    storeSectionResponse(state, 'cpu', { groups: [{ id: 'busy' }] });
+    assert.deepEqual(Object.keys(state.responses), ['cpu']);
+
+    clearSectionResponses(state);
+
+    assert.deepEqual(state.responses, {});
+    assert.deepEqual(getSections(state), [
+        { name: 'Overview', route: '/overview' },
+        { name: 'CPU', route: '/cpu' },
+    ]);
 });
 
 test('bounded section cache evicts oldest non-pinned section', () => {
