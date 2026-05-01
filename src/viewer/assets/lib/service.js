@@ -1,6 +1,8 @@
 // Shared service extension components and route builders.
 // Used by both the binary viewer and the static site viewer.
 
+import { renderSectionNotes } from './section_notes.js';
+
 /**
  * Render service section content (metadata table, KPI groups, unavailable list).
  * Returns a mithril vnode for use inside SectionContent.
@@ -57,24 +59,22 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
                 m(Group, { ...group, sectionRoute, sectionName, interval })
             )
         ),
-        unavailable.length > 0 && m('div.section-notes', [
-            m('h3', 'Unavailable KPIs'),
-            m('p', 'The following KPIs have no matching data in this recording:'),
-            m('ul', unavailable.map((kpi) =>
-                m('li', [m('strong', kpi.title), ` (${kpi.role})`])
-            )),
-        ]),
-        categoryUnavailable.length > 0 && m('div.section-notes', [
-            m('h3', 'Skipped Comparisons'),
-            m('p', 'The following category KPIs were skipped because one member did not have a matching chart:'),
-            m('ul', categoryUnavailable.map((entry) =>
-                m('li', [
-                    m('strong', entry.title),
-                    ' — missing in ',
-                    m('code', entry.missing_member),
-                ])
-            )),
-        ]),
+        renderSectionNotes({
+            title: 'Unavailable KPIs',
+            lead: 'The following KPIs have no matching data in this recording:',
+            items: unavailable,
+            formatItem: (kpi) => m('li', [m('strong', kpi.title), ` (${kpi.role})`]),
+        }),
+        renderSectionNotes({
+            title: 'Skipped Comparisons',
+            lead: 'The following category KPIs were skipped because one member did not have a matching chart:',
+            items: categoryUnavailable,
+            formatItem: (entry) => m('li', [
+                m('strong', entry.title),
+                ' — missing in ',
+                m('code', entry.missing_member),
+            ]),
+        }),
     ]);
 };
 

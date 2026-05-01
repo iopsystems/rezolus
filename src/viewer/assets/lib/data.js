@@ -433,6 +433,36 @@ const createDataApi = ({
             }
         }
 
+        // Surface no-data plots at the bottom (mirrors service KPI UX)
+        // instead of leaving silent empty chart cards mid-section.
+        const unavailable = [];
+        const plotHasData = (plot) =>
+            Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
+        for (const group of data.groups || []) {
+            for (const sg of group.subgroups || []) {
+                const surviving = [];
+                for (const plot of (sg.plots || [])) {
+                    if (!plot.promql_query || plotHasData(plot)) {
+                        surviving.push(plot);
+                    } else {
+                        unavailable.push({
+                            group: group.name,
+                            subgroup: sg.name || null,
+                            title: plot.opts?.title || '(unnamed chart)',
+                            query: plot.promql_query,
+                        });
+                    }
+                }
+                sg.plots = surviving;
+            }
+            group.subgroups = (group.subgroups || []).filter((sg) => (sg.plots || []).length > 0);
+        }
+        data.groups = (data.groups || []).filter((g) => (g.subgroups || []).length > 0);
+        if (unavailable.length > 0) {
+            data.metadata = data.metadata || {};
+            data.metadata.unavailable_charts = unavailable;
+        }
+
         return data;
     };
 

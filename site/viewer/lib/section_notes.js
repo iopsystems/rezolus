@@ -1,0 +1,1 @@
+../../../src/viewer/assets/lib/section_notes.js

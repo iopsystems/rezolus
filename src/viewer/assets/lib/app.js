@@ -18,6 +18,7 @@ import { initTheme } from './theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './service.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
+import { renderSectionNotes } from './section_notes.js';
 import {
     createSectionCacheState,
     storeSectionResponse,
@@ -567,6 +568,8 @@ const SectionContent = {
             collectGroupPlots(g).some(p => isHistogramPlot(p))
         );
 
+        const unavailableCharts = attrs.metadata?.unavailable_charts || [];
+
         return m('div#section-content', [
             m('div.section-header-row', [
                 m('h1.section-title', titleText),
@@ -593,6 +596,16 @@ const SectionContent = {
             m('div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
             ),
+            renderSectionNotes({
+                title: 'Charts with no data',
+                lead: 'The following charts have no matching data in this recording:',
+                items: unavailableCharts,
+                formatItem: (c) => m('li', [
+                    m('strong', c.title),
+                    c.subgroup ? ` — ${c.subgroup}` : '',
+                    c.group ? ` (${c.group})` : '',
+                ]),
+            }),
         ]);
     },
 };
