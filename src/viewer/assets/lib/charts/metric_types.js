@@ -76,20 +76,20 @@ export function buildHistogramQuery(baseQuery, subtype, percentiles, strideSecs)
         return `histogram_heatmap(${baseQuery}${strideSuffix})`;
     }
     const quantiles = percentiles || DEFAULT_PERCENTILES;
-    return `histogram_percentiles([${quantiles.join(', ')}], ${baseQuery}${strideSuffix})`;
+    return `histogram_quantiles([${quantiles.join(', ')}], ${baseQuery}${strideSuffix})`;
 }
 
 /**
  * Returns true if the given plot spec represents a histogram chart.
  * Checks the semantic type first, with a legacy fallback for specs that
- * still use the old histogram_percentiles query format.
+ * still use the histogram_quantiles query format.
  *
  * @param {object} plot - A plot spec with opts and optional promql_query
  * @returns {boolean}
  */
 export function isHistogramPlot(plot) {
     return plot.opts?.type === 'histogram' ||
-        (plot.promql_query && plot.promql_query.includes('histogram_percentiles'));
+        (plot.promql_query && plot.promql_query.includes('histogram_quantiles'));
 }
 
 /**

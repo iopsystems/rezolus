@@ -17,15 +17,16 @@ export const intersectLabels = (setA, setB) => {
 
 // Canonicalize a histogram quantile into the shared "pXX" label form.
 // Accepts either a raw value (number or string like "0.5", "50", "p99")
-// or an object with .metric carrying percentile/quantile labels, and
-// returns either a canonical label or null when it can't be parsed.
-// metriken_query emits `percentile` as a fraction; legacy sources may
-// use `quantile`; either fraction (<=1) or percent form is accepted.
+// or an object with .metric carrying a `quantile` label (the standard
+// PromQL convention emitted by both `histogram_quantile` and the
+// rezolus-extension `histogram_quantiles`), and returns either a
+// canonical label or null when it can't be parsed. Either fraction
+// (<=1) or percent form is accepted.
 export const canonicalQuantileLabel = (input) => {
     let raw = input;
     if (input && typeof input === 'object') {
         const mm = input.metric || input;
-        raw = mm.percentile != null ? mm.percentile : mm.quantile;
+        raw = mm.quantile;
         if (raw == null) {
             for (const [k, v] of Object.entries(mm)) {
                 if (k !== '__name__') { raw = v; break; }

@@ -449,7 +449,7 @@ fn extract_matrix_samples(
             // Histogram heatmap data cannot be converted to matrix samples
             Err(
                 "Histogram heatmap data is not suitable for correlation analysis. \
-                Use histogram_percentiles() instead."
+                Use histogram_quantiles() instead."
                     .into(),
             )
         }

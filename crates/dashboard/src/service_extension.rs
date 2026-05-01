@@ -87,7 +87,7 @@ impl Kpi {
                             .join(", ")
                     ),
                 };
-                format!("histogram_percentiles({}, {})", quantiles, self.query)
+                format!("histogram_quantiles({}, {})", quantiles, self.query)
             }
         } else {
             self.query.clone()
@@ -166,7 +166,7 @@ impl CategoryKpi {
 
     /// Build the same effective query string that a regular `Kpi` would
     /// produce given the supplied raw query. Mirrors `Kpi::effective_query`
-    /// — histogram_percentiles wrapping, histogram_heatmap for buckets,
+    /// — histogram_quantiles wrapping, histogram_heatmap for buckets,
     /// passthrough for everything else.
     pub fn effective_query(&self, raw_query: &str) -> String {
         if self.metric_type == "histogram" {
