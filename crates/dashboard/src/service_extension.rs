@@ -191,7 +191,7 @@ impl CategoryKpi {
                             .join(", ")
                     ),
                 };
-                format!("histogram_percentiles({}, {})", quantiles, raw_query)
+                format!("histogram_quantiles({}, {})", quantiles, raw_query)
             }
         } else {
             raw_query.to_string()
