@@ -62,7 +62,7 @@ export function configureMultiSeriesChart(chart) {
     // For percentile charts, assign z-index so lower quantiles draw on top of higher ones.
     // This ensures p50 is visible when its value equals p99.99.
     const isPercentileChart = chart.spec.promql_query &&
-        chart.spec.promql_query.includes('histogram_percentiles');
+        chart.spec.promql_query.includes('histogram_quantiles');
 
     for (let i = 1; i < data.length; i++) {
         const name = seriesNames[i - 1];

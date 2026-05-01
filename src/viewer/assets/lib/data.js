@@ -20,7 +20,7 @@ const getStepOverride = () => _stepOverride;
 //
 //   Counter:   irate(m[5m]) → rate(m[Ns])   (true average rate over window)
 //   Gauge:     no rewrite needed (engine samples at step points)
-//   Histogram: stride parameter passed to histogram_percentiles / histogram_heatmap
+//   Histogram: stride parameter passed to histogram_quantiles / histogram_heatmap
 
 // Replace all irate(...[window]) with rate(...[Ns]) in a query string.
 const rewriteCounterQuery = (query, stepSecs) => {
@@ -53,7 +53,7 @@ const getSelectedInstance = (serviceName) => _selectedInstances[serviceName] || 
 const PROMQL_KEYWORDS = new Set([
     'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
     'bool', 'sum', 'avg', 'min', 'max', 'count', 'rate', 'irate', 'increase',
-    'histogram_percentiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset',
+    'histogram_quantiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset',
     'abs', 'absent', 'ceil', 'floor', 'round', 'sqrt', 'exp', 'ln', 'log2',
     'log10', 'clamp', 'clamp_max', 'clamp_min', 'delta', 'deriv', 'idelta',
     'predict_linear', 'resets', 'changes', 'label_replace', 'label_join',
@@ -474,9 +474,9 @@ const createDataApi = ({
         let metricSelector;
         if (plot.opts.type === 'histogram') {
             metricSelector = query;
-        } else if (query.includes('histogram_percentiles')) {
+        } else if (query.includes('histogram_quantiles')) {
             // Legacy fallback: extract base metric from wrapped query
-            const match = query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
+            const match = query.match(/histogram_quantiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
             if (!match) return null;
             metricSelector = match[1].trim();
         } else {

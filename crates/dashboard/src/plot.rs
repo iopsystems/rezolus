@@ -377,7 +377,7 @@ impl PlotOpts {
 
     /// A histogram metric represents a distribution (e.g., latency, IO size).
     /// The subtype determines the visualization and query wrapping:
-    /// - "percentiles": shows percentile scatter plot, wraps query with histogram_percentiles()
+    /// - "percentiles": shows percentile scatter plot, wraps query with histogram_quantiles()
     /// - "buckets": shows bucket heatmap, wraps query with histogram_heatmap()
     pub fn histogram<T: Into<String>, U: Into<String>>(
         title: T,
