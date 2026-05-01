@@ -567,6 +567,8 @@ const SectionContent = {
             collectGroupPlots(g).some(p => isHistogramPlot(p))
         );
 
+        const unavailableCharts = attrs.metadata?.unavailable_charts || [];
+
         return m('div#section-content', [
             m('div.section-header-row', [
                 m('h1.section-title', titleText),
@@ -593,6 +595,15 @@ const SectionContent = {
             m('div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
             ),
+            unavailableCharts.length > 0 && m('div.section-notes', [
+                m('h3', 'Charts with no data'),
+                m('p', 'The following charts have no matching data in this recording:'),
+                m('ul', unavailableCharts.map((c) => m('li', [
+                    m('strong', c.title),
+                    c.subgroup ? ` — ${c.subgroup}` : '',
+                    c.group ? ` (${c.group})` : '',
+                ]))),
+            ]),
         ]);
     },
 };
