@@ -433,10 +433,8 @@ const createDataApi = ({
             }
         }
 
-        // Pull out plots whose query yielded no data and stash the
-        // titles in a section-level "unavailable" list, mirroring the
-        // service-section UX. Empty subgroups and groups are dropped
-        // so the page doesn't carry blank chart cards.
+        // Surface no-data plots at the bottom (mirrors service KPI UX)
+        // instead of leaving silent empty chart cards mid-section.
         const unavailable = [];
         const plotHasData = (plot) =>
             Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);

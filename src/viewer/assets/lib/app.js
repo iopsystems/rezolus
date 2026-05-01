@@ -18,6 +18,7 @@ import { initTheme } from './theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './service.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
+import { renderSectionNotes } from './section_notes.js';
 import {
     createSectionCacheState,
     storeSectionResponse,
@@ -595,15 +596,16 @@ const SectionContent = {
             m('div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
             ),
-            unavailableCharts.length > 0 && m('div.section-notes', [
-                m('h3', 'Charts with no data'),
-                m('p', 'The following charts have no matching data in this recording:'),
-                m('ul', unavailableCharts.map((c) => m('li', [
+            renderSectionNotes({
+                title: 'Charts with no data',
+                lead: 'The following charts have no matching data in this recording:',
+                items: unavailableCharts,
+                formatItem: (c) => m('li', [
                     m('strong', c.title),
                     c.subgroup ? ` — ${c.subgroup}` : '',
                     c.group ? ` (${c.group})` : '',
-                ]))),
-            ]),
+                ]),
+            }),
         ]);
     },
 };
