@@ -14,11 +14,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     busy.describe("Overall CPU utilization and per-core breakdown.");
     busy.plot_promql(
         PlotOpts::counter("Busy %", "cpu-busy", Unit::Percentage).percentage_range(),
-        "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
+        "sum by (node) (irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
     );
     busy.plot_promql(
         PlotOpts::counter("Busy %", "cpu-busy-heatmap", Unit::Percentage).percentage_range(),
-        "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
+        "sum by (id, node) (irate(cpu_usage[5m])) / 1000000000".to_string(),
     );
 
     view.group(cpu);
@@ -38,7 +38,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
             Unit::Bitrate,
         )
         .with_unit_system("bitrate"),
-        "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
+        "sum by (node) (irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
     );
     bandwidth.plot_promql(
         PlotOpts::counter(
@@ -47,18 +47,18 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
             Unit::Bitrate,
         )
         .with_unit_system("bitrate"),
-        "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
+        "sum by (node) (irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
     );
 
     let packets = network.subgroup("Packets");
     packets.describe("Transmit and receive packet rates.");
     packets.plot_promql(
         PlotOpts::counter("Transmit Packets", "network-transmit-packets", Unit::Rate),
-        "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
+        "sum by (node) (irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
     );
     packets.plot_promql(
         PlotOpts::counter("Receive Packets", "network-receive-packets", Unit::Rate),
-        "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
+        "sum by (node) (irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
     );
 
     let tcp = network.subgroup("TCP Latency");
@@ -99,7 +99,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     total.describe("Aggregate syscall rate and latency across all operation categories.");
     total.plot_promql(
         PlotOpts::counter("Total", "syscall-total", Unit::Rate),
-        "sum(irate(syscall[5m]))".to_string(),
+        "sum by (node) (irate(syscall[5m]))".to_string(),
     );
     total.plot_promql(
         PlotOpts::histogram_latency("Total", "syscall-total-latency"),
@@ -118,23 +118,23 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     rate.describe("Softirqs handled per second, aggregate and per-CPU.");
     rate.plot_promql(
         PlotOpts::counter("Rate", "softirq-total-rate", Unit::Rate),
-        "sum(irate(softirq[5m]))".to_string(),
+        "sum by (node) (irate(softirq[5m]))".to_string(),
     );
     rate.plot_promql(
         PlotOpts::counter("Rate", "softirq-total-rate-heatmap", Unit::Rate),
-        "sum by (id) (irate(softirq[5m]))".to_string(),
+        "sum by (id, node) (irate(softirq[5m]))".to_string(),
     );
 
     let time = softirq.subgroup("CPU Time");
     time.describe("Fraction of CPU time spent servicing softirqs.");
     time.plot_promql(
         PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
-        "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
+        "sum by (node) (irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
     );
     time.plot_promql(
         PlotOpts::counter("CPU %", "softirq-total-time-heatmap", Unit::Percentage)
             .percentage_range(),
-        "sum by (id) (irate(softirq_time[5m])) / 1000000000".to_string(),
+        "sum by (id, node) (irate(softirq_time[5m])) / 1000000000".to_string(),
     );
 
     view.group(softirq);
@@ -149,11 +149,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     read.describe("Read throughput and IOPS across all block devices.");
     read.plot_promql(
         PlotOpts::counter("Read Throughput", "blockio-throughput-read", Unit::Datarate),
-        "sum(irate(blockio_bytes{op=\"read\"}[5m]))".to_string(),
+        "sum by (node) (irate(blockio_bytes{op=\"read\"}[5m]))".to_string(),
     );
     read.plot_promql(
         PlotOpts::counter("Read IOPS", "blockio-iops-read", Unit::Count),
-        "sum(irate(blockio_operations{op=\"read\"}[5m]))".to_string(),
+        "sum by (node) (irate(blockio_operations{op=\"read\"}[5m]))".to_string(),
     );
 
     let write = blockio.subgroup("Write");
@@ -164,11 +164,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
             "blockio-throughput-write",
             Unit::Datarate,
         ),
-        "sum(irate(blockio_bytes{op=\"write\"}[5m]))".to_string(),
+        "sum by (node) (irate(blockio_bytes{op=\"write\"}[5m]))".to_string(),
     );
     write.plot_promql(
         PlotOpts::counter("Write IOPS", "blockio-iops-write", Unit::Count),
-        "sum(irate(blockio_operations{op=\"write\"}[5m]))".to_string(),
+        "sum by (node) (irate(blockio_operations{op=\"write\"}[5m]))".to_string(),
     );
 
     view.group(blockio);
@@ -193,6 +193,9 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
         // fraction formulation.
         efficiency.plot_promql(
             PlotOpts::counter("CPU Time / Throughput", "normalized-cpu-busy", Unit::Time),
+            // Fleet-aggregated against service throughput; per-host
+            // breakdown wouldn't vector-match the throughput KPI's
+            // {instance=...} labels.
             format!("sum(irate(cpu_usage[5m])) / ({tq})"),
         );
         efficiency.plot_promql(
