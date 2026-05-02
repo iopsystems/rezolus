@@ -5,6 +5,7 @@
 !.claude/scripts/
 docs/superpowers/
 target
+site/viewer/pkg/
 **/*.rs.bk
 .worktrees/
 results/

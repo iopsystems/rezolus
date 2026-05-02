@@ -6,6 +6,11 @@ on:
     paths:
       - 'site/**'
       - 'src/viewer/assets/lib/**'
+      - 'crates/viewer/**'
+      - 'crates/dashboard/**'
+      - 'config/templates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/pages.yml'
 
 permissions:
@@ -26,15 +31,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Regenerate static-site templates manifest
-        run: |
-          (
-            cd config/templates
-            printf '[\n'
-            ls -1 *.json | sort | sed 's/\.json$//' \
-              | awk 'BEGIN{first=1} {if(!first)printf ",\n"; printf "  \"%s\"", $0; first=0} END{printf "\n"}'
-            printf ']\n'
-          ) > site/viewer/templates/manifest.json
+      - uses: ./.github/actions/setup-rust
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version ^0.14 --locked
+      - name: Build WASM viewer
+        run: ./crates/viewer/build.sh
       - name: Resolve symlinks
         run: cp -rL site site-resolved
       - uses: actions/configure-pages@v5
