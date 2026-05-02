@@ -3,9 +3,9 @@
   "inference-library",
   "llm-perf",
   "sglang-decode",
+  "sglang",
   "sglang-prefill",
   "sglang-router",
-  "sglang",
   "valkey",
   "vllm"
 ]
