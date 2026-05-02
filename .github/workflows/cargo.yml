@@ -102,22 +102,15 @@ jobs:
           cargo fmt --all -- --check
 
   # WASM viewer is wasm32-only and excluded from the regular build
-  # matrix above. Two checks run here on every PR:
+  # matrix above. Build it from source here so Rust-side breakage in
+  # crates/viewer/ surfaces at PR time, then structurally validate the
+  # rebuilt WASM before the static-site deploy uses the same build path.
   #
-  #   1. Rebuild from source via crates/viewer/build.sh so a
-  #      Rust-side breakage in crates/viewer/ surfaces at PR time.
-  #
-  #   2. Structurally validate the *committed* WASM that will ship
-  #      to rezolus.com. The static-site deploy in pages.yml copies
-  #      site/viewer/pkg/wasm_viewer_bg.wasm verbatim, so a bad
-  #      committed artifact lands in production. Building locally
-  #      with the wrong binaryen silently produces a broken WASM —
-  #      e.g. binaryen 108 mis-orders the externref table so the
-  #      `__wbindgen_externrefs` export points at the locked
-  #      funcref table, and the JS shim then fails at instantiation
-  #      with `Table.grow(): failed to grow table by 4`. This step
-  #      catches that specific failure mode regardless of which
-  #      toolchain produced the committed bytes.
+  # Building with the wrong binaryen silently produces a broken WASM —
+  # e.g. binaryen 108 mis-orders the externref table so the
+  # `__wbindgen_externrefs` export points at the locked funcref table,
+  # and the JS shim then fails at instantiation with
+  # `Table.grow(): failed to grow table by 4`.
   wasm-viewer:
     name: wasm-viewer
     runs-on: ubuntu-latest
@@ -131,7 +124,9 @@ jobs:
         run: cargo install wasm-pack --version ^0.14 --locked
       - name: Install wabt
         run: sudo apt-get update && sudo apt-get -y install wabt
-      - name: Validate committed WASM structure
+      - name: Rebuild WASM viewer
+        run: ./crates/viewer/build.sh
+      - name: Validate rebuilt WASM structure
         run: |
           wasm=site/viewer/pkg/wasm_viewer_bg.wasm
           # Find which table index the JS shim's externref slot is
@@ -157,8 +152,6 @@ jobs:
             echo "(needs wasm-pack >= 0.14, which pins binaryen 117)."
             exit 1
           fi
-      - name: Rebuild WASM viewer
-        run: ./crates/viewer/build.sh
 
   setup:
     name: setup

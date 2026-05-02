@@ -30,6 +30,9 @@ The script invokes `wasm-pack build --profile wasm-release` and writes
 into `site/viewer/pkg/`, where `site/viewer/lib/script.js` imports them as
 `../pkg/wasm_viewer.js`.
 
+The generated `site/viewer/pkg/` files are intentionally ignored by git.
+GitHub Pages rebuilds them in CI before publishing the static viewer.
+
 The `wasm-release` profile is defined in the root `Cargo.toml`. It inherits
 from `release` but strips debuginfo and sets `opt-level = "s"` so the shipped
 `.wasm` stays compact.
