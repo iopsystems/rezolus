@@ -34,7 +34,9 @@ export class Viewer {
         }
     }
     /**
-     * Returns the full View JSON for a dashboard section.
+     * Returns the full View JSON for a dashboard section. The shared
+     * `sections` navigation array is stripped on the way out — callers
+     * fetch it once via `get_sections()`.
      * @param {string} key
      * @returns {string | undefined}
      */
@@ -127,7 +129,7 @@ export class Viewer {
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
-        this.__wbg_ptr = ret[0] >>> 0;
+        this.__wbg_ptr = ret[0];
         ViewerFinalization.register(this, this.__wbg_ptr, this);
         return this;
     }
@@ -390,7 +392,7 @@ export class WasmCaptureRegistry {
     }
     constructor() {
         const ret = wasm.wasmcaptureregistry_new();
-        this.__wbg_ptr = ret >>> 0;
+        this.__wbg_ptr = ret;
         WasmCaptureRegistryFinalization.register(this, this.__wbg_ptr, this);
         return this;
     }
@@ -453,17 +455,17 @@ export class WasmCaptureRegistry {
         }
     }
     /**
-     * Regenerate BOTH viewers' `dashboard_sections` using service
+     * Regenerate BOTH viewers' lazy `DashboardContext` using service
      * extensions from BOTH attached captures and the explicitly named
      * category template (when provided). When the experiment slot is
      * empty, this is a no-op (the per-capture `init_templates` call
      * already populated baseline's sections).
      *
-     * Both slots get the same combined map: compare-mode chart fetches
-     * query both slots for the active section route, so a category
-     * route like `/service/inference-library` must resolve in the
-     * experiment slot too — otherwise the experiment fetch 404s and
-     * the chart surfaces "Error: null".
+     * Both slots get the same combined `DashboardContext`: compare-mode
+     * chart fetches query both slots for the active section route, so
+     * a category route like `/service/inference-library` must resolve
+     * in the experiment slot too — otherwise the experiment fetch
+     * 404s and the chart surfaces "Error: null".
      *
      * `category_name` activates category mode when each detected
      * source appears in the category template's `members` list. When
@@ -545,7 +547,7 @@ export function init() {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg___wbindgen_throw_6b64449b9b9ed33c: function(arg0, arg1) {
+        __wbg___wbindgen_throw_9c75d47bf9e7731e: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
         __wbg_error_a6fa202b58aa1cd3: function(arg0, arg1) {
@@ -593,10 +595,10 @@ function __wbg_get_imports() {
 
 const ViewerFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_viewer_free(ptr >>> 0, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_viewer_free(ptr, 1));
 const WasmCaptureRegistryFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_wasmcaptureregistry_free(ptr >>> 0, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_wasmcaptureregistry_free(ptr, 1));
 
 let cachedDataViewMemory0 = null;
 function getDataViewMemory0() {
@@ -607,8 +609,7 @@ function getDataViewMemory0() {
 }
 
 function getStringFromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    return decodeText(ptr, len);
+    return decodeText(ptr >>> 0, len);
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -702,8 +703,9 @@ if (!('encodeInto' in cachedTextEncoder)) {
 
 let WASM_VECTOR_LEN = 0;
 
-let wasmModule, wasm;
+let wasmModule, wasmInstance, wasm;
 function __wbg_finalize_init(instance, module) {
+    wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
     cachedDataViewMemory0 = null;

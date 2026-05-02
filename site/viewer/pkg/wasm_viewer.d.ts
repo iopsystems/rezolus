@@ -15,7 +15,9 @@ export class Viewer {
      */
     file_metadata_json(): string;
     /**
-     * Returns the full View JSON for a dashboard section.
+     * Returns the full View JSON for a dashboard section. The shared
+     * `sections` navigation array is stripped on the way out — callers
+     * fetch it once via `get_sections()`.
      */
     get_section(key: string): string | undefined;
     /**
@@ -107,17 +109,17 @@ export class WasmCaptureRegistry {
     query(capture: string, query: string, time: number): string;
     query_range(capture: string, query: string, start: number, end: number, step: number): string;
     /**
-     * Regenerate BOTH viewers' `dashboard_sections` using service
+     * Regenerate BOTH viewers' lazy `DashboardContext` using service
      * extensions from BOTH attached captures and the explicitly named
      * category template (when provided). When the experiment slot is
      * empty, this is a no-op (the per-capture `init_templates` call
      * already populated baseline's sections).
      *
-     * Both slots get the same combined map: compare-mode chart fetches
-     * query both slots for the active section route, so a category
-     * route like `/service/inference-library` must resolve in the
-     * experiment slot too — otherwise the experiment fetch 404s and
-     * the chart surfaces "Error: null".
+     * Both slots get the same combined `DashboardContext`: compare-mode
+     * chart fetches query both slots for the active section route, so
+     * a category route like `/service/inference-library` must resolve
+     * in the experiment slot too — otherwise the experiment fetch
+     * 404s and the chart surfaces "Error: null".
      *
      * `category_name` activates category mode when each detected
      * source appears in the category template's `members` list. When
