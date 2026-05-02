@@ -331,8 +331,7 @@ impl Viewer {
 
         // Validate against this capture's own tsdb so per-capture
         // unavailability is correctly reported.
-        let tsdb = self.engine.tsdb();
-        validate_service_extensions_inline(tsdb, &mut service_exts);
+        validate_service_extensions_inline(&self.engine, &mut service_exts);
         service_exts
     }
 
@@ -665,15 +664,15 @@ fn parse_template_registry(
 }
 
 /// Validate KPI availability for service extensions by running each KPI's
-/// PromQL query against `tsdb`. Sets `available = false` on KPIs whose
-/// queries return empty results. WASM-targeted mirror of the server's
-/// `validate_service_extensions` in `src/viewer/mod.rs`.
-fn validate_service_extensions_inline(
-    tsdb: &Tsdb,
+/// PromQL query against the Viewer's existing query engine. Re-creating a
+/// fresh engine over `&Tsdb` has diverged for histogram queries in the WASM
+/// parquet-bytes path, which produced false "Unavailable KPIs" notes even
+/// though the same queries succeeded through the attached Viewer engine.
+fn validate_service_extensions_inline<T: std::ops::Deref<Target = Tsdb>>(
+    engine: &QueryEngine<T>,
     exts: &mut [(String, dashboard::ServiceExtension)],
 ) {
     use metriken_query::promql;
-    let engine = QueryEngine::new(tsdb);
     let (start, end) = engine.get_time_range();
     for (_source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
