@@ -2862,13 +2862,19 @@ main {
         font-size: var(--font-size-base);
     }
 
-    /* Show filename but hide expandable metadata on mobile */
+    /* Show filename but hide expandable metadata on mobile.
+     * pointer-events stays on the wrapper for the static-label case, but
+     * scope it to .topnav-source-name so the multi-node <select> child
+     * (rendered without a .topnav-source-name span) remains tappable. */
     .topnav-source {
-        pointer-events: none;
         overflow: hidden;
         text-overflow: ellipsis;
         min-width: 0;
         flex: 1;
+    }
+
+    .topnav-source-name {
+        pointer-events: none;
     }
 
     /* Shrink transport buttons */
