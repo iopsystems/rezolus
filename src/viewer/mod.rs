@@ -744,6 +744,11 @@ struct AppState {
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
     file_checksum: parking_lot::RwLock<Option<String>>,
+    /// Shared SQL backend. Holds the per-data-source DuckDB connection
+    /// cache, so the first request for a given parquet pays the cold-start
+    /// cost (UDF/macro registration + view + metadata-table build) and
+    /// every subsequent request hits the warm in-memory state.
+    sql_backend: Arc<metriken_query_sql::DuckDbBackend>,
 }
 
 impl AppState {
@@ -760,6 +765,7 @@ impl AppState {
             category_name: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
+            sql_backend: Arc::new(metriken_query_sql::DuckDbBackend::new()),
         }
     }
 
@@ -1633,6 +1639,76 @@ fn error_type(e: &promql::QueryError) -> &'static str {
     }
 }
 
+/// Build a `DispatchConfig` for a capture if its parquet path is known.
+/// Returns `None` for live-agent or upload-without-snapshot sources, in
+/// which case the caller falls back to the plain PromQL path.
+///
+/// The SQL backend is shared (cloned `Arc`) across every dispatch — that's
+/// what makes the per-data-source DuckDB connection cache useful. A fresh
+/// backend per request would defeat caching and pay full cold-start every
+/// time.
+fn dispatch_for_capture(state: &AppState, capture: CaptureId) -> Option<promql::DispatchConfig> {
+    // Skip dispatcher entirely when METRIKEN_DISABLE_SQL is set — every query
+    // goes straight to the PromQL engine, no catalogue lookup, no SQL backend,
+    // no observer. Useful for "what does the viewer look like with PromQL only"
+    // baseline experiments. Set METRIKEN_FORCE_PRIMARY=1 (in
+    // `metriken-query`) for the symmetric "SQL-only" experiment.
+    if std::env::var("METRIKEN_DISABLE_SQL").is_ok() {
+        return None;
+    }
+    let path = match capture {
+        CaptureId::Baseline => state.parquet_path.read().clone(),
+        CaptureId::Experiment => state.experiment_parquet_path.read().clone(),
+    }?;
+    Some(promql::DispatchConfig {
+        catalogue: metriken_query::Catalogue::embedded(),
+        backend: state.sql_backend.clone(),
+        observer: std::sync::Arc::new(LoggingDispatchObserver),
+        data_source: path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Logs every shadow-mode divergence as a `warn!` line and every dispatched
+/// query as `info!` with PromQL / SQL latency — keeps the e2e signal visible
+/// at the rezolus stderr without setting up a metrics pipeline. Drop in
+/// favour of a `metriken` counter once production rollout begins.
+struct LoggingDispatchObserver;
+impl metriken_query::DispatchObserver for LoggingDispatchObserver {
+    fn on_diff(&self, entry: &metriken_query::CatalogueEntry, diff: &metriken_query::Diff) {
+        warn!(
+            "shadow-mode divergence on `{}` ({}): PromQL ≠ SQL",
+            entry.id, entry.promql
+        );
+        debug!(
+            "  promql: {}",
+            serde_json::to_string(&diff.promql).unwrap_or_default()
+        );
+        debug!(
+            "  sql:    {}",
+            serde_json::to_string(&diff.sql).unwrap_or_default()
+        );
+    }
+
+    fn on_dispatch(
+        &self,
+        entry: &metriken_query::CatalogueEntry,
+        mode: metriken_query::Mode,
+        promql_ms: Option<f64>,
+        sql_ms: Option<f64>,
+    ) {
+        let p = promql_ms
+            .map(|x| format!("{:.1}ms", x))
+            .unwrap_or_else(|| "-".into());
+        let s = sql_ms
+            .map(|x| format!("{:.1}ms", x))
+            .unwrap_or_else(|| "-".into());
+        info!(
+            "dispatch id={} mode={:?} promql={} sql={}",
+            entry.id, mode, p, s
+        );
+    }
+}
+
 async fn instant_query(
     axum::extract::Query(params): axum::extract::Query<QueryParams>,
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
@@ -1649,6 +1725,10 @@ async fn instant_query(
     };
     let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
+    let engine = match dispatch_for_capture(&state, capture) {
+        Some(cfg) => engine.with_dispatch(cfg),
+        None => engine,
+    };
     match engine.query(&params.query, params.time) {
         Ok(result) => axum::response::Json(ApiResponse::success(result)),
         Err(e) => axum::response::Json(ApiResponse::error(
@@ -1674,6 +1754,10 @@ async fn range_query(
     };
     let tsdb = tsdb_handle.read();
     let engine = QueryEngine::new(&*tsdb);
+    let engine = match dispatch_for_capture(&state, capture) {
+        Some(cfg) => engine.with_dispatch(cfg),
+        None => engine,
+    };
     match engine.query_range(&params.query, params.start, params.end, params.step) {
         Ok(result) => axum::response::Json(ApiResponse::success(result)),
         Err(e) => axum::response::Json(ApiResponse::error(
