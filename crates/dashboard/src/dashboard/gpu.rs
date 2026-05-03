@@ -104,8 +104,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     sm.describe("Streaming multiprocessor active time and warp occupancy — core indicators of compute efficiency.");
     if multi_gpu {
         sm.plot_promql(
-            PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage)
-                .percentage_range(),
+            PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
             "avg(gpu_sm_utilization) / 100".to_string(),
         );
         sm.plot_promql(
@@ -133,8 +132,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         );
     } else {
         sm.plot_promql_full(
-            PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage)
-                .percentage_range(),
+            PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
             "avg(gpu_sm_utilization) / 100".to_string(),
         );
         sm.plot_promql_full(
