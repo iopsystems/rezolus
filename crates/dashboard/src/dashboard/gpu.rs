@@ -1,8 +1,25 @@
 use crate::Tsdb;
 use crate::plot::*;
 
+/// True iff the recording has more than one GPU. Per-device charts are
+/// suppressed when this is false because they degenerate to the aggregate.
+fn has_multiple_gpus(data: &Tsdb) -> bool {
+    [
+        "gpu_utilization",
+        "gpu_memory",
+        "gpu_temperature",
+        "gpu_power_usage",
+        "gpu_clock",
+        "gpu_memory_utilization",
+        "gpu_dram_bandwidth_utilization",
+    ]
+    .iter()
+    .any(|m| metric_unique_label_count(data, m, "id") > 1)
+}
+
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
+    let multi_gpu = has_multiple_gpus(data);
 
     /*
      * Utilization
@@ -16,10 +33,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::gauge("GPU %", "gpu-pct", Unit::Percentage).percentage_range(),
         "avg(gpu_utilization) / 100".to_string(),
     );
-    gpu.plot_promql(
-        PlotOpts::gauge("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage).percentage_range(),
-        "sum by (id) (gpu_utilization) / 100".to_string(),
-    );
+    if multi_gpu {
+        gpu.plot_promql(
+            PlotOpts::gauge("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage)
+                .percentage_range(),
+            "sum by (id) (gpu_utilization) / 100".to_string(),
+        );
+    }
 
     let mem_ctrl = utilization.subgroup("Memory Controller");
     mem_ctrl.describe("Fraction of time the memory controller is servicing requests.");
@@ -27,15 +47,17 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::gauge("Memory Controller %", "mem-ctrl-pct", Unit::Percentage).percentage_range(),
         "avg(gpu_memory_utilization) / 100".to_string(),
     );
-    mem_ctrl.plot_promql(
-        PlotOpts::gauge(
-            "Memory Controller % (Per-GPU)",
-            "mem-ctrl-pct-per-gpu",
-            Unit::Percentage,
-        )
-        .percentage_range(),
-        "sum by (id) (gpu_memory_utilization) / 100".to_string(),
-    );
+    if multi_gpu {
+        mem_ctrl.plot_promql(
+            PlotOpts::gauge(
+                "Memory Controller % (Per-GPU)",
+                "mem-ctrl-pct-per-gpu",
+                Unit::Percentage,
+            )
+            .percentage_range(),
+            "sum by (id) (gpu_memory_utilization) / 100".to_string(),
+        );
+    }
 
     view.group(utilization);
 
@@ -48,15 +70,17 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
             .percentage_range(),
         "avg(gpu_tensor_utilization) / 100".to_string(),
     );
-    tensor.plot_promql(
-        PlotOpts::gauge(
-            "GPU Tensor Activity % (Per-GPU)",
-            "gpu-tensor-act-per-gpu",
-            Unit::Percentage,
-        )
-        .percentage_range(),
-        "sum by (id) (gpu_tensor_utilization) / 100".to_string(),
-    );
+    if multi_gpu {
+        tensor.plot_promql(
+            PlotOpts::gauge(
+                "GPU Tensor Activity % (Per-GPU)",
+                "gpu-tensor-act-per-gpu",
+                Unit::Percentage,
+            )
+            .percentage_range(),
+            "sum by (id) (gpu_tensor_utilization) / 100".to_string(),
+        );
+    }
 
     let sm = activity.subgroup("SM Activity & Occupancy");
     sm.describe("Streaming multiprocessor active time and warp occupancy — core indicators of compute efficiency.");
@@ -64,28 +88,32 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
         "avg(gpu_sm_utilization) / 100".to_string(),
     );
-    sm.plot_promql(
-        PlotOpts::gauge(
-            "GPU SM Activity % (Per-GPU)",
-            "gpu-sm-act-per-gpu",
-            Unit::Percentage,
-        )
-        .percentage_range(),
-        "sum by (id) (gpu_sm_utilization) / 100".to_string(),
-    );
+    if multi_gpu {
+        sm.plot_promql(
+            PlotOpts::gauge(
+                "GPU SM Activity % (Per-GPU)",
+                "gpu-sm-act-per-gpu",
+                Unit::Percentage,
+            )
+            .percentage_range(),
+            "sum by (id) (gpu_sm_utilization) / 100".to_string(),
+        );
+    }
     sm.plot_promql(
         PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage).percentage_range(),
         "avg(gpu_sm_occupancy) / 100".to_string(),
     );
-    sm.plot_promql(
-        PlotOpts::gauge(
-            "GPU SM Occupancy % (Per-GPU)",
-            "gpu-sm-ocp-per-gpu",
-            Unit::Percentage,
-        )
-        .percentage_range(),
-        "sum by (id) (gpu_sm_occupancy) / 100".to_string(),
-    );
+    if multi_gpu {
+        sm.plot_promql(
+            PlotOpts::gauge(
+                "GPU SM Occupancy % (Per-GPU)",
+                "gpu-sm-ocp-per-gpu",
+                Unit::Percentage,
+            )
+            .percentage_range(),
+            "sum by (id) (gpu_sm_occupancy) / 100".to_string(),
+        );
+    }
 
     view.group(activity);
 
@@ -111,16 +139,18 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         "sum(gpu_memory{state=\"used\"}) / (sum(gpu_memory{state=\"used\"}) + sum(gpu_memory{state=\"free\"}))".to_string(),
     );
 
-    let per_device = memory.subgroup("Per-Device Capacity");
-    per_device.describe("Memory used and free broken out by GPU id.");
-    per_device.plot_promql(
-        PlotOpts::gauge("Used (Per-GPU)", "mem-used-per-gpu", Unit::Bytes),
-        "sum by (id) (gpu_memory{state=\"used\"})".to_string(),
-    );
-    per_device.plot_promql(
-        PlotOpts::gauge("Free (Per-GPU)", "mem-free-per-gpu", Unit::Bytes),
-        "sum by (id) (gpu_memory{state=\"free\"})".to_string(),
-    );
+    if multi_gpu {
+        let per_device = memory.subgroup("Per-Device Capacity");
+        per_device.describe("Memory used and free broken out by GPU id.");
+        per_device.plot_promql(
+            PlotOpts::gauge("Used (Per-GPU)", "mem-used-per-gpu", Unit::Bytes),
+            "sum by (id) (gpu_memory{state=\"used\"})".to_string(),
+        );
+        per_device.plot_promql(
+            PlotOpts::gauge("Free (Per-GPU)", "mem-free-per-gpu", Unit::Bytes),
+            "sum by (id) (gpu_memory{state=\"free\"})".to_string(),
+        );
+    }
 
     let dram_bw = memory.subgroup("DRAM Bandwidth");
     dram_bw.describe("Fraction of peak memory bandwidth in use.");
@@ -133,15 +163,17 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         .percentage_range(),
         "avg(gpu_dram_bandwidth_utilization) / 100".to_string(),
     );
-    dram_bw.plot_promql(
-        PlotOpts::gauge(
-            "DRAM Bandwidth % (Per-GPU)",
-            "gpu-dram-act-per-gpu",
-            Unit::Percentage,
-        )
-        .percentage_range(),
-        "sum by (id) (gpu_dram_bandwidth_utilization) / 100".to_string(),
-    );
+    if multi_gpu {
+        dram_bw.plot_promql(
+            PlotOpts::gauge(
+                "DRAM Bandwidth % (Per-GPU)",
+                "gpu-dram-act-per-gpu",
+                Unit::Percentage,
+            )
+            .percentage_range(),
+            "sum by (id) (gpu_dram_bandwidth_utilization) / 100".to_string(),
+        );
+    }
 
     view.group(memory);
 
@@ -206,11 +238,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::gauge("Power (W)", "power-watts", Unit::Count).with_axis_label("Watts"),
         "sum(gpu_power_usage) / 1000".to_string(),
     );
-    draw.plot_promql(
-        PlotOpts::gauge("Power (Per-GPU)", "power-watts-per-gpu", Unit::Count)
-            .with_axis_label("Watts"),
-        "sum by (id) (gpu_power_usage) / 1000".to_string(),
-    );
+    if multi_gpu {
+        draw.plot_promql(
+            PlotOpts::gauge("Power (Per-GPU)", "power-watts-per-gpu", Unit::Count)
+                .with_axis_label("Watts"),
+            "sum by (id) (gpu_power_usage) / 1000".to_string(),
+        );
+    }
 
     let energy = power.subgroup("Energy");
     energy.describe("Energy consumption rate derived from the accumulating GPU energy counter.");
@@ -229,10 +263,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let temps = thermal.subgroup("Temperatures");
     temps.describe("Per-device temperatures and the hottest GPU across the system.");
-    temps.plot_promql(
-        PlotOpts::gauge("Temperature (Per-GPU)", "temp-per-gpu", Unit::Count).with_axis_label("°C"),
-        "sum by (id) (gpu_temperature)".to_string(),
-    );
+    if multi_gpu {
+        temps.plot_promql(
+            PlotOpts::gauge("Temperature (Per-GPU)", "temp-per-gpu", Unit::Count)
+                .with_axis_label("°C"),
+            "sum by (id) (gpu_temperature)".to_string(),
+        );
+    }
     temps.plot_promql(
         PlotOpts::gauge("Max (°C)", "temp-max", Unit::Count).with_axis_label("°C"),
         "max(gpu_temperature)".to_string(),
