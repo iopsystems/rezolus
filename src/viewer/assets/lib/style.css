@@ -917,6 +917,14 @@ main {
     color: var(--fg);
     margin: 0;
     letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.section-title-pin {
+    color: var(--success);
+    flex-shrink: 0;
 }
 
 .section-actions {
@@ -1045,7 +1053,7 @@ main {
     top: 0;
     left: 0;
     right: 0;
-    padding: 10px 16px 0;
+    padding: 10px 60px 0 16px;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -1117,42 +1125,41 @@ main {
 
 .chart-expand {
     position: absolute;
-    bottom: 2px;
-    left: 16px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--fg-muted);
+    top: 8px;
+    right: 8px;
+    color: var(--accent);
     text-decoration: none;
     opacity: 0;
     transition: opacity var(--transition-base), color var(--transition-base);
     display: flex;
     align-items: center;
-    gap: 3px;
+    padding: 2px;
+    border-radius: 4px;
     z-index: 10;
 }
 
 .chart-wrapper:hover .chart-expand {
-    opacity: 0.6;
+    opacity: 0.8;
 }
 
 .chart-expand:hover {
     opacity: 1 !important;
-    color: var(--fg);
+    color: var(--accent);
+    background: var(--accent-subtle);
 }
 
 .chart-select {
     position: absolute;
-    bottom: 2px;
-    right: 16px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 600;
+    top: 8px;
+    right: 32px;
     color: var(--fg-muted);
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
-    padding: 2px 8px;
+    padding: 2px;
     cursor: pointer;
+    display: flex;
+    align-items: center;
     opacity: 0;
     transition: all var(--transition-base);
     z-index: 10;
@@ -1164,16 +1171,16 @@ main {
 
 .chart-select:hover {
     opacity: 1 !important;
-    color: var(--fg);
-    border-color: var(--accent-muted);
-    background: var(--accent-subtle);
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+    background: color-mix(in srgb, var(--success) 15%, transparent);
 }
 
 .chart-selected {
-    opacity: 0.8 !important;
-    color: var(--accent);
-    border-color: var(--accent-muted);
-    background: var(--accent-subtle);
+    opacity: 0.9 !important;
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+    background: color-mix(in srgb, var(--success) 15%, transparent);
 }
 
 .chart-wrapper:hover .chart-selected {
