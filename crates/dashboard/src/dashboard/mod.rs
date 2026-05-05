@@ -1,4 +1,4 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 use crate::service_extension::{CategoryExtension, ServiceExtension};
 
@@ -17,7 +17,7 @@ mod service;
 mod softirq;
 mod syscall;
 
-type Generator = fn(&Tsdb, Vec<Section>) -> View;
+type Generator = fn(&dyn DashboardData, Vec<Section>) -> View;
 
 static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Query Explorer", "/query", query_explorer::generate),
@@ -142,7 +142,11 @@ pub fn build_dashboard_context(
 ///
 /// Filesize is not applied — callers that want a filesize on the response
 /// should call `view.set_filesize(...)` themselves.
-pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Option<View> {
+pub fn generate_section(
+    data: &dyn DashboardData,
+    route: &str,
+    ctx: &DashboardContext,
+) -> Option<View> {
     let view = if route == "/overview" {
         overview::generate(data, ctx.sections.clone(), ctx.throughput_query.as_deref())
     } else if let Some((_, _, generator)) = SECTION_META.iter().find(|(_, r, _)| *r == route) {
@@ -180,6 +184,7 @@ pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Tsdb;
 
     #[test]
     fn build_context_produces_full_navigation() {

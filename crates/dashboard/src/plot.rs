@@ -1,4 +1,4 @@
-use metriken_query::Tsdb;
+use crate::data::DashboardData;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -25,7 +25,7 @@ pub struct View {
 }
 
 impl View {
-    pub fn new(data: &Tsdb, sections: Vec<Section>) -> Self {
+    pub fn new(data: &dyn DashboardData, sections: Vec<Section>) -> Self {
         let interval = data.interval();
         let source = data.source().to_string();
         let version = data.version().to_string();
@@ -41,13 +41,13 @@ impl View {
         let num_series = {
             let mut count = 0usize;
             for name in data.counter_names() {
-                count += data.counter_labels(name).map_or(0, |l| l.len());
+                count += data.counter_label_count(name);
             }
             for name in data.gauge_names() {
-                count += data.gauge_labels(name).map_or(0, |l| l.len());
+                count += data.gauge_label_count(name);
             }
             for name in data.histogram_names() {
-                count += data.histogram_labels(name).map_or(0, |l| l.len());
+                count += data.histogram_label_count(name);
             }
             Some(count)
         };

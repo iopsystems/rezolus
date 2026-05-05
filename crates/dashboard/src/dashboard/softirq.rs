@@ -1,4 +1,4 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 
 /// Adds the standard 4-plot pattern for a softirq kind in two subgroups:
@@ -41,7 +41,7 @@ fn add_softirq_group(view: &mut View, label: &str, kind: &str) {
     view.group(group);
 }
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     // Total softirq (uses the same pattern but without a kind filter)

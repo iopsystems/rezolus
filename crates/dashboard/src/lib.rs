@@ -1,7 +1,9 @@
 pub mod dashboard;
+mod data;
 mod plot;
 mod service_extension;
 
+pub use data::DashboardData;
 pub use metriken_query::Tsdb;
 pub use plot::*;
 pub use service_extension::{CategoryExtension, Kpi, ServiceExtension, TemplateRegistry};

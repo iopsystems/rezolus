@@ -1,7 +1,7 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     /*

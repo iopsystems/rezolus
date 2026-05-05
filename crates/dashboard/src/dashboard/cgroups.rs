@@ -1,4 +1,4 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 
 /// Adds the standard cgroup metric plots for either aggregate or individual mode.
@@ -137,7 +137,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     }
 }
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections.clone());
 
     // Add metadata for cgroup selection UI

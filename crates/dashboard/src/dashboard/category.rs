@@ -1,9 +1,9 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 use crate::service_extension::{CategoryExtension, ServiceExtension};
 
 pub fn generate(
-    data: &Tsdb,
+    data: &dyn DashboardData,
     all_sections: Vec<Section>,
     category: &CategoryExtension,
     baseline_member: &str,
@@ -155,6 +155,7 @@ pub fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Tsdb;
     use crate::service_extension::{CategoryKpi, Kpi};
     use std::collections::HashMap;
 

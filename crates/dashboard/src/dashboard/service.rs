@@ -1,8 +1,8 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 use crate::service_extension::ServiceExtension;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtension) -> View {
+pub fn generate(data: &dyn DashboardData, sections: Vec<Section>, service_ext: &ServiceExtension) -> View {
     let mut view = View::new(data, sections);
 
     // Embed service metadata in the view so the frontend can display it
