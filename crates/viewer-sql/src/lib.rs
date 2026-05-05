@@ -227,6 +227,19 @@ impl ViewerSql {
         first_double_cell(&table)
     }
 
+    /// Run a raw SQL string against the JS-side conn and return rows as a
+    /// JSON-serialized array of objects. The shape mirrors arrow-js's
+    /// `Table.toArray().map(r => r.toJSON())`. BigInt columns survive as
+    /// decimal-string fields.
+    ///
+    /// This is the shim the dashboard frontend will eventually call
+    /// through `query_range`/`query`. For now callers pass SQL directly;
+    /// the PromQL→SQL translator lands in a follow-up.
+    pub async fn query_sql(&self, sql: String) -> Result<String, JsValue> {
+        let table = self.query(&sql).await?;
+        arrow_table_to_json(&table)
+    }
+
     /// Lower-level: run a SQL string against the JS-side conn and return
     /// the Arrow Table as a JsValue. Internal helper for query methods
     /// that walk the result themselves.
@@ -237,6 +250,49 @@ impl ViewerSql {
             .dyn_into()?;
         JsFuture::from(promise).await
     }
+}
+
+/// Walk an Arrow JS Table to a JSON-encoded array-of-objects. Uses the
+/// table's own `toArray()` + per-row `toJSON()` so column-type-specific
+/// formatting (BigInt → string, lists → arrays) matches what arrow-js
+/// itself produces — the same shape the legacy viewer's PromQL response
+/// JSON wraps. BigInts are stringified to survive serde_json (no
+/// arbitrary-precision integer type in JS Number).
+fn arrow_table_to_json(table: &JsValue) -> Result<String, JsValue> {
+    let to_array_fn: Function = Reflect::get(table, &"toArray".into())?.dyn_into()?;
+    let rows = to_array_fn.call0(table)?;
+    let length = Reflect::get(&rows, &"length".into())?
+        .as_f64()
+        .ok_or_else(|| JsValue::from_str("rows.length not a number"))? as usize;
+
+    let json_stringify: Function = {
+        let global = js_sys::global();
+        let json = Reflect::get(&global, &"JSON".into())?;
+        Reflect::get(&json, &"stringify".into())?.dyn_into()?
+    };
+
+    let mut out = String::with_capacity(64 + length * 32);
+    out.push('[');
+    for i in 0..length {
+        if i > 0 {
+            out.push(',');
+        }
+        let row = Reflect::get(&rows, &(i as u32).into())?;
+        let to_json: Function = Reflect::get(&row, &"toJSON".into())?.dyn_into()?;
+        let plain = to_json.call0(&row)?;
+        // Custom replacer: BigInt → string. The replacer takes (key, value).
+        let replacer = js_sys::Function::new_with_args(
+            "k,v",
+            "return typeof v === 'bigint' ? v.toString() : v;",
+        );
+        let s = json_stringify
+            .call2(&JsValue::NULL, &plain, &replacer)?
+            .as_string()
+            .ok_or_else(|| JsValue::from_str("JSON.stringify did not return a string"))?;
+        out.push_str(&s);
+    }
+    out.push(']');
+    Ok(out)
 }
 
 /// Read the (0, 0) cell of an Arrow Table as f64. Matches the convention

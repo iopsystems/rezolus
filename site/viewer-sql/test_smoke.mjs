@@ -73,16 +73,27 @@ try {
         },
         { timeout: 120_000, polling: 500 },
     );
+    // Wait for the SQL probe to complete too.
+    await page.waitForFunction(
+        () => {
+            const txt = document.getElementById('sql_result')?.textContent ?? '';
+            return txt.length > 5 && txt !== '—';
+        },
+        { timeout: 60_000, polling: 500 },
+    );
     const status = await page.$eval('#status', (el) => el.textContent);
     const info = await page.$eval('#info', (el) => el.textContent);
     const section = await page.$eval('#section', (el) => el.textContent);
+    const sqlResult = await page.$eval('#sql_result', (el) => el.textContent);
     console.log('=== STATUS ===');
     console.log(status);
     console.log('\n=== INFO ===');
     console.log(info.slice(0, 500));
     console.log('\n=== SECTION (first 400) ===');
     console.log(section.slice(0, 400));
-    if (status.includes('FAIL') || status.includes('error')) exitCode = 1;
+    console.log('\n=== SQL PROBE ===');
+    console.log(sqlResult);
+    if (status.includes('FAIL') || sqlResult.startsWith('FAIL')) exitCode = 1;
 } catch (e) {
     console.error('Driver error:', e.message);
     const status = await page.$eval('#status', (el) => el.textContent).catch(() => '?');

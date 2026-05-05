@@ -185,6 +185,40 @@ async function loadParquet(buf, filename) {
     $('section').textContent = sectionJson
         ? sectionJson.slice(0, 1000) + (sectionJson.length > 1000 ? '\n…' : '')
         : '(no section)';
+
+    // Exercise query_sql end-to-end with a real Rezolus-style query that
+    // hits h2_quantile + h2_delta + LAG over a bucket column. Picks the
+    // scheduler_running:buckets column if present.
+    const histCols = Object.keys(metadata.histograms);
+    const probeCol = histCols.find((c) => c === 'scheduler_running:buckets')
+        ?? histCols[0];
+    if (probeCol) {
+        try {
+            const probeSql = `
+                WITH ranked AS (
+                    SELECT row_number() OVER (ORDER BY timestamp) AS rn,
+                           timestamp::BIGINT AS ts,
+                           "${probeCol}" AS b
+                    FROM read_parquet('${REGISTERED}')
+                )
+                SELECT a.ts AS timestamp,
+                       h2_quantile(h2_delta(a.b, b.b), 0.99) AS p99
+                FROM ranked a LEFT JOIN ranked b ON a.rn = b.rn + 1
+                ORDER BY a.ts
+                LIMIT 5`;
+            const t0 = performance.now();
+            const json = await viewer.query_sql(probeSql);
+            const t1 = performance.now();
+            const rows = JSON.parse(json);
+            $('sql_result').textContent =
+                `column: ${probeCol}\nquery time: ${(t1 - t0).toFixed(1)}ms\n` +
+                `first 5 rows:\n${JSON.stringify(rows, null, 2)}`;
+        } catch (e) {
+            $('sql_result').textContent = `FAIL: ${e.message ?? e}`;
+        }
+    } else {
+        $('sql_result').textContent = '(no histogram columns in this parquet)';
+    }
 }
 
 async function main() {
