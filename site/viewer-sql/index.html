@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rezolus Viewer (SQL backend) — smoke test</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 60em; margin: 1em auto; padding: 0 1em; color: #e0e0e0; background: #0a0e14; }
+        h1, h2 { color: #fff; }
+        pre { background: #1a1f2c; padding: 0.75em; border-radius: 4px; overflow-x: auto; font-size: 0.85em; line-height: 1.4; }
+        .section { margin: 1.5em 0; }
+        button { background: #2a3242; color: #fff; border: 1px solid #3a4252; padding: 0.5em 1em; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #3a4252; }
+        .ok { color: #5fff5f; }
+        .err { color: #ff5f5f; }
+        .muted { color: #888; }
+        input[type=file] { color: #ccc; }
+    </style>
+</head>
+<body>
+<h1>Rezolus Viewer SQL — smoke test</h1>
+<p class="muted">
+    Drops the SQL-backed viewer crate (<code>crates/viewer-sql/</code>) onto a duckdb-wasm
+    AsyncDuckDB connection and renders a dashboard section through the same
+    <code>dashboard::generate_section</code> generators the legacy viewer uses.
+    Drop a parquet file or click the demo button.
+</p>
+
+<div class="section">
+    <h2>Status</h2>
+    <pre id="status">initializing…</pre>
+</div>
+
+<div class="section">
+    <h2>Load a parquet</h2>
+    <input type="file" id="file" accept=".parquet" />
+    <button id="demo">Use bundled demo.parquet</button>
+</div>
+
+<div class="section">
+    <h2>info()</h2>
+    <pre id="info">—</pre>
+</div>
+
+<div class="section">
+    <h2>get_section("cpu") — first 1000 chars</h2>
+    <pre id="section">—</pre>
+</div>
+
+<script type="module" src="lib/script.js"></script>
+</body>
+</html>

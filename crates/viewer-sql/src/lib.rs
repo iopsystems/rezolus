@@ -128,12 +128,18 @@ pub struct ViewerSql {
 
 #[wasm_bindgen]
 impl ViewerSql {
-    /// Construct from a JS-side conn handle and a metadata blob (as a
-    /// JS object — typically built by the JS host from DESCRIBE results).
+    /// Construct from a JS-side conn handle and a metadata blob.
+    ///
+    /// Metadata arrives as a JSON string rather than a structured JS value
+    /// because nanosecond timestamps exceed Number's 2^53 precision range,
+    /// and serde-wasm-bindgen's default Number↔primitive bridge would
+    /// silently corrupt them. JS host serializes BigInts to decimal strings
+    /// inside the JSON; serde_json::Value::U64 parses decimal-string
+    /// numerics losslessly.
     #[wasm_bindgen(constructor)]
-    pub fn new(conn: JsValue, metadata_js: JsValue) -> Result<ViewerSql, JsValue> {
-        let metadata: SqlMetadata = serde_wasm_bindgen::from_value(metadata_js)
-            .map_err(|e| JsValue::from_str(&format!("invalid metadata: {e}")))?;
+    pub fn new(conn: JsValue, metadata_json: &str) -> Result<ViewerSql, JsValue> {
+        let metadata: SqlMetadata = serde_json::from_str(metadata_json)
+            .map_err(|e| JsValue::from_str(&format!("invalid metadata json: {e}")))?;
         let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
         Ok(ViewerSql {
             conn,
