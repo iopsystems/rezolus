@@ -20,7 +20,7 @@ export function compatibleStyles(type_) {
         case 'delta_counter':
             return ['line', 'heatmap', 'multi'];
         case 'histogram':
-            return ['scatter', 'histogram_heatmap'];
+            return ['scatter', 'histogram_heatmap', 'quantile_heatmap'];
         default:
             return ['line'];
     }
@@ -46,7 +46,9 @@ export function compatibleStyles(type_) {
  */
 export function resolveStyle(type_, subtype, result) {
     if (type_ === 'histogram') {
-        return subtype === 'buckets' ? 'histogram_heatmap' : 'scatter';
+        if (subtype === 'buckets') return 'histogram_heatmap';
+        if (subtype === 'quantile_heatmap') return 'quantile_heatmap';
+        return 'scatter';
     }
 
     // gauge or delta_counter: infer from result shape
@@ -75,7 +77,14 @@ export function buildHistogramQuery(baseQuery, subtype, percentiles, strideSecs)
     if (subtype === 'buckets') {
         return `histogram_heatmap(${baseQuery}${strideSuffix})`;
     }
-    const quantiles = percentiles || DEFAULT_PERCENTILES;
+    let quantiles;
+    if (subtype === 'quantile_heatmap') {
+        // 100-quantile spectrum: even, fine-grain coverage [0.01..1.00].
+        quantiles = [];
+        for (let i = 1; i <= 100; i++) quantiles.push(i / 100);
+    } else {
+        quantiles = percentiles || DEFAULT_PERCENTILES;
+    }
     return `histogram_quantiles([${quantiles.join(', ')}], ${baseQuery}${strideSuffix})`;
 }
 

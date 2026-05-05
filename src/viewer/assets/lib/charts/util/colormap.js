@@ -163,6 +163,25 @@ export function infernoColor(t) {
     return interpolateRamp(INFERNO_RGB, t);
 }
 
+/** d3 RdYlGn diverging hex ramp. t=0 → red, t=1 → green. */
+export const RD_YL_GN_COLORS = [
+    '#a50026', '#d73027', '#f46d43', '#fdae61', '#fee08b',
+    '#ffffbf',
+    '#d9ef8b', '#a6d96a', '#66bd63', '#1a9850', '#006837',
+];
+
+const RD_YL_GN_RGB = hexToRgbRamp(RD_YL_GN_COLORS);
+
+/**
+ * d3 RdYlGn colormap — t=0 maps to red, t=1 to green.
+ * Callers that want green-low/red-high (e.g. latency) pass `1 - t`.
+ * @param {number} t - 0..1
+ * @returns {string} `rgb(r,g,b)`
+ */
+export function rdYlGnColor(t) {
+    return interpolateRamp(RD_YL_GN_RGB, t);
+}
+
 // ── Compare-mode palette ─────────────────────────────────────────────
 
 /**
