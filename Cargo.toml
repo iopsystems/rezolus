@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/dashboard", "crates/systeminfo", "crates/viewer"]
+members = [".", "crates/dashboard", "crates/systeminfo", "crates/viewer", "crates/viewer-sql"]
 exclude = ["xtask"]
 resolver = "2"
 
