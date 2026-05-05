@@ -404,7 +404,10 @@ export function createGroupComponent(getState) {
                 // row. Single line overlays benefit from the wider x-axis
                 // to distinguish blue/green traces; split multi/scatter
                 // and side-by-side heatmaps need the room structurally.
-                const wrapperClass = (spec.width === 'full' || compareMode)
+                // Histogram charts (percentile scatter, bucket heatmap,
+                // quantile heatmap) also go full-width — the x-axis
+                // density and the heatmap legend bar both need the room.
+                const wrapperClass = (spec.width === 'full' || compareMode || isHistogramChart)
                     ? 'div.chart-wrapper.full-width'
                     : 'div.chart-wrapper';
 

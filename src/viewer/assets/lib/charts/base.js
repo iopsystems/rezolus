@@ -140,6 +140,15 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
 // band that precedes the grid.
 export const CHART_GRID_TOP_WITH_LEGEND = 71;
 
+// Fixed left gutter (in px) for histogram-family charts: percentile
+// scatter, full-spectrum quantile heatmap, and tail-spectrum quantile
+// heatmap. All three share the same gutter so toggling between them
+// keeps the y-axis position rock-steady. Sized to fit typical formatted
+// histogram labels (e.g. "100 μs", "1.5 ms", "p99.99") in the
+// JetBrains Mono 10px axis font; containLabel is set to false on
+// these charts so the value here is the actual rendered gutter.
+export const HISTOGRAM_CHART_GRID_LEFT = 60;
+
 export function getBaseOption() {
     return {
         grid: {
@@ -284,7 +293,7 @@ export function overrideXAxisFormatter(baseXAxis, customFormatter) {
  * overlays. The caller is responsible for pairing this with
  * `grid: { ..., top: '71' }` on the plot's option.
  */
-export function buildOverlayLegendOption(names, { tooltipFormatter, top = '42' } = {}) {
+export function buildOverlayLegendOption(names, { tooltipFormatter, top = '42', right = '16' } = {}) {
     const legendItemW = 56;
     const textStyleBase = {
         color: COLORS.fgSecondary,
@@ -297,7 +306,7 @@ export function buildOverlayLegendOption(names, { tooltipFormatter, top = '42' }
     };
     const legend = {
         show: true,
-        right: '16',
+        right,
         top,
         icon: 'circle',
         itemWidth: 8,

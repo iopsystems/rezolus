@@ -12,6 +12,9 @@ import {
     configureHistogramHeatmap
 } from './histogram_heatmap.js';
 import {
+    configureQuantileHeatmap
+} from './quantile_heatmap.js';
+import {
     configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
@@ -671,7 +674,10 @@ export class Chart {
         const style = resolvedStyle(this.spec)
             || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
         // Only for chart types with a value/log Y-axis
-        if (style === 'heatmap' || style === 'histogram_heatmap') return;
+        if (style === 'heatmap' || style === 'histogram_heatmap' || style === 'quantile_heatmap') return;
+        // Scatter charts in spectrum mode (full/tail) are rendered as
+        // quantile heatmaps; they own no value Y-axis to rescale.
+        if (style === 'scatter' && this.spectrumKind) return;
 
         // In compare-mode overlays, spec.data holds only the baseline's
         // [timeData, valueData]; the experiment values live in
@@ -803,9 +809,19 @@ export class Chart {
 
         // Clean up heatmap DOM legend bar when switching to a different chart type
         // (e.g. heatmap-mode toggle off). The legend lives inside chart.domNode
-        // now, so clear it from the same scope.
-        if (style !== 'histogram_heatmap' && style !== 'heatmap') {
+        // now, so clear it from the same scope. Scatter charts in spectrum mode
+        // render as a quantile heatmap and own a legend bar too.
+        const ownsLegendBar =
+            style === 'histogram_heatmap'
+            || style === 'heatmap'
+            || style === 'quantile_heatmap'
+            || (style === 'scatter' && this.spectrumKind);
+        if (!ownsLegendBar) {
             this.domNode?.querySelector('.heatmap-legend-bar')?.remove();
+        }
+        // The spectrum controls only belong on scatter charts.
+        if (style !== 'scatter') {
+            this.domNode?.querySelector('.spectrum-controls')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules
@@ -815,6 +831,8 @@ export class Chart {
             configureHeatmap(this, this.spec, this.chartsState);
         } else if (style === 'histogram_heatmap') {
             configureHistogramHeatmap(this, this.spec, this.chartsState);
+        } else if (style === 'quantile_heatmap') {
+            configureQuantileHeatmap(this, this.spec, this.chartsState);
         } else if (style === 'scatter') {
             configureScatterChart(this, this.spec, this.chartsState);
         } else if (style === 'multi') {
