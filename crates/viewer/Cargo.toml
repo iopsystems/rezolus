@@ -11,9 +11,10 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-# Workspace declares metriken-query with default-features = false. The browser
-# doesn't need the server-side http or ingest features, so we inherit as-is.
-metriken-query.workspace = true
+# Workspace declares metriken-query with default-features = false (no SQL
+# pipeline, no DuckDB). The WASM viewer needs the in-memory PromQL engine
+# + Tsdb under the `legacy` feature.
+metriken-query = { workspace = true, features = ["legacy"] }
 dashboard.workspace = true
 wasm-bindgen.workspace = true
 serde.workspace = true

@@ -16,7 +16,11 @@ libc = "0.2.186"
 log = "0.4.29"
 metriken = "0.9.2"
 metriken-exposition = "0.16.0"
-metriken-query = { version = "0.9.5", default-features = false }
+# Path dep (instead of `version = "0.9.5"`) because the local crate is 0.10.x
+# which doesn't satisfy a 0.9.x semver range — `[patch.crates-io]` would
+# silently fail. Path deps skip the version-range check.
+metriken-query = { path = "../metriken/metriken-query", default-features = false }
+metriken-query-sql = { path = "../metriken/metriken-query-sql" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -24,6 +28,14 @@ dashboard = { path = "crates/dashboard" }
 include_dir = "0.7.4"
 walkdir = "2.5.0"
 wasm-bindgen = "0.2"
+
+# Local override: use the in-tree metriken workspace (with the catalogue,
+# dispatcher, and DuckDB-backed SqlBackend) instead of the published
+# 0.9.x crate. Drop this section to pin to released versions.
+[patch.crates-io]
+metriken = { path = "../metriken/metriken" }
+metriken-exposition = { path = "../metriken/metriken-exposition" }
+metriken-query = { path = "../metriken/metriken-query" }
 
 [package]
 name = "rezolus"
@@ -63,7 +75,8 @@ linkme = "0.3.36"
 memmap2 = "0.9.10"
 metriken.workspace = true
 metriken-exposition.workspace = true
-metriken-query = { workspace = true, features = ["ingest", "lz4", "http"] }
+metriken-query = { workspace = true, features = ["ingest", "lz4"] }
+metriken-query-sql.workspace = true
 notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"

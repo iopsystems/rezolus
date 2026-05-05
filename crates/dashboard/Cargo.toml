@@ -8,7 +8,9 @@ homepage.workspace = true
 publish = false
 
 [dependencies]
-metriken-query.workspace = true
+# Dashboard re-exports Tsdb (the legacy in-memory store) so consumers
+# that want it can stay on the legacy path.
+metriken-query = { workspace = true, features = ["legacy"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
