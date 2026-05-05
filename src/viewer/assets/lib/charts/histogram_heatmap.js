@@ -23,7 +23,12 @@ import { infernoColor } from './util/colormap.js';
 // Reuse the shared time formatter for latency bucket labels
 const formatLatencyBucket = createAxisLabelFormatter('time');
 
-import { buildGradientCanvas, ensureLegendBar, LABEL_GAP } from './color_legend.js';
+import {
+    buildGradientCanvas,
+    ensureLegendBar,
+    sigDigits,
+    LEGEND_GRID_RIGHT,
+} from './color_legend.js';
 
 /**
  * Configures the Chart for histogram heatmap visualization
@@ -267,7 +272,7 @@ export function configureHistogramHeatmap(chart) {
         ...baseOption,
         grid: {
             left: '12',
-            right: '17',
+            right: String(LEGEND_GRID_RIGHT),
             top: String(CHART_GRID_TOP_WITH_LEGEND),
             bottom: '24',
             containLabel: true,
@@ -350,34 +355,55 @@ export function configureHistogramHeatmap(chart) {
     if (pctMax === -Infinity) pctMax = 100;
 
     const countFormatter = createAxisLabelFormatter('count');
-    const rawMinLabel = countFormatter(colorMin);
-    const rawMaxLabel = countFormatter(colorMax);
-    const pctMinLabel = pctMin.toFixed(1) + '%';
-    const pctMaxLabel = pctMax.toFixed(1) + '%';
 
-    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row.
+    // DOM legend bar: vertical gradient with tick marks/labels to the
+    // right of the chart canvas, plus a "Raw count" checkbox below.
     // Mounted inside chart.domNode so Mithril owns the legend's lifetime.
     const barCanvas = buildGradientCanvas(infernoColor);
 
-    // Build the checkbox element to pass as an extra element into the shared legend bar
-    let checkboxEl = chart.domNode.querySelector('.heatmap-legend-bar .histogram-toggle');
-    const checkboxExtra = [];
+    // Persist the checkbox between renders so the click handler keeps
+    // working after the legend is rebuilt.
+    let checkboxEl = chart.histogramToggleEl;
     if (!checkboxEl) {
         checkboxEl = document.createElement('span');
         checkboxEl.className = 'histogram-toggle';
-        checkboxEl.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px; margin-top: -2px;`;
-        checkboxExtra.push(checkboxEl);
+        checkboxEl.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none;`;
+        chart.histogramToggleEl = checkboxEl;
     }
 
-    const { minLabel: minLabelEl, maxLabel: maxLabelEl } =
-        ensureLegendBar(chart.domNode, barCanvas, checkboxExtra);
-
-    const updateLabels = () => {
+    // Bar gradient is linear in log1p(count) space (matches cell coloring).
+    // Map evenly spaced positions on the bar back to count via the inverse:
+    //   count = expm1(logMin + pos * logRange)
+    const TICK_COUNT = 5;
+    const buildTicks = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
-        minLabelEl.textContent = isRaw ? rawMinLabel : pctMinLabel;
-        maxLabelEl.textContent = isRaw ? rawMaxLabel : pctMaxLabel;
+        const ticks = [];
+        for (let i = 0; i < TICK_COUNT; i++) {
+            const pos = i / (TICK_COUNT - 1);
+            const count = Math.expm1(logMin + pos * logRange);
+            let label;
+            if (isRaw) {
+                label = countFormatter(sigDigits(count));
+            } else {
+                // Percentage at intermediate positions has no clean
+                // mapping (count ↔ pct depends on per-time-step total).
+                // Anchor the endpoints to pctMin/pctMax and leave
+                // intermediate ticks as bare marks.
+                if (pos === 0) label = pctMin.toFixed(1) + '%';
+                else if (pos === 1) label = pctMax.toFixed(1) + '%';
+                else label = '';
+            }
+            ticks.push({ pos, label });
+        }
+        return ticks;
     };
-    updateLabels();
+
+    const renderLegend = () => {
+        ensureLegendBar(chart.domNode, barCanvas, {
+            ticks: buildTicks(),
+            extras: [checkboxEl],
+        });
+    };
 
     const updateCheckbox = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
@@ -387,11 +413,12 @@ export function configureHistogramHeatmap(chart) {
         checkboxEl.style.color = color;
     };
     updateCheckbox();
+    renderLegend();
 
     checkboxEl.onclick = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
         chart.histogramDisplayMode = isRaw ? 'percentage' : 'raw';
         updateCheckbox();
-        updateLabels();
+        renderLegend();
     };
 }

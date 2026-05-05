@@ -22,7 +22,13 @@ import {
     createHeatmapResolutionStore,
     ensureHeatmapResolution,
 } from './util/heatmap_data.js';
-import { buildGradientCanvas, ensureLegendBar } from './color_legend.js';
+import {
+    buildGradientCanvas,
+    ensureLegendBar,
+    linearTicks,
+    sigDigits,
+    LEGEND_GRID_RIGHT,
+} from './color_legend.js';
 
 /**
  * Build an `(t: 0..1) => cssColor` function that interpolates through a
@@ -250,7 +256,11 @@ export function configureHeatmap(chart) {
     const option = {
         ...baseOption,
         ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
-        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
+        grid: {
+            ...baseOption.grid,
+            top: String(CHART_GRID_TOP_WITH_LEGEND),
+            right: String(LEGEND_GRID_RIGHT),
+        },
         yAxis,
         // dataZoom is the component takeGlobalCursor's dataZoomSelect
         // attaches to when the user drags a selection on the canvas.
@@ -321,44 +331,31 @@ export function configureHeatmap(chart) {
 
     applyChartOption(chart, option);
 
-    // DOM legend bar: [minLabel] [colorBar] [maxLabel] in a flex row.
-    // Mounted inside chart.domNode (Chart's own Mithril-managed div) so
-    // the legend is removed with the Chart on unmount/swap — no scrubber,
-    // no palette-signature dance.
+    // DOM legend bar: vertical gradient with tick marks and labels to
+    // the right of the chart canvas. Mounted inside chart.domNode (the
+    // Chart component's own Mithril-managed div) so the legend is
+    // removed with the Chart on unmount/swap.
     const formatter = createAxisLabelFormatter(unitSystem || 'count');
     const legendColorFn = chart.spec.colormap
         ? buildRampColorFn(chart.spec.colormap)
         : viridisColor;
     const barCanvas = buildGradientCanvas(legendColorFn);
-    const { minLabel, maxLabel, leftCaption, rightCaption, captionRow } =
-        ensureLegendBar(chart.domNode, barCanvas);
-    const sig = (v) => {
-        if (!Number.isFinite(v) || v === 0) return v;
-        return parseFloat(v.toPrecision(2));
-    };
-    // Diff heatmap: the left end is "baseline higher by X"; the right
-    // end is "experiment higher by Y". The sign is already carried by
-    // the caption row, so show magnitudes (absolute values) on both
-    // ends instead of a negative number on the left.
-    const isDiff = !!chart.spec.diffLegendLabels;
-    const minForLabel = isDiff ? Math.abs(visualMapMin) : visualMapMin;
-    const maxForLabel = isDiff ? Math.abs(visualMapMax) : visualMapMax;
-    minLabel.textContent = formatter(sig(minForLabel));
-    maxLabel.textContent = formatter(sig(maxForLabel));
 
-    // Diff-heatmap directional caption above the gradient bar. The
-    // captions share the legend row's width, so each sits directly
-    // above its numeric counterpart (min/max label).
+    // In diff mode the values are signed (negative=baseline higher);
+    // the sign itself disambiguates direction across all five ticks, so
+    // we don't strip it. Captions above/below reinforce the meaning.
+    const ticks = linearTicks(visualMapMin, visualMapMax, 5).map((t) => ({
+        pos: t.pos,
+        label: formatter(sigDigits(t.value)),
+    }));
     const diffLabels = chart.spec.diffLegendLabels;
-    if (diffLabels) {
-        leftCaption.textContent = diffLabels.left;
-        rightCaption.textContent = diffLabels.right;
-        captionRow.style.display = 'flex';
-    } else {
-        leftCaption.textContent = '';
-        rightCaption.textContent = '';
-        captionRow.style.display = 'none';
-    }
+    ensureLegendBar(chart.domNode, barCanvas, {
+        ticks,
+        // Top of bar = max = positive value = "experiment is higher"
+        // (which matched the right end in the legacy horizontal layout).
+        topCaption: diffLabels ? diffLabels.right : '',
+        bottomCaption: diffLabels ? diffLabels.left : '',
+    });
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {
