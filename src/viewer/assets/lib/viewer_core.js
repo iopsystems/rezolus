@@ -236,24 +236,37 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
     const range = vnode.attrs.experimentQueryRange;
     const quantiles = quantilesForKind(kind);
     const plotForFetch = { promql_query: spec.promql_query, opts: spec.opts };
+    // Snapshot the step this fetch was launched at. If the user
+    // changes granularity (which mutates _lastFetchedStep on the next
+    // experiment refetch), we discard this fetch's result so we don't
+    // write stale data into the kind cache after invalidation.
+    const stepAtLaunch = vnode.state._lastFetchedStep;
     Promise.all([
         fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_BASELINE),
         fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_EXPERIMENT, range),
     ])
         .then(([base, exp]) => {
-            if (!base || !exp) {
+            // Discard if granularity has changed since launch (the
+            // cache has already been invalidated for the new step;
+            // a fresh fetch will fire on the next view()).
+            if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
+            if (vnode.state._spectrumPending === kind) {
                 vnode.state._spectrumPending = null;
+            }
+            if (!base || !exp) {
                 m.redraw();
                 return;
             }
             vnode.state._spectrumByKind = vnode.state._spectrumByKind || {};
             vnode.state._spectrumByKind[kind] = { baseline: base, experiment: exp };
-            vnode.state._spectrumPending = null;
             m.redraw();
         })
         .catch((err) => {
+            if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
             console.error('[compare] spectrum fetch failed', err);
-            vnode.state._spectrumPending = null;
+            if (vnode.state._spectrumPending === kind) {
+                vnode.state._spectrumPending = null;
+            }
             vnode.state.error = err?.message || 'spectrum fetch failed';
             m.redraw();
         });
@@ -347,6 +360,19 @@ const CompareChartWrapper = {
             experimentCap.spectrumData = cached.experiment.data;
             experimentCap.spectrumSeriesNames = cached.experiment.series_names;
             experimentCap.spectrumColorMinAnchor = cached.experiment.color_min_anchor;
+        } else {
+            // Toggle off (or chart is non-scatter): scrub any spectrum
+            // fields left on the memoized capture objects from a prior
+            // toggled-on render. Otherwise downstream consumers would
+            // see stale truthy fields after the user disables the
+            // spectrum view.
+            for (const cap of [baselineCap, experimentCap]) {
+                if (!cap) continue;
+                cap.spectrumTimeData = undefined;
+                cap.spectrumData = undefined;
+                cap.spectrumSeriesNames = undefined;
+                cap.spectrumColorMinAnchor = undefined;
+            }
         }
 
         const result = renderCompareChart({
