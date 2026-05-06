@@ -2,6 +2,7 @@ pub mod dashboard;
 mod data;
 mod plot;
 mod service_extension;
+pub mod sql;
 
 pub use data::DashboardData;
 pub use metriken_query::Tsdb;
