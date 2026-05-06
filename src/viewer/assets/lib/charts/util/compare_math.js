@@ -32,21 +32,19 @@ export function unifyHistogramRange(a, b) {
     const aScan = scanPositiveRange(a?.data);
     const bScan = scanPositiveRange(b?.data);
 
-    const naturalMin = Math.min(
-        Number.isFinite(aScan.min) ? aScan.min : Infinity,
-        Number.isFinite(bScan.min) ? bScan.min : Infinity,
-    );
+    // Per-capture effective min: anchor if present, otherwise the
+    // capture's own scanned positive min. Each capture stays
+    // independent so an asymmetric anchor situation (one present,
+    // one absent) doesn't clip the no-anchor capture's lower values.
+    const aMin = positiveOr(a?.color_min_anchor, Number.isFinite(aScan.min) ? aScan.min : Infinity);
+    const bMin = positiveOr(b?.color_min_anchor, Number.isFinite(bScan.min) ? bScan.min : Infinity);
+    let colorMin = Math.min(aMin, bMin);
+    if (!Number.isFinite(colorMin)) colorMin = 0;
+
     const naturalMax = Math.max(
         Number.isFinite(aScan.max) ? aScan.max : -Infinity,
         Number.isFinite(bScan.max) ? bScan.max : -Infinity,
     );
-
-    let colorMin = Math.min(
-        positiveOr(a?.color_min_anchor, Infinity),
-        positiveOr(b?.color_min_anchor, Infinity),
-    );
-    if (!Number.isFinite(colorMin)) colorMin = naturalMin;
-    if (!Number.isFinite(colorMin)) colorMin = 0;
 
     let colorMax = naturalMax;
     if (!Number.isFinite(colorMax)) colorMax = 1;

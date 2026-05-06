@@ -81,3 +81,21 @@ test('unifyHistogramRange: collapsed range gets a non-zero ceiling', () => {
     assert.equal(r.colorMin, 5);
     assert.ok(r.colorMax > r.colorMin);  // padded so log-scale doesn't collapse
 });
+
+test('unifyHistogramRange: asymmetric anchors — capture without anchor still pulls colorMin via its own scanned min', () => {
+    const a = { ...fakeSpectrum([[10, 20, 30]]), color_min_anchor: 10 };
+    const b = { ...fakeSpectrum([[0.1, 5, 8]]), color_min_anchor: null };
+    const r = unifyHistogramRange(a, b);
+    // B's natural min (0.1) is lower than A's anchor (10); colorMin
+    // must be 0.1 so B's bottom cells aren't clipped on the shared scale.
+    assert.equal(r.colorMin, 0.1);
+    assert.equal(r.colorMax, 30);
+});
+
+test('unifyHistogramRange: asymmetric anchors, reversed — anchor on B, scan on A', () => {
+    const a = { ...fakeSpectrum([[2, 5, 9]]), color_min_anchor: null };
+    const b = { ...fakeSpectrum([[100, 200, 300]]), color_min_anchor: 100 };
+    const r = unifyHistogramRange(a, b);
+    assert.equal(r.colorMin, 2);   // A's natural min
+    assert.equal(r.colorMax, 300); // B's natural max
+});
