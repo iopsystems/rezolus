@@ -521,3 +521,74 @@ function rebaseSpectrumData(data, anchorSec) {
     if (!Array.isArray(data) || data.length === 0) return data;
     return [rebase(data[0], anchorSec), ...data.slice(1)];
 }
+
+/**
+ * Render a single (experiment − baseline) quantile-heatmap diff.
+ * Uses the diverging palette resampled so neutral lands on zero.
+ * Returns FALLBACK when either capture is missing spectrum data or
+ * when no non-null deltas exist.
+ */
+const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
+    if (!baseline?.spectrumData || !experiment?.spectrumData) return FALLBACK;
+
+    const baseFetch = {
+        time_data: baseline.spectrumTimeData,
+        data: baseline.spectrumData,
+        series_names: baseline.spectrumSeriesNames,
+    };
+    const expFetch = {
+        time_data: experiment.spectrumTimeData,
+        data: experiment.spectrumData,
+        series_names: experiment.spectrumSeriesNames,
+    };
+
+    const delta = buildDeltaSpectrum(baseFetch, expFetch);
+    if (!delta) return FALLBACK;
+
+    let { dMin, dMax } = delta;
+    if (dMin == null || dMax == null) return FALLBACK;
+    if (dMin === dMax) {
+        const pad = Math.max(Math.abs(dMin), 1) * 0.5;
+        dMin -= pad;
+        dMax += pad;
+    }
+
+    const isDark = isDarkTheme();
+    const basePalette = isDark ? DIVERGING_BLUE_GREEN_DARK : DIVERGING_BLUE_GREEN;
+    const resampled = resampleDivergingForRange(basePalette, dMin, dMax);
+
+    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, delta.time_data);
+    const baselineLabel = labelFor(captureLabels, CAPTURE_BASELINE);
+    const experimentLabel = labelFor(captureLabels, CAPTURE_EXPERIMENT);
+
+    const diffSpec = {
+        ...spec,
+        opts: {
+            ...spec.opts,
+            id: `${spec.opts.id || 'chart'}::diff`,
+            title: `${spec.opts.title} (${experimentLabel} − ${baselineLabel})`,
+            style: 'quantile_heatmap',
+        },
+        time_data: rebase(delta.time_data, baselineAnchorSec),
+        data: [rebase(delta.data[0], baselineAnchorSec), ...delta.data.slice(1)],
+        series_names: delta.series_names,
+        color_min_anchor: dMin,
+        color_max_anchor: dMax,
+        colormap: resampled,
+        nullCellColor: nullCellColor(isDark),
+        diffMatrices: delta.matrices,
+        diffCaptureLabels: { baseline: baselineLabel, experiment: experimentLabel },
+        diffLegendLabels: {
+            left:  `${baselineLabel} is higher`,
+            right: `${experimentLabel} is higher`,
+        },
+        xAxisFormatter: relativeTimeFormatter,
+    };
+
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-diff', m(Chart, { spec: diffSpec, chartsState, interval })),
+    };
+};
