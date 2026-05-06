@@ -82,6 +82,12 @@ fn default_parquet_name() -> String {
     "capture.parquet".to_string()
 }
 
+/// Empty Prometheus matrix response. Returned for queries whose
+/// `[*COLUMNS('regex')]` resolves empty against the loaded parquet
+/// (i.e. the metric isn't present) — DuckDB throws on empty matches,
+/// but the user-facing semantic is "no data for this plot".
+const EMPTY_PROM_MATRIX: &str = r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#;
+
 impl DashboardData for SqlMetadata {
     fn interval(&self) -> f64 {
         self.interval_seconds
@@ -280,8 +286,25 @@ impl ViewerSql {
             parquet = self.metadata.parquet_name,
             user_sql = sql,
         );
-        let table = self.query(&wrapped).await?;
-        arrow_table_to_prom_matrix(&table)
+        match self.query(&wrapped).await {
+            Ok(table) => arrow_table_to_prom_matrix(&table),
+            Err(e) => {
+                // DuckDB throws "No matching columns found that match regex
+                // \"...\"" when a [*COLUMNS('regex')] resolves empty. For
+                // dashboard plots whose metric isn't present in this capture
+                // (e.g. rezolus.service-specific queries on a non-rezolus
+                // host), the right behavior is "render empty", not error.
+                let msg = js_sys::Reflect::get(&e, &"message".into())
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_default();
+                if msg.contains("No matching columns found that match regex") {
+                    Ok(EMPTY_PROM_MATRIX.to_string())
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// Lower-level: run a SQL string against the JS-side conn and return
@@ -407,36 +430,37 @@ fn arrow_table_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
         let get: Function = Reflect::get(vector, &"get".into())?.dyn_into()?;
         get.call1(vector, &JsValue::from_f64(row as f64))
     };
-    let cell_to_string = |cell: &JsValue| -> String {
-        if cell.is_null() || cell.is_undefined() {
-            return "null".to_string();
-        }
+    // Convert any JS cell value to a decimal string via JS's `String(x)`
+    // — this handles BigInt (UBIGINT/BIGINT columns) which `as_f64` and
+    // `as_string` both reject. f64 fast-path avoids the JS round-trip
+    // for the common DOUBLE case.
+    let js_string: Function = Reflect::get(&js_sys::global(), &"String".into())?.dyn_into()?;
+    let to_string_via_js = |cell: &JsValue| -> Result<String, JsValue> {
         if let Some(s) = cell.as_string() {
-            return s;
+            return Ok(s);
         }
         if let Some(n) = cell.as_f64() {
-            return n.to_string();
+            return Ok(n.to_string());
         }
-        // BigInt and other JS values: format via String(...) at JS side
-        // would be cleaner; for now, debug-format the JsValue.
-        format!("{cell:?}")
+        let s = js_string.call1(&JsValue::NULL, cell)?;
+        Ok(s.as_string().unwrap_or_else(|| format!("{cell:?}")))
     };
-    let cell_to_v_string = |cell: &JsValue| -> Option<String> {
+    let cell_to_string = |cell: &JsValue| -> Result<String, JsValue> {
         if cell.is_null() || cell.is_undefined() {
-            return None;
+            return Ok("null".to_string());
         }
-        if let Some(s) = cell.as_string() {
-            return Some(s);
+        to_string_via_js(cell)
+    };
+    let cell_to_v_string = |cell: &JsValue| -> Result<Option<String>, JsValue> {
+        if cell.is_null() || cell.is_undefined() {
+            return Ok(None);
         }
-        if let Some(n) = cell.as_f64() {
-            return Some(n.to_string());
-        }
-        Some(format!("{cell:?}"))
+        Ok(Some(to_string_via_js(cell)?))
     };
 
     for row in 0..n_rows {
         let v_cell = get_cell(&v_col, row)?;
-        let v_str = match cell_to_v_string(&v_cell) {
+        let v_str = match cell_to_v_string(&v_cell)? {
             Some(s) => s,
             None => continue, // NULL value → drop row (Prometheus gap)
         };
@@ -451,7 +475,7 @@ fn arrow_table_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
             let cell = get_cell(vector, row)?;
             metric.insert(
                 (*name).to_string(),
-                serde_json::Value::String(cell_to_string(&cell)),
+                serde_json::Value::String(cell_to_string(&cell)?),
             );
         }
 

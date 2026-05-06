@@ -181,6 +181,8 @@ async function loadParquet(buf, filename) {
     const metadataJson = stringifyWithBigInt(metadata);
     const viewer = new ViewerSql(conn, metadataJson);
     session = { conn, viewer };
+    // Expose for the per-section validator (test_sections.mjs).
+    window.__viewerSqlSession = session;
 
     setStatus('ready', 'ok');
     $('info').textContent = JSON.stringify(JSON.parse(viewer.info()), null, 2);

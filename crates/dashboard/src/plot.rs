@@ -180,6 +180,17 @@ impl Group {
             .plot_sql_with_descriptions(opts, sql_query, descriptions);
     }
 
+    /// Group-level shim for the dual-query Phase D migration helper.
+    pub fn plot_promql_with_sql(
+        &mut self,
+        opts: PlotOpts,
+        promql_query: String,
+        sql_query: String,
+    ) {
+        self.tail_subgroup_mut()
+            .plot_promql_with_sql(opts, promql_query, sql_query);
+    }
+
     /// Find an existing named subgroup by exact name match.
     pub fn find_subgroup(&mut self, name: &str) -> Option<&mut SubGroup> {
         self.subgroups
@@ -258,6 +269,82 @@ impl SubGroup {
     /// `site/viewer/lib/data.js`).
     pub fn plot_sql(&mut self, opts: PlotOpts, sql_query: String) {
         self.plot_sql_with_descriptions(opts, sql_query, None);
+    }
+
+    /// Append one plot that carries BOTH the PromQL and SQL bodies.
+    /// During the Phase D migration window this lets each plot serve both
+    /// the legacy viewer (which evaluates `promql_query` via the in-memory
+    /// PromQL engine) AND `viewer-sql` (which evaluates `sql_query`
+    /// against duckdb-wasm). Once the legacy viewer is retired we convert
+    /// these calls to bare `plot_sql`.
+    pub fn plot_promql_with_sql(
+        &mut self,
+        opts: PlotOpts,
+        promql_query: String,
+        sql_query: String,
+    ) {
+        self.plot_promql_with_sql_with_descriptions(opts, promql_query, sql_query, None);
+    }
+
+    /// Full-width variant of `plot_promql_with_sql`.
+    pub fn plot_promql_with_sql_full(
+        &mut self,
+        opts: PlotOpts,
+        promql_query: String,
+        sql_query: String,
+    ) {
+        self.plot_promql_with_sql_with_descriptions(opts, promql_query, sql_query, None);
+        if let Some(plot) = self.plots.last_mut() {
+            plot.width = PlotWidth::Full;
+        }
+    }
+
+    pub fn plot_promql_with_sql_with_descriptions(
+        &mut self,
+        mut opts: PlotOpts,
+        promql_query: String,
+        sql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        // Description autofill matches against the PromQL body — that's
+        // the human-recognizable metric names. SQL bodies inline column
+        // patterns and don't carry the same names.
+        if opts.description.is_none()
+            && let Some(descriptions) = descriptions
+        {
+            let mut best_match: Option<(usize, &str, &str)> = None;
+            for (name, desc) in descriptions {
+                if let Some(pos) = promql_query.find(name.as_str()) {
+                    let dominated = best_match.is_some_and(|(best_pos, best_name, _)| {
+                        name.len() < best_name.len()
+                            || (name.len() == best_name.len()
+                                && (pos > best_pos
+                                    || (pos == best_pos && name.as_str() > best_name)))
+                    });
+                    if !dominated {
+                        best_match = Some((pos, name.as_str(), desc.as_str()));
+                    }
+                }
+            }
+            if let Some((_, _, desc)) = best_match {
+                opts.description = Some(desc.to_string());
+            }
+        }
+
+        self.plots.push(Plot {
+            opts,
+            data: Vec::new(),
+            min_value: None,
+            max_value: None,
+            time_data: None,
+            formatted_time_data: None,
+            series_names: None,
+            promql_query: Some(promql_query),
+            promql_query_experiment: None,
+            sql_query: Some(sql_query),
+            sql_query_experiment: None,
+            width: PlotWidth::default(),
+        });
     }
 
     pub fn plot_sql_with_descriptions(
