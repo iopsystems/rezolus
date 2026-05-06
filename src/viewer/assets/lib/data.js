@@ -511,7 +511,28 @@ const createDataApi = ({
         return `p${trimmed}`;
     };
 
-    const fetchQuantileSpectrumForPlot = async (plot, quantiles) => {
+    const fetchSpectrumViaCapture = async (wrappedQuery, captureId, range) => {
+        if (captureId === CAPTURE_BASELINE && !range) {
+            return executePromQLRangeQuery(wrappedQuery);
+        }
+        let r = range;
+        if (!r) {
+            const meta = cachedMetadata || await fetchMetadata();
+            const duration = meta.maxTime - meta.minTime;
+            const windowDuration = Math.min(3600, duration);
+            const start = Math.max(meta.minTime, meta.maxTime - windowDuration);
+            const step = _stepOverride || Math.max(1, Math.floor(windowDuration / 500));
+            r = { start, end: meta.maxTime, step };
+        }
+        return queryRangeForCapture(captureId, wrappedQuery, r.start, r.end, r.step);
+    };
+
+    const fetchQuantileSpectrumForPlot = async (
+        plot,
+        quantiles,
+        captureId = CAPTURE_BASELINE,
+        range = null,  // { start, end, step } — required when captureId !== baseline and the caller has the experiment's range; otherwise computed from cached metadata
+    ) => {
         const query = plot.promql_query;
         if (!query) return null;
 
@@ -538,7 +559,7 @@ const createDataApi = ({
         const queryQuantiles = quantiles.includes(0) ? quantiles : [0, ...quantiles];
         const strideSuffix = (_stepOverride && _stepOverride > 1) ? `, ${_stepOverride}` : '';
         const wrapped = `histogram_quantiles([${queryQuantiles.join(', ')}], ${metricSelector}${strideSuffix})`;
-        const result = await executePromQLRangeQuery(wrapped);
+        const result = await fetchSpectrumViaCapture(wrapped, captureId, range);
 
         if (result.status !== 'success' || !result.data?.result?.length) return null;
 
