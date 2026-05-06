@@ -137,3 +137,73 @@ CREATE OR REPLACE MACRO hist_p999(buckets)         AS h2_quantile(buckets, 0.999
 
 CREATE OR REPLACE MACRO hist_irate_quantile(buckets, q, ts) AS
     h2_quantile(h2_delta(buckets, LAG(buckets) OVER (ORDER BY ts)), q);
+
+CREATE OR REPLACE MACRO hist_rate5m_quantile(buckets, q, ts) AS
+    h2_quantile(h2_delta(buckets, LAG(buckets, 300) OVER (ORDER BY ts)), q);
+
+-- ---- Layer A: rate / delta primitives ----
+-- Layer A primitives copy verbatim from /work/duckdb-prototyping/duck/src/macros.rs:20-26
+-- so dashboard SQL using these names is identical between native and wasm.
+
+CREATE OR REPLACE MACRO irate_1s(c, ts) AS c - LAG(c) OVER (ORDER BY ts);
+
+CREATE OR REPLACE MACRO delta_1s(c, ts) AS c - LAG(c) OVER (ORDER BY ts);
+
+CREATE OR REPLACE MACRO rate_5m(c, ts) AS (c - LAG(c, 300) OVER (ORDER BY ts)) / 300.0;
+
+-- ---- irate_lag: emulates the canonical Rust UDF on the wasm side ----
+-- Native registers a vscalar UDF in /work/metriken/metriken-query-sql/src/udf.rs
+-- which runs in C++ for perf (~8x faster than this macro form per the bench).
+-- Wasm has no UDF support, so we provide a same-name same-semantics macro:
+--   prev IS NULL                  → NULL (first sample)
+--   curr >= prev                  → (curr - prev) / dt_seconds
+--   curr <  prev (counter reset)  → curr / dt_seconds
+CREATE OR REPLACE MACRO irate_lag(curr, prev, dt_ns) AS
+    CASE
+        WHEN prev IS NULL THEN NULL
+        WHEN curr >= prev THEN ((curr - prev)::DOUBLE / NULLIF(dt_ns::DOUBLE / 1e9, 0))
+        ELSE (curr::DOUBLE / NULLIF(dt_ns::DOUBLE / 1e9, 0))
+    END;
+
+-- ---- Layer B: dashboard-concept helpers ----
+-- Each composes Layer A primitives. Expanding by hand recovers the same SQL
+-- the original PromQL `irate(...)` formulas spell out. Names + signatures
+-- match /work/duckdb-prototyping/duck/src/macros.rs:54-89 verbatim.
+
+-- CPU fraction (0..1) — works for total CPU busy and for per-state usage.
+CREATE OR REPLACE MACRO cpu_busy_pct(usage, cores, ts) AS
+    irate_1s(usage, ts) / cores / 1e9;
+
+-- Instructions per cycle.
+CREATE OR REPLACE MACRO ipc(instructions, cycles, ts) AS
+    irate_1s(instructions, ts) / NULLIF(irate_1s(cycles, ts), 0);
+
+-- Effective CPU frequency in Hz.
+CREATE OR REPLACE MACRO frequency_hz(tsc, aperf, mperf, cores, ts) AS
+    irate_1s(tsc, ts) * irate_1s(aperf, ts) / NULLIF(irate_1s(mperf, ts), 0) / cores;
+
+-- Instructions per nanosecond (wall-clock-normalised throughput).
+CREATE OR REPLACE MACRO ipns(instructions, cycles, tsc, aperf, mperf, cores, ts) AS
+    ipc(instructions, cycles, ts)
+    * irate_1s(tsc, ts) * irate_1s(aperf, ts)
+    / NULLIF(irate_1s(mperf, ts) * cores * 1e9, 0);
+
+-- L3 cache hit fraction.
+CREATE OR REPLACE MACRO l3_hit_pct(miss, access, ts) AS
+    1 - irate_1s(miss, ts) / NULLIF(irate_1s(access, ts), 0);
+
+-- Branch misprediction fraction.
+CREATE OR REPLACE MACRO branch_miss_pct(misses, branches, ts) AS
+    irate_1s(misses, ts) / NULLIF(irate_1s(branches, ts), 0);
+
+-- DTLB misses per thousand instructions.
+CREATE OR REPLACE MACRO dtlb_mpki(misses, instructions, ts) AS
+    irate_1s(misses, ts) / NULLIF(irate_1s(instructions, ts), 0) * 1000;
+
+-- GPU memory used as fraction of total (used + free). No window needed.
+CREATE OR REPLACE MACRO gpu_mem_used_pct(used, free) AS
+    used / NULLIF(used + free, 0);
+
+-- Bandwidth in bits per second from a byte counter.
+CREATE OR REPLACE MACRO bps_from_bytes(bytes, ts) AS
+    irate_1s(bytes, ts) * 8;
