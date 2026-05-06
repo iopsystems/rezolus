@@ -91,18 +91,28 @@ function positiveOr(v, fallback) {
  *
  * Return shape (or null on mismatch / empty inputs):
  *   {
- *     time_data: number[],         // same as inputs (must match)
+ *     time_data: number[],         // alias of baseline.time_data (shared reference)
  *     data: [time, ...qDeltaCols], // null preserved when either side is null/NaN
  *     series_names: string[],      // taken from baseline
- *     dMin: number | null,         // null if all deltas null
- *     dMax: number | null,
+ *     dMin: number | null,         // null if all deltas null; can be 0 (flat)
+ *     dMax: number | null,         //   — caller must pad when dMin === dMax
  *     matrices: {
  *       baseline:   number[][],    // [qIdx][tIdx] for tooltip lookup
  *       experiment: number[][],    // same
  *     },
  *   }
  *
- * Uses nullDiff (above) so undefined/NaN propagate cleanly.
+ * Uses nullDiff so undefined/NaN propagate cleanly.
+ *
+ * Caller responsibilities:
+ *   - Time axes must be VALUE-aligned, not just length-matched. This
+ *     function only verifies length; matching cadence is the upstream
+ *     fetch's job.
+ *   - When dMin === dMax (flat captures), pad before passing to a
+ *     diverging palette renderer (see renderDiffHeatmap in compare.js
+ *     for the canonical pad recipe).
+ *   - Do not mutate the returned `time_data` / `data[0]` in place;
+ *     they alias baseline.time_data.
  */
 export function buildDeltaSpectrum(baseline, experiment) {
     const baseTimes = baseline?.time_data;

@@ -153,3 +153,15 @@ test('buildDeltaSpectrum: empty inputs return null', () => {
     const r = buildDeltaSpectrum({ data: [[]] }, { data: [[]] });
     assert.equal(r, null);
 });
+
+test('buildDeltaSpectrum: identical captures yield dMin === dMax === 0', () => {
+    const baseline = spectrum([0, 1], [[1, 2], [3, 4]], ['p50', 'p99']);
+    const experiment = spectrum([0, 1], [[1, 2], [3, 4]], ['p50', 'p99']);
+    const r = buildDeltaSpectrum(baseline, experiment);
+    assert.deepEqual(r.data[1], [0, 0]);
+    assert.deepEqual(r.data[2], [0, 0]);
+    // Flat-zero is intentionally not padded here — the caller pads
+    // before handing off to a diverging palette renderer.
+    assert.equal(r.dMin, 0);
+    assert.equal(r.dMax, 0);
+});
