@@ -372,7 +372,18 @@ export class Chart {
         // change" and the chart would render stale experiment dots.
         // Detect a multiSeries swap explicitly.
         const multiSeriesChanged = multiSeriesDiffers(oldSpec.multiSeries, this.spec.multiSeries);
-        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged)) {
+        // Compare-mode quantile heatmap (Full ↔ Tail toggle) feeds in
+        // data of identical shape (100 quantile cols, same time range)
+        // for either kind, so shallowSameShape returns true and a kind
+        // switch alone wouldn't trigger reconfigure. The two kinds DO
+        // have distinct series_names arrays (`['p1'..'p100']` vs
+        // `['p99.01'..'p100']`), and the strategy carries the cached
+        // ref through unchanged within a kind, so a reference change
+        // is a reliable kind-switch signal. (Single-capture and other
+        // chart types either don't set series_names or keep the same
+        // ref across renders, so this is a no-op for them.)
+        const seriesNamesChanged = oldSpec.series_names !== this.spec.series_names;
+        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 
