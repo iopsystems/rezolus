@@ -13,7 +13,8 @@
 # This configuration is used by the /release Claude skill and
 # the tag-release.yml GitHub workflow.
 
-# Don't publish via cargo-release (handled by release.yml workflow on tag push)
+# The rezolus crate is not published to crates.io; releases ship as deb/rpm
+# packages and a GitHub release via the release.yml workflow on tag push.
 publish = false
 
 # Tag settings (tag-release.yml creates tags, release.yml builds and publishes)
