@@ -212,6 +212,13 @@ export function configureQuantileHeatmap(chart) {
         : (v) => String(v);
 
     const customXFormatterForTooltip = chart.spec.xAxisFormatter;
+
+    // Diff side-channel: when present, the tooltip pulls the original
+    // baseline + experiment values from these matrices and renders both
+    // alongside the delta (matrices are keyed [qIdx][tIdx]).
+    const diffMatrices = chart.spec.diffMatrices;
+    const diffCaptureLabels = chart.spec.diffCaptureLabels;
+
     const tooltipFormatter = function (params) {
         if (!params.data) return '';
         const [tsMs, q, v] = params.data;
@@ -219,6 +226,45 @@ export function configureQuantileHeatmap(chart) {
             ? customXFormatterForTooltip(tsMs)
             : formatDateTime(tsMs);
         const label = displayLabels[q] || '';
+
+        // Diff variant: show baseline | experiment | delta.
+        if (diffMatrices) {
+            // Find the time index by scanning timeData for the matching ms.
+            // O(N) but tooltips fire on hover — fine at 100s of timestamps.
+            let tIdx = -1;
+            for (let i = 0; i < tCount; i++) {
+                if (Math.abs(timeData[i] * 1000 - tsMs) < 0.5) { tIdx = i; break; }
+            }
+            const bv = (tIdx >= 0) ? diffMatrices.baseline?.[q]?.[tIdx] : null;
+            const ev = (tIdx >= 0) ? diffMatrices.experiment?.[q]?.[tIdx] : null;
+            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : valueFmt(x);
+            const baselineLabel = diffCaptureLabels?.baseline || 'baseline';
+            const experimentLabel = diffCaptureLabels?.experiment || 'experiment';
+            const deltaStr = (v == null || Number.isNaN(v))
+                ? '—'
+                : `${v >= 0 ? '+' : ''}${valueFmt(v)}`;
+            return `<div style="${FONTS.cssSans}">
+                <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
+                    ${formattedTime}
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                    <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
+                        ${label}
+                    </span>
+                </div>
+                <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
+                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${baselineLabel}</span>
+                    <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(bv)}</span>
+                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${experimentLabel}</span>
+                    <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(ev)}</span>
+                    <span style="color: ${COLORS.fgSecondary};">Δ</span>
+                    <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${deltaStr}</span>
+                </div>
+                ${getTooltipFreezeFooter(chart)}
+            </div>`;
+        }
+
+        // Default variant: single value tooltip.
         return `<div style="${FONTS.cssSans}">
             <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                 ${formattedTime}
@@ -346,7 +392,10 @@ export function configureQuantileHeatmap(chart) {
     const barCanvas = buildGradientCanvas(legendColorFn);
 
     // Bar gradient is linear in log10(value) space. Interpolate values
-    // at evenly spaced positions for the tick labels.
+    // at evenly spaced positions for the tick labels. In diff mode the
+    // values are signed (negative=baseline higher); the sign itself
+    // disambiguates direction across all five ticks, so we don't strip
+    // it. Captions above/below the bar reinforce the meaning.
     const TICK_COUNT = 5;
     const ticks = [];
     for (let i = 0; i < TICK_COUNT; i++) {
@@ -356,12 +405,17 @@ export function configureQuantileHeatmap(chart) {
             : colorMin + pos * (colorMax - colorMin);
         ticks.push({ pos, label: valueFmt(sigDigits(value)) });
     }
+    // Diff captions: top of bar = max = "experiment is higher" (matches
+    // the right end of the legacy horizontal layout).
+    const diffLegendLabels = chart.spec.diffLegendLabels;
     // Re-run on every `finished` so the bar's height and top track the
     // grid rect (Y-axis). First call before layout uses defaults.
     const renderLegend = () => {
         const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
         ensureLegendBar(chart.domNode, barCanvas, {
             ticks,
+            topCaption: diffLegendLabels ? diffLegendLabels.right : '',
+            bottomCaption: diffLegendLabels ? diffLegendLabels.left : '',
             barTop: rect?.y,
             barHeight: rect?.height,
         });
