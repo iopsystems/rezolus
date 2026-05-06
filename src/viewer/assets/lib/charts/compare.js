@@ -86,7 +86,20 @@ export const renderCompareChart = (opts) => {
         case 'line':              return overlayLine(opts);
         case 'heatmap':           return sideBySideHeatmap(opts);
         case 'multi':             return splitMultiToSubgroup(opts);
-        case 'scatter':           return splitScatterToSubgroup(opts);
+        case 'scatter': {
+            // Per-chart spectrumKind toggle promotes the percentile
+            // scatter into a quantile-heatmap pair (or a single diff
+            // heatmap when the diff toggle is also on).
+            const chartId = opts.spec?.opts?.id;
+            const chartToggles = chartId && opts.toggles ? opts.toggles[chartId] : null;
+            const kind = chartToggles?.spectrumKind || null;
+            if (kind === 'full' || kind === 'tail') {
+                return chartToggles?.diff
+                    ? renderDiffQuantileHeatmap(opts)
+                    : sideBySideQuantileHeatmap(opts);
+            }
+            return splitScatterToSubgroup(opts);
+        }
         case 'histogram_heatmap': return sideBySideHistogramHeatmap(opts);
         default:
             return FALLBACK;
