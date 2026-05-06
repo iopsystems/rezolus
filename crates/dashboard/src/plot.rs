@@ -163,6 +163,23 @@ impl Group {
             .plot_promql_with_descriptions(opts, promql_query, descriptions);
     }
 
+    /// SQL-bodied counterparts to the legacy `plot_promql*` shims on
+    /// `Group`. Same tail-subgroup semantics — opens or reuses the trailing
+    /// subgroup so flat callers don't need to construct one explicitly.
+    pub fn plot_sql(&mut self, opts: PlotOpts, sql_query: String) {
+        self.tail_subgroup_mut().plot_sql(opts, sql_query);
+    }
+
+    pub fn plot_sql_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        sql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.tail_subgroup_mut()
+            .plot_sql_with_descriptions(opts, sql_query, descriptions);
+    }
+
     /// Find an existing named subgroup by exact name match.
     pub fn find_subgroup(&mut self, name: &str) -> Option<&mut SubGroup> {
         self.subgroups
@@ -228,8 +245,83 @@ impl SubGroup {
             series_names: None,
             promql_query: Some(promql_query),
             promql_query_experiment: None,
+            sql_query: None,
+            sql_query_experiment: None,
             width: PlotWidth::default(),
         });
+    }
+
+    /// Append a SQL-bodied plot. Phase D dashboard generators progressively
+    /// migrate `plot_promql` callers to `plot_sql`; the legacy viewer
+    /// continues to ignore the `sql_query` field and run `promql_query`,
+    /// while `viewer-sql` prefers `sql_query` (see frontend dispatcher in
+    /// `site/viewer/lib/data.js`).
+    pub fn plot_sql(&mut self, opts: PlotOpts, sql_query: String) {
+        self.plot_sql_with_descriptions(opts, sql_query, None);
+    }
+
+    pub fn plot_sql_with_descriptions(
+        &mut self,
+        mut opts: PlotOpts,
+        sql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        // Same description-autofill logic as plot_promql — match metric
+        // names that appear in the SQL body. Useful for descriptions
+        // attached to bare-metric or `dash_*` macro names.
+        if opts.description.is_none()
+            && let Some(descriptions) = descriptions
+        {
+            let mut best_match: Option<(usize, &str, &str)> = None;
+            for (name, desc) in descriptions {
+                if let Some(pos) = sql_query.find(name.as_str()) {
+                    let dominated = best_match.is_some_and(|(best_pos, best_name, _)| {
+                        name.len() < best_name.len()
+                            || (name.len() == best_name.len()
+                                && (pos > best_pos
+                                    || (pos == best_pos && name.as_str() > best_name)))
+                    });
+                    if !dominated {
+                        best_match = Some((pos, name.as_str(), desc.as_str()));
+                    }
+                }
+            }
+            if let Some((_, _, desc)) = best_match {
+                opts.description = Some(desc.to_string());
+            }
+        }
+
+        self.plots.push(Plot {
+            opts,
+            data: Vec::new(),
+            min_value: None,
+            max_value: None,
+            time_data: None,
+            formatted_time_data: None,
+            series_names: None,
+            promql_query: None,
+            promql_query_experiment: None,
+            sql_query: Some(sql_query),
+            sql_query_experiment: None,
+            width: PlotWidth::default(),
+        });
+    }
+
+    /// Full-width SQL-bodied plot. Mirrors `plot_promql_full`.
+    pub fn plot_sql_full(&mut self, opts: PlotOpts, sql_query: String) {
+        self.plot_sql_full_with_descriptions(opts, sql_query, None);
+    }
+
+    pub fn plot_sql_full_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        sql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.plot_sql_with_descriptions(opts, sql_query, descriptions);
+        if let Some(plot) = self.plots.last_mut() {
+            plot.width = PlotWidth::Full;
+        }
     }
 
     /// Set the optional description text rendered below the subgroup header.
@@ -275,6 +367,23 @@ pub struct Plot {
     promql_query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub promql_query_experiment: Option<String>,
+    /// SQL query body emitted by Phase D dashboard generators. The frontend
+    /// dispatcher (`site/viewer/lib/data.js`) prefers `sql_query` over
+    /// `promql_query` when both are present, so plots can migrate
+    /// piecewise without a flag day. Body conventions:
+    ///   - References parquet columns directly via `[*COLUMNS('regex')]`
+    ///     and/or by literal name (e.g. `"cpu_cycles/0"`).
+    ///   - Uses `_src` as the parquet alias — viewer-sql binds it to
+    ///     `read_parquet('<registered>')` at submit time.
+    ///   - Final SELECT projects `t` (DOUBLE seconds) and `v` (numeric);
+    ///     per-id queries also project label columns (e.g. `id`).
+    /// See `crates/viewer-sql/duckdb.md` for the full SQL convention.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sql_query: Option<String>,
+    /// Compare-mode experiment-side variant of `sql_query`. Mirrors
+    /// `promql_query_experiment`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sql_query_experiment: Option<String>,
     #[serde(skip_serializing_if = "plot_width_is_half", default)]
     pub width: PlotWidth,
 }
@@ -503,6 +612,8 @@ mod tests {
             series_names: None,
             promql_query: Some("up".into()),
             promql_query_experiment: None,
+            sql_query: None,
+            sql_query_experiment: None,
             width,
         }
     }
@@ -588,6 +699,58 @@ mod tests {
             json["subgroups"][0]["plots"][0]["width"],
             serde_json::json!("full")
         );
+    }
+
+    #[test]
+    fn plot_sql_serializes_with_sql_query_field() {
+        let mut g = Group::new("G", "g");
+        g.subgroup("Ops").plot_sql(
+            PlotOpts::counter("Total", "total", Unit::Rate),
+            "SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(\"cpu_cycles/0\", timestamp) AS v FROM _src".into(),
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        let plot = &json["subgroups"][0]["plots"][0];
+        assert!(plot["sql_query"].as_str().unwrap().contains("irate_1s"));
+        assert!(
+            plot.get("promql_query").is_none(),
+            "plot_sql leaves promql_query unset"
+        );
+    }
+
+    #[test]
+    fn plot_sql_full_marks_plot_as_full_width() {
+        let mut g = Group::new("G", "g");
+        g.subgroup("Ops").plot_sql_full(
+            PlotOpts::counter("Wide", "wide", Unit::Rate),
+            "SELECT 1 AS t, 1 AS v".into(),
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        assert_eq!(
+            json["subgroups"][0]["plots"][0]["width"],
+            serde_json::json!("full")
+        );
+    }
+
+    #[test]
+    fn legacy_and_sql_plots_can_coexist_in_one_subgroup() {
+        let mut g = Group::new("G", "g");
+        let sg = g.subgroup("Mixed");
+        sg.plot_promql(PlotOpts::counter("p", "p", Unit::Rate), "up".into());
+        sg.plot_sql(
+            PlotOpts::counter("s", "s", Unit::Rate),
+            "SELECT 1 AS t, 1 AS v".into(),
+        );
+        let plots = serde_json::to_value(&g).unwrap()["subgroups"][0]["plots"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(plots.len(), 2);
+        // First plot has only promql_query.
+        assert_eq!(plots[0]["promql_query"], "up");
+        assert!(plots[0].get("sql_query").is_none());
+        // Second plot has only sql_query.
+        assert!(plots[1].get("promql_query").is_none());
+        assert_eq!(plots[1]["sql_query"], "SELECT 1 AS t, 1 AS v");
     }
 
     #[test]
