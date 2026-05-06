@@ -278,6 +278,14 @@ export function configureHistogramHeatmap(chart) {
             containLabel: true,
         },
         dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
+        // Force hover effects onto a separate canvas (the zrender
+        // "hoverLayer") so cell hover doesn't trigger a progressive
+        // re-render of the main canvas. Without this, hovering each
+        // cell repaints the chunk to the right of the cursor — and in
+        // compare-mode side-by-side pairs, the parent layout shift
+        // also fires the sibling chart's ResizeObserver, mirroring
+        // the redraw onto the other chart. Same fix as heatmap.js.
+        hoverLayerThreshold: 0,
         xAxis: {
             type: 'time',
             min: 'dataMin',
@@ -330,6 +338,12 @@ export function configureHistogramHeatmap(chart) {
             },
             data: allCellsData,
             clip: true,
+            // No hover state for these cells — telling ECharts
+            // explicitly avoids the default hover-handling pass that
+            // can trigger a progressive re-render of the right-of-cursor
+            // chunk on every mousemove (visible as flicker in
+            // compare-mode side-by-side pairs).
+            emphasis: { disabled: true },
             progressive: 5000,
             progressiveThreshold: 3000,
             animation: false,
@@ -408,8 +422,18 @@ export function configureHistogramHeatmap(chart) {
         return ticks;
     };
 
+    // Dedup on grid-rect signature so we don't rebuild the legend DOM
+    // on every hover-emphasis render — `finished` fires on those and
+    // the resulting innerHTML reset would flash the legend (especially
+    // visible in compare-mode side-by-side pairs). The toggle handler
+    // resets `_legendLastSig` to force a re-render when ticks change.
     const renderLegend = () => {
         const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
+        const sig = rect
+            ? `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+            : 'none';
+        if (chart._legendLastSig === sig) return;
+        chart._legendLastSig = sig;
         ensureLegendBar(chart.domNode, barCanvas, {
             ticks: buildTicks(),
             barTop: rect?.y,
@@ -422,6 +446,7 @@ export function configureHistogramHeatmap(chart) {
             checkboxEl.style.left = Math.round(rect.x) + 'px';
         }
     };
+    chart._legendLastSig = null;
 
     const updateCheckbox = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
@@ -447,6 +472,10 @@ export function configureHistogramHeatmap(chart) {
         const isRaw = chart.histogramDisplayMode === 'raw';
         chart.histogramDisplayMode = isRaw ? 'percentage' : 'raw';
         updateCheckbox();
+        // Invalidate the rect-signature cache so renderLegend rebuilds
+        // with the new tick labels (raw count ↔ percentage), since the
+        // grid rect itself hasn't changed.
+        chart._legendLastSig = null;
         renderLegend();
     };
 }

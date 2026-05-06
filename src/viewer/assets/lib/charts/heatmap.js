@@ -354,8 +354,16 @@ export function configureHeatmap(chart) {
     // top track the chart's actual grid rect (the Y-axis). On the very
     // first call (before layout completes) the rect is unavailable and
     // we render at default dimensions; the next `finished` then resizes.
+    // Dedup on the grid-rect signature so we don't rebuild the legend
+    // DOM on every hover-emphasis render — `finished` fires on those
+    // and the resulting innerHTML reset would flash the legend.
     const renderLegend = () => {
         const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
+        const sig = rect
+            ? `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+            : 'none';
+        if (chart._legendLastSig === sig) return;
+        chart._legendLastSig = sig;
         ensureLegendBar(chart.domNode, barCanvas, {
             ticks,
             // Top of bar = max = positive value = "experiment is higher"
@@ -366,6 +374,7 @@ export function configureHeatmap(chart) {
             barHeight: rect?.height,
         });
     };
+    chart._legendLastSig = null;
     renderLegend();
     if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
     chart._legendFinishedFn = renderLegend;

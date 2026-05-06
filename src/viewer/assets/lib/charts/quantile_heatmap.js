@@ -385,6 +385,10 @@ export function configureQuantileHeatmap(chart) {
             containLabel: false,
         },
         dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
+        // Force hover effects onto the separate hoverLayer canvas so
+        // cell hover doesn't trigger a progressive re-render of the
+        // main canvas. Same fix as heatmap.js / histogram_heatmap.js.
+        hoverLayerThreshold: 0,
         xAxis: {
             type: 'time',
             min: 'dataMin',
@@ -453,6 +457,11 @@ export function configureQuantileHeatmap(chart) {
             encode: { x: 0, y: 1 },
             data: cells,
             clip: true,
+            // No hover state for these cells — telling ECharts
+            // explicitly avoids the default hover-handling pass that
+            // can trigger a progressive re-render of the right-of-cursor
+            // chunk on every mousemove. Same fix as histogram_heatmap.js.
+            emphasis: { disabled: true },
             progressive: 5000,
             progressiveThreshold: 3000,
             animation: false,
@@ -528,8 +537,17 @@ export function configureQuantileHeatmap(chart) {
     const diffLegendLabels = chart.spec.diffLegendLabels;
     // Re-run on every `finished` so the bar's height and top track the
     // grid rect (Y-axis). First call before layout uses defaults.
+    // Dedup on rect signature so we don't rebuild the legend DOM on
+    // every hover-emphasis render — `finished` fires on those and the
+    // resulting innerHTML reset would flash the legend (especially
+    // visible in compare-mode side-by-side pairs).
     const renderLegend = () => {
         const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
+        const sig = rect
+            ? `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+            : 'none';
+        if (chart._legendLastSig === sig) return;
+        chart._legendLastSig = sig;
         ensureLegendBar(chart.domNode, barCanvas, {
             ticks,
             topCaption: diffLegendLabels ? diffLegendLabels.right : '',
@@ -538,6 +556,7 @@ export function configureQuantileHeatmap(chart) {
             barHeight: rect?.height,
         });
     };
+    chart._legendLastSig = null;
     renderLegend();
     if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
     chart._legendFinishedFn = renderLegend;
