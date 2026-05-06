@@ -467,7 +467,7 @@ export function configureQuantileHeatmap(chart) {
     // hover this chart doesn't draw a redundant crosshair on itself.
     if (compareGroupId && chartsState && typeof chartsState.subscribeCompareCursor === 'function') {
         if (chart._compareCursorUnsub) chart._compareCursorUnsub();
-        const onCursor = (payload) => drawCompareCrosshair(chart, payload, timeData, tCount);
+        const onCursor = (payload) => drawCompareCrosshair(chart, payload, timeData, tCount, seriesCount);
         onCursor._chartId = chart.chartId;  // tag for self-filter in publishCompareCursor
         chart._compareCursorUnsub = chartsState.subscribeCompareCursor(compareGroupId, onCursor);
     }
@@ -518,7 +518,7 @@ export function configureQuantileHeatmap(chart) {
 // Render a crosshair on `chart` at the matching cell from a sibling's
 // cursor event. Cleared when payload is null. Uses ECharts' graphic
 // component overlaid on the chart canvas — no relayout cost.
-function drawCompareCrosshair(chart, payload, timeData, tCount) {
+function drawCompareCrosshair(chart, payload, timeData, tCount, seriesCount) {
     if (!chart || !chart.echart) return;
     if (!payload) {
         chart.echart.setOption({ graphic: [] });
@@ -534,10 +534,18 @@ function drawCompareCrosshair(chart, payload, timeData, tCount) {
     const rect = grid?.coordinateSystem?.getRect();
     if (!rect) return;
 
-    // Approximate cell width/height from time interval and quantile rows.
+    // Cell width/height: try to sample neighbours via convertToPixel
+    // first (matches actual axis spacing including any non-uniform
+    // mapping). For the rightmost time column or the top quantile row
+    // the neighbour is past the axis max and convertToPixel returns
+    // null — fall back to dividing the grid rect by the cell counts.
     const intervalMs = tCount > 1 ? (timeData[1] - timeData[0]) * 1000 : 1000;
-    const cellWidthPx = chart.echart.convertToPixel({ gridIndex: 0 }, [timeMs + intervalMs, qIdx])[0] - pix[0];
-    const cellHeightPx = chart.echart.convertToPixel({ gridIndex: 0 }, [timeMs, qIdx + 1])[1] - pix[1];
+    const widthSample = chart.echart.convertToPixel({ gridIndex: 0 }, [timeMs + intervalMs, qIdx]);
+    const heightSample = chart.echart.convertToPixel({ gridIndex: 0 }, [timeMs, qIdx + 1]);
+    const fallbackCellWidth = (tCount > 0) ? rect.width / tCount : rect.width;
+    const fallbackCellHeight = (seriesCount > 0) ? rect.height / seriesCount : rect.height;
+    const cellWidthPx = widthSample ? (widthSample[0] - pix[0]) : fallbackCellWidth;
+    const cellHeightPx = heightSample ? (heightSample[1] - pix[1]) : -fallbackCellHeight;
 
     chart.echart.setOption({
         graphic: [
