@@ -9,8 +9,10 @@ import {
     queryRangeForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
+    fetchQuantileSpectrumForPlot,
 } from './data.js';
 import { canonicalQuantileLabel } from './charts/util/compare_math.js';
+import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
 
@@ -225,6 +227,38 @@ const fetchExperimentResult = (vnode) => {
     })();
 };
 
+// Fire baseline + experiment spectrum fetches in parallel. On both
+// resolving, write into vnode.state._spectrumByKind[kind] and trigger
+// a redraw. On either failing or returning no data, leave the cache
+// empty for that kind and clear the pending flag so the toggle path
+// falls through to FALLBACK (5-percentile split).
+const kickOffSpectrumFetch = (vnode, spec, kind) => {
+    const range = vnode.attrs.experimentQueryRange;
+    const quantiles = quantilesForKind(kind);
+    const plotForFetch = { promql_query: spec.promql_query, opts: spec.opts };
+    Promise.all([
+        fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_BASELINE),
+        fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_EXPERIMENT, range),
+    ])
+        .then(([base, exp]) => {
+            if (!base || !exp) {
+                vnode.state._spectrumPending = null;
+                m.redraw();
+                return;
+            }
+            vnode.state._spectrumByKind = vnode.state._spectrumByKind || {};
+            vnode.state._spectrumByKind[kind] = { baseline: base, experiment: exp };
+            vnode.state._spectrumPending = null;
+            m.redraw();
+        })
+        .catch((err) => {
+            console.error('[compare] spectrum fetch failed', err);
+            vnode.state._spectrumPending = null;
+            vnode.state.error = err?.message || 'spectrum fetch failed';
+            m.redraw();
+        });
+};
+
 const CompareChartWrapper = {
     oninit(vnode) {
         vnode.state.experimentResult = null;
@@ -275,6 +309,45 @@ const CompareChartWrapper = {
         }
         const baselineCap = vnode.state._baselineCap;
         const experimentCap = vnode.state._experimentCap;
+
+        // Compare-mode spectrum fetch: when a percentile chart has a
+        // Full or Tail toggle on, we need the full/tail spectrum data
+        // for both captures. Fetched in parallel, cached on vnode.state
+        // by kind, invalidated when granularity changes (mirrors the
+        // existing experiment refetch path).
+        const chartId = spec?.opts?.id;
+        const chartToggles = chartId && toggles ? toggles[chartId] : null;
+        const spectrumKind = chartToggles?.spectrumKind || null;
+
+        // Invalidate the spectrum cache when granularity changes
+        // (we already track _lastFetchedStep for the experiment fetch;
+        // reuse the same trigger).
+        if (vnode.state._spectrumCachedStep !== vnode.state._lastFetchedStep) {
+            vnode.state._spectrumByKind = {};
+            vnode.state._spectrumPending = null;
+            vnode.state._spectrumCachedStep = vnode.state._lastFetchedStep;
+        }
+
+        if (spectrumKind && resolvedStyle(spec) === 'scatter') {
+            const cached = vnode.state._spectrumByKind?.[spectrumKind];
+            if (!cached && vnode.state._spectrumPending !== spectrumKind) {
+                vnode.state._spectrumPending = spectrumKind;
+                kickOffSpectrumFetch(vnode, spec, spectrumKind);
+                return m('div.chart-loading', 'Loading spectrum\u2026');
+            }
+            if (!cached) {
+                return m('div.chart-loading', 'Loading spectrum\u2026');
+            }
+            // Augment captures with spectrum fields for the strategies.
+            baselineCap.spectrumTimeData = cached.baseline.time_data;
+            baselineCap.spectrumData = cached.baseline.data;
+            baselineCap.spectrumSeriesNames = cached.baseline.series_names;
+            baselineCap.spectrumColorMinAnchor = cached.baseline.color_min_anchor;
+            experimentCap.spectrumTimeData = cached.experiment.time_data;
+            experimentCap.spectrumData = cached.experiment.data;
+            experimentCap.spectrumSeriesNames = cached.experiment.series_names;
+            experimentCap.spectrumColorMinAnchor = cached.experiment.color_min_anchor;
+        }
 
         const result = renderCompareChart({
             spec,
