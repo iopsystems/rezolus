@@ -26,6 +26,22 @@ import {
     LEGEND_GRID_RIGHT,
 } from './color_legend.js';
 
+// Build a (t: 0..1) → cssColor function from a palette array (CSS color
+// strings). Used when the spec supplies a custom `colormap` (e.g. the
+// diverging palette for compare-mode diff heatmaps). Nearest-neighbor
+// interpolation between adjacent stops — adequate for the cell colors
+// (the gradient legend uses the same function via buildGradientCanvas).
+const buildRampColorFn = (palette) => (t) => {
+    if (!palette || palette.length === 0) return 'rgb(0,0,0)';
+    if (palette.length === 1) return palette[0];
+    const clamped = Math.max(0, Math.min(1, t));
+    const idx = clamped * (palette.length - 1);
+    const i = Math.floor(idx);
+    if (i >= palette.length - 1) return palette[palette.length - 1];
+    const f = idx - i;
+    return f < 0.5 ? palette[i] : palette[i + 1];
+};
+
 // Series names from the spectrum fetch are already formatted as `pXX`
 // (see fetchQuantileSpectrumForPlot). For specs that come from elsewhere
 // (e.g. raw fractions like "0.5"), coerce to the same `pXX` shape so
@@ -98,6 +114,17 @@ export function configureQuantileHeatmap(chart) {
     if (!Number.isFinite(colorMax)) colorMax = 1;
     if (colorMax <= colorMin) colorMax = colorMin > 0 ? colorMin * 10 : 1;
 
+    // Color function. Default: flipped-RdYlGn so low values are green
+    // and high values are red. When the spec supplies a custom palette
+    // (e.g. compare-mode diff diverging palette), use that ramp directly
+    // — palette index 0 maps to t=0 (the colorMin end), so the strategy
+    // is responsible for ordering the palette accordingly.
+    const customPalette = chart.spec.colormap;
+    const rampFn = customPalette ? buildRampColorFn(customPalette) : null;
+    const cellColorFor = (norm) => rampFn
+        ? rampFn(norm)
+        : rdYlGnColor(1 - norm);  // flipped: low value → green
+
     // Log-scale color mapping. Guard against non-positive min by
     // clamping inside the log to a tiny epsilon (the renderer already
     // skips zero/negative cells, so this only matters when colorMin
@@ -153,8 +180,7 @@ export function configureQuantileHeatmap(chart) {
         if (width <= 0 || height <= 0) return;
 
         const norm = Math.min(1, Math.max(0, (safeLog(v) - logMin) / logRange));
-        // Flip: low value → green (t=1), high value → red (t=0).
-        const color = rdYlGnColor(1 - norm);
+        const color = cellColorFor(norm);
 
         return {
             type: 'rect',
@@ -293,9 +319,13 @@ export function configureQuantileHeatmap(chart) {
 
     applyChartOption(chart, option);
 
-    // Vertical legend bar: top=red=high value, bottom=green=low value.
-    // The (1 - t) flip matches the cell color mapping above.
-    const barCanvas = buildGradientCanvas((t) => rdYlGnColor(1 - t));
+    // Vertical legend bar. For the default (RdYlGn-flipped) palette we
+    // feed `1 - t` so the bottom (low value) stays green; for a custom
+    // palette (e.g. compare-mode diff diverging) use the ramp directly
+    // — strategies that supply their own palette get exactly the colors
+    // they configured (no implicit flip).
+    const legendColorFn = customPalette ? rampFn : (t) => rdYlGnColor(1 - t);
+    const barCanvas = buildGradientCanvas(legendColorFn);
 
     // Bar gradient is linear in log10(value) space. Interpolate values
     // at evenly spaced positions for the tick labels.
