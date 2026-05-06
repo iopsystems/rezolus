@@ -33,6 +33,7 @@ edition = "2021"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+publish = false
 
 [[bin]]
 name = "rezolus"
