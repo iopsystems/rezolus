@@ -109,6 +109,91 @@ pub fn hist_percentile_series(metric: &str) -> String {
     )
 }
 
+/// Specifies a layer-B concept-macro argument: either a `list_sum` over
+/// matching columns, or a literal column reference (for gauge scalars
+/// like `cpu_cores`).
+#[derive(Clone, Copy)]
+pub enum Arg<'a> {
+    Sum(&'a str),
+    Col(&'a str),
+}
+
+/// Emit a concept-macro plot (cpu_busy_pct, ipc, ipns, frequency_hz,
+/// l3_hit_pct, branch_miss_pct, dtlb_mpki, gpu_mem_used_pct, etc.).
+/// Each argument is wired into a CTE projection so the final macro call
+/// gets named columns rather than nested `[*COLUMNS()]` (which DuckDB
+/// rejects when more than one appears in a single expression).
+///
+/// The macro is invoked as `MACRO(arg1, arg2, ..., timestamp)` — Layer-B
+/// concept macros take the timestamp as their last positional arg by
+/// convention. Macros that don't take a timestamp (`gpu_mem_used_pct`)
+/// can use `concept_total_no_ts`.
+pub fn concept_total(macro_name: &str, args: &[(&str, Arg)]) -> String {
+    let projections: Vec<String> = args
+        .iter()
+        .map(|(name, a)| match a {
+            Arg::Sum(re) => format!("list_sum([*COLUMNS('{re}')]::UBIGINT[]) AS {name}"),
+            Arg::Col(c) => format!(r#""{c}" AS {name}"#),
+        })
+        .collect();
+    let macro_args: Vec<&str> = args.iter().map(|(name, _)| *name).collect();
+    format!(
+        "WITH agg AS (SELECT timestamp, {projs} FROM _src) \
+         SELECT timestamp::DOUBLE/1e9 AS t, {mname}({margs}, timestamp) AS v FROM agg",
+        projs = projections.join(", "),
+        mname = macro_name,
+        margs = macro_args.join(", "),
+    )
+}
+
+/// Per-CPU rate ratio: pairs two metrics by id via UNPIVOT+JOIN, computes
+/// per-id rates with PARTITION BY id (so LAG doesn't compare across CPUs),
+/// then plugs them into a `formula` template with `{n}` (numerator rate)
+/// and `{d}` (denominator rate) placeholders.
+///
+/// Examples:
+///   "{n} / NULLIF({d}, 0)"               — IPC, branch_miss_pct shape
+///   "1 - {n} / NULLIF({d}, 0)"           — l3_hit_pct shape
+///   "{n} / NULLIF({d}, 0) * 1000"        — dtlb_mpki shape
+///
+/// We can't use the layer-B macros directly here because their internal
+/// `irate_1s` uses an unpartitioned LAG — across UNPIVOT-interleaved rows
+/// that would compare values from different CPUs and underflow.
+pub fn ratio_by_id(num_re: &str, den_re: &str, id_extract_re: &str, formula: &str) -> String {
+    let body = formula.replace("{n}", "n_rate").replace("{d}", "d_rate");
+    format!(
+        r#"WITH n_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('{num_re}') FROM _src)
+                  ON COLUMNS('{num_re}') INTO NAME col VALUE v
+           ),
+           d_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('{den_re}') FROM _src)
+                  ON COLUMNS('{den_re}') INTO NAME col VALUE v
+           ),
+           joined AS (
+              SELECT n.timestamp,
+                     regexp_extract(n.col, '{id_extract_re}', 1) AS id,
+                     n.v AS num_v,
+                     d.v AS den_v
+              FROM n_unp n JOIN d_unp d
+                  ON n.timestamp = d.timestamp
+                 AND regexp_extract(n.col, '{id_extract_re}', 1)
+                     = regexp_extract(d.col, '{id_extract_re}', 1)
+           ),
+           rates AS (
+              SELECT timestamp, id,
+                     irate_lag(num_v,
+                               LAG(num_v) OVER (PARTITION BY id ORDER BY timestamp),
+                               timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS n_rate,
+                     irate_lag(den_v,
+                               LAG(den_v) OVER (PARTITION BY id ORDER BY timestamp),
+                               timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS d_rate
+              FROM joined
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, id, ({body}) AS v FROM rates"#
+    )
+}
+
 /// Like `hist_percentile_series` but for the "Overall" pattern: combine all
 /// `:buckets` columns matching a regex into a single histogram per row via
 /// `h2_combine`, then compute the per-quantile fan-out. PromQL's bare-metric
