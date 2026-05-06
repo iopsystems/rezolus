@@ -19,7 +19,12 @@ import {
     FONTS,
 } from './base.js';
 import { rdYlGnColor } from './util/colormap.js';
-import { buildGradientCanvas, ensureLegendBar } from './color_legend.js';
+import {
+    buildGradientCanvas,
+    ensureLegendBar,
+    sigDigits,
+    LEGEND_GRID_RIGHT,
+} from './color_legend.js';
 
 // Series names from the spectrum fetch are already formatted as `pXX`
 // (see fetchQuantileSpectrumForPlot). For specs that come from elsewhere
@@ -203,7 +208,7 @@ export function configureQuantileHeatmap(chart) {
             // anchored. containLabel is off so this value is the
             // actual rendered gutter, regardless of label width.
             left: HISTOGRAM_CHART_GRID_LEFT,
-            right: '17',
+            right: String(LEGEND_GRID_RIGHT),
             top: String(CHART_GRID_TOP_WITH_LEGEND),
             bottom: '24',
             containLabel: false,
@@ -285,11 +290,33 @@ export function configureQuantileHeatmap(chart) {
 
     applyChartOption(chart, option);
 
-    // Legend bar: gradient is drawn left=t0 → right=t1 by buildGradientCanvas.
-    // We want left=low value=green, right=high value=red — so feed t through
-    // the same flip (1 - t) used for cell colors.
+    // Vertical legend bar: top=red=high value, bottom=green=low value.
+    // The (1 - t) flip matches the cell color mapping above.
     const barCanvas = buildGradientCanvas((t) => rdYlGnColor(1 - t));
-    const { minLabel, maxLabel } = ensureLegendBar(chart.domNode, barCanvas);
-    minLabel.textContent = valueFmt(colorMin);
-    maxLabel.textContent = valueFmt(colorMax);
+
+    // Bar gradient is linear in log10(value) space. Interpolate values
+    // at evenly spaced positions for the tick labels.
+    const TICK_COUNT = 5;
+    const ticks = [];
+    for (let i = 0; i < TICK_COUNT; i++) {
+        const pos = i / (TICK_COUNT - 1);
+        const value = colorMin > 0 && colorMax > 0
+            ? Math.pow(10, safeLog(colorMin) + pos * (safeLog(colorMax) - safeLog(colorMin)))
+            : colorMin + pos * (colorMax - colorMin);
+        ticks.push({ pos, label: valueFmt(sigDigits(value)) });
+    }
+    // Re-run on every `finished` so the bar's height and top track the
+    // grid rect (Y-axis). First call before layout uses defaults.
+    const renderLegend = () => {
+        const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
+        ensureLegendBar(chart.domNode, barCanvas, {
+            ticks,
+            barTop: rect?.y,
+            barHeight: rect?.height,
+        });
+    };
+    renderLegend();
+    if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
+    chart._legendFinishedFn = renderLegend;
+    chart.echart.on('finished', renderLegend);
 }
