@@ -38,7 +38,7 @@
 //   anchors: { baseline: ms, experiment: ms }  — subtracted from each
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
-import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
+import { nullDiff, intersectLabels, canonicalQuantileLabel, unifyHistogramRange, buildDeltaSpectrum } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { ensureHeatmapMatrix } from './util/heatmap_data.js';
 import { resolvedStyle } from './metric_types.js';
@@ -445,3 +445,79 @@ const sideBySideHistogramHeatmap = (opts) => sideBySidePair({
         bucket_bounds: cap.bucketBounds || opts.spec.bucket_bounds,
     }),
 });
+
+/**
+ * Render baseline + experiment quantile-heatmaps side-by-side. Used in
+ * compare mode when the user has the Full or Tail spectrum toggle on
+ * for a percentile chart. Captures must carry pre-fetched spectrum
+ * data on cap.spectrumData / cap.spectrumSeriesNames /
+ * cap.spectrumColorMinAnchor (placed there by CompareChartWrapper).
+ *
+ * Returns FALLBACK when either capture's spectrum is missing, so the
+ * caller can fall back to the existing 5-percentile split.
+ */
+const sideBySideQuantileHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
+    if (!baseline?.spectrumData || !experiment?.spectrumData) return FALLBACK;
+
+    // Unified color scale across both halves so equal cells render
+    // with equal colors. Anchors win when present.
+    const range = unifyHistogramRange(
+        { data: baseline.spectrumData,   color_min_anchor: baseline.spectrumColorMinAnchor },
+        { data: experiment.spectrumData, color_min_anchor: experiment.spectrumColorMinAnchor },
+    );
+
+    const groupId = spec.opts.id;
+    const baselineLabel = labelFor(captureLabels, CAPTURE_BASELINE);
+    const experimentLabel = labelFor(captureLabels, CAPTURE_EXPERIMENT);
+
+    const makeSlotSpec = (cap, role, counterpart) => {
+        const timeData = cap.spectrumTimeData || [];
+        const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
+        const opts = {
+            ...spec.opts,
+            id: `${spec.opts.id || 'chart'}::${cap.id}`,
+            title: `${spec.opts.title} — ${labelFor(captureLabels, cap.id)}`,
+            style: 'quantile_heatmap',
+        };
+        return {
+            ...spec,
+            opts,
+            time_data: rebase(timeData, anchorSec),
+            data: rebaseSpectrumData(cap.spectrumData, anchorSec),
+            series_names: cap.spectrumSeriesNames,
+            color_min_anchor: range.colorMin,
+            color_max_anchor: range.colorMax,
+            compareGroupId: groupId,
+            compareCounterpartData: { data: counterpart.spectrumData },
+            compareCaptureLabels: { baseline: baselineLabel, experiment: experimentLabel },
+            compareSelfRole: role,
+            xAxisFormatter: relativeTimeFormatter,
+        };
+    };
+
+    const slot = (cap, role, counterpart, dotCls) => m('div.compare-slot', [
+        m('div.compare-slot-label', [
+            m(`span.compare-dot.${dotCls}`, '\u25CF'),
+            m('span', labelFor(captureLabels, cap.id)),
+        ]),
+        m(Chart, { spec: makeSlotSpec(cap, role, counterpart), chartsState, interval }),
+    ]);
+
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-pair', [
+            slot(baseline,   'baseline',   experiment, 'compare-baseline-dot'),
+            slot(experiment, 'experiment', baseline,   'compare-experiment-dot'),
+        ]),
+    };
+};
+
+// Spectrum data has shape [timeCol, q1Col, …]. Rebasing the time column
+// in-place would mutate the cached fetch result; clone the time column
+// only and reuse the value columns by reference.
+function rebaseSpectrumData(data, anchorSec) {
+    if (!Array.isArray(data) || data.length === 0) return data;
+    return [rebase(data[0], anchorSec), ...data.slice(1)];
+}
