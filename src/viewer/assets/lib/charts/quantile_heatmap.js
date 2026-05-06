@@ -305,5 +305,18 @@ export function configureQuantileHeatmap(chart) {
             : colorMin + pos * (colorMax - colorMin);
         ticks.push({ pos, label: valueFmt(sigDigits(value)) });
     }
-    ensureLegendBar(chart.domNode, barCanvas, { ticks });
+    // Re-run on every `finished` so the bar's height and top track the
+    // grid rect (Y-axis). First call before layout uses defaults.
+    const renderLegend = () => {
+        const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
+        ensureLegendBar(chart.domNode, barCanvas, {
+            ticks,
+            barTop: rect?.y,
+            barHeight: rect?.height,
+        });
+    };
+    renderLegend();
+    if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
+    chart._legendFinishedFn = renderLegend;
+    chart.echart.on('finished', renderLegend);
 }

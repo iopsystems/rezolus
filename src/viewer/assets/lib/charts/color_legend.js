@@ -10,16 +10,23 @@ import { COLORS, FONTS } from './base.js';
 // Bar geometry constants.
 //
 // LEGEND_GRID_RIGHT is the grid.right value heatmap chart configs must
-// use so the plot area leaves room for the legend bar + tick labels:
+// use so the plot area leaves room for the legend bar + tick labels
+// PLUS a horizontal breathing gap between the right edge of the plot
+// canvas and the bar itself:
 //   right:8 (offset)  +  10 (bar)  +  4 (tick mark)  +  4 (gap)
-//   +  ~32 (label width)  =  ~58, rounded up to 64.
+//   +  ~32 (label width)  +  ~8 (breathing gap)  ≈ 72.
 export const BAR_WIDTH = 10;
 export const BAR_HEIGHT = 150;
 export const LEGEND_RIGHT_OFFSET = 8;
-export const LEGEND_GRID_RIGHT = 64;
+export const LEGEND_GRID_RIGHT = 72;
 export const LEGEND_TOP = 50;
 export const LABEL_GAP = 4;
 const TICK_MARK_LEN = 4;
+// Approximate height of the topCaption row (10px font + ~1.2 line +
+// 2px margin-bottom). Used to back the container off the grid top so
+// the BAR (not the container) aligns with the Y-axis when a top
+// caption is present.
+const TOP_CAPTION_OFFSET = 14;
 
 /**
  * Build a vertical gradient bar canvas from a color function.
@@ -119,28 +126,54 @@ export function logTicks(min, max, count = 5) {
  * @param {string} [options.topCaption] - text above the bar (e.g. diff)
  * @param {string} [options.bottomCaption] - text below the bar (e.g. diff)
  * @param {HTMLElement[]} [options.extras] - elements appended at bottom
+ * @param {number} [options.barTop] - pixel offset of the BAR's top edge
+ *     from wrapper's top. Default LEGEND_TOP. Pass the chart grid's
+ *     `y` so the bar aligns with the Y-axis. The container is offset
+ *     above the bar to leave room for any topCaption row.
+ * @param {number} [options.barHeight] - pixel height of the BAR. Default
+ *     BAR_HEIGHT. Pass the chart grid's `height` to match the Y-axis.
+ *     Tick positions are recomputed against this value.
  * @returns {HTMLElement} the legend container
  */
 export function ensureLegendBar(wrapper, barCanvas, options = {}) {
-    const { ticks = [], topCaption = '', bottomCaption = '', extras = [] } = options;
+    const {
+        ticks = [],
+        topCaption = '',
+        bottomCaption = '',
+        extras = [],
+        barTop,
+        barHeight,
+    } = options;
+    const effectiveBarHeight = (Number.isFinite(barHeight) && barHeight > 0)
+        ? Math.round(barHeight)
+        : BAR_HEIGHT;
+    const requestedTop = Number.isFinite(barTop) ? Math.round(barTop) : LEGEND_TOP;
+    // Container.top must offset upward by the topCaption's height when
+    // present so the BAR's top — not the container's top — lines up with
+    // the requested barTop (which callers set to the grid's y).
+    const containerTop = topCaption
+        ? requestedTop - TOP_CAPTION_OFFSET
+        : requestedTop;
 
     let container = wrapper.querySelector('.heatmap-legend-bar');
     if (!container) {
         container = document.createElement('div');
         container.className = 'heatmap-legend-bar';
-        container.style.cssText = `
-            position: absolute;
-            top: ${LEGEND_TOP}px;
-            right: ${LEGEND_RIGHT_OFFSET}px;
-            display: flex;
-            flex-direction: column;
-            align-items: stretch;
-            gap: 2px;
-            z-index: 10;
-            pointer-events: none;
-        `;
         wrapper.appendChild(container);
     }
+    // Always (re-)apply container styles so dynamic top updates from
+    // the chart's `finished`-event handler take effect on every call.
+    container.style.cssText = `
+        position: absolute;
+        top: ${containerTop}px;
+        right: ${LEGEND_RIGHT_OFFSET}px;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 2px;
+        z-index: 10;
+        pointer-events: none;
+    `;
     container.innerHTML = '';
 
     // Top caption (diff mode only)
@@ -158,18 +191,26 @@ export function ensureLegendBar(wrapper, barCanvas, options = {}) {
         container.appendChild(top);
     }
 
-    // Bar + ticks row
+    // Bar + ticks row. Right-aligned within the container so a wider
+    // extras row (e.g. histogram_heatmap's "Raw count" checkbox) can
+    // expand the container's width without pushing the bar leftward —
+    // the bar always hugs the container's right edge.
     const body = document.createElement('div');
     body.className = 'heatmap-legend-body';
     body.style.cssText = `
         display: flex;
         align-items: stretch;
+        justify-content: flex-end;
     `;
 
+    // CSS-scale the source canvas to the effective bar height. The
+    // gradient is smooth so up/down-scaling produces no visible
+    // artifacts; rebuilding the canvas at the exact display height
+    // would buy nothing.
     const bar = document.createElement('canvas');
     bar.width = barCanvas.width;
     bar.height = barCanvas.height;
-    bar.style.cssText = `width: ${BAR_WIDTH}px; height: ${BAR_HEIGHT}px; display: block; flex: none;`;
+    bar.style.cssText = `width: ${BAR_WIDTH}px; height: ${effectiveBarHeight}px; display: block; flex: none;`;
     bar.getContext('2d').drawImage(barCanvas, 0, 0);
     body.appendChild(bar);
 
@@ -179,14 +220,14 @@ export function ensureLegendBar(wrapper, barCanvas, options = {}) {
     tickCol.style.cssText = `
         position: relative;
         width: 40px;
-        height: ${BAR_HEIGHT}px;
+        height: ${effectiveBarHeight}px;
         margin-left: ${LABEL_GAP}px;
     `;
     for (const t of ticks) {
         const pos = Math.max(0, Math.min(1, t.pos));
         // pos=0 means bottom (min); pos=1 means top (max). Convert to
         // CSS top offset where 0 = top of column.
-        const topPx = (1 - pos) * (BAR_HEIGHT - 1);
+        const topPx = (1 - pos) * (effectiveBarHeight - 1);
 
         const row = document.createElement('div');
         row.className = 'heatmap-legend-tick';

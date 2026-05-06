@@ -349,13 +349,27 @@ export function configureHeatmap(chart) {
         label: formatter(sigDigits(t.value)),
     }));
     const diffLabels = chart.spec.diffLegendLabels;
-    ensureLegendBar(chart.domNode, barCanvas, {
-        ticks,
-        // Top of bar = max = positive value = "experiment is higher"
-        // (which matched the right end in the legacy horizontal layout).
-        topCaption: diffLabels ? diffLabels.right : '',
-        bottomCaption: diffLabels ? diffLabels.left : '',
-    });
+
+    // Re-run on every echart `finished` event so the bar's height and
+    // top track the chart's actual grid rect (the Y-axis). On the very
+    // first call (before layout completes) the rect is unavailable and
+    // we render at default dimensions; the next `finished` then resizes.
+    const renderLegend = () => {
+        const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
+        ensureLegendBar(chart.domNode, barCanvas, {
+            ticks,
+            // Top of bar = max = positive value = "experiment is higher"
+            // (which matched the right end in the legacy horizontal layout).
+            topCaption: diffLabels ? diffLabels.right : '',
+            bottomCaption: diffLabels ? diffLabels.left : '',
+            barTop: rect?.y,
+            barHeight: rect?.height,
+        });
+    };
+    renderLegend();
+    if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
+    chart._legendFinishedFn = renderLegend;
+    chart.echart.on('finished', renderLegend);
 
     // When this echart's zoom level changes, pick which set of potentially downsampled data to use.
     chart.echart.on('datazoom', (event) => {

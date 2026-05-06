@@ -357,18 +357,28 @@ export function configureHistogramHeatmap(chart) {
     const countFormatter = createAxisLabelFormatter('count');
 
     // DOM legend bar: vertical gradient with tick marks/labels to the
-    // right of the chart canvas, plus a "Raw count" checkbox below.
-    // Mounted inside chart.domNode so Mithril owns the legend's lifetime.
+    // right of the chart canvas. Mounted inside chart.domNode so
+    // Mithril owns the legend's lifetime.
     const barCanvas = buildGradientCanvas(infernoColor);
 
-    // Persist the checkbox between renders so the click handler keeps
-    // working after the legend is rebuilt.
-    let checkboxEl = chart.histogramToggleEl;
+    // "Raw count" checkbox lives at the top-left of the grid (same
+    // position as the spectrum checkboxes on scatter — see
+    // ensureSpectrumCheckboxes in scatter.js). Persist between
+    // renders so the click handler keeps working after reconfigure.
+    let checkboxEl = chart.domNode.querySelector('.histogram-toggle');
     if (!checkboxEl) {
         checkboxEl = document.createElement('span');
         checkboxEl.className = 'histogram-toggle';
-        checkboxEl.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none;`;
-        chart.histogramToggleEl = checkboxEl;
+        checkboxEl.style.cssText = `
+            position: absolute;
+            top: 42px;
+            left: 0px;
+            z-index: 10;
+            ${FONTS.cssControl}
+            cursor: pointer;
+            user-select: none;
+        `;
+        chart.domNode.appendChild(checkboxEl);
     }
 
     // Bar gradient is linear in log1p(count) space (matches cell coloring).
@@ -399,21 +409,39 @@ export function configureHistogramHeatmap(chart) {
     };
 
     const renderLegend = () => {
+        const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
         ensureLegendBar(chart.domNode, barCanvas, {
             ticks: buildTicks(),
-            extras: [checkboxEl],
+            barTop: rect?.y,
+            barHeight: rect?.height,
         });
+        // Pin the "Raw count" checkbox to the grid's left edge so it
+        // sits flush with the inner plot canvas (matches the spectrum
+        // checkboxes on scatter charts).
+        if (rect && Number.isFinite(rect.x)) {
+            checkboxEl.style.left = Math.round(rect.x) + 'px';
+        }
     };
 
     const updateCheckbox = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
-        const color = isRaw ? COLORS.fg : COLORS.fgLabel;
+        // fgSecondary reads brighter than fgMuted in dark mode — same
+        // choice the spectrum checkboxes on scatter use.
+        const color = isRaw ? COLORS.fg : COLORS.fgSecondary;
         checkboxEl.innerHTML =
-            `<span style="font-size: 16px; vertical-align: bottom;">${isRaw ? '☑' : '☐'}</span> Raw count`;
+            `<span style="font-size: 16px; vertical-align: bottom; position: relative; top: 2px;">${isRaw ? '☑' : '☐'}</span> Raw count`;
         checkboxEl.style.color = color;
     };
     updateCheckbox();
     renderLegend();
+
+    // Re-run on every echart `finished` event so the bar's height + top
+    // track the chart's grid rect (Y-axis) and the checkbox's left
+    // edge tracks the grid X. First call before layout uses default
+    // dimensions; the next `finished` resizes.
+    if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
+    chart._legendFinishedFn = renderLegend;
+    chart.echart.on('finished', renderLegend);
 
     checkboxEl.onclick = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';

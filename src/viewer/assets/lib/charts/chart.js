@@ -818,10 +818,22 @@ export class Chart {
             || (style === 'scatter' && this.spectrumKind);
         if (!ownsLegendBar) {
             this.domNode?.querySelector('.heatmap-legend-bar')?.remove();
+            // Also detach the heatmap configurators' `finished` listener
+            // — without this it stays attached to the echart instance
+            // and re-creates the legend bar on the next render after a
+            // style swap (e.g. heatmap-mode toggled off).
+            if (this._legendFinishedFn && this.echart) {
+                this.echart.off('finished', this._legendFinishedFn);
+                this._legendFinishedFn = null;
+            }
         }
         // The spectrum controls only belong on scatter charts.
         if (style !== 'scatter') {
             this.domNode?.querySelector('.spectrum-controls')?.remove();
+        }
+        // The "Raw count" toggle only belongs on histogram_heatmap.
+        if (style !== 'histogram_heatmap') {
+            this.domNode?.querySelector('.histogram-toggle')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules
