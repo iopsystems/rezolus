@@ -413,6 +413,8 @@ export class Chart {
 
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
         if (this._pinCleanup) this._pinCleanup();
+        if (this._compareCursorOff) this._compareCursorOff();
+        if (this._compareCursorUnsub) this._compareCursorUnsub();
 
         // Remove ourselves from the charts registry so setZoom's fan-out,
         // resetAll, hasActiveSelection, etc. don't walk a stale entry

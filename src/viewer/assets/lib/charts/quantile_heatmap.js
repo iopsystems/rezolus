@@ -264,6 +264,55 @@ export function configureQuantileHeatmap(chart) {
             </div>`;
         }
 
+        // Compare-pair variant: when the spec carries the counterpart's
+        // spectrum data, render baseline | experiment | delta. This is
+        // the side-by-side path's tooltip (the diff path used the
+        // diffMatrices branch above).
+        if (chart.spec.compareCounterpartData
+            && chart.spec.compareCaptureLabels
+            && chart.spec.compareSelfRole) {
+            const counterpart = chart.spec.compareCounterpartData;
+            const labels = chart.spec.compareCaptureLabels;
+            const selfRole = chart.spec.compareSelfRole;  // 'baseline' | 'experiment'
+            // Find counterpart cell value at the same (timeIdx, qIdx).
+            let tIdx = -1;
+            for (let i = 0; i < tCount; i++) {
+                if (Math.abs(timeData[i] * 1000 - tsMs) < 0.5) { tIdx = i; break; }
+            }
+            const otherV = (tIdx >= 0 && Array.isArray(counterpart.data) && counterpart.data[q + 1])
+                ? counterpart.data[q + 1][tIdx]
+                : null;
+            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : valueFmt(x);
+            const selfV = v;
+            const baseV = selfRole === 'baseline' ? selfV : otherV;
+            const expV  = selfRole === 'experiment' ? selfV : otherV;
+            let deltaStr = '—';
+            if (baseV != null && !Number.isNaN(baseV) && expV != null && !Number.isNaN(expV)) {
+                const d = expV - baseV;
+                const pct = baseV !== 0 ? `(${d >= 0 ? '+' : ''}${(d / baseV * 100).toFixed(1)}%)` : '';
+                deltaStr = `${d >= 0 ? '+' : ''}${valueFmt(d)} ${pct}`.trim();
+            }
+            return `<div style="${FONTS.cssSans}">
+                <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
+                    ${formattedTime}
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
+                    <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
+                        ${label}
+                    </span>
+                </div>
+                <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
+                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${labels.baseline || 'baseline'}</span>
+                    <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(baseV)}</span>
+                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${labels.experiment || 'experiment'}</span>
+                    <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(expV)}</span>
+                    <span style="color: ${COLORS.fgSecondary};">Δ</span>
+                    <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${deltaStr}</span>
+                </div>
+                ${getTooltipFreezeFooter(chart)}
+            </div>`;
+        }
+
         // Default variant: single value tooltip.
         return `<div style="${FONTS.cssSans}">
             <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
@@ -382,6 +431,35 @@ export function configureQuantileHeatmap(chart) {
     };
 
     applyChartOption(chart, option);
+
+    // Compare-mode cross-cursor publisher. When the spec carries a
+    // compareGroupId, every showtip / hidetip event publishes the
+    // cell coordinates to sibling subscribers (the other half of the
+    // pair). Off completely outside compare-mode pair rendering.
+    const compareGroupId = chart.spec.compareGroupId;
+    const chartsState = chart.chartsState;
+    if (compareGroupId && chartsState && typeof chartsState.publishCompareCursor === 'function') {
+        // Tear down any prior listener (reconfigure path).
+        if (chart._compareCursorOff) chart._compareCursorOff();
+        const onShow = (params) => {
+            if (!params || !params.data) return;
+            chartsState.publishCompareCursor(compareGroupId, {
+                timeMs: params.data[0],
+                qIdx: params.data[1],
+                sourceChartId: chart.chartId,
+            });
+        };
+        const onHide = () => {
+            chartsState.publishCompareCursor(compareGroupId, null);
+        };
+        chart.echart.on('showTip', onShow);
+        chart.echart.on('hideTip', onHide);
+        chart._compareCursorOff = () => {
+            chart.echart.off('showTip', onShow);
+            chart.echart.off('hideTip', onHide);
+            chart._compareCursorOff = null;
+        };
+    }
 
     // Vertical legend bar. For the default (RdYlGn-flipped) palette we
     // feed `1 - t` so the bottom (low value) stays green; for a custom
