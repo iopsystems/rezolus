@@ -139,6 +139,11 @@ pub struct ViewerSql {
     cached_bodies: RefCell<HashMap<String, serde_json::Value>>,
     /// Display alias for this capture, when the JS caller supplied one.
     alias: Option<String>,
+    /// Selected cgroup names (the `name` label values). The cgroups
+    /// dashboard emits SQL with `__SELECTED_CGROUPS__` placeholders;
+    /// `query_range` substitutes them with a SQL list literal built from
+    /// this vector.
+    selected_cgroups: RefCell<Vec<String>>,
 }
 
 #[wasm_bindgen]
@@ -162,11 +167,28 @@ impl ViewerSql {
             context,
             cached_bodies: RefCell::new(HashMap::new()),
             alias: None,
+            selected_cgroups: RefCell::new(Vec::new()),
         })
     }
 
     pub fn set_alias(&mut self, alias: Option<String>) {
         self.alias = alias;
+    }
+
+    /// Update the selected-cgroup names that `query_range` substitutes
+    /// into `__SELECTED_CGROUPS__` placeholders. Empty list is fine —
+    /// substitution emits a sentinel that matches no real cgroup name.
+    /// Takes a JS Array of strings; `Vec<String>` would be cleaner but
+    /// wasm-bindgen's Vec-of-String input bridge only works with
+    /// `&mut self`, while the rest of this impl is `&self`-uniform.
+    pub fn set_selected_cgroups(&self, names: js_sys::Array) {
+        let mut out: Vec<String> = Vec::with_capacity(names.length() as usize);
+        for v in names.iter() {
+            if let Some(s) = v.as_string() {
+                out.push(s);
+            }
+        }
+        *self.selected_cgroups.borrow_mut() = out;
     }
 
     /// JSON metadata compatible with the legacy viewer's /api/v1/metadata.
@@ -277,6 +299,36 @@ impl ViewerSql {
     ) -> Result<String, JsValue> {
         let start_ns = (start * 1e9) as i64;
         let end_ns = (end * 1e9) as i64;
+        // Substitute the cgroup-selection placeholder with a SQL list
+        // literal `('a','b',…)` built from `selected_cgroups`. When the
+        // selection is empty we emit a sentinel that won't match any
+        // real cgroup name — keeps `IN`/`NOT IN` clauses well-formed.
+        let sql = if sql.contains("__SELECTED_CGROUPS__") {
+            let names = self.selected_cgroups.borrow();
+            let list = if names.is_empty() {
+                "('__rezolus_no_cgroup_selected__')".to_string()
+            } else {
+                let mut s = String::from("(");
+                for (i, n) in names.iter().enumerate() {
+                    if i > 0 {
+                        s.push(',');
+                    }
+                    s.push('\'');
+                    for ch in n.chars() {
+                        if ch == '\'' {
+                            s.push('\'');
+                        }
+                        s.push(ch);
+                    }
+                    s.push('\'');
+                }
+                s.push(')');
+                s
+            };
+            sql.replace("__SELECTED_CGROUPS__", &list)
+        } else {
+            sql
+        };
         let wrapped = format!(
             "WITH _src AS ( \
                SELECT * FROM read_parquet('{parquet}') \

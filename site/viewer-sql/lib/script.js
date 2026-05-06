@@ -10,6 +10,7 @@
 // repo. The eventual production page can switch to a vendored copy.
 
 import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev45.0/+esm';
+import * as arrow from 'https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm';
 import init, { ViewerSql, pure_sql_macros } from '../pkg/wasm_viewer_sql.js';
 
 const $ = (id) => document.getElementById(id);
@@ -133,6 +134,71 @@ async function buildMetadata(conn, filename, registeredName) {
     };
 }
 
+// Build a `_cgroup_index(metric, column_name, name, id, labels)` lookup
+// table used by cgroup dashboard SQL to filter by `name` (which the column
+// path can encode ambiguously, since cgroup names are `/`-paths).
+//
+// DuckDB's `read_parquet` drops Arrow field metadata, so we decode the
+// embedded `ARROW:schema` IPC bytes via arrow-js to recover the per-field
+// label maps that metriken-exposition writes into the schema.
+//
+// Returns the row count for logging.
+async function buildCgroupIndex(conn, registeredName) {
+    const sch = await conn.query(
+        `SELECT value::VARCHAR AS v FROM parquet_kv_metadata('${registeredName}')
+         WHERE key::VARCHAR = 'ARROW:schema'`
+    );
+    const rows = sch.toArray();
+    await conn.query(
+        `CREATE TABLE _cgroup_index(
+            metric VARCHAR,
+            column_name VARCHAR,
+            name VARCHAR,
+            id VARCHAR,
+            labels MAP(VARCHAR, VARCHAR)
+        )`
+    );
+    if (rows.length === 0) return 0;
+    const b64 = rows[0].toJSON().v;
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+    const reader = await arrow.RecordBatchReader.from(bytes);
+    await reader.open();
+    const cgroupRows = [];
+    for (const f of reader.schema.fields) {
+        const md = f.metadata;
+        if (!md || !md.get) continue;
+        const metric = md.get('metric');
+        if (!metric || !metric.startsWith('cgroup_')) continue;
+        const name = md.has('name') ? md.get('name') : null;
+        const id = md.has('id') ? md.get('id') : null;
+        const labels = {};
+        for (const [k, v] of md.entries()) {
+            if (k === 'metric' || k === 'metric_type' || k === 'unit'
+                || k === 'name' || k === 'id') continue;
+            labels[k] = v;
+        }
+        cgroupRows.push({ metric, column_name: f.name, name, id, labels });
+    }
+    if (cgroupRows.length === 0) return 0;
+
+    // Insert in one statement: (...) VALUES (...), (...). Quote strings
+    // with single-quote escaping; build MAP literals via MAP{'k':'v'}.
+    const esc = (s) => "'" + String(s).replace(/'/g, "''") + "'";
+    const mapLit = (m) => {
+        const keys = Object.keys(m);
+        if (keys.length === 0) return 'MAP{}';
+        return 'MAP{' + keys.map((k) => `${esc(k)}:${esc(m[k])}`).join(',') + '}';
+    };
+    const valueRows = cgroupRows
+        .map((r) => `(${esc(r.metric)},${esc(r.column_name)},${r.name == null ? 'NULL' : esc(r.name)},${r.id == null ? 'NULL' : esc(r.id)},${mapLit(r.labels)})`)
+        .join(',');
+    await conn.query(`INSERT INTO _cgroup_index VALUES ${valueRows}`);
+    return cgroupRows.length;
+}
+
 // JSON.stringify with BigInt support: emits BigInts as unquoted decimal
 // numerics. Lossless on the wire; serde_json on the Rust side parses them
 // into u64 without going through f64.
@@ -173,6 +239,8 @@ async function loadParquet(buf, filename) {
     await registerMacros(conn);
     const metadata = await buildMetadata(conn, filename, REGISTERED);
     log(`  ✓ metadata: ${Object.keys(metadata.counters).length} counters, ${Object.keys(metadata.gauges).length} gauges, ${Object.keys(metadata.histograms).length} histograms`);
+    const cgroupRowCount = await buildCgroupIndex(conn, REGISTERED);
+    log(`  ✓ _cgroup_index built: ${cgroupRowCount} rows`);
 
     // BigInts can't be JSON.stringify'd. Manual stringify keeps BigInt
     // values as unquoted decimal numerics in the JSON text — serde_json's
