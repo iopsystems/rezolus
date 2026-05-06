@@ -84,6 +84,11 @@ export function configureQuantileHeatmap(chart) {
         : Array.from({ length: seriesCount }, (_, i) => String((i + 1) / seriesCount));
     const displayLabels = rawLabels.map(formatQuantileLabel);
 
+    // Diff mode (signed deltas) flows through the renderer with a
+    // linear color scale and accepts negative anchors. Detected once
+    // here so the cell loop and color logic can branch consistently.
+    const isDiff = !!chart.spec.diffMatrices;
+
     // Color scale spans the non-null, positive value range across all cells.
     let colorMin = Infinity;
     let colorMax = -Infinity;
@@ -91,7 +96,9 @@ export function configureQuantileHeatmap(chart) {
         const col = data[s];
         for (let t = 0; t < tCount; t++) {
             const v = col[t];
-            if (v != null && !Number.isNaN(v) && v > 0) {
+            // Diff data is signed; only the positive log path needs the
+            // v > 0 filter (log10 is undefined at and below zero).
+            if (v != null && !Number.isNaN(v) && (isDiff || v > 0)) {
                 if (v < colorMin) colorMin = v;
                 if (v > colorMax) colorMax = v;
             }
@@ -103,16 +110,26 @@ export function configureQuantileHeatmap(chart) {
     // max anchor lets the compare-mode pair share a unified ceiling so
     // both halves render with the same color scale.
     const minAnchor = chart.spec.color_min_anchor;
-    if (minAnchor != null && Number.isFinite(minAnchor) && minAnchor > 0) {
+    if (minAnchor != null && Number.isFinite(minAnchor) && (isDiff || minAnchor > 0)) {
         colorMin = minAnchor;
     }
     const maxAnchor = chart.spec.color_max_anchor;
-    if (maxAnchor != null && Number.isFinite(maxAnchor) && maxAnchor > 0) {
+    if (maxAnchor != null && Number.isFinite(maxAnchor) && (isDiff || maxAnchor > 0)) {
         colorMax = maxAnchor;
     }
     if (!Number.isFinite(colorMin)) colorMin = 0;
     if (!Number.isFinite(colorMax)) colorMax = 1;
-    if (colorMax <= colorMin) colorMax = colorMin > 0 ? colorMin * 10 : 1;
+    if (colorMax <= colorMin) {
+        if (isDiff) {
+            // Signed range: pad symmetrically so the diverging palette
+            // resampler has a non-degenerate window to work with.
+            const pad = Math.max(Math.abs(colorMin), 1) * 0.5;
+            colorMin -= pad;
+            colorMax += pad;
+        } else {
+            colorMax = colorMin > 0 ? colorMin * 10 : 1;
+        }
+    }
 
     // Color function. Default: flipped-RdYlGn so low values are green
     // and high values are red. When the spec supplies a custom palette
@@ -125,14 +142,24 @@ export function configureQuantileHeatmap(chart) {
         ? rampFn(norm)
         : rdYlGnColor(1 - norm);  // flipped: low value → green
 
-    // Log-scale color mapping. Guard against non-positive min by
-    // clamping inside the log to a tiny epsilon (the renderer already
-    // skips zero/negative cells, so this only matters when colorMin
-    // collapsed to its initialization value above).
-    const safeLog = (v) => Math.log10(v > 0 ? v : 1e-12);
-    const logMin = safeLog(colorMin);
-    const logMax = safeLog(colorMax);
-    const logRange = logMax - logMin || 1;
+    // Color normalization. Single-capture and side-by-side compare-pair
+    // data is strictly positive — use log10 mapping (preserves visual
+    // contrast across the wide latency dynamic range). Diff mode is
+    // signed and uses a diverging palette with neutral at zero — use a
+    // linear mapping so palette stops align with semantic values.
+    // `safeLog` is lifted to function scope because the legend tick
+    // loop also computes log-spaced positions in non-diff mode.
+    const safeLog = (val) => Math.log10(val > 0 ? val : 1e-12);
+    let normalize;
+    if (isDiff) {
+        const range = (colorMax - colorMin) || 1;
+        normalize = (v) => Math.min(1, Math.max(0, (v - colorMin) / range));
+    } else {
+        const logMin = safeLog(colorMin);
+        const logMax = safeLog(colorMax);
+        const logRange = (logMax - logMin) || 1;
+        normalize = (v) => Math.min(1, Math.max(0, (safeLog(v) - logMin) / logRange));
+    }
 
     const timeIntervalMs = tCount > 1
         ? (timeData[1] - timeData[0]) * 1000
@@ -153,7 +180,9 @@ export function configureQuantileHeatmap(chart) {
                 if (nullCellColor) cells.push([tsMs, q, null]);
                 continue;
             }
-            if (v <= 0) continue;
+            // Log-scale mapping requires v > 0; the diff path uses a
+            // linear mapping that's defined for negatives too.
+            if (!isDiff && v <= 0) continue;
             cells.push([tsMs, q, v]);
         }
     }
@@ -197,7 +226,7 @@ export function configureQuantileHeatmap(chart) {
             };
         }
 
-        const norm = Math.min(1, Math.max(0, (safeLog(v) - logMin) / logRange));
+        const norm = normalize(v);
         const color = cellColorFor(norm);
 
         return {
