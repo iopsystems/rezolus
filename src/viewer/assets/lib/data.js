@@ -524,7 +524,7 @@ const createDataApi = ({
             const step = _stepOverride || Math.max(1, Math.floor(windowDuration / 500));
             r = { start, end: meta.maxTime, step };
         }
-        return queryRangeForCapture(captureId, wrappedQuery, r.start, r.end, r.step);
+        return queryRange(wrappedQuery, r.start, r.end, r.step, captureId);
     };
 
     const fetchQuantileSpectrumForPlot = async (
