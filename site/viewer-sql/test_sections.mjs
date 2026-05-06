@@ -14,9 +14,19 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const REZOLUS_ROOT = path.resolve(ROOT, '../..');
-const sections = process.argv.slice(2);
+// Args: section routes, optional --select=name1,name2 to seed cgroup selection.
+const argv = process.argv.slice(2);
+const sections = [];
+let selectedCgroups = [];
+for (const a of argv) {
+    if (a.startsWith('--select=')) {
+        selectedCgroups = a.slice('--select='.length).split(',').filter(Boolean);
+    } else {
+        sections.push(a);
+    }
+}
 if (sections.length === 0) {
-    console.error('usage: node test_sections.mjs /memory [/rezolus ...]');
+    console.error('usage: node test_sections.mjs [--select=/,/foo] /memory [/rezolus ...]');
     process.exit(2);
 }
 
@@ -66,13 +76,16 @@ try {
         { timeout: 60_000, polling: 250 },
     );
     // Now the viewer is loaded. Pull each section's plots and run their SQL.
-    const result = await page.evaluate(async (sectionRoutes) => {
+    const result = await page.evaluate(async (sectionRoutes, selected) => {
         // Need access to the viewer instance. The smoke-test script attaches
         // the session globally for debugging; if not, we reach into module
         // globals via a small registration hook in script.js (see below).
         const session = window.__viewerSqlSession;
         if (!session) return { error: 'viewer session not exposed; needs window.__viewerSqlSession in script.js' };
         const viewer = session.viewer;
+        // Seed the cgroup selection so the cgroups page's individual side
+        // can return real series.
+        if (selected && selected.length) viewer.set_selected_cgroups(selected);
         const tr = await (async () => {
             // Use the metadata-derived time range.
             const info = JSON.parse(viewer.info());
@@ -123,7 +136,7 @@ try {
             out.push({ route, plots: probes });
         }
         return { ok: true, sections: out };
-    }, sections);
+    }, sections, selectedCgroups);
 
     if (result.error) {
         console.error('Driver error:', result.error);

@@ -194,6 +194,199 @@ pub fn ratio_by_id(num_re: &str, den_re: &str, id_extract_re: &str, formula: &st
     )
 }
 
+/// Aggregate vs individual sides of the cgroups dashboard. Aggregate
+/// sums non-selected cgroups; individual fans out per selected cgroup.
+#[derive(Clone, Copy)]
+pub enum CgroupSide {
+    Aggregate,
+    Individual,
+}
+
+fn cgroup_name_filter(side: CgroupSide) -> &'static str {
+    // Aggregate: include cgroups whose name is NOT in the selection,
+    // including columns with no `name` label at all (root host metrics).
+    // `NULL NOT IN (...)` returns NULL → COALESCE makes those columns
+    // pass through. Individual: `IN` filters out NULLs naturally.
+    match side {
+        CgroupSide::Aggregate => "COALESCE(idx.name, '') NOT IN __SELECTED_CGROUPS__",
+        CgroupSide::Individual => "idx.name IN __SELECTED_CGROUPS__",
+    }
+}
+
+fn cgroup_label_filter(filter: Option<(&str, &str)>) -> String {
+    match filter {
+        Some((k, v)) => format!(
+            " AND idx.labels[{}] = {}",
+            sql_string(k),
+            sql_string(v),
+        ),
+        None => String::new(),
+    }
+}
+
+fn sql_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' { out.push('\''); }
+        out.push(ch);
+    }
+    out.push('\'');
+    out
+}
+
+/// Aggregate cgroup rate: `sum(irate(<metric>{[label_filter,]name<side>"X"}[5m]))`.
+/// Joins the unpivoted `<metric>/...` columns against `_cgroup_index` to
+/// filter by the `name` label (and optionally one other label like `state`
+/// or `op`). Returns scalar `v` per timestamp.
+pub fn cgroup_irate_total(
+    metric: &str,
+    side: CgroupSide,
+    label_filter: Option<(&str, &str)>,
+) -> String {
+    let name_clause = cgroup_name_filter(side);
+    let extra = cgroup_label_filter(label_filter);
+    format!(
+        r#"WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^{metric}(/.+)?$') FROM _src)
+                  ON COLUMNS('^{metric}(/.+)?$') INTO NAME col VALUE v
+           ),
+           joined AS (
+              SELECT u.timestamp, u.v
+              FROM unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = '{metric}'{extra}
+              WHERE {name_clause}
+           ),
+           agg AS (SELECT timestamp, SUM(v) AS s FROM joined GROUP BY timestamp)
+           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) AS v FROM agg"#,
+    )
+}
+
+/// Per-name cgroup rate fan-out. Each selected cgroup becomes one
+/// Prometheus matrix series with `metric:{name:value}`.
+///
+/// Uses explicit `PARTITION BY name` LAG (not the `irate_1s` macro) because
+/// rows interleave across cgroups after the per-(timestamp,name) GROUP BY.
+pub fn cgroup_irate_by_name(
+    metric: &str,
+    side: CgroupSide,
+    label_filter: Option<(&str, &str)>,
+) -> String {
+    let name_clause = cgroup_name_filter(side);
+    let extra = cgroup_label_filter(label_filter);
+    format!(
+        r#"WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^{metric}(/.+)?$') FROM _src)
+                  ON COLUMNS('^{metric}(/.+)?$') INTO NAME col VALUE v
+           ),
+           joined AS (
+              SELECT u.timestamp, idx.name, u.v
+              FROM unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = '{metric}'{extra}
+              WHERE {name_clause}
+           ),
+           by_name AS (
+              SELECT timestamp, name, SUM(v) AS s FROM joined GROUP BY timestamp, name
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, name,
+                  irate_lag(s,
+                      LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
+                      timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
+                  ) AS v
+           FROM by_name"#,
+    )
+}
+
+/// Aggregate cgroup ratio: `sum(irate(<num>)) / sum(irate(<den>))` where
+/// both are filtered by the same cgroup-name selection. Used for IPC
+/// (instructions/cycles), branch-miss-pct, etc.
+pub fn cgroup_ratio_total(num_metric: &str, den_metric: &str, side: CgroupSide) -> String {
+    let name_clause = cgroup_name_filter(side);
+    format!(
+        r#"WITH n_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^{num_metric}(/.+)?$') FROM _src)
+                  ON COLUMNS('^{num_metric}(/.+)?$') INTO NAME col VALUE v
+           ),
+           d_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^{den_metric}(/.+)?$') FROM _src)
+                  ON COLUMNS('^{den_metric}(/.+)?$') INTO NAME col VALUE v
+           ),
+           n_join AS (
+              SELECT u.timestamp, u.v FROM n_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = '{num_metric}'
+              WHERE {name_clause}
+           ),
+           d_join AS (
+              SELECT u.timestamp, u.v FROM d_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = '{den_metric}'
+              WHERE {name_clause}
+           ),
+           n_agg AS (SELECT timestamp, SUM(v) AS s FROM n_join GROUP BY timestamp),
+           d_agg AS (SELECT timestamp, SUM(v) AS s FROM d_join GROUP BY timestamp),
+           n_rate AS (SELECT timestamp, irate_1s(s, timestamp) AS r FROM n_agg),
+           d_rate AS (SELECT timestamp, irate_1s(s, timestamp) AS r FROM d_agg)
+           SELECT n.timestamp::DOUBLE/1e9 AS t,
+                  n.r / NULLIF(d.r, 0) AS v
+           FROM n_rate n JOIN d_rate d USING(timestamp)"#,
+    )
+}
+
+/// Per-name cgroup ratio fan-out: `sum by (name) (irate(<num>)) / sum by
+/// (name) (irate(<den>))`. Like `ratio_by_id` but joins on the `name`
+/// label via `_cgroup_index`.
+pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide) -> String {
+    let name_clause = cgroup_name_filter(side);
+    format!(
+        r#"WITH n_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^{num_metric}(/.+)?$') FROM _src)
+                  ON COLUMNS('^{num_metric}(/.+)?$') INTO NAME col VALUE v
+           ),
+           d_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^{den_metric}(/.+)?$') FROM _src)
+                  ON COLUMNS('^{den_metric}(/.+)?$') INTO NAME col VALUE v
+           ),
+           n_join AS (
+              SELECT u.timestamp, idx.name, u.v
+              FROM n_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = '{num_metric}'
+              WHERE {name_clause}
+           ),
+           d_join AS (
+              SELECT u.timestamp, idx.name, u.v
+              FROM d_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = '{den_metric}'
+              WHERE {name_clause}
+           ),
+           n_by AS (SELECT timestamp, name, SUM(v) AS s FROM n_join GROUP BY timestamp, name),
+           d_by AS (SELECT timestamp, name, SUM(v) AS s FROM d_join GROUP BY timestamp, name),
+           n_rate AS (
+              SELECT timestamp, name,
+                     irate_lag(s,
+                         LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
+                     ) AS r
+              FROM n_by
+           ),
+           d_rate AS (
+              SELECT timestamp, name,
+                     irate_lag(s,
+                         LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
+                     ) AS r
+              FROM d_by
+           )
+           SELECT n.timestamp::DOUBLE/1e9 AS t, n.name,
+                  n.r / NULLIF(d.r, 0) AS v
+           FROM n_rate n JOIN d_rate d USING(timestamp, name)"#,
+    )
+}
+
+/// Wrap a helper-emitted SQL string with a `v / divisor` projection.
+/// Used for the cores-from-nanoseconds conversion (`/ 1e9`).
+pub fn scale_v(inner: String, divisor: f64) -> String {
+    format!("WITH _w AS ({inner}) SELECT _w.* REPLACE (_w.v / {divisor} AS v) FROM _w")
+}
+
 /// Like `hist_percentile_series` but for the "Overall" pattern: combine all
 /// `:buckets` columns matching a regex into a single histogram per row via
 /// `h2_combine`, then compute the per-quantile fan-out. PromQL's bare-metric
