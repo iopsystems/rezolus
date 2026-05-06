@@ -1152,7 +1152,7 @@ main {
     position: absolute;
     top: 8px;
     right: 32px;
-    color: var(--fg-muted);
+    color: var(--success);
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -2436,6 +2436,7 @@ main {
 
 .selection-link {
     font-weight: 600 !important;
+    color: var(--success) !important;
 }
 
 .report-link {
