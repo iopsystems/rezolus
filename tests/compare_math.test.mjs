@@ -4,6 +4,7 @@ import {
     nullDiff,
     intersectLabels,
     unifyHistogramRange,
+    buildDeltaSpectrum,
 } from '../src/viewer/assets/lib/charts/util/compare_math.js';
 
 test('nullDiff: numbers', () => {
@@ -98,4 +99,57 @@ test('unifyHistogramRange: asymmetric anchors, reversed — anchor on B, scan on
     const r = unifyHistogramRange(a, b);
     assert.equal(r.colorMin, 2);   // A's natural min
     assert.equal(r.colorMax, 300); // B's natural max
+});
+
+const spectrum = (times, qSeries, names) => ({
+    time_data: times,
+    data: [times, ...qSeries],
+    series_names: names,
+});
+
+test('buildDeltaSpectrum: per-cell experiment − baseline', () => {
+    const baseline = spectrum([0, 1], [[1, 2], [3, 4]], ['p50', 'p99']);
+    const experiment = spectrum([0, 1], [[2, 5], [4, 7]], ['p50', 'p99']);
+    const r = buildDeltaSpectrum(baseline, experiment);
+    assert.deepEqual(r.data[0], [0, 1]);
+    assert.deepEqual(r.data[1], [1, 3]);   // p50 deltas: 2−1, 5−2
+    assert.deepEqual(r.data[2], [1, 3]);   // p99 deltas: 4−3, 7−4
+    assert.deepEqual(r.series_names, ['p50', 'p99']);
+});
+
+test('buildDeltaSpectrum: dMin/dMax over non-null deltas', () => {
+    const baseline = spectrum([0, 1], [[1, 5]], ['p50']);
+    const experiment = spectrum([0, 1], [[2, 3]], ['p50']);
+    const r = buildDeltaSpectrum(baseline, experiment);
+    assert.equal(r.dMin, -2);  // 3 − 5
+    assert.equal(r.dMax, 1);   // 2 − 1
+});
+
+test('buildDeltaSpectrum: null on either side propagates', () => {
+    const baseline = spectrum([0, 1], [[null, 2]], ['p50']);
+    const experiment = spectrum([0, 1], [[5, null]], ['p50']);
+    const r = buildDeltaSpectrum(baseline, experiment);
+    assert.deepEqual(r.data[1], [null, null]);
+    assert.equal(r.dMin, null);
+    assert.equal(r.dMax, null);
+});
+
+test('buildDeltaSpectrum: returns matrices keyed by qIdx then tIdx for tooltip lookup', () => {
+    const baseline = spectrum([0, 1], [[1, 2], [3, 4]], ['p50', 'p99']);
+    const experiment = spectrum([0, 1], [[2, 5], [4, 7]], ['p50', 'p99']);
+    const r = buildDeltaSpectrum(baseline, experiment);
+    assert.equal(r.matrices.baseline[0][1], 2);    // p50 at t=1 → 2
+    assert.equal(r.matrices.experiment[1][0], 4);  // p99 at t=0 → 4
+});
+
+test('buildDeltaSpectrum: time/series mismatch returns null', () => {
+    const baseline = spectrum([0, 1], [[1, 2]], ['p50']);
+    const experiment = spectrum([0], [[5]], ['p50']);
+    const r = buildDeltaSpectrum(baseline, experiment);
+    assert.equal(r, null);
+});
+
+test('buildDeltaSpectrum: empty inputs return null', () => {
+    const r = buildDeltaSpectrum({ data: [[]] }, { data: [[]] });
+    assert.equal(r, null);
 });

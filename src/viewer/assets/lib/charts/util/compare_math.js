@@ -80,6 +80,83 @@ function positiveOr(v, fallback) {
     return (v != null && Number.isFinite(v) && v > 0) ? v : fallback;
 }
 
+/**
+ * Build a columnar delta spectrum (experiment − baseline) from two
+ * spectrum-shaped captures. Returns null when the time axes or quantile
+ * counts don't match (the renderer needs aligned axes for cross-cell
+ * lookup).
+ *
+ * Shape of each input:
+ *   { time_data: number[], data: [time, ...qCols], series_names: string[] }
+ *
+ * Return shape (or null on mismatch / empty inputs):
+ *   {
+ *     time_data: number[],         // same as inputs (must match)
+ *     data: [time, ...qDeltaCols], // null preserved when either side is null/NaN
+ *     series_names: string[],      // taken from baseline
+ *     dMin: number | null,         // null if all deltas null
+ *     dMax: number | null,
+ *     matrices: {
+ *       baseline:   number[][],    // [qIdx][tIdx] for tooltip lookup
+ *       experiment: number[][],    // same
+ *     },
+ *   }
+ *
+ * Uses nullDiff (above) so undefined/NaN propagate cleanly.
+ */
+export function buildDeltaSpectrum(baseline, experiment) {
+    const baseTimes = baseline?.time_data;
+    const expTimes = experiment?.time_data;
+    if (!Array.isArray(baseTimes) || !Array.isArray(expTimes)) return null;
+    if (baseTimes.length === 0 || baseTimes.length !== expTimes.length) return null;
+
+    const baseData = baseline.data;
+    const expData = experiment.data;
+    if (!Array.isArray(baseData) || baseData.length < 2) return null;
+    if (!Array.isArray(expData) || expData.length !== baseData.length) return null;
+
+    const qCount = baseData.length - 1;
+    const tCount = baseTimes.length;
+
+    const deltaCols = [];
+    const baseMatrix = [];
+    const expMatrix = [];
+    let dMin = Infinity;
+    let dMax = -Infinity;
+
+    for (let q = 0; q < qCount; q++) {
+        const baseCol = baseData[q + 1];
+        const expCol = expData[q + 1];
+        const deltaCol = new Array(tCount);
+        const baseRow = new Array(tCount);
+        const expRow = new Array(tCount);
+        for (let t = 0; t < tCount; t++) {
+            const bv = baseCol?.[t];
+            const ev = expCol?.[t];
+            const d = nullDiff(ev, bv);
+            deltaCol[t] = d;
+            baseRow[t] = (bv != null && !Number.isNaN(bv)) ? bv : null;
+            expRow[t]  = (ev != null && !Number.isNaN(ev)) ? ev : null;
+            if (d != null) {
+                if (d < dMin) dMin = d;
+                if (d > dMax) dMax = d;
+            }
+        }
+        deltaCols.push(deltaCol);
+        baseMatrix.push(baseRow);
+        expMatrix.push(expRow);
+    }
+
+    return {
+        time_data: baseTimes,
+        data: [baseTimes, ...deltaCols],
+        series_names: baseline.series_names || [],
+        dMin: Number.isFinite(dMin) ? dMin : null,
+        dMax: Number.isFinite(dMax) ? dMax : null,
+        matrices: { baseline: baseMatrix, experiment: expMatrix },
+    };
+}
+
 // Canonicalize a histogram quantile into the shared "pXX" label form.
 // Accepts either a raw value (number or string like "0.5", "50", "p99")
 // or an object with .metric carrying a `quantile` label (the standard
