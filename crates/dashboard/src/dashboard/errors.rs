@@ -1,9 +1,11 @@
 use crate::Tsdb;
 use crate::plot::*;
 
-/// Centralized view of error / fault / health-degradation metrics
-/// captured across subsystems. Each group answers a single question:
-/// "is this layer dropping work, throttling, or missing?"
+/// Centralized view of true error / fault metrics across subsystems:
+/// dropped or failed work, retransmissions, hardware-enforced rate-limit
+/// hits, and quota-driven throttling. Excludes ordinary performance
+/// counters like cache misses or page faults — those belong in their
+/// own subsystem sections.
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
@@ -15,8 +17,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let drops = network.subgroup("Packet Drops & Transmit Errors");
     drops.describe(
-        "Packets dropped in the stack and transmit-side faults — the canonical \
-         signals that the host is shedding network work.",
+        "Packets dropped in the stack and driver-level transmit faults — the \
+         canonical signals that the host is shedding or failing network work.",
     );
     drops.plot_promql(
         PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
@@ -25,10 +27,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     drops.plot_promql(
         PlotOpts::counter("Transmit Timeouts", "tx-timeouts", Unit::Rate),
         "sum(irate(network_transmit_timeout[5m]))".to_string(),
-    );
-    drops.plot_promql(
-        PlotOpts::counter("Transmit Busy", "tx-busy", Unit::Rate),
-        "sum(irate(network_transmit_busy[5m]))".to_string(),
     );
 
     view.group(network);
@@ -136,85 +134,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     );
 
     view.group(throttle);
-
-    /*
-     * CPU misses (cache, TLB, branch)
-     *
-     * Not "errors" in the textbook sense, but they're the closest thing
-     * the CPU has to exception counters: each one is work the pipeline
-     * had to redo or stall on. Mispredict / miss rates are normalized
-     * against their denominators because absolute counts scale with load.
-     */
-
-    let mut misses = Group::new("Cache & Prediction Misses", "cpu-misses");
-
-    let l3 = misses.subgroup("L3 Cache Miss Rate");
-    l3.describe("Fraction of last-level cache accesses that missed.");
-    l3.plot_promql(
-        PlotOpts::counter("L3 Miss %", "l3-miss-rate", Unit::Percentage).percentage_range(),
-        "sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))".to_string(),
-    );
-    l3.plot_promql(
-        PlotOpts::counter("L3 Misses", "l3-misses", Unit::Rate),
-        "sum(irate(cpu_l3_miss[5m]))".to_string(),
-    );
-
-    let dtlb = misses.subgroup("DTLB Misses");
-    dtlb.describe("Data-TLB miss rate — page-table walks the CPU had to take.");
-    dtlb.plot_promql(
-        PlotOpts::counter("DTLB Misses", "dtlb-misses", Unit::Rate),
-        "sum(irate(cpu_dtlb_miss[5m]))".to_string(),
-    );
-
-    let branch = misses.subgroup("Branch Mispredictions");
-    branch.describe(
-        "Fraction of branches the predictor got wrong. Each miss is a \
-         pipeline flush.",
-    );
-    branch.plot_promql(
-        PlotOpts::counter("Misprediction %", "branch-miss-rate", Unit::Percentage)
-            .percentage_range(),
-        "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))".to_string(),
-    );
-    branch.plot_promql(
-        PlotOpts::counter("Mispredictions", "branch-misses", Unit::Rate),
-        "sum(irate(cpu_branch_misses[5m]))".to_string(),
-    );
-
-    view.group(misses);
-
-    /*
-     * Memory faults & NUMA placement
-     */
-
-    let mut memory = Group::new("Memory", "memory");
-
-    let faults = memory.subgroup("Page Faults");
-    faults.describe(
-        "Major page faults required disk I/O to satisfy. Sustained rates \
-         indicate memory pressure on the Rezolus process itself; for \
-         broader process coverage, run with /usr/bin/time -v or eBPF.",
-    );
-    faults.plot_promql_full(
-        PlotOpts::counter("Major Page Faults", "rezolus-major-faults", Unit::Rate),
-        "sum(irate(rezolus_memory_page_faults[5m]))".to_string(),
-    );
-
-    let numa = memory.subgroup("NUMA Misses");
-    numa.describe(
-        "NUMA allocations that didn't land on the intended node. \
-         High values mean cross-socket memory traffic.",
-    );
-    numa.plot_promql(
-        PlotOpts::counter("NUMA Miss", "numa-miss", Unit::Rate),
-        "sum(irate(memory_numa_miss[5m]))".to_string(),
-    );
-    numa.plot_promql(
-        PlotOpts::counter("NUMA Foreign", "numa-foreign", Unit::Rate),
-        "sum(irate(memory_numa_foreign[5m]))".to_string(),
-    );
-
-    view.group(memory);
 
     view
 }
