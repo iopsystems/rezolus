@@ -64,11 +64,18 @@ This is the foundation of the schema-independent SQL strategy. The regex
 resolves at parse time against whichever parquet is loaded:
 
 ```sql
-list_sum([*COLUMNS('cpu_cycles/[0-9]+')]::UBIGINT[])::UBIGINT
+list_sum([*COLUMNS('^cpu_cycles/[0-9]+$')]::UBIGINT[])::UBIGINT
 ```
 
 Works. Required cast to `UBIGINT[]` because the splat produces an untyped
 list literal.
+
+**Always anchor the regex with `^` and `$`.** DuckDB's `COLUMNS('regex')`
+treats the pattern as `re_search` (find), not `re_match` (full-string).
+Unanchored `cpu_cycles/[0-9]+` matches `cgroup_cpu_cycles/0` because it
+finds the substring inside the longer name. Hit this in stage E with the
+multi-series UNPIVOT probe — series 0 had two values per timestamp because
+`cgroup_cpu_cycles/0` was being included alongside `cpu_cycles/0`.
 
 ### Multiple `STAR/COLUMNS` in the same expression are rejected
 

@@ -67,10 +67,19 @@ pub struct SqlMetadata {
     pub source: String,
     pub version: String,
     pub filename: String,
+    /// Name the parquet was registered under via `db.registerFileBuffer`.
+    /// `query_range` references this in the `_src` CTE wrap. Defaults to the
+    /// conventional `"capture.parquet"` if the JS host doesn't override it.
+    #[serde(default = "default_parquet_name")]
+    pub parquet_name: String,
     /// Counter metric name → number of distinct label sets.
     pub counters: HashMap<String, usize>,
     pub gauges: HashMap<String, usize>,
     pub histograms: HashMap<String, usize>,
+}
+
+fn default_parquet_name() -> String {
+    "capture.parquet".to_string()
 }
 
 impl DashboardData for SqlMetadata {
@@ -240,6 +249,41 @@ impl ViewerSql {
         arrow_table_to_json(&table)
     }
 
+    /// Run a Phase D-shaped dashboard SQL string and return Prometheus
+    /// matrix-shape JSON, the same shape `/api/v1/query_range` returns from
+    /// the legacy viewer.
+    ///
+    /// The dashboard SQL must:
+    ///   - Reference parquet columns via `_src` (not `read_parquet(...)` directly).
+    ///   - Project a `t` (DOUBLE seconds) column and a `v` (numeric) column.
+    ///   - Optionally project label columns (e.g. `id`, `state`) — each
+    ///     becomes a `metric:{label: value}` entry in the result series.
+    ///
+    /// `step` is currently ignored; the frontend handles client-side step
+    /// resampling. start/end are seconds-since-epoch; we convert to ns to
+    /// filter `_src` at the source for cheaper window evaluation.
+    pub async fn query_range(
+        &self,
+        sql: String,
+        start: f64,
+        end: f64,
+        _step: f64,
+    ) -> Result<String, JsValue> {
+        let start_ns = (start * 1e9) as i64;
+        let end_ns = (end * 1e9) as i64;
+        let wrapped = format!(
+            "WITH _src AS ( \
+               SELECT * FROM read_parquet('{parquet}') \
+               WHERE timestamp BETWEEN {start_ns} AND {end_ns} \
+             ) \
+             SELECT * FROM ({user_sql}) ORDER BY t",
+            parquet = self.metadata.parquet_name,
+            user_sql = sql,
+        );
+        let table = self.query(&wrapped).await?;
+        arrow_table_to_prom_matrix(&table)
+    }
+
     /// Lower-level: run a SQL string against the JS-side conn and return
     /// the Arrow Table as a JsValue. Internal helper for query methods
     /// that walk the result themselves.
@@ -292,6 +336,168 @@ fn arrow_table_to_json(table: &JsValue) -> Result<String, JsValue> {
         out.push_str(&s);
     }
     out.push(']');
+    Ok(out)
+}
+
+/// Walk an Arrow JS Table and emit Prometheus matrix-shape JSON:
+///   {status:"success", data:{resultType:"matrix", result:[
+///     {metric: {<label>:<value>, ...}, values: [[t_seconds, v_string], ...]}
+///   ]}}
+///
+/// Column-role detection from the table schema:
+///   - Field named `t` → timestamp axis (DOUBLE seconds since epoch).
+///   - Field named `v` → numeric value axis.
+///   - All other fields → series labels. Their per-row values key the row
+///     into a result series. NULL `v` rows are dropped (Prometheus series
+///     gap semantics).
+///
+/// All non-`t`/`v` columns are stringified for the metric label dictionary.
+fn arrow_table_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
+    // Inspect the schema to identify column roles.
+    let schema = Reflect::get(table, &"schema".into())?;
+    let fields = Reflect::get(&schema, &"fields".into())?;
+    let n_fields = Reflect::get(&fields, &"length".into())?
+        .as_f64()
+        .ok_or_else(|| JsValue::from_str("schema.fields.length not a number"))?
+        as usize;
+
+    let mut t_idx: Option<usize> = None;
+    let mut v_idx: Option<usize> = None;
+    let mut label_indices: Vec<(usize, String)> = Vec::new();
+    for i in 0..n_fields {
+        let field = Reflect::get(&fields, &(i as u32).into())?;
+        let name = Reflect::get(&field, &"name".into())?
+            .as_string()
+            .unwrap_or_default();
+        match name.as_str() {
+            "t" => t_idx = Some(i),
+            "v" => v_idx = Some(i),
+            _ => label_indices.push((i, name)),
+        }
+    }
+    let t_idx = t_idx.ok_or_else(|| JsValue::from_str("query result missing required `t` column"))?;
+    let v_idx = v_idx.ok_or_else(|| JsValue::from_str("query result missing required `v` column"))?;
+
+    // Pre-fetch the column vectors by index — avoids per-row Reflect on the table.
+    let get_child_at: Function = Reflect::get(table, &"getChildAt".into())?.dyn_into()?;
+    let mut col = |i: usize| -> Result<JsValue, JsValue> {
+        get_child_at.call1(table, &JsValue::from_f64(i as f64))
+    };
+    let t_col = col(t_idx)?;
+    let v_col = col(v_idx)?;
+    let label_cols: Vec<(JsValue, &str)> = {
+        let mut out = Vec::with_capacity(label_indices.len());
+        for (i, name) in &label_indices {
+            out.push((col(*i)?, name.as_str()));
+        }
+        out
+    };
+
+    let n_rows = Reflect::get(table, &"numRows".into())?
+        .as_f64()
+        .ok_or_else(|| JsValue::from_str("table.numRows not a number"))?
+        as usize;
+
+    // Group rows by the tuple of label values. Build groups in insertion
+    // order so output is deterministic.
+    let mut groups: Vec<(serde_json::Map<String, serde_json::Value>, Vec<(f64, String)>)> = Vec::new();
+    let mut group_index: HashMap<String, usize> = HashMap::new();
+
+    let get_cell = |vector: &JsValue, row: usize| -> Result<JsValue, JsValue> {
+        let get: Function = Reflect::get(vector, &"get".into())?.dyn_into()?;
+        get.call1(vector, &JsValue::from_f64(row as f64))
+    };
+    let cell_to_string = |cell: &JsValue| -> String {
+        if cell.is_null() || cell.is_undefined() {
+            return "null".to_string();
+        }
+        if let Some(s) = cell.as_string() {
+            return s;
+        }
+        if let Some(n) = cell.as_f64() {
+            return n.to_string();
+        }
+        // BigInt and other JS values: format via String(...) at JS side
+        // would be cleaner; for now, debug-format the JsValue.
+        format!("{cell:?}")
+    };
+    let cell_to_v_string = |cell: &JsValue| -> Option<String> {
+        if cell.is_null() || cell.is_undefined() {
+            return None;
+        }
+        if let Some(s) = cell.as_string() {
+            return Some(s);
+        }
+        if let Some(n) = cell.as_f64() {
+            return Some(n.to_string());
+        }
+        Some(format!("{cell:?}"))
+    };
+
+    for row in 0..n_rows {
+        let v_cell = get_cell(&v_col, row)?;
+        let v_str = match cell_to_v_string(&v_cell) {
+            Some(s) => s,
+            None => continue, // NULL value → drop row (Prometheus gap)
+        };
+        let t_cell = get_cell(&t_col, row)?;
+        let t_secs = t_cell.as_f64().ok_or_else(|| {
+            JsValue::from_str(&format!("`t` column row {row} is not a number"))
+        })?;
+
+        // Build label map for this row (deterministic field ordering).
+        let mut metric = serde_json::Map::with_capacity(label_cols.len());
+        for (vector, name) in &label_cols {
+            let cell = get_cell(vector, row)?;
+            metric.insert(
+                (*name).to_string(),
+                serde_json::Value::String(cell_to_string(&cell)),
+            );
+        }
+
+        // Group key: deterministic JSON encoding of the metric map.
+        let key = serde_json::to_string(&metric).unwrap_or_default();
+        let idx = match group_index.get(&key) {
+            Some(&idx) => idx,
+            None => {
+                let idx = groups.len();
+                group_index.insert(key, idx);
+                groups.push((metric, Vec::new()));
+                idx
+            }
+        };
+        groups[idx].1.push((t_secs, v_str));
+    }
+
+    // Emit the Prometheus matrix JSON.
+    let mut out = String::new();
+    out.push_str("{\"status\":\"success\",\"data\":{\"resultType\":\"matrix\",\"result\":[");
+    for (i, (metric, values)) in groups.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"metric\":");
+        out.push_str(&serde_json::to_string(metric).unwrap_or_else(|_| "{}".into()));
+        out.push_str(",\"values\":[");
+        for (j, (t, v)) in values.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            out.push('[');
+            out.push_str(&t.to_string());
+            out.push_str(",\"");
+            // Escape backslashes and quotes (rare for numeric value strings).
+            for ch in v.chars() {
+                if ch == '\\' || ch == '"' {
+                    out.push('\\');
+                }
+                out.push(ch);
+            }
+            out.push_str("\"]");
+        }
+        out.push_str("]}");
+    }
+    out.push_str("]}}");
     Ok(out)
 }
 

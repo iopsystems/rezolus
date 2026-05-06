@@ -53,6 +53,18 @@
     <pre id="sql_result">—</pre>
 </div>
 
+<div class="section">
+    <h2>query_range probe (Prometheus matrix shape)</h2>
+    <p class="muted">Runs a Phase D-shaped dashboard SQL through <code>query_range</code> and shows the Prometheus matrix JSON the legacy frontend would consume.</p>
+    <pre id="range_result">—</pre>
+</div>
+
+<div class="section">
+    <h2>query_range multi-series probe (UNPIVOT per-id)</h2>
+    <p class="muted">Per-CPU rate via <code>UNPIVOT … ON COLUMNS(...)</code>. Tests the label-grouping codepath in <code>arrow_table_to_prom_matrix</code>.</p>
+    <pre id="range_multi_result">—</pre>
+</div>
+
 <script type="module" src="lib/script.js"></script>
 </body>
 </html>

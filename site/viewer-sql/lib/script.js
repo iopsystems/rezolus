@@ -124,6 +124,9 @@ async function buildMetadata(conn, filename, registeredName) {
         source: 'rezolus',
         version: '',
         filename,
+        // ViewerSql's query_range prepends `WITH _src AS (SELECT * FROM
+        // read_parquet('<this name>'))` to dashboard SQL, so include it.
+        parquet_name: registeredName,
         counters,
         gauges,
         histograms,
@@ -218,6 +221,96 @@ async function loadParquet(buf, filename) {
         }
     } else {
         $('sql_result').textContent = '(no histogram columns in this parquet)';
+    }
+
+    // Exercise query_range end-to-end. Phase D dashboard SQL convention:
+    // references `_src` (not read_parquet), projects `t` (DOUBLE seconds)
+    // and `v` (numeric), plus optional label columns. ViewerSql wraps with
+    // a time-windowed `_src` CTE and converts the Arrow table to Prometheus
+    // matrix shape.
+    try {
+        // Use a cpu_busy_pct-style query if cpu_usage columns exist.
+        const hasCpuUsage = Object.keys(metadata.counters).some(
+            (n) => n.startsWith('cpu_usage/'),
+        );
+        const dashboardSql = hasCpuUsage
+            ? `WITH agg AS (
+                  SELECT timestamp,
+                         list_sum([*COLUMNS('^cpu_usage/[a-z]+/[0-9]+$')]::UBIGINT[]) AS usage,
+                         "cpu_cores" AS cores
+                  FROM _src
+              )
+              SELECT timestamp::DOUBLE/1e9 AS t,
+                     cpu_busy_pct(usage, cores, timestamp) AS v
+              FROM agg`
+            : `SELECT timestamp::DOUBLE/1e9 AS t,
+                      irate_1s("cpu_cycles/0", timestamp) AS v
+               FROM _src`;
+        const tr = metadata.time_range_ns;
+        // Convert BigInt ns → seconds; tolerate string nanoseconds too.
+        const startSec = tr ? Number(BigInt(tr[0])) / 1e9 : 0;
+        const endSec = tr ? Number(BigInt(tr[1])) / 1e9 : 0;
+        const t0 = performance.now();
+        const json = await viewer.query_range(dashboardSql, startSec, endSec, 1.0);
+        const t1 = performance.now();
+        const parsed = JSON.parse(json);
+        const series = parsed?.data?.result ?? [];
+        const firstValues = series[0]?.values ?? [];
+        $('range_result').textContent =
+            `query: ${dashboardSql.replace(/\s+/g, ' ').slice(0, 100)}…\n` +
+            `wall: ${(t1 - t0).toFixed(1)}ms\n` +
+            `status: ${parsed.status}\n` +
+            `resultType: ${parsed?.data?.resultType}\n` +
+            `series: ${series.length}\n` +
+            `first series metric: ${JSON.stringify(series[0]?.metric ?? {})}\n` +
+            `first series values: ${firstValues.length} samples; first 3 = ${JSON.stringify(firstValues.slice(0, 3))}`;
+    } catch (e) {
+        $('range_result').textContent = `FAIL: ${e.message ?? e}\n${e.stack ?? ''}`;
+    }
+
+    // Multi-series probe: per-CPU rate via UNPIVOT. Each id becomes a
+    // separate Prometheus matrix series with metric:{id:"<n>"}.
+    //
+    // Note: after UNPIVOT, rows interleave across ids, so the LAG must
+    // PARTITION BY col — otherwise it compares values across CPUs and
+    // underflows on the UBIGINT subtraction. Use `irate_lag` directly
+    // (not `irate_1s`) because it takes (curr, prev, dt_ns) explicitly,
+    // letting us specify the per-partition window.
+    try {
+        // Regex is anchored with ^…$ — without anchors COLUMNS('cpu_cycles/[0-9]+')
+        // also matches cgroup_cpu_cycles/0 as a substring. Documented in
+        // crates/viewer-sql/duckdb.md.
+        const multiSql = `
+            WITH unp AS (
+                UNPIVOT (SELECT timestamp, COLUMNS('^cpu_cycles/[0-9]+$') FROM _src)
+                    ON COLUMNS('^cpu_cycles/[0-9]+$')
+                    INTO NAME col VALUE v
+            )
+            SELECT timestamp::DOUBLE/1e9 AS t,
+                   regexp_extract(col, '/([0-9]+)$', 1) AS id,
+                   irate_lag(
+                       v,
+                       LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                       timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                   ) AS v
+            FROM unp`;
+        const tr = metadata.time_range_ns;
+        const startSec = tr ? Number(BigInt(tr[0])) / 1e9 : 0;
+        const endSec = tr ? Number(BigInt(tr[1])) / 1e9 : 0;
+        const t0 = performance.now();
+        const json = await viewer.query_range(multiSql, startSec, endSec, 1.0);
+        const t1 = performance.now();
+        const parsed = JSON.parse(json);
+        const series = parsed?.data?.result ?? [];
+        $('range_multi_result').textContent =
+            `wall: ${(t1 - t0).toFixed(1)}ms\n` +
+            `status: ${parsed.status}\n` +
+            `resultType: ${parsed?.data?.resultType}\n` +
+            `series count: ${series.length}\n` +
+            `series metrics: ${JSON.stringify(series.map((s) => s.metric))}\n` +
+            `series 0 first 2 samples: ${JSON.stringify(series[0]?.values?.slice(0, 2))}`;
+    } catch (e) {
+        $('range_multi_result').textContent = `FAIL: ${e.message ?? e}\n${e.stack ?? ''}`;
     }
 }
 

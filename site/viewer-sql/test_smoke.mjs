@@ -73,13 +73,16 @@ try {
         },
         { timeout: 120_000, polling: 500 },
     );
-    // Wait for the SQL probe to complete too.
+    // Wait for all four probes to complete.
     await page.waitForFunction(
         () => {
-            const txt = document.getElementById('sql_result')?.textContent ?? '';
-            return txt.length > 5 && txt !== '—';
+            const ids = ['sql_result', 'range_result', 'range_multi_result'];
+            return ids.every((id) => {
+                const t = document.getElementById(id)?.textContent ?? '';
+                return t.length > 5 && t !== '—';
+            });
         },
-        { timeout: 60_000, polling: 500 },
+        { timeout: 120_000, polling: 500 },
     );
     const status = await page.$eval('#status', (el) => el.textContent);
     const info = await page.$eval('#info', (el) => el.textContent);
@@ -93,7 +96,16 @@ try {
     console.log(section.slice(0, 400));
     console.log('\n=== SQL PROBE ===');
     console.log(sqlResult);
-    if (status.includes('FAIL') || sqlResult.startsWith('FAIL')) exitCode = 1;
+    const rangeResult = await page.$eval('#range_result', (el) => el.textContent);
+    console.log('\n=== RANGE PROBE ===');
+    console.log(rangeResult);
+    const rangeMultiResult = await page.$eval('#range_multi_result', (el) => el.textContent);
+    console.log('\n=== RANGE MULTI-SERIES PROBE ===');
+    console.log(rangeMultiResult);
+    if (status.includes('FAIL')
+        || sqlResult.startsWith('FAIL')
+        || rangeResult.startsWith('FAIL')
+        || rangeMultiResult.startsWith('FAIL')) exitCode = 1;
 } catch (e) {
     console.error('Driver error:', e.message);
     const status = await page.$eval('#status', (el) => el.textContent).catch(() => '?');
