@@ -461,6 +461,17 @@ export function configureQuantileHeatmap(chart) {
         };
     }
 
+    // Compare-mode cross-cursor subscriber. Receives sibling events
+    // and renders a thin crosshair at the matching cell. The publisher
+    // filters out self-sourced events (via fn._chartId), so on its own
+    // hover this chart doesn't draw a redundant crosshair on itself.
+    if (compareGroupId && chartsState && typeof chartsState.subscribeCompareCursor === 'function') {
+        if (chart._compareCursorUnsub) chart._compareCursorUnsub();
+        const onCursor = (payload) => drawCompareCrosshair(chart, payload, timeData, tCount);
+        onCursor._chartId = chart.chartId;  // tag for self-filter in publishCompareCursor
+        chart._compareCursorUnsub = chartsState.subscribeCompareCursor(compareGroupId, onCursor);
+    }
+
     // Vertical legend bar. For the default (RdYlGn-flipped) palette we
     // feed `1 - t` so the bottom (low value) stays green; for a custom
     // palette (e.g. compare-mode diff diverging) use the ramp directly
@@ -502,4 +513,50 @@ export function configureQuantileHeatmap(chart) {
     if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
     chart._legendFinishedFn = renderLegend;
     chart.echart.on('finished', renderLegend);
+}
+
+// Render a crosshair on `chart` at the matching cell from a sibling's
+// cursor event. Cleared when payload is null. Uses ECharts' graphic
+// component overlaid on the chart canvas — no relayout cost.
+function drawCompareCrosshair(chart, payload, timeData, tCount) {
+    if (!chart || !chart.echart) return;
+    if (!payload) {
+        chart.echart.setOption({ graphic: [] });
+        return;
+    }
+    const { timeMs, qIdx } = payload;
+    // Convert (timeMs, qIdx) to pixel coords. convertToPixel returns
+    // null when the chart hasn't laid out yet.
+    const pix = chart.echart.convertToPixel({ gridIndex: 0 }, [timeMs, qIdx]);
+    if (!pix) return;
+
+    const grid = chart.echart.getModel().getComponent('grid');
+    const rect = grid?.coordinateSystem?.getRect();
+    if (!rect) return;
+
+    // Approximate cell width/height from time interval and quantile rows.
+    const intervalMs = tCount > 1 ? (timeData[1] - timeData[0]) * 1000 : 1000;
+    const cellWidthPx = chart.echart.convertToPixel({ gridIndex: 0 }, [timeMs + intervalMs, qIdx])[0] - pix[0];
+    const cellHeightPx = chart.echart.convertToPixel({ gridIndex: 0 }, [timeMs, qIdx + 1])[1] - pix[1];
+
+    chart.echart.setOption({
+        graphic: [
+            // Horizontal line across grid at qIdx
+            {
+                type: 'rect',
+                z: 100,
+                shape: { x: rect.x, y: pix[1] + cellHeightPx, width: rect.width, height: 1 },
+                style: { fill: 'rgba(255,255,255,0.6)' },
+                silent: true,
+            },
+            // Vertical line across grid at timeMs
+            {
+                type: 'rect',
+                z: 100,
+                shape: { x: pix[0], y: rect.y, width: Math.max(1, cellWidthPx), height: rect.height },
+                style: { fill: 'rgba(255,255,255,0.15)' },
+                silent: true,
+            },
+        ],
+    });
 }
