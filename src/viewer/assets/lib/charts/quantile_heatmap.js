@@ -138,14 +138,22 @@ export function configureQuantileHeatmap(chart) {
         ? (timeData[1] - timeData[0]) * 1000
         : 1000;
 
-    // Cells: [timestampMs, quantileIdx, value]. Skip non-positive
-    // values — they'd be invisible anyway and break the log mapping.
+    // Cells: [timestampMs, quantileIdx, value]. When `nullCellColor`
+    // is set, emit null-valued cells too so they render with the
+    // configured color (compare-mode diff heatmap uses this). Otherwise
+    // skip them along with non-positive cells (which break log mapping).
+    const nullCellColor = chart.spec.nullCellColor || null;
     const cells = [];
     for (let t = 0; t < tCount; t++) {
         const tsMs = timeData[t] * 1000;
         for (let q = 0; q < seriesCount; q++) {
             const v = data[q + 1][t];
-            if (v == null || Number.isNaN(v) || v <= 0) continue;
+            const isNull = v == null || Number.isNaN(v);
+            if (isNull) {
+                if (nullCellColor) cells.push([tsMs, q, null]);
+                continue;
+            }
+            if (v <= 0) continue;
             cells.push([tsMs, q, v]);
         }
     }
@@ -178,6 +186,16 @@ export function configureQuantileHeatmap(chart) {
         if (y < gridY) { height -= (gridY - y); y = gridY; }
         if (y + height > gridY + gridHeight) height = gridY + gridHeight - y;
         if (width <= 0 || height <= 0) return;
+
+        // Null cells (compare-mode diff): paint with the configured
+        // null color and exit early — no log-scale mapping needed.
+        if (v === null || v === undefined || Number.isNaN(v)) {
+            return {
+                type: 'rect',
+                shape: { x, y, width, height },
+                style: { fill: nullCellColor, stroke: null, lineWidth: 0 },
+            };
+        }
 
         const norm = Math.min(1, Math.max(0, (safeLog(v) - logMin) / logRange));
         const color = cellColorFor(norm);
