@@ -81,15 +81,18 @@ export function configureQuantileHeatmap(chart) {
             }
         }
     }
-    // Override colorMin with the p0 anchor when the spec carries one.
-    // This pins the lower bound of the color scale across spectrum
-    // kinds (full vs tail) so toggling between them doesn't repaint
-    // the whole heatmap with a different color range — Tail's rows
-    // (p99.01..p100) all sit near the top of the natural max, so
-    // without an anchor they'd remap to the full green→red span.
-    const anchor = chart.spec.color_min_anchor;
-    if (anchor != null && Number.isFinite(anchor) && anchor > 0) {
-        colorMin = anchor;
+    // Override colorMin / colorMax with anchors when the spec carries
+    // them. min anchor pins the lower bound across spectrum kinds
+    // (full vs tail) so toggling between them keeps colors consistent;
+    // max anchor lets the compare-mode pair share a unified ceiling so
+    // both halves render with the same color scale.
+    const minAnchor = chart.spec.color_min_anchor;
+    if (minAnchor != null && Number.isFinite(minAnchor) && minAnchor > 0) {
+        colorMin = minAnchor;
+    }
+    const maxAnchor = chart.spec.color_max_anchor;
+    if (maxAnchor != null && Number.isFinite(maxAnchor) && maxAnchor > 0) {
+        colorMax = maxAnchor;
     }
     if (!Number.isFinite(colorMin)) colorMin = 0;
     if (!Number.isFinite(colorMax)) colorMax = 1;
