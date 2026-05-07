@@ -574,17 +574,33 @@ export class CaptureRegistry {
         }
         return JSON.stringify(out);
     }
-    // Compare-mode combined section. Reconstructs a registry that
-    // includes both service templates and category templates, then
-    // calls each capture's per-capture init with the combined
-    // service_refs. The legacy `WasmCaptureRegistry::regenerate_combined`
-    // is multi-capture in a single Rust struct; here we orchestrate
-    // it from JS across two attached `CaptureSession`s.
+    // Compare-mode combined section.
     //
-    // Implemented when compare-mode wiring lands; until then, throws
-    // with a clear message so the calling code can fall back gracefully.
-    regenerate_combined(_templatesJson, _categoryName) {
-        throw new Error('CaptureRegistry.regenerate_combined not yet implemented (compare-mode follow-up)');
+    // Legacy `WasmCaptureRegistry::regenerate_combined` did two things:
+    //
+    //   (a) initialised both captures' dashboard contexts with the
+    //       UNION of their detected service extensions (so a service
+    //       only present on one capture still shows in the other's
+    //       nav, with KPIs marked unavailable on the missing side);
+    //   (b) when both captures matched a registered `category`, it
+    //       built one combined "category" section that paired the two
+    //       captures side-by-side under a single section in the nav.
+    //
+    // Stage 2d ships (a) only — call init_templates on each capture
+    // independently so per-capture service sections appear in compare
+    // mode. The category-combined section (b) requires a multi-
+    // capture init API on viewer-sql (the dashboard crate's
+    // `build_dashboard_context` already accepts a category arg, but
+    // wiring it through wasm-bindgen + JS-side template-registry
+    // round-tripping is its own piece of work). Documented as a
+    // follow-up; users in compare mode see two per-capture service
+    // sections instead of one combined section, which is the same
+    // fallback shape the legacy registry produces when category
+    // matching fails.
+    regenerate_combined(templatesJson, _categoryName) {
+        for (const captureId of this.captures.keys()) {
+            this.init_templates(captureId, templatesJson);
+        }
     }
 
     // ─── Additive surface: source picker + cgroup selection ────────
