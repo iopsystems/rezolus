@@ -98,12 +98,18 @@ async function buildSourceViews(conn, registeredName) {
         if (!bySource.has(prefix)) bySource.set(prefix, []);
         bySource.get(prefix).push({ orig: c, alias: rest });
     }
-    if (bySource.size === 0) return { sources: [], rezolusSources: [] };
+    // columnsBySource: source name → Set of unprefixed column names
+    // available in that source's view. Used by `sqlReferencesMissingColumn`
+    // to short-circuit dashboard queries whose `COLUMNS('regex')` would
+    // resolve empty — DuckDB throws a Binder Error in that case which the
+    // worker logs to console regardless of how the caller handles it.
+    const columnsBySource = new Map();
+    if (bySource.size === 0) {
+        // Single-source file: every parquet column is available unprefixed.
+        columnsBySource.set('', new Set(cols));
+        return { sources: [], rezolusSources: [], columnsBySource };
+    }
     const sources = [...bySource.keys()].sort();
-    // A source is "rezolus-shaped" when it carries the canonical signal
-    // metric `memory_total` — sources that don't (typically app-specific
-    // metric streams from `parquet combine`) won't render the standard
-    // dashboards meaningfully.
     const rezolusSources = sources.filter(
         (s) => bySource.get(s).some((a) => a.alias === 'memory_total'),
     );
@@ -117,8 +123,38 @@ async function buildSourceViews(conn, registeredName) {
             .join(', ');
         const viewName = `_src_${src.replace(/[^a-zA-Z0-9_]/g, '_')}`;
         await conn.query(`CREATE VIEW ${viewName} AS SELECT ${projections} FROM read_parquet('${registeredName}')`);
+        columnsBySource.set(src, new Set([
+            ...['timestamp', 'duration'].filter((c) => cols.includes(c)),
+            ...aliases.map((a) => a.alias),
+        ]));
     }
-    return { sources, rezolusSources };
+    return { sources, rezolusSources, columnsBySource };
+}
+
+// Pre-flight check: does any `COLUMNS('regex')` in the SQL match no
+// column in the current source's view? If so, submitting it would throw
+// a Binder Error in the worker and pollute the console even though our
+// Rust-side catch turns it into an empty matrix. We replicate the
+// regex check here so the query never goes to the worker.
+//
+// Limited to `COLUMNS('regex')` patterns since those are the dashboard's
+// runtime schema-resolution mechanism. Bare column refs like
+// `"memory_total"` are stable per parquet and either work for the whole
+// session or fail fast on first use.
+function sqlReferencesMissingColumn(sql, columnSet) {
+    const re = /COLUMNS\('([^']+)'\)/g;
+    let m;
+    while ((m = re.exec(sql)) !== null) {
+        let pattern;
+        try { pattern = new RegExp(m[1]); }
+        catch { continue; } // unparsable — let the worker handle it
+        let any = false;
+        for (const c of columnSet) {
+            if (pattern.test(c)) { any = true; break; }
+        }
+        if (!any) return true;
+    }
+    return false;
 }
 
 function viewNameForSource(src) {
@@ -214,7 +250,7 @@ async function loadParquet(buf, filename) {
     const conn = await db.connect();
     await registerMacros(conn);
     const metadata = await buildMetadata(conn, filename, REGISTERED);
-    const { sources, rezolusSources } = await buildSourceViews(conn, REGISTERED);
+    const { sources, rezolusSources, columnsBySource } = await buildSourceViews(conn, REGISTERED);
 
     // Default source pick order:
     //   1. A rezolus-shaped source whose name appears in the filename.
@@ -232,7 +268,7 @@ async function loadParquet(buf, filename) {
     // has to be source-scoped from the start.
     const cgroupRows = await buildCgroupIndex(conn, REGISTERED, pickedSource);
     const viewer = new ViewerSql(conn, stringifyWithBigInt(metadata));
-    session = { conn, viewer, metadata, sources, rezolusSources, pickedSource };
+    session = { conn, viewer, metadata, sources, rezolusSources, pickedSource, columnsBySource };
     window.__viewerSqlSession = session;
     if (pickedSource) viewer.set_source_relation(viewNameForSource(pickedSource));
 
@@ -537,6 +573,7 @@ async function renderSection(sectionKey) {
         const { p, div, isPercent } = entry;
         if (div.dataset.rendered) return;
         div.dataset.rendered = '1';
+        const tStart = performance.now();
         const chartEl = div.querySelector('.chart');
         if (!p.sql_query) {
             div.classList.add('no-sql');
@@ -547,9 +584,18 @@ async function renderSection(sectionKey) {
             const key = cacheKeyFor(p.sql_query);
             let result = resultCache.get(key);
             if (result === undefined) {
-                const resp = await viewer.query_range(p.sql_query, startSec, endSec, 1.0);
-                const parsed = JSON.parse(resp);
-                result = parsed?.data?.result ?? [];
+                // Short-circuit when the SQL's COLUMNS() regexes don't
+                // resolve to anything in the active source — DuckDB throws
+                // a Binder Error in that case which the worker logs to
+                // the console regardless of how Rust handles the result.
+                const cols = session.columnsBySource?.get(session.pickedSource ?? '');
+                if (cols && sqlReferencesMissingColumn(p.sql_query, cols)) {
+                    result = [];
+                } else {
+                    const resp = await viewer.query_range(p.sql_query, startSec, endSec, 1.0);
+                    const parsed = JSON.parse(resp);
+                    result = parsed?.data?.result ?? [];
+                }
                 resultCache.set(key, result);
             }
             // Drop the render if the user has moved to another section
@@ -562,9 +608,11 @@ async function renderSection(sectionKey) {
                 chartEl.style.display = 'flex';
                 chartEl.style.alignItems = 'center';
                 chartEl.style.justifyContent = 'center';
+                console.log(`[plot] ${p.opts?.id} no-data ${(performance.now()-tStart).toFixed(1)}ms`);
                 return;
             }
             renderResult(chartEl, result, isPercent);
+            console.log(`[plot] ${p.opts?.id} ${(performance.now()-tStart).toFixed(1)}ms`);
         } catch (e) {
             if (myGen !== renderGen) return;
             div.classList.add('fail');
@@ -576,12 +624,23 @@ async function renderSection(sectionKey) {
     const observer = new IntersectionObserver((entries) => {
         // If the section has changed, stop observing and don't fire renders.
         if (myGen !== renderGen) { observer.disconnect(); return; }
-        for (const entry of entries) {
-            if (!entry.isIntersecting) continue;
+        // Each plot's query takes ~230 ms (gauge) to ~1.1 s (histogram)
+        // and they serialise through one worker. When multiple plots
+        // intersect at once we sort by distance from the viewport's
+        // vertical centre so the most-visible plots fire first — the
+        // user sees on-screen content populate before below-the-fold.
+        const visible = entries.filter((e) => e.isIntersecting);
+        const cy = window.innerHeight / 2;
+        visible.sort((a, b) => {
+            const ay = a.boundingClientRect.top + a.boundingClientRect.height / 2;
+            const by = b.boundingClientRect.top + b.boundingClientRect.height / 2;
+            return Math.abs(ay - cy) - Math.abs(by - cy);
+        });
+        for (const entry of visible) {
             const q = queueByDiv.get(entry.target);
             if (q) renderOne(q);
         }
-    }, { rootMargin: '300px' });
+    }, { rootMargin: '50px' });
     for (const { div } of renderQueue) observer.observe(div);
 }
 
