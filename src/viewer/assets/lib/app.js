@@ -296,8 +296,15 @@ const loadSection = async (section) => {
     const data = await ViewerApi.getSection(section);
     if (!data) return null;
 
-    const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
-    return cacheSectionResponse(section, processedData);
+    // Cache the bare section structure immediately so the route
+    // resolves without the "Loading…" splash. Plot data fills in
+    // progressively as `processDashboardData` mutates plots in place
+    // and triggers a redraw — same data flow as before, but the user
+    // sees the section frame appear right away instead of staring at
+    // a splash for the duration of N async query round-trips.
+    cacheSectionResponse(section, data);
+    await processDashboardData(data, activeCgroupPattern, `/${section}`);
+    return data;
 };
 
 const preloadSections = (allSections) => {
