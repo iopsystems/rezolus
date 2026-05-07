@@ -194,6 +194,11 @@ export const CgroupSelector = {
         // path. The query string is unchanged across selections (the
         // registry handles substitution); only the cache miss + fetch
         // is what's new.
+        //
+        // Redraw after EACH plot's data lands rather than after the
+        // entire batch — cgroup queries can be ~100–300 ms each, so
+        // the user sees per-cgroup charts appear one-by-one instead
+        // of all-at-once after the slowest finishes.
         const BATCH_SIZE = 5;
         for (let i = 0; i < plotsToUpdate.length; i += BATCH_SIZE) {
             if (vnode.state.cancelUpdate || vnode.state.updateGeneration !== generation) {
@@ -206,16 +211,14 @@ export const CgroupSelector = {
                     const result = await executeQuery(plot.sql_query);
                     if (vnode.state.updateGeneration !== generation) return;
                     applyResultToPlot(plot, result);
+                    m.redraw();
                 } catch (error) {
                     console.error(`Failed query for ${plot.opts.title}:`, error);
                     plot.data = [];
                     plot.series_names = [];
+                    m.redraw();
                 }
             }));
-        }
-
-        if (vnode.state.updateGeneration === generation) {
-            m.redraw();
         }
         vnode.state.updateInProgress = false;
     },
