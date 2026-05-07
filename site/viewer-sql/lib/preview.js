@@ -290,6 +290,14 @@ class WorkerPool {
     runQuery(sql, start, end, step) {
         return this._enqueue((slot) => slot.viewer.query_range(sql, start, end, step));
     }
+    // Submit a fully-formed SQL string and get back rows-as-objects JSON.
+    // Used by the combined-query path: callers wrap their SQL with the
+    // `WITH _src AS (…)` CTE manually and demux multi-column results in
+    // JS. Bypasses query_range's Prometheus-matrix shaper since the
+    // combined SQL projects N value columns instead of one.
+    runRawQuery(sql) {
+        return this._enqueue((slot) => slot.viewer.query_sql(sql));
+    }
     async setSourceRelation(viewName) {
         for (const s of this.slots) s.viewer.set_source_relation(viewName);
     }
@@ -599,6 +607,119 @@ function cacheKeyFor(sql) {
     return `${sourceKey}|${cg}|${sql}`;
 }
 
+// Combined-query plumbing: detect plots whose SQL fits one of a few
+// well-known shapes, group them, and submit a single query that produces
+// all their value columns in one round-trip. Each worker round-trip costs
+// ~50–230 ms of overhead before it does any real work; sections like
+// memory (7 simple-gauge plots × 230 ms) get a 5–6× win from this alone.
+//
+// Histograms, per-id heatmaps, and complex per-id ratio plots fall into
+// "loners" — their SQL is per-plot bespoke and the inner work doesn't
+// share usefully across plots, so they keep using `pool.runQuery` for
+// the existing one-plot-per-query path.
+
+// Match `SELECT timestamp::DOUBLE/1e9 AS t, <expr> AS v FROM _src` (with
+// any whitespace). The expression captured by group 1 is the per-plot
+// projection — it can reference columns directly (`"memory_total"::DOUBLE`)
+// or do arithmetic (`"memory_total" - "memory_available"`).
+const SIMPLE_GAUGE_RE = /^\s*SELECT\s+timestamp::DOUBLE\s*\/\s*1e9\s+AS\s+t\s*,\s*([\s\S]+?)\s+AS\s+v\s+FROM\s+_src\s*$/;
+
+// Match `irate_total(re)` SQL: a single CTE summing a regex-matched set
+// of columns, then `irate_1s` over the result. Group 1 is the inner regex
+// (we replicate the CTE projection N times in the combined form).
+const IRATE_TOTAL_RE = /^\s*WITH\s+agg\s+AS\s+\(\s*SELECT\s+timestamp\s*,\s*list_sum\(\[\*COLUMNS\('([^']+)'\)\]::UBIGINT\[\]\)\s+AS\s+s\s+FROM\s+_src\s*\)\s+SELECT\s+timestamp::DOUBLE\s*\/\s*1e9\s+AS\s+t\s*,\s*irate_1s\(s\s*,\s*timestamp\)\s+AS\s+v\s+FROM\s+agg\s*$/;
+
+// Inspect each plot's SQL and partition into batches + loners. Returns
+// `{ batches: [{ kind, plots: Plot[], indices: number[], sqlBody, demuxFn }],
+//    loners: Plot[] }` where indices[i] is the value-column index for
+// plots[i] in the combined result, and demuxFn(rows, idx) → per-plot
+// matrix-shape result array.
+function partitionPlots(plots) {
+    const gauges = [];   // { plot, expr }
+    const irates = [];   // { plot, regex }
+    const loners = [];
+    for (const p of plots) {
+        if (!p.sql_query) { loners.push(p); continue; }
+        const sql = p.sql_query;
+        // The cgroup placeholder makes a plot per-source-AND-per-selection;
+        // exclude from batching since that complicates cache keying.
+        if (sql.includes('__SELECTED_CGROUPS__')) { loners.push(p); continue; }
+        let m;
+        if ((m = sql.match(SIMPLE_GAUGE_RE))) {
+            gauges.push({ plot: p, expr: m[1] });
+        } else if ((m = sql.match(IRATE_TOTAL_RE))) {
+            irates.push({ plot: p, regex: m[1] });
+        } else {
+            loners.push(p);
+        }
+    }
+    const batches = [];
+    if (gauges.length >= 2) {
+        const projs = gauges.map((g, i) => `(${g.expr}) AS v_${i}`).join(', ');
+        batches.push({
+            kind: 'gauge',
+            plots: gauges.map((g) => g.plot),
+            sqlBody: `SELECT timestamp::DOUBLE/1e9 AS t, ${projs} FROM _src`,
+            demuxFn: rowsToPerPlotMatrix,
+        });
+    } else {
+        for (const g of gauges) loners.push(g.plot);
+    }
+    if (irates.length >= 2) {
+        const sums = irates.map((r, i) =>
+            `list_sum([*COLUMNS('${r.regex}')]::UBIGINT[]) AS s_${i}`).join(', ');
+        // Cast each irate_1s output to DOUBLE so int128 deltas don't reach
+        // JS as arrow Int128 objects — `query_sql`'s BigInt-only JSON
+        // replacer doesn't catch those, leading to doubly-quoted strings
+        // in the row JSON. The per-plot `query_range` path side-steps this
+        // by stringifying every cell via JS `String()`, but the combined
+        // path uses `query_sql` for the multi-column row shape.
+        const rates = irates.map((_, i) => `irate_1s(s_${i}, timestamp)::DOUBLE AS v_${i}`).join(', ');
+        batches.push({
+            kind: 'irate_total',
+            plots: irates.map((r) => r.plot),
+            sqlBody:
+                `WITH agg AS (SELECT timestamp, ${sums} FROM _src) ` +
+                `SELECT timestamp::DOUBLE/1e9 AS t, ${rates} FROM agg`,
+            demuxFn: rowsToPerPlotMatrix,
+        });
+    } else {
+        for (const r of irates) loners.push(r.plot);
+    }
+    return { batches, loners };
+}
+
+// Convert rows-as-objects (from `pool.runRawQuery`) into the
+// Prometheus-matrix shape the existing `renderResult` expects. We keep
+// only column `v_${idx}` per plot, matching the per-plot path's
+// `[{metric:{}, values: [[t, v_string], ...]}]` output.
+function rowsToPerPlotMatrix(rows, idx) {
+    const values = [];
+    for (const r of rows) {
+        const v = r[`v_${idx}`];
+        if (v == null) continue;
+        // String() handles BigInt + numbers + nulls uniformly to match
+        // arrow_table_to_prom_matrix' string-typed value cells.
+        values.push([Number(r.t), String(v)]);
+    }
+    if (values.length === 0) return [];
+    return [{ metric: {}, values }];
+}
+
+// Wrap a body that references `_src` with the same time-windowed CTE
+// `viewer-sql`'s `query_range` would apply, so we can run it via
+// `pool.runRawQuery` (which bypasses query_range's matrix shaper).
+function wrapWithSrcCte(body, startSec, endSec, sourcePrefix) {
+    const fromClause = sourcePrefix
+        ? viewNameForSource(sourcePrefix)
+        : "read_parquet('capture.parquet')";
+    const startNs = BigInt(Math.floor(startSec * 1e9));
+    const endNs = BigInt(Math.floor(endSec * 1e9));
+    return `WITH _src AS (SELECT * FROM ${fromClause} `
+        + `WHERE timestamp BETWEEN ${startNs} AND ${endNs}) `
+        + `SELECT * FROM (${body}) ORDER BY t`;
+}
+
 async function renderSection(sectionKey) {
     if (!session) return;
     const { pool, metadata } = session;
@@ -673,6 +794,36 @@ async function renderSection(sectionKey) {
     await new Promise((r) => requestAnimationFrame(r));
     await new Promise((r) => requestAnimationFrame(r));
 
+    // Group plots that share a structural SQL shape and combine each
+    // group into one query. plotToBatch maps a plot ref → its batch +
+    // index in that batch. Each batch lazily fires its combined query
+    // on first render request; subsequent renders in the same batch
+    // share the in-flight Promise.
+    const sectionPlots = renderQueue.map((q) => q.p);
+    const { batches } = partitionPlots(sectionPlots);
+    const plotToBatch = new Map();
+    for (const b of batches) {
+        b.promise = null; // lazy
+        for (let i = 0; i < b.plots.length; i++) {
+            plotToBatch.set(b.plots[i], { batch: b, idx: i });
+        }
+    }
+
+    const fireBatch = (b) => {
+        if (b.promise) return b.promise;
+        // Pre-flight: if the combined SQL has any COLUMNS('regex') that
+        // resolves empty in the active source, every plot in the batch
+        // would be no-data — short-circuit to avoid the worker error log.
+        const cols = session.columnsBySource?.get(session.pickedSource ?? '');
+        if (cols && sqlReferencesMissingColumn(b.sqlBody, cols)) {
+            b.promise = Promise.resolve([]);
+        } else {
+            const wrapped = wrapWithSrcCte(b.sqlBody, startSec, endSec, session.pickedSource);
+            b.promise = pool.runRawQuery(wrapped).then((s) => JSON.parse(s));
+        }
+        return b.promise;
+    };
+
     const renderOne = async (entry) => {
         const { p, div, isPercent } = entry;
         if (div.dataset.rendered) return;
@@ -688,22 +839,23 @@ async function renderSection(sectionKey) {
             const key = cacheKeyFor(p.sql_query);
             let result = resultCache.get(key);
             if (result === undefined) {
-                // Short-circuit when the SQL's COLUMNS() regexes don't
-                // resolve to anything in the active source — DuckDB throws
-                // a Binder Error in that case which the worker logs to
-                // the console regardless of how Rust handles the result.
-                const cols = session.columnsBySource?.get(session.pickedSource ?? '');
-                if (cols && sqlReferencesMissingColumn(p.sql_query, cols)) {
-                    result = [];
+                const batchEntry = plotToBatch.get(p);
+                if (batchEntry) {
+                    const rows = await fireBatch(batchEntry.batch);
+                    result = batchEntry.batch.demuxFn(rows, batchEntry.idx);
                 } else {
-                    const resp = await pool.runQuery(p.sql_query, startSec, endSec, 1.0);
-                    const parsed = JSON.parse(resp);
-                    result = parsed?.data?.result ?? [];
+                    // Loner: keep the existing per-plot path.
+                    const cols = session.columnsBySource?.get(session.pickedSource ?? '');
+                    if (cols && sqlReferencesMissingColumn(p.sql_query, cols)) {
+                        result = [];
+                    } else {
+                        const resp = await pool.runQuery(p.sql_query, startSec, endSec, 1.0);
+                        const parsed = JSON.parse(resp);
+                        result = parsed?.data?.result ?? [];
+                    }
                 }
                 resultCache.set(key, result);
             }
-            // Drop the render if the user has moved to another section
-            // while we were awaiting the worker — DOM is detached.
             if (myGen !== renderGen) return;
             if (result.length === 0) {
                 chartEl.textContent = '(no data)';
