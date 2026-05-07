@@ -76,6 +76,13 @@ pub struct SqlMetadata {
     pub counters: HashMap<String, usize>,
     pub gauges: HashMap<String, usize>,
     pub histograms: HashMap<String, usize>,
+    /// Parquet file-level KV metadata (per_source_metadata, systeminfo,
+    /// selection, etc.). JS host extracts these via `parquet_kv_metadata`
+    /// at load time. Drives `init_templates` source-detection and
+    /// `systeminfo`. May be empty when the JS host doesn't populate it
+    /// (older code paths).
+    #[serde(default)]
+    pub file_metadata: HashMap<String, String>,
 }
 
 fn default_parquet_name() -> String {
@@ -246,10 +253,100 @@ impl ViewerSql {
         .to_string()
     }
 
-    /// Section navigation list, JSON-serialized. Empty array until the JS
-    /// host calls `init_templates` (not yet implemented).
+    /// Section navigation list, JSON-serialized.
     pub fn get_sections(&self) -> String {
         serde_json::to_string(&self.context.sections).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// Parquet file-level systeminfo blob. Mirrors `Viewer::systeminfo`
+    /// in `crates/viewer/src/lib.rs:172`. For multi-node combined files
+    /// returns an object keyed by node name; otherwise the flat string.
+    pub fn systeminfo(&self) -> Option<String> {
+        if let Some(psm_str) = self.metadata.file_metadata.get("per_source_metadata") {
+            if let Ok(psm) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
+            {
+                if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
+                    let mut nodes = serde_json::Map::new();
+                    for (sub_key, entry) in rez_group {
+                        let obj = match entry.as_object() {
+                            Some(o) => o,
+                            None => continue,
+                        };
+                        let sysinfo_val = match obj.get("systeminfo") {
+                            Some(v) => v,
+                            None => continue,
+                        };
+                        let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
+                        nodes.insert(node_name.to_string(), sysinfo_val.clone());
+                    }
+                    if nodes.len() > 1 {
+                        return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
+                    }
+                }
+            }
+        }
+        self.metadata.file_metadata.get("systeminfo").cloned()
+    }
+
+    /// Accept a JSON array of templates and (re)build the dashboard
+    /// context so service/category sections show in `get_sections`.
+    /// Mirrors `Viewer::init_templates` in `crates/viewer/src/lib.rs:270`,
+    /// minus the Tsdb-backed KPI availability validation. viewer-sql
+    /// has no Tsdb; KPIs flow through with their default `available =
+    /// true`. Their plots emit `promql_query` only (no `sql_query`)
+    /// until `parquet annotate` learns to translate KPI PromQL → SQL,
+    /// so the frontend renders them as "query not yet available"
+    /// placeholders. The section nav structure is identical to the
+    /// legacy viewer's.
+    pub fn init_templates(&mut self, templates_json: &str) -> Result<(), JsValue> {
+        let templates = parse_service_templates(templates_json)?;
+        let registry = dashboard::TemplateRegistry::from_templates(templates);
+        let service_exts = self.detect_service_exts(&registry);
+        let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
+            .iter()
+            .map(|(name, ext)| (name.as_str(), ext))
+            .collect();
+        let context = dashboard::dashboard::build_dashboard_context(
+            None,
+            &service_refs,
+            None, // single-capture: no category bridging here
+        );
+        self.context = context;
+        self.cached_bodies.borrow_mut().clear();
+        Ok(())
+    }
+
+    /// Detect this capture's matching service extensions from the
+    /// parquet's `per_source_metadata` (or fall back to the simple
+    /// `source` field). Mirrors the structure of
+    /// `Viewer::detect_and_validate_service_exts` minus the Tsdb
+    /// validation step.
+    fn detect_service_exts(
+        &self,
+        registry: &dashboard::TemplateRegistry,
+    ) -> Vec<(String, dashboard::ServiceExtension)> {
+        let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
+        if let Some(psm_str) = self.metadata.file_metadata.get("per_source_metadata") {
+            if let Ok(psm) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
+            {
+                for (source_type, _group) in &psm {
+                    if source_type == "rezolus" {
+                        continue;
+                    }
+                    if let Some(ext) = registry.get(source_type) {
+                        service_exts.push((source_type.clone(), ext.clone()));
+                    }
+                }
+            }
+        }
+        if service_exts.is_empty() {
+            if let Some(ext) = registry.get(&self.metadata.source) {
+                service_exts.push((self.metadata.source.clone(), ext.clone()));
+            }
+        }
+        service_exts
     }
 
     /// Render a single section by route stem (e.g. "cpu", "service/vllm").
@@ -606,4 +703,26 @@ fn first_double_cell(table: &JsValue) -> Result<f64, JsValue> {
     let cell = get.call1(&vector, &JsValue::from_f64(0.0))?;
     cell.as_f64()
         .ok_or_else(|| JsValue::from_str(&format!("cell is not a number: {cell:?}")))
+}
+
+/// Parse a `templates_json` array into service-only extensions.
+/// Category templates (`category: true`) are filtered out — they have
+/// no per-KPI `query` field and would fail to deserialize as
+/// `ServiceExtension`. Mirrors `parse_service_templates` in
+/// `crates/viewer/src/lib.rs:623`.
+fn parse_service_templates(
+    templates_json: &str,
+) -> Result<Vec<dashboard::ServiceExtension>, JsValue> {
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(templates_json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse templates: {e}")))?;
+    let mut templates = Vec::new();
+    for v in parsed {
+        if v.get("category").and_then(|b| b.as_bool()).unwrap_or(false) {
+            continue;
+        }
+        let ext: dashboard::ServiceExtension = serde_json::from_value(v)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse template: {e}")))?;
+        templates.push(ext);
+    }
+    Ok(templates)
 }

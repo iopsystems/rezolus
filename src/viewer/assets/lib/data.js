@@ -353,6 +353,18 @@ const createDataApi = ({
     //                        counter-rate rewriting. Defaults to the
     //                        module-level _stepOverride.
     const buildEffectiveQuery = (plot, opts = {}) => {
+        // Prefer the SQL query (Phase D dashboard emission). The SQL
+        // string is verbatim — viewer-sql substitutes cgroup selection
+        // server-side from registry state, and the dashboard's SQL
+        // emitters already encode histogram fan-out / counter rates /
+        // ratios. Skip the legacy PromQL transforms below for SQL plots
+        // — the registry is the single source of dynamic state.
+        //
+        // Plots without `sql_query` are KPI plots whose query lives in
+        // parquet metadata and hasn't been translated yet. Returning
+        // null makes processDashboardData skip them; the section view
+        // can paint a "query not yet available" placeholder.
+        if (plot.sql_query) return plot.sql_query;
         if (!plot.promql_query) return null;
         const {
             sectionRoute = null,

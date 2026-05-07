@@ -66,10 +66,27 @@ async function buildMetadata(conn, filename, registeredName) {
     if (tsRows.length === 2) {
         interval_seconds = Number(BigInt(tsRows[1].t) - BigInt(tsRows[0].t)) / 1e9;
     }
+    // Pull the parquet's file-level KV metadata (per_source_metadata,
+    // systeminfo, source, version, etc.). Drives `init_templates`'s
+    // service-extension detection and `systeminfo()`. Heavy entries like
+    // `ARROW:schema` (the embedded IPC schema) and `descriptions` are
+    // dropped — they're large and we don't need them on the Rust side.
+    const file_metadata = {};
+    const kvRows = (await conn.query(
+        `SELECT key::VARCHAR AS k, value::VARCHAR AS v FROM parquet_kv_metadata('${registeredName}')`,
+    )).toArray().map((r) => r.toJSON());
+    for (const { k, v } of kvRows) {
+        if (k === 'ARROW:schema') continue;
+        file_metadata[k] = v;
+    }
+    // Prefer the parquet's recorded `source` over our generic fallback.
+    const recordedSource = file_metadata.source ?? 'rezolus';
+    const recordedVersion = file_metadata.version ?? '';
     return {
         interval_seconds, time_range_ns,
-        source: 'rezolus', version: '', filename,
+        source: recordedSource, version: recordedVersion, filename,
         parquet_name: registeredName, counters, gauges, histograms,
+        file_metadata,
     };
 }
 
@@ -507,29 +524,67 @@ export class CaptureRegistry {
     get_sections(captureId) {
         return this.session(captureId).pool.viewer.get_sections();
     }
-    // Note: viewer-sql doesn't yet expose `init_templates`,
-    // `regenerate_combined`, `systeminfo`. They're added in Stage 2 of
-    // the migration plan. Stubs here so the surface is documented; they
-    // throw until viewer-sql ships them.
+    // init_templates / systeminfo route through every slot's
+    // ViewerSql so each one's dashboard context stays in lockstep —
+    // `pool.runQuery` round-robins across slots and they must all
+    // agree on which sections exist.
     init_templates(captureId, templatesJson) {
-        const v = this.session(captureId).pool.viewer;
-        if (typeof v.init_templates !== 'function') {
-            throw new Error('viewer-sql.init_templates not yet implemented');
-        }
-        return v.init_templates(templatesJson);
-    }
-    regenerate_combined(templatesJson, categoryName) {
-        // legacy registry is multi-capture; viewer-sql is per-capture.
-        // For Stage 2 we'd loop attached captures and re-run on each.
-        // Stub for now.
-        throw new Error('CaptureRegistry.regenerate_combined not yet implemented');
+        const slots = this.session(captureId).pool.slots;
+        for (const s of slots) s.viewer.init_templates(templatesJson);
     }
     systeminfo(captureId) {
-        const v = this.session(captureId).pool.viewer;
-        if (typeof v.systeminfo !== 'function') {
-            throw new Error('viewer-sql.systeminfo not yet implemented');
+        return this.session(captureId).pool.viewer.systeminfo();
+    }
+    // Selection blob from parquet file metadata (drives the URL state
+    // that compare-mode bridges from baseline → experiment). The legacy
+    // viewer's WASM exposes this from the Rust side reading the parquet
+    // KV; we already pull KV metadata into `metadata.file_metadata` at
+    // load time, so this is a JS-side lookup.
+    selection(captureId) {
+        return this.session(captureId).metadata.file_metadata?.selection ?? null;
+    }
+    // File-level KV metadata for `/file_metadata` endpoint parity.
+    // Returns a JSON-encoded object (each value embedded as JSON when
+    // it parses, raw string otherwise). The legacy viewer's
+    // `enrich_with_multi_node_info` is a Rust-side massage that adds
+    // pre-computed `nodes`/`node_versions`/`service_instances` fields
+    // for the frontend's convenience — keep the surface compatible by
+    // including those when readily derivable.
+    file_metadata_json(captureId) {
+        const fm = this.session(captureId).metadata.file_metadata ?? {};
+        const out = {};
+        for (const [k, v] of Object.entries(fm)) {
+            try { out[k] = JSON.parse(v); } catch { out[k] = v; }
         }
-        return v.systeminfo();
+        // enrich_with_multi_node_info equivalent: derive node names from
+        // per_source_metadata.rezolus when present.
+        const psm = out.per_source_metadata;
+        if (psm && typeof psm === 'object' && psm.rezolus && typeof psm.rezolus === 'object') {
+            const nodes = [];
+            const node_versions = {};
+            for (const [subKey, entry] of Object.entries(psm.rezolus)) {
+                if (entry && typeof entry === 'object') {
+                    const node = entry.node ?? subKey;
+                    nodes.push(node);
+                    if (entry.version) node_versions[node] = entry.version;
+                }
+            }
+            if (nodes.length > 0) out.nodes = nodes;
+            if (Object.keys(node_versions).length > 0) out.node_versions = node_versions;
+        }
+        return JSON.stringify(out);
+    }
+    // Compare-mode combined section. Reconstructs a registry that
+    // includes both service templates and category templates, then
+    // calls each capture's per-capture init with the combined
+    // service_refs. The legacy `WasmCaptureRegistry::regenerate_combined`
+    // is multi-capture in a single Rust struct; here we orchestrate
+    // it from JS across two attached `CaptureSession`s.
+    //
+    // Implemented when compare-mode wiring lands; until then, throws
+    // with a clear message so the calling code can fall back gracefully.
+    regenerate_combined(_templatesJson, _categoryName) {
+        throw new Error('CaptureRegistry.regenerate_combined not yet implemented (compare-mode follow-up)');
     }
 
     // ─── Additive surface: source picker + cgroup selection ────────
