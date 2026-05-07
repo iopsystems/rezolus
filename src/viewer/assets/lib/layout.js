@@ -125,6 +125,22 @@ const TopNav = {
                     m('span.topnav-source-name', displayLabel),
                 ]);
             })(),
+            // Source picker (multi-source combined parquets only).
+            // viewer-sql exposes per-source aliasing views; the user
+            // picks which source's metrics drive the dashboard. The
+            // legacy PromQL backend never had this — files produced by
+            // `parquet combine` weren't introspectable per-source.
+            (() => {
+                const sources = attrs.sourceList || [];
+                if (sources.length < 2) return null;
+                return m('div.topnav-source.topnav-multi-source', [
+                    m('label.topnav-source-label', { for: 'topnav-source-select' }, 'Source:'),
+                    m('select.topnav-node-select#topnav-source-select', {
+                        value: attrs.selectedSource || sources[0],
+                        onchange: (e) => attrs.onSourceChange?.(e.target.value),
+                    }, sources.map((s) => m('option', { value: s }, s))),
+                ]);
+            })(),
             m('div.topnav-actions', [
                 // Upload parquet (file mode only, when handler provided).
                 // Hidden in compare mode — use the per-capture Load buttons

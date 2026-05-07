@@ -366,10 +366,17 @@ export function createGroupComponent(getState) {
             // the group title + subgroup headers when the whole cluster is
             // empty (e.g. a section querying metrics that don't exist on
             // the host, like GPU on a CPU-only box).
+            //
+            // Plots flagged `_unavailable` by data.js (KPI plots whose
+            // query lives in parquet metadata and hasn't been translated
+            // to SQL yet) count as "has data" so the placeholder still
+            // renders — otherwise the user can't tell there's a plot
+            // there at all.
             const plotHasData = (plot) =>
-                Array.isArray(plot.data) && plot.data.some((series) =>
+                plot._unavailable
+                || (Array.isArray(plot.data) && plot.data.some((series) =>
                     Array.isArray(series) && series.length > 0
-                );
+                ));
             const subgroupHasData = (sg) => (sg.plots || []).some(plotHasData);
             const groupHasData = subgroups.some(subgroupHasData);
 

@@ -369,6 +369,18 @@ export class Chart {
     }
 
     view() {
+        // Visible-missing placeholder for KPI plots whose query lives
+        // in parquet metadata and hasn't been translated to SQL yet.
+        // Stage 2c of the PromQL → SQL migration sets `_unavailable` on
+        // these via processDashboardData; the chart slot reserves the
+        // same DOM footprint a populated chart would have so the
+        // section's grid layout doesn't reflow.
+        if (this.spec?._unavailable) {
+            return m('div.chart.chart-unavailable',
+                m('div.chart-unavailable-message',
+                    this.spec._unavailableMessage
+                        ?? '(query not yet available)'));
+        }
         return m('div.chart');
     }
 

@@ -49,26 +49,22 @@ let exitCode = 0;
 try {
     // Demo load is auto-triggered via ?demo=demo.parquet (script.js has
     // a check for that URL param).
+    // Use the multi-source sglang demo so the source picker mounts.
     await page.goto(
-        `http://127.0.0.1:${port}/site/viewer/index.html?demo=demo.parquet`,
+        `http://127.0.0.1:${port}/site/viewer/index.html?demo=disagg/sglang-nixl-16c.parquet`,
         { waitUntil: 'networkidle0', timeout: 60_000 },
     );
-    // Just wait a fixed window for boot + initial renders.
-    await new Promise((r) => setTimeout(r, 12000));
-    // Navigate to cgroups so the selector mounts.
-    await page.evaluate(() => { location.hash = '#/cgroups'; });
-    await new Promise((r) => setTimeout(r, 6000));
+    // sglang is bigger; allow more boot time.
+    await new Promise((r) => setTimeout(r, 25000));
     const summary = await page.evaluate(() => {
-        const cgList = document.querySelector('.cgroup-select');
-        const items = cgList ? cgList.querySelectorAll('.cgroup-select-item') : [];
-        const empty = cgList?.querySelector('.cgroup-select-empty');
+        const sourceSel = document.querySelector('#topnav-source-select');
         return {
             title: document.title,
             hasContent: !!document.body.textContent && document.body.textContent.length > 0,
             canvases: document.querySelectorAll('canvas').length,
-            cgroupSelectorMounted: !!cgList,
-            cgroupCount: items.length,
-            cgroupListEmpty: empty?.textContent ?? null,
+            sourcePickerMounted: !!sourceSel,
+            sourceOptions: sourceSel ? Array.from(sourceSel.options).map((o) => o.value) : [],
+            selectedSource: sourceSel?.value ?? null,
         };
     });
     console.log(JSON.stringify(summary, null, 2));

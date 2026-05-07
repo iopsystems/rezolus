@@ -1026,6 +1026,18 @@ main {
     position: relative;
 }
 
+.chart.chart-unavailable {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-foreground, #888);
+    font-style: italic;
+    font-size: 0.85em;
+    background: var(--card, #11161e);
+    border: 1px dashed var(--border, #2a3242);
+    border-radius: 4px;
+}
+
 .chart.no-data {
     height: 0;
     border: none;

@@ -413,7 +413,19 @@ const createDataApi = ({
         const queryPlots = [];
         for (const group of data.groups || []) {
             for (const plot of collectGroupPlots(group)) {
-                if (plot.promql_query) {
+                // Mark KPI plots without an SQL query as
+                // "temporarily unavailable" so they render as a
+                // placeholder rather than a silently-empty chart.
+                // These are plots whose query lives in parquet
+                // `service_queries` metadata; a follow-up will
+                // translate them to SQL at `parquet annotate` time.
+                if (!plot.sql_query && plot.promql_query) {
+                    plot._unavailable = true;
+                    plot._unavailableMessage =
+                        '(query not yet available — translation pending)';
+                    continue;
+                }
+                if (plot.sql_query || plot.promql_query) {
                     const queryToRun = buildEffectiveQuery(plot, {
                         sectionRoute,
                         activeCgroupPattern,

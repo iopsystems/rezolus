@@ -425,6 +425,17 @@ const fetchSectionHeatmapData = async (sectionRoute, groups) => {
 
 // ── TopNav builder ─────────────────────────────────────────────────
 
+const changeSource = async (sourceName) => {
+    if (!ViewerApi.registry()?.has?.('baseline')) return;
+    await ViewerApi.registry().setSource('baseline', sourceName);
+    // Source switch invalidates section caches keyed by previous
+    // source's data — drop them so the next render re-fetches.
+    for (const k of Object.keys(sectionResponseCache)) delete sectionResponseCache[k];
+    chartsState.clear();
+    m.redraw();
+    await reloadCurrentSection();
+};
+
 const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     data,
     sectionRoute,
@@ -442,6 +453,17 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     selectedNode,
     nodeVersions,
     onNodeChange: changeNode,
+    sourceList: (() => {
+        const reg = ViewerApi.registry();
+        if (!reg?.has?.('baseline')) return [];
+        return reg.sources('baseline') || [];
+    })(),
+    selectedSource: (() => {
+        const reg = ViewerApi.registry();
+        if (!reg?.has?.('baseline')) return null;
+        return reg.pickedSource('baseline') || null;
+    })(),
+    onSourceChange: changeSource,
     extra: {
         // Default compare state so TopNav renders the badge in every
         // code path (Main.view, single-chart route, service route).

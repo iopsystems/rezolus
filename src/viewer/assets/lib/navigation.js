@@ -15,6 +15,9 @@ const buildTopNavAttrs = ({
     selectedNode = null,
     nodeVersions = {},
     onNodeChange,
+    sourceList = [],
+    selectedSource = null,
+    onSourceChange,
     extra = {},
 }) => ({
     sectionRoute,
@@ -39,6 +42,9 @@ const buildTopNavAttrs = ({
     selectedNode,
     nodeVersions,
     onNodeChange,
+    sourceList,
+    selectedSource,
+    onSourceChange,
     ...extra,
 });
 
