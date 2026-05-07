@@ -6,8 +6,11 @@ import { resolvedStyle } from './charts/metric_types.js';
 
 /**
  * Compact per-chart toggle rendered in the chart header when compare
- * mode is active and the chart style supports it (currently: heatmap
- * style only, for the `diff` toggle).
+ * mode is active and the chart style supports it.
+ *
+ * - heatmap: single `diff` checkbox (experiment − baseline)
+ * - scatter: Full / Tail (mutually exclusive) + Diff (visible only when
+ *   one of them is active)
  *
  * @param {object} spec - plot spec (reads spec.opts.id and spec.opts.style)
  * @param {object} state - { compareMode, toggles, setChartToggle }
@@ -15,25 +18,78 @@ import { resolvedStyle } from './charts/metric_types.js';
 export const compareToggle = (spec, state) => {
     if (!state || !state.compareMode) return null;
     const style = resolvedStyle(spec);
-    if (style !== 'heatmap') return null;
     const chartId = spec?.opts?.id;
     if (!chartId) return null;
-    const current = state.toggles && state.toggles[chartId];
-    const checked = !!(current && current.diff);
-    return m('label.compare-toggle', {
-        title: 'Show experiment − baseline diff instead of side-by-side',
-    }, [
-        m('input[type=checkbox]', {
-            checked,
-            onchange: (e) => {
-                const v = e.target.checked;
-                if (typeof state.setChartToggle === 'function') {
-                    state.setChartToggle(chartId, 'diff', v);
-                }
-            },
-        }),
-        m('span', 'diff'),
-    ]);
+    const current = state.toggles?.[chartId] || {};
+    const setToggle = state.setChartToggle;
+
+    if (style === 'heatmap') {
+        return m('label.compare-toggle', {
+            title: 'Show experiment − baseline diff instead of side-by-side',
+        }, [
+            m('input[type=checkbox]', {
+                checked: !!current.diff,
+                onchange: (e) => setToggle?.(chartId, 'diff', e.target.checked),
+            }),
+            m('span', 'diff'),
+        ]);
+    }
+
+    if (style === 'scatter') {
+        const kind = current.spectrumKind || null;
+        const setKind = (v) => {
+            // Mutually exclusive: clicking the active kind clears it,
+            // clicking the other kind switches.
+            const next = (kind === v) ? null : v;
+            setToggle?.(chartId, 'spectrumKind', next);
+            // When clearing the kind, also clear the diff flag so that
+            // re-enabling spectrum mode later starts in side-by-side.
+            if (next == null) setToggle?.(chartId, 'diff', false);
+        };
+        // Two visually-separated groups:
+        //   1. Diff — data treatment (experiment − baseline). Only
+        //      visible when a spectrum kind is selected, since diff
+        //      is meaningless without one (the dispatch ignores diff
+        //      when kind is null).
+        //   2. Full / Tail — visual style (which quantile slice the
+        //      heatmap shows). Mutually exclusive, always visible.
+        return m('span.compare-toggle-group', [
+            kind && m('label.compare-toggle', {
+                title: 'Show experiment − baseline diff instead of side-by-side',
+            }, [
+                m('input[type=checkbox]', {
+                    checked: !!current.diff,
+                    onchange: (e) => setToggle?.(chartId, 'diff', e.target.checked),
+                }),
+                m('span', 'Diff'),
+            ]),
+            m('label.compare-toggle', {
+                // Add gap between the Diff group and Full/Tail only
+                // when Diff is actually rendered, so a kind-less chart
+                // doesn't show a stray indent before Full.
+                style: kind ? 'margin-left: 20px' : '',
+                title: 'Show full p1..p100 spectrum heatmap',
+            }, [
+                m('input[type=checkbox]', {
+                    checked: kind === 'full',
+                    onchange: () => setKind('full'),
+                }),
+                m('span', 'Full'),
+            ]),
+            m('label.compare-toggle', {
+                style: 'margin-left: 0.5em',
+                title: 'Show tail p99.01..p100 spectrum heatmap',
+            }, [
+                m('input[type=checkbox]', {
+                    checked: kind === 'tail',
+                    onchange: () => setKind('tail'),
+                }),
+                m('span', 'Tail'),
+            ]),
+        ]);
+    }
+
+    return null;
 };
 
 const EXPAND_ICON_PATH = 'M10 1h5v5h-1.5V3.56L9.78 7.28 8.72 6.22l3.72-3.72H10V1zM1 6V1h5v1.5H3.56l3.72 3.72-1.06 1.06L2.5 3.56V6H1zm5 4H1v5h5v-1.5H3.56l3.72-3.72-1.06-1.06L2.5 12.44V10zm4 5h5v-5h-1.5V12.44L9.78 8.72 8.72 9.78l3.72 3.72H10V15z';

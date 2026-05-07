@@ -40,6 +40,10 @@ export class ChartsState {
     // Zoom subscribers. Each entry receives (zoom, source) synchronously
     // after setZoom produces a diff.
     _zoomSubs = new Set();
+    // Compare-mode cursor subscribers, keyed by compare-group id (the
+    // parent spec's opts.id). Two subscribers per group max — the
+    // baseline and experiment halves of a side-by-side pair.
+    _compareCursorSubs = new Map();  // groupId → Set<fn>
     // Global color mapper - for consistent cgroup colors
     colorMapper = globalColorMapper;
 
@@ -51,6 +55,7 @@ export class ChartsState {
         this.globalZoom = null;
         this.charts.clear();
         this._zoomSubs.clear();
+        this._compareCursorSubs.clear();
     }
 
     isDefaultZoom() {
@@ -77,6 +82,55 @@ export class ChartsState {
     subscribeZoom(fn) {
         this._zoomSubs.add(fn);
         return () => { this._zoomSubs.delete(fn); };
+    }
+
+    /**
+     * Subscribe to compare-mode cursor events for a group. The
+     * callback fires synchronously from inside publishCompareCursor
+     * when a sibling chart in the same compare group hovers / leaves
+     * a cell. Payload is either { timeMs, qIdx, sourceChartId } or
+     * null (cursor left the publishing chart).
+     *
+     * Self-sourced events (when sourceChartId equals the subscriber's
+     * own id) are filtered by the publisher; subscribers don't need to
+     * filter themselves.
+     *
+     * Returns an unsubscribe function.
+     */
+    subscribeCompareCursor(groupId, fn) {
+        if (!groupId) return () => {};
+        let set = this._compareCursorSubs.get(groupId);
+        if (!set) {
+            set = new Set();
+            this._compareCursorSubs.set(groupId, set);
+        }
+        set.add(fn);
+        return () => {
+            const s = this._compareCursorSubs.get(groupId);
+            if (!s) return;
+            s.delete(fn);
+            if (s.size === 0) this._compareCursorSubs.delete(groupId);
+        };
+    }
+
+    /**
+     * Publish a compare-mode cursor event to all subscribers in the
+     * group EXCEPT the source chart itself. Payload shape:
+     *   { timeMs, qIdx, sourceChartId } | null
+     * `null` clears (the cursor left the source chart).
+     */
+    publishCompareCursor(groupId, payload) {
+        if (!groupId) return;
+        const set = this._compareCursorSubs.get(groupId);
+        if (!set) return;
+        const sourceId = payload?.sourceChartId;
+        for (const fn of set) {
+            // Subscribers tag their fn with `_chartId` (set in
+            // quantile_heatmap.js) so we can skip the publisher's own
+            // copy without round-tripping through the event payload.
+            if (sourceId && fn._chartId === sourceId) continue;
+            fn(payload);
+        }
     }
 
     /**
@@ -318,7 +372,18 @@ export class Chart {
         // change" and the chart would render stale experiment dots.
         // Detect a multiSeries swap explicitly.
         const multiSeriesChanged = multiSeriesDiffers(oldSpec.multiSeries, this.spec.multiSeries);
-        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged)) {
+        // Compare-mode quantile heatmap (Full ↔ Tail toggle) feeds in
+        // data of identical shape (100 quantile cols, same time range)
+        // for either kind, so shallowSameShape returns true and a kind
+        // switch alone wouldn't trigger reconfigure. The two kinds DO
+        // have distinct series_names arrays (`['p1'..'p100']` vs
+        // `['p99.01'..'p100']`), and the strategy carries the cached
+        // ref through unchanged within a kind, so a reference change
+        // is a reliable kind-switch signal. (Single-capture and other
+        // chart types either don't set series_names or keep the same
+        // ref across renders, so this is a no-op for them.)
+        const seriesNamesChanged = oldSpec.series_names !== this.spec.series_names;
+        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 
@@ -359,6 +424,8 @@ export class Chart {
 
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
         if (this._pinCleanup) this._pinCleanup();
+        if (this._compareCursorOff) this._compareCursorOff();
+        if (this._compareCursorUnsub) this._compareCursorUnsub();
 
         // Remove ourselves from the charts registry so setZoom's fan-out,
         // resetAll, hasActiveSelection, etc. don't walk a stale entry
