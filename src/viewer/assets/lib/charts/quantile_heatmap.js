@@ -564,14 +564,24 @@ export function configureQuantileHeatmap(chart) {
 }
 
 // Render a crosshair on `chart` at the matching cell from a sibling's
-// cursor event. Cleared when payload is null. Uses ECharts' graphic
-// component overlaid on the chart canvas — no relayout cost.
+// cursor event. Cleared when payload is null. Uses zrender's `add` /
+// `remove` directly — going through `setOption({ graphic: [...] })`
+// would force ECharts to re-process the option tree on every cursor
+// move and re-render the progressive custom-type series chunks, which
+// the user perceives as cell flicker. Direct zrender shape ops only
+// touch the overlay layer; the chart cells stay untouched.
 function drawCompareCrosshair(chart, payload, timeData, tCount, seriesCount) {
     if (!chart || !chart.echart) return;
-    if (!payload) {
-        chart.echart.setOption({ graphic: [] });
-        return;
+    const zr = chart.echart.getZr?.();
+    if (!zr) return;
+
+    // Tear down any prior crosshair shapes before deciding what to do.
+    if (chart._compareCrosshairShapes) {
+        for (const s of chart._compareCrosshairShapes) zr.remove(s);
+        chart._compareCrosshairShapes = null;
     }
+    if (!payload) return;
+
     const { timeMs, qIdx } = payload;
     // Convert (timeMs, qIdx) to pixel coords. convertToPixel returns
     // null when the chart hasn't laid out yet.
@@ -595,24 +605,21 @@ function drawCompareCrosshair(chart, payload, timeData, tCount, seriesCount) {
     const cellWidthPx = widthSample ? (widthSample[0] - pix[0]) : fallbackCellWidth;
     const cellHeightPx = heightSample ? (heightSample[1] - pix[1]) : -fallbackCellHeight;
 
-    chart.echart.setOption({
-        graphic: [
-            // Horizontal line across grid at qIdx
-            {
-                type: 'rect',
-                z: 100,
-                shape: { x: rect.x, y: pix[1] + cellHeightPx, width: rect.width, height: 1 },
-                style: { fill: 'rgba(255,255,255,0.6)' },
-                silent: true,
-            },
-            // Vertical line across grid at timeMs
-            {
-                type: 'rect',
-                z: 100,
-                shape: { x: pix[0], y: rect.y, width: Math.max(1, cellWidthPx), height: rect.height },
-                style: { fill: 'rgba(255,255,255,0.15)' },
-                silent: true,
-            },
-        ],
+    const Rect = (typeof echarts !== 'undefined' && echarts.graphic && echarts.graphic.Rect);
+    if (!Rect) return;
+    const horizontal = new Rect({
+        z: 100,
+        silent: true,
+        shape: { x: rect.x, y: pix[1] + cellHeightPx, width: rect.width, height: 1 },
+        style: { fill: 'rgba(255,255,255,0.6)' },
     });
+    const vertical = new Rect({
+        z: 100,
+        silent: true,
+        shape: { x: pix[0], y: rect.y, width: Math.max(1, cellWidthPx), height: rect.height },
+        style: { fill: 'rgba(255,255,255,0.15)' },
+    });
+    zr.add(horizontal);
+    zr.add(vertical);
+    chart._compareCrosshairShapes = [horizontal, vertical];
 }

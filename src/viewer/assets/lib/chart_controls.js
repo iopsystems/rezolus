@@ -46,21 +46,14 @@ export const compareToggle = (spec, state) => {
             // re-enabling spectrum mode later starts in side-by-side.
             if (next == null) setToggle?.(chartId, 'diff', false);
         };
+        // Two visually-separated groups:
+        //   1. Diff — data treatment (experiment − baseline). Only
+        //      visible when a spectrum kind is selected, since diff
+        //      is meaningless without one (the dispatch ignores diff
+        //      when kind is null).
+        //   2. Full / Tail — visual style (which quantile slice the
+        //      heatmap shows). Mutually exclusive, always visible.
         return m('span.compare-toggle-group', [
-            m('label.compare-toggle', { title: 'Show full p1..p100 spectrum heatmap' }, [
-                m('input[type=checkbox]', {
-                    checked: kind === 'full',
-                    onchange: () => setKind('full'),
-                }),
-                m('span', 'Full'),
-            ]),
-            m('label.compare-toggle', { title: 'Show tail p99.01..p100 spectrum heatmap' }, [
-                m('input[type=checkbox]', {
-                    checked: kind === 'tail',
-                    onchange: () => setKind('tail'),
-                }),
-                m('span', 'Tail'),
-            ]),
             kind && m('label.compare-toggle', {
                 title: 'Show experiment − baseline diff instead of side-by-side',
             }, [
@@ -69,6 +62,29 @@ export const compareToggle = (spec, state) => {
                     onchange: (e) => setToggle?.(chartId, 'diff', e.target.checked),
                 }),
                 m('span', 'Diff'),
+            ]),
+            m('label.compare-toggle', {
+                // Add gap between the Diff group and Full/Tail only
+                // when Diff is actually rendered, so a kind-less chart
+                // doesn't show a stray indent before Full.
+                style: kind ? 'margin-left: 20px' : '',
+                title: 'Show full p1..p100 spectrum heatmap',
+            }, [
+                m('input[type=checkbox]', {
+                    checked: kind === 'full',
+                    onchange: () => setKind('full'),
+                }),
+                m('span', 'Full'),
+            ]),
+            m('label.compare-toggle', {
+                style: 'margin-left: 0.5em',
+                title: 'Show tail p99.01..p100 spectrum heatmap',
+            }, [
+                m('input[type=checkbox]', {
+                    checked: kind === 'tail',
+                    onchange: () => setKind('tail'),
+                }),
+                m('span', 'Tail'),
             ]),
         ]);
     }

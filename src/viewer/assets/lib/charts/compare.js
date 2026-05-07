@@ -562,6 +562,38 @@ const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, inter
 
     let { dMin, dMax } = delta;
     if (dMin == null || dMax == null) return FALLBACK;
+
+    // Robust scale: trim outliers from each end of the sorted deltas
+    // ONE quantile step at a time (1/100 of the distribution per step)
+    // up to 5 steps from each end (so we never trim past p5 / p95).
+    // A step is trimmed only when both:
+    //   - the trimmed value is at least 2× the magnitude of the next
+    //     value inward (an order-of-magnitude outlier worth dropping)
+    //   - dropping the value doesn't change the sign of the bound
+    //     (a flat percentile cap can map a small +ε cell to the wrong
+    //     side of the diverging palette when the trimmed extreme was
+    //     of the opposite sign — wrong color for that delta)
+    // Stops at the first step that fails either condition. This
+    // anchors each diff scale to its own bulk distribution, making
+    // Full and Tail diffs visually distinct without flipping any
+    // cell's diverging-color sign.
+    const flatDeltas = [];
+    for (let q = 1; q < delta.data.length; q++) {
+        const col = delta.data[q];
+        if (!Array.isArray(col)) continue;
+        for (const v of col) {
+            if (v != null && Number.isFinite(v)) flatDeltas.push(v);
+        }
+    }
+    if (flatDeltas.length >= 20) {
+        flatDeltas.sort((a, b) => a - b);
+        const trimmed = trimDiffOutliers(flatDeltas);
+        if (trimmed.lo !== null && trimmed.hi !== null && trimmed.hi > trimmed.lo) {
+            dMin = trimmed.lo;
+            dMax = trimmed.hi;
+        }
+    }
+
     if (dMin === dMax) {
         const pad = Math.max(Math.abs(dMin), 1) * 0.5;
         dMin -= pad;
@@ -605,3 +637,43 @@ const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, inter
         vnode: m('div.compare-heatmap-diff', m(Chart, { spec: diffSpec, chartsState, interval })),
     };
 };
+
+// Trim outliers from the sorted ascending delta array, walking inward
+// one quantile step (1/100 of the distribution) per iteration. A step
+// is trimmed only when the boundary value is ≥2× the magnitude of the
+// next value inward AND has the same sign — never trim across a sign
+// boundary (that would flip the diverging-palette color of cells near
+// zero). Capped at 5 steps from each end (so the band is never tighter
+// than [p5, p95]). Returns { lo, hi } or { lo: null, hi: null } when
+// the input is too small.
+function trimDiffOutliers(sorted) {
+    const n = sorted.length;
+    if (n < 20) return { lo: null, hi: null };
+    const stepSize = Math.max(1, Math.floor(n / 100));
+    const MAX_STEPS = 5;
+    const REDUCTION = 2;
+
+    let loIdx = 0;
+    for (let step = 0; step < MAX_STEPS; step++) {
+        const nxtIdx = loIdx + stepSize;
+        if (nxtIdx >= n) break;
+        const cur = sorted[loIdx];
+        const nxt = sorted[nxtIdx];
+        if (Math.sign(cur) !== Math.sign(nxt)) break;
+        if (Math.abs(cur) < REDUCTION * Math.abs(nxt)) break;
+        loIdx = nxtIdx;
+    }
+
+    let hiIdx = n - 1;
+    for (let step = 0; step < MAX_STEPS; step++) {
+        const nxtIdx = hiIdx - stepSize;
+        if (nxtIdx < 0) break;
+        const cur = sorted[hiIdx];
+        const nxt = sorted[nxtIdx];
+        if (Math.sign(cur) !== Math.sign(nxt)) break;
+        if (Math.abs(cur) < REDUCTION * Math.abs(nxt)) break;
+        hiIdx = nxtIdx;
+    }
+
+    return { lo: sorted[loIdx], hi: sorted[hiIdx] };
+}

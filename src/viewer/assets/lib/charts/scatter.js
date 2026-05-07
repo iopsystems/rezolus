@@ -471,18 +471,36 @@ function toggleSpectrum(chart, kind) {
     chart.configureChartByType();
 }
 
-// Align the controls' left edge with the chart grid's left edge (the
-// inner plot canvas, not the y-axis label gutter). The grid rect is
-// only available after echarts has laid out the chart, and its
-// x-position depends on the rendered y-axis label width — so we query
-// it after each render via the `finished` event and reposition.
+// Position the spectrum controls inside chart.domNode so they:
+//   - hug the chart grid's left edge (so they line up with the inner
+//     plot canvas, not the y-axis label gutter)
+//   - sit on the same vertical row as the right-anchored percentile
+//     legend on wide charts, OR move up to the empty area above the
+//     legend on narrow charts so they don't crowd the legend on
+//     mobile / narrow viewport widths.
+// The grid rect is only available after echarts has laid out the
+// chart, so we query it via the `finished` event and reposition.
+const SPECTRUM_CONTROLS_NARROW_WIDTH = 500;
 function positionControlsAtGridLeft(chart, container) {
     if (!chart.echart) return;
     try {
         const grid = chart.echart.getModel().getComponent('grid');
         const rect = grid?.coordinateSystem?.getRect();
-        if (rect && Number.isFinite(rect.x)) {
-            container.style.left = Math.round(rect.x) + 'px';
+        const chartWidth = chart.echart.getDom?.()?.clientWidth ?? 0;
+        const narrow = chartWidth > 0 && chartWidth < SPECTRUM_CONTROLS_NARROW_WIDTH;
+        if (narrow) {
+            // Narrow chart: stack above the legend on its own line and
+            // align to the right edge so it visually anchors to the
+            // legend's column rather than floating in the left gutter.
+            container.style.top = '28px';
+            container.style.left = 'auto';
+            container.style.right = '12px';
+        } else {
+            container.style.top = '42px';
+            container.style.right = 'auto';
+            if (rect && Number.isFinite(rect.x)) {
+                container.style.left = Math.round(rect.x) + 'px';
+            }
         }
     } catch (_e) {
         // Layout not ready yet — next 'finished' event will retry.
