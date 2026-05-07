@@ -233,29 +233,111 @@ function stringifyWithBigInt(value) {
 
 const ALL_SECTIONS = ['memory', 'rezolus', 'scheduler', 'gpu', 'network', 'blockio', 'softirq', 'syscall', 'cpu', 'overview', 'cgroups'];
 
+// One pool slot: an AsyncDuckDB instance + connection + ViewerSql, with
+// the parquet registered, macros installed, source views created, and the
+// cgroup index seeded for the picked source. All slots share identical
+// state; we just route queries across them for parallelism.
+async function bootWorker(parquetBytes, registered, pickedSource) {
+    const db = await bootDuckDB();
+    // registerFileBuffer transfers ownership of the underlying ArrayBuffer
+    // to the worker (zero-copy). For N pool slots we need N distinct
+    // buffers — caller passes a fresh slice() per worker.
+    await db.registerFileBuffer(registered, new Uint8Array(parquetBytes));
+    const conn = await db.connect();
+    await registerMacros(conn);
+    const { sources, rezolusSources, columnsBySource } = await buildSourceViews(conn, registered);
+    await buildCgroupIndex(conn, registered, pickedSource);
+    return { db, conn, sources, rezolusSources, columnsBySource };
+}
+
+// Round-robin query pool. AsyncDuckDB serialises through one Worker; for
+// real parallelism we spawn N AsyncDuckDB instances with N independent
+// Workers and route queries to whichever is idle.
+//
+// The pool exposes the small subset of viewer-sql calls renderSection
+// uses (`runQuery` / `setSourceRelation` / `setSelectedCgroups` /
+// `rebuildCgroupIndex`); everything else (info, get_section, metadata)
+// is pure DashboardData so we delegate to slot 0 arbitrarily.
+class WorkerPool {
+    constructor(slots, registeredName) {
+        this.slots = slots;          // [{ db, conn, viewer, idle, columnsBySource, ... }]
+        this.registered = registeredName;
+        this.queue = [];             // pending [{ resolve, run }] entries
+        for (const s of slots) s.idle = true;
+    }
+    get viewer() { return this.slots[0].viewer; }
+    get conn() { return this.slots[0].conn; }
+    get columnsBySource() { return this.slots[0].columnsBySource; }
+    _dispatch(slot, run, resolve, reject) {
+        slot.idle = false;
+        Promise.resolve()
+            .then(() => run(slot))
+            .then((v) => { resolve(v); this._release(slot); },
+                  (e) => { reject(e); this._release(slot); });
+    }
+    _release(slot) {
+        const next = this.queue.shift();
+        if (next) this._dispatch(slot, next.run, next.resolve, next.reject);
+        else slot.idle = true;
+    }
+    _enqueue(run) {
+        return new Promise((resolve, reject) => {
+            const free = this.slots.find((s) => s.idle);
+            if (free) this._dispatch(free, run, resolve, reject);
+            else this.queue.push({ run, resolve, reject });
+        });
+    }
+    runQuery(sql, start, end, step) {
+        return this._enqueue((slot) => slot.viewer.query_range(sql, start, end, step));
+    }
+    async setSourceRelation(viewName) {
+        for (const s of this.slots) s.viewer.set_source_relation(viewName);
+    }
+    async setSelectedCgroups(names) {
+        for (const s of this.slots) s.viewer.set_selected_cgroups(names);
+    }
+    async rebuildCgroupIndex(sourcePrefix) {
+        await Promise.all(this.slots.map((s) =>
+            buildCgroupIndex(s.conn, this.registered, sourcePrefix)));
+    }
+    async close() {
+        for (const s of this.slots) {
+            try { await s.conn.close(); } catch {}
+        }
+    }
+}
+
 async function loadParquet(buf, filename) {
     setStatus(`Loading ${filename}…`);
     if (session) {
-        try { await session.conn.close(); } catch {}
+        try { await session.pool?.close(); } catch {}
         session = null;
     }
     // New parquet → fresh cache. The Map's lifetime is tied to a session;
     // there's no in-session invalidation because the source data never
     // mutates while the file is loaded.
     resultCache = new Map();
-    const db = await bootDuckDB();
     const REGISTERED = 'capture.parquet';
     const byteLength = buf.byteLength;
-    await db.registerFileBuffer(REGISTERED, new Uint8Array(buf));
-    const conn = await db.connect();
-    await registerMacros(conn);
-    const metadata = await buildMetadata(conn, filename, REGISTERED);
-    const { sources, rezolusSources, columnsBySource } = await buildSourceViews(conn, REGISTERED);
+    // N = number of parallel workers. registerFileBuffer detaches the
+    // ArrayBuffer it's handed, so each worker needs its own copy. Default
+    // N=4 — laptop browsers handle 4× ~17 MB without strain. Override
+    // via `?workers=N` for experimentation.
+    const wantWorkers = parseInt(new URLSearchParams(location.search).get('workers') ?? '', 10);
+    const N = Number.isFinite(wantWorkers) && wantWorkers >= 1 ? wantWorkers : 4;
 
-    // Default source pick order:
-    //   1. A rezolus-shaped source whose name appears in the filename.
-    //   2. The first rezolus-shaped source.
-    //   3. The first source.
+    // Boot one worker first so we can compute pickedSource from its
+    // schema before the rest are spun up — passing pickedSource into the
+    // remaining workers lets each one build a correctly-scoped cgroup
+    // index in its own bootWorker call (rather than running an extra
+    // rebuildCgroupIndex pass after the fact).
+    // Boot one worker first so we can compute pickedSource from its
+    // schema before the rest are spun up — passing pickedSource into the
+    // remaining workers lets each one build a correctly-scoped cgroup
+    // index in its own bootWorker call.
+    const buf0 = buf.slice();
+    const slot0 = await bootWorker(buf0, REGISTERED, null);
+    const { sources, rezolusSources, columnsBySource } = slot0;
     let pickedSource = null;
     if (sources.length > 0) {
         const fnLower = filename.toLowerCase();
@@ -263,16 +345,37 @@ async function loadParquet(buf, filename) {
             ?? rezolusSources[0]
             ?? sources[0];
     }
-    // Build the cgroup index *after* we know the source — its rows store
-    // unprefixed column names that match the source's aliased view, so it
-    // has to be source-scoped from the start.
-    const cgroupRows = await buildCgroupIndex(conn, REGISTERED, pickedSource);
-    const viewer = new ViewerSql(conn, stringifyWithBigInt(metadata));
-    session = { conn, viewer, metadata, sources, rezolusSources, pickedSource, columnsBySource };
-    window.__viewerSqlSession = session;
-    if (pickedSource) viewer.set_source_relation(viewNameForSource(pickedSource));
+    // The cgroup index for slot0 was built with sourcePrefix=null; rebuild
+    // for the chosen source.
+    if (pickedSource) await buildCgroupIndex(slot0.conn, REGISTERED, pickedSource);
 
-    setStatus(`Loaded ${filename} — ${(byteLength/1024/1024).toFixed(1)} MB, ${Object.keys(metadata.counters).length}c/${Object.keys(metadata.gauges).length}g/${Object.keys(metadata.histograms).length}h, cgroup index: ${cgroupRows.length} rows${sources.length ? `, sources: ${sources.join(', ')} (showing ${pickedSource})` : ''}`, 'loading');
+    // Boot the remaining N-1 workers in parallel.
+    const restSlots = await Promise.all(
+        Array.from({ length: N - 1 }, () => bootWorker(buf.slice(), REGISTERED, pickedSource))
+    );
+    const slots = [slot0, ...restSlots];
+    // Build a metadata object + ViewerSql per slot — viewers can't share
+    // a conn handle, and each one carries its own selected_cgroups /
+    // source_relation refcells that must stay in lockstep.
+    const metadata = await buildMetadata(slot0.conn, filename, REGISTERED);
+    const metaJson = stringifyWithBigInt(metadata);
+    for (const s of slots) {
+        s.viewer = new ViewerSql(s.conn, metaJson);
+        if (pickedSource) s.viewer.set_source_relation(viewNameForSource(pickedSource));
+    }
+    const pool = new WorkerPool(slots, REGISTERED);
+    session = {
+        pool, viewer: pool.viewer, conn: pool.conn,
+        metadata, sources, rezolusSources, pickedSource,
+        columnsBySource,
+    };
+    window.__viewerSqlSession = session;
+    const cgroupRowCount = Number((await slot0.conn.query(`SELECT COUNT(*) AS n FROM _cgroup_index`))
+        .toArray()[0]?.toJSON()?.n ?? 0);
+    const cgroupRows = (await slot0.conn.query(`SELECT name FROM _cgroup_index WHERE name IS NOT NULL`))
+        .toArray().map((r) => r.toJSON());
+
+    setStatus(`Loaded ${filename} — ${(byteLength/1024/1024).toFixed(1)} MB, ${Object.keys(metadata.counters).length}c/${Object.keys(metadata.gauges).length}g/${Object.keys(metadata.histograms).length}h, cgroup index: ${cgroupRowCount} rows${sources.length ? `, sources: ${sources.join(', ')} (showing ${pickedSource})` : ''}, workers: ${N}`, 'loading');
 
     // Build source picker UI (only when multiple sources are present).
     const sourceBar = $('source-bar');
@@ -291,10 +394,11 @@ async function loadParquet(buf, filename) {
         }
         select.onchange = async () => {
             session.pickedSource = select.value;
-            viewer.set_source_relation(viewNameForSource(select.value));
-            // Cgroup index is source-scoped — rebuild when source changes
-            // so cgroup-page SQL JOINs resolve against the new source's view.
-            await buildCgroupIndex(conn, REGISTERED, select.value);
+            // Fan out to every worker — pool.runQuery routes round-robin
+            // and each slot must agree on the source view + cgroup index
+            // before the next batch of queries lands.
+            await pool.setSourceRelation(viewNameForSource(select.value));
+            await pool.rebuildCgroupIndex(select.value);
             const active = document.querySelector('nav button.active');
             if (active) renderSection(active.dataset.section);
         };
@@ -314,9 +418,9 @@ async function loadParquet(buf, filename) {
     }
     if (cgroupNames.length > 0) {
         $('cgroup-bar').style.display = '';
-        sel.onchange = () => {
+        sel.onchange = async () => {
             selectedCgroups = Array.from(sel.selectedOptions).map((o) => o.value);
-            viewer.set_selected_cgroups(selectedCgroups);
+            await pool.setSelectedCgroups(selectedCgroups);
             // Refresh current section if it's cgroups.
             const active = document.querySelector('nav button.active');
             if (active && active.dataset.section === 'cgroups') renderSection('cgroups');
@@ -497,12 +601,12 @@ function cacheKeyFor(sql) {
 
 async function renderSection(sectionKey) {
     if (!session) return;
-    const { viewer, metadata } = session;
+    const { pool, metadata } = session;
     // Bump generation so any in-flight renders from the previous section
     // see a stale `myGen` and bail out before mutating DOM.
     renderGen += 1;
     const myGen = renderGen;
-    const json = viewer.get_section(sectionKey);
+    const json = pool.viewer.get_section(sectionKey);
     const content = $('content');
     if (!json) { content.innerHTML = `<p>section ${sectionKey} not found</p>`; return; }
     const view = JSON.parse(json);
@@ -592,7 +696,7 @@ async function renderSection(sectionKey) {
                 if (cols && sqlReferencesMissingColumn(p.sql_query, cols)) {
                     result = [];
                 } else {
-                    const resp = await viewer.query_range(p.sql_query, startSec, endSec, 1.0);
+                    const resp = await pool.runQuery(p.sql_query, startSec, endSec, 1.0);
                     const parsed = JSON.parse(resp);
                     result = parsed?.data?.result ?? [];
                 }

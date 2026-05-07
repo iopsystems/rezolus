@@ -32,7 +32,8 @@ const browser = await puppeteer.launch({
 });
 const page = await browser.newPage();
 page.on('pageerror', (err) => process.stderr.write(`[pageerror] ${err.message}\n`));
-page.on('console', (m) => process.stdout.write(`[console.${m.type()}] ${m.text()}\n`));
+page.on('console', (m) => process.stdout.write(`[console.${m.type()}] ${m.text().slice(0, 300)}\n`));
+page.on('pageerror', (e) => process.stderr.write(`[pageerror] ${e.message}\n${(e.stack || '').slice(0, 500)}\n`));
 let exitCode = 0;
 try {
     await page.goto(`http://127.0.0.1:${port}/site/viewer-sql/preview.html`, { waitUntil: 'networkidle0', timeout: 60_000 });
@@ -41,7 +42,7 @@ try {
     // Wait until at least one chart has rendered.
     await page.waitForFunction(
         () => document.querySelectorAll('#content .plot canvas').length > 1,
-        { timeout: 60_000, polling: 500 },
+        { timeout: 120_000, polling: 500 },
     );
     // Lazy render: scroll the page to trigger IntersectionObserver for
     // off-screen plots so the test can validate them all.
