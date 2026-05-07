@@ -1,5 +1,6 @@
 import { expandLink, selectButton } from './chart_controls.js';
 import { collectGroupPlots } from './group_utils.js';
+import { ViewerApi } from './viewer_api.js';
 
 const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
     view({ attrs }) {
@@ -322,8 +323,10 @@ const renderCgroupSection = ({
             groups: attrs.groups,
             executeQuery: executePromQLRangeQuery,
             applyResultToPlot: applyResultToPlot,
-            substitutePattern: substituteCgroupPattern,
-            setActiveCgroupPattern: (p) => { setActiveCgroupPattern(p); },
+            // Tell the registry which cgroups are selected; viewer-sql
+            // substitutes `__SELECTED_CGROUPS__` server-side from this
+            // state. No per-plot string rewriting needed.
+            setSelectedCgroups: (names) => ViewerApi.setSelectedCgroups(names),
         }),
         m('div.cgroup-pairs',
             pairs.map((pair) => {

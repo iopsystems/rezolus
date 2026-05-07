@@ -105,6 +105,21 @@ const ViewerApi = {
         registry.init_templates(captureId, templatesJson);
     },
 
+    // Update the selected-cgroup names for a capture. viewer-sql
+    // substitutes `__SELECTED_CGROUPS__` server-side from this state;
+    // SQL plots that reference the placeholder pick up the new
+    // selection on their next fetch (cache key includes selection).
+    setSelectedCgroups(names, captureId = 'baseline') {
+        ensureAttached(captureId);
+        registry.setSelectedCgroups(captureId, names);
+    },
+
+    // Currently-selected cgroups for a capture. Returns a defensive copy.
+    getSelectedCgroups(captureId = 'baseline') {
+        if (!registry?.has(captureId)) return [];
+        return registry.selectedCgroups(captureId);
+    },
+
     regenerateCombined(templatesJson, categoryName) {
         ensureRegistry();
         registry.regenerate_combined(

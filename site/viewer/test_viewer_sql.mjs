@@ -54,12 +54,23 @@ try {
         { waitUntil: 'networkidle0', timeout: 60_000 },
     );
     // Just wait a fixed window for boot + initial renders.
-    await new Promise((r) => setTimeout(r, 15000));
-    const summary = await page.evaluate(() => ({
-        title: document.title,
-        hasContent: !!document.body.textContent && document.body.textContent.length > 0,
-        canvases: document.querySelectorAll('canvas').length,
-    }));
+    await new Promise((r) => setTimeout(r, 12000));
+    // Navigate to cgroups so the selector mounts.
+    await page.evaluate(() => { location.hash = '#/cgroups'; });
+    await new Promise((r) => setTimeout(r, 6000));
+    const summary = await page.evaluate(() => {
+        const cgList = document.querySelector('.cgroup-select');
+        const items = cgList ? cgList.querySelectorAll('.cgroup-select-item') : [];
+        const empty = cgList?.querySelector('.cgroup-select-empty');
+        return {
+            title: document.title,
+            hasContent: !!document.body.textContent && document.body.textContent.length > 0,
+            canvases: document.querySelectorAll('canvas').length,
+            cgroupSelectorMounted: !!cgList,
+            cgroupCount: items.length,
+            cgroupListEmpty: empty?.textContent ?? null,
+        };
+    });
     console.log(JSON.stringify(summary, null, 2));
     if (errors.length > 0) {
         console.log('--- console errors ---');
