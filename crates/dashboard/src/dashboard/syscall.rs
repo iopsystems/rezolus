@@ -19,7 +19,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     overall.plot_promql_with_sql(
         PlotOpts::counter("Overall Rate", "syscall-total", Unit::Rate),
         "sum(irate(syscall[5m]))".to_string(),
-        sql::irate_total("^syscall/[a-z_]+/[0-9]+$"),
+        sql::irate_total("^syscall/[a-z_]+(/[0-9]+)?$"),
     );
     overall.plot_promql_with_sql(
         PlotOpts::histogram_latency("Overall Latency", "syscall-total-latency"),
@@ -53,7 +53,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         sg.plot_promql_with_sql(
             PlotOpts::counter(format!("{op} Rate"), format!("syscall-{op}"), Unit::Rate),
             format!("sum(irate(syscall{{op=\"{op_lower}\"}}[5m]))"),
-            sql::irate_total(&format!("^syscall/{op_lower}/[0-9]+$")),
+            sql::irate_total(&format!("^syscall/{op_lower}(/[0-9]+)?$")),
         );
         sg.plot_promql_with_sql(
             PlotOpts::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency")),

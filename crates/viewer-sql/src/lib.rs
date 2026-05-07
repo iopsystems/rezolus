@@ -144,6 +144,11 @@ pub struct ViewerSql {
     /// `query_range` substitutes them with a SQL list literal built from
     /// this vector.
     selected_cgroups: RefCell<Vec<String>>,
+    /// Override for what `_src` reads from. When set, `query_range` uses
+    /// `SELECT * FROM <this>` instead of `SELECT * FROM
+    /// read_parquet('<parquet_name>')`. Used for multi-source combined
+    /// parquets where the JS host pre-creates per-source aliasing views.
+    source_relation: RefCell<Option<String>>,
 }
 
 #[wasm_bindgen]
@@ -168,7 +173,16 @@ impl ViewerSql {
             cached_bodies: RefCell::new(HashMap::new()),
             alias: None,
             selected_cgroups: RefCell::new(Vec::new()),
+            source_relation: RefCell::new(None),
         })
+    }
+
+    /// Override what `_src` reads from. Pass `None` to revert to the
+    /// default `read_parquet('<parquet_name>')`. Used for multi-source
+    /// combined parquets — the JS host creates a per-source aliasing
+    /// view and points `_src` at it.
+    pub fn set_source_relation(&self, relation: Option<String>) {
+        *self.source_relation.borrow_mut() = relation;
     }
 
     pub fn set_alias(&mut self, alias: Option<String>) {
@@ -329,13 +343,16 @@ impl ViewerSql {
         } else {
             sql
         };
+        let from_clause = match &*self.source_relation.borrow() {
+            Some(rel) => rel.clone(),
+            None => format!("read_parquet('{}')", self.metadata.parquet_name),
+        };
         let wrapped = format!(
             "WITH _src AS ( \
-               SELECT * FROM read_parquet('{parquet}') \
+               SELECT * FROM {from_clause} \
                WHERE timestamp BETWEEN {start_ns} AND {end_ns} \
              ) \
              SELECT * FROM ({user_sql}) ORDER BY t",
-            parquet = self.metadata.parquet_name,
             user_sql = sql,
         );
         match self.query(&wrapped).await {

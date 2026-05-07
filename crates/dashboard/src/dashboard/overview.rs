@@ -126,7 +126,7 @@ pub fn generate(
     total.plot_promql_with_sql(
         PlotOpts::counter("Total", "syscall-total", Unit::Rate),
         "sum(irate(syscall[5m]))".to_string(),
-        sql::irate_total("^syscall/[a-z_]+/[0-9]+$"),
+        sql::irate_total("^syscall/[a-z_]+(/[0-9]+)?$"),
     );
     total.plot_promql_with_sql(
         PlotOpts::histogram_latency("Total", "syscall-total-latency"),
