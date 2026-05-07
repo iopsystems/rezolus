@@ -41,8 +41,9 @@ cargo run -p dashboard -- output_dir/   # write files to directory
 # Developer mode build (serves viewer assets from disk for hot reload)
 cargo build --features developer-mode
 
-# Build the WASM viewer for the static site (outputs to site/viewer/pkg/)
-./crates/viewer/build.sh
+# Build the WASM viewer for the static site (outputs to site/viewer-sql/pkg/).
+# The static viewer at site/viewer/ imports it via a relative path.
+./crates/viewer-sql/build.sh
 ```
 
 ## Running Modes
@@ -141,7 +142,7 @@ Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`
 
 The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It shares the `src/viewer/assets/` frontend (via symlinks) with the server-backed viewer, but loads parquet files directly in the browser through a WASM module.
 
-The WASM crate lives at `crates/viewer/`. It is its own Cargo workspace — it targets `wasm32-unknown-unknown` and has profile settings that differ from the main rezolus binary. Build with `./crates/viewer/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`.
+The WASM crate lives at `crates/viewer-sql/`. It targets `wasm32-unknown-unknown` and runs queries through duckdb-wasm against the loaded parquet (no in-process PromQL engine). Build with `./crates/viewer-sql/build.sh`; output goes to `site/viewer-sql/pkg/` where the frontend imports it as `../viewer-sql/pkg/wasm_viewer_sql.js`. The static viewer at `site/viewer/` boots a `CaptureRegistry` from `site/viewer-sql/lib/duckdb-registry.js` (a JS-side multi-worker pool that mirrors the legacy `WasmCaptureRegistry` surface). The pre-2026 PromQL/metriken-query WASM crate at `crates/viewer/` was retired once every dashboard plot emitted SQL — see `git log --oneline -- crates/viewer` for migration history.
 
 ### Key Dependencies
 

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/dashboard", "crates/systeminfo", "crates/viewer", "crates/viewer-sql"]
+members = [".", "crates/dashboard", "crates/systeminfo", "crates/viewer-sql"]
 exclude = ["xtask"]
 resolver = "2"
 
@@ -143,8 +143,9 @@ debug = true
 lto = true
 codegen-units = 1
 
-# Profile used by crates/viewer/build.sh for the wasm build. Smaller and
-# debuginfo-free so the .wasm artifact stays compact when shipped to browsers.
+# Profile used by crates/viewer-sql/build.sh for the wasm build. Smaller
+# and debuginfo-free so the .wasm artifact stays compact when shipped to
+# browsers.
 [profile.wasm-release]
 inherits = "release"
 opt-level = "s"
