@@ -1,13 +1,21 @@
-// Minimal preview UI for the SQL-backed viewer. Renders every migrated
-// section's plots as ECharts line charts, driven directly by viewer-sql's
-// `query_range`. Not a replacement for the real viewer — that lives in
-// `site/viewer/lib/` and is much more capable (selection, compare, heatmaps,
-// histograms, etc.). This page exists so a human can eyeball that the SQL
-// pipeline works end-to-end against a real parquet.
+// Standalone preview UI for the SQL-backed viewer. Renders every
+// migrated section's plots as ECharts line charts / heatmaps, driven
+// by the `CaptureRegistry` library at `./duckdb-registry.js`. Not a
+// replacement for the real viewer at `site/viewer/` — this exists so a
+// human can eyeball that the SQL pipeline works end-to-end against a
+// real parquet, and so we have a place to iterate on perf experiments.
+//
+// The duckdb / viewer-sql plumbing all lives in `duckdb-registry.js`
+// (CaptureRegistry mirrors the Mithril viewer's WasmCaptureRegistry
+// surface). This file is just UI: DOM, ECharts, and the
+// IntersectionObserver-driven render loop.
 
-import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev45.0/+esm';
-import * as arrow from 'https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm';
-import init, { ViewerSql, pure_sql_macros } from '../pkg/wasm_viewer_sql.js';
+import {
+    CaptureRegistry,
+    partitionPlots,
+    rowsToPerPlotMatrix,
+    wrapWithSrcCte,
+} from './duckdb-registry.js';
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (text, cls = 'loading') => {
@@ -16,406 +24,92 @@ const setStatus = (text, cls = 'loading') => {
     el.textContent = text;
 };
 
-let session = null;
-let selectedCgroups = [];
-// Per-session result cache: key = `${source}|${cgroupsKeyOrEmpty}|${sql}`,
-// value = the parsed Prometheus matrix `data.result` array. Time window
-// isn't keyed because we always use the full file range; revisit when
-// zoom/compare arrives. Cgroup selection only enters the key when the
-// SQL references the `__SELECTED_CGROUPS__` placeholder, so non-cgroup
-// plots correctly hit across selection changes.
-let resultCache = new Map();
+const ALL_SECTIONS = ['memory', 'rezolus', 'scheduler', 'gpu', 'network', 'blockio', 'softirq', 'syscall', 'cpu', 'overview', 'cgroups'];
+const CAPTURE = 'baseline';
+
+// One CaptureRegistry per page. Reused across parquet loads.
+const wantWorkers = parseInt(new URLSearchParams(location.search).get('workers') ?? '', 10);
+const N = Number.isFinite(wantWorkers) && wantWorkers >= 1 ? wantWorkers : 4;
+const registry = new CaptureRegistry({ workersPerCapture: N });
+
 // Bumped each time the user navigates to a different section. Pending
 // async renders compare against this before writing to the DOM, so
 // stale renders from a section the user has navigated away from get
 // dropped silently instead of populating detached chart containers.
 let renderGen = 0;
 
-async function bootDuckDB() {
-    const bundles = duckdb.getJsDelivrBundles();
-    const bundle = await duckdb.selectBundle(bundles);
-    const worker_url = URL.createObjectURL(
-        new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
-    );
-    const worker = new Worker(worker_url);
-    URL.revokeObjectURL(worker_url);
-    const logger = { log: () => {}, info: () => {}, warn: () => {}, error: () => {} };
-    const db = new duckdb.AsyncDuckDB(logger, worker);
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    return db;
-}
-
-async function registerMacros(conn) {
-    const sql = pure_sql_macros();
-    const statements = sql.split(/;\s*$/m).map((s) => s.trim()).filter(Boolean);
-    for (const stmt of statements) await conn.query(stmt);
-}
-
-async function buildMetadata(conn, filename, registeredName) {
-    const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${registeredName}')`);
-    const counters = {}, gauges = {}, histograms = {};
-    for (const row of desc.toArray().map((r) => r.toJSON())) {
-        const name = row.column_name;
-        if (name === 'timestamp' || name === 'duration') continue;
-        const t = String(row.column_type);
-        if (t === 'UBIGINT[]' || t === 'BIGINT[]') histograms[name] = (histograms[name] ?? 0) + 1;
-        else if (t === 'BIGINT' || t === 'INTEGER' || t === 'TINYINT') gauges[name] = (gauges[name] ?? 0) + 1;
-        else if (t === 'UBIGINT' || t === 'UINTEGER' || t === 'UTINYINT') counters[name] = (counters[name] ?? 0) + 1;
-    }
-    const tr = await conn.query(`SELECT min(timestamp)::BIGINT AS lo, max(timestamp)::BIGINT AS hi FROM read_parquet('${registeredName}')`);
-    const trRow = tr.toArray()[0]?.toJSON() ?? {};
-    const lo = trRow.lo == null ? null : BigInt(trRow.lo);
-    const hi = trRow.hi == null ? null : BigInt(trRow.hi);
-    const time_range_ns = lo != null && hi != null ? [lo, hi] : null;
-    let interval_seconds = 1.0;
-    const ts2 = await conn.query(`SELECT timestamp::BIGINT AS t FROM read_parquet('${registeredName}') ORDER BY timestamp LIMIT 2`);
-    const tsRows = ts2.toArray().map((r) => r.toJSON());
-    if (tsRows.length === 2) {
-        interval_seconds = Number(BigInt(tsRows[1].t) - BigInt(tsRows[0].t)) / 1e9;
-    }
-    return {
-        interval_seconds, time_range_ns,
-        source: 'rezolus', version: '', filename,
-        parquet_name: registeredName, counters, gauges, histograms,
-    };
-}
-
-// For multi-source combined parquets (one file produced by `parquet combine`
-// from N sources), all metric columns are prefixed `<source>::`. Build a
-// VIEW per source that aliases its columns back to their unprefixed names —
-// dashboard SQL can then run verbatim against any chosen source's view.
-//
-// Returns the list of detected source prefixes (without the `::`). Empty
-// when the file is single-source (no prefixes).
-async function buildSourceViews(conn, registeredName) {
-    const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${registeredName}')`);
-    const cols = desc.toArray().map((r) => r.toJSON().column_name);
-    const bySource = new Map();
-    for (const c of cols) {
-        const m = c.match(/^([^:]+)::(.+)$/);
-        if (!m) continue;
-        const [, prefix, rest] = m;
-        if (!bySource.has(prefix)) bySource.set(prefix, []);
-        bySource.get(prefix).push({ orig: c, alias: rest });
-    }
-    // columnsBySource: source name → Set of unprefixed column names
-    // available in that source's view. Used by `sqlReferencesMissingColumn`
-    // to short-circuit dashboard queries whose `COLUMNS('regex')` would
-    // resolve empty — DuckDB throws a Binder Error in that case which the
-    // worker logs to console regardless of how the caller handles it.
-    const columnsBySource = new Map();
-    if (bySource.size === 0) {
-        // Single-source file: every parquet column is available unprefixed.
-        columnsBySource.set('', new Set(cols));
-        return { sources: [], rezolusSources: [], columnsBySource };
-    }
-    const sources = [...bySource.keys()].sort();
-    const rezolusSources = sources.filter(
-        (s) => bySource.get(s).some((a) => a.alias === 'memory_total'),
-    );
-    for (const src of sources) {
-        const aliases = bySource.get(src);
-        const q = (s) => '"' + s.replace(/"/g, '""') + '"';
-        const projections = ['timestamp', 'duration']
-            .filter((c) => cols.includes(c))
-            .map((c) => q(c))
-            .concat(aliases.map((a) => `${q(a.orig)} AS ${q(a.alias)}`))
-            .join(', ');
-        const viewName = `_src_${src.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-        await conn.query(`CREATE VIEW ${viewName} AS SELECT ${projections} FROM read_parquet('${registeredName}')`);
-        columnsBySource.set(src, new Set([
-            ...['timestamp', 'duration'].filter((c) => cols.includes(c)),
-            ...aliases.map((a) => a.alias),
-        ]));
-    }
-    return { sources, rezolusSources, columnsBySource };
-}
-
-// Pre-flight check: does any `COLUMNS('regex')` in the SQL match no
-// column in the current source's view? If so, submitting it would throw
-// a Binder Error in the worker and pollute the console even though our
-// Rust-side catch turns it into an empty matrix. We replicate the
-// regex check here so the query never goes to the worker.
-//
-// Limited to `COLUMNS('regex')` patterns since those are the dashboard's
-// runtime schema-resolution mechanism. Bare column refs like
-// `"memory_total"` are stable per parquet and either work for the whole
-// session or fail fast on first use.
-function sqlReferencesMissingColumn(sql, columnSet) {
-    const re = /COLUMNS\('([^']+)'\)/g;
-    let m;
-    while ((m = re.exec(sql)) !== null) {
-        let pattern;
-        try { pattern = new RegExp(m[1]); }
-        catch { continue; } // unparsable — let the worker handle it
-        let any = false;
-        for (const c of columnSet) {
-            if (pattern.test(c)) { any = true; break; }
-        }
-        if (!any) return true;
-    }
-    return false;
-}
-
-function viewNameForSource(src) {
-    return `_src_${src.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-}
-
-// Build (or rebuild) `_cgroup_index` for the currently active source.
-//
-// `sourcePrefix` is the source name (without the `::` separator) for
-// multi-source combined parquets, or `null` for single-source files.
-// When set, the index only contains cgroup columns from that source,
-// and `column_name` stores the *unprefixed* name so it matches the
-// columns in the source's aliased `_src_<src>` view (which dashboard
-// SQL JOINs against in the cgroup helpers).
-async function buildCgroupIndex(conn, registeredName, sourcePrefix = null) {
-    const sch = await conn.query(`SELECT value::VARCHAR AS v FROM parquet_kv_metadata('${registeredName}') WHERE key::VARCHAR = 'ARROW:schema'`);
-    const rows = sch.toArray();
-    await conn.query(`DROP TABLE IF EXISTS _cgroup_index`);
-    await conn.query(`CREATE TABLE _cgroup_index(metric VARCHAR, column_name VARCHAR, name VARCHAR, id VARCHAR, labels MAP(VARCHAR, VARCHAR))`);
-    if (rows.length === 0) return [];
-    const b64 = rows[0].toJSON().v;
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const reader = await arrow.RecordBatchReader.from(bytes);
-    await reader.open();
-    const prefixWithSep = sourcePrefix ? `${sourcePrefix}::` : null;
-    const cgroupRows = [];
-    for (const f of reader.schema.fields) {
-        const md = f.metadata;
-        if (!md || !md.get) continue;
-        const metric = md.get('metric');
-        if (!metric || !metric.startsWith('cgroup_')) continue;
-        // Strip the source prefix to match the alias used in `_src_<src>`.
-        // Skip columns from other sources entirely.
-        let columnName = f.name;
-        if (prefixWithSep) {
-            if (!columnName.startsWith(prefixWithSep)) continue;
-            columnName = columnName.slice(prefixWithSep.length);
-        }
-        const name = md.has('name') ? md.get('name') : null;
-        const id = md.has('id') ? md.get('id') : null;
-        const labels = {};
-        for (const [k, v] of md.entries()) {
-            if (['metric', 'metric_type', 'unit', 'name', 'id'].includes(k)) continue;
-            labels[k] = v;
-        }
-        cgroupRows.push({ metric, column_name: columnName, name, id, labels });
-    }
-    if (cgroupRows.length === 0) return [];
-    const esc = (s) => "'" + String(s).replace(/'/g, "''") + "'";
-    const mapLit = (m) => {
-        const keys = Object.keys(m);
-        if (keys.length === 0) return 'MAP{}';
-        return 'MAP{' + keys.map((k) => `${esc(k)}:${esc(m[k])}`).join(',') + '}';
-    };
-    const valueRows = cgroupRows
-        .map((r) => `(${esc(r.metric)},${esc(r.column_name)},${r.name == null ? 'NULL' : esc(r.name)},${r.id == null ? 'NULL' : esc(r.id)},${mapLit(r.labels)})`)
-        .join(',');
-    await conn.query(`INSERT INTO _cgroup_index VALUES ${valueRows}`);
-    return cgroupRows;
-}
-
-function stringifyWithBigInt(value) {
-    if (value === null) return 'null';
-    if (typeof value === 'bigint') return value.toString();
-    if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
-    if (Array.isArray(value)) return '[' + value.map(stringifyWithBigInt).join(',') + ']';
-    if (typeof value === 'object') {
-        const parts = [];
-        for (const k of Object.keys(value)) parts.push(JSON.stringify(k) + ':' + stringifyWithBigInt(value[k]));
-        return '{' + parts.join(',') + '}';
-    }
-    throw new Error('cannot stringify ' + typeof value);
-}
-
-const ALL_SECTIONS = ['memory', 'rezolus', 'scheduler', 'gpu', 'network', 'blockio', 'softirq', 'syscall', 'cpu', 'overview', 'cgroups'];
-
-// One pool slot: an AsyncDuckDB instance + connection + ViewerSql, with
-// the parquet registered, macros installed, source views created, and the
-// cgroup index seeded for the picked source. All slots share identical
-// state; we just route queries across them for parallelism.
-async function bootWorker(parquetBytes, registered, pickedSource) {
-    const db = await bootDuckDB();
-    // registerFileBuffer transfers ownership of the underlying ArrayBuffer
-    // to the worker (zero-copy). For N pool slots we need N distinct
-    // buffers — caller passes a fresh slice() per worker.
-    await db.registerFileBuffer(registered, new Uint8Array(parquetBytes));
-    const conn = await db.connect();
-    await registerMacros(conn);
-    const { sources, rezolusSources, columnsBySource } = await buildSourceViews(conn, registered);
-    await buildCgroupIndex(conn, registered, pickedSource);
-    return { db, conn, sources, rezolusSources, columnsBySource };
-}
-
-// Round-robin query pool. AsyncDuckDB serialises through one Worker; for
-// real parallelism we spawn N AsyncDuckDB instances with N independent
-// Workers and route queries to whichever is idle.
-//
-// The pool exposes the small subset of viewer-sql calls renderSection
-// uses (`runQuery` / `setSourceRelation` / `setSelectedCgroups` /
-// `rebuildCgroupIndex`); everything else (info, get_section, metadata)
-// is pure DashboardData so we delegate to slot 0 arbitrarily.
-class WorkerPool {
-    constructor(slots, registeredName) {
-        this.slots = slots;          // [{ db, conn, viewer, idle, columnsBySource, ... }]
-        this.registered = registeredName;
-        this.queue = [];             // pending [{ resolve, run }] entries
-        for (const s of slots) s.idle = true;
-    }
-    get viewer() { return this.slots[0].viewer; }
-    get conn() { return this.slots[0].conn; }
-    get columnsBySource() { return this.slots[0].columnsBySource; }
-    _dispatch(slot, run, resolve, reject) {
-        slot.idle = false;
-        Promise.resolve()
-            .then(() => run(slot))
-            .then((v) => { resolve(v); this._release(slot); },
-                  (e) => { reject(e); this._release(slot); });
-    }
-    _release(slot) {
-        const next = this.queue.shift();
-        if (next) this._dispatch(slot, next.run, next.resolve, next.reject);
-        else slot.idle = true;
-    }
-    _enqueue(run) {
-        return new Promise((resolve, reject) => {
-            const free = this.slots.find((s) => s.idle);
-            if (free) this._dispatch(free, run, resolve, reject);
-            else this.queue.push({ run, resolve, reject });
-        });
-    }
-    runQuery(sql, start, end, step) {
-        return this._enqueue((slot) => slot.viewer.query_range(sql, start, end, step));
-    }
-    // Submit a fully-formed SQL string and get back rows-as-objects JSON.
-    // Used by the combined-query path: callers wrap their SQL with the
-    // `WITH _src AS (…)` CTE manually and demux multi-column results in
-    // JS. Bypasses query_range's Prometheus-matrix shaper since the
-    // combined SQL projects N value columns instead of one.
-    runRawQuery(sql) {
-        return this._enqueue((slot) => slot.viewer.query_sql(sql));
-    }
-    async setSourceRelation(viewName) {
-        for (const s of this.slots) s.viewer.set_source_relation(viewName);
-    }
-    async setSelectedCgroups(names) {
-        for (const s of this.slots) s.viewer.set_selected_cgroups(names);
-    }
-    async rebuildCgroupIndex(sourcePrefix) {
-        await Promise.all(this.slots.map((s) =>
-            buildCgroupIndex(s.conn, this.registered, sourcePrefix)));
-    }
-    async close() {
-        for (const s of this.slots) {
-            try { await s.conn.close(); } catch {}
-        }
-    }
-}
+let loaded = false;     // true once a parquet is attached to the registry
 
 async function loadParquet(buf, filename) {
     setStatus(`Loading ${filename}…`);
-    if (session) {
-        try { await session.pool?.close(); } catch {}
-        session = null;
+    if (loaded) {
+        await registry.detach(CAPTURE);
+        loaded = false;
     }
-    // New parquet → fresh cache. The Map's lifetime is tied to a session;
-    // there's no in-session invalidation because the source data never
-    // mutates while the file is loaded.
-    resultCache = new Map();
-    const REGISTERED = 'capture.parquet';
     const byteLength = buf.byteLength;
-    // N = number of parallel workers. registerFileBuffer detaches the
-    // ArrayBuffer it's handed, so each worker needs its own copy. Default
-    // N=4 — laptop browsers handle 4× ~17 MB without strain. Override
-    // via `?workers=N` for experimentation.
-    const wantWorkers = parseInt(new URLSearchParams(location.search).get('workers') ?? '', 10);
-    const N = Number.isFinite(wantWorkers) && wantWorkers >= 1 ? wantWorkers : 4;
-
-    // Boot one worker first so we can compute pickedSource from its
-    // schema before the rest are spun up — passing pickedSource into the
-    // remaining workers lets each one build a correctly-scoped cgroup
-    // index in its own bootWorker call (rather than running an extra
-    // rebuildCgroupIndex pass after the fact).
-    // Boot one worker first so we can compute pickedSource from its
-    // schema before the rest are spun up — passing pickedSource into the
-    // remaining workers lets each one build a correctly-scoped cgroup
-    // index in its own bootWorker call.
-    const buf0 = buf.slice();
-    const slot0 = await bootWorker(buf0, REGISTERED, null);
-    const { sources, rezolusSources, columnsBySource } = slot0;
-    let pickedSource = null;
-    if (sources.length > 0) {
-        const fnLower = filename.toLowerCase();
-        pickedSource = rezolusSources.find((s) => fnLower.includes(s.toLowerCase()))
-            ?? rezolusSources[0]
-            ?? sources[0];
-    }
-    // The cgroup index for slot0 was built with sourcePrefix=null; rebuild
-    // for the chosen source.
-    if (pickedSource) await buildCgroupIndex(slot0.conn, REGISTERED, pickedSource);
-
-    // Boot the remaining N-1 workers in parallel.
-    const restSlots = await Promise.all(
-        Array.from({ length: N - 1 }, () => bootWorker(buf.slice(), REGISTERED, pickedSource))
-    );
-    const slots = [slot0, ...restSlots];
-    // Build a metadata object + ViewerSql per slot — viewers can't share
-    // a conn handle, and each one carries its own selected_cgroups /
-    // source_relation refcells that must stay in lockstep.
-    const metadata = await buildMetadata(slot0.conn, filename, REGISTERED);
-    const metaJson = stringifyWithBigInt(metadata);
-    for (const s of slots) {
-        s.viewer = new ViewerSql(s.conn, metaJson);
-        if (pickedSource) s.viewer.set_source_relation(viewNameForSource(pickedSource));
-    }
-    const pool = new WorkerPool(slots, REGISTERED);
-    session = {
-        pool, viewer: pool.viewer, conn: pool.conn,
-        metadata, sources, rezolusSources, pickedSource,
-        columnsBySource,
+    await registry.attach(CAPTURE, buf, filename);
+    loaded = true;
+    // Expose for test harnesses (test_preview.mjs etc.).
+    window.__viewerSqlSession = {
+        registry,
+        capture: CAPTURE,
+        viewer: registry.session(CAPTURE).pool.viewer,
+        conn: registry.session(CAPTURE).pool.conn,
+        get pickedSource() { return registry.pickedSource(CAPTURE); },
+        get sources() { return registry.sources(CAPTURE); },
+        get rezolusSources() { return registry.rezolusSources(CAPTURE); },
+        get columnsBySource() { return registry.columnsBySource(CAPTURE); },
     };
-    window.__viewerSqlSession = session;
-    const cgroupRowCount = Number((await slot0.conn.query(`SELECT COUNT(*) AS n FROM _cgroup_index`))
-        .toArray()[0]?.toJSON()?.n ?? 0);
-    const cgroupRows = (await slot0.conn.query(`SELECT name FROM _cgroup_index WHERE name IS NOT NULL`))
-        .toArray().map((r) => r.toJSON());
 
-    setStatus(`Loaded ${filename} — ${(byteLength/1024/1024).toFixed(1)} MB, ${Object.keys(metadata.counters).length}c/${Object.keys(metadata.gauges).length}g/${Object.keys(metadata.histograms).length}h, cgroup index: ${cgroupRowCount} rows${sources.length ? `, sources: ${sources.join(', ')} (showing ${pickedSource})` : ''}, workers: ${N}`, 'loading');
+    const meta = registry.session(CAPTURE).metadata;
+    const sources = registry.sources(CAPTURE);
+    const pickedSource = registry.pickedSource(CAPTURE);
+    const cgroupRowCount = Number(
+        (await registry.session(CAPTURE).pool.conn.query(`SELECT COUNT(*) AS n FROM _cgroup_index`))
+            .toArray()[0]?.toJSON()?.n ?? 0,
+    );
+    const cgroupRows = (await registry.session(CAPTURE).pool.conn.query(
+        `SELECT name FROM _cgroup_index WHERE name IS NOT NULL`,
+    )).toArray().map((r) => r.toJSON());
 
-    // Build source picker UI (only when multiple sources are present).
+    setStatus(
+        `Loaded ${filename} — ${(byteLength/1024/1024).toFixed(1)} MB, `
+        + `${Object.keys(meta.counters).length}c/${Object.keys(meta.gauges).length}g/`
+        + `${Object.keys(meta.histograms).length}h, cgroup index: ${cgroupRowCount} rows`
+        + `${sources.length ? `, sources: ${sources.join(', ')} (showing ${pickedSource})` : ''}`
+        + `, workers: ${N}`,
+        'loading',
+    );
+
+    buildSourcePicker(sources, pickedSource);
+    buildCgroupPicker(cgroupRows);
+    buildSectionNav();
+}
+
+function buildSourcePicker(sources, pickedSource) {
     const sourceBar = $('source-bar');
-    if (sources.length > 0) {
-        sourceBar.style.display = '';
-        sourceBar.innerHTML = '';
-        const label = document.createElement('label');
-        label.textContent = 'Source:';
-        sourceBar.appendChild(label);
-        const select = document.createElement('select');
-        for (const s of sources) {
-            const opt = document.createElement('option');
-            opt.value = s; opt.textContent = s;
-            if (s === pickedSource) opt.selected = true;
-            select.appendChild(opt);
-        }
-        select.onchange = async () => {
-            session.pickedSource = select.value;
-            // Fan out to every worker — pool.runQuery routes round-robin
-            // and each slot must agree on the source view + cgroup index
-            // before the next batch of queries lands.
-            await pool.setSourceRelation(viewNameForSource(select.value));
-            await pool.rebuildCgroupIndex(select.value);
-            const active = document.querySelector('nav button.active');
-            if (active) renderSection(active.dataset.section);
-        };
-        sourceBar.appendChild(select);
-    } else {
-        sourceBar.style.display = 'none';
+    if (sources.length === 0) { sourceBar.style.display = 'none'; return; }
+    sourceBar.style.display = '';
+    sourceBar.innerHTML = '';
+    const label = document.createElement('label');
+    label.textContent = 'Source:';
+    sourceBar.appendChild(label);
+    const select = document.createElement('select');
+    for (const s of sources) {
+        const opt = document.createElement('option');
+        opt.value = s; opt.textContent = s;
+        if (s === pickedSource) opt.selected = true;
+        select.appendChild(opt);
     }
+    select.onchange = async () => {
+        await registry.setSource(CAPTURE, select.value);
+        const active = document.querySelector('nav button.active');
+        if (active) renderSection(active.dataset.section);
+    };
+    sourceBar.appendChild(select);
+}
 
-    // Populate cgroup selection UI from the index.
+function buildCgroupPicker(cgroupRows) {
     const cgroupNames = [...new Set(cgroupRows.map((r) => r.name).filter(Boolean))].sort();
     const sel = $('cgroup-select');
     sel.innerHTML = '';
@@ -426,16 +120,16 @@ async function loadParquet(buf, filename) {
     }
     if (cgroupNames.length > 0) {
         $('cgroup-bar').style.display = '';
-        sel.onchange = async () => {
-            selectedCgroups = Array.from(sel.selectedOptions).map((o) => o.value);
-            await pool.setSelectedCgroups(selectedCgroups);
-            // Refresh current section if it's cgroups.
+        sel.onchange = () => {
+            const names = Array.from(sel.selectedOptions).map((o) => o.value);
+            registry.setSelectedCgroups(CAPTURE, names);
             const active = document.querySelector('nav button.active');
             if (active && active.dataset.section === 'cgroups') renderSection('cgroups');
         };
     }
+}
 
-    // Build the section nav.
+function buildSectionNav() {
     const list = $('section-list');
     list.innerHTML = '';
     for (const s of ALL_SECTIONS) {
@@ -449,9 +143,10 @@ async function loadParquet(buf, filename) {
         };
         list.appendChild(b);
     }
-    // Auto-render the first section.
     list.firstChild?.click();
 }
+
+// ─── Chart renderers (UI-side) ─────────────────────────────────────
 
 function makeLineChart(container, series, isPercent) {
     const chart = echarts.init(container, 'dark', { renderer: 'canvas' });
@@ -468,9 +163,8 @@ function makeLineChart(container, series, isPercent) {
         },
         yAxis: {
             type: 'value',
-            // Don't use `scale: true` for non-percentage axes — when the
-            // values are constant (e.g. memory total), min == max and the
-            // axis collapses to nothing, so no line is drawn.
+            // No `scale: true` for non-percentage axes — when values are
+            // constant min == max and the axis collapses to nothing.
             min: isPercent ? 0 : null,
             max: isPercent ? 1 : null,
             axisLabel: { color: '#888', fontSize: 9 },
@@ -489,15 +183,11 @@ function makeLineChart(container, series, isPercent) {
     return chart;
 }
 
-// Heatmap: per-(time, lane) intensity. `lanes` is the categorical Y axis
-// (sorted CPU ids, sorted percentile labels, etc.). `data` is a flat array
-// of [timeIdx, laneIdx, value] triples.
-//
-// `logScale=true` switches the colour mapping to log10(value+1). Latency
-// histograms span orders of magnitude (median ~20µs vs p9999 ~100ms), and
-// a linear scale collapses 99% of cells into the floor colour. We apply
-// the log transform to the data itself rather than ECharts' visualMap log
-// option since ECharts' built-in log mode misbehaves at the v=0 boundary.
+// `logScale=true` switches the colour mapping to log10(value+1).
+// Latency histograms span orders of magnitude (median ~20µs vs p9999
+// ~100ms), and a linear scale collapses 99% of cells into the floor
+// colour. We apply the log transform to the data itself rather than
+// ECharts' visualMap log option since that misbehaves at v=0.
 function makeHeatmap(container, timestamps, lanes, data, logScale = false) {
     const chart = echarts.init(container, 'dark', { renderer: 'canvas' });
     if (window.ResizeObserver) new ResizeObserver(() => chart.resize()).observe(container);
@@ -511,7 +201,6 @@ function makeHeatmap(container, timestamps, lanes, data, logScale = false) {
     }
     if (!isFinite(vMin)) { vMin = 0; vMax = 1; }
     if (vMin === vMax) vMax = vMin + 1;
-    data = xformed;
     chart.setOption({
         backgroundColor: 'transparent',
         animation: false,
@@ -539,24 +228,16 @@ function makeHeatmap(container, timestamps, lanes, data, logScale = false) {
             inRange: { color: ['#0a0e14', '#1f3a52', '#3066be', '#5fb6ff', '#bce0ff', '#ffffff'] },
         },
         tooltip: { trigger: 'item', formatter: (p) => `${lanes[p.value[1]]} @ ${timestamps[p.value[0]] ? new Date(timestamps[p.value[0]] * 1000).toLocaleTimeString('en-US') : ''}<br>value: ${p.value[2]}` },
-        series: [{ type: 'heatmap', data, progressive: 1000 }],
+        series: [{ type: 'heatmap', data: xformed, progressive: 1000 }],
     });
     return chart;
 }
 
-// Decide which renderer to use for a result.
-//
-// - Histograms emit one series per quantile with `metric.quantile` set
-//   → render as 5-row heatmap (quantile on Y, intensity = value).
-// - Per-id plots (id label, multiple series) → heatmap with id on Y.
-// - Otherwise → line chart with one line per series.
+// Decide which renderer to use for a Prometheus matrix result.
 function renderResult(container, result, isPercent) {
     const allHaveQuantile = result.length > 0 && result.every((s) => s.metric?.quantile != null);
     const allHaveId = result.length > 0 && result.every((s) => s.metric?.id != null);
     if (allHaveQuantile && result.length >= 3) {
-        // Quantile heatmaps almost always span orders of magnitude
-        // (latency / IO size distributions); log scale prevents the
-        // colour gradient from collapsing into the floor.
         return renderHeatmap(container, result, 'quantile', (a, b) => parseFloat(b) - parseFloat(a), true);
     }
     if (allHaveId && result.length >= 4) {
@@ -572,9 +253,6 @@ function renderResult(container, result, isPercent) {
     return makeLineChart(container, series, isPercent);
 }
 
-// Convert a Prometheus matrix result into heatmap triples + axes.
-// `laneKey`: which metric label to use as the Y axis (e.g. 'id', 'quantile').
-// `laneSort`: sort comparator for unique lane values.
 function renderHeatmap(container, result, laneKey, laneSort, logScale = false) {
     const tSet = new Set();
     for (const s of result) for (const [t] of (s.values ?? [])) tSet.add(t);
@@ -597,141 +275,33 @@ function renderHeatmap(container, result, laneKey, laneSort, logScale = false) {
     return makeHeatmap(container, timestamps, lanes, data, logScale);
 }
 
-// Build the cache key for a given plot's SQL. Time window isn't included
-// (assumed constant per session). Cgroup selection only enters the key for
-// SQL strings that reference `__SELECTED_CGROUPS__` — most plots don't,
-// and over-keying would needlessly miss when the user changes selection.
-function cacheKeyFor(sql) {
-    const sourceKey = session?.pickedSource ?? '';
-    const cg = sql.includes('__SELECTED_CGROUPS__') ? selectedCgroups.join(',') : '';
-    return `${sourceKey}|${cg}|${sql}`;
-}
+// ─── Render a section: build DOM, fire batched + per-plot queries ───
 
-// Combined-query plumbing: detect plots whose SQL fits one of a few
-// well-known shapes, group them, and submit a single query that produces
-// all their value columns in one round-trip. Each worker round-trip costs
-// ~50–230 ms of overhead before it does any real work; sections like
-// memory (7 simple-gauge plots × 230 ms) get a 5–6× win from this alone.
-//
-// Histograms, per-id heatmaps, and complex per-id ratio plots fall into
-// "loners" — their SQL is per-plot bespoke and the inner work doesn't
-// share usefully across plots, so they keep using `pool.runQuery` for
-// the existing one-plot-per-query path.
-
-// Match `SELECT timestamp::DOUBLE/1e9 AS t, <expr> AS v FROM _src` (with
-// any whitespace). The expression captured by group 1 is the per-plot
-// projection — it can reference columns directly (`"memory_total"::DOUBLE`)
-// or do arithmetic (`"memory_total" - "memory_available"`).
-const SIMPLE_GAUGE_RE = /^\s*SELECT\s+timestamp::DOUBLE\s*\/\s*1e9\s+AS\s+t\s*,\s*([\s\S]+?)\s+AS\s+v\s+FROM\s+_src\s*$/;
-
-// Match `irate_total(re)` SQL: a single CTE summing a regex-matched set
-// of columns, then `irate_1s` over the result. Group 1 is the inner regex
-// (we replicate the CTE projection N times in the combined form).
-const IRATE_TOTAL_RE = /^\s*WITH\s+agg\s+AS\s+\(\s*SELECT\s+timestamp\s*,\s*list_sum\(\[\*COLUMNS\('([^']+)'\)\]::UBIGINT\[\]\)\s+AS\s+s\s+FROM\s+_src\s*\)\s+SELECT\s+timestamp::DOUBLE\s*\/\s*1e9\s+AS\s+t\s*,\s*irate_1s\(s\s*,\s*timestamp\)\s+AS\s+v\s+FROM\s+agg\s*$/;
-
-// Inspect each plot's SQL and partition into batches + loners. Returns
-// `{ batches: [{ kind, plots: Plot[], indices: number[], sqlBody, demuxFn }],
-//    loners: Plot[] }` where indices[i] is the value-column index for
-// plots[i] in the combined result, and demuxFn(rows, idx) → per-plot
-// matrix-shape result array.
-function partitionPlots(plots) {
-    const gauges = [];   // { plot, expr }
-    const irates = [];   // { plot, regex }
-    const loners = [];
-    for (const p of plots) {
-        if (!p.sql_query) { loners.push(p); continue; }
-        const sql = p.sql_query;
-        // The cgroup placeholder makes a plot per-source-AND-per-selection;
-        // exclude from batching since that complicates cache keying.
-        if (sql.includes('__SELECTED_CGROUPS__')) { loners.push(p); continue; }
-        let m;
-        if ((m = sql.match(SIMPLE_GAUGE_RE))) {
-            gauges.push({ plot: p, expr: m[1] });
-        } else if ((m = sql.match(IRATE_TOTAL_RE))) {
-            irates.push({ plot: p, regex: m[1] });
-        } else {
-            loners.push(p);
-        }
+const el = (tag, props = {}, children = []) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+        if (k === 'class') e.className = v;
+        else if (k === 'text') e.textContent = v;
+        else if (k === 'style') e.setAttribute('style', v);
+        else e.setAttribute(k, v);
     }
-    const batches = [];
-    if (gauges.length >= 2) {
-        const projs = gauges.map((g, i) => `(${g.expr}) AS v_${i}`).join(', ');
-        batches.push({
-            kind: 'gauge',
-            plots: gauges.map((g) => g.plot),
-            sqlBody: `SELECT timestamp::DOUBLE/1e9 AS t, ${projs} FROM _src`,
-            demuxFn: rowsToPerPlotMatrix,
-        });
-    } else {
-        for (const g of gauges) loners.push(g.plot);
-    }
-    if (irates.length >= 2) {
-        const sums = irates.map((r, i) =>
-            `list_sum([*COLUMNS('${r.regex}')]::UBIGINT[]) AS s_${i}`).join(', ');
-        // Cast each irate_1s output to DOUBLE so int128 deltas don't reach
-        // JS as arrow Int128 objects — `query_sql`'s BigInt-only JSON
-        // replacer doesn't catch those, leading to doubly-quoted strings
-        // in the row JSON. The per-plot `query_range` path side-steps this
-        // by stringifying every cell via JS `String()`, but the combined
-        // path uses `query_sql` for the multi-column row shape.
-        const rates = irates.map((_, i) => `irate_1s(s_${i}, timestamp)::DOUBLE AS v_${i}`).join(', ');
-        batches.push({
-            kind: 'irate_total',
-            plots: irates.map((r) => r.plot),
-            sqlBody:
-                `WITH agg AS (SELECT timestamp, ${sums} FROM _src) ` +
-                `SELECT timestamp::DOUBLE/1e9 AS t, ${rates} FROM agg`,
-            demuxFn: rowsToPerPlotMatrix,
-        });
-    } else {
-        for (const r of irates) loners.push(r.plot);
-    }
-    return { batches, loners };
-}
-
-// Convert rows-as-objects (from `pool.runRawQuery`) into the
-// Prometheus-matrix shape the existing `renderResult` expects. We keep
-// only column `v_${idx}` per plot, matching the per-plot path's
-// `[{metric:{}, values: [[t, v_string], ...]}]` output.
-function rowsToPerPlotMatrix(rows, idx) {
-    const values = [];
-    for (const r of rows) {
-        const v = r[`v_${idx}`];
-        if (v == null) continue;
-        // String() handles BigInt + numbers + nulls uniformly to match
-        // arrow_table_to_prom_matrix' string-typed value cells.
-        values.push([Number(r.t), String(v)]);
-    }
-    if (values.length === 0) return [];
-    return [{ metric: {}, values }];
-}
-
-// Wrap a body that references `_src` with the same time-windowed CTE
-// `viewer-sql`'s `query_range` would apply, so we can run it via
-// `pool.runRawQuery` (which bypasses query_range's matrix shaper).
-function wrapWithSrcCte(body, startSec, endSec, sourcePrefix) {
-    const fromClause = sourcePrefix
-        ? viewNameForSource(sourcePrefix)
-        : "read_parquet('capture.parquet')";
-    const startNs = BigInt(Math.floor(startSec * 1e9));
-    const endNs = BigInt(Math.floor(endSec * 1e9));
-    return `WITH _src AS (SELECT * FROM ${fromClause} `
-        + `WHERE timestamp BETWEEN ${startNs} AND ${endNs}) `
-        + `SELECT * FROM (${body}) ORDER BY t`;
-}
+    for (const c of children) if (c) e.appendChild(c);
+    return e;
+};
 
 async function renderSection(sectionKey) {
-    if (!session) return;
-    const { pool, metadata } = session;
-    // Bump generation so any in-flight renders from the previous section
-    // see a stale `myGen` and bail out before mutating DOM.
+    if (!loaded) return;
+    // Bump generation so any in-flight renders from the previous
+    // section see a stale `myGen` and bail out before mutating DOM.
     renderGen += 1;
     const myGen = renderGen;
+    const session = registry.session(CAPTURE);
+    const pool = session.pool;
     const json = pool.viewer.get_section(sectionKey);
     const content = $('content');
     if (!json) { content.innerHTML = `<p>section ${sectionKey} not found</p>`; return; }
     const view = JSON.parse(json);
-    const tr = metadata.time_range_ns;
+    const tr = session.metadata.time_range_ns;
     const startSec = tr ? Number(BigInt(tr[0])) / 1e9 : 0;
     const endSec = tr ? Number(BigInt(tr[1])) / 1e9 : 0;
     content.innerHTML = `<h2>${sectionKey}</h2>`;
@@ -740,22 +310,10 @@ async function renderSection(sectionKey) {
         content.innerHTML += '<p style="color:#888">(empty section)</p>';
         return;
     }
-    // Pass 1: build all the DOM up front. This guarantees every .chart
-    // container has been laid out by the browser before we init ECharts
-    // against it (otherwise the first few charts measure 0×0 because Promise
-    // microtasks resolve before paint).
+
+    // Pass 1: build all the DOM up front so each .chart container has
+    // been laid out by the browser before we init ECharts against it.
     const renderQueue = [];
-    const el = (tag, props = {}, children = []) => {
-        const e = document.createElement(tag);
-        for (const [k, v] of Object.entries(props)) {
-            if (k === 'class') e.className = v;
-            else if (k === 'text') e.textContent = v;
-            else if (k === 'style') e.setAttribute('style', v);
-            else e.setAttribute(k, v);
-        }
-        for (const c of children) if (c) e.appendChild(c);
-        return e;
-    };
     for (const g of groups) {
         const gEl = el('div', { class: 'group' }, [
             el('h3', { text: g.name ?? '' }),
@@ -781,29 +339,17 @@ async function renderSection(sectionKey) {
         }
         content.appendChild(gEl);
     }
-    // Pass 2: lazy render via IntersectionObserver. Each plot's query
-    // fires only when the plot is within ~one screen of the viewport
-    // (rootMargin 300px). The duckdb worker serialises queries; the
-    // result cache (keyed by source + cgroup-selection-when-relevant +
-    // sql) makes revisiting a section after a navigation away O(1) per
-    // chart instead of re-running every query.
-    //
-    // Renders compare against `myGen` before mutating the DOM — if the
-    // user has navigated to a different section since this render was
-    // queued, the chartEl is detached and writing to it is wasted work.
+
+    // Pass 2: lazy render via IntersectionObserver. Charts render in
+    // viewport-distance order; the cache keeps revisits O(1).
     await new Promise((r) => requestAnimationFrame(r));
     await new Promise((r) => requestAnimationFrame(r));
 
-    // Group plots that share a structural SQL shape and combine each
-    // group into one query. plotToBatch maps a plot ref → its batch +
-    // index in that batch. Each batch lazily fires its combined query
-    // on first render request; subsequent renders in the same batch
-    // share the in-flight Promise.
     const sectionPlots = renderQueue.map((q) => q.p);
     const { batches } = partitionPlots(sectionPlots);
     const plotToBatch = new Map();
     for (const b of batches) {
-        b.promise = null; // lazy
+        b.promise = null;
         for (let i = 0; i < b.plots.length; i++) {
             plotToBatch.set(b.plots[i], { batch: b, idx: i });
         }
@@ -811,15 +357,11 @@ async function renderSection(sectionKey) {
 
     const fireBatch = (b) => {
         if (b.promise) return b.promise;
-        // Pre-flight: if the combined SQL has any COLUMNS('regex') that
-        // resolves empty in the active source, every plot in the batch
-        // would be no-data — short-circuit to avoid the worker error log.
-        const cols = session.columnsBySource?.get(session.pickedSource ?? '');
-        if (cols && sqlReferencesMissingColumn(b.sqlBody, cols)) {
+        if (registry.preflightSkip(CAPTURE, b.sqlBody)) {
             b.promise = Promise.resolve([]);
         } else {
-            const wrapped = wrapWithSrcCte(b.sqlBody, startSec, endSec, session.pickedSource);
-            b.promise = pool.runRawQuery(wrapped).then((s) => JSON.parse(s));
+            const wrapped = wrapWithSrcCte(b.sqlBody, startSec, endSec, registry.pickedSource(CAPTURE));
+            b.promise = registry.query_sql_rows(CAPTURE, wrapped).then((s) => JSON.parse(s));
         }
         return b.promise;
     };
@@ -836,25 +378,23 @@ async function renderSection(sectionKey) {
             return;
         }
         try {
-            const key = cacheKeyFor(p.sql_query);
-            let result = resultCache.get(key);
+            const key = registry.cacheKey(CAPTURE, p.sql_query);
+            let result = registry.cachedResult(CAPTURE, key);
             if (result === undefined) {
                 const batchEntry = plotToBatch.get(p);
                 if (batchEntry) {
                     const rows = await fireBatch(batchEntry.batch);
                     result = batchEntry.batch.demuxFn(rows, batchEntry.idx);
                 } else {
-                    // Loner: keep the existing per-plot path.
-                    const cols = session.columnsBySource?.get(session.pickedSource ?? '');
-                    if (cols && sqlReferencesMissingColumn(p.sql_query, cols)) {
+                    if (registry.preflightSkip(CAPTURE, p.sql_query)) {
                         result = [];
                     } else {
-                        const resp = await pool.runQuery(p.sql_query, startSec, endSec, 1.0);
+                        const resp = await registry.query_range(CAPTURE, p.sql_query, startSec, endSec, 1.0);
                         const parsed = JSON.parse(resp);
                         result = parsed?.data?.result ?? [];
                     }
                 }
-                resultCache.set(key, result);
+                registry.setCached(CAPTURE, key, result);
             }
             if (myGen !== renderGen) return;
             if (result.length === 0) {
@@ -878,13 +418,13 @@ async function renderSection(sectionKey) {
 
     const queueByDiv = new Map(renderQueue.map((q) => [q.div, q]));
     const observer = new IntersectionObserver((entries) => {
-        // If the section has changed, stop observing and don't fire renders.
         if (myGen !== renderGen) { observer.disconnect(); return; }
-        // Each plot's query takes ~230 ms (gauge) to ~1.1 s (histogram)
-        // and they serialise through one worker. When multiple plots
-        // intersect at once we sort by distance from the viewport's
-        // vertical centre so the most-visible plots fire first — the
-        // user sees on-screen content populate before below-the-fold.
+        // Each plot's query takes ~50–1100 ms and they serialise through
+        // one worker (we have N parallel, but a single user-paced scroll
+        // typically saturates only one). Sort by distance to the
+        // viewport's vertical centre so the most-visible plots fire
+        // first — the user sees on-screen content populate before
+        // below-the-fold.
         const visible = entries.filter((e) => e.isIntersecting);
         const cy = window.innerHeight / 2;
         visible.sort((a, b) => {
@@ -901,8 +441,6 @@ async function renderSection(sectionKey) {
 }
 
 async function main() {
-    setStatus('Initializing wasm…');
-    await init();
     setStatus('Ready — drop a parquet file or click "demo".', 'loading');
 
     $('file').addEventListener('change', async (ev) => {
