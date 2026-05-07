@@ -344,17 +344,26 @@ function makeLineChart(container, series, isPercent) {
 // Heatmap: per-(time, lane) intensity. `lanes` is the categorical Y axis
 // (sorted CPU ids, sorted percentile labels, etc.). `data` is a flat array
 // of [timeIdx, laneIdx, value] triples.
-function makeHeatmap(container, timestamps, lanes, data) {
+//
+// `logScale=true` switches the colour mapping to log10(value+1). Latency
+// histograms span orders of magnitude (median ~20µs vs p9999 ~100ms), and
+// a linear scale collapses 99% of cells into the floor colour. We apply
+// the log transform to the data itself rather than ECharts' visualMap log
+// option since ECharts' built-in log mode misbehaves at the v=0 boundary.
+function makeHeatmap(container, timestamps, lanes, data, logScale = false) {
     const chart = echarts.init(container, 'dark', { renderer: 'canvas' });
     if (window.ResizeObserver) new ResizeObserver(() => chart.resize()).observe(container);
+    const xform = logScale ? ((v) => Math.log10(Math.max(0, v) + 1)) : ((v) => v);
+    const xformed = data.map(([t, l, v]) => [t, l, xform(v)]);
     let vMin = Infinity, vMax = -Infinity;
-    for (const [, , v] of data) {
+    for (const [, , v] of xformed) {
         if (v == null || Number.isNaN(v)) continue;
         if (v < vMin) vMin = v;
         if (v > vMax) vMax = v;
     }
     if (!isFinite(vMin)) { vMin = 0; vMax = 1; }
     if (vMin === vMax) vMax = vMin + 1;
+    data = xformed;
     chart.setOption({
         backgroundColor: 'transparent',
         animation: false,
@@ -397,10 +406,13 @@ function renderResult(container, result, isPercent) {
     const allHaveQuantile = result.length > 0 && result.every((s) => s.metric?.quantile != null);
     const allHaveId = result.length > 0 && result.every((s) => s.metric?.id != null);
     if (allHaveQuantile && result.length >= 3) {
-        return renderHeatmap(container, result, 'quantile', (a, b) => parseFloat(b) - parseFloat(a));
+        // Quantile heatmaps almost always span orders of magnitude
+        // (latency / IO size distributions); log scale prevents the
+        // colour gradient from collapsing into the floor.
+        return renderHeatmap(container, result, 'quantile', (a, b) => parseFloat(b) - parseFloat(a), true);
     }
     if (allHaveId && result.length >= 4) {
-        return renderHeatmap(container, result, 'id', (a, b) => parseInt(a, 10) - parseInt(b, 10));
+        return renderHeatmap(container, result, 'id', (a, b) => parseInt(a, 10) - parseInt(b, 10), false);
     }
     const series = result.map((s, i) => {
         const labelStr = Object.entries(s.metric ?? {}).map(([k, v]) => `${k}=${v}`).join(' ');
@@ -415,7 +427,7 @@ function renderResult(container, result, isPercent) {
 // Convert a Prometheus matrix result into heatmap triples + axes.
 // `laneKey`: which metric label to use as the Y axis (e.g. 'id', 'quantile').
 // `laneSort`: sort comparator for unique lane values.
-function renderHeatmap(container, result, laneKey, laneSort) {
+function renderHeatmap(container, result, laneKey, laneSort, logScale = false) {
     const tSet = new Set();
     for (const s of result) for (const [t] of (s.values ?? [])) tSet.add(t);
     const timestamps = Array.from(tSet).sort((a, b) => a - b);
@@ -434,7 +446,7 @@ function renderHeatmap(container, result, laneKey, laneSort) {
             data.push([ti, li, num]);
         }
     }
-    return makeHeatmap(container, timestamps, lanes, data);
+    return makeHeatmap(container, timestamps, lanes, data, logScale);
 }
 
 // Build the cache key for a given plot's SQL. Time window isn't included

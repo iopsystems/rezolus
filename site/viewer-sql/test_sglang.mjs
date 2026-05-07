@@ -51,6 +51,24 @@ try {
         { timeout: 60_000, polling: 1000 },
     ).catch(() => console.log('[harness] no charts in 60s'));
     await new Promise((r) => setTimeout(r, 3000));
+    // Navigate to /network and scroll so the lazy renderer fires for every plot.
+    await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('nav button[data-section]'))
+            .find((b) => b.dataset.section === 'network');
+        btn?.click();
+    });
+    await new Promise((r) => setTimeout(r, 1000));
+    await page.evaluate(async () => {
+        const step = window.innerHeight * 0.8;
+        for (let y = 0; y < document.body.scrollHeight; y += step) {
+            window.scrollTo(0, y);
+            await new Promise((r) => setTimeout(r, 200));
+        }
+        window.scrollTo(0, 0);
+    });
+    await new Promise((r) => setTimeout(r, 5000));
+    await page.screenshot({ path: '/tmp/preview-sglang-network.png', fullPage: true });
+    console.log('screenshot: /tmp/preview-sglang-network.png');
     // Probe the cgroup index now scoped to the picked source.
     const idxProbe = await page.evaluate(async () => {
         const conn = window.__viewerSqlSession.conn;
