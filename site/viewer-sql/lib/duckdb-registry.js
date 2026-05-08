@@ -95,6 +95,14 @@ async function buildMetadata(conn, filename, registeredName) {
 // Build a VIEW per source that aliases its columns back to their
 // unprefixed names — dashboard SQL can then run verbatim against any
 // chosen source's view.
+// True when `t` is a non-list DuckDB type (e.g. UBIGINT, BIGINT,
+// DOUBLE) — we only synthesize `:src<i>` per-source aliases for
+// scalar metrics. List columns (histogram bucket arrays) go through
+// `h2_combine` for cross-source aggregation, not `:src<i>`.
+function isScalarType(t) {
+    return typeof t === 'string' && !t.endsWith('[]');
+}
+
 async function buildSourceViews(conn, registeredName) {
     const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${registeredName}')`);
     const descRows = desc.toArray().map((r) => r.toJSON());
@@ -119,19 +127,32 @@ async function buildSourceViews(conn, registeredName) {
         (s) => bySource.get(s).some((a) => a.alias === 'memory_total'),
     );
     const q = (s) => '"' + s.replace(/"/g, '""') + '"';
+    // Per-source view: each prefixed column is exposed under its bare
+    // metric name AND a `:src0` synthetic alias. The `:src0` form lets
+    // multi-source-aware emitters (avg/max/min over per-(source,id))
+    // use a single regex that works in both single-source mode (one
+    // entry per id) and combined mode (N entries per id, see below).
     for (const src of sources) {
         const aliases = bySource.get(src);
+        const baseProjections = aliases.map((a) => `${q(a.orig)} AS ${q(a.alias)}`);
+        const srcProjections = aliases
+            .filter((a) => isScalarType(colType.get(a.orig)))
+            .map((a) => `${q(a.orig)} AS ${q(`${a.alias}:src0`)}`);
         const projections = ['timestamp', 'duration']
             .filter((c) => cols.includes(c))
             .map((c) => q(c))
-            .concat(aliases.map((a) => `${q(a.orig)} AS ${q(a.alias)}`))
+            .concat(baseProjections, srcProjections)
             .join(', ');
         const viewName = viewNameForSource(src);
         await conn.query(`CREATE VIEW ${viewName} AS SELECT ${projections} FROM read_parquet('${registeredName}')`);
-        columnsBySource.set(src, new Set([
+        const colSet = new Set([
             ...['timestamp', 'duration'].filter((c) => cols.includes(c)),
             ...aliases.map((a) => a.alias),
-        ]));
+        ]);
+        for (const a of aliases) {
+            if (isScalarType(colType.get(a.orig))) colSet.add(`${a.alias}:src0`);
+        }
+        columnsBySource.set(src, colSet);
     }
     // Multi-rezolus aggregation. The legacy PromQL evaluator's Tsdb
     // stores every source's series under a flat metric → series map,
@@ -152,25 +173,43 @@ async function buildSourceViews(conn, registeredName) {
             .filter((c) => cols.includes(c))
             .map((c) => q(c));
         for (const metric of [...allMetrics].sort()) {
+            // Collect (source-index, prefixed-column) for sources that
+            // have this metric. The source index is its position in
+            // `rezolusSources`, used as the `:src<i>` synthetic suffix.
             const contribs = [];
             let isList = false;
-            for (const src of rezolusSources) {
+            for (let i = 0; i < rezolusSources.length; i++) {
+                const src = rezolusSources[i];
                 const a = bySource.get(src).find((x) => x.alias === metric);
                 if (!a) continue;
-                contribs.push(a.orig);
+                contribs.push({ srcIdx: i, prefixed: a.orig });
                 const t = colType.get(a.orig) ?? '';
                 if (t.endsWith('[]')) isList = true;
             }
+            // Sum form: drives `sum(...)` / `sum by (id) (...)` /
+            // `histogram_quantiles(...)` emitters.
             if (contribs.length === 1) {
-                projections.push(`${q(contribs[0])} AS ${q(metric)}`);
+                projections.push(`${q(contribs[0].prefixed)} AS ${q(metric)}`);
             } else if (isList) {
                 const parts = contribs
-                    .map((c) => `COALESCE(${q(c)}, []::UBIGINT[])`)
+                    .map((c) => `COALESCE(${q(c.prefixed)}, []::UBIGINT[])`)
                     .join(', ');
                 projections.push(`h2_combine([${parts}]) AS ${q(metric)}`);
             } else {
-                const parts = contribs.map((c) => `COALESCE(${q(c)}, 0)`).join(' + ');
+                const parts = contribs.map((c) => `COALESCE(${q(c.prefixed)}, 0)`).join(' + ');
                 projections.push(`(${parts}) AS ${q(metric)}`);
+            }
+            // Per-source `:src<i>` aliases for scalar columns: drive
+            // multi-source-aware avg/max/min emitters (PromQL's
+            // `avg(...)` / `max(...)` / `min(...)` aggregate over every
+            // series, so we need each per-(source,id) value as its own
+            // entry in the COLUMNS('regex') match).
+            if (!isList) {
+                for (const c of contribs) {
+                    projections.push(
+                        `${q(c.prefixed)} AS ${q(`${metric}:src${c.srcIdx}`)}`,
+                    );
+                }
             }
         }
         combinedView = '_src_rezolus_combined';

@@ -1,14 +1,33 @@
 use crate::data::DashboardData;
 use crate::plot::*;
 
-// Helper: gauge avg across columns matching a regex, divided by `divisor`.
-// Used for the many `avg(gpu_X) / 100` percentages.
+// Helper: gauge avg across all (source, id) entries matching `re`,
+// divided by `divisor`. Used for the many `avg(gpu_X) / 100`
+// percentages.
+//
+// `re` matches per-id columns like `gpu_utilization/0`; the SQL
+// rewrites it to `gpu_utilization/0:src[0-9]+$` so the same template
+// works in single-source mode (one `:src0` alias per id, identical
+// to the base column) and combined-rezolus mode (one `:src<i>` alias
+// per (source, id), exposed by the registry's combined view). PromQL
+// `avg(metric)` averages over every series — i.e. every (source, id)
+// pair — and the `:src<i>` aliasing is what lets us do that here.
 fn gauge_avg_div(re: &str, divisor: f64) -> String {
+    let by_src = re_with_src_suffix(re);
     format!(
         r#"SELECT timestamp::DOUBLE/1e9 AS t,
-                  list_avg([*COLUMNS('{re}')]::BIGINT[]) / {divisor:.1} AS v
+                  list_avg([*COLUMNS('{by_src}')]::BIGINT[]) / {divisor:.1} AS v
            FROM _src"#
     )
+}
+
+// Append `:src[0-9]+$` to a per-id regex, replacing the trailing `$`
+// anchor. The registry's source views expose `<col>:src<i>` aliases;
+// matching against the suffixed form picks up every (source, id)
+// entry.
+fn re_with_src_suffix(re: &str) -> String {
+    let trimmed = re.strip_suffix('$').unwrap_or(re);
+    format!("{trimmed}:src[0-9]+$")
 }
 
 // Helper: per-id fan-out via UNPIVOT, returning gauge value / divisor.
@@ -334,8 +353,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     temps.plot_promql_with_sql(
         PlotOpts::gauge("Max (°C)", "temp-max", Unit::Count).with_axis_label("°C"),
         "max(gpu_temperature)".to_string(),
+        // Use the `:src<i>` aliases so multi-rezolus parquets see
+        // each (source, id) value separately and `list_max` gives the
+        // global max — a sum-combined `gpu_temperature/0` would land
+        // 2× too high.
         r#"SELECT timestamp::DOUBLE/1e9 AS t,
-                  list_max([*COLUMNS('^gpu_temperature/[0-9]+$')]::BIGINT[])::DOUBLE AS v
+                  list_max([*COLUMNS('^gpu_temperature/[0-9]+:src[0-9]+$')]::BIGINT[])::DOUBLE AS v
            FROM _src"#.to_string(),
     );
 
