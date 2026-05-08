@@ -24,7 +24,7 @@ pub fn generate(
         sql::concept_total(
             "cpu_busy_pct",
             &[
-                ("usage", Arg::Sum("^cpu_usage(/.+)?$")),
+                ("usage", Arg::Sum("^cpu_usage(/[^:]+)?$")),
                 ("cores", Arg::Col("cpu_cores")),
             ],
         ),
@@ -55,7 +55,7 @@ pub fn generate(
         "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
         format!(
             "WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
-            sql::irate_total("^network_bytes/transmit(/.+)?$")
+            sql::irate_total("^network_bytes/transmit(/[^:]+)?$")
         ),
     );
     bandwidth.plot_promql_with_sql(
@@ -68,7 +68,7 @@ pub fn generate(
         "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         format!(
             "WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
-            sql::irate_total("^network_bytes/receive(/.+)?$")
+            sql::irate_total("^network_bytes/receive(/[^:]+)?$")
         ),
     );
 
@@ -77,12 +77,12 @@ pub fn generate(
     packets.plot_promql_with_sql(
         PlotOpts::counter("Transmit Packets", "network-transmit-packets", Unit::Rate),
         "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
-        sql::irate_total("^network_packets/transmit(/.+)?$"),
+        sql::irate_total("^network_packets/transmit(/[^:]+)?$"),
     );
     packets.plot_promql_with_sql(
         PlotOpts::counter("Receive Packets", "network-receive-packets", Unit::Rate),
         "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
-        sql::irate_total("^network_packets/receive(/.+)?$"),
+        sql::irate_total("^network_packets/receive(/[^:]+)?$"),
     );
 
     let tcp = network.subgroup("TCP Latency");
@@ -218,12 +218,12 @@ pub fn generate(
     read.plot_promql_with_sql(
         PlotOpts::counter("Read Throughput", "blockio-throughput-read", Unit::Datarate),
         "sum(irate(blockio_bytes{op=\"read\"}[5m]))".to_string(),
-        sql::irate_total("^blockio_bytes/read(/.+)?$"),
+        sql::irate_total("^blockio_bytes/read(/[^:]+)?$"),
     );
     read.plot_promql_with_sql(
         PlotOpts::counter("Read IOPS", "blockio-iops-read", Unit::Count),
         "sum(irate(blockio_operations{op=\"read\"}[5m]))".to_string(),
-        sql::irate_total("^blockio_operations/read(/.+)?$"),
+        sql::irate_total("^blockio_operations/read(/[^:]+)?$"),
     );
 
     let write = blockio.subgroup("Write");
@@ -235,12 +235,12 @@ pub fn generate(
             Unit::Datarate,
         ),
         "sum(irate(blockio_bytes{op=\"write\"}[5m]))".to_string(),
-        sql::irate_total("^blockio_bytes/write(/.+)?$"),
+        sql::irate_total("^blockio_bytes/write(/[^:]+)?$"),
     );
     write.plot_promql_with_sql(
         PlotOpts::counter("Write IOPS", "blockio-iops-write", Unit::Count),
         "sum(irate(blockio_operations{op=\"write\"}[5m]))".to_string(),
-        sql::irate_total("^blockio_operations/write(/.+)?$"),
+        sql::irate_total("^blockio_operations/write(/[^:]+)?$"),
     );
 
     view.group(blockio);

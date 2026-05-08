@@ -24,7 +24,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         sql::concept_total(
             "cpu_busy_pct",
             &[
-                ("usage", Arg::Sum("^cpu_usage(/.+)?$")),
+                ("usage", Arg::Sum("^cpu_usage(/[^:]+)?$")),
                 ("cores", Arg::Col("cpu_cores")),
             ],
         ),
@@ -274,15 +274,15 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     misses.plot_promql_with_sql(
         PlotOpts::counter("Misses", "dtlb-misses", Unit::Rate),
         "sum(irate(cpu_dtlb_miss[5m]))".to_string(),
-        sql::irate_total("^cpu_dtlb_miss(/.+)?$"),
+        sql::irate_total("^cpu_dtlb_miss(/[^:]+)?$"),
     );
     misses.plot_promql_with_sql(
         PlotOpts::counter("Misses (Per-CPU)", "dtlb-misses-per-cpu", Unit::Rate),
         "sum by (id) (irate(cpu_dtlb_miss[5m]))".to_string(),
         // Aggregate across op variants per id, then irate.
         r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_dtlb_miss(/.+)?$') FROM _src)
-                  ON COLUMNS('^cpu_dtlb_miss(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_dtlb_miss(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^cpu_dtlb_miss(/[^:]+)?$') INTO NAME col VALUE v
            ),
            by_id AS (
               SELECT timestamp,
@@ -308,7 +308,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         sql::concept_total(
             "dtlb_mpki",
             &[
-                ("misses",       Arg::Sum("^cpu_dtlb_miss(/.+)?$")),
+                ("misses",       Arg::Sum("^cpu_dtlb_miss(/[^:]+)?$")),
                 ("instructions", Arg::Sum("^cpu_instructions/[0-9]+$")),
             ],
         ),
@@ -322,8 +322,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         // `ratio_by_id` helper assumes 1:1 metric-to-id mapping, which
         // doesn't hold when miss has 3 variant columns per id), then ratio.
         r#"WITH miss_unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_dtlb_miss(/.+)?$') FROM _src)
-                  ON COLUMNS('^cpu_dtlb_miss(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_dtlb_miss(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^cpu_dtlb_miss(/[^:]+)?$') INTO NAME col VALUE v
            ),
            miss_by_id AS (
               SELECT timestamp, regexp_extract(col, '/([0-9]+)$', 1) AS id, SUM(v) AS s
@@ -404,15 +404,15 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     total.plot_promql_with_sql(
         PlotOpts::counter("Total", "tlb-total", Unit::Rate),
         "sum(irate(cpu_tlb_flush[5m]))".to_string(),
-        sql::irate_total("^cpu_tlb_flush(/.+)?$"),
+        sql::irate_total("^cpu_tlb_flush(/[^:]+)?$"),
     );
     total.plot_promql_with_sql(
         PlotOpts::counter("Total (Per-CPU)", "tlb-total-per-cpu", Unit::Rate),
         "sum by (id) (irate(cpu_tlb_flush[5m]))".to_string(),
         // Same aggregate-by-id-then-rate pattern as softirq's total per-CPU.
         r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_tlb_flush(/.+)?$') FROM _src)
-                  ON COLUMNS('^cpu_tlb_flush(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_tlb_flush(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^cpu_tlb_flush(/[^:]+)?$') INTO NAME col VALUE v
            ),
            by_id AS (
               SELECT timestamp,

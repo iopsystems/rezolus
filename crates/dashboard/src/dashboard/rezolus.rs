@@ -20,7 +20,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         // then divide by 1e9 (PromQL counter is in nanoseconds).
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^rezolus_cpu_usage(/.+)?$')]::UBIGINT[]) AS s
+                     list_sum([*COLUMNS('^rezolus_cpu_usage(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) / 1e9 AS v FROM agg"#.to_string(),
@@ -29,7 +29,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         PlotOpts::gauge("Memory (RSS)", "memory", Unit::Bytes),
         "sum(rezolus_memory_usage_resident_set_size)".to_string(),
         r#"SELECT timestamp::DOUBLE/1e9 AS t,
-                  list_sum([*COLUMNS('^rezolus_memory_usage_resident_set_size(/.+)?$')]::BIGINT[])::DOUBLE AS v
+                  list_sum([*COLUMNS('^rezolus_memory_usage_resident_set_size(/[^:]+)?$')]::BIGINT[])::DOUBLE AS v
            FROM _src"#.to_string(),
     );
 
@@ -68,7 +68,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         "sum(irate(rezolus_bpf_run_time[5m])) / 1000000000".to_string(),
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^rezolus_bpf_run_time(/.+)?$')]::UBIGINT[]) AS s
+                     list_sum([*COLUMNS('^rezolus_bpf_run_time(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) / 1e9 AS v FROM agg"#.to_string(),

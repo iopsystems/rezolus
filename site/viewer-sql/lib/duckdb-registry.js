@@ -103,30 +103,144 @@ function isScalarType(t) {
     return typeof t === 'string' && !t.endsWith('[]');
 }
 
+// "Infrastructure" labels — Arrow field metadata keys that don't
+// participate in the canonical column name (they describe where the
+// value came from rather than which series it belongs to).
+const NON_VALUE_METADATA_KEYS = new Set([
+    'metric', 'metric_type', 'unit',
+    'endpoint', 'instance', 'node', 'source',
+    'grouping_power', 'max_value_power',
+]);
+
+// Resolve a parquet field to the column name the dashboard SQL would
+// reference. For named-column parquets the column name is already
+// canonical (`network_bytes/receive`, `cpu_usage/user/0`, …); pass it
+// through. For numeric-encoded parquets the column name is just an
+// ordinal (`117`) and the canonical identity lives in the field's
+// Arrow metadata — rebuild the name from `metric` + value-label
+// values. The order of value labels is metric-specific (e.g.
+// `cpu_usage/<state>/<id>`); we sort alphabetically, which agrees
+// with the named-column convention for every metric in our demo set
+// that has 0 or 1 value labels. Multi-label metrics in numeric-encoded
+// parquets remain a known limitation.
+function canonicalAlias(colName, restAfterPrefix, metricName, metricType, fieldMetadata) {
+    if (!metricName) return restAfterPrefix;
+    // Column-name canonical: starts with `metric/`, or equals `metric`,
+    // or equals `metric:buckets`. Trust it.
+    if (
+        restAfterPrefix === metricName
+        || restAfterPrefix === `${metricName}:buckets`
+        || restAfterPrefix.startsWith(`${metricName}/`)
+    ) {
+        return restAfterPrefix;
+    }
+    const valueLabels = [];
+    for (const [k, v] of fieldMetadata.entries()) {
+        if (NON_VALUE_METADATA_KEYS.has(k)) continue;
+        valueLabels.push([k, v]);
+    }
+    valueLabels.sort((a, b) => a[0].localeCompare(b[0]));
+    let name = metricName;
+    for (const [, v] of valueLabels) name += `/${v}`;
+    if (metricType === 'histogram') name += ':buckets';
+    return name;
+}
+
+// Read the parquet's Arrow schema and return Map<column_name,
+// {metric, metric_type, metadata}> for every field that carries a
+// `metric` metadata key. Used by `buildSourceViews` to canonicalise
+// numeric-encoded column aliases.
+async function readFieldMetadata(conn, registeredName) {
+    const sch = await conn.query(
+        `SELECT value::VARCHAR AS v FROM parquet_kv_metadata('${registeredName}') WHERE key::VARCHAR = 'ARROW:schema'`,
+    );
+    const rows = sch.toArray();
+    const out = new Map();
+    if (rows.length === 0) return out;
+    const b64 = rows[0].toJSON().v;
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const reader = await arrow.RecordBatchReader.from(bytes);
+    await reader.open();
+    for (const f of reader.schema.fields) {
+        const md = f.metadata;
+        if (!md || !md.get) continue;
+        const metric = md.get('metric');
+        if (!metric) continue;
+        out.set(f.name, {
+            metric,
+            metric_type: md.get('metric_type') ?? '',
+            metadata: md,
+        });
+    }
+    return out;
+}
+
 async function buildSourceViews(conn, registeredName) {
     const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${registeredName}')`);
     const descRows = desc.toArray().map((r) => r.toJSON());
     const cols = descRows.map((r) => r.column_name);
     const colType = new Map();
     for (const r of descRows) colType.set(r.column_name, String(r.column_type));
+    const fieldMeta = await readFieldMetadata(conn, registeredName);
     const bySource = new Map();
+    const aliasSeen = new Map(); // src → Set<alias>, for dedup
     for (const c of cols) {
         const m = c.match(/^([^:]+)::(.+)$/);
         if (!m) continue;
         const [, prefix, rest] = m;
-        if (!bySource.has(prefix)) bySource.set(prefix, []);
-        bySource.get(prefix).push({ orig: c, alias: rest });
+        const meta = fieldMeta.get(c);
+        const alias = meta
+            ? canonicalAlias(c, rest, meta.metric, meta.metric_type, meta.metadata)
+            : rest;
+        if (!bySource.has(prefix)) {
+            bySource.set(prefix, []);
+            aliasSeen.set(prefix, new Set());
+        }
+        // Skip duplicate alias within a source — if two parquet columns
+        // resolve to the same canonical name (would be a parquet
+        // authoring bug), keep the first occurrence so CREATE VIEW
+        // doesn't error on duplicate output column names.
+        if (aliasSeen.get(prefix).has(alias)) continue;
+        aliasSeen.get(prefix).add(alias);
+        bySource.get(prefix).push({ orig: c, alias });
     }
     const columnsBySource = new Map();
+    const q = (s0) => '"' + s0.replace(/"/g, '""') + '"';
     if (bySource.size === 0) {
-        columnsBySource.set('', new Set(cols));
-        return { sources: [], rezolusSources: [], columnsBySource, combinedView: null };
+        // Single-source parquet — no `::` prefixes. Build a synthetic
+        // `_src_default` view that exposes every column plus `:src0`
+        // aliases for scalar columns, so the multi-source-aware
+        // avg/max/min emitters (which match `:src[0-9]+$`) work the
+        // same way as in per-source views.
+        const projections = cols.map((c) => q(c));
+        for (const c of cols) {
+            if (c === 'timestamp' || c === 'duration') continue;
+            if (!isScalarType(colType.get(c))) continue;
+            projections.push(`${q(c)} AS ${q(`${c}:src0`)}`);
+        }
+        await conn.query(
+            `CREATE VIEW _src_default AS SELECT ${projections.join(', ')} FROM read_parquet('${registeredName}')`,
+        );
+        const colSet = new Set(cols);
+        for (const c of cols) {
+            if (c === 'timestamp' || c === 'duration') continue;
+            if (isScalarType(colType.get(c))) colSet.add(`${c}:src0`);
+        }
+        columnsBySource.set('_src_default', colSet);
+        return {
+            sources: [],
+            rezolusSources: [],
+            columnsBySource,
+            combinedView: null,
+            defaultView: '_src_default',
+        };
     }
     const sources = [...bySource.keys()].sort();
     const rezolusSources = sources.filter(
         (s) => bySource.get(s).some((a) => a.alias === 'memory_total'),
     );
-    const q = (s) => '"' + s.replace(/"/g, '""') + '"';
     // Per-source view: each prefixed column is exposed under its bare
     // metric name AND a `:src0` synthetic alias. The `:src0` form lets
     // multi-source-aware emitters (avg/max/min over per-(source,id))
@@ -221,7 +335,7 @@ async function buildSourceViews(conn, registeredName) {
             ...allMetrics,
         ]));
     }
-    return { sources, rezolusSources, columnsBySource, combinedView };
+    return { sources, rezolusSources, columnsBySource, combinedView, defaultView: null };
 }
 
 export function viewNameForSource(src) {
@@ -322,17 +436,20 @@ async function bootSlot(parquetBytes, registered, pickedSource) {
     await db.registerFileBuffer(registered, new Uint8Array(parquetBytes));
     const conn = await db.connect();
     await registerMacros(conn);
-    const { sources, rezolusSources, columnsBySource, combinedView } =
+    const { sources, rezolusSources, columnsBySource, combinedView, defaultView } =
         await buildSourceViews(conn, registered);
     // The cgroup index needs to know which source prefix(es) to strip
     // when materialising column_name. For the combined-rezolus view
     // we union cgroup metadata from every rezolus source so all
-    // selectable cgroups land in the index.
-    const cgroupPrefix = pickedSource === combinedView
-        ? rezolusSources
-        : pickedSource;
+    // selectable cgroups land in the index. For `_src_default`
+    // (single-source parquets) the parquet's columns aren't prefixed,
+    // so no stripping is needed.
+    let cgroupPrefix;
+    if (pickedSource === combinedView) cgroupPrefix = rezolusSources;
+    else if (pickedSource === defaultView) cgroupPrefix = null;
+    else cgroupPrefix = pickedSource;
     await buildCgroupIndex(conn, registered, cgroupPrefix);
-    return { db, conn, sources, rezolusSources, columnsBySource, combinedView };
+    return { db, conn, sources, rezolusSources, columnsBySource, combinedView, defaultView };
 }
 
 // Round-robin query pool. AsyncDuckDB serialises through one Worker; for
@@ -506,7 +623,7 @@ export function wrapWithSrcCte(body, startSec, endSec, sourcePrefix) {
 const REGISTERED_NAME = 'capture.parquet';
 
 class CaptureSession {
-    constructor({ pool, metadata, sources, rezolusSources, columnsBySource, pickedSource, combinedView }) {
+    constructor({ pool, metadata, sources, rezolusSources, columnsBySource, pickedSource, combinedView, defaultView }) {
         this.pool = pool;
         this.metadata = metadata;
         this.sources = sources;
@@ -514,6 +631,7 @@ class CaptureSession {
         this.columnsBySource = columnsBySource;
         this.pickedSource = pickedSource;
         this.combinedView = combinedView;
+        this.defaultView = defaultView;
         // Per-session result cache: key = `${source}|${cgroupsKey}|${sql}`,
         // value = parsed Prometheus matrix `data.result` array. Time
         // window isn't keyed because it's constant per session today;
@@ -536,13 +654,14 @@ class CaptureSession {
     }
     async setSource(sourceName) {
         this.pickedSource = sourceName;
-        const rel = sourceName === this.combinedView
-            ? this.combinedView
+        const rel = (sourceName === this.combinedView || sourceName === this.defaultView)
+            ? sourceName
             : viewNameForSource(sourceName);
         this.pool.setSourceRelation(rel);
-        const cgPrefix = sourceName === this.combinedView
-            ? this.rezolusSources
-            : sourceName;
+        let cgPrefix;
+        if (sourceName === this.combinedView) cgPrefix = this.rezolusSources;
+        else if (sourceName === this.defaultView) cgPrefix = null;
+        else cgPrefix = sourceName;
         await this.pool.rebuildCgroupIndex(cgPrefix);
         // Cache entries from the previous source are still valid (key
         // includes source), no flush needed.
@@ -580,13 +699,16 @@ export class CaptureRegistry {
         // into the remaining workers lets each one build a correctly-
         // scoped cgroup index in its own bootSlot call.
         const slot0 = await bootSlot(bytes.slice(), REGISTERED_NAME, null);
-        const { sources, rezolusSources, columnsBySource, combinedView } = slot0;
+        const { sources, rezolusSources, columnsBySource, combinedView, defaultView } = slot0;
         // Source picker:
         //   - 2+ rezolus sources → use the combined view so SQL queries
         //     match the legacy PromQL evaluator's cross-source aggregation.
         //   - exactly 1 rezolus source → use that source's view (filename
         //     hint is moot when there's only one).
         //   - non-rezolus multi-source → filename hint, fallback to first.
+        //   - single-source (no `::` prefixes) → `_src_default` view
+        //     so multi-source-aware avg/max/min emitters still find
+        //     `:src0` aliases.
         let pickedSource = null;
         if (combinedView) {
             pickedSource = combinedView;
@@ -595,11 +717,14 @@ export class CaptureRegistry {
             pickedSource = rezolusSources.find((s) => fnLower.includes(s.toLowerCase()))
                 ?? rezolusSources[0]
                 ?? sources[0];
+        } else if (defaultView) {
+            pickedSource = defaultView;
         }
         if (pickedSource) {
-            const cgPrefix = pickedSource === combinedView
-                ? rezolusSources
-                : pickedSource;
+            let cgPrefix;
+            if (pickedSource === combinedView) cgPrefix = rezolusSources;
+            else if (pickedSource === defaultView) cgPrefix = null;
+            else cgPrefix = pickedSource;
             await buildCgroupIndex(slot0.conn, REGISTERED_NAME, cgPrefix);
         }
 
@@ -612,11 +737,11 @@ export class CaptureRegistry {
         for (const s of slots) {
             s.viewer = new ViewerSql(s.conn, metaJson);
             if (pickedSource) {
-                // The combined view name is its own SQL identifier (it's
-                // not derived from a single source label, so don't run
-                // it through `viewNameForSource`).
-                const rel = pickedSource === combinedView
-                    ? combinedView
+                // The combined and default views' names are real SQL
+                // identifiers — don't run them through `viewNameForSource`
+                // (which sanitises a source label).
+                const rel = (pickedSource === combinedView || pickedSource === defaultView)
+                    ? pickedSource
                     : viewNameForSource(pickedSource);
                 s.viewer.set_source_relation(rel);
             }
@@ -624,7 +749,7 @@ export class CaptureRegistry {
         const pool = new WorkerPool(slots, REGISTERED_NAME);
         const session = new CaptureSession({
             pool, metadata, sources, rezolusSources, columnsBySource, pickedSource,
-            combinedView,
+            combinedView, defaultView,
         });
         this.captures.set(captureId, session);
         return session;

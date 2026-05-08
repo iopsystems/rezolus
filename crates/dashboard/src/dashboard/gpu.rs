@@ -327,7 +327,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         // converted from mJ/s to W (= J/s).
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^gpu_energy_consumption(/.+)?$')]::UBIGINT[]) AS s
+                     list_sum([*COLUMNS('^gpu_energy_consumption(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t,

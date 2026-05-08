@@ -266,8 +266,8 @@ pub fn cgroup_irate_total(
     let extra = cgroup_label_filter(label_filter);
     format!(
         r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{metric}(/.+)?$') FROM _src)
-                  ON COLUMNS('^{metric}(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^{metric}(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^{metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            joined AS (
               SELECT u.timestamp, u.v
@@ -294,8 +294,8 @@ pub fn cgroup_irate_by_name(
     let extra = cgroup_label_filter(label_filter);
     format!(
         r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{metric}(/.+)?$') FROM _src)
-                  ON COLUMNS('^{metric}(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^{metric}(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^{metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            joined AS (
               SELECT u.timestamp, idx.name, u.v
@@ -322,12 +322,12 @@ pub fn cgroup_ratio_total(num_metric: &str, den_metric: &str, side: CgroupSide) 
     let name_clause = cgroup_name_filter(side);
     format!(
         r#"WITH n_unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{num_metric}(/.+)?$') FROM _src)
-                  ON COLUMNS('^{num_metric}(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^{num_metric}(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^{num_metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            d_unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{den_metric}(/.+)?$') FROM _src)
-                  ON COLUMNS('^{den_metric}(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^{den_metric}(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^{den_metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            n_join AS (
               SELECT u.timestamp, u.v FROM n_unp u JOIN _cgroup_index idx
@@ -356,12 +356,12 @@ pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide
     let name_clause = cgroup_name_filter(side);
     format!(
         r#"WITH n_unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{num_metric}(/.+)?$') FROM _src)
-                  ON COLUMNS('^{num_metric}(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^{num_metric}(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^{num_metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            d_unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{den_metric}(/.+)?$') FROM _src)
-                  ON COLUMNS('^{den_metric}(/.+)?$') INTO NAME col VALUE v
+              UNPIVOT (SELECT timestamp, COLUMNS('^{den_metric}(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^{den_metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            n_join AS (
               SELECT u.timestamp, idx.name, u.v

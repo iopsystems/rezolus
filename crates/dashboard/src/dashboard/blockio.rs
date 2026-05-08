@@ -16,12 +16,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     totals.plot_promql_with_sql(
         PlotOpts::counter("Total Throughput", "blockio-throughput-total", Unit::Datarate),
         "sum(irate(blockio_bytes[5m]))".to_string(),
-        sql::irate_total("^blockio_bytes(/.+)?$"),
+        sql::irate_total("^blockio_bytes(/[^:]+)?$"),
     );
     totals.plot_promql_with_sql(
         PlotOpts::counter("Total IOPS", "blockio-iops-total", Unit::Count),
         "sum(irate(blockio_operations[5m]))".to_string(),
-        sql::irate_total("^blockio_operations(/.+)?$"),
+        sql::irate_total("^blockio_operations(/[^:]+)?$"),
     );
 
     for op in &["Read", "Write"] {
@@ -34,7 +34,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                 Unit::Datarate,
             ),
             format!("sum(irate(blockio_bytes{{op=\"{op_lower}\"}}[5m]))"),
-            sql::irate_total(&format!("^blockio_bytes/{op_lower}(/.+)?$")),
+            sql::irate_total(&format!("^blockio_bytes/{op_lower}(/[^:]+)?$")),
         );
         sg.plot_promql_with_sql(
             PlotOpts::counter(
@@ -43,7 +43,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                 Unit::Count,
             ),
             format!("sum(irate(blockio_operations{{op=\"{op_lower}\"}}[5m]))"),
-            sql::irate_total(&format!("^blockio_operations/{op_lower}(/.+)?$")),
+            sql::irate_total(&format!("^blockio_operations/{op_lower}(/[^:]+)?$")),
         );
     }
 

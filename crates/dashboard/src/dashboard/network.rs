@@ -19,14 +19,14 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             .with_unit_system("bitrate"),
         "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
         format!("WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
-            sql::irate_total("^network_bytes/transmit(/.+)?$")),
+            sql::irate_total("^network_bytes/transmit(/[^:]+)?$")),
     );
     bandwidth.plot_promql_with_sql(
         PlotOpts::counter("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
             .with_unit_system("bitrate"),
         "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         format!("WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
-            sql::irate_total("^network_bytes/receive(/.+)?$")),
+            sql::irate_total("^network_bytes/receive(/[^:]+)?$")),
     );
 
     let packets = traffic.subgroup("Packets");
@@ -34,12 +34,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     packets.plot_promql_with_sql(
         PlotOpts::counter("Packets Transmit", "packets-tx", Unit::Rate),
         "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
-        sql::irate_total("^network_packets/transmit(/.+)?$"),
+        sql::irate_total("^network_packets/transmit(/[^:]+)?$"),
     );
     packets.plot_promql_with_sql(
         PlotOpts::counter("Packets Receive", "packets-rx", Unit::Rate),
         "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
-        sql::irate_total("^network_packets/receive(/.+)?$"),
+        sql::irate_total("^network_packets/receive(/[^:]+)?$"),
     );
 
     view.group(traffic);
@@ -57,12 +57,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     health.plot_promql_with_sql(
         PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
         "sum(irate(network_drop[5m]))".to_string(),
-        sql::irate_total("^network_drop(/.+)?$"),
+        sql::irate_total("^network_drop(/[^:]+)?$"),
     );
     health.plot_promql_with_sql(
         PlotOpts::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
         "sum(irate(tcp_retransmit[5m]))".to_string(),
-        sql::irate_total("^tcp_retransmit(/.+)?$"),
+        sql::irate_total("^tcp_retransmit(/[^:]+)?$"),
     );
 
     view.group(errors);

@@ -67,7 +67,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         // matching columns first, then per-second rate via irate_1s.
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^scheduler_context_switch(/.+)?$')]::UBIGINT[]) AS s
+                     list_sum([*COLUMNS('^scheduler_context_switch(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) AS v FROM agg"#.to_string(),

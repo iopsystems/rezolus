@@ -75,7 +75,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         "rate(memory_numa_local[5m])".to_string(),
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^memory_numa_local(/.+)?$')]::UBIGINT[]) AS s
+                     list_sum([*COLUMNS('^memory_numa_local(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, rate_5m(s, timestamp) AS v FROM agg"#.to_string(),
@@ -85,7 +85,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         "rate(memory_numa_foreign[5m])".to_string(),
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^memory_numa_foreign(/.+)?$')]::UBIGINT[]) AS s
+                     list_sum([*COLUMNS('^memory_numa_foreign(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, rate_5m(s, timestamp) AS v FROM agg"#.to_string(),
