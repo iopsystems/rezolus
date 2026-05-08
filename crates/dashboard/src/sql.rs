@@ -70,21 +70,39 @@ pub fn cpu_pct_total(re: &str) -> String {
 /// Per-CPU CPU-fraction. Equivalent to PromQL
 /// `sum by (id) (irate(M[5m])) / 1e9` (per-CPU values are already nanoseconds
 /// of CPU time, so dividing by 1e9 yields the fraction directly).
+///
+/// Two stages:
+///   1. UNPIVOT + windowed irate per source column (`PARTITION BY col`).
+///   2. Aggregate by (timestamp, id) to collapse multiple matching
+///      columns that share an `id`. This matters when `re` matches
+///      across states — e.g. `^cpu_usage/[a-z]+/[0-9]+$` matches both
+///      `cpu_usage/user/<n>` and `cpu_usage/system/<n>`, which both
+///      extract the same `id`. Without the SUM step the result has
+///      two rows per (timestamp, id), and the heatmap renderer ends
+///      up with ambiguous values per cell. Single-state regexes
+///      degenerate to one row per group, so the SUM is a no-op there.
 pub fn cpu_pct_by_id(re: &str, id_extract_re: &str) -> String {
     format!(
         r#"WITH unp AS (
               UNPIVOT (SELECT timestamp, COLUMNS('{re}') FROM _src)
                   ON COLUMNS('{re}')
                   INTO NAME col VALUE v
+           ),
+           rates AS (
+              SELECT timestamp,
+                     regexp_extract(col, '{id_extract_re}', 1) AS id,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate_ns
+              FROM unp
            )
            SELECT timestamp::DOUBLE/1e9 AS t,
-                  regexp_extract(col, '{id_extract_re}', 1) AS id,
-                  irate_lag(
-                      v,
-                      LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
-                      timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
-                  ) / 1e9 AS v
-           FROM unp"#
+                  id,
+                  SUM(rate_ns) / 1e9 AS v
+           FROM rates
+           GROUP BY timestamp, id"#
     )
 }
 
