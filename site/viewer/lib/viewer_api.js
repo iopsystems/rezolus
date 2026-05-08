@@ -1,6 +1,10 @@
 // WASM API adapter for site/viewer frontend.
 // Mirrors the server viewer's transport layer; queries run via WASM.
 
+// Tells data.js which of plot.{sql_query, promql_query} to prefer when
+// both are present. Static viewer drives duckdb-wasm — pure SQL.
+const BACKEND = 'sql';
+
 let registry = null;
 
 const ensureRegistry = () => {
@@ -127,6 +131,8 @@ const ViewerApi = {
             categoryName ?? undefined,
         );
     },
+
+    backend() { return BACKEND; },
 };
 
 export { ViewerApi };

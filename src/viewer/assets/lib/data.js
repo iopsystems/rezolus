@@ -353,18 +353,27 @@ const createDataApi = ({
     //                        counter-rate rewriting. Defaults to the
     //                        module-level _stepOverride.
     const buildEffectiveQuery = (plot, opts = {}) => {
-        // Prefer the SQL query (Phase D dashboard emission). The SQL
-        // string is verbatim — viewer-sql substitutes cgroup selection
-        // server-side from registry state, and the dashboard's SQL
-        // emitters already encode histogram fan-out / counter rates /
-        // ratios. Skip the legacy PromQL transforms below for SQL plots
-        // — the registry is the single source of dynamic state.
+        // Most plots emit BOTH `sql_query` (for the duckdb-wasm static
+        // viewer) and `promql_query` (for the server-backed Mithril
+        // viewer driving metriken-query). `ViewerApi.backend()` tells us
+        // which path is live — sending the wrong dialect to the active
+        // engine produces parse errors on every plot.
         //
-        // Plots without `sql_query` are KPI plots whose query lives in
-        // parquet metadata and hasn't been translated yet. Returning
+        // For SQL plots: the string is verbatim; viewer-sql substitutes
+        // cgroup selection server-side from registry state, and the
+        // dashboard's SQL emitters already encode histogram fan-out /
+        // counter rates / ratios — skip the PromQL transforms below.
+        //
+        // Plots without the active dialect's query are KPIs whose query
+        // lives in parquet metadata and hasn't been translated. Returning
         // null makes processDashboardData skip them; the section view
-        // can paint a "query not yet available" placeholder.
-        if (plot.sql_query) return plot.sql_query;
+        // paints a "query not yet available" placeholder.
+        const backend = (typeof ViewerApi.backend === 'function')
+            ? ViewerApi.backend() : 'sql';
+        if (backend === 'sql') {
+            if (plot.sql_query) return plot.sql_query;
+            return null;
+        }
         if (!plot.promql_query) return null;
         const {
             sectionRoute = null,
@@ -410,16 +419,17 @@ const createDataApi = ({
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
 
+        const backend = (typeof ViewerApi.backend === 'function')
+            ? ViewerApi.backend() : 'sql';
         const queryPlots = [];
         for (const group of data.groups || []) {
             for (const plot of collectGroupPlots(group)) {
-                // Mark KPI plots without an SQL query as
-                // "temporarily unavailable" so they render as a
-                // placeholder rather than a silently-empty chart.
-                // These are plots whose query lives in parquet
-                // `service_queries` metadata; a follow-up will
-                // translate them to SQL at `parquet annotate` time.
-                if (!plot.sql_query && plot.promql_query) {
+                // KPI plots whose query lives in parquet metadata
+                // haven't been translated to SQL yet. In SQL backend
+                // mode mark them unavailable so the section view paints
+                // a placeholder instead of a silently-empty chart;
+                // PromQL backend mode runs them as-is.
+                if (backend === 'sql' && !plot.sql_query && plot.promql_query) {
                     plot._unavailable = true;
                     plot._unavailableMessage =
                         '(query not yet available — translation pending)';

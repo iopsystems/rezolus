@@ -1,6 +1,11 @@
 // Backend API adapter for src/viewer frontend.
 // Defines a transport abstraction that mirrors the site/viewer WASM adapter.
 
+// Tells data.js which of plot.{sql_query, promql_query} to prefer when
+// both are present. Server `/api/v1/query_range` is metriken-query's
+// PromQL engine; sending the SQL form would parse-error.
+const BACKEND = 'promql';
+
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB — must match server DefaultBodyLimit
 
 const formatMB = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
@@ -150,6 +155,7 @@ const ViewerApi = {
         return backendRequest({ method: 'DELETE', url: '/api/v1/captures/experiment' });
     },
 
+    backend() { return BACKEND; },
 };
 
 export { ViewerApi };
