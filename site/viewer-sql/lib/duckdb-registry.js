@@ -97,7 +97,10 @@ async function buildMetadata(conn, filename, registeredName) {
 // chosen source's view.
 async function buildSourceViews(conn, registeredName) {
     const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${registeredName}')`);
-    const cols = desc.toArray().map((r) => r.toJSON().column_name);
+    const descRows = desc.toArray().map((r) => r.toJSON());
+    const cols = descRows.map((r) => r.column_name);
+    const colType = new Map();
+    for (const r of descRows) colType.set(r.column_name, String(r.column_type));
     const bySource = new Map();
     for (const c of cols) {
         const m = c.match(/^([^:]+)::(.+)$/);
@@ -109,15 +112,15 @@ async function buildSourceViews(conn, registeredName) {
     const columnsBySource = new Map();
     if (bySource.size === 0) {
         columnsBySource.set('', new Set(cols));
-        return { sources: [], rezolusSources: [], columnsBySource };
+        return { sources: [], rezolusSources: [], columnsBySource, combinedView: null };
     }
     const sources = [...bySource.keys()].sort();
     const rezolusSources = sources.filter(
         (s) => bySource.get(s).some((a) => a.alias === 'memory_total'),
     );
+    const q = (s) => '"' + s.replace(/"/g, '""') + '"';
     for (const src of sources) {
         const aliases = bySource.get(src);
-        const q = (s) => '"' + s.replace(/"/g, '""') + '"';
         const projections = ['timestamp', 'duration']
             .filter((c) => cols.includes(c))
             .map((c) => q(c))
@@ -130,7 +133,56 @@ async function buildSourceViews(conn, registeredName) {
             ...aliases.map((a) => a.alias),
         ]));
     }
-    return { sources, rezolusSources, columnsBySource };
+    // Multi-rezolus aggregation. The legacy PromQL evaluator's Tsdb
+    // stores every source's series under a flat metric → series map,
+    // so `sum(metric)` / `sum by (id) (...)` / `histogram_quantiles(...)`
+    // implicitly aggregate across all rezolus sources. To match that
+    // behaviour from SQL, build a combined view whose columns are the
+    // per-source contributions summed at each timestamp:
+    //   - scalar metrics: COALESCE(<src1>::col, 0) + COALESCE(<src2>::col, 0) + ...
+    //   - histogram (LIST<UBIGINT>) metrics: h2_combine([COALESCE(...), ...])
+    // Sources missing a given metric column contribute zero / empty list.
+    let combinedView = null;
+    if (rezolusSources.length >= 2) {
+        const allMetrics = new Set();
+        for (const src of rezolusSources) {
+            for (const a of bySource.get(src)) allMetrics.add(a.alias);
+        }
+        const projections = ['timestamp', 'duration']
+            .filter((c) => cols.includes(c))
+            .map((c) => q(c));
+        for (const metric of [...allMetrics].sort()) {
+            const contribs = [];
+            let isList = false;
+            for (const src of rezolusSources) {
+                const a = bySource.get(src).find((x) => x.alias === metric);
+                if (!a) continue;
+                contribs.push(a.orig);
+                const t = colType.get(a.orig) ?? '';
+                if (t.endsWith('[]')) isList = true;
+            }
+            if (contribs.length === 1) {
+                projections.push(`${q(contribs[0])} AS ${q(metric)}`);
+            } else if (isList) {
+                const parts = contribs
+                    .map((c) => `COALESCE(${q(c)}, []::UBIGINT[])`)
+                    .join(', ');
+                projections.push(`h2_combine([${parts}]) AS ${q(metric)}`);
+            } else {
+                const parts = contribs.map((c) => `COALESCE(${q(c)}, 0)`).join(' + ');
+                projections.push(`(${parts}) AS ${q(metric)}`);
+            }
+        }
+        combinedView = '_src_rezolus_combined';
+        await conn.query(
+            `CREATE VIEW ${combinedView} AS SELECT ${projections.join(', ')} FROM read_parquet('${registeredName}')`,
+        );
+        columnsBySource.set(combinedView, new Set([
+            ...['timestamp', 'duration'].filter((c) => cols.includes(c)),
+            ...allMetrics,
+        ]));
+    }
+    return { sources, rezolusSources, columnsBySource, combinedView };
 }
 
 export function viewNameForSource(src) {
@@ -139,8 +191,17 @@ export function viewNameForSource(src) {
 
 // Build (or rebuild) `_cgroup_index` for the currently active source.
 // Stores unprefixed column names so cgroup-page SQL JOINs resolve
-// against the source's aliased `_src_<src>` view.
+// against the source's aliased `_src_<src>` view (or the
+// `_src_rezolus_combined` view when `prefixSet` lists multiple
+// rezolus sources, in which case we union the cgroup metadata over
+// every source — same shape the legacy PromQL viewer's Tsdb produces).
 async function buildCgroupIndex(conn, registeredName, sourcePrefix = null) {
+    // Allow `sourcePrefix` to be a string (single source), an array
+    // (combined-rezolus mode — union cgroups across sources), or null
+    // (single-source parquet — no prefix to strip).
+    const prefixes = sourcePrefix == null
+        ? null
+        : Array.isArray(sourcePrefix) ? sourcePrefix : [sourcePrefix];
     const sch = await conn.query(`SELECT value::VARCHAR AS v FROM parquet_kv_metadata('${registeredName}') WHERE key::VARCHAR = 'ARROW:schema'`);
     const rows = sch.toArray();
     await conn.query(`DROP TABLE IF EXISTS _cgroup_index`);
@@ -152,18 +213,26 @@ async function buildCgroupIndex(conn, registeredName, sourcePrefix = null) {
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     const reader = await arrow.RecordBatchReader.from(bytes);
     await reader.open();
-    const prefixWithSep = sourcePrefix ? `${sourcePrefix}::` : null;
     const cgroupRows = [];
+    // De-dupe entries that appear identically (same metric + unprefixed
+    // column_name) under multiple source prefixes — when a cgroup
+    // exists on more than one rezolus node, the combined view sums
+    // its bucket arrays into one column, so the index needs one row.
+    const seen = new Set();
     for (const f of reader.schema.fields) {
         const md = f.metadata;
         if (!md || !md.get) continue;
         const metric = md.get('metric');
         if (!metric || !metric.startsWith('cgroup_')) continue;
         let columnName = f.name;
-        if (prefixWithSep) {
-            if (!columnName.startsWith(prefixWithSep)) continue;
-            columnName = columnName.slice(prefixWithSep.length);
+        if (prefixes) {
+            const matched = prefixes.find((p) => columnName.startsWith(`${p}::`));
+            if (!matched) continue;
+            columnName = columnName.slice(matched.length + 2);
         }
+        const dedupKey = `${metric}\u{1f}${columnName}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
         const name = md.has('name') ? md.get('name') : null;
         const id = md.has('id') ? md.get('id') : null;
         const labels = {};
@@ -214,9 +283,17 @@ async function bootSlot(parquetBytes, registered, pickedSource) {
     await db.registerFileBuffer(registered, new Uint8Array(parquetBytes));
     const conn = await db.connect();
     await registerMacros(conn);
-    const { sources, rezolusSources, columnsBySource } = await buildSourceViews(conn, registered);
-    await buildCgroupIndex(conn, registered, pickedSource);
-    return { db, conn, sources, rezolusSources, columnsBySource };
+    const { sources, rezolusSources, columnsBySource, combinedView } =
+        await buildSourceViews(conn, registered);
+    // The cgroup index needs to know which source prefix(es) to strip
+    // when materialising column_name. For the combined-rezolus view
+    // we union cgroup metadata from every rezolus source so all
+    // selectable cgroups land in the index.
+    const cgroupPrefix = pickedSource === combinedView
+        ? rezolusSources
+        : pickedSource;
+    await buildCgroupIndex(conn, registered, cgroupPrefix);
+    return { db, conn, sources, rezolusSources, columnsBySource, combinedView };
 }
 
 // Round-robin query pool. AsyncDuckDB serialises through one Worker; for
@@ -390,13 +467,14 @@ export function wrapWithSrcCte(body, startSec, endSec, sourcePrefix) {
 const REGISTERED_NAME = 'capture.parquet';
 
 class CaptureSession {
-    constructor({ pool, metadata, sources, rezolusSources, columnsBySource, pickedSource }) {
+    constructor({ pool, metadata, sources, rezolusSources, columnsBySource, pickedSource, combinedView }) {
         this.pool = pool;
         this.metadata = metadata;
         this.sources = sources;
         this.rezolusSources = rezolusSources;
         this.columnsBySource = columnsBySource;
         this.pickedSource = pickedSource;
+        this.combinedView = combinedView;
         // Per-session result cache: key = `${source}|${cgroupsKey}|${sql}`,
         // value = parsed Prometheus matrix `data.result` array. Time
         // window isn't keyed because it's constant per session today;
@@ -419,8 +497,14 @@ class CaptureSession {
     }
     async setSource(sourceName) {
         this.pickedSource = sourceName;
-        this.pool.setSourceRelation(viewNameForSource(sourceName));
-        await this.pool.rebuildCgroupIndex(sourceName);
+        const rel = sourceName === this.combinedView
+            ? this.combinedView
+            : viewNameForSource(sourceName);
+        this.pool.setSourceRelation(rel);
+        const cgPrefix = sourceName === this.combinedView
+            ? this.rezolusSources
+            : sourceName;
+        await this.pool.rebuildCgroupIndex(cgPrefix);
         // Cache entries from the previous source are still valid (key
         // includes source), no flush needed.
     }
@@ -457,15 +541,28 @@ export class CaptureRegistry {
         // into the remaining workers lets each one build a correctly-
         // scoped cgroup index in its own bootSlot call.
         const slot0 = await bootSlot(bytes.slice(), REGISTERED_NAME, null);
-        const { sources, rezolusSources, columnsBySource } = slot0;
+        const { sources, rezolusSources, columnsBySource, combinedView } = slot0;
+        // Source picker:
+        //   - 2+ rezolus sources → use the combined view so SQL queries
+        //     match the legacy PromQL evaluator's cross-source aggregation.
+        //   - exactly 1 rezolus source → use that source's view (filename
+        //     hint is moot when there's only one).
+        //   - non-rezolus multi-source → filename hint, fallback to first.
         let pickedSource = null;
-        if (sources.length > 0) {
+        if (combinedView) {
+            pickedSource = combinedView;
+        } else if (sources.length > 0) {
             const fnLower = filename.toLowerCase();
             pickedSource = rezolusSources.find((s) => fnLower.includes(s.toLowerCase()))
                 ?? rezolusSources[0]
                 ?? sources[0];
         }
-        if (pickedSource) await buildCgroupIndex(slot0.conn, REGISTERED_NAME, pickedSource);
+        if (pickedSource) {
+            const cgPrefix = pickedSource === combinedView
+                ? rezolusSources
+                : pickedSource;
+            await buildCgroupIndex(slot0.conn, REGISTERED_NAME, cgPrefix);
+        }
 
         const restSlots = await Promise.all(
             Array.from({ length: N - 1 }, () => bootSlot(bytes.slice(), REGISTERED_NAME, pickedSource))
@@ -475,11 +572,20 @@ export class CaptureRegistry {
         const metaJson = stringifyWithBigInt(metadata);
         for (const s of slots) {
             s.viewer = new ViewerSql(s.conn, metaJson);
-            if (pickedSource) s.viewer.set_source_relation(viewNameForSource(pickedSource));
+            if (pickedSource) {
+                // The combined view name is its own SQL identifier (it's
+                // not derived from a single source label, so don't run
+                // it through `viewNameForSource`).
+                const rel = pickedSource === combinedView
+                    ? combinedView
+                    : viewNameForSource(pickedSource);
+                s.viewer.set_source_relation(rel);
+            }
         }
         const pool = new WorkerPool(slots, REGISTERED_NAME);
         const session = new CaptureSession({
             pool, metadata, sources, rezolusSources, columnsBySource, pickedSource,
+            combinedView,
         });
         this.captures.set(captureId, session);
         return session;
