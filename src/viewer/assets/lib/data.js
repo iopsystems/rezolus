@@ -435,14 +435,25 @@ const createDataApi = ({
 
         // Surface no-data plots at the bottom (mirrors service KPI UX)
         // instead of leaving silent empty chart cards mid-section.
+        // Plots whose original query carries the `__SELECTED_CGROUPS__`
+        // placeholder are deferred — they intentionally have no data
+        // until the user picks a cgroup, at which point cgroup_selector
+        // refetches them in place. Stripping them here would remove the
+        // right-side "Individual Cgroups" group entirely on first load
+        // and the cgroup selector would have nothing to repopulate.
         const unavailable = [];
         const plotHasData = (plot) =>
             Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
+        const isDeferredCgroupPlot = (plot) =>
+            typeof plot.promql_query === 'string'
+            && plot.promql_query.includes('__SELECTED_CGROUPS__');
         for (const group of data.groups || []) {
             for (const sg of group.subgroups || []) {
                 const surviving = [];
                 for (const plot of (sg.plots || [])) {
-                    if (!plot.promql_query || plotHasData(plot)) {
+                    if (!plot.promql_query
+                        || plotHasData(plot)
+                        || isDeferredCgroupPlot(plot)) {
                         surviving.push(plot);
                     } else {
                         unavailable.push({
