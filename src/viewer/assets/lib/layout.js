@@ -336,6 +336,19 @@ const Sidebar = {
                 ),
             ],
 
+            // NL Query link (always visible, client-only)
+            m('div.sidebar-separator'),
+            m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection?.route === '/nl_query'
+                        ? 'selected nl-query-link'
+                        : 'nl-query-link',
+                    href: '/nl_query',
+                },
+                [m('span.arrow', '→'), ' ', 'NL Query'],
+            ),
+
             // System Info link (below Query Explorer)
             attrs.hasSystemInfo && [
                 m('div.sidebar-separator'),

@@ -2,7 +2,7 @@
 // Exports initDashboard(config) which sets up state and mounts the Mithril router.
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { QueryExplorer, SingleChartView } from './explorers.js';
+import { QueryExplorer, SingleChartView, NLQueryExplorer } from './explorers.js';
 import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
@@ -58,8 +58,12 @@ pinSectionKey(sectionCacheState, 'overview');
 const sectionResponseCache = sectionCacheState.responses;
 const cacheSectionResponse = (section, data) =>
     storeSectionResponse(sectionCacheState, section, data);
-const bootstrapSharedSections = (sections) =>
+const _origBootstrapSharedSections = (sections) =>
     storeSharedSections(sectionCacheState, sections);
+const bootstrapSharedSections = (sections) => {
+    const augmented = [...sections, { name: 'NL Query', route: '/nl_query' }];
+    _origBootstrapSharedSections(augmented);
+};
 const withCachedSections = (data) => withSharedSections(sectionCacheState, data);
 const getCachedSections = () => getSections(sectionCacheState);
 
@@ -362,6 +366,7 @@ const CLIENT_ONLY_SECTIONS = new Set([
     'systeminfo',
     'metadata',
     'query_explorer',
+    'nl_query',
 ]);
 
 const changeGranularity = async (step) => {
@@ -482,6 +487,19 @@ const SectionContent = {
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => chartsState.replayZoom());
             });
+        }
+
+        if (sectionName === 'NL Query') {
+            return m('div#section-content', [
+                m(NLQueryExplorer, {
+                    chartsState,
+                    queryRangeFn: (query, start, end, step) =>
+                        executePromQLRangeQuery(query)
+                            .then(r => {
+                                return r.status === 'success' ? r : { status: 'error', error: r.error };
+                            }),
+                }),
+            ]);
         }
 
         if (sectionName === 'Query Explorer') {
