@@ -62,6 +62,11 @@ enabled = true
 # Each sampler can then be individually configured to override the defaults. All
 # of the configuration options in the `[defaults]` section are allowed.
 
+# BPF sampler that instruments block_io completions and requeues to count
+# terminal IO failures (bucketed by op and error class) and recovered
+# requests put back on the queue.
+[samplers.blockio_errors]
+
 # BPF sampler that instruments block_io request queue to measure the request
 # latency distribution.
 [samplers.blockio_latency]

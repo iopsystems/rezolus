@@ -3,6 +3,10 @@ mod linux;
 
 #[cfg(not(target_os = "linux"))]
 mod stats {
+    mod errors {
+        include!("./linux/errors/stats.rs");
+    }
+
     mod latency {
         include!("./linux/latency/stats.rs");
     }

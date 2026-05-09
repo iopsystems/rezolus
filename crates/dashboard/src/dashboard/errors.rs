@@ -135,5 +135,91 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     view.group(throttle);
 
+    /*
+     * Block IO
+     *
+     * `blockio_errors` is labeled (op, error) where error buckets coarse
+     * blk_status_t classes: io / timeout / nospc / target / protection /
+     * unsupported / other. `blockio_requeues` counts requests the block
+     * layer put back on the queue (driver couldn't complete; SCSI EH or
+     * NVMe controller reset retried under the covers). Pairing them is
+     * diagnostic — high requeues with flat errors means recovery is
+     * absorbing the fault; both rising means real damage.
+     */
+
+    let mut blockio = Group::new("Block IO", "blockio");
+
+    let by_class = blockio.subgroup("Errors by Class");
+    by_class.describe(
+        "Terminal block IO failures grouped by class. \
+         The shape of the mix is more diagnostic than absolute counts: \
+         timeout-heavy = controller / transport hang; nospc = thin pool \
+         out of room; protection = data-integrity check failed.",
+    );
+    by_class.plot_promql(
+        PlotOpts::counter("IO Error", "blockio-err-io", Unit::Rate),
+        "sum(irate(blockio_errors{error=\"io\"}[5m]))".to_string(),
+    );
+    by_class.plot_promql(
+        PlotOpts::counter("Timeout", "blockio-err-timeout", Unit::Rate),
+        "sum(irate(blockio_errors{error=\"timeout\"}[5m]))".to_string(),
+    );
+    by_class.plot_promql(
+        PlotOpts::counter("No Space", "blockio-err-nospc", Unit::Rate),
+        "sum(irate(blockio_errors{error=\"nospc\"}[5m]))".to_string(),
+    );
+    by_class.plot_promql(
+        PlotOpts::counter("Target", "blockio-err-target", Unit::Rate),
+        "sum(irate(blockio_errors{error=\"target\"}[5m]))".to_string(),
+    );
+    by_class.plot_promql(
+        PlotOpts::counter("Protection", "blockio-err-protection", Unit::Rate),
+        "sum(irate(blockio_errors{error=\"protection\"}[5m]))".to_string(),
+    );
+    by_class.plot_promql(
+        PlotOpts::counter("Unsupported", "blockio-err-unsupported", Unit::Rate),
+        "sum(irate(blockio_errors{error=\"unsupported\"}[5m]))".to_string(),
+    );
+    by_class.plot_promql(
+        PlotOpts::counter("Other", "blockio-err-other", Unit::Rate),
+        "sum(irate(blockio_errors{error=\"other\"}[5m]))".to_string(),
+    );
+
+    let by_op = blockio.subgroup("Errors by Operation");
+    by_op.describe(
+        "Same terminal failures, broken down by op. Reads vs. writes \
+         imply different fault sources — a read-only spike points at the \
+         media; a write-only spike points at the controller / target.",
+    );
+    for (op, label, id) in &[
+        ("read", "Read", "blockio-err-read"),
+        ("write", "Write", "blockio-err-write"),
+        ("flush", "Flush", "blockio-err-flush"),
+        ("discard", "Discard", "blockio-err-discard"),
+    ] {
+        by_op.plot_promql(
+            PlotOpts::counter(*label, *id, Unit::Rate),
+            format!("sum(irate(blockio_errors{{op=\"{op}\"}}[5m]))"),
+        );
+    }
+
+    let requeues = blockio.subgroup("Requeues");
+    requeues.describe(
+        "Requests the block layer put back on the queue for retry — \
+         SCSI error-handler escalation, NVMe controller reset, or \
+         multipath path failover. High requeues with flat errors above = \
+         transport blip the kernel absorbed cleanly.",
+    );
+    requeues.plot_promql(
+        PlotOpts::counter("Total", "blockio-requeue-total", Unit::Rate),
+        "sum(irate(blockio_requeues[5m]))".to_string(),
+    );
+    requeues.plot_promql(
+        PlotOpts::counter("By Op", "blockio-requeue-by-op", Unit::Rate),
+        "sum by (op) (irate(blockio_requeues[5m]))".to_string(),
+    );
+
+    view.group(blockio);
+
     view
 }
