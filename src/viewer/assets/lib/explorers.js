@@ -476,3 +476,266 @@ export const SingleChartView = {
         ]);
     },
 };
+
+// ── NLQueryExplorer: Natural Language to Chart ──────────────────────
+
+let _transformersModule = null;
+let _pipeline = null;
+let _modelLoaded = false;
+let _modelLoading = false;
+let _modelError = null;
+
+/**
+ * Lazy-load the Transformers.js pipeline. Returns the pipeline
+ * instance, downloading the model on first call with progress updates.
+ */
+const loadModel = async (onProgress) => {
+    if (_modelLoaded) return _pipeline;
+    if (_modelLoading) throw new Error('Model load already in progress');
+
+    _modelLoading = true;
+    _modelError = null;
+
+    try {
+        if (!_transformersModule) {
+            // Dynamic import of Transformers.js — only triggers on first
+            // use of the NL Query tab. The ESM import in index.html ensures
+            // the module is available on globalThis.
+            _transformersModule = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+        }
+
+        _pipeline = await _transformersModule.pipeline(
+            'text-generation',
+            'Xenova/qwen3-0.8b',
+            {
+                progress: (report) => {
+                    if (typeof onProgress === 'function') {
+                        onProgress(report);
+                    }
+                },
+                config: {
+                    // Only use WebGPU tensors for efficiency
+                    safe_tensors: false,
+                },
+            }
+        );
+
+        _modelLoaded = true;
+        _modelLoading = false;
+    } catch (err) {
+        _modelError = err.message || String(err);
+        _modelLoading = false;
+        throw err;
+    }
+};
+
+/**
+ * Convert natural language to a PromQL query using the loaded model.
+ */
+const nlToPromQL = async (pipeline, naturalLanguage) => {
+    const systemPrompt = `You are a Rezolus telemetry assistant. Rezolus collects system performance metrics including CPU, scheduler, block I/O, network, and syscall metrics. Convert the user's natural language request into a valid PromQL query that would display the requested data as a chart.
+
+Available metric prefixes:
+- cpu_usage, cpu_frequency, cpu_instructions, cpu_cycles (CPU metrics)
+- scheduler_runqueue (scheduler metrics)
+- blockio_* (disk I/O metrics)
+- network_bytes, network_packets (network metrics)
+- syscall (syscall counts)
+
+Rules:
+1. Return ONLY the PromQL query, nothing else
+2. Use rate()/irate() for counters, direct queries for gauges
+3. Use a 5-minute window [5m] for rate calculations
+4. For time-series charts, use range queries
+5. Keep queries simple and readable
+
+Examples:
+  "Show me CPU usage over time" → sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores
+  "Show network traffic" → sum(rate(network_bytes{direction="transmit"}[5m]))
+  "Show scheduler runqueue" → scheduler_runqueue`;
+
+    const response = await pipeline(naturalLanguage, {
+        max_new_tokens: 128,
+        temperature: 0.1,
+        return_full_text: false,
+        repetition_penalty: 1.1,
+    });
+
+    let text = response[0]?.generated_text?.trim() || '';
+    // Strip any markdown code fences
+    text = text.replace(/^```(?:promql|sql|query)?\n?/i, '').replace(/```$/, '').trim();
+    return text;
+};
+
+// Attrs: chartsState: ChartsState, queryRangeFn: (query, start, end, step) => Promise
+export const NLQueryExplorer = {
+    oninit(vnode) {
+        vnode.state.query = '';
+        vnode.state.result = null;
+        vnode.state.error = null;
+        vnode.state.loading = false;
+        vnode.state.modelLoading = false;
+        vnode.state.modelProgress = -1; // -1 = indeterminate
+        vnode.state.modelLoaded = false;
+        vnode.state.modelDownloaded = 0; // bytes downloaded
+        vnode.state.modelTotal = 0; // total bytes
+        vnode.state.chartState = new ChartsState();
+        vnode.state.rawResult = null;
+    },
+
+    view(vnode) {
+        const st = vnode.state;
+
+        // Build progress info for display
+        const formatBytes = (bytes) => {
+            if (!bytes) return '';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+            return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+        };
+
+        const modelProgressText = st.modelTotal > 0
+            ? `${formatBytes(st.modelDownloaded)} / ${formatBytes(st.modelTotal)}`
+            : st.modelLoading ? 'Downloading model...' : '';
+
+        const modelProgressBar = st.modelLoading || st.modelLoaded
+            ? m('div', { style: 'margin-top: 1rem' }, [
+                m('div.progress-bar', [
+                    m('div.progress-fill', {
+                        style: st.modelTotal > 0
+                            ? `width: ${Math.round((st.modelDownloaded / st.modelTotal) * 100)}%`
+                            : undefined,
+                        class: st.modelTotal === 0 ? 'indeterminate' : undefined,
+                    }),
+                ]),
+                st.modelTotal > 0 && m('p', {
+                    style: 'font-size: 0.8rem; color: var(--fg-muted); margin-top: 0.5rem',
+                }, modelProgressText),
+            ])
+            : null;
+
+        const handleExecute = async () => {
+            if (!st.query.trim()) return;
+
+            st.loading = true;
+            st.error = null;
+            st.result = null;
+            st.rawResult = null;
+
+            try {
+                // Step 1: Ensure model is loaded
+                if (!st.modelLoaded) {
+                    st.modelLoading = true;
+                    st.modelProgress = -1;
+                    m.redraw();
+
+                    await loadModel((report) => {
+                        st.modelLoading = true;
+                        if (report.total) {
+                            st.modelTotal = report.total;
+                        }
+                        if (report.loaded != null) {
+                            st.modelDownloaded = report.loaded;
+                        }
+                        // Indeterminate during init, determinate during actual downloads
+                        if (report.total === undefined && report.loaded === undefined) {
+                            st.modelTotal = 0;
+                            st.modelDownloaded = 0;
+                        }
+                        m.redraw();
+                    });
+                    st.modelLoaded = true;
+                    st.modelLoading = false;
+                }
+
+                // Step 2: Convert NL to PromQL
+                const promql = await nlToPromQL(_pipeline, st.query);
+                st.rawResult = promql;
+                m.redraw();
+
+                // Step 3: Execute the PromQL query
+                const result = await vnode.attrs.queryRangeFn(promql);
+
+                if (result.status === 'success' && result.data?.result) {
+                    st.result = result;
+                } else {
+                    st.error = result.error || `Query returned no data`;
+                }
+            } catch (err) {
+                console.error('[NL Query] Error:', err);
+                st.error = err.message || String(err);
+            } finally {
+                st.loading = false;
+                m.redraw();
+            }
+        };
+
+        return m('div.nl-query-explorer', [
+            // Header
+            m('div.nl-query-header', [
+                m('h2', 'NL Query'),
+                m('p.nl-query-desc', 'Describe the chart you want in natural language. The AI converts it to a PromQL query and renders the result.'),
+            ]),
+
+            // Input section
+            m('div.nl-query-input-section', [
+                m('div.nl-query-wrapper', [
+                    m('textarea.nl-query-input', {
+                        placeholder: 'e.g., "Show me CPU usage over the last 5 minutes"',
+                        value: st.query,
+                        oninput: (e) => { st.query = e.target.value; },
+                        onkeydown: (e) => {
+                            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleExecute();
+                        },
+                        rows: 3,
+                        disabled: st.loading || st.modelLoading,
+                    }),
+                    m('div.nl-query-controls', [
+                        m('button.nl-query-execute-btn', {
+                            onclick: handleExecute,
+                            disabled: st.loading || st.modelLoading || !st.query.trim(),
+                        }, st.loading ? 'Processing...' : 'Generate & Execute (Ctrl+Enter)'),
+                    ]),
+                ]),
+            ]),
+
+            // Model loading progress (shown when model not yet loaded)
+            modelProgressBar,
+
+            // Model error
+            _modelError && m('div.nl-query-error', [
+                m('strong', 'Model Error: '), _modelError,
+                m('button', {
+                    onclick: () => { _modelLoaded = false; _modelLoading = false; _modelError = null; m.redraw(); },
+                    style: 'margin-left: 1rem',
+                }, 'Retry'),
+            ]),
+
+            // Raw PromQL (shown when available)
+            st.rawResult && !st.result && m('div.nl-query-promql', [
+                m('strong', 'Generated PromQL: '),
+                m('code', st.rawResult),
+            ]),
+
+            // Error
+            st.error && m('div.nl-query-error', m('strong', 'Error: '), st.error),
+
+            // Result chart
+            st.result && m('div.nl-query-result', [
+                m('h3', 'Result'),
+                st.result.status === 'success'
+                    ? m('div.nl-query-chart', [
+                        renderQueryChart(
+                            st.result.data && st.result.data.result,
+                            st.query,
+                            st.chartState,
+                            null,
+                        ),
+                    ])
+                    : m('div.nl-query-error', 'Query failed: ' + (st.result.error || 'Unknown error')),
+            ]),
+        ]);
+    },
+};
+
+export { QueryExplorer, SingleChartView, NLQueryExplorer };
