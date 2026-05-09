@@ -889,6 +889,27 @@ main {
     color: var(--accent);
 }
 
+/* ── Sidebar NL Query link ────────────────────────────────────────── */
+
+#sidebar .nl-query-link {
+    color: var(--fg-muted);
+}
+
+#sidebar .nl-query-link .arrow {
+    opacity: 0;
+    margin-right: 0;
+    transition: opacity 0.2s, margin-right 0.2s;
+}
+
+#sidebar .nl-query-link:hover .arrow {
+    opacity: 1;
+    margin-right: 4px;
+}
+
+#sidebar .nl-query-link.selected {
+    color: var(--accent);
+}
+
 /* ==========================================================================
    Section Content
    ========================================================================== */
@@ -1489,6 +1510,133 @@ main {
     background: var(--accent-subtle);
     border-color: var(--accent-muted);
     box-shadow: 0 0 12px var(--accent-glow);
+}
+
+/* ==========================================================================
+   NL Query Explorer
+   ========================================================================== */
+
+.nl-query-explorer {
+    padding: 1.5rem;
+}
+
+.nl-query-header {
+    margin-bottom: 1.5rem;
+}
+
+.nl-query-header h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.nl-query-desc {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.nl-query-input-section {
+    margin-bottom: 1rem;
+}
+
+.nl-query-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.nl-query-input {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    resize: vertical;
+    min-height: 80px;
+    transition: border-color 0.2s;
+}
+
+.nl-query-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.nl-query-input:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.nl-query-controls {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.nl-query-execute-btn {
+    padding: 0.6rem 1.2rem;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.nl-query-execute-btn:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.nl-query-execute-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.nl-query-promql {
+    margin: 1rem 0;
+    padding: 0.75rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.85rem;
+}
+
+.nl-query-promql strong {
+    color: var(--fg-muted);
+    margin-right: 0.5rem;
+}
+
+.nl-query-promql code {
+    font-family: var(--font-mono);
+    color: var(--accent);
+}
+
+.nl-query-result {
+    margin-top: 1rem;
+}
+
+.nl-query-result h3 {
+    margin: 0 0 1rem 0;
+    font-size: 1.1rem;
+}
+
+.nl-query-chart {
+    margin-top: 0.5rem;
+}
+
+.nl-query-error {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background: rgba(255, 82, 82, 0.1);
+    border: 1px solid rgba(255, 82, 82, 0.3);
+    border-radius: 6px;
+    color: #ff5252;
+    font-size: 0.9rem;
 }
 
 /* ==========================================================================
