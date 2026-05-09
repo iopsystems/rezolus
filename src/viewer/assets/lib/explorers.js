@@ -738,4 +738,3 @@ export const NLQueryExplorer = {
     },
 };
 
-export { QueryExplorer };
