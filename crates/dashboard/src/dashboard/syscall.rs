@@ -4,6 +4,10 @@ use crate::plot::*;
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
+    /*
+     * Syscall
+     */
+
     let mut syscall = Group::new("Syscall", "syscall");
     syscall
         .metadata

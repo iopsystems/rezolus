@@ -4,6 +4,10 @@ use crate::plot::*;
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
+    /*
+     * Rezolus
+     */
+
     let mut rezolus = Group::new("Rezolus", "rezolus");
 
     let resources = rezolus.subgroup("Resource Usage");

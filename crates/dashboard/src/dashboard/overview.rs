@@ -4,6 +4,10 @@ use crate::plot::*;
 pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&str>) -> View {
     let mut view = View::new(data, sections);
 
+    /*
+     * CPU
+     */
+
     let mut cpu = Group::new("CPU", "cpu");
 
     let busy = cpu.subgroup("CPU Busy");
@@ -18,6 +22,10 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     );
 
     view.group(cpu);
+
+    /*
+     * Network
+     */
 
     let mut network = Group::new("Network", "network");
 
@@ -64,6 +72,10 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
 
     view.group(network);
 
+    /*
+     * Scheduler
+     */
+
     let mut scheduler = Group::new("Scheduler", "scheduler");
 
     let queueing = scheduler.subgroup("Runqueue Latency");
@@ -76,6 +88,10 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     );
 
     view.group(scheduler);
+
+    /*
+     * Syscall
+     */
 
     let mut syscall = Group::new("Syscall", "syscall");
 
@@ -91,6 +107,10 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     );
 
     view.group(syscall);
+
+    /*
+     * Softirq
+     */
 
     let mut softirq = Group::new("Softirq", "softirq");
 
@@ -118,6 +138,10 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&s
     );
 
     view.group(softirq);
+
+    /*
+     * BlockIO
+     */
 
     let mut blockio = Group::new("BlockIO", "blockio");
 
