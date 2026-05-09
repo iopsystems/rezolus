@@ -878,6 +878,12 @@ export class CaptureRegistry {
     sources(captureId) { return this.session(captureId).sources; }
     rezolusSources(captureId) { return this.session(captureId).rezolusSources; }
     pickedSource(captureId) { return this.session(captureId).pickedSource; }
+    /// Returns the synthetic combined-rezolus view name (e.g.
+    /// `_src_rezolus_combined`) when 2+ rezolus sources are present in
+    /// the parquet, else `null`. Drives the source picker so users can
+    /// switch between "all rezolus sources combined" (the default) and
+    /// any individual source for drill-down.
+    combinedView(captureId) { return this.session(captureId).combinedView; }
     columnsBySource(captureId) { return this.session(captureId).columnsBySource; }
 
     async setSource(captureId, sourceName) {

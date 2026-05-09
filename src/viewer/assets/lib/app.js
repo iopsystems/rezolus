@@ -456,7 +456,12 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     sourceList: (() => {
         const reg = ViewerApi.registry();
         if (!reg?.has?.('baseline')) return [];
-        return reg.sources('baseline') || [];
+        const sources = reg.sources('baseline') || [];
+        // Prepend the synthetic combined-rezolus entry when present so
+        // users can choose between cross-source aggregation (default)
+        // and any individual source for drill-down.
+        const combined = reg.combinedView?.('baseline');
+        return combined ? [combined, ...sources] : sources;
     })(),
     selectedSource: (() => {
         const reg = ViewerApi.registry();

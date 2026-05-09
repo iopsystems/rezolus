@@ -133,12 +133,22 @@ const TopNav = {
             (() => {
                 const sources = attrs.sourceList || [];
                 if (sources.length < 2) return null;
+                // The combined-rezolus view is a synthetic value
+                // (`_src_rezolus_combined`) — the real source labels
+                // are short slugs like `decode`, `prefill`, `router`.
+                // Render the combined entry with a friendlier label
+                // while keeping the synthetic value as the option's
+                // value (the source-change handler already routes
+                // synthetic names correctly).
+                const labelFor = (s) => s === '_src_rezolus_combined'
+                    ? 'All rezolus sources (combined)'
+                    : s;
                 return m('div.topnav-source.topnav-multi-source', [
                     m('label.topnav-source-label', { for: 'topnav-source-select' }, 'Source:'),
                     m('select.topnav-node-select#topnav-source-select', {
                         value: attrs.selectedSource || sources[0],
                         onchange: (e) => attrs.onSourceChange?.(e.target.value),
-                    }, sources.map((s) => m('option', { value: s }, s))),
+                    }, sources.map((s) => m('option', { value: s }, labelFor(s)))),
                 ]);
             })(),
             m('div.topnav-actions', [
