@@ -506,7 +506,7 @@ const loadModel = async (onProgress) => {
 
         _pipeline = await _transformersModule.pipeline(
             'text-generation',
-            'Qwen/Qwen3.5-0.5B-Instruct-GGUF',
+            'onnx-community/Qwen2.5-0.5B-Instruct',
             {
                 progress: (report) => {
                     if (typeof onProgress === 'function') {
