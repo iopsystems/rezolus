@@ -23,7 +23,6 @@ pub struct Cpufreq {
 
 impl Cpufreq {
     pub fn new(cpu: usize) -> Result<Self> {
-        // related CPUs
         let affected_cpus: Vec<usize> = read_space_list(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/affected_cpus"
         ))?;
@@ -33,7 +32,6 @@ impl Cpufreq {
         let freqdomain_cpus = read_space_list(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/freqdomain_cpus"
         ))?;
-        // cpuinfo
         let cpuinfo_min_freq = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_min_freq"
         ))?;
@@ -47,7 +45,6 @@ impl Cpufreq {
         let cpuinfo_transition_latency = read_usize(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/cpuinfo_transition_latency"
         ))?;
-        // scaling
         let scaling_driver = read_string(format!(
             "/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_driver"
         ))?;

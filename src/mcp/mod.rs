@@ -106,7 +106,6 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
     use crate::viewer::promql::QueryEngine;
     use crate::viewer::tsdb::Tsdb;
 
-    // Load the parquet file
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
@@ -115,10 +114,8 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
         }
     };
 
-    // Create query engine
     let engine = Arc::new(QueryEngine::new(tsdb.clone()));
 
-    // Run correlation analysis
     match correlation::calculate_correlation(&engine, &tsdb, &query1, &query2) {
         Ok(result) => {
             println!("{}", correlation::format_correlation_result(&result));
@@ -131,7 +128,6 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
 }
 
 fn run_describe_recording(file: PathBuf) {
-    // Load the parquet file
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
@@ -140,16 +136,13 @@ fn run_describe_recording(file: PathBuf) {
         }
     };
 
-    // Create query engine
     let engine = QueryEngine::new(tsdb.clone());
 
-    // Use the shared formatting function
     let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &tsdb, &engine);
     println!("{output}");
 }
 
 fn run_describe_metrics(file: PathBuf) {
-    // Load the parquet file
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
@@ -158,13 +151,11 @@ fn run_describe_metrics(file: PathBuf) {
         }
     };
 
-    // Format and print the metrics list
     let output = describe_metrics::format_metrics_description(&tsdb);
     println!("{output}");
 }
 
 fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
-    // Load the parquet file
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
@@ -173,10 +164,8 @@ fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
         }
     };
 
-    // Create query engine
     let engine = Arc::new(QueryEngine::new(tsdb.clone()));
 
-    // If query is provided, run single anomaly detection
     if let Some(query) = query {
         match anomaly_detection::detect_anomalies(&engine, &tsdb, &query) {
             Ok(result) => {
@@ -217,24 +206,20 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
         "cgroup_cpu_bandwidth_quota",   // Static config value
     ];
 
-    // Collect all metrics to analyze
     let mut metrics_to_analyze = Vec::new();
 
-    // Add all counters (except skipped ones)
     for name in tsdb.counter_names() {
         if !skip_metrics.contains(&name) {
             metrics_to_analyze.push((name.to_string(), "counter", None));
         }
     }
 
-    // Add all gauges (except skipped ones)
     for name in tsdb.gauge_names() {
         if !skip_metrics.contains(&name) {
             metrics_to_analyze.push((name.to_string(), "gauge", None));
         }
     }
 
-    // Add all histograms with different quantiles
     for name in tsdb.histogram_names() {
         metrics_to_analyze.push((name.to_string(), "histogram_p50", None));
         metrics_to_analyze.push((name.to_string(), "histogram_p90", None));
@@ -315,7 +300,6 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
             }
         };
 
-        // Run anomaly detection
         match anomaly_detection::detect_anomalies(&engine, &tsdb, &query) {
             Ok(result) => {
                 if !result.anomalies.is_empty() {
@@ -360,7 +344,6 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
         }
     }
 
-    // Print summary
     println!("\nSummary");
     println!("=======");
     println!(
@@ -401,7 +384,6 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
 }
 
 fn run_query(file: PathBuf, query: String) {
-    // Load the parquet file
     let tsdb = match Tsdb::load(&file) {
         Ok(tsdb) => Arc::new(tsdb),
         Err(e) => {
@@ -410,14 +392,11 @@ fn run_query(file: PathBuf, query: String) {
         }
     };
 
-    // Create query engine
     let engine = Arc::new(QueryEngine::new(tsdb.clone()));
 
-    // Get time range from the recording
     let (start_time, end_time) = engine.get_time_range();
     let step = 1.0;
 
-    // Execute query
     match engine.query_range(&query, start_time, end_time, step) {
         Ok(result) => {
             println!("{}", format_query_result(&result));

@@ -10,7 +10,6 @@ export function isDarkTheme() {
         && document.documentElement?.getAttribute('data-theme') !== 'light';
 }
 
-// Shared x-axis time label format used by all chart types
 export const TIME_AXIS_FORMATTER = {
     year: '{yyyy}',
     month: '{MMM}',

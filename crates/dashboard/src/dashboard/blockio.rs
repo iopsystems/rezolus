@@ -4,10 +4,6 @@ use crate::plot::*;
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
-    /*
-     * Operations
-     */
-
     let mut operations = Group::new("Operations", "operations");
 
     let totals = operations.subgroup("Totals");
@@ -48,10 +44,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     view.group(operations);
 
-    /*
-     * Latency
-     */
-
     let mut latency = Group::new("Latency", "latency");
 
     let by_op = latency.subgroup("By Operation");
@@ -65,10 +57,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     }
 
     view.group(latency);
-
-    /*
-     * IO Size
-     */
 
     let mut size = Group::new("Size", "size");
 

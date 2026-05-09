@@ -1,5 +1,3 @@
-// multi.js - Multi-series chart configuration with deterministic cgroup colors
-
 import {
     createAxisLabelFormatter,
 } from './util/units.js';
@@ -54,7 +52,6 @@ export function configureMultiSeriesChart(chart) {
     const logScale = format.log_scale;
     const range = format.range;
 
-    // Create series configurations for each data series
     const series = [];
 
     const cgroupColors = seriesNames.map(name => globalColorMapper.getColorByName(name));

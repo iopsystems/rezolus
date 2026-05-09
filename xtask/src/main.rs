@@ -13,7 +13,6 @@ fn main() -> Result<()> {
 }
 
 fn fmt() -> Result<()> {
-    // rustfmt
     run(Command::new("cargo").arg("fmt").arg("--all"))?;
 
     // clang-format on tracked C/H files excluding vmlinux.h

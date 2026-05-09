@@ -192,7 +192,6 @@ async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParam
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
-    // Read and filter snapshots
     let data = match read_filtered_snapshots(shared, &time_range) {
         Ok(d) => d,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
@@ -239,7 +238,6 @@ async fn dump_to_file(
         }
     };
 
-    // Send request to sampling loop
     let (response_tx, response_rx) = oneshot::channel();
     let request = DumpToFileRequest {
         time_range,
@@ -259,7 +257,6 @@ async fn dump_to_file(
             .into_response();
     }
 
-    // Wait for response
     match response_rx.await {
         Ok(response) => {
             if let Some(error) = response.error {
@@ -313,34 +310,28 @@ fn read_filtered_snapshots(
 
     let mut result = Vec::new();
 
-    // Iterate through snapshots in chronological order
     for offset in 0..valid_count {
         let mut i = idx + offset;
         if i >= shared.snapshot_count {
             i -= shared.snapshot_count;
         }
 
-        // Seek to the start of the snapshot slot
         file.seek(SeekFrom::Start(i * shared.snapshot_len))
             .map_err(|e| format!("failed to seek: {}", e))?;
 
-        // Read the size of the snapshot
         let mut len_bytes = [0u8; 8];
         file.read_exact(&mut len_bytes)
             .map_err(|e| format!("failed to read snapshot length: {}", e))?;
 
         let size = u64::from_be_bytes(len_bytes) as usize;
         if size == 0 {
-            // Empty slot, skip
             continue;
         }
 
-        // Read the snapshot data
         let mut buf = vec![0u8; size];
         file.read_exact(&mut buf)
             .map_err(|e| format!("failed to read snapshot data: {}", e))?;
 
-        // Check time filter
         if time_range.start.is_some() || time_range.end.is_some() {
             if let Some(timestamp) = extract_timestamp(&buf) {
                 if !time_range.contains(timestamp) {
@@ -379,7 +370,6 @@ fn get_timestamp_bounds(shared: &SharedState) -> Result<(Option<u64>, Option<u64
     let mut oldest: Option<SystemTime> = None;
     let mut newest: Option<SystemTime> = None;
 
-    // Read first and last valid snapshots
     for offset in [0, valid_count.saturating_sub(1)] {
         let mut i = idx + offset;
         if i >= shared.snapshot_count {
@@ -430,7 +420,6 @@ fn convert_to_parquet(
     interval: Duration,
     agent_systeminfo: &Option<String>,
 ) -> Result<Vec<u8>, String> {
-    // Write msgpack data to a temp file
     let mut input =
         tempfile::tempfile().map_err(|e| format!("failed to create temp file: {}", e))?;
 
@@ -441,11 +430,9 @@ fn convert_to_parquet(
         .seek(SeekFrom::Start(0))
         .map_err(|e| format!("failed to seek temp file: {}", e))?;
 
-    // Create output temp file
     let output =
         tempfile::tempfile().map_err(|e| format!("failed to create output temp file: {}", e))?;
 
-    // Convert
     let mut converter = MsgpackToParquet::with_options(ParquetOptions::new()).metadata(
         "sampling_interval_ms".to_string(),
         interval.as_millis().to_string(),
@@ -459,7 +446,6 @@ fn convert_to_parquet(
         .convert_file_handle(input, &output)
         .map_err(|e| format!("failed to convert to parquet: {}", e))?;
 
-    // Read the parquet data
     let mut output = output;
     output
         .seek(SeekFrom::Start(0))

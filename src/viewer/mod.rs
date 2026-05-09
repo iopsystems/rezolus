@@ -227,10 +227,8 @@ impl TryFrom<ArgMatches> for Config {
 pub fn run(config: Config) {
     let config: Arc<Config> = config.into();
 
-    // configure logging
     let _log_drain = configure_logging(verbosity_to_level(config.verbose));
 
-    // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(1)
@@ -420,14 +418,12 @@ pub fn run(config: Config) {
         Source::Live(url) => {
             info!("Connecting to live agent at {url}...");
 
-            // Fetch agent version and systeminfo from the agent
             let (source, version, agent_systeminfo) = rt.block_on(async {
                 let client = Client::builder()
                     .http1_only()
                     .build()
                     .expect("failed to create http client");
 
-                // Fetch version from root endpoint
                 let (source, version) = match client.get(url.clone()).send().await {
                     Ok(response) => match response.text().await {
                         Ok(body) => {
@@ -452,7 +448,6 @@ pub fn run(config: Config) {
                     }
                 };
 
-                // Fetch systeminfo from agent
                 let mut info_url = url.clone();
                 info_url.set_path("/systeminfo");
                 let sysinfo = match client.get(info_url).send().await {
@@ -465,7 +460,6 @@ pub fn run(config: Config) {
 
             info!("Connected to {source} {version} at {url}");
 
-            // Generate dashboards from a TSDB with live metadata
             let mut tsdb = Tsdb::default();
             tsdb.set_sampling_interval_ms(1000);
             tsdb.set_source(source.clone());
@@ -478,7 +472,6 @@ pub fn run(config: Config) {
 
             state.captures.set_baseline_systeminfo(agent_systeminfo);
 
-            // Spawn the ingest loop
             let ingest_tsdb = state.baseline_tsdb();
             let ingest_snapshots = state.snapshots.clone();
             let mut ingest_url = url.clone();
@@ -509,11 +502,9 @@ pub fn run(config: Config) {
         );
     }
 
-    // open the tcp listener
     let listener = std::net::TcpListener::bind(config.listen).expect("failed to listen");
     let addr = listener.local_addr().expect("socket missing local addr");
 
-    // open in browser
     rt.spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -524,7 +515,6 @@ pub fn run(config: Config) {
         }
     });
 
-    // launch the HTTP listener
     rt.block_on(async move { serve(listener, state).await });
 
     std::thread::sleep(Duration::from_millis(200));
@@ -546,7 +536,6 @@ async fn ingest_loop(
         }
     };
 
-    // Initialize the shared TSDB metadata
     {
         let mut tsdb = tsdb.write();
         tsdb.set_sampling_interval_ms(1000);
@@ -592,7 +581,6 @@ async fn ingest_loop(
             }
         };
 
-        // Write directly to the shared TSDB — no cloning
         let mut tsdb = tsdb.write();
         tsdb.ingest(snapshot);
         sample_count += 1;
@@ -1412,7 +1400,6 @@ const STANDALONE_HEAD: &str = r#"<meta charset="utf-8"/>
 <link rel="stylesheet" href="/lib/style.css"/>
 <style>body{display:flex;align-items:center;justify-content:center;padding:2rem}</style>"#;
 
-// Styled /about page handler
 async fn about() -> axum::response::Html<String> {
     let version = env!("CARGO_PKG_VERSION");
     axum::response::Html(format!(
@@ -1984,7 +1971,6 @@ async fn connect_agent(
         }
     };
 
-    // Fetch agent version from root endpoint
     let (source, version) = match client.get(url.clone()).send().await {
         Ok(response) => match response.text().await {
             Ok(body) => {
@@ -2005,7 +1991,6 @@ async fn connect_agent(
         }
     };
 
-    // Fetch systeminfo from agent
     let mut info_url = url.clone();
     info_url.set_path("/systeminfo");
     let agent_systeminfo = match client.get(info_url).send().await {
@@ -2013,7 +1998,6 @@ async fn connect_agent(
         _ => None,
     };
 
-    // Generate dashboards with live metadata
     let mut tsdb = Tsdb::default();
     tsdb.set_sampling_interval_ms(1000);
     tsdb.set_source(source.clone());
@@ -2021,7 +2005,6 @@ async fn connect_agent(
     tsdb.set_filename(url.to_string());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
 
-    // Update shared state
     {
         let tsdb_handle = state.baseline_tsdb();
         let mut db = tsdb_handle.write();
@@ -2031,7 +2014,6 @@ async fn connect_agent(
     state.captures.set_baseline_systeminfo(agent_systeminfo);
     state.live.store(true, Ordering::Relaxed);
 
-    // Spawn the ingest loop
     let ingest_tsdb = state.baseline_tsdb();
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();

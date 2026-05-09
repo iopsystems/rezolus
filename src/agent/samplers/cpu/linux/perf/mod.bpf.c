@@ -144,8 +144,6 @@ int handle__sched_switch(u64* ctx) {
         }
     }
 
-    // update the per-core counters
-
     bpf_map_update_elem(&cycles_prev, &processor_id, &c, BPF_ANY);
     bpf_map_update_elem(&instructions_prev, &processor_id, &i, BPF_ANY);
 

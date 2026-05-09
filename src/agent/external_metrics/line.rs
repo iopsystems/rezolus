@@ -56,7 +56,6 @@ pub fn parse_line_with_context(
 ) -> Result<ParseResult, LineError> {
     let line = line.trim();
 
-    // Skip empty lines
     if line.is_empty() {
         return Ok(ParseResult::Skipped);
     }
@@ -81,7 +80,6 @@ pub fn parse_line_with_context(
     // Find the split between name+labels and value
     let (name_labels, value_str) = split_name_value(line)?;
 
-    // Parse name and labels
     let (name, mut labels) = parse_name_labels(name_labels)?;
 
     // Merge session labels (metric-specific labels take precedence)
@@ -89,10 +87,8 @@ pub fn parse_line_with_context(
         labels.entry(k.clone()).or_insert_with(|| v.clone());
     }
 
-    // Parse value with type prefix
     let value = parse_value(value_str)?;
 
-    // Ingest
     if store.upsert(name, labels, value) {
         ctx.metric_count += 1;
         Ok(ParseResult::MetricIngested)
@@ -133,7 +129,6 @@ fn split_name_value(line: &str) -> Result<(&str, &str), LineError> {
 }
 
 fn parse_name_labels(s: &str) -> Result<(String, HashMap<String, String>), LineError> {
-    // Check for labels
     if let Some(brace_start) = s.find('{') {
         let name = s[..brace_start].trim();
         if name.is_empty() {
@@ -188,7 +183,6 @@ fn parse_labels(s: &str) -> Result<HashMap<String, String>, LineError> {
         }
     }
 
-    // Handle last label
     if !current.is_empty() {
         let (k, v) = parse_single_label(&current)?;
         labels.insert(k, v);

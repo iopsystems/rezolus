@@ -4,10 +4,6 @@ use crate::plot::*;
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
-    /*
-     * Usage
-     */
-
     let mut usage = Group::new("Usage", "usage");
 
     let capacity = usage.subgroup("Capacity");
@@ -45,10 +41,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     );
 
     view.group(usage);
-
-    /*
-     * NUMA
-     */
 
     let mut numa = Group::new("NUMA", "numa");
 

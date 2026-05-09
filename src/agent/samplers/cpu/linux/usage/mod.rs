@@ -57,7 +57,6 @@ fn handle_task_info(data: &[u8]) -> i32 {
             .trim_end_matches(char::from(0))
             .to_string();
 
-        // Extract cgroup name hierarchy
         let cgroup_name = std::str::from_utf8(&info.cgroup_name)
             .unwrap_or("")
             .trim_end_matches(char::from(0))
@@ -73,7 +72,6 @@ fn handle_task_info(data: &[u8]) -> i32 {
             .trim_end_matches(char::from(0))
             .replace("\\x2d", "-");
 
-        // Construct cgroup path
         let cgroup = if !cgroup_gpname.is_empty() {
             if info.cgroup_level > 3 {
                 format!(".../{cgroup_gpname}/{cgroup_pname}/{cgroup_name}")
@@ -88,7 +86,6 @@ fn handle_task_info(data: &[u8]) -> i32 {
             "/".to_string()
         };
 
-        // Set metadata for all task metrics
         for metric in TASK_METRICS {
             metric.insert_metadata(pid, "pid".to_string(), pid.to_string());
             metric.insert_metadata(pid, "tgid".to_string(), tgid.to_string());
@@ -108,7 +105,6 @@ fn handle_task_exit(data: &[u8]) -> i32 {
     if plain::copy_from_bytes(&mut exit, data).is_ok() {
         let pid = exit.pid as usize;
 
-        // Clear metadata for all task metrics
         for metric in TASK_METRICS {
             metric.clear_metadata(pid);
         }

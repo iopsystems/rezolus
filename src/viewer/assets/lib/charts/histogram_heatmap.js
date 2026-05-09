@@ -1,5 +1,3 @@
-// histogram_heatmap.js - Histogram heatmap chart for latency distributions
-
 import {
     formatDateTime
 } from './util/utils.js';

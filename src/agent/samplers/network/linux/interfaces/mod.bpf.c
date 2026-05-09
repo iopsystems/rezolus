@@ -109,7 +109,6 @@ int net_dev_xmit(struct trace_event_raw_net_dev_xmit* args) {
  * transmit timeouts - driver specific probes
  */
 
-// helper function
 int tx_timeout() {
     u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + TX_TIMEOUT;
 

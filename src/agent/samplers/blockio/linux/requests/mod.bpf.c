@@ -90,7 +90,6 @@ static int handle_block_rq_complete(struct request* rq, int error, unsigned int 
 
         idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
 
-        // increment per-operation size histogram
         switch (op) {
         case REQ_OP_READ:
             array_incr(&read_size, idx);

@@ -93,10 +93,8 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
                                   BPF_CORE_READ(grandparent, name));
     }
 
-    // Submit the cgroup info
     bpf_ringbuf_submit(cginfo, 0);
 
-    // Update the serial number in the local map
     bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
 
     return 0;
@@ -177,10 +175,8 @@ static __always_inline int handle_new_cgroup_from_css(struct cgroup_subsys_state
                                   BPF_CORE_READ(grandparent, name));
     }
 
-    // Submit the cgroup info
     bpf_ringbuf_submit(cginfo, 0);
 
-    // Update the serial number in the local map
     bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
 
     return 0;

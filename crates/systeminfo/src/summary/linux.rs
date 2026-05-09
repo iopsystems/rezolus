@@ -74,7 +74,6 @@ fn collect_cpu_info() -> (
         Some(package_set.len())
     };
 
-    // SMT
     let smt = read_usize("/sys/devices/system/cpu/smt/active")
         .ok()
         .map(|v| v == 1);

@@ -38,13 +38,10 @@ pub fn command() -> Command {
 /// Optionally, an HTTP endpoint can be enabled to allow remote triggering of
 /// ring buffer dumps without terminating the service.
 pub fn run(config: Config) {
-    // load config from file
     let config: Arc<Config> = config.into();
 
-    // configure logging
     let _log_drain = configure_logging(config.log().level().to_tracing_level());
 
-    // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(1)
@@ -70,7 +67,6 @@ pub fn run(config: Config) {
 
     let url = config.general().url();
 
-    // our blocking http client
     let blocking_client = match reqwest::blocking::Client::builder().http1_only().build() {
         Ok(c) => c,
         Err(e) => {
@@ -97,7 +93,6 @@ pub fn run(config: Config) {
         debug!("agent systeminfo not available");
     }
 
-    // our async http client
     let async_client = match reqwest::Client::builder().http1_only().build() {
         Ok(c) => c,
         Err(e) => {
@@ -215,12 +210,9 @@ pub fn run(config: Config) {
     rt.block_on(async move {
         let shared = shared_for_loop;
 
-        // sampling interval
         let mut interval = crate::common::aligned_interval(config.general().interval().into());
 
-        // sampling loop
         while STATE.load(Ordering::Relaxed) < TERMINATING {
-            // sample in a loop until RUNNING is false
             loop {
                 tokio::select! {
                     biased;
@@ -248,7 +240,6 @@ pub fn run(config: Config) {
 
                         let start = Instant::now();
 
-                        // sample rezolus
                         if let Ok(response) = async_client.get(url.clone()).send().await {
                             if let Ok(body) = response.bytes().await {
                                 let latency = start.elapsed();
@@ -258,20 +249,16 @@ pub fn run(config: Config) {
 
                                 let idx = shared.idx();
 
-                                // seek to position in snapshot
                                 writer
                                     .seek(SeekFrom::Start(idx * snapshot_len))
                                     .expect("failed to seek");
 
-                                // write the size of the snapshot
                                 writer
                                     .write_all(&body.len().to_be_bytes())
                                     .expect("failed to write snapshot size");
 
-                                // write the actual snapshot content
                                 writer.write_all(&body).expect("failed to write snapshot");
 
-                                // Update shared state atomically
                                 shared.advance_idx();
                             } else {
                                 error!("failed to read response");
@@ -336,7 +323,6 @@ fn perform_dump_to_file(
     let idx = shared.idx();
     let valid_count = shared.valid_snapshot_count();
 
-    // Prepare destination
     if let Err(e) = destination.seek(SeekFrom::Start(0)) {
         return DumpToFileResponse::error(format!("failed to seek destination: {}", e));
     }
@@ -348,14 +334,12 @@ fn perform_dump_to_file(
     let mut first_timestamp: Option<u64> = None;
     let mut last_timestamp: Option<u64> = None;
 
-    // Get temp directory for packed file
     let temp_dir = {
         let mut path: PathBuf = config.general().output();
         path.pop();
         path
     };
 
-    // Create temporary file for packed msgpack data
     let mut packed = match tempfile_in(temp_dir.clone()) {
         Ok(t) => t,
         Err(error) => {
@@ -372,7 +356,6 @@ fn perform_dump_to_file(
             i -= shared.snapshot_count;
         }
 
-        // seek to the start of the snapshot slot
         if writer
             .seek(SeekFrom::Start(i * shared.snapshot_len))
             .is_err()
@@ -380,7 +363,6 @@ fn perform_dump_to_file(
             continue;
         }
 
-        // read the size of the snapshot
         let mut len = [0u8; 8];
         if writer.read_exact(&mut len).is_err() {
             continue;
@@ -391,7 +373,6 @@ fn perform_dump_to_file(
             continue;
         }
 
-        // read the contents of the snapshot
         let mut buf = vec![0u8; size];
         if writer.read_exact(&mut buf).is_err() {
             continue;
@@ -425,7 +406,6 @@ fn perform_dump_to_file(
             }
         }
 
-        // write the contents of the snapshot to the packed file
         if packed.write_all(&buf).is_err() {
             return DumpToFileResponse::error("failed to write to packed file".to_string());
         }

@@ -194,7 +194,6 @@ int sys_exit(struct trace_event_raw_sys_exit* args) {
 
     u32 syscall_id = args->id;
 
-    // lookup the start time
     start_ts = bpf_map_lookup_elem(&start, &tid);
 
     // possible we missed the start
@@ -202,13 +201,10 @@ int sys_exit(struct trace_event_raw_sys_exit* args) {
         return 0;
     }
 
-    // calculate the latency
     lat = bpf_ktime_get_ns() - *start_ts;
 
-    // clear the start timestamp
     *start_ts = 0;
 
-    // calculate the histogram index for this latency value
     idx = value_to_index(lat, HISTOGRAM_POWER);
 
     // increment latency histogram for the syscall family

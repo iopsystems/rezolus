@@ -7,10 +7,8 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
     output.push_str("Available Metrics in Recording\n");
     output.push_str("===============================\n\n");
 
-    // Get the descriptions from metriken metrics
     let descriptions = crate::common::metric_descriptions();
 
-    // List counters
     let mut counter_names = tsdb.counter_names();
     if !counter_names.is_empty() {
         counter_names.sort();
@@ -18,7 +16,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
         output.push_str("-------------------------------------------\n");
         for name in counter_names {
             output.push_str(&format!("• {name}\n"));
-            // Add description if available
             if let Some(desc) = descriptions.get(name) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
@@ -44,7 +41,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
         }
     }
 
-    // List gauges
     let mut gauge_names = tsdb.gauge_names();
     if !gauge_names.is_empty() {
         gauge_names.sort();
@@ -52,7 +48,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
         output.push_str("----------------------------------------\n");
         for name in gauge_names {
             output.push_str(&format!("• {name}\n"));
-            // Add description if available
             if let Some(desc) = descriptions.get(name) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
@@ -78,7 +73,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
         }
     }
 
-    // List histograms
     let mut histogram_names = tsdb.histogram_names();
     if !histogram_names.is_empty() {
         histogram_names.sort();
@@ -86,7 +80,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
         output.push_str("--------------------------------------\n");
         for name in histogram_names {
             output.push_str(&format!("• {name}\n"));
-            // Add description if available
             if let Some(desc) = descriptions.get(name) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
@@ -112,13 +105,11 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
         }
     }
 
-    // Add summary statistics
     let total_counters = tsdb.counter_names().len();
     let total_gauges = tsdb.gauge_names().len();
     let total_histograms = tsdb.histogram_names().len();
     let total_metrics = total_counters + total_gauges + total_histograms;
 
-    // Calculate total series counts
     let mut total_counter_series = 0;
     for name in tsdb.counter_names() {
         if let Some(labels_list) = tsdb.counter_labels(name) {
@@ -157,7 +148,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
         tsdb.interval() * 1000.0
     ));
 
-    // Add common query examples section
     output.push_str("\n\nCOMMON QUERY PATTERNS:\n");
     output.push_str("----------------------\n");
     output.push_str(

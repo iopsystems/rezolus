@@ -89,7 +89,6 @@ int handle__sched_switch(u64* ctx) {
             u32 from_idx = old_cpu * COUNTER_GROUP_WIDTH + FROM;
             u32 to_idx = cpu * COUNTER_GROUP_WIDTH + TO;
 
-            // increment counters
             array_incr(&migrations, from_idx);
             array_incr(&migrations, to_idx);
 

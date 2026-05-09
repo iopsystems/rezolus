@@ -45,7 +45,6 @@ pub struct RecordingConfig {
 
 impl RecordingConfig {
     pub fn from_args(args: &ArgMatches) -> Result<Self, String> {
-        // Common CLI values shared across all modes
         let verbose = *args.get_one::<u8>("VERBOSE").unwrap_or(&0);
         let interval = *args
             .get_one::<humantime::Duration>("INTERVAL")

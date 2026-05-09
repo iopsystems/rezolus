@@ -43,13 +43,10 @@ pub fn command() -> Command {
 /// metrics and/or full histograms with counter and gauge metrics passed through
 /// directly.
 pub fn run(config: Config) {
-    // load config from file
     let config: Arc<Config> = config.into();
 
-    // configure logging
     let _log_drain = configure_logging(config.log().level().to_tracing_level());
 
-    // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(1)
@@ -62,7 +59,6 @@ pub fn run(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    // our http client
     let client = match Client::builder().http1_only().build() {
         Ok(c) => c,
         Err(e) => {
@@ -71,28 +67,21 @@ pub fn run(config: Config) {
         }
     };
 
-    // launch the HTTP listener
     let c = config.clone();
     rt.spawn(async move { serve(c).await });
 
-    // timed loop to calculate summary metrics
     rt.block_on(async move {
-        // sampling interval
         let mut interval = crate::common::aligned_interval(config.general().interval().into());
 
-        // previous snapshot
         let mut previous = None;
 
         let url = config.general().mpk_url();
 
-        // sample in a loop
         loop {
-            // wait to sample
             interval.tick().await;
 
             let start = Instant::now();
 
-            // sample rezolus
             if let Ok(response) = client.get(url.clone()).send().await {
                 if let Ok(body) = response.bytes().await {
                     let latency = start.elapsed();

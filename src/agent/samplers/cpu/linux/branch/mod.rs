@@ -71,14 +71,12 @@ impl BranchInner {
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
-        // check that no perf threads have exited
         for thread in self.perf_threads.iter() {
             if thread.is_finished() {
                 panic!("{} perf thread exited early", NAME);
             }
         }
 
-        // trigger and wait on all perf threads
         let perf_futures: Vec<_> = self
             .perf_sync
             .iter()
@@ -189,7 +187,6 @@ impl Core {
 fn logical_cores() -> Result<Vec<usize>, std::io::Error> {
     let mut cores: BTreeSet<usize> = BTreeSet::new();
 
-    // walk the cpu devices directory
     for entry in WalkDir::new("/sys/devices/system/cpu")
         .min_depth(1)
         .max_depth(1)
@@ -199,7 +196,6 @@ fn logical_cores() -> Result<Vec<usize>, std::io::Error> {
         let path = entry.path();
         let filename = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
 
-        // check if this is a cpu directory
         if filename.starts_with("cpu") && filename[3..].chars().all(char::is_numeric) {
             if let Ok(core_id) = filename[3..].parse() {
                 cores.insert(core_id);

@@ -58,7 +58,6 @@ fn main() {
         std::process::exit(101);
     }));
 
-    // parse command line options
     let cli = Command::new(env!("CARGO_BIN_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .long_about("Rezolus provides high-resolution systems performance telemetry.")

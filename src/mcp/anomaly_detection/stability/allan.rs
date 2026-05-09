@@ -40,10 +40,8 @@ pub(in crate::mcp::anomaly_detection) fn perform_allan_analysis(
         });
     }
 
-    // Create Allan calculator
     let mut allan = Allan::new();
 
-    // Add all data points
     for &value in values {
         allan.record(value);
     }
@@ -60,7 +58,6 @@ pub(in crate::mcp::anomaly_detection) fn perform_allan_analysis(
         tau_samples = ((tau_samples as f64 * 1.5) as usize).max(tau_samples + 1);
     }
 
-    // Calculate Allan deviation for each tau
     let mut deviations = Vec::new();
     for &tau in &taus {
         if let Some(tau_result) = allan.get(tau) {
@@ -117,12 +114,10 @@ fn detect_noise_transitions(
     let mut prev_noise_type: Option<NoiseType> = None;
     let mut prev_deviation: Option<f64> = None;
 
-    // Slide window through the data
     let mut start = 0;
     while start + window_size <= values.len() {
         let window = &values[start..start + window_size];
 
-        // Compute Allan deviation for this window
         let mut allan = Allan::new();
         for &value in window {
             allan.record(value);
@@ -139,7 +134,6 @@ fn detect_noise_transitions(
                 let devs = vec![current_deviation];
                 let current_noise_type = identify_noise_type(&taus, &devs);
 
-                // Check for transition
                 if let (Some(prev_type), Some(prev_dev)) = (prev_noise_type, prev_deviation) {
                     let noise_type_changed = !matches!(
                         (&prev_type, &current_noise_type),

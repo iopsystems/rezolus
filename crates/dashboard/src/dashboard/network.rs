@@ -4,10 +4,6 @@ use crate::plot::*;
 pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
-    /*
-     * Traffic
-     */
-
     let mut traffic = Group::new("Traffic", "traffic");
 
     let bandwidth = traffic.subgroup("Bandwidth");
@@ -36,10 +32,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     view.group(traffic);
 
-    /*
-     * Errors
-     */
-
     let mut errors = Group::new("Errors", "errors");
 
     let health = errors.subgroup("Drops & Retransmits");
@@ -56,10 +48,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     );
 
     view.group(errors);
-
-    /*
-     * TCP
-     */
 
     let mut tcp = Group::new("TCP", "tcp");
 
