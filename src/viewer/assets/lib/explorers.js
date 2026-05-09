@@ -738,4 +738,4 @@ export const NLQueryExplorer = {
     },
 };
 
-export { QueryExplorer, SingleChartView };
+export { QueryExplorer };
