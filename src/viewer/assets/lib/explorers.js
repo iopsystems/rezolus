@@ -505,8 +505,8 @@ const loadModel = async (onProgress) => {
         }
 
         _pipeline = await _transformersModule.pipeline(
-            'image-text-to-text',
-            'huggingworld/Qwen3.5-0.8B-ONNX',
+            'text-generation',
+            'Qwen/Qwen3.5-0.5B-Instruct-GGUF',
             {
                 progress: (report) => {
                     if (typeof onProgress === 'function') {
@@ -554,17 +554,12 @@ Examples:
   "Show network traffic" → sum(rate(network_bytes{direction="transmit"}[5m]))
   "Show scheduler runqueue" → scheduler_runqueue`;
 
-    const response = await pipeline.chat({
-        messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: naturalLanguage },
-        ],
-        max_new_tokens: 128,
-        temperature: 0.1,
-        repetition_penalty: 1.1,
-    });
+    const response = await pipeline(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: naturalLanguage }],
+        { max_new_tokens: 128, temperature: 0.1, repetition_penalty: 1.1 },
+    );
 
-    let text = response?.trim() || '';
+    let text = response?.[0]?.generated_text?.trim() || '';
     // Strip any markdown code fences
     text = text.replace(/^```(?:promql|sql|query)?\n?/i, '').replace(/```$/, '').trim();
     return text;
