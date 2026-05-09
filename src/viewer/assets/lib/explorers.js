@@ -1,5 +1,3 @@
-// explorers.js - QueryExplorer and SingleChartView components
-
 import { ChartsState, Chart } from './charts/chart.js';
 import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from './data.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';

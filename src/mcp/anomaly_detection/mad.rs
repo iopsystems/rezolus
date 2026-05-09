@@ -19,7 +19,6 @@ pub(super) fn perform_mad_analysis(
         return Err("Cannot perform MAD analysis on empty dataset".into());
     }
 
-    // Calculate median
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = if sorted.len().is_multiple_of(2) {
@@ -28,10 +27,8 @@ pub(super) fn perform_mad_analysis(
         sorted[sorted.len() / 2]
     };
 
-    // Calculate absolute deviations from median
     let deviations: Vec<f64> = values.iter().map(|v| (v - median).abs()).collect();
 
-    // Calculate MAD (median of absolute deviations)
     let mut sorted_deviations = deviations.clone();
     sorted_deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mad = if sorted_deviations.len().is_multiple_of(2) {
@@ -46,7 +43,6 @@ pub(super) fn perform_mad_analysis(
     let mad_std = mad * 1.4826;
     let threshold = threshold_multiplier * mad_std;
 
-    // Find outliers
     let mut outliers = Vec::new();
     for (i, &value) in values.iter().enumerate() {
         if (value - median).abs() > threshold {

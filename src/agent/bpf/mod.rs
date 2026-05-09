@@ -80,7 +80,6 @@ where
     let mut cgroup_info = T::default();
 
     if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
-        // Process name fields from bytes to strings
         let name = std::str::from_utf8(cgroup_info.name())
             .unwrap_or("")
             .trim_end_matches(char::from(0))
@@ -141,25 +140,20 @@ impl Sampler for AsyncBpf {
     }
 
     async fn refresh(&self) {
-        // check that the thread has not exited
         if self.thread.is_finished() {
             panic!("{} bpf thread exited early", self.name);
         }
 
-        // notify the thread to start
         self.sync.trigger();
 
-        // wait for notification that thread has finished
         self.sync.wait_notify().await;
 
-        // check that no perf threads have exited
         for thread in self.perf_threads.iter() {
             if thread.is_finished() {
                 panic!("{} perf thread exited early", self.name);
             }
         }
 
-        // trigger and wait on all perf threads
         let perf_futures: Vec<_> = self
             .perf_sync
             .iter()

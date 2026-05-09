@@ -92,7 +92,6 @@ pub fn get_cpus() -> Result<Vec<Cpu>> {
         let die_id = read_usize(format!("/sys/devices/system/cpu/cpu{id}/topology/die_id"))
             .unwrap_or(package_id);
 
-        // sched_domain
         let mut sched_domains: Option<Vec<SchedDomain>> = None;
         if let Ok(domain_dir) = fs::read_dir(format!("/sys/kernel/debug/sched/domains/cpu{id}")) {
             sched_domains = Some(

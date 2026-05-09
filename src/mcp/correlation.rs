@@ -66,15 +66,12 @@ pub fn calculate_correlation(
     expr1: &str,
     expr2: &str,
 ) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
-    // Get time range and step from the TSDB
     let (start, end) = engine.get_time_range();
     let step = tsdb.interval();
 
-    // Query both expressions
     let result1 = engine.query_range(expr1, start, end, step)?;
     let result2 = engine.query_range(expr2, start, end, step)?;
 
-    // Extract matrix samples
     let samples1 = extract_matrix_samples(&result1)?;
     let samples2 = extract_matrix_samples(&result2)?;
 
@@ -131,14 +128,12 @@ pub fn calculate_correlation(
             .unwrap_or((0.0, 0, 0))
     };
 
-    // Calculate correlations at different lags for the overall result
     let correlations_at_lag = if samples1.len() == 1 && samples2.len() == 1 {
         calculate_lag_correlations(&samples1[0], &samples2[0], step)
     } else {
         vec![]
     };
 
-    // Sort series pairs by absolute correlation
     series_pairs.sort_by(|a, b| {
         b.max_correlation
             .abs()
@@ -165,7 +160,6 @@ fn calculate_series_cross_correlation(
     series2: &MatrixSample,
     step: f64,
 ) -> Option<CrossCorrelationResult> {
-    // Prepare the data
     let data1 = prepare_series_data(series1);
     let data2 = prepare_series_data(series2);
 
@@ -221,7 +215,6 @@ fn calculate_series_cross_correlation(
         })
         .collect();
 
-    // Find the best correlation
     for (lag, corr, count) in lag_correlations {
         if corr.abs() > best_correlation.abs() {
             best_correlation = corr;
@@ -409,8 +402,6 @@ fn calculate_lag_correlations(
     lag_samples.sort();
     lag_samples.dedup();
 
-    // Calculate all correlations in parallel
-
     lag_samples
         .into_par_iter()
         .filter_map(|lag| {
@@ -487,7 +478,6 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
         result.max_correlation, result.optimal_lag,
     ));
 
-    // Interpret the lag
     if result.optimal_lag > 0 {
         output.push_str(&format!(
             "  → {} leads {} by {} seconds\n",

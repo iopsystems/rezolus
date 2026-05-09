@@ -3,7 +3,6 @@
  * Supports automatic scaling of values based on magnitude
  */
 
-// Define unit scaling systems
 const UNIT_SYSTEMS = {
     // Time-based units (nanoseconds to seconds)
     time: {

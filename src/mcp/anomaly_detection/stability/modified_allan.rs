@@ -28,10 +28,8 @@ pub(in crate::mcp::anomaly_detection) fn perform_modified_allan_analysis(
         });
     }
 
-    // Create Modified Allan calculator from allan crate
     let mut modified = ModifiedAllan::new();
 
-    // Add all data points
     for &value in values {
         modified.record(value);
     }
@@ -48,7 +46,6 @@ pub(in crate::mcp::anomaly_detection) fn perform_modified_allan_analysis(
         tau_samples = ((tau_samples as f64 * 1.5) as usize).max(tau_samples + 1);
     }
 
-    // Calculate Modified Allan deviation for each tau
     let mut deviations = Vec::new();
     for &tau in &taus {
         if let Some(tau_result) = modified.get(tau) {
@@ -62,10 +59,8 @@ pub(in crate::mcp::anomaly_detection) fn perform_modified_allan_analysis(
         }
     }
 
-    // Identify noise type
     let noise_type = identify_noise_type(&taus_seconds, &deviations);
 
-    // Find local minima
     let minima = find_deviation_minima(&taus_seconds, &deviations);
 
     // Detect noise characteristic transitions via sliding window analysis
@@ -101,12 +96,10 @@ fn detect_modified_allan_transitions(
     let mut prev_noise_type: Option<NoiseType> = None;
     let mut prev_deviation: Option<f64> = None;
 
-    // Slide window through the data
     let mut start = 0;
     while start + window_size <= values.len() {
         let window = &values[start..start + window_size];
 
-        // Compute Modified Allan deviation for this window
         let mut modified = ModifiedAllan::new();
         for &value in window {
             modified.record(value);
@@ -123,7 +116,6 @@ fn detect_modified_allan_transitions(
                 let devs = vec![current_deviation];
                 let current_noise_type = identify_noise_type(&taus, &devs);
 
-                // Check for transition
                 if let (Some(prev_type), Some(prev_dev)) = (prev_noise_type, prev_deviation) {
                     let noise_type_changed = !matches!(
                         (&prev_type, &current_noise_type),

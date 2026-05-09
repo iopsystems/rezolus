@@ -96,7 +96,6 @@ static int handle_block_rq_complete(struct request* rq, int error, unsigned int 
 
         idx = value_to_index(delta, HISTOGRAM_POWER);
 
-        // increment per-operation latency histogram
         switch (op) {
         case REQ_OP_READ:
             array_incr(&read_latency, idx);

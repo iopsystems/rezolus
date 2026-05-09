@@ -37,7 +37,6 @@ pub const MAX_PID: usize = 4194304;
 ///
 /// This is the default mode for running Rezolus.
 pub fn run(config: PathBuf) {
-    // load config from file
     let config: Arc<Config> = {
         debug!("loading config: {config:?}");
         match Config::load(&config) {
@@ -49,14 +48,11 @@ pub fn run(config: PathBuf) {
         }
     };
 
-    // configure scheduler
     #[cfg(target_os = "linux")]
     config.scheduler().apply();
 
-    // configure logging
     let _log_drain = configure_logging(config.log().level().to_tracing_level());
 
-    // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(1)

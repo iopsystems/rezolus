@@ -40,7 +40,6 @@ impl ExternalMetricsStore {
         labels: HashMap<String, String>,
         value: ExternalMetricValue,
     ) -> bool {
-        // Check for collision with internal metrics
         if self.reserved_names.contains(&name) {
             warn!(
                 "external metric '{}' rejected: collides with internal metric",

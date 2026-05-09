@@ -288,7 +288,6 @@ where
             }
             libbpf_rs::set_print(Some((PrintLevel::Debug, libbpf_print_fn)));
 
-            // storage for the BPF object file
             let open_object: &'static mut MaybeUninit<OpenObject> =
                 Box::leak(Box::new(MaybeUninit::uninit()));
 
@@ -341,13 +340,10 @@ where
                 }
             }
 
-            // load the BPF program
             let mut skel = open_skel.load()?;
 
-            // log the number of instructions for each probe in the program
             skel.log_prog_instructions();
 
-            // attach the BPF program
             match skel.attach() {
                 Ok(_) => {}
                 Err(e) if e.kind() == libbpf_rs::ErrorKind::NotFound => {
@@ -355,8 +351,6 @@ where
                 }
                 Err(e) => return Err(e),
             }
-
-            // convert our metrics into wrapped types that we can refresh
 
             let mut counters: Vec<Counters> = self
                 .counters
@@ -438,7 +432,6 @@ where
                 .map(|(name, counters)| PackedCounters::new(skel.map(name), counters))
                 .collect();
 
-            // load any data from userspace into BPF maps
             for (name, values) in self.maps.into_iter() {
                 let fd = skel.map(name).as_fd().as_raw_fd();
                 let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
@@ -462,10 +455,8 @@ where
                 let _ = mmap.flush();
             }
 
-            // indicate that we have finished initialization
             initialized.store(true, Ordering::Relaxed);
 
-            // the sampling loop
             loop {
                 // blocking wait until we are notified to start, no cpu consumed
                 sync.wait_trigger();
@@ -474,8 +465,6 @@ where
                 if let Some(ref rb) = ringbuffer {
                     let _ = rb.consume();
                 }
-
-                // refresh all the metrics
 
                 for v in &mut counters {
                     v.refresh();
@@ -519,7 +508,6 @@ where
                     self.prog_stats.run_count.set(run_count);
                 }
 
-                // notify that we have finished running
                 sync.notify();
             }
         });
@@ -529,7 +517,6 @@ where
             self.name
         );
 
-        // wait for the sampler thread to either error out or finish initializing
         loop {
             if thread.is_finished() {
                 if let Err(e) = thread.join().unwrap() {
@@ -550,7 +537,6 @@ where
             self.name
         );
 
-        // gather perf thread sync primitives and join handles
         let perf_sync = perf_sync_rx.try_iter().collect();
         let perf_threads = perf_threads_rx.try_iter().collect();
 

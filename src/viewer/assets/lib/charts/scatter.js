@@ -1,5 +1,3 @@
-// scatter.js - Scatter chart configuration with fixed time axis handling
-
 import {
     createAxisLabelFormatter,
 } from './util/units.js';
@@ -92,7 +90,6 @@ export function configureScatterChart(chart) {
     // For percentile data, the format is [times, percentile1Values, percentile2Values, ...]
     const timeData = data[0];
 
-    // Create series for each percentile
     const series = [];
 
     // Derive labels from query result series names (set by the PromQL engine's

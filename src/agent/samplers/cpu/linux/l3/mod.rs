@@ -70,14 +70,12 @@ impl CpuL3Inner {
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
-        // check that no perf threads have exited
         for thread in self.perf_threads.iter() {
             if thread.is_finished() {
                 panic!("{} perf thread exited early", NAME);
             }
         }
 
-        // trigger and wait on all perf threads
         let perf_futures: Vec<_> = self
             .perf_sync
             .iter()
@@ -195,7 +193,6 @@ fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
     let mut l3_domains = Vec::new();
     let mut processed = HashSet::new();
 
-    // walk the cpu devices directory
     for entry in WalkDir::new("/sys/devices/system/cpu")
         .min_depth(1)
         .max_depth(1)
@@ -205,7 +202,6 @@ fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
         let path = entry.path();
         let filename = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
 
-        // check if this is a cpu directory
         if filename.starts_with("cpu") && filename[3..].chars().all(char::is_numeric) {
             let cache_dir = path.join("cache");
 
@@ -230,7 +226,6 @@ fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
             {
                 let shared_cpu_list = l3_index.path().join("shared_cpu_list");
 
-                // parse the shared cpu list
                 if let Ok(shared_cpu_list) = std::fs::read_to_string(&shared_cpu_list) {
                     let shared_cores = parse_cpu_list(&shared_cpu_list);
 

@@ -448,7 +448,6 @@ pub fn run(config: RecordingConfig) {
 
     let out_dir = output_dir(&config.output);
 
-    // Initialize endpoint states
     let mut endpoints: Vec<EndpointState> = config
         .endpoints
         .iter()
@@ -491,7 +490,6 @@ pub fn run(config: RecordingConfig) {
         std::process::exit(1);
     }
 
-    // Create per-endpoint writers
     let mut writers: Vec<Option<EndpointWriter>> = endpoints
         .iter()
         .map(|ep| {
@@ -625,7 +623,6 @@ pub fn run(config: RecordingConfig) {
                 }
             }
 
-            // Retry pending endpoints
             let pending_indices: Vec<usize> = endpoints
                 .iter()
                 .enumerate()
@@ -668,7 +665,6 @@ pub fn run(config: RecordingConfig) {
 
         // ── Finalization ──────────────────────────────────────────────────
 
-        // Flush all writers
         for ew in writers.iter_mut().flatten() {
             let _ = ew.writer.flush();
         }

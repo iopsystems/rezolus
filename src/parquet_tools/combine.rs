@@ -50,7 +50,6 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let bypass_time_check = args.get_flag("bypass-time-check");
     let pinned = args.get_one::<String>("pinned");
 
-    // Phase 1: Load all input files
     let mut inputs = load_inputs(&files)?;
 
     // Phase 2: Validate (cheapest checks first)
@@ -74,7 +73,6 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Phase 3: Combine and write
     combine_and_write(&inputs, output, bypass_time_check, pinned)?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
@@ -95,7 +93,6 @@ fn load_inputs(paths: &[PathBuf]) -> Result<Vec<InputFile>, Box<dyn std::error::
 }
 
 fn load_single_input(path: &PathBuf) -> Result<InputFile, Box<dyn std::error::Error>> {
-    // Read file-level metadata via SerializedFileReader
     let meta_reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
     let kv_metadata: Vec<KeyValue> = meta_reader
         .metadata()
@@ -135,7 +132,6 @@ fn load_single_input(path: &PathBuf) -> Result<InputFile, Box<dyn std::error::Er
         .find(|kv| kv.key == KEY_INSTANCE)
         .and_then(|kv| kv.value.clone());
 
-    // Read all record batches
     let file = std::fs::File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let schema = builder.schema().clone();

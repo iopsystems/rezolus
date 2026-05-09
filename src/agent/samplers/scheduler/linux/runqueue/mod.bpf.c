@@ -214,26 +214,21 @@ int handle__sched_switch(u64* ctx) {
                     cginfo->id = cgroup_id;
                     cginfo->level = BPF_CORE_READ(prev, sched_task_group, css.cgroup, level);
 
-                    // read the cgroup name
                     bpf_probe_read_kernel_str(
                         &cginfo->name, CGROUP_NAME_LEN,
                         BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn, name));
 
-                    // read the cgroup parent name
                     struct kernfs_node* kn = BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn);
                     struct kernfs_node* parent = get_kernfs_node_parent(kn);
                     bpf_probe_read_kernel_str(&cginfo->pname, CGROUP_NAME_LEN,
                                               BPF_CORE_READ(parent, name));
 
-                    // read the cgroup grandparent name
                     struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
                     bpf_probe_read_kernel_str(&cginfo->gpname, CGROUP_NAME_LEN,
                                               BPF_CORE_READ(grandparent, name));
 
-                    // submit the cgroup info
                     bpf_ringbuf_submit(cginfo, 0);
 
-                    // update the serial number in the local map
                     bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
                 }
             }
@@ -248,26 +243,21 @@ int handle__sched_switch(u64* ctx) {
     // - update prev->pid enqueued_at with now
     // - calculate how long prev task was running and update hist
     if (get_task_state(prev) == TASK_RUNNING) {
-        // count involuntary context switch system level
         idx = COUNTER_GROUP_WIDTH * processor_id + IVCSW;
         array_incr(&counters, idx);
 
-        // count cswitch for cgroup
         if (cgroup_id < MAX_CGROUPS) {
             array_incr(&cgroup_ivcsw, cgroup_id);
         }
 
         pid = prev->pid;
 
-        // mark when it was enqueued
         bpf_map_update_elem(&enqueued_at, &pid, &ts, 0);
 
-        // calculate how long it was running and increment stats
         tsp = bpf_map_lookup_elem(&running_at, &pid);
         if (tsp && *tsp) {
             delta_ns = ts - *tsp;
 
-            // update histogram
             histogram_incr(&running, HISTOGRAM_POWER, delta_ns);
 
             *tsp = 0;
@@ -277,7 +267,6 @@ int handle__sched_switch(u64* ctx) {
     // for all tasks: track when it went off-cpu
     pid = prev->pid;
 
-    // mark off-cpu at
     bpf_map_update_elem(&offcpu_at, &pid, &ts, 0);
 
     // next task has moved into running
@@ -304,22 +293,17 @@ int handle__sched_switch(u64* ctx) {
         }
     }
 
-    // update running_at
     bpf_map_update_elem(&running_at, &pid, &ts, 0);
 
-    // calculate how long it was enqueued and increment stats
     tsp = bpf_map_lookup_elem(&enqueued_at, &pid);
     if (tsp && *tsp) {
         delta_ns = ts - *tsp;
 
-        // update the histogram
         histogram_incr(&runqlat, HISTOGRAM_POWER, delta_ns);
 
-        // update the system counter
         idx = COUNTER_GROUP_WIDTH * processor_id + RUNQ_WAIT;
         array_add(&counters, idx, delta_ns);
 
-        // update the cgroup counter
         if (cgroup_id < MAX_CGROUPS) {
             array_add(&cgroup_runq_wait, cgroup_id, delta_ns);
         }
@@ -335,10 +319,8 @@ int handle__sched_switch(u64* ctx) {
             if (offcpu_ns > delta_ns) {
                 offcpu_ns = offcpu_ns - delta_ns;
 
-                // update the histogram
                 histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
 
-                // update the cgroup counter
                 if (cgroup_id < MAX_CGROUPS) {
                     array_add(&cgroup_offcpu, cgroup_id, offcpu_ns);
                 }

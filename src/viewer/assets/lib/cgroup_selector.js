@@ -1,5 +1,3 @@
-// cgroup_selector.js - Cgroup selector component for selecting which cgroups to view individually
-//
 // Attrs:
 //   groups: array of group objects with plots
 //   executeQuery: (query) => Promise<result> — runs a PromQL range query
