@@ -898,6 +898,17 @@ const initDashboard = (config = {}) => {
                     );
                 }
 
+                if (params.section === 'nl_query') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        { name: 'NL Query', route: '/nl_query' },
+                        () => compareMode,
+                    );
+                }
+
                 const cachedView = (sectionKey, path) => ({
                     view() {
                         const data = sectionResponseCache[sectionKey];
