@@ -2,13 +2,16 @@
 // Used by both the binary viewer (src/viewer) and the static site (site/viewer).
 //
 // Props:
-//   onFile(file: File)  — called when user selects or drops a .parquet file
-//   onConnect(url: str) — called when user enters a live agent URL (optional; hidden if absent)
-//   onDemo()            — called when user clicks "Try Demo" (optional; hidden if absent)
-//   loading: boolean    — show "Loading..." indicator
-//   error: string|null  — show error message
+//   onFile(file: File)        — called when user selects or drops a .parquet file
+//   onConnect(url: str)       — called when user enters a live agent URL (optional; hidden if absent)
+//   onLoadUrl(raw: str)       — called with `[alias=]url` to load a parquet from a URL (optional; hidden if absent)
+//   proxyEnabled: bool        — when false (default), the URL section warns about CORS for cross-origin loads
+//   onDemo()                  — called when user clicks "Try Demo" (optional; hidden if absent)
+//   loading: boolean          — show "Loading..." indicator
+//   error: string|null        — show error message
 
 let connectUrl = '';
+let parquetUrl = '';
 
 // Small reusable dropzone for a single parquet slot. Used by the
 // compare-mode dual landing and available for other single-slot callers.
@@ -126,99 +129,140 @@ const CompareLanding = {
 const FileUpload = {
     view({ attrs }) {
         const { onFile, onConnect, onDemo, loading, error } = attrs;
+
+        const hasDemos = !!(attrs.demoSections || attrs.demos || onDemo);
+        const hasExplore = !!(onFile || onConnect || attrs.onLoadUrl);
+
+        const demosSection = hasDemos && m('section.upload-section', [
+            m('h2.upload-section-title', 'Demos'),
+            // Either grouped by section (demoSections) or a flat row
+            // (demos). A demo entry may carry either a single `file`
+            // string or a `files` array (for compare demos); onDemo
+            // receives the whole entry so the caller can route single
+            // vs compare appropriately.
+            m('div.upload-demo-area',
+                attrs.demoSections
+                    ? attrs.demoSections.map(section => m('div.upload-demo-section', [
+                        m('p.upload-section-label', section.label),
+                        m('div.upload-demo-row',
+                            (section.demos || []).map(demo =>
+                                m('button.upload-btn', {
+                                    onclick: () => onDemo(demo),
+                                    disabled: loading,
+                                }, demo.label),
+                            ),
+                        ),
+                    ]))
+                    : m('div.upload-demo-row',
+                        (attrs.demos || [{ label: 'Try Demo' }]).map(demo =>
+                            m('button.upload-btn', {
+                                onclick: () => onDemo(demo),
+                                disabled: loading,
+                            }, demo.label),
+                        ),
+                    ),
+            ),
+        ]);
+
+        const dropzone = onFile && m('div.upload-dropzone', {
+            ondragover: (e) => {
+                e.preventDefault();
+                e.currentTarget.classList.add('dragover');
+            },
+            ondragleave: (e) => {
+                e.currentTarget.classList.remove('dragover');
+            },
+            ondrop: (e) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove('dragover');
+                const file = e.dataTransfer.files[0];
+                if (file) onFile(file);
+            },
+        }, [
+            m('svg.upload-icon', {
+                width: 48, height: 48, viewBox: '0 0 24 24',
+                fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5,
+            }, [
+                m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+                m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+            ]),
+            m('p', 'Drag & drop a .parquet file here'),
+            m('p.upload-or', 'or'),
+            m('label.upload-btn', [
+                'Choose File',
+                m('input', {
+                    type: 'file',
+                    accept: '.parquet',
+                    style: 'display:none',
+                    onchange: (e) => {
+                        const file = e.target.files[0];
+                        if (file) onFile(file);
+                    },
+                }),
+            ]),
+        ]);
+
+        const connectGroup = onConnect && m('div.upload-connect', [
+            m('p.upload-connect-label', 'Connect to a live agent'),
+            m('input.connect-input', {
+                type: 'text',
+                placeholder: 'http://localhost:4241',
+                value: connectUrl,
+                disabled: loading,
+                oninput: (e) => { connectUrl = e.target.value; },
+                onkeydown: (e) => {
+                    if (e.key === 'Enter' && connectUrl.trim()) {
+                        onConnect(connectUrl.trim());
+                    }
+                },
+            }),
+            m('button.upload-btn.connect-btn', {
+                disabled: loading || !connectUrl.trim(),
+                onclick: () => onConnect(connectUrl.trim()),
+            }, 'Connect'),
+        ]);
+
+        const urlGroup = attrs.onLoadUrl && m('div.upload-connect', [
+            m('p.upload-connect-label', 'Load a parquet from URL'),
+            m('textarea.connect-input.connect-textarea', {
+                rows: 4,
+                placeholder: 'https://example.com/recording.parquet\n— or —\nalias=URL, alias=URL\n(comma-separate two for A/B compare mode)',
+                value: parquetUrl,
+                disabled: loading,
+                oninput: (e) => { parquetUrl = e.target.value; },
+                onkeydown: (e) => {
+                    // Enter submits; Shift+Enter inserts a newline for
+                    // users who really want to paste multi-line input.
+                    if (e.key === 'Enter' && !e.shiftKey && parquetUrl.trim()) {
+                        e.preventDefault();
+                        attrs.onLoadUrl(parquetUrl.trim());
+                    }
+                },
+            }),
+            m('button.upload-btn.connect-btn', {
+                disabled: loading || !parquetUrl.trim(),
+                onclick: () => attrs.onLoadUrl(parquetUrl.trim()),
+            }, 'Load'),
+            m('p.upload-hint', attrs.proxyEnabled
+                ? 'Cross-origin URLs are fetched server-side via the local proxy.'
+                : 'Cross-origin URLs require CORS on the source. To bypass, host this viewer with `rezolus view --proxy-allow=<host>`.'),
+        ]);
+
+        const exploreSection = hasExplore && m('section.upload-section', [
+            m('h2.upload-section-title', 'Explore'),
+            dropzone,
+            connectGroup,
+            urlGroup,
+        ]);
+
         return m('div.upload-container', [
             m('div.upload-card', [
                 m('h1.upload-title', 'Rezolus Viewer'),
                 m('p.upload-subtitle', onFile
-                    ? 'Drop a parquet file to explore system performance metrics.'
-                    : 'Explore system performance metrics.'),
-                onFile && m('div.upload-dropzone', {
-                    ondragover: (e) => {
-                        e.preventDefault();
-                        e.currentTarget.classList.add('dragover');
-                    },
-                    ondragleave: (e) => {
-                        e.currentTarget.classList.remove('dragover');
-                    },
-                    ondrop: (e) => {
-                        e.preventDefault();
-                        e.currentTarget.classList.remove('dragover');
-                        const file = e.dataTransfer.files[0];
-                        if (file) onFile(file);
-                    },
-                }, [
-                    m('svg.upload-icon', {
-                        width: 48, height: 48, viewBox: '0 0 24 24',
-                        fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5,
-                    }, [
-                        m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
-                        m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
-                    ]),
-                    m('p', 'Drag & drop a .parquet file here'),
-                    m('p.upload-or', 'or'),
-                    m('label.upload-btn', [
-                        'Choose File',
-                        m('input', {
-                            type: 'file',
-                            accept: '.parquet',
-                            style: 'display:none',
-                            onchange: (e) => {
-                                const file = e.target.files[0];
-                                if (file) onFile(file);
-                            },
-                        }),
-                    ]),
-                ]),
-                onConnect && m('div.upload-connect', [
-                    m('p.upload-connect-label', 'or connect to a live agent'),
-                    m('input.connect-input', {
-                        type: 'text',
-                        placeholder: 'http://localhost:4241',
-                        value: connectUrl,
-                        disabled: loading,
-                        oninput: (e) => { connectUrl = e.target.value; },
-                        onkeydown: (e) => {
-                            if (e.key === 'Enter' && connectUrl.trim()) {
-                                onConnect(connectUrl.trim());
-                            }
-                        },
-                    }),
-                    m('button.upload-btn.connect-btn', {
-                        disabled: loading || !connectUrl.trim(),
-                        onclick: () => onConnect(connectUrl.trim()),
-                    }, 'Connect'),
-                ]),
-                // Demo area — either grouped by section (demoSections)
-                // or a flat row (demos). A demo entry may carry either a
-                // single `file` string or a `files` array (for compare
-                // demos); onDemo receives the whole entry so the caller
-                // can route single vs compare appropriately.
-                (attrs.demoSections || attrs.demos || (onDemo ? [{ label: 'Try Demo' }] : [])).length > 0 &&
-                    m('div.upload-demo-area', [
-                        onFile && m('p.upload-or', 'or'),
-                        ...(attrs.demoSections
-                            ? attrs.demoSections.map(section => m('div.upload-demo-section', [
-                                m('p.upload-section-label', section.label),
-                                m('div.upload-demo-row',
-                                    (section.demos || []).map(demo =>
-                                        m('button.upload-btn', {
-                                            onclick: () => onDemo(demo),
-                                            disabled: loading,
-                                        }, demo.label),
-                                    ),
-                                ),
-                            ]))
-                            : [
-                                m('div.upload-demo-row',
-                                    (attrs.demos || [{ label: 'Try Demo' }]).map(demo =>
-                                        m('button.upload-btn', {
-                                            onclick: () => onDemo(demo),
-                                            disabled: loading,
-                                        }, demo.label),
-                                    ),
-                                ),
-                            ]),
-                    ]),
+                    ? 'Drop a rezolus-recorded parquet file for no-code charts.'
+                    : 'Explore system metrics and service KPIs.'),
+                demosSection,
+                exploreSection,
                 error && m('p.upload-error', error),
                 loading && m('p.upload-loading', 'Loading...'),
             ]),

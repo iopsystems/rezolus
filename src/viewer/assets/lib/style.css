@@ -3190,6 +3190,43 @@ main {
     margin: 0 0 0.25rem;
 }
 
+.upload-hint {
+    color: var(--fg-muted);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    margin: 0.5rem 0 0;
+}
+
+.upload-section {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-default);
+}
+
+.upload-section:first-of-type {
+    margin-top: 1rem;
+    padding-top: 0;
+    border-top: none;
+}
+
+.upload-section-title {
+    color: var(--accent);
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.connect-textarea {
+    resize: vertical;
+    min-height: 7rem;
+    text-align: left;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-y: auto;
+}
+
 .connect-input {
     display: block;
     width: 100%;
