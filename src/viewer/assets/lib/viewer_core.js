@@ -227,13 +227,43 @@ const fetchExperimentResult = (vnode) => {
     })();
 };
 
+// Resolve baseline's full [start, end] time range from server metadata.
+// Returns null when metadata isn't available; callers fall back to
+// data.js's natural baseline range (3600 s window cap).
+const fetchBaselineRange = async () => {
+    try {
+        const meta = await ViewerApi.getMetadata(CAPTURE_BASELINE);
+        const data = meta?.data ?? meta;
+        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+        if (minT == null || maxT == null) return null;
+        const start = Number(minT);
+        const end = Number(maxT);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+            return null;
+        }
+        return { start, end };
+    } catch (_) {
+        return null;
+    }
+};
+
 // Fire baseline + experiment spectrum fetches in parallel. On both
 // resolving, write into vnode.state._spectrumByKind[kind] and trigger
 // a redraw. On either failing or returning no data, leave the cache
 // empty for that kind and clear the pending flag so the toggle path
 // falls through to FALLBACK (5-percentile split).
+//
+// Both captures fetch over their full duration with a SHARED step so
+// the diff path (renderDiffQuantileHeatmap → buildDeltaSpectrum) can
+// pair samples by index after rebasing each side to its own first
+// sample. Without a shared step, baseline (3600 s cap, step=window/500)
+// and experiment (full duration, step=duration/500) end up on
+// incompatible grids whenever the durations differ — buildDeltaSpectrum
+// then refuses to diff and the user sees the baseline scatter instead
+// of a heatmap.
 const kickOffSpectrumFetch = (vnode, spec, kind) => {
-    const range = vnode.attrs.experimentQueryRange;
+    const expRange = vnode.attrs.experimentQueryRange;
     const quantiles = quantilesForKind(kind);
     const plotForFetch = { promql_query: spec.promql_query, opts: spec.opts };
     // Snapshot the step this fetch was launched at. If the user
@@ -241,11 +271,26 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
     // experiment refetch), we discard this fetch's result so we don't
     // write stale data into the kind cache after invalidation.
     const stepAtLaunch = vnode.state._lastFetchedStep;
-    Promise.all([
-        fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_BASELINE),
-        fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_EXPERIMENT, range),
-    ])
-        .then(([base, exp]) => {
+
+    (async () => {
+        try {
+            const baseRangeBare = await fetchBaselineRange();
+            let baseRange = null;
+            let expRangeOut = expRange || null;
+            if (baseRangeBare && expRange?.step) {
+                // Coarsest step keeps both grids aligned without
+                // oversampling either capture.
+                const baseStep = Math.max(1, Math.floor((baseRangeBare.end - baseRangeBare.start) / 500));
+                const sharedStep = Math.max(baseStep, expRange.step);
+                baseRange = { ...baseRangeBare, step: sharedStep };
+                expRangeOut = { ...expRange, step: sharedStep };
+            }
+
+            const [base, exp] = await Promise.all([
+                fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_BASELINE, baseRange),
+                fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_EXPERIMENT, expRangeOut),
+            ]);
+
             // Discard if granularity has changed since launch (the
             // cache has already been invalidated for the new step;
             // a fresh fetch will fire on the next view()).
@@ -260,8 +305,7 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
             vnode.state._spectrumByKind = vnode.state._spectrumByKind || {};
             vnode.state._spectrumByKind[kind] = { baseline: base, experiment: exp };
             m.redraw();
-        })
-        .catch((err) => {
+        } catch (err) {
             if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
             console.error('[compare] spectrum fetch failed', err);
             if (vnode.state._spectrumPending === kind) {
@@ -269,7 +313,8 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
             }
             vnode.state.error = err?.message || 'spectrum fetch failed';
             m.redraw();
-        });
+        }
+    })();
 };
 
 const CompareChartWrapper = {

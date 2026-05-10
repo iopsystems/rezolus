@@ -105,28 +105,43 @@ function positiveOr(v, fallback) {
  * Uses nullDiff so undefined/NaN propagate cleanly.
  *
  * Caller responsibilities:
- *   - Time axes must be VALUE-aligned, not just length-matched. This
- *     function only verifies length; matching cadence is the upstream
- *     fetch's job.
+ *   - Compare-mode anchors each capture to its own first sample
+ *     (relative t=0). When the captures share the same step, the i-th
+ *     index represents the same relative offset on both sides — this
+ *     function pairs by index and truncates to the common prefix when
+ *     timestamp counts differ. Step mismatch returns null instead of
+ *     producing a misleading diff.
  *   - When dMin === dMax (flat captures), pad before passing to a
  *     diverging palette renderer (see renderDiffHeatmap in compare.js
  *     for the canonical pad recipe).
  *   - Do not mutate the returned `time_data` / `data[0]` in place;
- *     they alias baseline.time_data.
+ *     they alias baseline.time_data when no truncation was needed.
  */
 export function buildDeltaSpectrum(baseline, experiment) {
     const baseTimes = baseline?.time_data;
     const expTimes = experiment?.time_data;
     if (!Array.isArray(baseTimes) || !Array.isArray(expTimes)) return null;
-    if (baseTimes.length === 0 || baseTimes.length !== expTimes.length) return null;
+    if (baseTimes.length === 0 || expTimes.length === 0) return null;
 
     const baseData = baseline.data;
     const expData = experiment.data;
     if (!Array.isArray(baseData) || baseData.length < 2) return null;
+    // qCount must match across captures (same set of percentiles).
     if (!Array.isArray(expData) || expData.length !== baseData.length) return null;
 
+    // Reject when either side has too few samples to determine step,
+    // or when steps disagree — pairing by index would be meaningless.
+    if (baseTimes.length < 2 || expTimes.length < 2) return null;
+    const baseStep = baseTimes[1] - baseTimes[0];
+    const expStep = expTimes[1] - expTimes[0];
+    if (!(baseStep > 0) || !(expStep > 0)) return null;
+    if (Math.abs(baseStep - expStep) > 1e-9) return null;
+
     const qCount = baseData.length - 1;
-    const tCount = baseTimes.length;
+    const tCount = Math.min(baseTimes.length, expTimes.length);
+    const truncatedBaseTimes = baseTimes.length === tCount
+        ? baseTimes
+        : baseTimes.slice(0, tCount);
 
     const deltaCols = [];
     const baseMatrix = [];
@@ -158,8 +173,8 @@ export function buildDeltaSpectrum(baseline, experiment) {
     }
 
     return {
-        time_data: baseTimes,
-        data: [baseTimes, ...deltaCols],
+        time_data: truncatedBaseTimes,
+        data: [truncatedBaseTimes, ...deltaCols],
         series_names: baseline.series_names || [],
         dMin: Number.isFinite(dMin) ? dMin : null,
         dMax: Number.isFinite(dMax) ? dMax : null,
