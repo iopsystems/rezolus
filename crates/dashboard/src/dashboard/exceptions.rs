@@ -157,20 +157,18 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         "sum(irate(blockio_errors[5m]))".to_string(),
     );
     errors.plot_promql_full(
-        PlotOpts::counter("By Class", "blockio-err-by-class", Unit::Rate)
-            .with_description(
-                "Fault mode: timeout-heavy = controller / transport hang; \
+        PlotOpts::counter("By Class", "blockio-err-by-class", Unit::Rate).with_description(
+            "Fault mode: timeout-heavy = controller / transport hang; \
                  nospc = thin pool out of room; protection = data-integrity \
                  check failed.",
-            ),
+        ),
         "sum by (error) (irate(blockio_errors[5m]))".to_string(),
     );
     errors.plot_promql_full(
-        PlotOpts::counter("By Op", "blockio-err-by-op", Unit::Rate)
-            .with_description(
-                "Fault source: a read-only spike points at the media; a \
+        PlotOpts::counter("By Op", "blockio-err-by-op", Unit::Rate).with_description(
+            "Fault source: a read-only spike points at the media; a \
                  write-only spike points at the controller / target.",
-            ),
+        ),
         "sum by (op) (irate(blockio_errors[5m]))".to_string(),
     );
 
