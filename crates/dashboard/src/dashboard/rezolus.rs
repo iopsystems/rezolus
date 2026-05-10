@@ -38,14 +38,14 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     perf.plot_promql_with_sql(
         PlotOpts::counter("IPC", "ipc", Unit::Count),
         "sum(irate(cgroup_cpu_instructions{name=\"/system.slice/rezolus.service\"}[5m])) / sum(irate(cgroup_cpu_cycles{name=\"/system.slice/rezolus.service\"}[5m]))".to_string(),
-        // The cgroup name "/system.slice/rezolus.service" maps to physical
-        // columns of the form cgroup_cpu_<metric>/system.slice/rezolus.service/<id>.
-        // (Leading slash on the cgroup path is absorbed into the metric/path
-        // boundary in metriken-exposition's wide-form encoding.)
+        // Cgroup path is "/system.slice/rezolus.service" — the leading
+        // `/` is part of the label value, so the wide-form column name
+        // is cgroup_cpu_<metric>//system.slice/rezolus.service/<id>
+        // (note the double slash at the metric/path boundary).
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^cgroup_cpu_instructions/system.slice/rezolus.service/[0-9]+$')]::UBIGINT[]) AS instr,
-                     list_sum([*COLUMNS('^cgroup_cpu_cycles/system.slice/rezolus.service/[0-9]+$')]::UBIGINT[]) AS cyc
+                     list_sum([*COLUMNS('^cgroup_cpu_instructions//system.slice/rezolus.service/[0-9]+$')]::UBIGINT[]) AS instr,
+                     list_sum([*COLUMNS('^cgroup_cpu_cycles//system.slice/rezolus.service/[0-9]+$')]::UBIGINT[]) AS cyc
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, ipc(instr, cyc, timestamp) AS v FROM agg"#.to_string(),
@@ -53,9 +53,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     perf.plot_promql_with_sql(
         PlotOpts::counter("Syscalls", "syscalls", Unit::Rate),
         "sum(irate(cgroup_syscall{name=\"/system.slice/rezolus.service\"}[5m]))".to_string(),
+        // cgroup_syscall has an additional `op` label (read/write/lock/...)
+        // between the cgroup path and the numeric id, so the wide-form
+        // column name is cgroup_syscall//<path>/<op>/<id>.
         r#"WITH agg AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('^cgroup_syscall/system.slice/rezolus.service/[0-9]+$')]::UBIGINT[]) AS s
+                     list_sum([*COLUMNS('^cgroup_syscall//system.slice/rezolus.service/[a-z]+/[0-9]+$')]::UBIGINT[]) AS s
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) AS v FROM agg"#.to_string(),

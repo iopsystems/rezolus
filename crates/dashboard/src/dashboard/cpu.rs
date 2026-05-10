@@ -119,27 +119,23 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             ],
         ),
     );
-    // Per-CPU IPNS doesn't have a clean concept-macro form (5-way per-id
-    // join is more than the helpers cover), so we expand inline.
     ipns.plot_promql_with_sql(
         PlotOpts::counter("IPNS (Per-CPU)", "ipns-per-cpu", Unit::Count),
         "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000".to_string(),
-        // For each (id, timestamp) we compute irate of all 5 metrics, then
-        // ipc(instr, cyc) * (tsc * aperf / mperf) / 1e9.
-        // Per-id rates require PARTITION BY id on the LAG.
-        r#"WITH wide AS (
-              SELECT timestamp,
-                     COLUMNS('^cpu_instructions/[0-9]+$') AS i,
-                     COLUMNS('^cpu_cycles/[0-9]+$') AS c,
-                     COLUMNS('^cpu_tsc/[0-9]+$') AS t,
-                     COLUMNS('^cpu_aperf/[0-9]+$') AS a,
-                     COLUMNS('^cpu_mperf/[0-9]+$') AS m
-              FROM _src
-           )
-           -- Keeping per-CPU IPNS simple: emit empty until we layer in
-           -- a per-id 5-way pivot. Falls back to the legacy viewer's PromQL
-           -- evaluation; viewer-sql renders this plot empty for now.
-           SELECT timestamp::DOUBLE/1e9 AS t, NULL::DOUBLE AS v FROM wide WHERE FALSE"#.to_string(),
+        // 5-way per-id join: UNPIVOT each metric on its `^cpu_<m>/[0-9]+$`
+        // regex, join on (timestamp, id), compute per-id irate (PARTITION
+        // BY id), then combine as (i/c) * (t*a/m) / 1e9 — the ipns formula.
+        sql::nway_ratio_by_id(
+            &[
+                ("i", "^cpu_instructions/[0-9]+$"),
+                ("c", "^cpu_cycles/[0-9]+$"),
+                ("t", "^cpu_tsc/[0-9]+$"),
+                ("a", "^cpu_aperf/[0-9]+$"),
+                ("m", "^cpu_mperf/[0-9]+$"),
+            ],
+            "/([0-9]+)$",
+            "(i_rate / NULLIF(c_rate, 0)) * t_rate * a_rate / NULLIF(m_rate * 1000000000, 0)",
+        ),
     );
 
     let l3 = performance.subgroup("L3 Cache Hit Rate");
@@ -186,9 +182,16 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     freq.plot_promql_with_sql(
         PlotOpts::counter("Frequency (Per-CPU)", "frequency-per-cpu", Unit::Frequency),
         "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))".to_string(),
-        // Same shape as IPNS per-CPU: 3-way per-id rate combination not
-        // covered by the helpers. Empty for now; legacy viewer renders.
-        r#"SELECT timestamp::DOUBLE/1e9 AS t, NULL::DOUBLE AS v FROM _src WHERE FALSE"#.to_string(),
+        // 3-way per-id join — formula tsc * aperf / mperf.
+        sql::nway_ratio_by_id(
+            &[
+                ("t", "^cpu_tsc/[0-9]+$"),
+                ("a", "^cpu_aperf/[0-9]+$"),
+                ("m", "^cpu_mperf/[0-9]+$"),
+            ],
+            "/([0-9]+)$",
+            "t_rate * a_rate / NULLIF(m_rate, 0)",
+        ),
     );
 
     view.group(performance);

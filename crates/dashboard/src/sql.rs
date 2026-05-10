@@ -399,6 +399,70 @@ pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide
     )
 }
 
+/// N-way per-id ratio fan-out. Joins the unpivoted streams of N
+/// metrics on `(timestamp, id)`, computes per-id rates with
+/// `PARTITION BY id` LAG (so LAG doesn't compare across CPUs), and
+/// applies the `formula` template — placeholders are
+/// `<arg_name>_rate` (e.g. `t_rate`, `a_rate`, `m_rate`).
+///
+/// Used for plots that need 3+ per-id rates combined arithmetically
+/// — `frequency-per-cpu` (tsc × aperf / mperf), `ipns-per-cpu`
+/// ((i/c) × (t·a/m) / 1e9). `ratio_by_id` covers the 2-arg case
+/// already.
+pub fn nway_ratio_by_id(
+    args: &[(&str, &str)],
+    id_extract_re: &str,
+    formula: &str,
+) -> String {
+    assert!(args.len() >= 2, "nway_ratio_by_id needs ≥ 2 inputs");
+    // CTE per arg: UNPIVOT the matching columns into (timestamp, col, v).
+    let mut sql = String::from("WITH ");
+    for (i, (name, re)) in args.iter().enumerate() {
+        if i > 0 {
+            sql.push_str(",\n     ");
+        }
+        sql.push_str(&format!(
+            "{name}_unp AS (\n        UNPIVOT (SELECT timestamp, COLUMNS('{re}') FROM _src) \
+                ON COLUMNS('{re}') INTO NAME col VALUE v\n     )"
+        ));
+    }
+    // Joined CTE: anchor on the first arg, JOIN the rest on
+    // (timestamp, id) — id extracted via the same regex on each side.
+    let (anchor_name, _) = args[0];
+    sql.push_str(&format!(
+        ",\n     joined AS (\n        SELECT {a}_unp.timestamp, \
+            regexp_extract({a}_unp.col, '{id}', 1) AS id",
+        a = anchor_name,
+        id = id_extract_re,
+    ));
+    for (name, _) in args {
+        sql.push_str(&format!(", {name}_unp.v AS {name}_v"));
+    }
+    sql.push_str(&format!("\n        FROM {a}_unp", a = anchor_name));
+    for (name, _) in &args[1..] {
+        sql.push_str(&format!(
+            "\n            JOIN {n}_unp ON {a}_unp.timestamp = {n}_unp.timestamp \
+                AND regexp_extract({a}_unp.col, '{id}', 1) = regexp_extract({n}_unp.col, '{id}', 1)",
+            n = name,
+            a = anchor_name,
+            id = id_extract_re,
+        ));
+    }
+    sql.push_str("\n     ),\n     rates AS (\n        SELECT timestamp, id");
+    for (name, _) in args {
+        sql.push_str(&format!(
+            ",\n               irate_lag({n}_v, \
+                LAG({n}_v) OVER (PARTITION BY id ORDER BY timestamp), \
+                timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS {n}_rate",
+            n = name,
+        ));
+    }
+    sql.push_str("\n        FROM joined\n     )\n     SELECT timestamp::DOUBLE/1e9 AS t, id, (");
+    sql.push_str(formula);
+    sql.push_str(") AS v FROM rates");
+    sql
+}
+
 /// Wrap a helper-emitted SQL string with a `v / divisor` projection.
 /// Used for the cores-from-nanoseconds conversion (`/ 1e9`).
 pub fn scale_v(inner: String, divisor: f64) -> String {

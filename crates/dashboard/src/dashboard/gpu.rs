@@ -254,7 +254,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         r#"WITH agg AS (
               SELECT timestamp,
                      list_sum([*COLUMNS('^gpu_pcie_throughput/receive/[0-9]+$')]::BIGINT[])::DOUBLE AS rx,
-                     list_sum([*COLUMNS('^gpu_pcie_bandwidth/[0-9]+$')]::BIGINT[])::DOUBLE AS bw
+                     list_sum([*COLUMNS('^gpu_pcie_bandwidth(/[a-z]+)?/[0-9]+$')]::BIGINT[])::DOUBLE AS bw
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, rx / NULLIF(bw, 0) AS v FROM agg"#.to_string(),
@@ -279,7 +279,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         r#"WITH agg AS (
               SELECT timestamp,
                      list_sum([*COLUMNS('^gpu_pcie_throughput/transmit/[0-9]+$')]::BIGINT[])::DOUBLE AS tx,
-                     list_sum([*COLUMNS('^gpu_pcie_bandwidth/[0-9]+$')]::BIGINT[])::DOUBLE AS bw
+                     list_sum([*COLUMNS('^gpu_pcie_bandwidth(/[a-z]+)?/[0-9]+$')]::BIGINT[])::DOUBLE AS bw
               FROM _src
            )
            SELECT timestamp::DOUBLE/1e9 AS t, tx / NULLIF(bw, 0) AS v FROM agg"#.to_string(),
@@ -290,7 +290,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     capacity.plot_promql_with_sql_full(
         PlotOpts::gauge("Bandwidth", "pcie-bandwidth", Unit::Datarate),
         "sum(gpu_pcie_bandwidth)".to_string(),
-        gauge_sum("^gpu_pcie_bandwidth/[0-9]+$"),
+        gauge_sum("^gpu_pcie_bandwidth(/[a-z]+)?/[0-9]+$"),
     );
 
     view.group(pcie);
