@@ -412,24 +412,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     total.plot_promql_with_sql(
         PlotOpts::counter("Total (Per-CPU)", "tlb-total-per-cpu", Unit::Rate),
         "sum by (id) (irate(cpu_tlb_flush[5m]))".to_string(),
-        // Same aggregate-by-id-then-rate pattern as softirq's total per-CPU.
-        r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_tlb_flush(/[^:]+)?$') FROM _src)
-                  ON COLUMNS('^cpu_tlb_flush(/[^:]+)?$') INTO NAME col VALUE v
-           ),
-           by_id AS (
-              SELECT timestamp,
-                     regexp_extract(col, '/([0-9]+)$', 1) AS id,
-                     SUM(v) AS s
-              FROM unp GROUP BY timestamp, id
-           )
-           SELECT timestamp::DOUBLE/1e9 AS t, id,
-                  irate_lag(
-                      s,
-                      LAG(s) OVER (PARTITION BY id ORDER BY timestamp),
-                      timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)
-                  ) AS v
-           FROM by_id"#.to_string(),
+        sql::irate_sum_by_id("^cpu_tlb_flush(/[^:]+)?$", "/([0-9]+)$"),
     );
 
     for reason in &[

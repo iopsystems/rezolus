@@ -62,27 +62,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     rate.plot_promql_with_sql(
         PlotOpts::counter("Rate (per-CPU)", "softirq-total-rate-heatmap", Unit::Rate),
         "sum by (id) (irate(softirq[5m]))".to_string(),
-        // Aggregate across kinds, per id. Using UNPIVOT then SUM by id +
-        // timestamp lets us collapse the kind dimension while keeping id.
-        r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^softirq/[a-z_]+/[0-9]+$') FROM _src)
-                  ON COLUMNS('^softirq/[a-z_]+/[0-9]+$')
-                  INTO NAME col VALUE v
-           ),
-           by_id AS (
-              SELECT timestamp,
-                     regexp_extract(col, '/([0-9]+)$', 1) AS id,
-                     SUM(v) AS s
-              FROM unp
-              GROUP BY timestamp, id
-           )
-           SELECT timestamp::DOUBLE/1e9 AS t, id,
-                  irate_lag(
-                      s,
-                      LAG(s) OVER (PARTITION BY id ORDER BY timestamp),
-                      timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)
-                  ) AS v
-           FROM by_id"#.to_string(),
+        sql::irate_sum_by_id("^softirq/[a-z_]+/[0-9]+$", "/([0-9]+)$"),
     );
 
     let time = softirq.subgroup("CPU Time");
@@ -100,26 +80,10 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         )
         .percentage_range(),
         "sum by (id) (irate(softirq_time[5m])) / 1000000000".to_string(),
-        // Same aggregate-by-id-then-rate pattern as the total rate plot.
-        r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^softirq_time/[a-z_]+/[0-9]+$') FROM _src)
-                  ON COLUMNS('^softirq_time/[a-z_]+/[0-9]+$')
-                  INTO NAME col VALUE v
-           ),
-           by_id AS (
-              SELECT timestamp,
-                     regexp_extract(col, '/([0-9]+)$', 1) AS id,
-                     SUM(v) AS s
-              FROM unp
-              GROUP BY timestamp, id
-           )
-           SELECT timestamp::DOUBLE/1e9 AS t, id,
-                  irate_lag(
-                      s,
-                      LAG(s) OVER (PARTITION BY id ORDER BY timestamp),
-                      timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)
-                  ) / 1e9 AS v
-           FROM by_id"#.to_string(),
+        sql::scale_v(
+            sql::irate_sum_by_id("^softirq_time/[a-z_]+/[0-9]+$", "/([0-9]+)$"),
+            1e9,
+        ),
     );
 
     view.group(softirq);

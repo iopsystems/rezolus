@@ -15,15 +15,70 @@
 //!     `duck/src/macros.rs`; wasm binds them to the macros in
 //!     `crates/viewer-sql/src/macros.sql`.
 
-/// `sum(irate(M[5m]))` over all columns matching `re`. One series, scalar v.
+/// `sum(irate(M[5m]))` over all columns matching `re` — per-series
+/// irate then sum. Mirrors PromQL semantics: each series's counter
+/// resets are handled locally before aggregation. One output series,
+/// scalar v.
+///
+/// Pre-2026-05 this was `irate_1s(list_sum([*COLUMNS(...)]), ts)` —
+/// sum-then-rate, which diverges from PromQL at intra-window counter
+/// resets in any individual column. Switched to UNPIVOT + per-series
+/// irate + sum-by-timestamp to close those divergences.
 pub fn irate_total(re: &str) -> String {
     format!(
-        r#"WITH agg AS (
+        r#"WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('{re}') FROM _src)
+                  ON COLUMNS('{re}')
+                  INTO NAME col VALUE v
+           ),
+           rates AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('{re}')]::UBIGINT[]) AS s
-              FROM _src
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM unp
            )
-           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) AS v FROM agg"#
+           SELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp"#
+    )
+}
+
+/// `sum by (id) (irate(M[5m]))` over columns whose names share an id
+/// segment — per-series irate then sum-by-(timestamp, id). Mirrors
+/// PromQL's per-series-rate-then-sum semantics; correct in the
+/// presence of per-series counter resets (sum-then-rate would mask
+/// individual resets).
+///
+/// Use this when more than one column maps to the same id (e.g.
+/// `softirq/<kind>/<cpu>` where `<kind>` varies per cpu). When each
+/// id has exactly one matching column, `irate_by_id` produces the
+/// same rows without the GROUP BY pass.
+///
+/// `id_extract_re`: capture group 1 in the column name yields the id
+/// text. Common case: `'/([0-9]+)$'` (id is the trailing `/N` segment).
+pub fn irate_sum_by_id(re: &str, id_extract_re: &str) -> String {
+    format!(
+        r#"WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('{re}') FROM _src)
+                  ON COLUMNS('{re}')
+                  INTO NAME col VALUE v
+           ),
+           rates AS (
+              SELECT timestamp,
+                     regexp_extract(col, '{id_extract_re}', 1) AS id,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM unp
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, id, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp, id"#
     )
 }
 
@@ -51,19 +106,32 @@ pub fn irate_by_id(re: &str, id_extract_re: &str) -> String {
 }
 
 /// CPU-fraction over all columns matching `re`. Equivalent to PromQL
-/// `sum(irate(M[5m])) / cpu_cores / 1e9` — wraps the layer-B `cpu_busy_pct`
-/// macro that takes (usage_sum, cores, ts).
+/// `sum(irate(M[5m])) / cpu_cores / 1e9` — per-series irate, sum, then
+/// scale. Like `irate_total` this avoids the sum-then-rate semantic
+/// gap at intra-window counter resets.
 pub fn cpu_pct_total(re: &str) -> String {
     format!(
-        r#"WITH agg AS (
+        r#"WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('{re}') FROM _src)
+                  ON COLUMNS('{re}')
+                  INTO NAME col VALUE v
+           ),
+           rates AS (
               SELECT timestamp,
-                     list_sum([*COLUMNS('{re}')]::UBIGINT[]) AS usage,
-                     "cpu_cores" AS cores
-              FROM _src
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM unp
+           ),
+           summed AS (
+              SELECT timestamp, SUM(rate) AS s FROM rates GROUP BY timestamp
            )
-           SELECT timestamp::DOUBLE/1e9 AS t,
-                  cpu_busy_pct(usage, cores, timestamp) AS v
-           FROM agg"#
+           SELECT s.timestamp::DOUBLE/1e9 AS t,
+                  s.s / NULLIF(c."cpu_cores", 0) / 1e9 AS v
+           FROM summed s
+              JOIN _src c ON c.timestamp = s.timestamp"#
     )
 }
 
