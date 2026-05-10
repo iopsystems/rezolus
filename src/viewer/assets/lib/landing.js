@@ -2,13 +2,16 @@
 // Used by both the binary viewer (src/viewer) and the static site (site/viewer).
 //
 // Props:
-//   onFile(file: File)  — called when user selects or drops a .parquet file
-//   onConnect(url: str) — called when user enters a live agent URL (optional; hidden if absent)
-//   onDemo()            — called when user clicks "Try Demo" (optional; hidden if absent)
-//   loading: boolean    — show "Loading..." indicator
-//   error: string|null  — show error message
+//   onFile(file: File)        — called when user selects or drops a .parquet file
+//   onConnect(url: str)       — called when user enters a live agent URL (optional; hidden if absent)
+//   onLoadUrl(raw: str)       — called with `[alias=]url` to load a parquet from a URL (optional; hidden if absent)
+//   proxyEnabled: bool        — when false (default), the URL section warns about CORS for cross-origin loads
+//   onDemo()                  — called when user clicks "Try Demo" (optional; hidden if absent)
+//   loading: boolean          — show "Loading..." indicator
+//   error: string|null        — show error message
 
 let connectUrl = '';
+let parquetUrl = '';
 
 // Small reusable dropzone for a single parquet slot. Used by the
 // compare-mode dual landing and available for other single-slot callers.
@@ -187,6 +190,28 @@ const FileUpload = {
                         disabled: loading || !connectUrl.trim(),
                         onclick: () => onConnect(connectUrl.trim()),
                     }, 'Connect'),
+                ]),
+                attrs.onLoadUrl && m('div.upload-connect', [
+                    m('p.upload-connect-label', 'or load a parquet from URL'),
+                    m('input.connect-input', {
+                        type: 'text',
+                        placeholder: 'https://example.com/recording.parquet (or alias=URL)',
+                        value: parquetUrl,
+                        disabled: loading,
+                        oninput: (e) => { parquetUrl = e.target.value; },
+                        onkeydown: (e) => {
+                            if (e.key === 'Enter' && parquetUrl.trim()) {
+                                attrs.onLoadUrl(parquetUrl.trim());
+                            }
+                        },
+                    }),
+                    m('button.upload-btn.connect-btn', {
+                        disabled: loading || !parquetUrl.trim(),
+                        onclick: () => attrs.onLoadUrl(parquetUrl.trim()),
+                    }, 'Load'),
+                    m('p.upload-hint', attrs.proxyEnabled
+                        ? 'Cross-origin URLs are fetched server-side via the local proxy.'
+                        : 'Cross-origin URLs require CORS on the source. To bypass, host this viewer with `rezolus view --proxy-allow=<host>`.'),
                 ]),
                 // Demo area — either grouped by section (demoSections)
                 // or a flat row (demos). A demo entry may carry either a

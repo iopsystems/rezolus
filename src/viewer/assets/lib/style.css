@@ -3190,6 +3190,13 @@ main {
     margin: 0 0 0.25rem;
 }
 
+.upload-hint {
+    color: var(--fg-muted);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    margin: 0.5rem 0 0;
+}
+
 .connect-input {
     display: block;
     width: 100%;
