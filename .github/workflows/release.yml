@@ -240,7 +240,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: cargo install wasm-pack --version ^0.14 --locked
 
       - name: build wasm viewer
         run: ./crates/viewer/build.sh
