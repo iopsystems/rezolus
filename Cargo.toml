@@ -91,7 +91,16 @@ syscall-numbers = "4.0.3"
 sysconf = "0.3.4"
 tempfile = "3.27.0"
 thiserror.workspace = true
-tokio = { version = "1.52.2", features = ["full"] }
+tokio = { version = "1.52.2", features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
 toml = "1.1.2"
 tower = { version = "0.5.3", features = ["tokio"] }
 tower-http = { version = "0.6.8", features = [
