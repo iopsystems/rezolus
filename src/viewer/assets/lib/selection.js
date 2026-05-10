@@ -44,6 +44,7 @@ const selectionStore = {
     stepOverride: null,   // query step in seconds (null = auto)
     anchors: { baseline: 0, experiment: 0 }, // compare-mode offsets in ms
     chartToggles: {},      // per-chart compare-mode toggles, e.g. { chartId: { diff: true } }
+    compare: null,         // { baseline_alias, experiment_alias } when set in compare mode
 };
 
 const reportStore = {
@@ -54,6 +55,7 @@ const reportStore = {
     stepOverride: null,   // query step in seconds (null = auto)
     anchors: { baseline: 0, experiment: 0 },
     chartToggles: {},
+    compare: null,         // { baseline_alias, experiment_alias } when set in compare mode
     loadedFrom: null,    // filename of the imported JSON
     reportId: null,       // UUIDv7 from the imported report
     savedAt: null,        // ISO timestamp
@@ -104,6 +106,7 @@ const persistStore = (key, store) => {
             stepOverride: store.stepOverride ?? undefined,
             anchors: store.anchors || { baseline: 0, experiment: 0 },
             chartToggles: store.chartToggles || {},
+            compare: store.compare || undefined,
             loadedFrom: store.loadedFrom || undefined,
             reportId: store.reportId || undefined,
             savedAt: store.savedAt || undefined,
@@ -140,6 +143,7 @@ const restoreStore = (key, store) => {
         store.stepOverride = data.stepOverride ?? null;
         store.anchors = data.anchors || { baseline: 0, experiment: 0 };
         store.chartToggles = data.chartToggles || {};
+        if (data.compare !== undefined) store.compare = data.compare;
         if (data.loadedFrom !== undefined) store.loadedFrom = data.loadedFrom;
         if (data.reportId !== undefined) store.reportId = data.reportId;
         if (data.savedAt !== undefined) store.savedAt = data.savedAt;
@@ -260,6 +264,7 @@ const resetStoreState = (store) => {
     store.stepOverride = null;
     store.anchors = { baseline: 0, experiment: 0 };
     store.chartToggles = {};
+    store.compare = null;
     if (store === reportStore) {
         store.loadedFrom = null;
         store.reportId = null;
@@ -299,6 +304,7 @@ const buildPayload = (store, attrs) => ({
     step_override: attrs.stepOverride ?? null,
     anchors: store.anchors || { baseline: 0, experiment: 0 },
     chartToggles: store.chartToggles || {},
+    compare: store.compare || undefined,
     tagline: store.tagline,
     entries: store.entries.map(e => ({
         chartId: e.chartId,
