@@ -470,14 +470,17 @@ export function createGroupComponent(getState) {
                 ? { ...opts, title: `${titlePrefix}: ${opts.title}` }
                 : opts;
 
-            const chartHeader = (opts, spec) => m('div.chart-header', [
+            // Per-chart description renders OUTSIDE the chart-wrapper as
+            // a block above it (see renderChart), so it sits at body
+            // font-size and isn't squeezed by the absolute-positioned
+            // header overlay. The header keeps title + compare toggles only.
+            const chartHeader = (_opts, spec) => m('div.chart-header', [
                 m('div.chart-title-row', [
-                    m('span.chart-title', opts.title),
+                    m('span.chart-title', _opts.title),
                     compareMode && spec && compareToggle(spec, {
                         compareMode, toggles, setChartToggle,
                     }),
                 ]),
-                opts.description && m('span.chart-subtitle', opts.description),
             ]);
 
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
@@ -534,9 +537,8 @@ export function createGroupComponent(getState) {
                 // Histogram charts (percentile scatter, bucket heatmap,
                 // quantile heatmap) also go full-width — the x-axis
                 // density and the heatmap legend bar both need the room.
-                const wrapperClass = (spec.width === 'full' || compareMode || isHistogramChart)
-                    ? 'div.chart-wrapper.full-width'
-                    : 'div.chart-wrapper';
+                const isFull = spec.width === 'full' || compareMode || isHistogramChart;
+                const cellClass = isFull ? 'div.chart-cell.full-width' : 'div.chart-cell';
 
                 let renderSpec;
                 if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
@@ -545,11 +547,15 @@ export function createGroupComponent(getState) {
                     renderSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
                 }
 
-                return m(wrapperClass, [
-                    chartHeader(renderSpec.opts, renderSpec),
-                    chartBody(renderSpec, spec),
-                    expandLink(spec, sectionRoute),
-                    selectButton(spec, sectionRoute, sectionName, attrs.name),
+                return m(cellClass, [
+                    renderSpec.opts.description
+                        && m('p.chart-description', renderSpec.opts.description),
+                    m('div.chart-wrapper', [
+                        chartHeader(renderSpec.opts, renderSpec),
+                        chartBody(renderSpec, spec),
+                        expandLink(spec, sectionRoute),
+                        selectButton(spec, sectionRoute, sectionName, attrs.name),
+                    ]),
                 ]);
             };
 
