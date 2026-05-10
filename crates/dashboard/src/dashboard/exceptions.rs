@@ -149,26 +149,28 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let mut blockio = Group::new("Block IO", "blockio");
 
-    let by_class = blockio.subgroup("Errors by Class");
-    by_class.describe(
-        "Terminal block IO failures grouped by class. \
-         The shape of the mix is more diagnostic than absolute counts: \
-         timeout-heavy = controller / transport hang; nospc = thin pool \
-         out of room; protection = data-integrity check failed.",
+    let errors = blockio.subgroup("Errors");
+    errors.describe("Terminal block IO failures.");
+    errors.plot_promql(
+        PlotOpts::counter("Total", "blockio-err-total", Unit::Rate)
+            .with_description("Aggregate failure rate across all ops and classes."),
+        "sum(irate(blockio_errors[5m]))".to_string(),
     );
-    by_class.plot_promql(
-        PlotOpts::counter("By Class", "blockio-err-by-class", Unit::Rate),
+    errors.plot_promql_full(
+        PlotOpts::counter("By Class", "blockio-err-by-class", Unit::Rate)
+            .with_description(
+                "Fault mode: timeout-heavy = controller / transport hang; \
+                 nospc = thin pool out of room; protection = data-integrity \
+                 check failed.",
+            ),
         "sum by (error) (irate(blockio_errors[5m]))".to_string(),
     );
-
-    let by_op = blockio.subgroup("Errors by Operation");
-    by_op.describe(
-        "Same terminal failures, broken down by op. Reads vs. writes \
-         imply different fault sources — a read-only spike points at the \
-         media; a write-only spike points at the controller / target.",
-    );
-    by_op.plot_promql(
-        PlotOpts::counter("By Op", "blockio-err-by-op", Unit::Rate),
+    errors.plot_promql_full(
+        PlotOpts::counter("By Op", "blockio-err-by-op", Unit::Rate)
+            .with_description(
+                "Fault source: a read-only spike points at the media; a \
+                 write-only spike points at the controller / target.",
+            ),
         "sum by (op) (irate(blockio_errors[5m]))".to_string(),
     );
 
@@ -183,7 +185,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         PlotOpts::counter("Total", "blockio-requeue-total", Unit::Rate),
         "sum(irate(blockio_requeues[5m]))".to_string(),
     );
-    requeues.plot_promql(
+    requeues.plot_promql_full(
         PlotOpts::counter("By Op", "blockio-requeue-by-op", Unit::Rate),
         "sum by (op) (irate(blockio_requeues[5m]))".to_string(),
     );

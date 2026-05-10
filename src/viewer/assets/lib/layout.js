@@ -229,9 +229,13 @@ const Sidebar = {
             (s) => s.name === 'Query Explorer',
         );
         const overviewSection = visibleSections.find((s) => s.name === 'Overview');
+        const exceptionsSection = visibleSections.find((s) => s.name === 'Exceptions');
         const serviceSections = visibleSections.filter((s) => s.route.startsWith('/service/'));
         const samplerSections = visibleSections.filter(
-            (s) => s.name !== 'Query Explorer' && s.name !== 'Overview' && !s.route.startsWith('/service/'),
+            (s) => s.name !== 'Query Explorer'
+                && s.name !== 'Overview'
+                && s.name !== 'Exceptions'
+                && !s.route.startsWith('/service/'),
         );
 
         return [
@@ -299,6 +303,18 @@ const Sidebar = {
                     label,
                 );
             }),
+
+            // Exceptions sits between Overview/Services and Samplers —
+            // it's a cross-sampler triage view, not one of the per-
+            // sampler sections.
+            exceptionsSection && m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection === exceptionsSection ? 'selected' : '',
+                    href: exceptionsSection.route,
+                },
+                exceptionsSection.name,
+            ),
 
             // Samplers label
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),

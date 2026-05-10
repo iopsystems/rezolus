@@ -70,18 +70,20 @@ export const COLORS = new Proxy(SERIES_COLORS, {
 
 // ── Palettes ─────────────────────────────────────────────────────────
 
-/** Default 10-color palette for echarts `color` option */
+// Tableau Classic 10. Interleaves warm/cool + includes neutrals so
+// adjacent series in series-index-mapped charts (e.g. Exceptions)
+// don't accidentally imply ordering.
 export const CHART_PALETTE = [
-    COLORS.chartBlue,
-    COLORS.chartCyan,
-    COLORS.chartTeal,
-    COLORS.chartGreen,
-    COLORS.chartLime,
-    COLORS.chartYellow,
-    COLORS.chartOrange,
-    COLORS.chartRed,
-    COLORS.chartPink,
-    COLORS.chartPurple,
+    '#4e79a7', // blue
+    '#f28e2c', // orange
+    '#e15759', // red
+    '#76b7b2', // teal
+    '#59a14f', // green
+    '#edc949', // yellow
+    '#af7aa1', // purple
+    '#ff9da7', // pink
+    '#9c755f', // brown
+    '#bab0ac', // gray
 ];
 
 /** 5-color subset for percentile scatter charts */
@@ -280,29 +282,19 @@ export class ColorMapper {
     constructor() {
         this.colorMap = new Map();
 
-        // Wider palette optimized for dark backgrounds.
-        // Green first to differentiate from the blue aggregate charts on the left.
+        // Tableau 20 — paired dark/light per hue, so spillover slots
+        // stay visually related to a slot already in use.
         this.colorPalette = [
-            COLORS.chartGreen,
-            COLORS.chartOrange,
-            COLORS.chartPurple,
-            COLORS.chartCyan,
-            COLORS.chartRed,
-            COLORS.chartLime,
-            COLORS.chartPink,
-            COLORS.chartYellow,
-            COLORS.chartTeal,
-            '#818cf8', // Indigo
-            COLORS.chartBlue,
-            '#38bdf8', // Sky blue
-            '#34d399', // Emerald
-            '#facc15', // Yellow
-            '#fb923c', // Light orange
-            '#e879f9', // Fuchsia
-            '#c084fc', // Violet
-            '#22d3ee', // Cyan bright
-            '#4ade80', // Light green
-            '#fca5a1', // Light coral
+            '#4e79a7', '#a0cbe8', // blue
+            '#f28e2c', '#ffbe7d', // orange
+            '#59a14f', '#8cd17d', // green
+            '#b6992d', '#f1ce63', // yellow
+            '#499894', '#86bcb6', // teal
+            '#e15759', '#ff9d9a', // red
+            '#79706e', '#bab0ac', // gray
+            '#d37295', '#fabfd2', // pink
+            '#b07aa1', '#d4a6c8', // purple
+            '#9d7660', '#d7b5a6', // brown
         ];
     }
 

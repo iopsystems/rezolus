@@ -446,6 +446,14 @@ impl PlotOpts {
         self
     }
 
+    /// Per-chart subtitle rendered below the chart title. Use when the
+    /// description is specific to one chart in a subgroup; for shared
+    /// context, prefer `Subgroup::describe`.
+    pub fn with_description<T: Into<String>>(mut self, text: T) -> Self {
+        self.description = Some(text.into());
+        self
+    }
+
     pub fn maybe_unit_system(self, unit: Option<&str>) -> Self {
         match unit {
             Some(u) => self.with_unit_system(u),
