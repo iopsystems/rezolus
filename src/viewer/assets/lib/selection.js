@@ -3,7 +3,7 @@
 // Report: loaded from JSON import or parquet metadata (read-only mode).
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { executePromQLRangeQuery, applyResultToPlot, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
@@ -441,7 +441,12 @@ const chartLoaderMixin = (store, component) => ({
                     promql_query: entry.promql_query,
                     data: [],
                 };
-                const result = await executePromQLRangeQuery(entry.promql_query);
+                // Histogram metrics need histogram_quantiles / heatmap
+                // wrapping; the dashboard pipeline does this via
+                // buildEffectiveQuery, but the stored entry only has
+                // the raw metric name.
+                const effective = buildEffectiveQuery(spec) || entry.promql_query;
+                const result = await executePromQLRangeQuery(effective);
                 if (result) {
                     applyResultToPlot(spec, result);
                 }
