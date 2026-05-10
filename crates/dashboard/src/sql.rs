@@ -15,6 +15,70 @@
 //!     `duck/src/macros.rs`; wasm binds them to the macros in
 //!     `crates/viewer-sql/src/macros.sql`.
 
+/// `sum(rate(M[5m]))` over columns matching `re` — per-series
+/// reset-aware 5-minute rate then sum. PromQL's `rate(c[5m])` walks
+/// samples within the 5-minute lookback, treating each `c < LAG(c)`
+/// transition as a counter reset (post-reset value used as the
+/// increment), sums the increments, divides by the actual time span.
+///
+/// The `rate_5m` *macro* is monotonic-only — DuckDB rejects nested
+/// window functions (`SUM(... LAG ...) OVER ...`), so reset-aware
+/// 5-minute rate must be expressed as the CTE pattern below. Use this
+/// helper at any callsite where the underlying counter can wrap or
+/// reset within a 5-minute window (UInt64 overflow is real in
+/// practice on long-running NUMA / energy counters).
+///
+/// Equivalent to PromQL `rate(M[5m])` for a single matching column;
+/// for multiple columns, sums across them — matching `sum(rate(...))`.
+pub fn rate_5m_total(re: &str) -> String {
+    format!(
+        r#"WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('{re}') FROM _src)
+                  ON COLUMNS('{re}')
+                  INTO NAME col VALUE v
+           ),
+           per_pair AS (
+              SELECT timestamp, col,
+                     CASE
+                         WHEN LAG(v) OVER w IS NULL THEN 0::DOUBLE
+                         WHEN v >= LAG(v) OVER w THEN (v - LAG(v) OVER w)::DOUBLE
+                         ELSE v::DOUBLE
+                     END AS inc
+              FROM unp
+              WINDOW w AS (PARTITION BY col ORDER BY timestamp)
+           ),
+           row_sum AS (
+              SELECT timestamp, SUM(inc) AS s_inc
+              FROM per_pair
+              GROUP BY timestamp
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  -- PromQL `rate(c[5m])` walks pairs in samples[lo..hi]
+                  -- and sums `windows(2)` increments — that's hi-lo-1
+                  -- pairs. The boundary-crossing increment (between the
+                  -- sample just before `lo` and `lo` itself) is NOT
+                  -- counted. SUM(s_inc) OVER wr includes that crossing
+                  -- increment via LAG over the full partition; subtract
+                  -- FIRST_VALUE(s_inc) to drop it. See
+                  -- metriken-query/src/promql/streaming/rate.rs:CounterRate.
+                  --
+                  -- One residual: PromQL's eval point can carry a
+                  -- sub-second offset (start_ns of the parquet's first
+                  -- raw timestamp), so its window_start sits at e.g.
+                  -- 638.0007 — strictly greater than the snapped 638e9
+                  -- sample and so excludes it. SQL's window starts at
+                  -- 638e9 exactly and INCLUDES that sample. On parquets
+                  -- where this misalignment lands, the very last few
+                  -- eval points show ~0.07% rate diffs. Not fixable by
+                  -- tightening the RANGE bound by a small constant —
+                  -- the offset varies parquet-to-parquet.
+                  (SUM(s_inc) OVER wr - COALESCE(FIRST_VALUE(s_inc) OVER wr, 0))
+                    / NULLIF((timestamp - MIN(timestamp) OVER wr)::DOUBLE/1e9, 0) AS v
+           FROM row_sum
+           WINDOW wr AS (ORDER BY timestamp RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW)"#
+    )
+}
+
 /// `sum(irate(M[5m]))` over all columns matching `re` — per-series
 /// irate then sum. Mirrors PromQL semantics: each series's counter
 /// resets are handled locally before aggregation. One output series,

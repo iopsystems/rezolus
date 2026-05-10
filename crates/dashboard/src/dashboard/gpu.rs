@@ -1,5 +1,6 @@
 use crate::data::DashboardData;
 use crate::plot::*;
+use crate::sql;
 
 // Helper: gauge avg across all (source, id) entries matching `re`,
 // divided by `divisor`. Used for the many `avg(gpu_X) / 100`
@@ -325,14 +326,10 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         "sum(rate(gpu_energy_consumption[5m])) / 1000".to_string(),
         // Counter rate (5m windowed) of the energy accumulator across GPUs,
         // converted from mJ/s to W (= J/s).
-        r#"WITH agg AS (
-              SELECT timestamp,
-                     list_sum([*COLUMNS('^gpu_energy_consumption(/[^:]+)?$')]::UBIGINT[]) AS s
-              FROM _src
-           )
-           SELECT timestamp::DOUBLE/1e9 AS t,
-                  rate_5m(s, timestamp) / 1000.0 AS v
-           FROM agg"#.to_string(),
+        sql::scale_v(
+            sql::rate_5m_total("^gpu_energy_consumption(/[^:]+)?$"),
+            1000.0,
+        ),
     );
 
     view.group(power);

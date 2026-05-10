@@ -1,5 +1,6 @@
 use crate::data::DashboardData;
 use crate::plot::*;
+use crate::sql;
 
 pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
@@ -73,22 +74,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     locality.plot_promql_with_sql(
         PlotOpts::counter("Local Rate", "numa-local-rate", Unit::Rate),
         "rate(memory_numa_local[5m])".to_string(),
-        r#"WITH agg AS (
-              SELECT timestamp,
-                     list_sum([*COLUMNS('^memory_numa_local(/[^:]+)?$')]::UBIGINT[]) AS s
-              FROM _src
-           )
-           SELECT timestamp::DOUBLE/1e9 AS t, rate_5m(s, timestamp) AS v FROM agg"#.to_string(),
+        sql::rate_5m_total("^memory_numa_local(/[^:]+)?$"),
     );
     locality.plot_promql_with_sql(
         PlotOpts::counter("Remote Rate", "numa-remote-rate", Unit::Rate),
         "rate(memory_numa_foreign[5m])".to_string(),
-        r#"WITH agg AS (
-              SELECT timestamp,
-                     list_sum([*COLUMNS('^memory_numa_foreign(/[^:]+)?$')]::UBIGINT[]) AS s
-              FROM _src
-           )
-           SELECT timestamp::DOUBLE/1e9 AS t, rate_5m(s, timestamp) AS v FROM agg"#.to_string(),
+        sql::rate_5m_total("^memory_numa_foreign(/[^:]+)?$"),
     );
 
     view.group(numa);
