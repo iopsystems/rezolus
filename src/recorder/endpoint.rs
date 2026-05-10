@@ -20,9 +20,8 @@ where
 pub struct EndpointConfig {
     #[serde(deserialize_with = "deserialize_url")]
     pub url: Url,
-    /// User-supplied source label. None means "let the recorder pick"
-    /// — the probe handler resolves it after the protocol is known
-    /// (Msgpack → "rezolus", Prometheus → URL-derived + warning).
+    /// None until probe resolves it: Msgpack → "rezolus",
+    /// Prometheus → URL-derived (with warning).
     #[serde(default)]
     pub source: Option<String>,
     #[serde(default)]
@@ -32,8 +31,7 @@ pub struct EndpointConfig {
 }
 
 impl EndpointConfig {
-    /// Source label as `&str`. Returns "?" before probe has resolved
-    /// the source (only Pending endpoints hit this).
+    /// "?" only reachable on Pending endpoints (probe hasn't run).
     pub fn source_label(&self) -> &str {
         self.source.as_deref().unwrap_or("?")
     }
@@ -86,8 +84,6 @@ impl EndpointState {
     }
 }
 
-/// Derive a source name from a URL when none is configured. Silent;
-/// the recorder warns (or upgrades to "rezolus") after protocol probe.
 pub fn infer_source_name(url: &Url) -> String {
     let host = url.host_str().unwrap_or("unknown");
     let port = url.port().map(|p| format!("-{p}")).unwrap_or_default();

@@ -460,7 +460,6 @@ pub fn run(config: RecordingConfig) {
         for ep in &mut endpoints {
             match probe_endpoint(&client, &ep.config).await {
                 Some((protocol, url)) => {
-                    // Resolve source by protocol when caller didn't set one.
                     if ep.config.source.is_none() {
                         if protocol == Protocol::Msgpack {
                             ep.config.source = Some("rezolus".to_string());

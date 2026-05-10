@@ -159,7 +159,6 @@ impl RecordingConfig {
             .ok_or_else(|| "OUTPUT is required".to_string())?
             .to_path_buf();
 
-        // Source from --metadata source=xxx; None means probe resolves it.
         let source = metadata
             .iter()
             .find(|(k, _)| k == "source")
