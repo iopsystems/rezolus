@@ -282,18 +282,16 @@ export class ColorMapper {
     constructor() {
         this.colorMap = new Map();
 
-        // d3 schemeCategory20 — paired dark/light per hue family.
-        // First 10 = schemeCategory10 dark colors, alternated with
-        // their desaturated light siblings.
+        // d3 schemeCategory20 with the muted brown + gray pairs
+        // dropped — leaves 16 vivid hues (8 dark + 8 light siblings)
+        // so hash-indexed charts never roll the dice on a beige slot.
         this.colorPalette = [
             '#1f77b4', '#aec7e8', // blue
             '#ff7f0e', '#ffbb78', // orange
             '#2ca02c', '#98df8a', // green
             '#d62728', '#ff9896', // red
             '#9467bd', '#c5b0d5', // purple
-            '#8c564b', '#c49c94', // brown
             '#e377c2', '#f7b6d2', // pink
-            '#7f7f7f', '#c7c7c7', // gray
             '#bcbd22', '#dbdb8d', // olive
             '#17becf', '#9edae5', // cyan
         ];
