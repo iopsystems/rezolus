@@ -258,7 +258,7 @@ const showLanding = () => {
                     m.redraw();
                 }
             },
-            proxyEnabled: landingState.proxyEnabled,
+            urlLoading: landingState.proxyEnabled ? 'proxy' : 'disabled',
             loading: landingState.loading,
             error: landingState.error,
         }),

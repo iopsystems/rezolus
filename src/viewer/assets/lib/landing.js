@@ -5,7 +5,10 @@
 //   onFile(file: File)        — called when user selects or drops a .parquet file
 //   onConnect(url: str)       — called when user enters a live agent URL (optional; hidden if absent)
 //   onLoadUrl(raw: str)       — called with `[alias=]url` to load a parquet from a URL (optional; hidden if absent)
-//   proxyEnabled: bool        — when false (default), the URL section warns about CORS for cross-origin loads
+//   urlLoading                — 'direct' | 'proxy' | 'disabled'. Drives the URL input's enabled state and hint text:
+//                               'direct'   — browser fetches directly; CORS on the source matters (static-site default).
+//                               'proxy'    — server fetches via --proxy-allow; CORS irrelevant (binary viewer with allowlist).
+//                               'disabled' — input greyed out; hint explains how to enable (binary viewer without allowlist).
 //   onDemo()                  — called when user clicks "Try Demo" (optional; hidden if absent)
 //   loading: boolean          — show "Loading..." indicator
 //   error: string|null        — show error message
@@ -222,17 +225,26 @@ const FileUpload = {
             }, 'Connect'),
         ]);
 
+        const urlMode = attrs.urlLoading || 'direct';
+        const urlDisabled = urlMode === 'disabled';
+        const urlHint = ({
+            disabled: 'URL loading is off. Restart the viewer with `rezolus view --proxy-allow=<host>` to enable it.',
+            proxy:    'Cross-origin URLs are fetched server-side via the local proxy.',
+            direct:   'Cross-origin URLs require CORS on the source. To bypass, host this viewer with `rezolus view --proxy-allow=<host>`.',
+        })[urlMode];
+
         const urlGroup = attrs.onLoadUrl && m('div.upload-connect', [
             m('p.upload-connect-label', 'Load a parquet from URL'),
             m('textarea.connect-input.connect-textarea', {
                 rows: 4,
                 placeholder: 'https://example.com/recording.parquet\n— or —\nalias=URL, alias=URL\n(comma-separate two for A/B compare mode)',
                 value: parquetUrl,
-                disabled: loading,
+                disabled: loading || urlDisabled,
                 oninput: (e) => { parquetUrl = e.target.value; },
                 onkeydown: (e) => {
                     // Enter submits; Shift+Enter inserts a newline for
                     // users who really want to paste multi-line input.
+                    if (urlDisabled) return;
                     if (e.key === 'Enter' && !e.shiftKey && parquetUrl.trim()) {
                         e.preventDefault();
                         attrs.onLoadUrl(parquetUrl.trim());
@@ -240,12 +252,10 @@ const FileUpload = {
                 },
             }),
             m('button.upload-btn.connect-btn', {
-                disabled: loading || !parquetUrl.trim(),
+                disabled: loading || urlDisabled || !parquetUrl.trim(),
                 onclick: () => attrs.onLoadUrl(parquetUrl.trim()),
             }, 'Load'),
-            m('p.upload-hint', attrs.proxyEnabled
-                ? 'Cross-origin URLs are fetched server-side via the local proxy.'
-                : 'Cross-origin URLs require CORS on the source. To bypass, host this viewer with `rezolus view --proxy-allow=<host>`.'),
+            m('p.upload-hint', { class: urlDisabled ? 'upload-hint-disabled' : '' }, urlHint),
         ]);
 
         const exploreSection = hasExplore && m('section.upload-section', [

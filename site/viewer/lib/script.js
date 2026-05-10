@@ -418,10 +418,9 @@ const Root = {
                     loadCapture(source, alias);
                 }
             },
-            // Static-site bundle has no local proxy. The CORS hint
-            // surfaces as a fetch failure error, not a permanent
-            // banner — keep this false.
-            proxyEnabled: false,
+            // Static-site bundle has no local proxy; URL loading goes
+            // direct from the browser, so CORS on the source matters.
+            urlLoading: 'direct',
             demoSections,
             loading: false,
             error: landingError,
