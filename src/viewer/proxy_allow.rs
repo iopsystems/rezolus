@@ -10,6 +10,10 @@
 
 #[derive(Debug, Clone, Default)]
 pub struct Allowlist {
+    /// `--proxy-allow-any` short-circuits — every host passes,
+    /// regardless of `patterns`. Deliberate opt-in escape hatch for
+    /// "I'm running this on my own laptop, just let me load anything."
+    any: bool,
     patterns: Vec<Vec<Label>>,
 }
 
@@ -37,14 +41,31 @@ impl Allowlist {
                     .collect()
             })
             .collect();
-        Self { patterns }
+        Self {
+            any: false,
+            patterns,
+        }
+    }
+
+    pub fn any() -> Self {
+        Self {
+            any: true,
+            patterns: Vec::new(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.patterns.is_empty()
+        !self.any && self.patterns.is_empty()
+    }
+
+    pub fn is_any(&self) -> bool {
+        self.any
     }
 
     pub fn allows(&self, host: &str) -> bool {
+        if self.any {
+            return true;
+        }
         let host = host.to_ascii_lowercase();
         let host_labels: Vec<&str> = host.split('.').collect();
         self.patterns.iter().any(|pattern| {
@@ -138,5 +159,18 @@ mod tests {
         assert!(a.allows("bucket.us-west.example.com"));
         assert!(!a.allows("bucket.example.com"));
         assert!(!a.allows("other.us-west.example.com"));
+    }
+
+    #[test]
+    fn any_allows_every_host() {
+        // --proxy-allow-any is the deliberate escape hatch. is_empty
+        // must report false (proxy is enabled), and allows() must
+        // accept arbitrary label counts and shapes.
+        let a = Allowlist::any();
+        assert!(!a.is_empty());
+        assert!(a.allows("example.com"));
+        assert!(a.allows("bucket.s3.amazonaws.com"));
+        assert!(a.allows("a.b.c.d.e.f.g"));
+        assert!(a.allows("localhost"));
     }
 }

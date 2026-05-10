@@ -154,6 +154,17 @@ pub fn command() -> Command {
                 )
                 .action(clap::ArgAction::Append),
         )
+        .arg(
+            clap::Arg::new("PROXY_ALLOW_ANY")
+                .long("proxy-allow-any")
+                .help(
+                    "Disable the proxy allowlist entirely — every URL is \
+                     fetched. Use only when you trust everyone who can reach \
+                     this viewer (the SSRF risk is on you). Mutually exclusive \
+                     with --proxy-allow; if both are passed, this wins.",
+                )
+                .action(clap::ArgAction::SetTrue),
+        )
 }
 
 pub struct Config {
@@ -224,11 +235,15 @@ impl TryFrom<ArgMatches> for Config {
             None => (None, None),
         };
 
-        let proxy_allow = proxy_allow::Allowlist::new(
-            args.get_many::<String>("PROXY_ALLOW")
-                .unwrap_or_default()
-                .cloned(),
-        );
+        let proxy_allow = if args.get_flag("PROXY_ALLOW_ANY") {
+            proxy_allow::Allowlist::any()
+        } else {
+            proxy_allow::Allowlist::new(
+                args.get_many::<String>("PROXY_ALLOW")
+                    .unwrap_or_default()
+                    .cloned(),
+            )
+        };
 
         Ok(Config {
             source,
@@ -517,7 +532,14 @@ pub fn run(config: Config) {
 
     state.set_proxy(config.proxy_allow.clone());
     if state.proxy.enabled() {
-        info!("URL loading enabled at /api/v1/load_url");
+        if state.proxy.allow.is_any() {
+            warn!(
+                "URL loading enabled at /api/v1/load_url with --proxy-allow-any — \
+                 every URL will be fetched. Don't expose this listen address."
+            );
+        } else {
+            info!("URL loading enabled at /api/v1/load_url");
+        }
     }
 
     // The experiment CLI arg is only honored when the baseline is a parquet
