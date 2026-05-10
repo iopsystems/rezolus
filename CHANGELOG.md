@@ -1,5 +1,71 @@
 ## [Unreleased]
 
+## [5.13.0] - 2026-05-10
+
+### Added
+
+- BPF: `blockio_requests` sampler now also reports per-op error counts
+  (with a coarse class derived from `blk_status_t` — io / timeout /
+  nospc / target / protection / unsupported / other) and requeue
+  counts, exposed as `blockio_errors` and `blockio_requeues`. The new
+  counters are folded into the existing sampler so the
+  `block_rq_complete` hot path stays single-attach. (#873)
+- Dashboard: new "Exceptions" section consolidating cross-subsystem
+  fault signals — network drops & transmit faults, TCP retransmits,
+  AWS ENA allowance hits, CFS bandwidth throttling, and the new block
+  IO errors / requeues. (#873)
+- Viewer (static site): `?capture=alias=URL` now accepts absolute
+  http(s) URLs in addition to bundled-demo paths, with comma-separated
+  pairs routing straight to A/B compare mode. Landing page split into
+  Demos / Explore sections with a "Load from URL" textarea. (#886)
+- Viewer (server): opt-in URL-fetch proxy via `--proxy-allow
+  <HOST_PATTERN>` (repeatable, shell-style with `*` matching a single
+  DNS label) plus a `--proxy-allow-any` escape hatch. Adds
+  `POST /api/v1/load_url` so the browser can hand off remote parquet
+  captures the server fetches and ingests on its behalf; the landing
+  page greys out URL loading when no allowlist is configured and
+  prints a warning at startup in any-mode. (#888)
+- Viewer: tri-state `urlLoading` (`disabled` / `proxy` / `direct`)
+  exposed via `/api/v1/mode` so the static-site and binary frontends
+  surface accurate hints about how URL fetches will be performed.
+  (#888)
+- CI: release builds publish a self-contained
+  `rezolus-viewer-vX.Y.Z.tar.gz` bundle (WASM + frontend assets, demo
+  parquets excluded, symlinks dereferenced) alongside the deb/rpm
+  packages. (#885)
+- Tests: end-to-end `tests/viewer_smoke.sh` exercising `rezolus view`
+  in upload-only, file, A/B, and proxy modes against checked-in demo
+  parquets, plus a companion `viewer-smoke` skill for triage. (#893)
+- Docs: `docs/principles.md` capturing the design rules Rezolus
+  commits to for BPF samplers (always-on production use, in-kernel
+  aggregation read via mmap, H2 histograms, etc.) and the operational
+  checklist for reviewing or writing a sampler. (#887)
+
+### Changed
+
+- Viewer: split the 2.6k-line `src/viewer/mod.rs` into focused
+  submodules (`state.rs`, `metadata.rs`, `routes.rs`, `actions.rs`).
+  No behavior change. (#892)
+- Viewer: multi-line chart palette swapped to d3 `schemeCategory10` /
+  `schemeCategory20` for stronger discriminability on dark
+  backgrounds; muted brown / gray pairs dropped from the cgroup color
+  rotation. Per-chart description text now renders as a sibling block
+  above the chart card. (#873)
+- Bumped direct deps `arrow` / `parquet` 58.1.0 → 58.2.0 and `tokio`
+  1.52.1 → 1.52.2; refreshed `Cargo.lock` for in-range bumps across
+  `tower-http`, `wasm-bindgen`, `web-sys`, `webpki-root-certs`, the
+  `arrow-*` transitive set, and others. Trimmed unused features
+  (tokio's `full` → eight specific features, dropped axum's `http2`
+  feature and the standalone `h2` direct dep), shrinking the
+  transitive crate count. (#891)
+- Viewer (server): enable reqwest's `rustls` feature so
+  `/api/v1/load_url` can fetch HTTPS URLs. (#888)
+
+### Fixed
+
+- Viewer: cgroup selector columns now truncate long names with
+  ellipsis instead of widening past the flex split. (#873)
+
 ## [5.12.1] - 2026-05-10
 
 ### Fixed
@@ -728,7 +794,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.12.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.13.0...HEAD
+[5.13.0]: https://github.com/iopsystems/rezolus/compare/v5.12.1...v5.13.0
 [5.12.1]: https://github.com/iopsystems/rezolus/compare/v5.12.0...v5.12.1
 [5.12.0]: https://github.com/iopsystems/rezolus/compare/v5.11.0...v5.12.0
 [5.11.0]: https://github.com/iopsystems/rezolus/compare/v5.10.0...v5.11.0
