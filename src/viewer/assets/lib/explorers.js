@@ -506,7 +506,7 @@ const loadModel = async (onProgress) => {
 
         _pipeline = await _transformersModule.pipeline(
             'text-generation',
-            'onnx-community/Qwen2.5-0.5B-Instruct',
+            'onnx-community/Qwen2.5-0.5B-Instruct-ONNX',
             {
                 progress: (report) => {
                     if (typeof onProgress === 'function') {
@@ -514,8 +514,8 @@ const loadModel = async (onProgress) => {
                     }
                 },
                 config: {
-                    // Only use WebGPU tensors for efficiency
-                    safe_tensors: false,
+                    // Quantized model for faster browser inference
+                    dtype: 'q4f16',
                 },
             }
         );
