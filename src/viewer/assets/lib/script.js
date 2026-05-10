@@ -178,7 +178,21 @@ let landingState = {
     baselineFilename: null,
     experimentAttached: false,
     experimentFilename: null,
+    proxyEnabled: false,
 };
+
+// Best-effort probe of the proxy state so the landing's "Load from URL"
+// hint can swap to "fetched server-side" when the user started rezolus
+// view with --proxy-allow. A failed probe just leaves it at false.
+ViewerApi.getMode()
+    .then((res) => {
+        const flag = res?.data?.proxy_enabled ?? res?.proxy_enabled ?? false;
+        if (flag) {
+            landingState.proxyEnabled = true;
+            m.redraw();
+        }
+    })
+    .catch(() => { /* default false */ });
 
 const isCompareRequested = () =>
     new URLSearchParams(window.location.search).get('compare') === '1';
@@ -216,6 +230,27 @@ const showLanding = () => {
                     m.redraw();
                 }
             },
+            onLoadUrl: async (raw) => {
+                // Single URL only on the binary-viewer landing — A/B
+                // ingestion goes through the experiment-attach flow
+                // after the baseline lands, not via the URL field.
+                landingState.loading = true;
+                landingState.error = null;
+                m.redraw();
+                try {
+                    const eq = raw.indexOf('=');
+                    const looksAliased = eq > 0
+                        && !/[\/\\:\s]/.test(raw.slice(0, eq));
+                    const url = looksAliased ? raw.slice(eq + 1).trim() : raw.trim();
+                    await ViewerApi.loadFromUrl(url);
+                    window.location.reload();
+                } catch (e) {
+                    landingState.loading = false;
+                    landingState.error = `Failed to load URL: ${e?.message ?? e ?? 'unknown error'}`;
+                    m.redraw();
+                }
+            },
+            proxyEnabled: landingState.proxyEnabled,
             loading: landingState.loading,
             error: landingState.error,
         }),

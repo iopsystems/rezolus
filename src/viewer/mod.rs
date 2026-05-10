@@ -67,6 +67,7 @@ use promql::QueryEngine;
 use tsdb::*;
 
 pub mod capture_registry;
+mod proxy_allow;
 
 use capture_registry::{CaptureId, CaptureRegistry};
 
@@ -140,6 +141,19 @@ pub fn command() -> Command {
                 )
                 .action(clap::ArgAction::Set),
         )
+        .arg(
+            clap::Arg::new("PROXY_ALLOW")
+                .long("proxy-allow")
+                .value_name("HOST_PATTERN")
+                .help(
+                    "Enable the URL proxy and whitelist a host pattern \
+                     (repeatable). Patterns are shell-style with `*` matching \
+                     a single DNS label — e.g. `*.s3.amazonaws.com`, \
+                     `bucket.example.internal`. Without this flag the proxy \
+                     stays disabled and the browser must fetch URLs directly.",
+                )
+                .action(clap::ArgAction::Append),
+        )
 }
 
 pub struct Config {
@@ -151,6 +165,7 @@ pub struct Config {
     verbose: u8,
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
+    proxy_allow: proxy_allow::Allowlist,
 }
 
 /// Split a positional input into an optional alias and the remaining
@@ -209,6 +224,12 @@ impl TryFrom<ArgMatches> for Config {
             None => (None, None),
         };
 
+        let proxy_allow = proxy_allow::Allowlist::new(
+            args.get_many::<String>("PROXY_ALLOW")
+                .unwrap_or_default()
+                .cloned(),
+        );
+
         Ok(Config {
             source,
             experiment_path,
@@ -220,6 +241,7 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<SocketAddr>("LISTEN")
                 .unwrap_or(&"127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap()),
             templates_dir: args.get_one::<PathBuf>("templates").cloned(),
+            proxy_allow,
         })
     }
 }
@@ -243,7 +265,7 @@ pub fn run(config: Config) {
 
     let registry = load_template_registry(config.templates_dir.as_deref());
 
-    let state = match &config.source {
+    let mut state = match &config.source {
         Source::File(path) => {
             info!("Loading data from parquet file...");
             let data = Tsdb::load(path)
@@ -493,6 +515,11 @@ pub fn run(config: Config) {
         }
     };
 
+    state.set_proxy(config.proxy_allow.clone());
+    if state.proxy.enabled() {
+        info!("URL proxy enabled at /api/v1/proxy");
+    }
+
     // The experiment CLI arg is only honored when the baseline is a parquet
     // file. Live and upload-only modes manage the experiment slot via the
     // HTTP attach endpoint instead.
@@ -700,6 +727,21 @@ impl Default for LazySectionStore {
     }
 }
 
+/// Proxy state for the optional URL-fetch endpoint. When the CLI is
+/// invoked without `--proxy-allow`, both fields stay empty/None and the
+/// endpoint refuses every request.
+#[derive(Default)]
+struct ProxyState {
+    allow: proxy_allow::Allowlist,
+    client: Option<Client>,
+}
+
+impl ProxyState {
+    fn enabled(&self) -> bool {
+        !self.allow.is_empty() && self.client.is_some()
+    }
+}
+
 struct AppState {
     sections: parking_lot::RwLock<LazySectionStore>,
     /// Per-capture TSDB + metadata. Single-capture callers always target
@@ -732,6 +774,9 @@ struct AppState {
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
     file_checksum: parking_lot::RwLock<Option<String>>,
+    /// Optional URL-fetch proxy. Disabled (empty allowlist + no client)
+    /// unless the CLI was invoked with one or more `--proxy-allow`.
+    proxy: ProxyState,
 }
 
 impl AppState {
@@ -748,6 +793,27 @@ impl AppState {
             category_name: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
+            proxy: ProxyState::default(),
+        }
+    }
+
+    /// Enable the URL proxy with the given hostname allowlist. Builds a
+    /// dedicated reqwest client (so the proxy traffic is isolated from
+    /// the live-mode scrape client). No-op when the allowlist is empty.
+    fn set_proxy(&mut self, allow: proxy_allow::Allowlist) {
+        if allow.is_empty() {
+            return;
+        }
+        match Client::builder().build() {
+            Ok(client) => {
+                self.proxy = ProxyState {
+                    allow,
+                    client: Some(client),
+                };
+            }
+            Err(e) => {
+                error!("failed to build proxy http client: {e}");
+            }
         }
     }
 
@@ -1351,6 +1417,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
             "/save_with_selection",
             axum::routing::post(save_with_selection),
         )
+        .route("/proxy", get(proxy_url))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -1474,7 +1541,80 @@ async fn mode(
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
         "category": state.category_name.read().clone(),
+        "proxy_enabled": state.proxy.enabled(),
     }))
+}
+
+#[derive(serde::Deserialize)]
+struct ProxyParam {
+    url: String,
+}
+
+/// Fetch a remote URL on behalf of the browser. Refuses every request
+/// when the proxy is disabled (no `--proxy-allow` patterns) or when the
+/// requested host doesn't match the allowlist. The handler is GET-only
+/// and streams the upstream response body verbatim — no buffering, no
+/// rewriting beyond stripping cookie-setting headers.
+async fn proxy_url(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<ProxyParam>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let Some(client) = state.proxy.client.as_ref() else {
+        return (StatusCode::FORBIDDEN, "proxy is disabled").into_response();
+    };
+
+    let target = match Url::parse(&q.url) {
+        Ok(u) => u,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid url: {e}")).into_response(),
+    };
+
+    if !matches!(target.scheme(), "http" | "https") {
+        return (StatusCode::BAD_REQUEST, "url scheme must be http or https").into_response();
+    }
+
+    let host = match target.host_str() {
+        Some(h) => h,
+        None => return (StatusCode::BAD_REQUEST, "url is missing a host").into_response(),
+    };
+
+    if !state.proxy.allow.allows(host) {
+        return (
+            StatusCode::FORBIDDEN,
+            format!("host {host} not in --proxy-allow list"),
+        )
+            .into_response();
+    }
+
+    let upstream = match client.get(target.clone()).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("proxy fetch failed for {target}: {e}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("upstream fetch failed: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let status = upstream.status();
+    let upstream_headers = upstream.headers().clone();
+    let body = axum::body::Body::from_stream(upstream.bytes_stream());
+
+    let mut response = axum::response::Response::builder().status(status);
+    // Forward content type + length. Drop Set-Cookie so the upstream
+    // can't plant cookies on the proxy's origin.
+    for name in [header::CONTENT_TYPE, header::CONTENT_LENGTH] {
+        if let Some(v) = upstream_headers.get(&name) {
+            response = response.header(name, v);
+        }
+    }
+    response.body(body).unwrap_or_else(|e| {
+        error!("failed to assemble proxy response: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "proxy response error").into_response()
+    })
 }
 
 /// Query param for endpoints that select between baseline and experiment.
