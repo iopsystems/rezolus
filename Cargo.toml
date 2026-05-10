@@ -45,7 +45,7 @@ anyhow.workspace = true
 archspec = "0.1.3"
 arrow = "58.2.0"
 async-trait = "0.1.89"
-axum = { version = "0.8.9", features = ["http2"] }
+axum = "0.8.9"
 backtrace = "0.3.76"
 chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive"] }
@@ -53,7 +53,6 @@ clocksource = "1.0.0"
 core_affinity = "0.8.3"
 ctrlc = { version = "3.5.2", features = ["termination"] }
 futures = "0.3.32"
-h2 = "0.4.13"
 histogram.workspace = true
 http = "1.4.0"
 humantime = "2.3.0"
