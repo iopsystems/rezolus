@@ -1,5 +1,71 @@
 ## [Unreleased]
 
+## [5.12.0] - 2026-05-09
+
+### Added
+
+- Viewer A/B compare mode for two parquet captures, with shared cursor/zoom,
+  diff heatmaps, and a compact top-nav compare badge. (#820 #821 #822 #823
+  #827 #828 #832)
+- Quantile heatmap chart for histogram metrics, with Full/Tail toggles and a
+  vertical color legend. Available in compare (A/B) mode with a unified scale
+  and diff variant. (#868 #870 #872)
+- Service templates for inference-library (vllm + sglang) and
+  sglang-router/prefill/decode. Service templates are now embedded in the
+  release binary. (#829 #836 #850)
+- Per-CPU runqueue wait and context switch metrics in the dashboard. (#875)
+- Site landing-page demos: grouped + polished layout and an inference A/B
+  example. (#824 #830 #831)
+- Viewer URL params honor `capture=alias=path`, scaling to N captures, with a
+  matching positional CLI. (#827 #832)
+- Recorder auto-labels `source=rezolus` when probing a Msgpack endpoint, so
+  `--metadata source=rezolus` is no longer required for local agents. (#878)
+- Parquet `annotate` gains `--node`, `--source`, and systeminfo JSON
+  annotation; `--source` rename now updates matching `per_source_metadata`
+  keys. (#840 #841 #853)
+- Viewer: chart controls moved to top-right with icon-only buttons, and
+  unavailable charts listed at the bottom of regular sections. (#859 #869)
+- Viewer WASM is built during the GitHub Pages deploy. (#863)
+
+### Changed
+
+- Viewer: lazy section generation in two phases — split sections metadata
+  from payloads and defer payload construction until a section is rendered.
+  Reduces initial chart load memory and time. (#835 #848 #851)
+- Viewer: observable `ChartsState` with zoom subscriptions; percentile pins
+  stay local per chart. (#825 #828)
+- Viewer: rename `histogram_percentiles` → `histogram_quantiles` and drop the
+  `percentile` label. (#856)
+- Dashboard: suppress per-device charts on single-GPU and single-CPU
+  recordings. (#864)
+- Bumped `metriken-query` 0.9.5 → 0.10.2 — 0.9.6 tightens load-path heap
+  allocations (60–90% reduction on demo parquets, with a corresponding drop
+  in the WASM viewer's memory footprint), and 0.10.x ships the streaming
+  PromQL engine. Also bumped `histogram` and `wasm-bindgen`, and refreshed
+  the rest of the cargo dependencies. (#839 #858)
+- Marked the `rezolus` crate as unpublishable; prepared the `systeminfo`
+  crate for publishing. (#771 #871)
+
+### Fixed
+
+- Viewer: preserve deferred per-cgroup charts when section payload filtering
+  runs before the cgroup selector populates them. (#874)
+- Viewer: missing histograms for service metrics. (#862)
+- Viewer: compare-mode bug bash — legends, zoom, layout, default route — and
+  follow-ups including diff-heatmap polish, narrow-screen time range bar, and
+  pinning the node filter to both captures. (#821 #822 #823 #827 #852 #854)
+- Viewer: redirect stale `#/service/...` hashes to the default route, and
+  break the redirect loop when the default route itself is missing.
+  (#842 #843)
+- Viewer: drive template + category membership from the parquet source,
+  refresh experiment charts when granularity changes, and fix WASM template
+  parsing for inference-library. (#833 #838 #846)
+- Viewer: multi-node selector tappable on mobile. (#865)
+- WASM: rebuild plus a CI gate against bad externref-table layout. (#847)
+- Parquet: flatten existing source arrays when combining, and expand array
+  sources into `per_source_metadata`. (#845 #849)
+- Installer: run as root and create the `rezolus` user on RPM systems. (#844)
+
 ## [5.11.0] - 2026-04-21
 
 ### Added
@@ -640,7 +706,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.11.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.12.0...HEAD
+[5.12.0]: https://github.com/iopsystems/rezolus/compare/v5.11.0...v5.12.0
 [5.11.0]: https://github.com/iopsystems/rezolus/compare/v5.10.0...v5.11.0
 [5.10.0]: https://github.com/iopsystems/rezolus/compare/v5.9.1...v5.10.0
 [5.9.1]: https://github.com/iopsystems/rezolus/compare/v5.9.0...v5.9.1
