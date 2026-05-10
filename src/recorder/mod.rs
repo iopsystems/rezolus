@@ -6,7 +6,7 @@ mod prometheus;
 
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
-use endpoint::{EndpointState, EndpointStatus, Protocol};
+use endpoint::{infer_source_name, EndpointState, EndpointStatus, Protocol};
 use std::path::Path;
 
 pub fn command() -> Command {
@@ -306,7 +306,7 @@ fn build_parquet_converter(
     );
 
     // Source metadata
-    converter = converter.metadata("source".to_string(), ep.config.source.clone());
+    converter = converter.metadata("source".to_string(), ep.config.source_label().to_string());
 
     // User-supplied metadata
     for (key, value) in &config.metadata {
@@ -337,7 +337,7 @@ fn build_parquet_converter(
         .iter()
         .find(|(k, _)| k == "source")
         .map(|(_, v)| v.as_str())
-        .unwrap_or(ep.config.source.as_str());
+        .unwrap_or(ep.config.source_label());
 
     if let Some(json) = build_per_source_metadata(
         effective_source,
@@ -459,9 +459,24 @@ pub fn run(config: RecordingConfig) {
         for ep in &mut endpoints {
             match probe_endpoint(&client, &ep.config).await {
                 Some((protocol, url)) => {
+                    if ep.config.source.is_none() {
+                        if protocol == Protocol::Msgpack {
+                            ep.config.source = Some("rezolus".to_string());
+                        } else {
+                            let inferred = infer_source_name(&ep.config.url);
+                            eprintln!(
+                                "warn: no source name specified for {}, using \"{inferred}\" \
+                                 (pass --metadata source=NAME to override)",
+                                ep.config.url,
+                            );
+                            ep.config.source = Some(inferred);
+                        }
+                    }
                     info!(
                         "endpoint {} ({}): detected {:?}",
-                        ep.config.source, ep.config.url, protocol
+                        ep.config.source_label(),
+                        ep.config.url,
+                        protocol
                     );
                     if protocol == Protocol::Msgpack {
                         let (si, desc) = fetch_agent_metadata(&client, &ep.config.url).await;
@@ -474,8 +489,8 @@ pub fn run(config: RecordingConfig) {
                 }
                 None => {
                     warn!(
-                        "endpoint {} ({}) not reachable, will retry each tick",
-                        ep.config.source, ep.config.url
+                        "endpoint {} not reachable, will retry each tick",
+                        ep.config.url
                     );
                 }
             }
@@ -503,7 +518,7 @@ pub fn run(config: RecordingConfig) {
                 };
                 let converter = if ep.protocol() == Some(&Protocol::Prometheus) {
                     Some(prometheus::PrometheusConverter::with_provenance(
-                        ep.config.source.clone(),
+                        ep.config.source_label().to_string(),
                         ep.config.url.to_string(),
                     ))
                 } else {
@@ -573,7 +588,7 @@ pub fn run(config: RecordingConfig) {
                                     Err(e) => {
                                         error!(
                                             "serialize error for {}: {e}",
-                                            endpoints[idx].config.source
+                                            endpoints[idx].config.source_label()
                                         );
                                         continue;
                                     }
@@ -585,7 +600,7 @@ pub fn run(config: RecordingConfig) {
                                     Ok(snapshot) => {
                                         let snapshot = inject_provenance(
                                             snapshot,
-                                            &endpoints[idx].config.source,
+                                            endpoints[idx].config.source_label(),
                                             endpoints[idx].config.url.as_str(),
                                         );
                                         match rmp_serde::encode::to_vec(&snapshot) {
@@ -593,7 +608,7 @@ pub fn run(config: RecordingConfig) {
                                             Err(e) => {
                                                 error!(
                                                     "serialize error for {}: {e}",
-                                                    endpoints[idx].config.source
+                                                    endpoints[idx].config.source_label()
                                                 );
                                                 continue;
                                             }
@@ -602,7 +617,7 @@ pub fn run(config: RecordingConfig) {
                                     Err(e) => {
                                         warn!(
                                             "msgpack decode error for {}: {e}",
-                                            endpoints[idx].config.source
+                                            endpoints[idx].config.source_label()
                                         );
                                         continue;
                                     }
@@ -610,14 +625,18 @@ pub fn run(config: RecordingConfig) {
                             };
 
                             if let Err(e) = ew.writer.write_all(&bytes) {
-                                error!("write error for {}: {e}", endpoints[idx].config.source);
+                                error!(
+                                    "write error for {}: {e}",
+                                    endpoints[idx].config.source_label()
+                                );
                             }
                         }
                     }
                     Err(e) => {
                         warn!(
                             "scrape failed for {} ({}): {e}",
-                            endpoints[idx].config.source, endpoints[idx].config.url
+                            endpoints[idx].config.source_label(),
+                            endpoints[idx].config.url
                         );
                     }
                 }
@@ -633,9 +652,23 @@ pub fn run(config: RecordingConfig) {
             for idx in pending_indices {
                 if let Some((protocol, url)) = probe_endpoint(&client, &endpoints[idx].config).await
                 {
+                    if endpoints[idx].config.source.is_none() {
+                        if protocol == Protocol::Msgpack {
+                            endpoints[idx].config.source = Some("rezolus".to_string());
+                        } else {
+                            let inferred = infer_source_name(&endpoints[idx].config.url);
+                            eprintln!(
+                                "warn: no source name specified for {}, using \"{inferred}\" \
+                                 (pass --metadata source=NAME to override)",
+                                endpoints[idx].config.url,
+                            );
+                            endpoints[idx].config.source = Some(inferred);
+                        }
+                    }
                     info!(
                         "endpoint {} ({}) now available, starting capture",
-                        endpoints[idx].config.source, endpoints[idx].config.url
+                        endpoints[idx].config.source_label(),
+                        endpoints[idx].config.url
                     );
                     if protocol == Protocol::Msgpack {
                         let (si, desc) =
@@ -649,7 +682,7 @@ pub fn run(config: RecordingConfig) {
 
                     let converter = if protocol == Protocol::Prometheus {
                         Some(prometheus::PrometheusConverter::with_provenance(
-                            endpoints[idx].config.source.clone(),
+                            endpoints[idx].config.source_label().to_string(),
                             endpoints[idx].config.url.to_string(),
                         ))
                     } else {
@@ -688,7 +721,10 @@ pub fn run(config: RecordingConfig) {
                             continue;
                         }
                         let dest_path = if config.separate || active_count > 1 {
-                            separate_output_path(&config.output, &endpoints[idx].config.source)
+                            separate_output_path(
+                                &config.output,
+                                endpoints[idx].config.source_label(),
+                            )
                         } else {
                             config.output.clone()
                         };
@@ -713,8 +749,10 @@ pub fn run(config: RecordingConfig) {
                         if endpoints[idx].first_success_ns.is_none() {
                             continue;
                         }
-                        let dest_path =
-                            separate_output_path(&config.output, &endpoints[idx].config.source);
+                        let dest_path = separate_output_path(
+                            &config.output,
+                            endpoints[idx].config.source_label(),
+                        );
                         match std::fs::File::create(&dest_path) {
                             Ok(dest) => {
                                 let _ = ew.writer.rewind();
@@ -728,7 +766,7 @@ pub fn run(config: RecordingConfig) {
                                 {
                                     eprintln!(
                                         "error saving parquet for {}: {e}",
-                                        endpoints[idx].config.source
+                                        endpoints[idx].config.source_label()
                                     );
                                 } else {
                                     info!("wrote {}", dest_path.display());
@@ -801,7 +839,7 @@ pub fn run(config: RecordingConfig) {
                                     {
                                         eprintln!(
                                             "error converting {} to parquet: {e}",
-                                            endpoints[idx].config.source
+                                            endpoints[idx].config.source_label()
                                         );
                                         continue;
                                     }
