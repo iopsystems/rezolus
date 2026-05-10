@@ -517,7 +517,7 @@ pub fn run(config: Config) {
 
     state.set_proxy(config.proxy_allow.clone());
     if state.proxy.enabled() {
-        info!("URL proxy enabled at /api/v1/proxy");
+        info!("URL loading enabled at /api/v1/load_url");
     }
 
     // The experiment CLI arg is only honored when the baseline is a parquet
@@ -1560,80 +1560,70 @@ struct LoadUrlBody {
 async fn load_url(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     axum::extract::Json(body): axum::extract::Json<LoadUrlBody>,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
+) -> axum::response::Json<ApiResponse<serde_json::Value>> {
+    // Every branch returns Json(ApiResponse) — never raw text — so the
+    // Mithril frontend's JSON-parsing default doesn't choke on non-2xx
+    // bodies and bury the real error as `null`.
+    let err =
+        |msg: String, kind: &str| axum::response::Json(ApiResponse::error(msg, kind.to_string()));
 
     if state.live.load(Ordering::Relaxed) {
-        return (
-            StatusCode::BAD_REQUEST,
-            "load_url is only available in file mode",
-        )
-            .into_response();
+        return err(
+            "load_url is only available in file mode".to_string(),
+            "bad_request",
+        );
     }
 
     let Some(client) = state.proxy.client.as_ref() else {
-        return (StatusCode::FORBIDDEN, "url loading is disabled").into_response();
+        return err("url loading is disabled".to_string(), "forbidden");
     };
 
     let target = match Url::parse(&body.url) {
         Ok(u) => u,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid url: {e}")).into_response(),
+        Err(e) => return err(format!("invalid url: {e}"), "bad_request"),
     };
 
     if !matches!(target.scheme(), "http" | "https") {
-        return (StatusCode::BAD_REQUEST, "url scheme must be http or https").into_response();
+        return err(
+            "url scheme must be http or https".to_string(),
+            "bad_request",
+        );
     }
 
     let host = match target.host_str() {
         Some(h) => h.to_string(),
-        None => return (StatusCode::BAD_REQUEST, "url is missing a host").into_response(),
+        None => return err("url is missing a host".to_string(), "bad_request"),
     };
 
     if !state.proxy.allow.allows(&host) {
-        return (
-            StatusCode::FORBIDDEN,
+        return err(
             format!("host {host} not in --proxy-allow list"),
-        )
-            .into_response();
+            "forbidden",
+        );
     }
 
     let upstream = match client.get(target.clone()).send().await {
         Ok(r) => r,
         Err(e) => {
             warn!("load_url fetch failed for {target}: {e}");
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("upstream fetch failed: {e}"),
-            )
-                .into_response();
+            return err(format!("upstream fetch failed: {e}"), "upstream_error");
         }
     };
     if !upstream.status().is_success() {
-        return (
-            StatusCode::BAD_GATEWAY,
+        return err(
             format!("upstream returned {}", upstream.status()),
-        )
-            .into_response();
+            "upstream_error",
+        );
     }
 
     let bytes = match upstream.bytes().await {
         Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("upstream read failed: {e}"),
-            )
-                .into_response();
-        }
+        Err(e) => return err(format!("upstream read failed: {e}"), "upstream_error"),
     };
 
     let temp_path = baseline_temp_path();
     if let Err(e) = std::fs::write(&temp_path, &bytes) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to stage upstream bytes: {e}"),
-        )
-            .into_response();
+        return err(format!("failed to stage upstream bytes: {e}"), "io_error");
     }
 
     let filename = body.filename.unwrap_or_else(|| {
@@ -1644,7 +1634,7 @@ async fn load_url(
             .unwrap_or_else(|| "remote.parquet".to_string())
     });
 
-    ingest_baseline_from_path(&state, temp_path, filename).into_response()
+    ingest_baseline_from_path(&state, temp_path, filename)
 }
 
 /// Query param for endpoints that select between baseline and experiment.

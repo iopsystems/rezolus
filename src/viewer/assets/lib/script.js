@@ -242,7 +242,15 @@ const showLanding = () => {
                     const looksAliased = eq > 0
                         && !/[\/\\:\s]/.test(raw.slice(0, eq));
                     const url = looksAliased ? raw.slice(eq + 1).trim() : raw.trim();
-                    await ViewerApi.loadFromUrl(url);
+                    const res = await ViewerApi.loadFromUrl(url);
+                    // Backend wraps both success and recoverable errors
+                    // (invalid parquet, upstream 404, allowlist deny) in
+                    // an ApiResponse envelope, so check status before
+                    // reloading — otherwise an error gets lost in the
+                    // page refresh.
+                    if (res?.status === 'error') {
+                        throw new Error(res.error || 'unknown error');
+                    }
                     window.location.reload();
                 } catch (e) {
                     landingState.loading = false;
