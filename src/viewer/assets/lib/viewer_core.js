@@ -549,7 +549,7 @@ export function createGroupComponent(getState) {
                     chartHeader(renderSpec.opts, renderSpec),
                     chartBody(renderSpec, spec),
                     expandLink(spec, sectionRoute),
-                    selectButton(spec, sectionRoute, sectionName),
+                    selectButton(spec, sectionRoute, sectionName, attrs.name),
                 ]);
             };
 

@@ -112,6 +112,7 @@ const persistStore = (key, store) => {
                 chartId: e.chartId,
                 section: e.section,
                 sectionName: e.sectionName,
+                groupName: e.groupName || '',
                 promql_query: e.promql_query,
                 note: e.note,
                 chartOpts: e.chartOpts,
@@ -148,6 +149,7 @@ const restoreStore = (key, store) => {
             chartId: e.chartId,
             section: e.section,
             sectionName: e.sectionName,
+            groupName: e.groupName || '',
             promql_query: e.promql_query,
             note: e.note || '',
             chartOpts: e.chartOpts,
@@ -194,9 +196,22 @@ const setChartToggle = (chartId, key, value) => {
 restoreStore(REPORT_STORAGE_KEY, reportStore);
 restoreStore(SELECTION_STORAGE_KEY, selectionStore);
 
+// Build the displayed chart title for a selection card. The dashboard
+// gives charts visual context via section/group breadcrumbs ("CPU >
+// TLB Flush > Total Flushes"); the selection cards are flat-listed,
+// so we restore that context inline. De-dups when group equals
+// section (e.g. /scheduler has a single "Scheduler" group).
+const selectionCardTitle = (entry, spec) => {
+    const parts = [];
+    if (entry.sectionName) parts.push(entry.sectionName);
+    if (entry.groupName && entry.groupName !== entry.sectionName) parts.push(entry.groupName);
+    parts.push(spec.opts.title);
+    return parts.join(': ');
+};
+
 // ── Selection API (write mode) ───────────────────────────────────
 
-const toggleSelection = (spec, sectionKey, sectionName) => {
+const toggleSelection = (spec, sectionKey, sectionName, groupName) => {
     const idx = selectionStore.entries.findIndex(e => e.chartId === spec.opts.id);
     if (idx >= 0) {
         selectionStore.entries.splice(idx, 1);
@@ -208,6 +223,7 @@ const toggleSelection = (spec, sectionKey, sectionName) => {
         chartId: spec.opts.id,
         section: sectionKey,
         sectionName,
+        groupName: groupName || '',
         promql_query: spec.promql_query,
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
@@ -271,6 +287,7 @@ const buildPayload = (store, attrs) => ({
         chartId: e.chartId,
         section: e.section,
         sectionName: e.sectionName,
+        groupName: e.groupName || '',
         promql_query: e.promql_query,
         note: e.note,
         chartOpts: e.chartOpts,
@@ -308,6 +325,7 @@ const loadPayloadIntoStore = (store, payload) => {
         chartId: e.chartId,
         section: e.section,
         sectionName: e.sectionName,
+        groupName: e.groupName || '',
         promql_query: e.promql_query,
         note: e.note || '',
         chartOpts: e.chartOpts,
@@ -555,7 +573,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                             }, 'X'),
                             m('div.chart-wrapper', [
                                 m('div.chart-header', [
-                                    m('span.chart-title', spec.opts.title),
+                                    m('span.chart-title', selectionCardTitle(entry, spec)),
                                     spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                                 ]),
                                 m(Chart, { spec, chartsState: attrs.chartsState, interval }),
@@ -647,7 +665,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                         m('div.selection-card-chart', [
                             m('div.chart-wrapper', [
                                 m('div.chart-header', [
-                                    m('span.chart-title', spec.opts.title),
+                                    m('span.chart-title', selectionCardTitle(entry, spec)),
                                     spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                                 ]),
                                 m(Chart, { spec, chartsState: attrs.chartsState, interval }),
