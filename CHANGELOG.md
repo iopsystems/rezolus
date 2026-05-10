@@ -1,5 +1,27 @@
 ## [Unreleased]
 
+## [5.12.1] - 2026-05-10
+
+### Fixed
+
+- Viewer: align compare-mode spectrum fetches with a shared step so the
+  diff path on quantile heatmaps actually renders, instead of falling
+  back to the baseline percentile scatter when the two captures have
+  different durations. (#881)
+- Viewer: pinned histogram (percentile-scatter) charts in the Selection
+  section now wrap their stored query through `buildEffectiveQuery`,
+  fixing the empty-card regression where the raw metric name was being
+  fetched without the `histogram_quantiles(...)` wrapping. (#882)
+- Viewer: persisted selection + notes now actually survive a page
+  refresh — `setStorageScope` was wiping the just-bound file-scoped
+  localStorage key on every load. (#882)
+- Viewer: selection cards now show "Section: Group: Title" so pinned
+  charts carry the same context the dashboard headers provide; spectrum
+  controls use the narrow layout when rendered inside a selection card
+  so they don't crowd the legend. (#882)
+- CI: Homebrew formula bump on release no longer fails on permissions.
+  (#880)
+
 ## [5.12.0] - 2026-05-09
 
 ### Added
@@ -706,7 +728,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.12.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.12.1...HEAD
+[5.12.1]: https://github.com/iopsystems/rezolus/compare/v5.12.0...v5.12.1
 [5.12.0]: https://github.com/iopsystems/rezolus/compare/v5.11.0...v5.12.0
 [5.11.0]: https://github.com/iopsystems/rezolus/compare/v5.10.0...v5.11.0
 [5.10.0]: https://github.com/iopsystems/rezolus/compare/v5.9.1...v5.10.0
