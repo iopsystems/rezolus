@@ -192,10 +192,10 @@ const FileUpload = {
                     }, 'Connect'),
                 ]),
                 attrs.onLoadUrl && m('div.upload-connect', [
-                    m('p.upload-connect-label', 'or load a parquet from URL'),
+                    m('p.upload-connect-label', 'or load a parquet from URL (comma-separated for A/B compare)'),
                     m('input.connect-input', {
                         type: 'text',
-                        placeholder: 'https://example.com/recording.parquet (or alias=URL)',
+                        placeholder: 'https://example.com/recording.parquet  —  or  alias=URL, alias=URL',
                         value: parquetUrl,
                         disabled: loading,
                         oninput: (e) => { parquetUrl = e.target.value; },

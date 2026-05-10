@@ -401,11 +401,22 @@ const Root = {
                 }
             },
             onLoadUrl: (raw) => {
-                // Reuse the same alias=URL grammar as the URL params so
-                // users can paste `vllm=https://…/file.parquet` to seed
-                // both the legend and the source.
-                const [alias, source] = splitAlias(raw);
-                loadCapture(source, alias);
+                // Comma separates A/B for compare mode. Each entry uses
+                // the same alias=URL grammar as the URL params, so a
+                // paste like `vllm=https://…/a.parquet, sglang=https://…/b.parquet`
+                // seeds legends and routes to compare mode automatically.
+                const entries = raw.split(',').map((s) => s.trim()).filter(Boolean);
+                if (entries.length >= 2) {
+                    const [labelA, fileA] = splitAlias(entries[0]);
+                    const [labelB, fileB] = splitAlias(entries[1]);
+                    const legends = (labelA || labelB)
+                        ? { baseline: labelA, experiment: labelB }
+                        : null;
+                    loadCompareDemo(fileA, fileB, legends, null);
+                } else if (entries.length === 1) {
+                    const [alias, source] = splitAlias(entries[0]);
+                    loadCapture(source, alias);
+                }
             },
             // Static-site bundle has no local proxy. The CORS hint
             // surfaces as a fetch failure error, not a permanent
