@@ -151,11 +151,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let errors = blockio.subgroup("Errors");
     errors.describe("Terminal block IO failures.");
-    errors.plot_promql(
-        PlotOpts::counter("Total", "blockio-err-total", Unit::Rate)
-            .with_description("Aggregate failure rate across all ops and classes."),
-        "sum(irate(blockio_errors[5m]))".to_string(),
-    );
     errors.plot_promql_full(
         PlotOpts::counter("By Class", "blockio-err-by-class", Unit::Rate).with_description(
             "Fault mode: timeout-heavy = controller / transport hang; \
@@ -178,10 +173,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
          SCSI error-handler escalation, NVMe controller reset, or \
          multipath path failover. High requeues with flat errors above = \
          transport blip the kernel absorbed cleanly.",
-    );
-    requeues.plot_promql(
-        PlotOpts::counter("Total", "blockio-requeue-total", Unit::Rate),
-        "sum(irate(blockio_requeues[5m]))".to_string(),
     );
     requeues.plot_promql_full(
         PlotOpts::counter("By Op", "blockio-requeue-by-op", Unit::Rate),
