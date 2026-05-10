@@ -1417,7 +1417,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
             "/save_with_selection",
             axum::routing::post(save_with_selection),
         )
-        .route("/proxy", get(proxy_url))
+        .route("/load_url", axum::routing::post(load_url))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -1546,26 +1546,36 @@ async fn mode(
 }
 
 #[derive(serde::Deserialize)]
-struct ProxyParam {
+struct LoadUrlBody {
     url: String,
+    #[serde(default)]
+    filename: Option<String>,
 }
 
-/// Fetch a remote URL on behalf of the browser. Refuses every request
-/// when the proxy is disabled (no `--proxy-allow` patterns) or when the
-/// requested host doesn't match the allowlist. The handler is GET-only
-/// and streams the upstream response body verbatim — no buffering, no
-/// rewriting beyond stripping cookie-setting headers.
-async fn proxy_url(
+/// Fetch a remote parquet on behalf of the browser and ingest it into
+/// the baseline TSDB in one server-side hop. Refuses every request when
+/// `--proxy-allow` was not set or when the requested host doesn't match
+/// any allowlist pattern. The browser only sends the URL; the bytes
+/// never traverse it — no double round-trip, no ArrayBuffer pressure.
+async fn load_url(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    axum::extract::Query(q): axum::extract::Query<ProxyParam>,
+    axum::extract::Json(body): axum::extract::Json<LoadUrlBody>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
+    if state.live.load(Ordering::Relaxed) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "load_url is only available in file mode",
+        )
+            .into_response();
+    }
+
     let Some(client) = state.proxy.client.as_ref() else {
-        return (StatusCode::FORBIDDEN, "proxy is disabled").into_response();
+        return (StatusCode::FORBIDDEN, "url loading is disabled").into_response();
     };
 
-    let target = match Url::parse(&q.url) {
+    let target = match Url::parse(&body.url) {
         Ok(u) => u,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid url: {e}")).into_response(),
     };
@@ -1575,11 +1585,11 @@ async fn proxy_url(
     }
 
     let host = match target.host_str() {
-        Some(h) => h,
+        Some(h) => h.to_string(),
         None => return (StatusCode::BAD_REQUEST, "url is missing a host").into_response(),
     };
 
-    if !state.proxy.allow.allows(host) {
+    if !state.proxy.allow.allows(&host) {
         return (
             StatusCode::FORBIDDEN,
             format!("host {host} not in --proxy-allow list"),
@@ -1590,7 +1600,7 @@ async fn proxy_url(
     let upstream = match client.get(target.clone()).send().await {
         Ok(r) => r,
         Err(e) => {
-            warn!("proxy fetch failed for {target}: {e}");
+            warn!("load_url fetch failed for {target}: {e}");
             return (
                 StatusCode::BAD_GATEWAY,
                 format!("upstream fetch failed: {e}"),
@@ -1598,23 +1608,43 @@ async fn proxy_url(
                 .into_response();
         }
     };
-
-    let status = upstream.status();
-    let upstream_headers = upstream.headers().clone();
-    let body = axum::body::Body::from_stream(upstream.bytes_stream());
-
-    let mut response = axum::response::Response::builder().status(status);
-    // Forward content type + length. Drop Set-Cookie so the upstream
-    // can't plant cookies on the proxy's origin.
-    for name in [header::CONTENT_TYPE, header::CONTENT_LENGTH] {
-        if let Some(v) = upstream_headers.get(&name) {
-            response = response.header(name, v);
-        }
+    if !upstream.status().is_success() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            format!("upstream returned {}", upstream.status()),
+        )
+            .into_response();
     }
-    response.body(body).unwrap_or_else(|e| {
-        error!("failed to assemble proxy response: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "proxy response error").into_response()
-    })
+
+    let bytes = match upstream.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("upstream read failed: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let temp_path = baseline_temp_path();
+    if let Err(e) = std::fs::write(&temp_path, &bytes) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to stage upstream bytes: {e}"),
+        )
+            .into_response();
+    }
+
+    let filename = body.filename.unwrap_or_else(|| {
+        target
+            .path_segments()
+            .and_then(|mut s| s.rfind(|seg| !seg.is_empty()))
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "remote.parquet".to_string())
+    });
+
+    ingest_baseline_from_path(&state, temp_path, filename).into_response()
 }
 
 /// Query param for endpoints that select between baseline and experiment.
@@ -1907,15 +1937,7 @@ async fn upload_parquet(
         .map(ToString::to_string)
         .unwrap_or_else(|| "upload.parquet".to_string());
 
-    let temp_suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let temp_path = std::env::temp_dir().join(format!(
-        "rezolus-viewer-{}-{}",
-        std::process::id(),
-        temp_suffix
-    ));
+    let temp_path = baseline_temp_path();
     if let Err(e) = std::fs::write(&temp_path, &body) {
         return axum::response::Json(ApiResponse::error(
             format!("failed to store upload: {e}"),
@@ -1923,6 +1945,19 @@ async fn upload_parquet(
         ));
     }
 
+    ingest_baseline_from_path(&state, temp_path, filename)
+}
+
+/// Shared baseline-ingest path used by `/api/v1/upload` and
+/// `/api/v1/load_url`. Takes ownership of `temp_path` (file is deleted
+/// on parquet-load failure, retained on success since the AppState
+/// references it for re-reads). The caller is responsible for
+/// populating the file at `temp_path` before calling.
+fn ingest_baseline_from_path(
+    state: &AppState,
+    temp_path: PathBuf,
+    filename: String,
+) -> axum::response::Json<ApiResponse<serde_json::Value>> {
     let loaded = Tsdb::load(&temp_path);
     let mut data = match loaded {
         Ok(d) => d,
@@ -1967,6 +2002,14 @@ async fn upload_parquet(
     axum::response::Json(ApiResponse::success(serde_json::json!({
         "filename": filename,
     })))
+}
+
+fn baseline_temp_path() -> PathBuf {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!("rezolus-viewer-{}-{}", std::process::id(), suffix))
 }
 
 /// Attach an experiment parquet for A/B comparison. Body is raw parquet bytes.

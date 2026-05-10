@@ -82,39 +82,16 @@ const ViewerApi = {
         });
     },
 
-    /// Fetch a remote parquet through the local /api/v1/proxy endpoint
-    /// (which respects --proxy-allow on the server) and ingest it into
-    /// the backend TSDB via the existing upload path. The two-hop
-    /// round-trip is wasteful but keeps the feature additive — no new
-    /// ingest endpoint, just composition of /proxy + /upload.
+    /// Ask the local server to fetch + ingest a remote parquet in one
+    /// hop. The bytes never traverse the browser. The server validates
+    /// the URL against its --proxy-allow list and 403s if disallowed.
     async loadFromUrl(url, filename = null) {
-        const proxied = await fetch(`/api/v1/proxy?url=${encodeURIComponent(url)}`);
-        if (!proxied.ok) {
-            const detail = await proxied.text().catch(() => '');
-            throw new Error(`proxy fetch ${proxied.status}: ${detail || proxied.statusText}`);
-        }
-        const data = await proxied.arrayBuffer();
-        if (data.byteLength > MAX_UPLOAD_BYTES) {
-            throw new Error(
-                `Fetched parquet is too large (${formatMB(data.byteLength)} MB). Max upload is ${formatMB(MAX_UPLOAD_BYTES)} MB.`,
-            );
-        }
-        const name = filename || (() => {
-            try {
-                const u = new URL(url);
-                return u.pathname.split('/').filter(Boolean).pop() || 'remote.parquet';
-            } catch (_) {
-                return 'remote.parquet';
-            }
-        })();
         return backendRequest({
             method: 'POST',
-            url: '/api/v1/upload',
-            body: data,
-            serialize: (v) => v,
+            url: '/api/v1/load_url',
+            body: { url, filename },
             headers: {
-                'Content-Type': 'application/octet-stream',
-                'x-rezolus-filename': name,
+                'Content-Type': 'application/json',
             },
         });
     },
