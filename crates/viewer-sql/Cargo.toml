@@ -12,7 +12,9 @@ publish = false
 # legacy path); both consume the same `dashboard` crate (the DashboardData
 # trait abstracts the metadata source).
 [lib]
-crate-type = ["cdylib"]
+# rlib so integration tests in tests/ can link against the crate on the host
+# target. Build script (build.sh) still produces the cdylib for wasm32.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 dashboard.workspace = true
@@ -23,3 +25,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook.workspace = true
+
+# Native-only test deps. The test scaffold runs the macros.sql script
+# against an in-memory DuckDB connection to catch drift between the WASM
+# macros and the native ones at metriken-query-sql/src/macros.rs.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+duckdb = { version = "1.1.1", features = ["bundled"] }

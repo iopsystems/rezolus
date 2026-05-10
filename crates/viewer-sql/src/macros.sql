@@ -145,11 +145,41 @@ CREATE OR REPLACE MACRO hist_rate5m_quantile(buckets, q, ts) AS
 -- Layer A primitives copy verbatim from /work/duckdb-prototyping/duck/src/macros.rs:20-26
 -- so dashboard SQL using these names is identical between native and wasm.
 
-CREATE OR REPLACE MACRO irate_1s(c, ts) AS c - LAG(c) OVER (ORDER BY ts);
+-- Per-second rate with PromQL reset semantics: when c < LAG(c), treat
+-- the post-reset value `c` as the increment (matches PromQL's
+-- `irate(c[w])` reset handling, see metriken-query/src/promql/streaming/
+-- {rate,irate}.rs:60-70). Divides by the actual `(ts - LAG(ts))` so a
+-- missing sample (gap > sampling interval) yields a rate over the
+-- longer interval. NULLIF guards against duplicate timestamps (dt=0).
+CREATE OR REPLACE MACRO irate_1s(c, ts) AS
+    CASE
+        WHEN LAG(c) OVER (ORDER BY ts) IS NULL THEN NULL
+        WHEN c >= LAG(c) OVER (ORDER BY ts) THEN
+            CAST(c - LAG(c) OVER (ORDER BY ts) AS DOUBLE)
+            / NULLIF((ts - LAG(ts) OVER (ORDER BY ts))::DOUBLE / 1e9, 0)
+        ELSE
+            CAST(c AS DOUBLE)
+            / NULLIF((ts - LAG(ts) OVER (ORDER BY ts))::DOUBLE / 1e9, 0)
+    END;
 
-CREATE OR REPLACE MACRO delta_1s(c, ts) AS c - LAG(c) OVER (ORDER BY ts);
+CREATE OR REPLACE MACRO delta_1s(c, ts) AS
+    CASE
+        WHEN LAG(c) OVER (ORDER BY ts) IS NULL THEN NULL
+        WHEN c >= LAG(c) OVER (ORDER BY ts) THEN CAST(c - LAG(c) OVER (ORDER BY ts) AS DOUBLE)
+        ELSE CAST(c AS DOUBLE)
+    END;
 
-CREATE OR REPLACE MACRO rate_5m(c, ts) AS (c - LAG(c, 300) OVER (ORDER BY ts)) / 300.0;
+-- 5-minute average rate over a *time-range* window. Uses RANGE BETWEEN
+-- 300000000000 PRECEDING AND CURRENT ROW (300s in nanoseconds — DuckDB
+-- 1.1.1 requires a literal here) so:
+--   - Parquets shorter than 5 minutes still produce values (positional
+--     `LAG(c, 300)` returned NULL on every sample for ≤300-row tables).
+--   - Sample gaps don't shift the lookback window by row count.
+-- Caveat: monotonic-only. Reset-aware 5-minute rate has to be the CTE
+-- pattern in metriken-query/src/translate.rs (counter-rate Rate variant).
+CREATE OR REPLACE MACRO rate_5m(c, ts) AS
+    (c - first_value(c) OVER (ORDER BY ts RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW))
+    / NULLIF((ts - first_value(ts) OVER (ORDER BY ts RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW))::DOUBLE / 1e9, 0);
 
 -- ---- irate_lag: emulates the canonical Rust UDF on the wasm side ----
 -- Native registers a vscalar UDF in /work/metriken/metriken-query-sql/src/udf.rs
