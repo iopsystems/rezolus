@@ -375,6 +375,47 @@ value is monotone.
   updates do not self-heal.
 - Uncommented benign-race code; the comment is part of the contract.
 
+### 15. Prefer BPF probes (or `perf_event_open`) over parsing procfs/sysfs
+
+When the same metric is reachable from a BPF probe or a hardware/software
+perf counter, prefer that over parsing `/proc` or `/sys` text files on
+every refresh. Two reasons:
+
+- **Cost.** A procfs/sysfs read is `rewind` + `read` + UTF-8 parse on
+  every refresh, with the kernel formatting the file from internal
+  state on each read. The cost scales with the file size and is paid in
+  full at every sampling tick. A BPF counter is a single mmap'd `u64`
+  load (principle 6). At high sampling frequencies the difference
+  dominates the agent's userspace budget (principle 13).
+- **Resolution.** Many procfs/sysfs counters are exposed at a
+  coarser granularity than the underlying kernel state, or are
+  pre-aggregated in ways we cannot influence. A BPF probe lets us
+  define the aggregation we actually want.
+
+Discovery is the explicit exception. Walking `/sys/devices/system/cpu`
+once at startup to enumerate CPU IDs, reading
+`/sys/bus/event_source/devices/.../type` to find a perf event source,
+or listing `/sys/class/net` to enumerate interfaces is not on a hot
+path and is fine.
+
+A small set of metrics genuinely have no useful BPF or perf hook —
+some kernel-internal gauges only surface through procfs. Those keep
+parsing the file, but the choice should be deliberate, not the default.
+
+**How to apply.**
+- A new sampler whose data is reachable from a tracepoint, `fentry`,
+  `kprobe`, or `perf_event_open` counter should use that, not parse a
+  file on every refresh.
+- One-time discovery via sysfs/procfs at startup is fine. Per-refresh
+  parsing is the pattern to avoid.
+- If procfs is the only viable source, document why in the sampler
+  module so a later reviewer does not have to rediscover it.
+
+**What we refuse.**
+- Reading `/proc/stat`, `/proc/meminfo`, `/proc/vmstat`, or similar on
+  every refresh when the same data is reachable from a BPF probe or a
+  perf counter at comparable or lower cost.
+
 ---
 
 ## Reviewing or writing a sampler — operational checklist
@@ -382,6 +423,12 @@ value is monotone.
 A short pass an agent or human reviewer can run literally over a sampler
 change. Each item is a yes/no question, or "justify in a comment."
 
+- **Data source.** Is the metric reachable from a BPF probe (tracepoint /
+  `fentry` / `kprobe`) or a `perf_event_open` counter? If yes, prefer
+  that over parsing `/proc` or `/sys` on every refresh. One-time
+  discovery via sysfs is fine; per-refresh text parsing is not. If
+  procfs is genuinely the only source, justify it in a comment.
+  (Principle 15.)
 - **Hook deduplication.** Does another sampler already attach this hook? If
   yes, the change should consolidate the existing sampler rather than add
   a second attach. (Principle 11.)
@@ -476,6 +523,29 @@ can sum downstream via the Rezolus Exporter):
 Currently duplicated in every BPF program. Move into a shared header.
 Counter group widths stay per-sampler — those vary by metric count and
 are sized intentionally.
+
+### Procfs parsing in hot path (principle 15)
+
+Per-refresh text parsing of pseudo-filesystems where a BPF or perf-counter
+source is plausible:
+
+- `memory/vmstat`: `rewind` + `read_to_string` + parse of `/proc/vmstat`
+  on every refresh. Most VM events have function-level hooks that a BPF
+  counter could increment directly; whichever entries genuinely have no
+  hook would stay on procfs and be documented as such.
+- `memory/meminfo`: same pattern for `/proc/meminfo`. Some entries are
+  computed gauges with no clean BPF source and would have to remain;
+  the goal is to move what *can* move and make the residual deliberate.
+
+Lower priority but in the same family:
+
+- `cpu/cores` reads `/sys/devices/system/cpu/online` per refresh. The
+  file is tiny so the cost is small, but a BPF hook on `cpu_up` /
+  `cpu_down` would remove the per-refresh read entirely.
+
+Sysfs use elsewhere (`cpu/{frequency,l3,branch,dtlb}`,
+`network/ethtool`) is one-time discovery (CPU enumeration, perf event
+source IDs, interface listing) — not drift.
 
 ### Possible refinement: small per-CPU shard count for hot histograms (principle 8)
 
