@@ -158,7 +158,12 @@ const restoreStore = (key, store) => {
             chartOpts: e.chartOpts,
         }));
     } catch (e) {
-        console.warn('[selection] failed to restore:', e);
+        if (e?.message?.includes('unsupported selection schema')) {
+            console.warn('[selection] dropped stale localStorage entry:', e.message);
+            localStorage.removeItem(key);
+        } else {
+            console.warn('[selection] failed to restore:', e);
+        }
     }
 };
 
@@ -325,31 +330,37 @@ const exportJSON = async (store, attrs) => {
 };
 
 const loadPayloadIntoStore = (store, payload) => {
-    const migrated = migrateSelection(payload);
-    store.version = migrated.version;
-    store.tagline = migrated.tagline || '';
-    store.zoom = migrated.zoom || null;
-    store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
-    store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
-    store.chartToggles = migrated.chartToggles || {};
-    store.entries = payload.entries.map(e => ({
-        id: crypto.randomUUID(),
-        chartId: e.chartId,
-        section: e.section,
-        sectionName: e.sectionName,
-        groupName: e.groupName || '',
-        promql_query: e.promql_query,
-        note: e.note || '',
-        chartOpts: e.chartOpts,
-    }));
-    if (store === reportStore) {
-        store.reportId = payload.report_id || null;
-        store.savedAt = payload.saved_at || null;
-        store.sourceFilename = payload.filename || null;
-        store.fileChecksum = payload.file_checksum || null;
-        store.timeRange = payload.time_range || null;
-        store.rezolusVersion = payload.rezolus_version || null;
-        persistReport();
+    try {
+        const migrated = migrateSelection(payload);
+        store.version = migrated.version;
+        store.tagline = migrated.tagline || '';
+        store.zoom = migrated.zoom || null;
+        store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
+        store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
+        store.chartToggles = migrated.chartToggles || {};
+        store.entries = payload.entries.map(e => ({
+            id: crypto.randomUUID(),
+            chartId: e.chartId,
+            section: e.section,
+            sectionName: e.sectionName,
+            groupName: e.groupName || '',
+            promql_query: e.promql_query,
+            note: e.note || '',
+            chartOpts: e.chartOpts,
+        }));
+        if (store === reportStore) {
+            store.reportId = payload.report_id || null;
+            store.savedAt = payload.saved_at || null;
+            store.sourceFilename = payload.filename || null;
+            store.fileChecksum = payload.file_checksum || null;
+            store.timeRange = payload.time_range || null;
+            store.rezolusVersion = payload.rezolus_version || null;
+            persistReport();
+        }
+        return true;
+    } catch (e) {
+        notify('error', `Cannot load: ${e.message}`);
+        return false;
     }
 };
 
