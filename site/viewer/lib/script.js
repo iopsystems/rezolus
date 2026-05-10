@@ -3,7 +3,7 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
-import { FileUpload } from './landing.js';
+import { FileUpload, splitAlias } from './landing.js';
 import { setStorageScope } from './selection.js';
 import { initDashboard, bootstrapSharedSections } from './app.js';
 
@@ -12,19 +12,6 @@ import { initDashboard, bootstrapSharedSections } from './app.js';
 let splashLabel = null;   // non-null = show splash, null = show landing
 let splashProgress = -1;  // -1 = indeterminate, 0–1 = determinate
 let landingError = null;
-
-// Split a "alias=path" string into [alias, path]. Mirrors the Rust
-// split_alias in src/viewer/mod.rs: alias must be non-empty, free of
-// path separators, ':' (URL-scheme guard), and whitespace. Anything
-// else parses as a bare path with alias=null.
-const splitAlias = (raw) => {
-    const eq = raw.indexOf('=');
-    if (eq <= 0) return [null, raw];
-    const lhs = raw.slice(0, eq);
-    const rhs = raw.slice(eq + 1);
-    if (/[\/\\:\s]/.test(lhs)) return [null, raw];
-    return [lhs, rhs];
-};
 
 const demoSections = [
     {
@@ -418,10 +405,9 @@ const Root = {
                     loadCapture(source, alias);
                 }
             },
-            // Static-site bundle has no local proxy. The CORS hint
-            // surfaces as a fetch failure error, not a permanent
-            // banner — keep this false.
-            proxyEnabled: false,
+            // Static-site bundle has no local proxy; URL loading goes
+            // direct from the browser, so CORS on the source matters.
+            urlLoading: 'direct',
             demoSections,
             loading: false,
             error: landingError,

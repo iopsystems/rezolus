@@ -82,6 +82,20 @@ const ViewerApi = {
         });
     },
 
+    /// Ask the local server to fetch + ingest a remote parquet in one
+    /// hop. The bytes never traverse the browser. The server validates
+    /// the URL against its --proxy-allow list and 403s if disallowed.
+    async loadFromUrl(url, filename = null) {
+        return backendRequest({
+            method: 'POST',
+            url: '/api/v1/load_url',
+            body: { url, filename },
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+    },
+
     saveUrl() {
         return '/api/v1/save';
     },

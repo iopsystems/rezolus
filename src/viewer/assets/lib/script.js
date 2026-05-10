@@ -3,7 +3,7 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
-import { FileUpload, CompareLanding } from './landing.js';
+import { FileUpload, CompareLanding, splitAlias } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
@@ -178,7 +178,21 @@ let landingState = {
     baselineFilename: null,
     experimentAttached: false,
     experimentFilename: null,
+    urlLoading: 'disabled',
 };
+
+// Best-effort probe of the URL-loading mode the backend exposes via
+// /api/v1/mode. Drives the landing's "Load from URL" hint and disabled
+// state. A failed probe leaves it 'disabled' (input greyed out).
+ViewerApi.getMode()
+    .then((res) => {
+        const mode = res?.data?.url_loading ?? res?.url_loading;
+        if (mode) {
+            landingState.urlLoading = mode;
+            m.redraw();
+        }
+    })
+    .catch(() => { /* default 'disabled' */ });
 
 const isCompareRequested = () =>
     new URLSearchParams(window.location.search).get('compare') === '1';
@@ -216,6 +230,32 @@ const showLanding = () => {
                     m.redraw();
                 }
             },
+            onLoadUrl: async (raw) => {
+                // Single URL only on the binary-viewer landing — A/B
+                // ingestion goes through the experiment-attach flow
+                // after the baseline lands, not via the URL field.
+                landingState.loading = true;
+                landingState.error = null;
+                m.redraw();
+                try {
+                    const [, source] = splitAlias(raw.trim());
+                    const res = await ViewerApi.loadFromUrl(source.trim());
+                    // Backend wraps both success and recoverable errors
+                    // (invalid parquet, upstream 404, allowlist deny) in
+                    // an ApiResponse envelope, so check status before
+                    // reloading — otherwise an error gets lost in the
+                    // page refresh.
+                    if (res?.status === 'error') {
+                        throw new Error(res.error || 'unknown error');
+                    }
+                    window.location.reload();
+                } catch (e) {
+                    landingState.loading = false;
+                    landingState.error = `Failed to load URL: ${e?.message ?? e ?? 'unknown error'}`;
+                    m.redraw();
+                }
+            },
+            urlLoading: landingState.urlLoading,
             loading: landingState.loading,
             error: landingState.error,
         }),

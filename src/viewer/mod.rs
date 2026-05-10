@@ -67,6 +67,7 @@ use promql::QueryEngine;
 use tsdb::*;
 
 pub mod capture_registry;
+mod proxy_allow;
 
 use capture_registry::{CaptureId, CaptureRegistry};
 
@@ -140,6 +141,30 @@ pub fn command() -> Command {
                 )
                 .action(clap::ArgAction::Set),
         )
+        .arg(
+            clap::Arg::new("PROXY_ALLOW")
+                .long("proxy-allow")
+                .value_name("HOST_PATTERN")
+                .help(
+                    "Enable the URL proxy and whitelist a host pattern \
+                     (repeatable). Patterns are shell-style with `*` matching \
+                     a single DNS label — e.g. `*.s3.amazonaws.com`, \
+                     `bucket.example.internal`. Without this flag the proxy \
+                     stays disabled and the browser must fetch URLs directly.",
+                )
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
+            clap::Arg::new("PROXY_ALLOW_ANY")
+                .long("proxy-allow-any")
+                .help(
+                    "Disable the proxy allowlist entirely — every URL is \
+                     fetched. Use only when you trust everyone who can reach \
+                     this viewer (the SSRF risk is on you). Mutually exclusive \
+                     with --proxy-allow; if both are passed, this wins.",
+                )
+                .action(clap::ArgAction::SetTrue),
+        )
 }
 
 pub struct Config {
@@ -151,6 +176,7 @@ pub struct Config {
     verbose: u8,
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
+    proxy_allow: proxy_allow::Allowlist,
 }
 
 /// Split a positional input into an optional alias and the remaining
@@ -209,6 +235,16 @@ impl TryFrom<ArgMatches> for Config {
             None => (None, None),
         };
 
+        let proxy_allow = if args.get_flag("PROXY_ALLOW_ANY") {
+            proxy_allow::Allowlist::any()
+        } else {
+            proxy_allow::Allowlist::new(
+                args.get_many::<String>("PROXY_ALLOW")
+                    .unwrap_or_default()
+                    .cloned(),
+            )
+        };
+
         Ok(Config {
             source,
             experiment_path,
@@ -220,6 +256,7 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<SocketAddr>("LISTEN")
                 .unwrap_or(&"127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap()),
             templates_dir: args.get_one::<PathBuf>("templates").cloned(),
+            proxy_allow,
         })
     }
 }
@@ -243,7 +280,7 @@ pub fn run(config: Config) {
 
     let registry = load_template_registry(config.templates_dir.as_deref());
 
-    let state = match &config.source {
+    let mut state = match &config.source {
         Source::File(path) => {
             info!("Loading data from parquet file...");
             let data = Tsdb::load(path)
@@ -493,6 +530,18 @@ pub fn run(config: Config) {
         }
     };
 
+    state.set_proxy(config.proxy_allow.clone());
+    if state.proxy.enabled() {
+        if state.proxy.allow.is_any() {
+            warn!(
+                "URL loading enabled at /api/v1/load_url with --proxy-allow-any — \
+                 every URL will be fetched. Don't expose this listen address."
+            );
+        } else {
+            info!("URL loading enabled at /api/v1/load_url");
+        }
+    }
+
     // The experiment CLI arg is only honored when the baseline is a parquet
     // file. Live and upload-only modes manage the experiment slot via the
     // HTTP attach endpoint instead.
@@ -700,6 +749,21 @@ impl Default for LazySectionStore {
     }
 }
 
+/// Proxy state for the optional URL-fetch endpoint. When the CLI is
+/// invoked without `--proxy-allow`, both fields stay empty/None and the
+/// endpoint refuses every request.
+#[derive(Default)]
+struct ProxyState {
+    allow: proxy_allow::Allowlist,
+    client: Option<Client>,
+}
+
+impl ProxyState {
+    fn enabled(&self) -> bool {
+        !self.allow.is_empty() && self.client.is_some()
+    }
+}
+
 struct AppState {
     sections: parking_lot::RwLock<LazySectionStore>,
     /// Per-capture TSDB + metadata. Single-capture callers always target
@@ -732,6 +796,9 @@ struct AppState {
     selection: parking_lot::RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
     file_checksum: parking_lot::RwLock<Option<String>>,
+    /// Optional URL-fetch proxy. Disabled (empty allowlist + no client)
+    /// unless the CLI was invoked with one or more `--proxy-allow`.
+    proxy: ProxyState,
 }
 
 impl AppState {
@@ -748,6 +815,27 @@ impl AppState {
             category_name: parking_lot::RwLock::new(None),
             selection: parking_lot::RwLock::new(None),
             file_checksum: parking_lot::RwLock::new(None),
+            proxy: ProxyState::default(),
+        }
+    }
+
+    /// Enable the URL proxy with the given hostname allowlist. Builds a
+    /// dedicated reqwest client (so the proxy traffic is isolated from
+    /// the live-mode scrape client). No-op when the allowlist is empty.
+    fn set_proxy(&mut self, allow: proxy_allow::Allowlist) {
+        if allow.is_empty() {
+            return;
+        }
+        match Client::builder().build() {
+            Ok(client) => {
+                self.proxy = ProxyState {
+                    allow,
+                    client: Some(client),
+                };
+            }
+            Err(e) => {
+                error!("failed to build proxy http client: {e}");
+            }
         }
     }
 
@@ -1351,6 +1439,7 @@ fn app(livereload: LiveReloadLayer, state: AppState) -> Router {
             "/save_with_selection",
             axum::routing::post(save_with_selection),
         )
+        .route("/load_url", axum::routing::post(load_url))
         .layer(axum::middleware::map_response(
             |mut response: axum::response::Response| async move {
                 response.headers_mut().insert(
@@ -1469,12 +1558,114 @@ async fn mode(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<serde_json::Value> {
     let loaded = !state.sections.read().is_empty();
+    // The static-site bundle reports "direct" for its own URL input
+    // (browser fetches the URL itself, CORS applies). The binary viewer
+    // never reports "direct" — the only way to load a URL here is
+    // through the local proxy.
+    let url_loading = if state.proxy.enabled() {
+        "proxy"
+    } else {
+        "disabled"
+    };
     axum::response::Json(serde_json::json!({
         "live": state.live.load(Ordering::Relaxed),
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
         "category": state.category_name.read().clone(),
+        "url_loading": url_loading,
     }))
+}
+
+#[derive(serde::Deserialize)]
+struct LoadUrlBody {
+    url: String,
+    #[serde(default)]
+    filename: Option<String>,
+}
+
+/// Fetch a remote parquet on behalf of the browser and ingest it into
+/// the baseline TSDB in one server-side hop. Refuses every request when
+/// `--proxy-allow` was not set or when the requested host doesn't match
+/// any allowlist pattern. The browser only sends the URL; the bytes
+/// never traverse it — no double round-trip, no ArrayBuffer pressure.
+async fn load_url(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::Json(body): axum::extract::Json<LoadUrlBody>,
+) -> axum::response::Json<ApiResponse<serde_json::Value>> {
+    // Every branch returns Json(ApiResponse) — never raw text — so the
+    // Mithril frontend's JSON-parsing default doesn't choke on non-2xx
+    // bodies and bury the real error as `null`.
+    let err =
+        |msg: String, kind: &str| axum::response::Json(ApiResponse::error(msg, kind.to_string()));
+
+    if state.live.load(Ordering::Relaxed) {
+        return err(
+            "load_url is only available in file mode".to_string(),
+            "bad_request",
+        );
+    }
+
+    let Some(client) = state.proxy.client.as_ref() else {
+        return err("url loading is disabled".to_string(), "forbidden");
+    };
+
+    let target = match Url::parse(&body.url) {
+        Ok(u) => u,
+        Err(e) => return err(format!("invalid url: {e}"), "bad_request"),
+    };
+
+    if !matches!(target.scheme(), "http" | "https") {
+        return err(
+            "url scheme must be http or https".to_string(),
+            "bad_request",
+        );
+    }
+
+    let host = match target.host_str() {
+        Some(h) => h.to_string(),
+        None => return err("url is missing a host".to_string(), "bad_request"),
+    };
+
+    if !state.proxy.allow.allows(&host) {
+        return err(
+            format!("host {host} not in --proxy-allow list"),
+            "forbidden",
+        );
+    }
+
+    let upstream = match client.get(target.clone()).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("load_url fetch failed for {target}: {e}");
+            return err(format!("upstream fetch failed: {e}"), "upstream_error");
+        }
+    };
+    if !upstream.status().is_success() {
+        return err(
+            format!("upstream returned {}", upstream.status()),
+            "upstream_error",
+        );
+    }
+
+    let bytes = match upstream.bytes().await {
+        Ok(b) => b,
+        Err(e) => return err(format!("upstream read failed: {e}"), "upstream_error"),
+    };
+
+    let temp_path = baseline_temp_path();
+    if let Err(e) = std::fs::write(&temp_path, &bytes) {
+        return err(format!("failed to stage upstream bytes: {e}"), "io_error");
+    }
+
+    let filename = body.filename.unwrap_or_else(|| {
+        target
+            .path_segments()
+            .and_then(|mut s| s.rfind(|seg| !seg.is_empty()))
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "remote.parquet".to_string())
+    });
+
+    ingest_baseline_from_path(&state, temp_path, filename)
 }
 
 /// Query param for endpoints that select between baseline and experiment.
@@ -1767,15 +1958,7 @@ async fn upload_parquet(
         .map(ToString::to_string)
         .unwrap_or_else(|| "upload.parquet".to_string());
 
-    let temp_suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let temp_path = std::env::temp_dir().join(format!(
-        "rezolus-viewer-{}-{}",
-        std::process::id(),
-        temp_suffix
-    ));
+    let temp_path = baseline_temp_path();
     if let Err(e) = std::fs::write(&temp_path, &body) {
         return axum::response::Json(ApiResponse::error(
             format!("failed to store upload: {e}"),
@@ -1783,6 +1966,19 @@ async fn upload_parquet(
         ));
     }
 
+    ingest_baseline_from_path(&state, temp_path, filename)
+}
+
+/// Shared baseline-ingest path used by `/api/v1/upload` and
+/// `/api/v1/load_url`. Takes ownership of `temp_path` (file is deleted
+/// on parquet-load failure, retained on success since the AppState
+/// references it for re-reads). The caller is responsible for
+/// populating the file at `temp_path` before calling.
+fn ingest_baseline_from_path(
+    state: &AppState,
+    temp_path: PathBuf,
+    filename: String,
+) -> axum::response::Json<ApiResponse<serde_json::Value>> {
     let loaded = Tsdb::load(&temp_path);
     let mut data = match loaded {
         Ok(d) => d,
@@ -1827,6 +2023,14 @@ async fn upload_parquet(
     axum::response::Json(ApiResponse::success(serde_json::json!({
         "filename": filename,
     })))
+}
+
+fn baseline_temp_path() -> PathBuf {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!("rezolus-viewer-{}-{}", std::process::id(), suffix))
 }
 
 /// Attach an experiment parquet for A/B comparison. Body is raw parquet bytes.

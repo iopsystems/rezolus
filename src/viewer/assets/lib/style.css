@@ -3197,6 +3197,11 @@ main {
     margin: 0.5rem 0 0;
 }
 
+.upload-hint-disabled {
+    color: var(--fg);
+    font-style: italic;
+}
+
 .upload-section {
     margin-top: 1.5rem;
     padding-top: 1rem;
