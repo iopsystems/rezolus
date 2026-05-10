@@ -228,6 +228,84 @@ jobs:
           path: target/generate-rpm/*
           name: rpm_${{ matrix.distro }}_${{ matrix.version }}_${{ matrix.arch }}
 
+  build-viewer-static:
+    if: github.repository == 'iopsystems/rezolus'
+    name: build static viewer bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: build wasm viewer
+        run: ./crates/viewer/build.sh
+
+      - name: stage viewer bundle
+        run: |
+          TAG="${{ github.ref_name }}"
+          STAGE="target/viewer-static/rezolus-viewer-${TAG}"
+          mkdir -p "$STAGE"
+          # Dereference symlinks (site/viewer/lib/* points back into
+          # src/viewer/assets/lib) so the tarball is self-contained.
+          # Skip data/ — demo parquets aren't part of the package.
+          rsync -aL --exclude='data' site/viewer/ "$STAGE/"
+          cp LICENSE-MIT LICENSE-APACHE "$STAGE/" 2>/dev/null || true
+          cat > "$STAGE/README.md" << 'EOF'
+          # Rezolus Viewer (static bundle)
+
+          This bundle is a self-contained Rezolus parquet viewer that runs
+          entirely in the browser via WebAssembly. Drop the directory on
+          any static webserver (nginx, caddy, S3 + CloudFront, GitHub
+          Pages, `python -m http.server`, …) and visit `/viewer/`.
+
+          ## Loading recordings
+
+          The viewer accepts parquet recordings via:
+
+          - **Drag-and-drop / file picker** on the landing page.
+          - **`?capture=label=path/to/file.parquet`** in the URL — relative
+            paths are fetched from the same origin.
+          - **`?capture=label=https://...`** for absolute URLs — requires
+            either CORS headers on the source, or the local proxy
+            (see "Loading from arbitrary URLs" below).
+
+          Two `?capture=` params (separated by `&`) put the viewer in
+          A/B compare mode.
+
+          ## Loading from arbitrary URLs
+
+          Cross-origin parquet URLs (e.g. another team's S3 bucket, a
+          colleague's webserver) only work when the source serves CORS
+          headers — most don't. To bypass that, run the full `rezolus`
+          binary with `rezolus view --proxy-allow=<glob>`; the local
+          proxy fetches the URL server-side and streams it to the
+          browser.
+
+          ## Customising
+
+          - Demo parquets go in `data/` (not shipped in this bundle).
+          - Service-extension templates live under `templates/`.
+          - Frontend overrides go in `lib/` — the layout mirrors the
+            in-tree `src/viewer/assets/lib/` so existing patches apply.
+          EOF
+
+      - name: tarball viewer bundle
+        run: |
+          TAG="${{ github.ref_name }}"
+          cd target/viewer-static
+          tar -czf "rezolus-viewer-${TAG}.tar.gz" "rezolus-viewer-${TAG}"
+          ls -l "rezolus-viewer-${TAG}.tar.gz"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          path: target/viewer-static/rezolus-viewer-*.tar.gz
+          name: viewer-static
+
   publish:
     if: github.repository == 'iopsystems/rezolus'
     name: Publish release artifacts
@@ -235,6 +313,7 @@ jobs:
     needs:
       - build-deb
       - build-rpm
+      - build-viewer-static
     steps:
       - uses: actions/checkout@v5
 
@@ -263,6 +342,12 @@ jobs:
         with:
           path: target/rpm/
           pattern: rpm_*
+
+      # Download static viewer bundle
+      - uses: actions/download-artifact@v5
+        with:
+          path: target/viewer-static/
+          pattern: viewer-static
 
       # Upload debs to systemslab registry
       - uses: google-github-actions/auth@v2
@@ -381,6 +466,12 @@ jobs:
             version="$(echo "$directory" | cut -d _ -f 3)"
             arch="$(echo "$directory" | cut -d _ -f 4)"
             mv "$artifact" "target/release-artifacts/${distro}_${version}_${arch}_${name}"
+          done
+
+          # Collect static viewer bundle
+          for artifact in target/viewer-static/viewer-static/*.tar.gz; do
+            [ -f "$artifact" ] || continue
+            mv "$artifact" "target/release-artifacts/$(basename "$artifact")"
           done
 
       - name: generate checksums and sign release artifacts
