@@ -43,7 +43,7 @@ jobs:
     env:
       DEB_BUILD_OPTS: nocheck
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: run packaging script
         run: |
@@ -57,7 +57,7 @@ jobs:
             --chown "$(id -u)"                  \
             --verbose
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           path: target/debian/*
           name: deb_${{ matrix.distro }}_${{ matrix.release }}_${{ matrix.arch }}
@@ -82,7 +82,7 @@ jobs:
         run: |
           yum install -y tar gzip
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install rust
         run: |
@@ -223,7 +223,7 @@ jobs:
             rpm --checksig "$rpm"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           path: target/generate-rpm/*
           name: rpm_${{ matrix.distro }}_${{ matrix.version }}_${{ matrix.arch }}
@@ -236,7 +236,7 @@ jobs:
       - build-deb
       - build-rpm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: check release type
         id: check-release
@@ -253,24 +253,24 @@ jobs:
           fi
 
       # Download deb artifacts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: target/artifacts/
           pattern: deb_*
 
       # Download rpm artifacts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: target/rpm/
           pattern: rpm_*
 
       # Upload debs to systemslab registry
-      - uses: google-github-actions/auth@v1
+      - uses: google-github-actions/auth@v2
         id: auth-systemslab
         with:
           credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
 
-      - uses: google-github-actions/setup-gcloud@v1
+      - uses: google-github-actions/setup-gcloud@v2
 
       - name: upload debs to systemslab registry (all releases)
         run: |
@@ -291,13 +291,13 @@ jobs:
           done
 
       # Upload debs to rezolus registry (stable releases only)
-      - uses: google-github-actions/auth@v1
+      - uses: google-github-actions/auth@v2
         if: steps.check-release.outputs.is_stable == 'true'
         id: auth-rezolus
         with:
           credentials_json: "${{ secrets.GCP_CREDENTIALS_REZOLUS }}"
 
-      - uses: google-github-actions/setup-gcloud@v1
+      - uses: google-github-actions/setup-gcloud@v2
         if: steps.check-release.outputs.is_stable == 'true'
 
       - name: upload debs to rezolus registry (stable releases only)
@@ -432,16 +432,18 @@ jobs:
       # Update Homebrew formula
       - name: set up Homebrew
         if: steps.check-release.outputs.is_stable == 'true'
-        uses: Homebrew/actions/setup-homebrew@master
+        uses: Homebrew/actions/setup-homebrew@main
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: set up git for Homebrew
         if: steps.check-release.outputs.is_stable == 'true'
-        uses: Homebrew/actions/git-user-config@master
+        uses: Homebrew/actions/git-user-config@main
 
       - name: update Homebrew formula
         if: steps.check-release.outputs.is_stable == 'true'
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
