@@ -432,16 +432,18 @@ jobs:
       # Update Homebrew formula
       - name: set up Homebrew
         if: steps.check-release.outputs.is_stable == 'true'
-        uses: Homebrew/actions/setup-homebrew@master
+        uses: Homebrew/actions/setup-homebrew@main
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: set up git for Homebrew
         if: steps.check-release.outputs.is_stable == 'true'
-        uses: Homebrew/actions/git-user-config@master
+        uses: Homebrew/actions/git-user-config@main
 
       - name: update Homebrew formula
         if: steps.check-release.outputs.is_stable == 'true'
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
