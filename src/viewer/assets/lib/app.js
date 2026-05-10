@@ -513,6 +513,16 @@ const SectionContent = {
                 heatmapLoading,
                 stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
+                // Compare-mode plumbing — SelectionView mirrors the
+                // current viewer state, so pinning in compare mode and
+                // visiting /selection renders the compare view.
+                compareMode,
+                anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
+                toggles: selectionStore.chartToggles || {},
+                setChartToggle,
+                experimentQueryRange,
+                baselineAlias,
+                experimentAlias,
             });
         }
 

@@ -3,6 +3,7 @@
 // Report: loaded from JSON import or parquet metadata (read-only mode).
 
 import { ChartsState, Chart } from './charts/chart.js';
+import { CompareChartWrapper } from './viewer_core.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
@@ -575,6 +576,28 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             selectionStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
+                // In compare mode, render through CompareChartWrapper so
+                // pinned charts mirror the live A/B view (side-by-side,
+                // diff, etc.). Service-template charts that lack a
+                // promql_query fall through to the single-capture path.
+                const captureLabels = {
+                    baseline: attrs.baselineAlias || 'baseline',
+                    experiment: attrs.experimentAlias || 'experiment',
+                };
+                const chartBody = (attrs.compareMode && spec.promql_query)
+                    ? m(CompareChartWrapper, {
+                        spec,
+                        chartsState: attrs.chartsState,
+                        interval,
+                        anchors: attrs.anchors,
+                        toggles: attrs.toggles,
+                        setChartToggle: attrs.setChartToggle,
+                        sectionRoute: '/selection',
+                        step: interval,
+                        experimentQueryRange: attrs.experimentQueryRange,
+                        captureLabels,
+                    })
+                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
                     m('div.selection-card-body', [
                         m('div.selection-card-chart', [
@@ -587,7 +610,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                                     m('span.chart-title', selectionCardTitle(entry, spec)),
                                     spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                                 ]),
-                                m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                                chartBody,
                             ]),
                         ]),
                         m('div.selection-card-notes', [
