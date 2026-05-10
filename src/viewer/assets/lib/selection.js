@@ -3,7 +3,7 @@
 // Report: loaded from JSON import or parquet metadata (read-only mode).
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { executePromQLRangeQuery, applyResultToPlot, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
@@ -85,9 +85,11 @@ const setStorageScope = (info) => {
         .toString(36);
     REPORT_STORAGE_KEY = `rezolus_report_${suffix}`;
     SELECTION_STORAGE_KEY = `rezolus_selection_${suffix}`;
-    // Restore from the scoped keys
-    clearStore(selectionStore);
-    clearStore(reportStore);
+    // In-memory reset only — must NOT purge localStorage at the
+    // (just-set) scoped key, otherwise we wipe the file's persisted
+    // selection on every page load before restoring it.
+    resetStoreState(selectionStore);
+    resetStoreState(reportStore);
     restoreStore(REPORT_STORAGE_KEY, reportStore);
     restoreStore(SELECTION_STORAGE_KEY, selectionStore);
 };
@@ -112,6 +114,7 @@ const persistStore = (key, store) => {
                 chartId: e.chartId,
                 section: e.section,
                 sectionName: e.sectionName,
+                groupName: e.groupName || '',
                 promql_query: e.promql_query,
                 note: e.note,
                 chartOpts: e.chartOpts,
@@ -148,6 +151,7 @@ const restoreStore = (key, store) => {
             chartId: e.chartId,
             section: e.section,
             sectionName: e.sectionName,
+            groupName: e.groupName || '',
             promql_query: e.promql_query,
             note: e.note || '',
             chartOpts: e.chartOpts,
@@ -194,9 +198,22 @@ const setChartToggle = (chartId, key, value) => {
 restoreStore(REPORT_STORAGE_KEY, reportStore);
 restoreStore(SELECTION_STORAGE_KEY, selectionStore);
 
+// Build the displayed chart title for a selection card. The dashboard
+// gives charts visual context via section/group breadcrumbs ("CPU >
+// TLB Flush > Total Flushes"); the selection cards are flat-listed,
+// so we restore that context inline. De-dups when group equals
+// section (e.g. /scheduler has a single "Scheduler" group).
+const selectionCardTitle = (entry, spec) => {
+    const parts = [];
+    if (entry.sectionName) parts.push(entry.sectionName);
+    if (entry.groupName && entry.groupName !== entry.sectionName) parts.push(entry.groupName);
+    parts.push(spec.opts.title);
+    return parts.join(': ');
+};
+
 // ── Selection API (write mode) ───────────────────────────────────
 
-const toggleSelection = (spec, sectionKey, sectionName) => {
+const toggleSelection = (spec, sectionKey, sectionName, groupName) => {
     const idx = selectionStore.entries.findIndex(e => e.chartId === spec.opts.id);
     if (idx >= 0) {
         selectionStore.entries.splice(idx, 1);
@@ -208,6 +225,7 @@ const toggleSelection = (spec, sectionKey, sectionName) => {
         chartId: spec.opts.id,
         section: sectionKey,
         sectionName,
+        groupName: groupName || '',
         promql_query: spec.promql_query,
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
@@ -227,7 +245,9 @@ const removeEntry = (store, id) => {
     }
 };
 
-const clearStore = (store) => {
+// In-memory only — leaves localStorage alone. Used during scope
+// re-binding where the next step is restoring from the scoped key.
+const resetStoreState = (store) => {
     store.entries.length = 0;
     store.tagline = '';
     store.zoom = null;
@@ -242,6 +262,13 @@ const clearStore = (store) => {
         store.fileChecksum = null;
         store.timeRange = null;
         store.rezolusVersion = null;
+    }
+};
+
+// Full purge: in-memory + localStorage. Used by the "Clear All" UI.
+const clearStore = (store) => {
+    resetStoreState(store);
+    if (store === reportStore) {
         localStorage.removeItem(REPORT_STORAGE_KEY);
     } else if (store === selectionStore) {
         localStorage.removeItem(SELECTION_STORAGE_KEY);
@@ -271,6 +298,7 @@ const buildPayload = (store, attrs) => ({
         chartId: e.chartId,
         section: e.section,
         sectionName: e.sectionName,
+        groupName: e.groupName || '',
         promql_query: e.promql_query,
         note: e.note,
         chartOpts: e.chartOpts,
@@ -308,6 +336,7 @@ const loadPayloadIntoStore = (store, payload) => {
         chartId: e.chartId,
         section: e.section,
         sectionName: e.sectionName,
+        groupName: e.groupName || '',
         promql_query: e.promql_query,
         note: e.note || '',
         chartOpts: e.chartOpts,
@@ -441,7 +470,12 @@ const chartLoaderMixin = (store, component) => ({
                     promql_query: entry.promql_query,
                     data: [],
                 };
-                const result = await executePromQLRangeQuery(entry.promql_query);
+                // Histogram metrics need histogram_quantiles / heatmap
+                // wrapping; the dashboard pipeline does this via
+                // buildEffectiveQuery, but the stored entry only has
+                // the raw metric name.
+                const effective = buildEffectiveQuery(spec) || entry.promql_query;
+                const result = await executePromQLRangeQuery(effective);
                 if (result) {
                     applyResultToPlot(spec, result);
                 }
@@ -550,7 +584,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                             }, 'X'),
                             m('div.chart-wrapper', [
                                 m('div.chart-header', [
-                                    m('span.chart-title', spec.opts.title),
+                                    m('span.chart-title', selectionCardTitle(entry, spec)),
                                     spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                                 ]),
                                 m(Chart, { spec, chartsState: attrs.chartsState, interval }),
@@ -642,7 +676,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                         m('div.selection-card-chart', [
                             m('div.chart-wrapper', [
                                 m('div.chart-header', [
-                                    m('span.chart-title', spec.opts.title),
+                                    m('span.chart-title', selectionCardTitle(entry, spec)),
                                     spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                                 ]),
                                 m(Chart, { spec, chartsState: attrs.chartsState, interval }),
