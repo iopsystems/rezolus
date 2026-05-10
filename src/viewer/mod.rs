@@ -1558,12 +1558,21 @@ async fn mode(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::response::Json<serde_json::Value> {
     let loaded = !state.sections.read().is_empty();
+    // The static-site bundle reports "direct" for its own URL input
+    // (browser fetches the URL itself, CORS applies). The binary viewer
+    // never reports "direct" — the only way to load a URL here is
+    // through the local proxy.
+    let url_loading = if state.proxy.enabled() {
+        "proxy"
+    } else {
+        "disabled"
+    };
     axum::response::Json(serde_json::json!({
         "live": state.live.load(Ordering::Relaxed),
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
         "category": state.category_name.read().clone(),
-        "proxy_enabled": state.proxy.enabled(),
+        "url_loading": url_loading,
     }))
 }
 

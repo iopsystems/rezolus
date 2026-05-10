@@ -16,6 +16,21 @@
 let connectUrl = '';
 let parquetUrl = '';
 
+// Split an `alias=value` string into [alias, value]. Mirrors the Rust
+// split_alias in src/viewer/mod.rs: the alias must be non-empty and
+// free of path separators, ':' (URL-scheme guard), and whitespace.
+// Anything else parses as a bare value with alias=null. Exported so
+// the binary viewer's onLoadUrl handler and the static-site bootstrap
+// share one parser instead of re-implementing the grammar.
+export const splitAlias = (raw) => {
+    const eq = raw.indexOf('=');
+    if (eq <= 0) return [null, raw];
+    const lhs = raw.slice(0, eq);
+    const rhs = raw.slice(eq + 1);
+    if (/[\/\\:\s]/.test(lhs)) return [null, raw];
+    return [lhs, rhs];
+};
+
 // Small reusable dropzone for a single parquet slot. Used by the
 // compare-mode dual landing and available for other single-slot callers.
 // Props: { label, disabled, onDrop(file), onChoose(file) }

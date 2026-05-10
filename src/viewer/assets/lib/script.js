@@ -3,7 +3,7 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
-import { FileUpload, CompareLanding } from './landing.js';
+import { FileUpload, CompareLanding, splitAlias } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
@@ -178,21 +178,21 @@ let landingState = {
     baselineFilename: null,
     experimentAttached: false,
     experimentFilename: null,
-    proxyEnabled: false,
+    urlLoading: 'disabled',
 };
 
-// Best-effort probe of the proxy state so the landing's "Load from URL"
-// hint can swap to "fetched server-side" when the user started rezolus
-// view with --proxy-allow. A failed probe just leaves it at false.
+// Best-effort probe of the URL-loading mode the backend exposes via
+// /api/v1/mode. Drives the landing's "Load from URL" hint and disabled
+// state. A failed probe leaves it 'disabled' (input greyed out).
 ViewerApi.getMode()
     .then((res) => {
-        const flag = res?.data?.proxy_enabled ?? res?.proxy_enabled ?? false;
-        if (flag) {
-            landingState.proxyEnabled = true;
+        const mode = res?.data?.url_loading ?? res?.url_loading;
+        if (mode) {
+            landingState.urlLoading = mode;
             m.redraw();
         }
     })
-    .catch(() => { /* default false */ });
+    .catch(() => { /* default 'disabled' */ });
 
 const isCompareRequested = () =>
     new URLSearchParams(window.location.search).get('compare') === '1';
@@ -238,11 +238,8 @@ const showLanding = () => {
                 landingState.error = null;
                 m.redraw();
                 try {
-                    const eq = raw.indexOf('=');
-                    const looksAliased = eq > 0
-                        && !/[\/\\:\s]/.test(raw.slice(0, eq));
-                    const url = looksAliased ? raw.slice(eq + 1).trim() : raw.trim();
-                    const res = await ViewerApi.loadFromUrl(url);
+                    const [, source] = splitAlias(raw.trim());
+                    const res = await ViewerApi.loadFromUrl(source.trim());
                     // Backend wraps both success and recoverable errors
                     // (invalid parquet, upstream 404, allowlist deny) in
                     // an ApiResponse envelope, so check status before
@@ -258,7 +255,7 @@ const showLanding = () => {
                     m.redraw();
                 }
             },
-            urlLoading: landingState.proxyEnabled ? 'proxy' : 'disabled',
+            urlLoading: landingState.urlLoading,
             loading: landingState.loading,
             error: landingState.error,
         }),
