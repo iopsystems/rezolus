@@ -20,11 +20,23 @@ where
 pub struct EndpointConfig {
     #[serde(deserialize_with = "deserialize_url")]
     pub url: Url,
-    pub source: String,
+    /// User-supplied source label. None means "let the recorder pick"
+    /// — the probe handler resolves it after the protocol is known
+    /// (Msgpack → "rezolus", Prometheus → URL-derived + warning).
+    #[serde(default)]
+    pub source: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
     pub protocol: Option<Protocol>,
+}
+
+impl EndpointConfig {
+    /// Source label as `&str`. Returns "?" before probe has resolved
+    /// the source (only Pending endpoints hit this).
+    pub fn source_label(&self) -> &str {
+        self.source.as_deref().unwrap_or("?")
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -74,14 +86,12 @@ impl EndpointState {
     }
 }
 
-/// Derive a source name from a URL when none is configured.
-/// Logs a warning to stderr.
+/// Derive a source name from a URL when none is configured. Silent;
+/// the recorder warns (or upgrades to "rezolus") after protocol probe.
 pub fn infer_source_name(url: &Url) -> String {
     let host = url.host_str().unwrap_or("unknown");
     let port = url.port().map(|p| format!("-{p}")).unwrap_or_default();
-    let name = format!("{host}{port}");
-    eprintln!("warn: no source name specified for {url}, using \"{name}\"");
-    name
+    format!("{host}{port}")
 }
 
 #[cfg(test)]
@@ -106,7 +116,7 @@ mod tests {
     fn test_endpoint_state_new() {
         let config = EndpointConfig {
             url: "http://localhost:4241".parse().unwrap(),
-            source: "rezolus".to_string(),
+            source: Some("rezolus".to_string()),
             role: None,
             protocol: Some(Protocol::Msgpack),
         };
@@ -120,7 +130,7 @@ mod tests {
     fn test_record_success() {
         let config = EndpointConfig {
             url: "http://localhost:4241".parse().unwrap(),
-            source: "rezolus".to_string(),
+            source: Some("rezolus".to_string()),
             role: None,
             protocol: None,
         };
