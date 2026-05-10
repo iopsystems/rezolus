@@ -157,32 +157,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
          out of room; protection = data-integrity check failed.",
     );
     by_class.plot_promql(
-        PlotOpts::counter("IO Error", "blockio-err-io", Unit::Rate),
-        "sum(irate(blockio_errors{error=\"io\"}[5m]))".to_string(),
-    );
-    by_class.plot_promql(
-        PlotOpts::counter("Timeout", "blockio-err-timeout", Unit::Rate),
-        "sum(irate(blockio_errors{error=\"timeout\"}[5m]))".to_string(),
-    );
-    by_class.plot_promql(
-        PlotOpts::counter("No Space", "blockio-err-nospc", Unit::Rate),
-        "sum(irate(blockio_errors{error=\"nospc\"}[5m]))".to_string(),
-    );
-    by_class.plot_promql(
-        PlotOpts::counter("Target", "blockio-err-target", Unit::Rate),
-        "sum(irate(blockio_errors{error=\"target\"}[5m]))".to_string(),
-    );
-    by_class.plot_promql(
-        PlotOpts::counter("Protection", "blockio-err-protection", Unit::Rate),
-        "sum(irate(blockio_errors{error=\"protection\"}[5m]))".to_string(),
-    );
-    by_class.plot_promql(
-        PlotOpts::counter("Unsupported", "blockio-err-unsupported", Unit::Rate),
-        "sum(irate(blockio_errors{error=\"unsupported\"}[5m]))".to_string(),
-    );
-    by_class.plot_promql(
-        PlotOpts::counter("Other", "blockio-err-other", Unit::Rate),
-        "sum(irate(blockio_errors{error=\"other\"}[5m]))".to_string(),
+        PlotOpts::counter("By Class", "blockio-err-by-class", Unit::Rate),
+        "sum by (error) (irate(blockio_errors[5m]))".to_string(),
     );
 
     let by_op = blockio.subgroup("Errors by Operation");
@@ -191,17 +167,10 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
          imply different fault sources — a read-only spike points at the \
          media; a write-only spike points at the controller / target.",
     );
-    for (op, label, id) in &[
-        ("read", "Read", "blockio-err-read"),
-        ("write", "Write", "blockio-err-write"),
-        ("flush", "Flush", "blockio-err-flush"),
-        ("discard", "Discard", "blockio-err-discard"),
-    ] {
-        by_op.plot_promql(
-            PlotOpts::counter(*label, *id, Unit::Rate),
-            format!("sum(irate(blockio_errors{{op=\"{op}\"}}[5m]))"),
-        );
-    }
+    by_op.plot_promql(
+        PlotOpts::counter("By Op", "blockio-err-by-op", Unit::Rate),
+        "sum by (op) (irate(blockio_errors[5m]))".to_string(),
+    );
 
     let requeues = blockio.subgroup("Requeues");
     requeues.describe(
