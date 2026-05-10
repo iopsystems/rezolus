@@ -6,6 +6,7 @@ mod blockio;
 mod category;
 mod cgroups;
 mod cpu;
+mod exceptions;
 mod gpu;
 mod memory;
 mod network;
@@ -20,6 +21,9 @@ mod syscall;
 type Generator = fn(&Tsdb, Vec<Section>) -> View;
 
 static SECTION_META: &[(&str, &str, Generator)] = &[
+    // Exceptions sits after Overview — it's a cross-sampler triage view,
+    // not a per-sampler section.
+    ("Exceptions", "/exceptions", exceptions::generate),
     ("Query Explorer", "/query", query_explorer::generate),
     ("CPU", "/cpu", cpu::generate),
     ("GPU", "/gpu", gpu::generate),

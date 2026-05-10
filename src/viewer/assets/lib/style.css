@@ -998,6 +998,25 @@ main {
     gap: 2rem;
 }
 
+.chart-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.chart-cell.full-width {
+    grid-column: 1 / -1;
+}
+
+.chart-description {
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--fg-secondary);
+    margin: 0;
+}
+
 .group .subgroup {
     margin-bottom: 1.5rem;
 }
@@ -1020,9 +1039,6 @@ main {
     margin: 0 0 0.5rem 0;
 }
 
-.group .charts .chart-wrapper.full-width {
-    grid-column: 1 / -1;
-}
 
 /* ==========================================================================
    Chart Cards
@@ -1607,6 +1623,7 @@ main {
 
 .selector-column {
     flex: 1;
+    min-width: 0;
 }
 
 .selector-column h4 {
@@ -1657,6 +1674,8 @@ main {
 }
 
 .cgroup-select-name {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -66,8 +66,9 @@ enabled = true
 # latency distribution.
 [samplers.blockio_latency]
 
-# BPF sampler that instruments block_io request queue to get counts of requests,
-# the number of bytes by request type, and the size distribution.
+# BPF sampler that instruments block_io request queue. Produces per-op
+# completion counts, byte counters, size histograms, terminal-failure
+# counters bucketed by error class, and requeue counters.
 [samplers.blockio_requests]
 
 # BPF sampler that collects CPU CFS bandwidth control and throttling stats

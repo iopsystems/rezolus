@@ -70,18 +70,20 @@ export const COLORS = new Proxy(SERIES_COLORS, {
 
 // ── Palettes ─────────────────────────────────────────────────────────
 
-/** Default 10-color palette for echarts `color` option */
+// d3 schemeCategory10. More saturated than Tableau Classic 10 — same
+// categorical-discriminability shape (interleaved warm/cool, neutrals
+// included), brighter on dark backgrounds.
 export const CHART_PALETTE = [
-    COLORS.chartBlue,
-    COLORS.chartCyan,
-    COLORS.chartTeal,
-    COLORS.chartGreen,
-    COLORS.chartLime,
-    COLORS.chartYellow,
-    COLORS.chartOrange,
-    COLORS.chartRed,
-    COLORS.chartPink,
-    COLORS.chartPurple,
+    '#1f77b4', // blue
+    '#ff7f0e', // orange
+    '#2ca02c', // green
+    '#d62728', // red
+    '#9467bd', // purple
+    '#8c564b', // brown
+    '#e377c2', // pink
+    '#7f7f7f', // gray
+    '#bcbd22', // olive
+    '#17becf', // cyan
 ];
 
 /** 5-color subset for percentile scatter charts */
@@ -280,29 +282,18 @@ export class ColorMapper {
     constructor() {
         this.colorMap = new Map();
 
-        // Wider palette optimized for dark backgrounds.
-        // Green first to differentiate from the blue aggregate charts on the left.
+        // d3 schemeCategory20 with the muted brown + gray pairs
+        // dropped — leaves 16 vivid hues (8 dark + 8 light siblings)
+        // so hash-indexed charts never roll the dice on a beige slot.
         this.colorPalette = [
-            COLORS.chartGreen,
-            COLORS.chartOrange,
-            COLORS.chartPurple,
-            COLORS.chartCyan,
-            COLORS.chartRed,
-            COLORS.chartLime,
-            COLORS.chartPink,
-            COLORS.chartYellow,
-            COLORS.chartTeal,
-            '#818cf8', // Indigo
-            COLORS.chartBlue,
-            '#38bdf8', // Sky blue
-            '#34d399', // Emerald
-            '#facc15', // Yellow
-            '#fb923c', // Light orange
-            '#e879f9', // Fuchsia
-            '#c084fc', // Violet
-            '#22d3ee', // Cyan bright
-            '#4ade80', // Light green
-            '#fca5a1', // Light coral
+            '#1f77b4', '#aec7e8', // blue
+            '#ff7f0e', '#ffbb78', // orange
+            '#2ca02c', '#98df8a', // green
+            '#d62728', '#ff9896', // red
+            '#9467bd', '#c5b0d5', // purple
+            '#e377c2', '#f7b6d2', // pink
+            '#bcbd22', '#dbdb8d', // olive
+            '#17becf', '#9edae5', // cyan
         ];
     }
 
