@@ -227,9 +227,8 @@ const fetchExperimentResult = (vnode) => {
     })();
 };
 
-// Resolve baseline's full [start, end] time range from server metadata.
-// Returns null when metadata isn't available; callers fall back to
-// data.js's natural baseline range (3600 s window cap).
+// Returns null on metadata failure; callers then fall back to data.js's
+// 3600 s-capped baseline range — fine outside the diff path.
 const fetchBaselineRange = async () => {
     try {
         const meta = await ViewerApi.getMetadata(CAPTURE_BASELINE);
@@ -248,28 +247,16 @@ const fetchBaselineRange = async () => {
     }
 };
 
-// Fire baseline + experiment spectrum fetches in parallel. On both
-// resolving, write into vnode.state._spectrumByKind[kind] and trigger
-// a redraw. On either failing or returning no data, leave the cache
-// empty for that kind and clear the pending flag so the toggle path
-// falls through to FALLBACK (5-percentile split).
-//
-// Both captures fetch over their full duration with a SHARED step so
-// the diff path (renderDiffQuantileHeatmap → buildDeltaSpectrum) can
-// pair samples by index after rebasing each side to its own first
-// sample. Without a shared step, baseline (3600 s cap, step=window/500)
-// and experiment (full duration, step=duration/500) end up on
-// incompatible grids whenever the durations differ — buildDeltaSpectrum
-// then refuses to diff and the user sees the baseline scatter instead
-// of a heatmap.
+// Both captures fetch with a SHARED step so buildDeltaSpectrum can pair
+// samples by index. Without it, baseline (3600 s cap) and experiment
+// (full duration) land on incompatible grids whenever durations differ
+// and the diff path silently falls back to the baseline scatter.
 const kickOffSpectrumFetch = (vnode, spec, kind) => {
     const expRange = vnode.attrs.experimentQueryRange;
     const quantiles = quantilesForKind(kind);
     const plotForFetch = { promql_query: spec.promql_query, opts: spec.opts };
-    // Snapshot the step this fetch was launched at. If the user
-    // changes granularity (which mutates _lastFetchedStep on the next
-    // experiment refetch), we discard this fetch's result so we don't
-    // write stale data into the kind cache after invalidation.
+    // Snapshot _lastFetchedStep: if granularity changes mid-fetch we
+    // discard this result to avoid writing stale data into the cache.
     const stepAtLaunch = vnode.state._lastFetchedStep;
 
     (async () => {
@@ -278,8 +265,7 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
             let baseRange = null;
             let expRangeOut = expRange || null;
             if (baseRangeBare && expRange?.step) {
-                // Coarsest step keeps both grids aligned without
-                // oversampling either capture.
+                // Coarsest step avoids oversampling either capture.
                 const baseStep = Math.max(1, Math.floor((baseRangeBare.end - baseRangeBare.start) / 500));
                 const sharedStep = Math.max(baseStep, expRange.step);
                 baseRange = { ...baseRangeBare, step: sharedStep };
@@ -291,9 +277,6 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
                 fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_EXPERIMENT, expRangeOut),
             ]);
 
-            // Discard if granularity has changed since launch (the
-            // cache has already been invalidated for the new step;
-            // a fresh fetch will fire on the next view()).
             if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
             if (vnode.state._spectrumPending === kind) {
                 vnode.state._spectrumPending = null;

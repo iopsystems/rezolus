@@ -105,12 +105,9 @@ function positiveOr(v, fallback) {
  * Uses nullDiff so undefined/NaN propagate cleanly.
  *
  * Caller responsibilities:
- *   - Compare-mode anchors each capture to its own first sample
- *     (relative t=0). When the captures share the same step, the i-th
- *     index represents the same relative offset on both sides — this
- *     function pairs by index and truncates to the common prefix when
- *     timestamp counts differ. Step mismatch returns null instead of
- *     producing a misleading diff.
+ *   - Pairs by index after compare-mode anchors each capture to its
+ *     own first sample (relative t=0); requires matching step.
+ *     Mismatched steps return null instead of misleading the user.
  *   - When dMin === dMax (flat captures), pad before passing to a
  *     diverging palette renderer (see renderDiffHeatmap in compare.js
  *     for the canonical pad recipe).
@@ -126,11 +123,8 @@ export function buildDeltaSpectrum(baseline, experiment) {
     const baseData = baseline.data;
     const expData = experiment.data;
     if (!Array.isArray(baseData) || baseData.length < 2) return null;
-    // qCount must match across captures (same set of percentiles).
     if (!Array.isArray(expData) || expData.length !== baseData.length) return null;
 
-    // Reject when either side has too few samples to determine step,
-    // or when steps disagree — pairing by index would be meaningless.
     if (baseTimes.length < 2 || expTimes.length < 2) return null;
     const baseStep = baseTimes[1] - baseTimes[0];
     const expStep = expTimes[1] - expTimes[0];

@@ -150,17 +150,14 @@ test('buildDeltaSpectrum: undetermined step (single-sample side) returns null', 
 });
 
 test('buildDeltaSpectrum: timestamp count mismatch with matching step truncates to common prefix', () => {
-    // Compare-mode rebases each capture to its own first sample
-    // (relative t=0). When steps match, the i-th index represents the
-    // same relative offset in both captures, so the diff covers the
-    // common prefix.
+    // Captures with matching step but different lengths pair by index
+    // after compare-mode rebases each to its own first sample.
     const baseline = spectrum([100, 101, 102, 103], [[1, 2, 3, 4]], ['p50']);
     const experiment = spectrum([200, 201, 202, 203, 204, 205], [[10, 12, 14, 16, 18, 20]], ['p50']);
     const r = buildDeltaSpectrum(baseline, experiment);
     assert.notEqual(r, null);
     assert.equal(r.data[1].length, 4);
     assert.deepEqual(r.data[1], [9, 10, 11, 12]);
-    // Truncated baseline times become the diff's time axis.
     assert.deepEqual(r.time_data, [100, 101, 102, 103]);
     assert.equal(r.dMin, 9);
     assert.equal(r.dMax, 12);
@@ -177,8 +174,8 @@ test('buildDeltaSpectrum: experiment shorter than baseline truncates to experime
 });
 
 test('buildDeltaSpectrum: mismatched step refuses to pair samples', () => {
-    // step 1 vs step 2 — same index does not correspond to same
-    // relative time, so refuse the diff rather than mislead.
+    // Same index → different relative time when steps differ; refuse
+    // rather than produce a nonsense diff.
     const baseline = spectrum([0, 1, 2, 3], [[1, 2, 3, 4]], ['p50']);
     const experiment = spectrum([0, 2, 4, 6], [[1, 2, 3, 4]], ['p50']);
     const r = buildDeltaSpectrum(baseline, experiment);
