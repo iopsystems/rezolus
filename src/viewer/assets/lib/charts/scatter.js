@@ -483,8 +483,13 @@ function positionControlsAtGridLeft(chart, container) {
     try {
         const grid = chart.echart.getModel().getComponent('grid');
         const rect = grid?.coordinateSystem?.getRect();
-        const chartWidth = chart.echart.getDom?.()?.clientWidth ?? 0;
-        const narrow = chartWidth > 0 && chartWidth < SPECTRUM_CONTROLS_NARROW_WIDTH;
+        const dom = chart.echart.getDom?.();
+        const chartWidth = dom?.clientWidth ?? 0;
+        // Selection cards put notes alongside the chart, so the
+        // histogram is structurally narrow regardless of viewport width.
+        const inSelectionCard = !!dom?.closest?.('.selection-card-chart');
+        const narrow = inSelectionCard
+            || (chartWidth > 0 && chartWidth < SPECTRUM_CONTROLS_NARROW_WIDTH);
         if (narrow) {
             // Narrow chart: stack above the legend on its own line and
             // align to the right edge so it visually anchors to the
