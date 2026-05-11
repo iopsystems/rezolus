@@ -31,6 +31,9 @@ echo "logs: $LOGDIR"
 # Build before launching anything so a compile failure surfaces early.
 cargo build --bin rezolus 2>&1 | tail -3
 
+# Don't pop browser tabs during the smoke test.
+export REZOLUS_NO_OPEN=1
+
 # Launch all four. Each writes its log to $LOGDIR so failures can be
 # triaged without re-running.
 ./target/debug/rezolus view \

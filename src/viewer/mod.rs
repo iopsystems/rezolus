@@ -305,7 +305,9 @@ pub fn run(config: Config) {
 
     rt.spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        if open::that(format!("http://{addr}")).is_err() {
+        if std::env::var_os("REZOLUS_NO_OPEN").is_some() {
+            info!("Use your browser to view: http://{addr}");
+        } else if open::that(format!("http://{addr}")).is_err() {
             info!("Use your browser to view: http://{addr}");
         } else {
             info!("Launched browser to view: http://{addr}");
