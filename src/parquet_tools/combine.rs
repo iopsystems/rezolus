@@ -98,7 +98,7 @@ pub(crate) fn combine_files(
     validate_sampling_interval(&inputs)?;
     validate_labels(&mut inputs)?;
     validate_time_overlap(&inputs)?;
-    combine_and_write(&inputs, output, false, None)
+    combine_and_write(&inputs, output, false, None, None)
 }
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
@@ -134,7 +134,39 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    combine_and_write(&inputs, output, bypass_time_check, pinned)?;
+    let ab_raw: Vec<String> = args
+        .get_many::<String>("ab")
+        .map(|i| i.cloned().collect())
+        .unwrap_or_default();
+
+    let ab = if !ab_raw.is_empty() {
+        if inputs.len() != 2 {
+            return Err(format!(
+                "--ab requires exactly two input files (got {})",
+                inputs.len()
+            )
+            .into());
+        }
+        for input in &inputs {
+            if input
+                .kv_metadata
+                .iter()
+                .any(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS)
+            {
+                return Err(format!(
+                    "{:?} is already a combined-A/B parquet — re-combining --ab is not supported",
+                    input.path
+                )
+                .into());
+            }
+        }
+        let available: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
+        Some(parse_ab_args(&ab_raw, &available)?)
+    } else {
+        None
+    };
+
+    combine_and_write(&inputs, output, bypass_time_check, pinned, ab)?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
     println!(
@@ -387,6 +419,7 @@ fn combine_and_write(
     output: &PathBuf,
     bypass_time_check: bool,
     pinned: Option<&String>,
+    ab: Option<(AbSide, AbSide)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let interval_ns = resolve_interval_ns(inputs)?;
 
@@ -1155,7 +1188,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         // Read back
         let file = std::fs::File::open(&out_path).unwrap();
@@ -1221,7 +1254,7 @@ mod tests {
         validate_sampling_interval(&inputs).unwrap();
         validate_labels(&mut inputs).unwrap();
         validate_time_overlap(&inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         // Read back and verify schema
         let file = std::fs::File::open(&out_path).unwrap();
@@ -1282,7 +1315,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1366,7 +1399,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1408,7 +1441,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false, None);
+        let result = combine_and_write(&inputs, &out_path, false, None, None);
         assert!(result.is_err());
     }
 
@@ -1437,7 +1470,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1484,7 +1517,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false, None);
+        let result = combine_and_write(&inputs, &out_path, false, None, None);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -1733,7 +1766,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1795,7 +1828,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1848,7 +1881,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2), load(&p3)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1891,7 +1924,7 @@ mod tests {
 
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
 
         let meta_reader =
             SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
