@@ -27,6 +27,17 @@ struct InputFile {
     instance: Option<String>,
 }
 
+/// Flatten an `InputFile.source` field into one or more flat source names.
+/// Already-combined inputs carry a JSON-array string (e.g. `"[\"rezolus\",\"vllm\"]"`);
+/// single-source inputs carry the bare name. This returns the flat list either way.
+fn flatten_input_sources(input: &InputFile) -> Vec<String> {
+    if let Ok(arr) = serde_json::from_str::<Vec<String>>(&input.source) {
+        arr
+    } else {
+        vec![input.source.clone()]
+    }
+}
+
 /// Parse a `--ab` argument list into (baseline, experiment) sides.
 ///
 /// `raw` is the clap-collected Vec, each entry `key=value`. `available_sources`
@@ -160,7 +171,11 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
                 .into());
             }
         }
-        let available: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
+        let flat: Vec<String> = inputs
+            .iter()
+            .flat_map(|i| flatten_input_sources(i))
+            .collect();
+        let available: Vec<&str> = flat.iter().map(|s| s.as_str()).collect();
         Some(parse_ab_args(&ab_raw, &available)?)
     } else {
         None
@@ -428,13 +443,16 @@ fn combine_and_write(
         inputs
             .iter()
             .map(|input| {
-                if baseline.sources.iter().any(|s| s == &input.source) {
+                let input_sources = flatten_input_sources(input);
+                if input_sources.iter().any(|s| baseline.sources.contains(s)) {
                     "baseline"
-                } else if experiment.sources.iter().any(|s| s == &input.source) {
+                } else if input_sources.iter().any(|s| experiment.sources.contains(s)) {
                     "experiment"
                 } else {
-                    // parse_ab_args validated every input source matches one side
-                    unreachable!("input source {:?} not in any --ab side", input.source)
+                    unreachable!(
+                        "input sources {:?} not in any --ab side",
+                        input_sources
+                    )
                 }
             })
             .collect()
@@ -2369,5 +2387,22 @@ mod tests {
             !kv.iter().any(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS),
             "non-AB combine must not emit ab_containers"
         );
+    }
+
+    #[test]
+    fn parse_ab_args_accepts_multi_source_input() {
+        // Already-combined inputs (e.g. rezolus+vllm) expose all their
+        // flattened source names to the validator. The user names ONE of
+        // them in --ab; the side-mapping code (in combine_and_write) is
+        // responsible for back-resolving which input contributes the side.
+        let raw = vec![
+            "baseline=vllm".to_string(),
+            "experiment=sglang".to_string(),
+        ];
+        // Flat list as combine_and_write would compute it.
+        let available = ["rezolus", "vllm", "rezolus", "sglang"];
+        let (baseline, experiment) = parse_ab_args(&raw, &available).unwrap();
+        assert_eq!(baseline.alias, "vllm");
+        assert_eq!(experiment.alias, "sglang");
     }
 }
