@@ -4,6 +4,7 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { CompareChartWrapper } from './viewer_core.js';
+import { compareToggle } from './chart_controls.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
@@ -780,7 +781,14 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
-                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            m('div.chart-title-row', [
+                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                attrs.compareMode && compareToggle(spec, {
+                                    compareMode: attrs.compareMode,
+                                    toggles: attrs.toggles,
+                                    setChartToggle: attrs.setChartToggle,
+                                }),
+                            ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
                         chartBody,
