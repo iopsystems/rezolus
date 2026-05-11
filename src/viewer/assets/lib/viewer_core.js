@@ -355,12 +355,8 @@ export const CompareChartWrapper = {
             return m('div.chart-loading', 'Loading experiment\u2026');
         }
 
-        // The category bridge: when this chart belongs to a category
-        // section (e.g. inference-library), the per-side queries
-        // produce series whose labels intentionally differ on a
-        // capture-identity dim like `source=vllm` vs `source=sglang`.
-        // Pass the member-name set down so composeScatterLabel drops
-        // those dims from the cross-capture match key.
+        // Category bridge — drop capture-identity dims from the
+        // cross-capture match key so bridge KPIs match symmetrically.
         const captureExtractOpts = (categoryMembers && categoryMembers.length > 0)
             ? { excludeValues: new Set(categoryMembers) }
             : {};
@@ -514,13 +510,8 @@ export function createGroupComponent(getState) {
             ]);
 
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
-            // Category bridge: when the section's metadata declares
-            // `category_members`, the compare-mode label composer drops
-            // labels whose values are member names so the cross-capture
-            // match key reduces to the real subseries dims (e.g. just
-            // the percentile, not "p50 · vllm" vs "p50 · sglang").
-            // sectionMetadata is forwarded by renderServiceSection;
-            // attrs.metadata holds per-group config and is unrelated.
+            // sectionMetadata is the section payload (set by renderServiceSection);
+            // attrs.metadata is per-group config — unrelated.
             const categoryMembers = Array.isArray(attrs.sectionMetadata?.category_members)
                 ? attrs.sectionMetadata.category_members
                 : null;

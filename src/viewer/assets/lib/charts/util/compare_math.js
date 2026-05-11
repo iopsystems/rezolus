@@ -204,39 +204,11 @@ export const canonicalQuantileLabel = (input) => {
     return `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
 };
 
-// Compose a stable, dimension-aware label for compare-mode label
-// matching of percentile (scatter-style) charts. Quantile dim is
-// canonicalized to "pXX"; remaining label dims are appended (sorted
-// by key for determinism, value-only) joined with " · ".
-//
-// Replaces the asymmetry where baseline used "first non-__name__ value"
-// (whichever label happened to come first in iteration order) and
-// experiment used canonicalQuantileLabel(item) (dropped extra dims) —
-// for percentile metrics with extra dims (per-cgroup, per-host) the
-// two sides produced disjoint key sets and the compare view failed
-// with "no shared labels between captures".
-//
-// `options.excludeValues` is the category bridge: in category-mode
-// compare (e.g. inference-library, baseline=vllm vs experiment=sglang)
-// the per-side queries return series whose labels intentionally differ
-// on a capture-identity dim like `source=vllm` vs `source=sglang`.
-// Including that dim in the match key would put the two sides in
-// disjoint sets. Caller passes the set of category-member names
-// (`["vllm","sglang"]`) so the composer drops any dim whose value is
-// in that set — restoring "p50" / "p95" as the cross-capture match
-// keys. Filtering by VALUE rather than KEY keeps the rule template-
-// agnostic (works for any future capture-identity label).
-//
-// Examples (no excludeValues):
-//   { quantile: "0.5" }                    → "p50"
-//   { quantile: "0.5", category: "vllm" }  → "p50 · vllm"
-//   { category: "vllm" }                   → "vllm"  (no quantile fallback)
-//   {}                                     → null
-//
-// Examples (excludeValues = Set(["vllm","sglang"])):
-//   { quantile: "0.5", source: "vllm" }    → "p50"
-//   { quantile: "0.5", source: "sglang" }  → "p50"  (matches the line above)
-//   { quantile: "0.5", source: "vllm", cgroup: "a" } → "p50 · a"
+// Compose-mode match key for percentile (scatter) series. Quantile dim
+// → "pXX"; other dims appended (key-sorted, value-only) joined with " · ".
+// `excludeValues` drops dims whose values are capture-identity names
+// (category members) so cross-capture compare doesn't end up with
+// disjoint key sets. See tests for examples.
 export const composeScatterLabel = (metric, { excludeValues } = {}) => {
     if (!metric || typeof metric !== 'object') return null;
     const dims = { ...metric };

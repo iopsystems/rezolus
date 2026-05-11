@@ -245,13 +245,10 @@ const applyResultToPlot = (plot, result) => {
             } else {
                 const allData = [];
                 const seriesNames = [];
-                // Parallel array of raw PromQL metric objects, one per
-                // kept series. Stashed on plot so compare-mode's baseline
-                // path can re-derive labels with the same multi-dim
-                // logic as the experiment path (both call
-                // composeScatterLabel on the metric). Otherwise the
-                // baseline would only have the lossy first-non-__name__
-                // string in series_names.
+                // Parallel to seriesNames; the raw metrics let compare-
+                // mode's baseline path re-derive labels symmetrically
+                // with the experiment path (composeScatterLabel needs
+                // the full label set, not the lossy series_names string).
                 const seriesMetrics = [];
                 let timestamps = null;
 
