@@ -87,6 +87,13 @@ fn parse_ab_args(
         }
     }
 
+    if baseline == experiment {
+        return Err(format!(
+            "--ab baseline and experiment must be different sources (both are {baseline:?})"
+        )
+        .into());
+    }
+
     Ok((
         AbSide {
             alias: baseline.clone(),
@@ -2404,5 +2411,18 @@ mod tests {
         let (baseline, experiment) = parse_ab_args(&raw, &available).unwrap();
         assert_eq!(baseline.alias, "vllm");
         assert_eq!(experiment.alias, "sglang");
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_same_source_on_both_sides() {
+        let raw = vec![
+            "baseline=vllm".to_string(),
+            "experiment=vllm".to_string(),
+        ];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("different"),
+            "error should explain that sides must differ: {err}"
+        );
     }
 }
