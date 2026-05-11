@@ -523,6 +523,8 @@ const SectionContent = {
                 experimentQueryRange,
                 baselineAlias,
                 experimentAlias,
+                // TODO PR 3: set true when loaded parquet has ab_containers metadata
+                combinedAB: false,
             });
         }
 

@@ -301,7 +301,7 @@ const clearStore = (store) => {
 
 // ── Export / Import / Parquet ─────────────────────────────────────
 
-const buildPayload = (store, attrs) => ({
+const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
     version: SELECTION_SCHEMA_VERSION,
     report_id: uuidv7(),
     rezolus_version: attrs.version || 'unknown',
@@ -325,7 +325,7 @@ const buildPayload = (store, attrs) => ({
         sectionName: e.sectionName,
         groupName: e.groupName || '',
         promql_query: e.promql_query,
-        note: e.note,
+        note: includeNotes ? e.note : '',
         chartOpts: e.chartOpts,
     })),
 });
@@ -335,7 +335,7 @@ const exportJSON = async (store, attrs) => {
     const result = await showSaveModal(defaultPrefix, '.json');
     if (!result) return;
     const filename = result.filename;
-    const payload = buildPayload(store, attrs);
+    const payload = buildPayload(store, attrs, { includeNotes: false });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -555,6 +555,9 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
         const cs = attrs.chartsState;
         const hasChartSelection = cs?.hasActiveSelection();
         const hasHistograms = selectionStore.entries.some(e => isHistogramPlot(e));
+        const hasAnyNote = selectionStore.entries.some(e => e.note && e.note.length > 0);
+        const inTwoFileCompare = attrs.compareMode && !attrs.combinedAB;
+        const downloadIcon = m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>');
 
         const header = m('div.selection-header', [
             m('div.section-header-row', [
@@ -589,15 +592,25 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             header,
 
             m('div.selection-actions', [
-                m('button.selection-btn', { onclick: () => exportJSON(selectionStore, attrs) }, [
-                    'Export JSON ',
-                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
+                m('button.selection-btn', {
+                    disabled: hasAnyNote,
+                    title: hasAnyNote
+                        ? 'Selection has notes \u2014 use Save as Report (annotate parquet) to keep them with the data, or clear notes first.'
+                        : 'Download a JSON pattern (charts + toggles only)',
+                    onclick: () => exportJSON(selectionStore, attrs),
+                }, [
+                    'Save as Selection (JSON) ',
+                    downloadIcon,
                 ]),
                 m('button.selection-btn', {
+                    disabled: inTwoFileCompare,
+                    title: inTwoFileCompare
+                        ? 'Two-file A/B mode has no single parquet to embed in. Use `parquet combine --ab` first.'
+                        : 'Embed selection + notes in the loaded parquet',
                     onclick: () => saveToParquet(selectionStore, attrs),
                 }, [
-                    'Annotate Parquet ',
-                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
+                    'Save as Report (annotate parquet) ',
+                    downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-danger', {
                     onclick: () => { clearStore(selectionStore); m.redraw(); },
