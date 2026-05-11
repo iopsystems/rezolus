@@ -8,7 +8,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setCombinedAB, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -65,6 +65,7 @@ const getCachedSections = () => getSections(sectionCacheState);
 
 // Compare-mode state (Stage 4 of A/B compare plan)
 let compareMode = false;
+let combinedAB = false;
 let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
@@ -524,8 +525,7 @@ const SectionContent = {
                 experimentQueryRange,
                 baselineAlias,
                 experimentAlias,
-                // TODO PR 3: set true when loaded parquet has ab_containers metadata
-                combinedAB: false,
+                combinedAB,
             });
         }
 
@@ -673,6 +673,8 @@ const initDashboard = (config = {}) => {
     // reported compare_mode=true).
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
+    combinedAB = config.combinedAB === true;
+    setCombinedAB(combinedAB);
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
     experimentQueryRange = config.experimentQueryRange || null;
