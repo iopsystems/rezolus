@@ -58,6 +58,10 @@ fn main() {
         std::process::exit(101);
     }));
 
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
+
     let cli = Command::new(env!("CARGO_BIN_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .long_about("Rezolus provides high-resolution systems performance telemetry.")
