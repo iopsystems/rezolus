@@ -300,7 +300,7 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
     })();
 };
 
-const CompareChartWrapper = {
+export const CompareChartWrapper = {
     oninit(vnode) {
         vnode.state.experimentResult = null;
         vnode.state.error = null;
