@@ -66,3 +66,37 @@ test('missing chartToggles becomes empty object on v3', () => {
     const s = migrateSelection({ version: 3, entries: [] });
     assert.deepEqual(s.chartToggles, {});
 });
+
+// Round-trip test: a v3 payload shaped like buildPayload's output
+// (the JSON-export shape) survives migrateSelection without losing
+// the optional compare field. Codifies the contract that any caller
+// in the load path (loadPayloadIntoStore, restoreStore, etc.) will
+// see compare intact when present. Catches regressions where a new
+// field strips or reshapes compare during validation.
+test('buildPayload-shaped v3 payload round-trips through migrateSelection with compare intact', () => {
+    const v3 = {
+        version: 3,
+        report_id: '0192f6a8-7c2e-7000-8000-000000000001',
+        rezolus_version: '5.13.1-alpha.1',
+        saved_at: '2026-05-10T20:00:00.000Z',
+        source: 'rezolus',
+        filename: 'capture.parquet',
+        file_checksum: null,
+        time_range: { start_ms: 0, end_ms: 1000 },
+        zoom: null,
+        step_override: null,
+        anchors: { baseline: 100, experiment: 200 },
+        chartToggles: { 'cpu/usage': { diff: true } },
+        compare: { baseline_alias: 'vllm', experiment_alias: 'sglang' },
+        tagline: 'compare run #42',
+        entries: [
+            { chartId: 'cpu/usage', section: 'cpu', sectionName: 'CPU', groupName: 'usage', promql_query: 'rate(...)', note: '', chartOpts: { id: 'cpu/usage', title: 'CPU' } },
+        ],
+    };
+    const s = migrateSelection(v3);
+    assert.deepEqual(s.compare, { baseline_alias: 'vllm', experiment_alias: 'sglang' });
+    assert.deepEqual(s.anchors, { baseline: 100, experiment: 200 });
+    assert.deepEqual(s.chartToggles, { 'cpu/usage': { diff: true } });
+    assert.equal(s.tagline, 'compare run #42');
+    assert.equal(s.entries.length, 1);
+});

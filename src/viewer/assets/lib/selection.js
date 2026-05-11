@@ -103,8 +103,12 @@ const setStorageScope = (info) => {
     // In-memory reset only — must NOT purge localStorage at the
     // (just-set) scoped key, otherwise we wipe the file's persisted
     // notebook on every page load before restoring it.
+    // loadedSelectionStore is in-memory only; reset so a Selection
+    // imported against a previous parquet doesn't survive into the
+    // new file's session (its chart specs may not even resolve).
     resetStoreState(notebookStore);
     resetStoreState(reportStore);
+    resetStoreState(loadedSelectionStore);
     restoreStore(REPORT_STORAGE_KEY, reportStore);
     restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 };
@@ -418,6 +422,7 @@ const loadPayloadIntoStore = (store, payload) => {
         store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
         store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
         store.chartToggles = migrated.chartToggles || {};
+        store.compare = migrated.compare || null;
         store.entries = payload.entries.map(e => ({
             id: crypto.randomUUID(),
             chartId: e.chartId,
