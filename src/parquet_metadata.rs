@@ -105,3 +105,41 @@ pub const KEY_PINNED_NODE: &str = "pinned_node";
 /// than inheriting from file-level metadata, so the payload stays
 /// self-describing across combine.
 pub const KEY_EVENTS: &str = "events";
+
+// ── Combined A/B parquet artifact (PR 3) ────────────────────────────
+
+/// File-level marker that the parquet was produced by `parquet combine --ab`.
+/// Value is JSON-encoded `AbContainers`. Presence flips the viewer into
+/// compare mode automatically and routes `container=baseline|experiment`
+/// as a per-capture label injection.
+pub const KEY_AB_CONTAINERS: &str = "ab_containers";
+
+/// Per-column metadata key that tags every column in a combined-AB file
+/// with its container side. Values are exactly `"baseline"` or
+/// `"experiment"`. Lives alongside existing labels (`source`, `node`, …)
+/// — does not replace them.
+pub const COLUMN_LABEL_CONTAINER: &str = "container";
+
+/// Wire shape for `KEY_AB_CONTAINERS`. Schema is versioned because
+/// adding fields later (e.g. side-specific descriptions) is plausible.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AbContainers {
+    pub version: u32,
+    pub baseline: AbSide,
+    pub experiment: AbSide,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AbSide {
+    /// Display alias for this side (e.g. "vllm", "sglang").
+    pub alias: String,
+    /// Source names from the input parquet that landed on this side.
+    /// A multi-source input (e.g. service+loadgen) contributes all its
+    /// sources here. The viewer's compare uses this for nothing
+    /// load-bearing — informational only.
+    pub sources: Vec<String>,
+}
+
+impl AbContainers {
+    pub const SCHEMA_VERSION: u32 = 1;
+}
