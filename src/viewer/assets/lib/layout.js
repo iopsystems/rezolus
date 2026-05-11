@@ -1,5 +1,5 @@
 import { TimeRangeBar, GranularitySelector } from './controls.js';
-import { selectionStore, reportStore, importJSON } from './selection.js';
+import { notebookStore, reportStore, loadedSelectionStore, importSelection } from './selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from './group_utils.js';
 
@@ -136,19 +136,19 @@ const TopNav = {
                     m('span', 'Load Parquet'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
-                // Import report JSON (server viewer only). Hidden in
-                // compare mode — reports are single-capture today.
+                // Import selection JSON (server viewer only). Hidden in
+                // compare mode — selections are single-capture today.
                 attrs.onUploadParquet && !compareMode && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
-                    onclick: () => importJSON(attrs.fileChecksum),
+                    onclick: () => importSelection(),
                     title: attrs.filename
-                        ? (reportStore.loadedFrom
-                            ? `Loaded: ${reportStore.loadedFrom} — click to replace`
-                            : 'Import report JSON')
+                        ? (loadedSelectionStore.loadedFrom
+                            ? `Loaded: ${loadedSelectionStore.loadedFrom} — click to replace`
+                            : 'Import selection JSON')
                         : 'Load a parquet file first',
                 }, [
-                    m('span', 'Load Report'),
+                    m('span', 'Load Selection'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
                 // Transport controls (live mode only)
@@ -263,16 +263,28 @@ const Sidebar = {
                 `Report (${reportStore.entries.length})`,
             ),
 
-            // Selection section (shown only when entries exist)
-            selectionStore.entries.length > 0 && m(
+            // Notebook section (shown only when entries exist)
+            notebookStore.entries.length > 0 && m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection?.route === '/notebook'
+                        ? 'selected selection-link notebook-link'
+                        : 'selection-link notebook-link',
+                    href: '/notebook',
+                },
+                `Notebook (${notebookStore.entries.length})`,
+            ),
+
+            // Selection section (shown only when JSON loaded)
+            loadedSelectionStore.entries.length > 0 && m(
                 m.route.Link,
                 {
                     class: attrs.activeSection?.route === '/selection'
-                        ? 'selected selection-link'
-                        : 'selection-link',
+                        ? 'selected selection-link loaded-selection-link'
+                        : 'selection-link loaded-selection-link',
                     href: '/selection',
                 },
-                `Selection (${selectionStore.entries.length})`,
+                `Selection (${loadedSelectionStore.entries.length})`,
             ),
 
             // Overview section first (if exists)

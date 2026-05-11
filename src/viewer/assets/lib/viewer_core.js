@@ -554,7 +554,10 @@ export function createGroupComponent(getState) {
                         chartHeader(renderSpec.opts, renderSpec),
                         chartBody(renderSpec, spec),
                         expandLink(spec, sectionRoute),
-                        selectButton(spec, sectionRoute, sectionName, attrs.name),
+                        selectButton(spec, sectionRoute, sectionName, attrs.name, compareMode ? {
+                            baselineAlias: captureLabels.baseline,
+                            experimentAlias: captureLabels.experiment,
+                        } : null),
                     ]),
                 ]);
             };

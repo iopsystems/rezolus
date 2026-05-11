@@ -110,7 +110,7 @@ export const expandLink = (spec, sectionRoute) => {
     );
 };
 
-export const selectButton = (spec, sectionRoute, sectionName, groupName) => {
+export const selectButton = (spec, sectionRoute, sectionName, groupName, compareMeta = null) => {
     if (!spec.promql_query) return null;
     const sectionKey = sectionRoute.replace(/^\//, '');
     const selected = isSelected(spec.opts.id);
@@ -118,7 +118,7 @@ export const selectButton = (spec, sectionRoute, sectionName, groupName) => {
         class: selected ? 'chart-selected' : '',
         onclick: (e) => {
             e.stopPropagation();
-            toggleSelection(spec, sectionKey, sectionName, groupName);
+            toggleSelection(spec, sectionKey, sectionName, groupName, compareMeta);
             m.redraw();
         },
         title: selected ? 'Remove from selection' : 'Add to selection',

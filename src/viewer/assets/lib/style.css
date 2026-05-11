@@ -41,6 +41,12 @@
     --accent-subtle: rgba(56, 139, 253, 0.15);
     --accent-glow: rgba(56, 139, 253, 0.25);
 
+    /* Selection brand color — indigo, distinct from Notebook (green) and Report (blue). */
+    --indigo: #a371f7;
+    --indigo-emphasis: #c297fc;
+    --indigo-muted: rgba(163, 113, 247, 0.4);
+    --indigo-subtle: rgba(163, 113, 247, 0.15);
+
     /* A/B compare mode — baseline is blue, experiment is green. */
     --compare-baseline: #2E5BFF;
     --compare-baseline-bg: rgba(46, 91, 255, 0.08);
@@ -719,14 +725,14 @@ body::after {
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded {
-    color: var(--success);
-    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+    color: var(--indigo);
+    border-color: var(--indigo-muted);
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded:hover {
-    background: color-mix(in srgb, var(--success) 15%, transparent);
-    color: var(--success);
-    box-shadow: 0 0 12px color-mix(in srgb, var(--success) 20%, transparent);
+    background: var(--indigo-subtle);
+    color: var(--indigo);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--indigo) 20%, transparent);
 }
 
 #topnav .theme-toggle-btn {
@@ -2287,6 +2293,23 @@ main {
     border-color: var(--danger);
 }
 
+.selection-btn-indigo {
+    background: var(--indigo-subtle);
+    color: var(--indigo);
+    border-color: var(--indigo-muted);
+}
+
+.selection-btn-indigo:hover {
+    background: color-mix(in srgb, var(--indigo) 25%, transparent);
+    color: var(--indigo);
+    border-color: var(--indigo);
+}
+
+.selection-btn-indigo:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .save-modal-input-row + .save-modal-options {
     margin-top: -11px;
 }
@@ -2318,89 +2341,113 @@ main {
 }
 
 .selection-card {
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    background: var(--bg-surface);
     margin-bottom: 1.5rem;
-    overflow: hidden;
-}
-
-.selection-card-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 8px 16px;
-    background: var(--bg-inset);
-    border-bottom: 1px solid var(--border-default);
-    font-family: var(--font-mono);
-    font-size: 12px;
-}
-
-.selection-card-section-link {
-    color: var(--accent);
-    text-decoration: none;
-}
-
-.selection-card-section-link:hover {
-    text-decoration: underline;
-}
-
-.selection-card-sep {
-    color: var(--fg-muted);
-}
-
-.selection-card-title {
-    color: var(--fg);
-}
-
-.selection-card-desc {
-    color: var(--fg-muted);
-    font-size: 0.85em;
-    flex: 1;
 }
 
 .selection-card-remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 6px;
+    opacity: 0;
+    transition: all var(--transition-base);
+    z-index: 10;
+}
+
+.chart-wrapper:hover .selection-card-remove {
+    opacity: 0.6;
+}
+
+.selection-card-remove:hover {
+    opacity: 1 !important;
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+    background: color-mix(in srgb, var(--danger) 15%, transparent);
+}
+
+/* Placeholder card for entries whose data isn't in the loaded
+   capture (metric absent, query errored, no series matched). */
+.chart-wrapper-unavailable {
+    background: var(--bg-inset);
+    border-style: dashed;
+}
+
+.chart-unavailable {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.chart-unavailable-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-muted);
+}
+
+.chart-unavailable-message {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--fg-muted);
+    font-style: italic;
+}
+
+.notes-affordance {
+    align-self: flex-start;
     background: transparent;
     border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    padding: 0.25rem 0.75rem 0.5rem;
+    border-radius: 4px;
+    transition: color var(--transition-base);
+}
+
+.notes-affordance:hover {
+    color: var(--accent);
+}
+
+.selection-card-notes {
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    border-top: 1px solid var(--border-default);
+}
+
+.report-card-notes {
+    padding: 12px;
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-inset);
+}
+
+.report-notes-label {
+    display: block;
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
     color: var(--fg-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    cursor: pointer;
-    padding: 0;
-    margin-bottom: 6px;
-    transition: color var(--transition-base);
+    margin-bottom: 0.4rem;
 }
 
-.selection-card-remove:hover {
-    color: var(--danger);
-}
-
-.selection-card-body {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0;
-}
-
-.selection-card-chart {
-    flex: 1 1 calc(50% - 1rem);
-    max-width: calc(50% - 1rem);
-    min-width: 300px;
-    padding: 12px;
-}
-
-.selection-card-chart .chart {
-    height: 250px;
-}
-
-.selection-card-notes {
-    flex: 1 1 200px;
-    display: flex;
-    flex-direction: column;
-    padding: 12px;
-    border-left: 1px solid var(--border-default);
+.report-notes-text {
+    margin: 0;
+    color: var(--fg);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
 }
 
 .selection-notes-label {
@@ -2455,11 +2502,18 @@ main {
 
 .selection-link {
     font-weight: 600 !important;
+}
+
+.notebook-link {
     color: var(--success) !important;
 }
 
+.loaded-selection-link {
+    color: var(--indigo) !important;
+}
+
 .report-link {
-    color: var(--success) !important;
+    color: var(--accent) !important;
 }
 
 /* Report metadata */
@@ -3052,19 +3106,6 @@ main {
         white-space: normal;
     }
 
-    /* ── Selection cards: stack vertically ── */
-    .selection-card-body {
-        flex-direction: column;
-    }
-
-    .selection-card-chart {
-        flex: 1 1 100%;
-        max-width: 100%;
-    }
-
-    .selection-card-notes {
-        flex: 1 1 auto;
-    }
 }
 
 /* ---- Landing / File Upload Page ---- */

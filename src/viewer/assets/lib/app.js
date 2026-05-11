@@ -9,7 +9,7 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
-import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
+import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
@@ -84,7 +84,7 @@ let experimentAlias = null;
 export const getBaselineAlias = () => baselineAlias;
 export const getExperimentAlias = () => experimentAlias;
 
-// Compare-mode per-chart toggles + anchors live in `selectionStore` so
+// Compare-mode per-chart toggles + anchors live in `notebookStore` so
 // they persist across page reloads. See selection_migration.js for the
 // schema. The accessors below read-through to the store.
 
@@ -109,9 +109,9 @@ const initComponents = () => {
     Group = createGroupComponent(() => ({
         chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
         compareMode,
-        toggles: selectionStore.chartToggles || {},
+        toggles: notebookStore.chartToggles || {},
         setChartToggle,
-        anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
+        anchors: notebookStore.anchors || { baseline: 0, experiment: 0 },
         experimentQueryRange,
         baselineAlias,
         experimentAlias,
@@ -187,7 +187,7 @@ const attachExperiment = async (file) => {
     // Clamp a stale anchor when the newly-attached experiment is
     // shorter than the previously-saved offset. Avoids a chart starting
     // past the end of its data.
-    const anchors = selectionStore.anchors || { baseline: 0, experiment: 0 };
+    const anchors = notebookStore.anchors || { baseline: 0, experiment: 0 };
     if (experimentDurationMs != null && anchors.experiment > experimentDurationMs) {
         setAnchor(CAPTURE_EXPERIMENT, experimentDurationMs);
         console.info(
@@ -357,6 +357,7 @@ const changeInstance = async (serviceName, instanceId) => {
 };
 
 const CLIENT_ONLY_SECTIONS = new Set([
+    'notebook',
     'selection',
     'report',
     'systeminfo',
@@ -367,8 +368,8 @@ const CLIENT_ONLY_SECTIONS = new Set([
 const changeGranularity = async (step) => {
     currentGranularity = step;
     setStepOverride(step);
-    selectionStore.stepOverride = step ?? null;
-    persistSelection();
+    notebookStore.stepOverride = step ?? null;
+    persistNotebook();
 
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
@@ -502,10 +503,10 @@ const SectionContent = {
             ]);
         }
 
-        if (sectionName === 'Selection') {
+        if (sectionName === 'Notebook') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
-            return m(SelectionView, {
-                title: 'Selection',
+            return m(NotebookView, {
+                title: 'Notebook',
                 ...sectionMeta,
                 chartsState,
                 fileChecksum,
@@ -513,16 +514,28 @@ const SectionContent = {
                 heatmapLoading,
                 stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
-                // Compare-mode plumbing — SelectionView mirrors the
+                // Compare-mode plumbing — NotebookView mirrors the
                 // current viewer state, so pinning in compare mode and
-                // visiting /selection renders the compare view.
+                // visiting /notebook renders the compare view.
                 compareMode,
-                anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
-                toggles: selectionStore.chartToggles || {},
+                anchors: notebookStore.anchors || { baseline: 0, experiment: 0 },
+                toggles: notebookStore.chartToggles || {},
                 setChartToggle,
                 experimentQueryRange,
                 baselineAlias,
                 experimentAlias,
+                // TODO PR 3: set true when loaded parquet has ab_containers metadata
+                combinedAB: false,
+            });
+        }
+
+        if (sectionName === 'Selection') {
+            const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
+            return m(LoadedSelectionView, {
+                title: 'Selection',
+                ...sectionMeta,
+                chartsState,
+                stepOverride: currentGranularity,
             });
         }
 
@@ -624,6 +637,7 @@ const SectionContent = {
 
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
 const metadataSection = { name: 'Metadata', route: '/metadata' };
+const notebookSection = { name: 'Notebook', route: '/notebook' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
 
@@ -670,7 +684,7 @@ const initDashboard = (config = {}) => {
     // (loaded-from-parquet) wins when both exist so a shared annotated
     // parquet shows the granularity its author intended.
     const restoredStep =
-        reportStore.stepOverride ?? selectionStore.stepOverride ?? null;
+        reportStore.stepOverride ?? notebookStore.stepOverride ?? null;
     if (restoredStep != null) {
         currentGranularity = restoredStep;
         setStepOverride(restoredStep);
@@ -864,6 +878,17 @@ const initDashboard = (config = {}) => {
                         sectionResponseCache,
                         getCachedSections,
                         metadataSection,
+                        () => compareMode,
+                    );
+                }
+
+                if (params.section === 'notebook') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        notebookSection,
                         () => compareMode,
                     );
                 }

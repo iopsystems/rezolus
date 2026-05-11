@@ -31,6 +31,9 @@ echo "logs: $LOGDIR"
 # Build before launching anything so a compile failure surfaces early.
 cargo build --bin rezolus 2>&1 | tail -3
 
+# Don't pop browser tabs during the smoke test.
+export REZOLUS_NO_OPEN=1
+
 # Launch all four. Each writes its log to $LOGDIR so failures can be
 # triaged without re-running.
 ./target/debug/rezolus view \
@@ -176,6 +179,23 @@ for path in / /about /lib/style.css; do
     status=$(curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT_UPLOAD$path" || true)
     eq "static $path" "$status" "200" "$LOGDIR/upload.log"
 done
+
+echo "==> served JS bundle has the Notebook rename + new Selection sidebar"
+selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection.js")
+echo "$selection_js" | grep -q "notebookStore" \
+    || fail "selection.js missing notebookStore identifier" "" "notebookStore present" "$LOGDIR/file.log"
+echo "$selection_js" | grep -q "loadedSelectionStore" \
+    || fail "selection.js missing loadedSelectionStore identifier" "" "loadedSelectionStore present" "$LOGDIR/file.log"
+echo "$selection_js" | grep -q "LoadedSelectionView" \
+    || fail "selection.js missing LoadedSelectionView" "" "LoadedSelectionView present" "$LOGDIR/file.log"
+# Sanity: the old identifiers should be gone (modulo the unrelated
+# `toggleSelection`, `isSelected`, `selectionCardTitle`, etc. which
+# stay — only the workspace-store identifiers were renamed).
+if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/null; then
+    fail "selection.js still has old workspace identifiers" \
+         "$(echo "$selection_js" | grep -nE '(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)' | head -3)" \
+         "no old store identifiers" "$LOGDIR/file.log"
+fi
 
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"

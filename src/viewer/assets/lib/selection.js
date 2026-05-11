@@ -36,24 +36,24 @@ const uuidv7 = () => {
 
 // ── Stores ───────────────────────────────────────────────────────
 
-const selectionStore = {
-    version: SELECTION_SCHEMA_VERSION,
+const notebookStore = {
     tagline: '',
     entries: [],
     zoom: null,
     stepOverride: null,   // query step in seconds (null = auto)
     anchors: { baseline: 0, experiment: 0 }, // compare-mode offsets in ms
     chartToggles: {},      // per-chart compare-mode toggles, e.g. { chartId: { diff: true } }
+    compare: null,         // { baseline_alias, experiment_alias } when set in compare mode
 };
 
 const reportStore = {
-    version: SELECTION_SCHEMA_VERSION,
     tagline: '',
     entries: [],
     zoom: null,
     stepOverride: null,   // query step in seconds (null = auto)
     anchors: { baseline: 0, experiment: 0 },
     chartToggles: {},
+    compare: null,         // { baseline_alias, experiment_alias } when set in compare mode
     loadedFrom: null,    // filename of the imported JSON
     reportId: null,       // UUIDv7 from the imported report
     savedAt: null,        // ISO timestamp
@@ -63,10 +63,41 @@ const reportStore = {
     rezolusVersion: null,
 };
 
+const loadedSelectionStore = {
+    tagline: '',
+    entries: [],
+    zoom: null,
+    stepOverride: null,
+    anchors: { baseline: 0, experiment: 0 },
+    chartToggles: {},
+    compare: null,
+    loadedFrom: null,  // filename of the dropped JSON
+};
+
+// Per-card "notes textarea expanded" tracker for NotebookView.
+// Module-level rather than view-local because removeEntry,
+// clearStore, and openInNotebook all need to clear it before the
+// view next mounts. UI-only state — never persisted.
+const expandedNotes = new Set();
+
+// Hydrate an entries list from a JSON payload. Used by all three
+// load paths (restoreStore, loadPayloadIntoStore, loadJsonIntoSelection)
+// so the entry shape stays in one place.
+const entriesFromPayload = (entries) => (entries || []).map(e => ({
+    id: crypto.randomUUID(),
+    chartId: e.chartId,
+    section: e.section,
+    sectionName: e.sectionName,
+    groupName: e.groupName || '',
+    promql_query: e.promql_query,
+    note: e.note || '',
+    chartOpts: e.chartOpts,
+}));
+
 // ── LocalStorage persistence ─────────────────────────────────────
 
 let REPORT_STORAGE_KEY = 'rezolus_report';
-let SELECTION_STORAGE_KEY = 'rezolus_selection';
+let NOTEBOOK_STORAGE_KEY = 'rezolus_notebook';
 
 /**
  * Scope localStorage keys by a file fingerprint so each parquet file
@@ -85,14 +116,18 @@ const setStorageScope = (info) => {
         .reduce((h, b) => ((h << 5) - h + b) | 0, 0)
         .toString(36);
     REPORT_STORAGE_KEY = `rezolus_report_${suffix}`;
-    SELECTION_STORAGE_KEY = `rezolus_selection_${suffix}`;
+    NOTEBOOK_STORAGE_KEY = `rezolus_notebook_${suffix}`;
     // In-memory reset only — must NOT purge localStorage at the
     // (just-set) scoped key, otherwise we wipe the file's persisted
-    // selection on every page load before restoring it.
-    resetStoreState(selectionStore);
+    // notebook on every page load before restoring it.
+    // loadedSelectionStore is in-memory only; reset so a Selection
+    // imported against a previous parquet doesn't survive into the
+    // new file's session (its chart specs may not even resolve).
+    resetStoreState(notebookStore);
     resetStoreState(reportStore);
+    resetStoreState(loadedSelectionStore);
     restoreStore(REPORT_STORAGE_KEY, reportStore);
-    restoreStore(SELECTION_STORAGE_KEY, selectionStore);
+    restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 };
 
 const persistStore = (key, store) => {
@@ -104,6 +139,7 @@ const persistStore = (key, store) => {
             stepOverride: store.stepOverride ?? undefined,
             anchors: store.anchors || { baseline: 0, experiment: 0 },
             chartToggles: store.chartToggles || {},
+            compare: store.compare || undefined,
             loadedFrom: store.loadedFrom || undefined,
             reportId: store.reportId || undefined,
             savedAt: store.savedAt || undefined,
@@ -134,12 +170,12 @@ const restoreStore = (key, store) => {
         const parsed = JSON.parse(raw);
         if (!parsed.entries || !Array.isArray(parsed.entries)) return;
         const data = migrateSelection(parsed);
-        store.version = data.version;
         store.tagline = data.tagline || '';
         store.zoom = data.zoom || null;
         store.stepOverride = data.stepOverride ?? null;
         store.anchors = data.anchors || { baseline: 0, experiment: 0 };
         store.chartToggles = data.chartToggles || {};
+        if (data.compare !== undefined) store.compare = data.compare;
         if (data.loadedFrom !== undefined) store.loadedFrom = data.loadedFrom;
         if (data.reportId !== undefined) store.reportId = data.reportId;
         if (data.savedAt !== undefined) store.savedAt = data.savedAt;
@@ -147,23 +183,19 @@ const restoreStore = (key, store) => {
         if (data.fileChecksum !== undefined) store.fileChecksum = data.fileChecksum;
         if (data.timeRange !== undefined) store.timeRange = data.timeRange;
         if (data.rezolusVersion !== undefined) store.rezolusVersion = data.rezolusVersion;
-        store.entries = data.entries.map(e => ({
-            id: crypto.randomUUID(),
-            chartId: e.chartId,
-            section: e.section,
-            sectionName: e.sectionName,
-            groupName: e.groupName || '',
-            promql_query: e.promql_query,
-            note: e.note || '',
-            chartOpts: e.chartOpts,
-        }));
+        store.entries = entriesFromPayload(data.entries);
     } catch (e) {
-        console.warn('[selection] failed to restore:', e);
+        if (e?.message?.includes('unsupported selection schema')) {
+            console.warn('[selection] dropped stale localStorage entry:', e.message);
+            localStorage.removeItem(key);
+        } else {
+            console.warn('[selection] failed to restore:', e);
+        }
     }
 };
 
 const persistReport = () => persistStore(REPORT_STORAGE_KEY, reportStore);
-const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStore);
+const persistNotebook = () => persistStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 
 // ── Anchors + per-chart toggles (compare-mode state) ─────────────
 
@@ -173,9 +205,9 @@ const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStor
  */
 const setAnchor = (captureId, ms) => {
     if (captureId !== CAPTURE_BASELINE && captureId !== CAPTURE_EXPERIMENT) return;
-    if (!selectionStore.anchors) selectionStore.anchors = { baseline: 0, experiment: 0 };
-    selectionStore.anchors[captureId] = Number(ms) || 0;
-    persistSelection();
+    if (!notebookStore.anchors) notebookStore.anchors = { baseline: 0, experiment: 0 };
+    notebookStore.anchors[captureId] = Number(ms) || 0;
+    persistNotebook();
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
@@ -185,19 +217,19 @@ const setAnchor = (captureId, ms) => {
  */
 const setChartToggle = (chartId, key, value) => {
     if (!chartId || !key) return;
-    if (!selectionStore.chartToggles) selectionStore.chartToggles = {};
-    if (!selectionStore.chartToggles[chartId]) {
-        selectionStore.chartToggles[chartId] = {};
+    if (!notebookStore.chartToggles) notebookStore.chartToggles = {};
+    if (!notebookStore.chartToggles[chartId]) {
+        notebookStore.chartToggles[chartId] = {};
     }
-    selectionStore.chartToggles[chartId][key] = value;
-    persistSelection();
+    notebookStore.chartToggles[chartId][key] = value;
+    persistNotebook();
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
 // Stores are restored when setStorageScope() is called with a file fingerprint,
 // or eagerly here for the default (unscoped) keys as a fallback.
 restoreStore(REPORT_STORAGE_KEY, reportStore);
-restoreStore(SELECTION_STORAGE_KEY, selectionStore);
+restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 
 // Build the displayed chart title for a selection card. The dashboard
 // gives charts visual context via section/group breadcrumbs ("CPU >
@@ -212,16 +244,35 @@ const selectionCardTitle = (entry, spec) => {
     return parts.join(': ');
 };
 
+// Render a placeholder card for an entry whose chart can't render
+// in this capture (metric absent, query errored, no series matched).
+// Replaces the previous silent-collapse behavior where the chart's
+// .no-data state hid the entire .chart-wrapper, leaving an empty
+// gap that diverged from the loaded entry count.
+const unavailableCard = (entry, spec, removeBtn = null) =>
+    m('div.selection-card', [
+        m('div.chart-wrapper.chart-wrapper-unavailable', [
+            m('div.chart-unavailable', [
+                m('div.chart-unavailable-title', selectionCardTitle(entry, spec)),
+                m('div.chart-unavailable-message',
+                    spec.unavailableReason
+                        ? `Failed to load: ${spec.unavailableReason}`
+                        : 'No data available in this capture.'),
+            ]),
+            removeBtn,
+        ]),
+    ]);
+
 // ── Selection API (write mode) ───────────────────────────────────
 
-const toggleSelection = (spec, sectionKey, sectionName, groupName) => {
-    const idx = selectionStore.entries.findIndex(e => e.chartId === spec.opts.id);
+const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta = null) => {
+    const idx = notebookStore.entries.findIndex(e => e.chartId === spec.opts.id);
     if (idx >= 0) {
-        selectionStore.entries.splice(idx, 1);
-        persistSelection();
+        notebookStore.entries.splice(idx, 1);
+        persistNotebook();
         return false;
     }
-    selectionStore.entries.push({
+    notebookStore.entries.push({
         id: crypto.randomUUID(),
         chartId: spec.opts.id,
         section: sectionKey,
@@ -231,18 +282,30 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName) => {
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
     });
-    persistSelection();
+    // Capture compare metadata on first pin in compare mode. Don't
+    // overwrite later pins so the first author's intent wins (e.g.,
+    // the user pinned a chart, attached a different experiment, then
+    // pinned more — the original baseline_alias stands).
+    if (compareMeta && !notebookStore.compare) {
+        notebookStore.compare = {
+            baseline_alias: compareMeta.baselineAlias || null,
+            experiment_alias: compareMeta.experimentAlias || null,
+        };
+    }
+    persistNotebook();
     return true;
 };
 
-const isSelected = (chartId) => selectionStore.entries.some(e => e.chartId === chartId);
+const isSelected = (chartId) => notebookStore.entries.some(e => e.chartId === chartId);
 
 const removeEntry = (store, id) => {
     const idx = store.entries.findIndex(e => e.id === id);
     if (idx >= 0) {
         store.entries.splice(idx, 1);
-        if (store === selectionStore) persistSelection();
-        else if (store === reportStore) persistReport();
+        if (store === notebookStore) {
+            expandedNotes.delete(id);
+            persistNotebook();
+        } else if (store === reportStore) persistReport();
     }
 };
 
@@ -255,6 +318,7 @@ const resetStoreState = (store) => {
     store.stepOverride = null;
     store.anchors = { baseline: 0, experiment: 0 };
     store.chartToggles = {};
+    store.compare = null;
     if (store === reportStore) {
         store.loadedFrom = null;
         store.reportId = null;
@@ -264,6 +328,9 @@ const resetStoreState = (store) => {
         store.timeRange = null;
         store.rezolusVersion = null;
     }
+    if (store === loadedSelectionStore) {
+        store.loadedFrom = null;
+    }
 };
 
 // Full purge: in-memory + localStorage. Used by the "Clear All" UI.
@@ -271,14 +338,40 @@ const clearStore = (store) => {
     resetStoreState(store);
     if (store === reportStore) {
         localStorage.removeItem(REPORT_STORAGE_KEY);
-    } else if (store === selectionStore) {
-        localStorage.removeItem(SELECTION_STORAGE_KEY);
+    } else if (store === notebookStore) {
+        expandedNotes.clear();
+        localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
     }
+    // loadedSelectionStore is in-memory only; no localStorage to clear
 };
+
+// Copy a source store (Report or LoadedSelection) into the live
+// Notebook with overwrite-confirm. Shallow-spread on entries with
+// fresh ids — chartOpts is shared by reference with the source,
+// which is safe because the viewer reads chartOpts but never
+// mutates it. Switch to structuredClone if that ever changes.
+const openInNotebook = (sourceStore, kindLabel) => {
+    if (notebookStore.entries.length > 0) {
+        if (!confirm(`Notebook has unsaved entries. Discard them and load the ${kindLabel}?`)) return;
+    }
+    resetStoreState(notebookStore);
+    notebookStore.tagline = sourceStore.tagline || '';
+    notebookStore.anchors = { ...(sourceStore.anchors || { baseline: 0, experiment: 0 }) };
+    notebookStore.chartToggles = { ...(sourceStore.chartToggles || {}) };
+    notebookStore.compare = sourceStore.compare ? { ...sourceStore.compare } : null;
+    notebookStore.entries = sourceStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
+    expandedNotes.clear();
+    persistNotebook();
+    notify('info', `${kindLabel} opened in Notebook`);
+    m.route.set('/notebook');
+};
+
+const openReportInNotebook = () => openInNotebook(reportStore, 'Report');
+const openLoadedSelectionInNotebook = () => openInNotebook(loadedSelectionStore, 'Selection');
 
 // ── Export / Import / Parquet ─────────────────────────────────────
 
-const buildPayload = (store, attrs) => ({
+const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
     version: SELECTION_SCHEMA_VERSION,
     report_id: uuidv7(),
     rezolus_version: attrs.version || 'unknown',
@@ -294,6 +387,7 @@ const buildPayload = (store, attrs) => ({
     step_override: attrs.stepOverride ?? null,
     anchors: store.anchors || { baseline: 0, experiment: 0 },
     chartToggles: store.chartToggles || {},
+    compare: store.compare || undefined,
     tagline: store.tagline,
     entries: store.entries.map(e => ({
         chartId: e.chartId,
@@ -301,17 +395,17 @@ const buildPayload = (store, attrs) => ({
         sectionName: e.sectionName,
         groupName: e.groupName || '',
         promql_query: e.promql_query,
-        note: e.note,
+        note: includeNotes ? e.note : '',
         chartOpts: e.chartOpts,
     })),
 });
 
 const exportJSON = async (store, attrs) => {
-    const defaultPrefix = `report-${Date.now()}`;
+    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
     const result = await showSaveModal(defaultPrefix, '.json');
     if (!result) return;
     const filename = result.filename;
-    const payload = buildPayload(store, attrs);
+    const payload = buildPayload(store, attrs, { includeNotes: false });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -325,35 +419,32 @@ const exportJSON = async (store, attrs) => {
 };
 
 const loadPayloadIntoStore = (store, payload) => {
-    const migrated = migrateSelection(payload);
-    store.version = migrated.version;
-    store.tagline = migrated.tagline || '';
-    store.zoom = migrated.zoom || null;
-    store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
-    store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
-    store.chartToggles = migrated.chartToggles || {};
-    store.entries = payload.entries.map(e => ({
-        id: crypto.randomUUID(),
-        chartId: e.chartId,
-        section: e.section,
-        sectionName: e.sectionName,
-        groupName: e.groupName || '',
-        promql_query: e.promql_query,
-        note: e.note || '',
-        chartOpts: e.chartOpts,
-    }));
-    if (store === reportStore) {
-        store.reportId = payload.report_id || null;
-        store.savedAt = payload.saved_at || null;
-        store.sourceFilename = payload.filename || null;
-        store.fileChecksum = payload.file_checksum || null;
-        store.timeRange = payload.time_range || null;
-        store.rezolusVersion = payload.rezolus_version || null;
-        persistReport();
+    try {
+        const migrated = migrateSelection(payload);
+        store.tagline = migrated.tagline || '';
+        store.zoom = migrated.zoom || null;
+        store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
+        store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
+        store.chartToggles = migrated.chartToggles || {};
+        store.compare = migrated.compare || null;
+        store.entries = entriesFromPayload(payload.entries);
+        if (store === reportStore) {
+            store.reportId = payload.report_id || null;
+            store.savedAt = payload.saved_at || null;
+            store.sourceFilename = payload.filename || null;
+            store.fileChecksum = payload.file_checksum || null;
+            store.timeRange = payload.time_range || null;
+            store.rezolusVersion = payload.rezolus_version || null;
+            persistReport();
+        }
+        return true;
+    } catch (e) {
+        notify('error', `Cannot load: ${e.message}`);
+        return false;
     }
 };
 
-const importJSON = (currentChecksum) => {
+const importSelection = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
@@ -366,41 +457,50 @@ const importJSON = (currentChecksum) => {
             try {
                 payload = JSON.parse(text);
             } catch {
-                notify('error', 'Not a valid Rezolus report');
+                notify('error', 'Not a valid Rezolus selection');
                 return;
             }
             if (!payload.entries || !Array.isArray(payload.entries)) {
-                notify('error', 'Not a valid Rezolus report');
+                notify('error', 'Not a valid Rezolus selection');
                 return;
             }
-            if (payload.file_checksum && currentChecksum && payload.file_checksum !== currentChecksum) {
-                const ok = confirm(
-                    `This report was saved from a different parquet file` +
-                    (payload.filename ? ` ("${payload.filename}")` : '') +
-                    `. Charts may not render correctly. Load anyway?`
-                );
-                if (!ok) return;
-                notify('warn', 'Report was saved from a different parquet file');
-            }
-            loadPayloadIntoStore(reportStore, payload);
-            reportStore.loadedFrom = file.name;
-            notify('info', `Loaded report (${reportStore.entries.length} charts)`);
-            if (m.route.get() === '/report') {
-                ReportView._needsReload = true;
+            const ok = loadJsonIntoSelection(payload, file.name);
+            if (!ok) return;
+            notify('info', `Loaded selection (${loadedSelectionStore.entries.length} charts)`);
+            if (m.route.get() === '/selection') {
+                LoadedSelectionView._needsReload = true;
                 m.redraw();
             } else {
-                m.route.set('/report');
+                m.route.set('/selection');
             }
         } catch (e) {
-            notify('error', 'Failed to import report');
+            notify('error', 'Failed to import selection');
             console.error('[selection] failed to import JSON:', e);
         }
     };
     input.click();
 };
 
+const loadJsonIntoSelection = (json, filename) => {
+    try {
+        const parsed = typeof json === 'string' ? JSON.parse(json) : json;
+        const migrated = migrateSelection(parsed);
+        resetStoreState(loadedSelectionStore);
+        loadedSelectionStore.tagline = migrated.tagline || '';
+        loadedSelectionStore.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
+        loadedSelectionStore.chartToggles = migrated.chartToggles || {};
+        loadedSelectionStore.compare = migrated.compare || null;
+        loadedSelectionStore.entries = entriesFromPayload(migrated.entries);
+        loadedSelectionStore.loadedFrom = filename;
+        return true;
+    } catch (e) {
+        notify('error', `Cannot load Selection: ${e.message}`);
+        return false;
+    }
+};
+
 const saveToParquet = async (store, attrs) => {
-    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-annotated';
+    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
     const cs = attrs.chartsState;
     const hasZoom = cs && !cs.isDefaultZoom();
     const checkboxes = hasZoom
@@ -464,13 +564,21 @@ const chartLoaderMixin = (store, component) => ({
 
     async _loadCharts() {
         const promises = store.entries.map(async (entry) => {
-            if (!entry.promql_query) return;
+            // Always set a spec so the view can render a placeholder card
+            // for entries whose query won't run or returns nothing in this
+            // capture — silent collapse confused users (the original entry
+            // count and visible cards diverged with no explanation).
+            const spec = {
+                opts: { ...entry.chartOpts },
+                promql_query: entry.promql_query,
+                data: [],
+            };
+            if (!entry.promql_query) {
+                spec.unavailable = true;
+                this.specs.set(entry.chartId, spec);
+                return;
+            }
             try {
-                const spec = {
-                    opts: { ...entry.chartOpts },
-                    promql_query: entry.promql_query,
-                    data: [],
-                };
                 // Histogram metrics need histogram_quantiles / heatmap
                 // wrapping; the dashboard pipeline does this via
                 // buildEffectiveQuery, but the stored entry only has
@@ -480,12 +588,26 @@ const chartLoaderMixin = (store, component) => ({
                 if (result) {
                     applyResultToPlot(spec, result);
                 }
-                this.specs.set(entry.chartId, spec);
+                const hasData = result?.status === 'success' && result?.data?.result?.length > 0;
+                if (!hasData) spec.unavailable = true;
             } catch (e) {
                 console.warn('[selection] failed to load chart:', entry.chartId, e);
+                spec.unavailable = true;
+                spec.unavailableReason = e.message;
             }
+            this.specs.set(entry.chartId, spec);
         });
         await Promise.all(promises);
+        // Surface the gap between "loaded N entries" and "visible cards" once
+        // per data-load. component._lastUnavailableNotice debounces re-mounts;
+        // it's reset by _checkReload when fresh data lands.
+        const unavailable = [...this.specs.values()].filter(s => s.unavailable).length;
+        const noticeKey = `${this.specs.size}/${unavailable}`;
+        if (unavailable > 0 && component._lastUnavailableNotice !== noticeKey) {
+            component._lastUnavailableNotice = noticeKey;
+            notify('warn',
+                `${unavailable} of ${this.specs.size} pinned ${this.specs.size === 1 ? 'chart has' : 'charts have'} no data in this capture`);
+        }
         this.loading = false;
         m.redraw();
     },
@@ -493,6 +615,7 @@ const chartLoaderMixin = (store, component) => ({
     _checkReload() {
         if (component._needsReload) {
             component._needsReload = false;
+            component._lastUnavailableNotice = null;  // re-arm the notify
             this.specs = new Map();
             this.loading = true;
             this._zoomApplied = false;
@@ -510,12 +633,12 @@ const chartLoaderMixin = (store, component) => ({
     },
 });
 
-// ── SelectionView (write mode) ───────────────────────────────────
+// ── NotebookView (write mode) ────────────────────────────────────
 
-const SelectionView = {
+const NotebookView = {
     _needsReload: false,
 };
-Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
+Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
     view({ attrs }) {
         this._checkReload();
         this._applyZoom(attrs);
@@ -523,13 +646,16 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
         const interval = attrs.interval || 1;
         const cs = attrs.chartsState;
         const hasChartSelection = cs?.hasActiveSelection();
-        const hasHistograms = selectionStore.entries.some(e => isHistogramPlot(e));
+        const hasHistograms = notebookStore.entries.some(e => isHistogramPlot(e));
+        const hasAnyNote = notebookStore.entries.some(e => e.note && e.note.length > 0);
+        const inTwoFileCompare = attrs.compareMode && !attrs.combinedAB;
+        const downloadIcon = m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>');
 
         const header = m('div.selection-header', [
             m('div.section-header-row', [
                 m('h1.section-title', [
                     sectionTitlePin(),
-                    attrs.title || 'Selection',
+                    attrs.title || 'Notebook',
                 ]),
                 m('div.section-actions', [
                     hasChartSelection && m('button.section-action-btn', {
@@ -545,8 +671,8 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             m('input.selection-tagline', {
                 type: 'text',
                 placeholder: 'Add a tagline\u2026',
-                value: selectionStore.tagline,
-                oninput: (e) => { selectionStore.tagline = e.target.value; persistSelection(); },
+                value: notebookStore.tagline,
+                oninput: (e) => { notebookStore.tagline = e.target.value; persistNotebook(); },
             }),
         ]);
 
@@ -558,24 +684,54 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             header,
 
             m('div.selection-actions', [
-                m('button.selection-btn', { onclick: () => exportJSON(selectionStore, attrs) }, [
-                    'Export JSON ',
-                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
-                ]),
                 m('button.selection-btn', {
-                    onclick: () => saveToParquet(selectionStore, attrs),
+                    disabled: inTwoFileCompare,
+                    title: inTwoFileCompare
+                        ? 'Two-file A/B mode has no single parquet to embed in. Use `parquet combine --ab` first.'
+                        : 'Embed selection + notes in the loaded parquet',
+                    onclick: () => saveToParquet(notebookStore, attrs),
                 }, [
-                    'Annotate Parquet ',
-                    m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>'),
+                    'Save as Report (parquet, Selection & Notes) ',
+                    downloadIcon,
+                ]),
+                m('button.selection-btn.selection-btn-indigo', {
+                    disabled: hasAnyNote,
+                    title: hasAnyNote
+                        ? 'Selection has notes \u2014 use Save as Report (parquet, Selection & Notes) to keep them with the data, or clear notes first.'
+                        : 'Download a JSON pattern (charts + toggles only)',
+                    onclick: () => exportJSON(notebookStore, attrs),
+                }, [
+                    'Save as Selection (JSON, no Notes) ',
+                    downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-danger', {
-                    onclick: () => { clearStore(selectionStore); m.redraw(); },
+                    disabled: !hasAnyNote,
+                    title: hasAnyNote
+                        ? 'Clear notes from all pinned charts (charts and toggles preserved)'
+                        : 'No notes to clear',
+                    onclick: () => {
+                        if (!confirm('Clear notes from all pinned charts? This cannot be undone.')) return;
+                        notebookStore.entries.forEach(e => { e.note = ''; });
+                        expandedNotes.clear();
+                        persistNotebook();
+                        m.redraw();
+                    },
+                }, 'Clear Notes'),
+                m('button.selection-btn.selection-btn-danger', {
+                    onclick: () => { clearStore(notebookStore); m.redraw(); },
                 }, 'Clear All'),
             ]),
 
-            selectionStore.entries.map((entry) => {
+            notebookStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
+                if (spec.unavailable) {
+                    return unavailableCard(entry, spec,
+                        m('button.selection-card-remove', {
+                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
+                            title: 'Remove from Notebook',
+                        }, '\u00d7'));
+                }
                 // In compare mode, render through CompareChartWrapper so
                 // pinned charts mirror the live A/B view (side-by-side,
                 // diff, etc.). Service-template charts that lack a
@@ -592,36 +748,50 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                         anchors: attrs.anchors,
                         toggles: attrs.toggles,
                         setChartToggle: attrs.setChartToggle,
-                        sectionRoute: '/selection',
+                        sectionRoute: '/notebook',
                         step: interval,
                         experimentQueryRange: attrs.experimentQueryRange,
                         captureLabels,
                     })
                     : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
-                    m('div.selection-card-body', [
-                        m('div.selection-card-chart', [
-                            m('button.selection-card-remove', {
-                                onclick: () => { removeEntry(selectionStore, entry.id); m.redraw(); },
-                                title: 'Remove',
-                            }, 'X'),
-                            m('div.chart-wrapper', [
-                                m('div.chart-header', [
-                                    m('span.chart-title', selectionCardTitle(entry, spec)),
-                                    spec.opts.description && m('span.chart-subtitle', spec.opts.description),
-                                ]),
-                                chartBody,
-                            ]),
+                    m('div.chart-wrapper', [
+                        m('div.chart-header', [
+                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
-                        m('div.selection-card-notes', [
+                        chartBody,
+                        m('button.selection-card-remove', {
+                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
+                            title: 'Remove from Notebook',
+                        }, '\u00d7'),
+                    ]),
+                    (() => {
+                        const hasNote = entry.note && entry.note.length > 0;
+                        const expanded = expandedNotes.has(entry.id);
+                        if (!hasNote && !expanded) {
+                            return m('button.notes-affordance', {
+                                onclick: () => {
+                                    expandedNotes.add(entry.id);
+                                    m.redraw();
+                                },
+                            }, '+ Add note');
+                        }
+                        return m('div.selection-card-notes', [
                             m('label.selection-notes-label', 'Notes'),
                             m('textarea.selection-notes', {
                                 placeholder: 'Add notes\u2026',
                                 value: entry.note,
-                                oninput: (e) => { entry.note = e.target.value; persistSelection(); },
+                                oninput: (e) => { entry.note = e.target.value; persistNotebook(); },
+                                onblur: (e) => {
+                                    if (!e.target.value) {
+                                        expandedNotes.delete(entry.id);
+                                        m.redraw();
+                                    }
+                                },
                             }),
-                        ]),
-                    ]),
+                        ]);
+                    })(),
                 ]);
             }),
         ]);
@@ -679,6 +849,10 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                         onclick: attrs.onToggleHeatmap,
                         disabled: attrs.heatmapLoading,
                     }, attrs.heatmapLoading ? 'LOADING...' : (attrs.heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
+                    reportStore.entries.length > 0 && m('button.section-action-btn', {
+                        onclick: openReportInNotebook,
+                        title: 'Copy this Report into the Notebook for editing',
+                    }, 'OPEN IN NOTEBOOK'),
                 ]),
             ]),
             reportStore.tagline && m('p.selection-tagline-text', reportStore.tagline),
@@ -694,21 +868,70 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
             reportStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
+                if (spec.unavailable) return unavailableCard(entry, spec);
                 return m('div.selection-card', [
-                    m('div.selection-card-body', [
-                        m('div.selection-card-chart', [
-                            m('div.chart-wrapper', [
-                                m('div.chart-header', [
-                                    m('span.chart-title', selectionCardTitle(entry, spec)),
-                                    spec.opts.description && m('span.chart-subtitle', spec.opts.description),
-                                ]),
-                                m(Chart, { spec, chartsState: attrs.chartsState, interval }),
-                            ]),
+                    m('div.chart-wrapper', [
+                        m('div.chart-header', [
+                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
-                        entry.note && m('div.selection-card-notes', [
-                            m('label.selection-notes-label', 'Notes'),
-                            m('p.selection-notes-text', entry.note),
+                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                    ]),
+                    entry.note && m('div.report-card-notes', [
+                        m('label.report-notes-label', 'Notes'),
+                        m('p.report-notes-text', entry.note),
+                    ]),
+                ]);
+            }),
+        ]);
+    },
+});
+
+// ── LoadedSelectionView (read-only mode for dropped JSON) ──────
+
+const LoadedSelectionView = {
+    _needsReload: false,
+};
+Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, LoadedSelectionView), {
+    view({ attrs }) {
+        this._checkReload();
+        this._applyZoom(attrs);
+
+        const interval = attrs.interval || 1;
+
+        const header = m('div.selection-header', [
+            m('div.section-header-row', [
+                m('h1.section-title', attrs.title || 'Selection'),
+                m('div.section-actions', [
+                    loadedSelectionStore.entries.length > 0 && m('button.section-action-btn', {
+                        onclick: openLoadedSelectionInNotebook,
+                        title: 'Copy this Selection into the Notebook for editing',
+                    }, 'OPEN IN NOTEBOOK'),
+                ]),
+            ]),
+            loadedSelectionStore.loadedFrom && m('p.selection-source',
+                `Loaded from: ${loadedSelectionStore.loadedFrom}`),
+            loadedSelectionStore.tagline && m('p.selection-tagline-text', loadedSelectionStore.tagline),
+        ]);
+
+        if (this.loading) {
+            return m('div#section-content.selection-section', [header, m('p', 'Loading charts\u2026')]);
+        }
+
+        return m('div#section-content.selection-section', [
+            header,
+
+            loadedSelectionStore.entries.map((entry) => {
+                const spec = this.specs.get(entry.chartId);
+                if (!spec) return null;
+                if (spec.unavailable) return unavailableCard(entry, spec);
+                return m('div.selection-card', [
+                    m('div.chart-wrapper', [
+                        m('div.chart-header', [
+                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
+                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
                     ]),
                 ]);
             }),
@@ -717,19 +940,22 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
 });
 
 export {
-    selectionStore,
+    notebookStore,
     reportStore,
+    loadedSelectionStore,
     setStorageScope,
-    persistSelection,
+    persistNotebook,
     toggleSelection,
     isSelected,
     clearStore,
-    importJSON,
+    importSelection,
     loadPayloadIntoStore,
+    loadJsonIntoSelection,
     setAnchor,
     setChartToggle,
-    SelectionView,
+    NotebookView,
     ReportView,
+    LoadedSelectionView,
     migrateSelection,
     SELECTION_SCHEMA_VERSION,
 };
