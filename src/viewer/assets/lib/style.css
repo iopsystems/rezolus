@@ -2367,6 +2367,34 @@ main {
     background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
+/* Placeholder card for entries whose data isn't in the loaded
+   capture (metric absent, query errored, no series matched). */
+.chart-wrapper-unavailable {
+    background: var(--bg-inset);
+    border-style: dashed;
+}
+
+.chart-unavailable {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.chart-unavailable-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-muted);
+}
+
+.chart-unavailable-message {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--fg-muted);
+    font-style: italic;
+}
+
 .notes-affordance {
     align-self: flex-start;
     background: transparent;

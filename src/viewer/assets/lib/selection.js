@@ -244,6 +244,25 @@ const selectionCardTitle = (entry, spec) => {
     return parts.join(': ');
 };
 
+// Render a placeholder card for an entry whose chart can't render
+// in this capture (metric absent, query errored, no series matched).
+// Replaces the previous silent-collapse behavior where the chart's
+// .no-data state hid the entire .chart-wrapper, leaving an empty
+// gap that diverged from the loaded entry count.
+const unavailableCard = (entry, spec, removeBtn = null) =>
+    m('div.selection-card', [
+        m('div.chart-wrapper.chart-wrapper-unavailable', [
+            m('div.chart-unavailable', [
+                m('div.chart-unavailable-title', selectionCardTitle(entry, spec)),
+                m('div.chart-unavailable-message',
+                    spec.unavailableReason
+                        ? `Failed to load: ${spec.unavailableReason}`
+                        : 'No data available in this capture.'),
+            ]),
+            removeBtn,
+        ]),
+    ]);
+
 // ── Selection API (write mode) ───────────────────────────────────
 
 const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta = null) => {
@@ -545,13 +564,21 @@ const chartLoaderMixin = (store, component) => ({
 
     async _loadCharts() {
         const promises = store.entries.map(async (entry) => {
-            if (!entry.promql_query) return;
+            // Always set a spec so the view can render a placeholder card
+            // for entries whose query won't run or returns nothing in this
+            // capture — silent collapse confused users (the original entry
+            // count and visible cards diverged with no explanation).
+            const spec = {
+                opts: { ...entry.chartOpts },
+                promql_query: entry.promql_query,
+                data: [],
+            };
+            if (!entry.promql_query) {
+                spec.unavailable = true;
+                this.specs.set(entry.chartId, spec);
+                return;
+            }
             try {
-                const spec = {
-                    opts: { ...entry.chartOpts },
-                    promql_query: entry.promql_query,
-                    data: [],
-                };
                 // Histogram metrics need histogram_quantiles / heatmap
                 // wrapping; the dashboard pipeline does this via
                 // buildEffectiveQuery, but the stored entry only has
@@ -561,12 +588,26 @@ const chartLoaderMixin = (store, component) => ({
                 if (result) {
                     applyResultToPlot(spec, result);
                 }
-                this.specs.set(entry.chartId, spec);
+                const hasData = result?.status === 'success' && result?.data?.result?.length > 0;
+                if (!hasData) spec.unavailable = true;
             } catch (e) {
                 console.warn('[selection] failed to load chart:', entry.chartId, e);
+                spec.unavailable = true;
+                spec.unavailableReason = e.message;
             }
+            this.specs.set(entry.chartId, spec);
         });
         await Promise.all(promises);
+        // Surface the gap between "loaded N entries" and "visible cards" once
+        // per data-load. component._lastUnavailableNotice debounces re-mounts;
+        // it's reset by _checkReload when fresh data lands.
+        const unavailable = [...this.specs.values()].filter(s => s.unavailable).length;
+        const noticeKey = `${this.specs.size}/${unavailable}`;
+        if (unavailable > 0 && component._lastUnavailableNotice !== noticeKey) {
+            component._lastUnavailableNotice = noticeKey;
+            notify('warn',
+                `${unavailable} of ${this.specs.size} pinned ${this.specs.size === 1 ? 'chart has' : 'charts have'} no data in this capture`);
+        }
         this.loading = false;
         m.redraw();
     },
@@ -574,6 +615,7 @@ const chartLoaderMixin = (store, component) => ({
     _checkReload() {
         if (component._needsReload) {
             component._needsReload = false;
+            component._lastUnavailableNotice = null;  // re-arm the notify
             this.specs = new Map();
             this.loading = true;
             this._zoomApplied = false;
@@ -649,17 +691,17 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         : 'Embed selection + notes in the loaded parquet',
                     onclick: () => saveToParquet(notebookStore, attrs),
                 }, [
-                    'Save as Report (annotate parquet) ',
+                    'Save as Report (parquet, Selection & Notes) ',
                     downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-success', {
                     disabled: hasAnyNote,
                     title: hasAnyNote
-                        ? 'Selection has notes \u2014 use Save as Report (annotate parquet) to keep them with the data, or clear notes first.'
+                        ? 'Selection has notes \u2014 use Save as Report (parquet, Selection & Notes) to keep them with the data, or clear notes first.'
                         : 'Download a JSON pattern (charts + toggles only)',
                     onclick: () => exportJSON(notebookStore, attrs),
                 }, [
-                    'Save as Selection (JSON) ',
+                    'Save as Selection (JSON, Notes dropped) ',
                     downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-danger', {
@@ -670,6 +712,13 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
             notebookStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
+                if (spec.unavailable) {
+                    return unavailableCard(entry, spec,
+                        m('button.selection-card-remove', {
+                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
+                            title: 'Remove from Notebook',
+                        }, '\u00d7'));
+                }
                 // In compare mode, render through CompareChartWrapper so
                 // pinned charts mirror the live A/B view (side-by-side,
                 // diff, etc.). Service-template charts that lack a
@@ -806,6 +855,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
             reportStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
+                if (spec.unavailable) return unavailableCard(entry, spec);
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
@@ -861,6 +911,7 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
             loadedSelectionStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
+                if (spec.unavailable) return unavailableCard(entry, spec);
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
