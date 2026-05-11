@@ -9,7 +9,7 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
-import { reportStore, notebookStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
+import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
@@ -358,6 +358,7 @@ const changeInstance = async (serviceName, instanceId) => {
 
 const CLIENT_ONLY_SECTIONS = new Set([
     'notebook',
+    'selection',
     'report',
     'systeminfo',
     'metadata',
@@ -528,6 +529,16 @@ const SectionContent = {
             });
         }
 
+        if (sectionName === 'Selection') {
+            const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
+            return m(LoadedSelectionView, {
+                title: 'Selection',
+                ...sectionMeta,
+                chartsState,
+                stepOverride: currentGranularity,
+            });
+        }
+
         if (sectionName === 'Report') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(ReportView, {
@@ -627,6 +638,7 @@ const SectionContent = {
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
 const metadataSection = { name: 'Metadata', route: '/metadata' };
 const notebookSection = { name: 'Notebook', route: '/notebook' };
+const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
 
 const bootstrapCacheIfNeeded = () => {
@@ -877,6 +889,17 @@ const initDashboard = (config = {}) => {
                         sectionResponseCache,
                         getCachedSections,
                         notebookSection,
+                        () => compareMode,
+                    );
+                }
+
+                if (params.section === 'selection') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        selectionSection,
                         () => compareMode,
                     );
                 }

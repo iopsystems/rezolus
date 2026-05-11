@@ -65,6 +65,18 @@ const reportStore = {
     rezolusVersion: null,
 };
 
+const loadedSelectionStore = {
+    version: SELECTION_SCHEMA_VERSION,
+    tagline: '',
+    entries: [],
+    zoom: null,
+    stepOverride: null,
+    anchors: { baseline: 0, experiment: 0 },
+    chartToggles: {},
+    compare: null,
+    loadedFrom: null,  // filename of the dropped JSON
+};
+
 // ── LocalStorage persistence ─────────────────────────────────────
 
 let REPORT_STORAGE_KEY = 'rezolus_report';
@@ -286,6 +298,9 @@ const resetStoreState = (store) => {
         store.timeRange = null;
         store.rezolusVersion = null;
     }
+    if (store === loadedSelectionStore) {
+        store.loadedFrom = null;
+    }
 };
 
 // Full purge: in-memory + localStorage. Used by the "Clear All" UI.
@@ -297,6 +312,7 @@ const clearStore = (store) => {
         NotebookView._expandedNotes.clear();
         localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
     }
+    // loadedSelectionStore is in-memory only; no localStorage to clear
 };
 
 const openReportInNotebook = () => {
@@ -320,6 +336,27 @@ const openReportInNotebook = () => {
     NotebookView._expandedNotes.clear();
     persistNotebook();
     notify('info', 'Report opened in Notebook');
+    m.route.set('/notebook');
+};
+
+const openLoadedSelectionInNotebook = () => {
+    if (notebookStore.entries.length > 0) {
+        const ok = confirm(
+            'Notebook has unsaved entries. Discard them and load the Selection?',
+        );
+        if (!ok) return;
+    }
+    resetStoreState(notebookStore);
+    notebookStore.tagline = loadedSelectionStore.tagline || '';
+    notebookStore.anchors = { ...(loadedSelectionStore.anchors || { baseline: 0, experiment: 0 }) };
+    notebookStore.chartToggles = { ...(loadedSelectionStore.chartToggles || {}) };
+    notebookStore.compare = loadedSelectionStore.compare ? { ...loadedSelectionStore.compare } : null;
+    // Shallow copy with fresh ids; chartOpts shared by reference
+    // (viewer reads chartOpts but never mutates it).
+    notebookStore.entries = loadedSelectionStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
+    NotebookView._expandedNotes.clear();
+    persistNotebook();
+    notify('info', 'Selection opened in Notebook');
     m.route.set('/notebook');
 };
 
@@ -407,7 +444,7 @@ const loadPayloadIntoStore = (store, payload) => {
     }
 };
 
-const importJSON = (currentChecksum) => {
+const importSelection = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
@@ -420,37 +457,55 @@ const importJSON = (currentChecksum) => {
             try {
                 payload = JSON.parse(text);
             } catch {
-                notify('error', 'Not a valid Rezolus report');
+                notify('error', 'Not a valid Rezolus selection');
                 return;
             }
             if (!payload.entries || !Array.isArray(payload.entries)) {
-                notify('error', 'Not a valid Rezolus report');
+                notify('error', 'Not a valid Rezolus selection');
                 return;
             }
-            if (payload.file_checksum && currentChecksum && payload.file_checksum !== currentChecksum) {
-                const ok = confirm(
-                    `This report was saved from a different parquet file` +
-                    (payload.filename ? ` ("${payload.filename}")` : '') +
-                    `. Charts may not render correctly. Load anyway?`
-                );
-                if (!ok) return;
-                notify('warn', 'Report was saved from a different parquet file');
-            }
-            loadPayloadIntoStore(reportStore, payload);
-            reportStore.loadedFrom = file.name;
-            notify('info', `Loaded report (${reportStore.entries.length} charts)`);
-            if (m.route.get() === '/report') {
-                ReportView._needsReload = true;
+            const ok = loadJsonIntoSelection(payload, file.name);
+            if (!ok) return;
+            notify('info', `Loaded selection (${loadedSelectionStore.entries.length} charts)`);
+            if (m.route.get() === '/selection') {
+                LoadedSelectionView._needsReload = true;
                 m.redraw();
             } else {
-                m.route.set('/report');
+                m.route.set('/selection');
             }
         } catch (e) {
-            notify('error', 'Failed to import report');
+            notify('error', 'Failed to import selection');
             console.error('[selection] failed to import JSON:', e);
         }
     };
     input.click();
+};
+
+const loadJsonIntoSelection = (json, filename) => {
+    try {
+        const parsed = typeof json === 'string' ? JSON.parse(json) : json;
+        const migrated = migrateSelection(parsed);
+        resetStoreState(loadedSelectionStore);
+        loadedSelectionStore.tagline = migrated.tagline || '';
+        loadedSelectionStore.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
+        loadedSelectionStore.chartToggles = migrated.chartToggles || {};
+        loadedSelectionStore.compare = migrated.compare || null;
+        loadedSelectionStore.entries = (migrated.entries || []).map(e => ({
+            id: crypto.randomUUID(),
+            chartId: e.chartId,
+            section: e.section,
+            sectionName: e.sectionName,
+            groupName: e.groupName || '',
+            promql_query: e.promql_query,
+            note: e.note || '',
+            chartOpts: e.chartOpts,
+        }));
+        loadedSelectionStore.loadedFrom = filename;
+        return true;
+    } catch (e) {
+        notify('error', `Cannot load Selection: ${e.message}`);
+        return false;
+    }
 };
 
 const saveToParquet = async (store, attrs) => {
@@ -804,20 +859,77 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
     },
 });
 
+// ── LoadedSelectionView (read-only mode for dropped JSON) ──────
+
+const LoadedSelectionView = {
+    _needsReload: false,
+};
+Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, LoadedSelectionView), {
+    view({ attrs }) {
+        this._checkReload();
+        this._applyZoom(attrs);
+
+        const interval = attrs.interval || 1;
+
+        const header = m('div.selection-header', [
+            m('div.section-header-row', [
+                m('h1.section-title', attrs.title || 'Selection'),
+                m('div.section-actions', [
+                    loadedSelectionStore.entries.length > 0 && m('button.section-action-btn', {
+                        onclick: openLoadedSelectionInNotebook,
+                        title: 'Copy this Selection into the Notebook for editing',
+                    }, 'OPEN IN NOTEBOOK'),
+                ]),
+            ]),
+            loadedSelectionStore.loadedFrom && m('p.selection-source',
+                `Loaded from: ${loadedSelectionStore.loadedFrom}`),
+            loadedSelectionStore.tagline && m('p.selection-tagline-text', loadedSelectionStore.tagline),
+        ]);
+
+        if (this.loading) {
+            return m('div#section-content.selection-section', [header, m('p', 'Loading charts\u2026')]);
+        }
+
+        return m('div#section-content.selection-section', [
+            header,
+
+            loadedSelectionStore.entries.map((entry) => {
+                const spec = this.specs.get(entry.chartId);
+                if (!spec) return null;
+                return m('div.selection-card', [
+                    m('div.selection-card-header', [
+                        m('span.chart-title', selectionCardTitle(entry, spec)),
+                    ]),
+                    m('div.chart-wrapper', [
+                        m('div.chart-header', [
+                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            spec.opts.description && m('span.chart-subtitle', spec.opts.description),
+                        ]),
+                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                    ]),
+                ]);
+            }),
+        ]);
+    },
+});
+
 export {
     notebookStore,
     reportStore,
+    loadedSelectionStore,
     setStorageScope,
     persistNotebook,
     toggleSelection,
     isSelected,
     clearStore,
-    importJSON,
+    importSelection,
     loadPayloadIntoStore,
+    loadJsonIntoSelection,
     setAnchor,
     setChartToggle,
     NotebookView,
     ReportView,
+    LoadedSelectionView,
     migrateSelection,
     SELECTION_SCHEMA_VERSION,
 };
