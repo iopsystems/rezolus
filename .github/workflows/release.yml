@@ -468,11 +468,12 @@ jobs:
             mv "$artifact" "target/release-artifacts/${distro}_${version}_${arch}_${name}"
           done
 
-          # Collect static viewer bundle
-          for artifact in target/viewer-static/viewer-static/*.tar.gz; do
-            [ -f "$artifact" ] || continue
-            mv "$artifact" "target/release-artifacts/$(basename "$artifact")"
-          done
+          # Collect static viewer bundle. `actions/download-artifact@v5` with
+          # `pattern:` nests files under `<path>/<artifact_name>/...`, but
+          # `upload-artifact`'s preserved relative path can add extra levels.
+          # `find` locates the tarball regardless of how deep it lands.
+          find target/viewer-static -type f -name 'rezolus-viewer-*.tar.gz' \
+            -exec mv -t target/release-artifacts/ {} +
 
       - name: generate checksums and sign release artifacts
         env:
