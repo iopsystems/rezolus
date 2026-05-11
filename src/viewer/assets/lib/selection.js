@@ -626,29 +626,21 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                     })
                     : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
-                    m('div.selection-card-body', [
-                        m('div.selection-card-chart', [
-                            m('button.selection-card-remove', {
-                                onclick: () => { removeEntry(selectionStore, entry.id); m.redraw(); },
-                                title: 'Remove',
-                            }, 'X'),
-                            m('div.chart-wrapper', [
-                                m('div.chart-header', [
-                                    m('span.chart-title', selectionCardTitle(entry, spec)),
-                                    spec.opts.description && m('span.chart-subtitle', spec.opts.description),
-                                ]),
-                                chartBody,
-                            ]),
-                        ]),
-                        m('div.selection-card-notes', [
-                            m('label.selection-notes-label', 'Notes'),
-                            m('textarea.selection-notes', {
-                                placeholder: 'Add notes\u2026',
-                                value: entry.note,
-                                oninput: (e) => { entry.note = e.target.value; persistSelection(); },
-                            }),
-                        ]),
+                    m('div.selection-card-header', [
+                        m('span.chart-title', selectionCardTitle(entry, spec)),
+                        m('button.selection-card-remove', {
+                            onclick: () => { removeEntry(selectionStore, entry.id); m.redraw(); },
+                            title: 'Remove',
+                        }, '\u00d7'),  // multiplication sign × — better visual than X
                     ]),
+                    m('div.chart-wrapper', [
+                        m('div.chart-header', [
+                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            spec.opts.description && m('span.chart-subtitle', spec.opts.description),
+                        ]),
+                        chartBody,
+                    ]),
+                    // Notes section rendered by Task 6 (placeholder for now)
                 ]);
             }),
         ]);
@@ -722,20 +714,19 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 return m('div.selection-card', [
-                    m('div.selection-card-body', [
-                        m('div.selection-card-chart', [
-                            m('div.chart-wrapper', [
-                                m('div.chart-header', [
-                                    m('span.chart-title', selectionCardTitle(entry, spec)),
-                                    spec.opts.description && m('span.chart-subtitle', spec.opts.description),
-                                ]),
-                                m(Chart, { spec, chartsState: attrs.chartsState, interval }),
-                            ]),
+                    m('div.selection-card-header', [
+                        m('span.chart-title', selectionCardTitle(entry, spec)),
+                    ]),
+                    m('div.chart-wrapper', [
+                        m('div.chart-header', [
+                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
-                        entry.note && m('div.selection-card-notes', [
-                            m('label.selection-notes-label', 'Notes'),
-                            m('p.selection-notes-text', entry.note),
-                        ]),
+                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                    ]),
+                    entry.note && m('div.selection-card-notes', [
+                        m('label.selection-notes-label', 'Notes'),
+                        m('p.selection-notes-text', entry.note),
                     ]),
                 ]);
             }),

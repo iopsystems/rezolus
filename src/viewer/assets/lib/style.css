@@ -2328,6 +2328,7 @@ main {
 .selection-card-header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 0.5rem;
     padding: 8px 16px;
     background: var(--bg-inset);
@@ -2363,14 +2364,11 @@ main {
     background: transparent;
     border: none;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     cursor: pointer;
-    padding: 0;
-    margin-bottom: 6px;
+    padding: 0 0.25rem;
     transition: color var(--transition-base);
 }
 
@@ -2378,29 +2376,11 @@ main {
     color: var(--danger);
 }
 
-.selection-card-body {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0;
-}
-
-.selection-card-chart {
-    flex: 1 1 calc(50% - 1rem);
-    max-width: calc(50% - 1rem);
-    min-width: 300px;
-    padding: 12px;
-}
-
-.selection-card-chart .chart {
-    height: 250px;
-}
-
 .selection-card-notes {
-    flex: 1 1 200px;
     display: flex;
     flex-direction: column;
     padding: 12px;
-    border-left: 1px solid var(--border-default);
+    border-top: 1px solid var(--border-default);
 }
 
 .selection-notes-label {
@@ -3052,19 +3032,6 @@ main {
         white-space: normal;
     }
 
-    /* ── Selection cards: stack vertically ── */
-    .selection-card-body {
-        flex-direction: column;
-    }
-
-    .selection-card-chart {
-        flex: 1 1 100%;
-        max-width: 100%;
-    }
-
-    .selection-card-notes {
-        flex: 1 1 auto;
-    }
 }
 
 /* ---- Landing / File Upload Page ---- */
