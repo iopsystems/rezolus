@@ -171,7 +171,8 @@ impl AppState {
         let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_str) else {
             return false;
         };
-        meta.get(crate::parquet_metadata::KEY_AB_CONTAINERS).is_some()
+        meta.get(crate::parquet_metadata::KEY_AB_CONTAINERS)
+            .is_some()
     }
 
     /// Build the navigation + global params payload for `/api/v1/sections`.

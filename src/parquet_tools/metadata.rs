@@ -52,7 +52,9 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let value = entry.value.as_deref().unwrap_or("");
                 if entry.key == crate::parquet_metadata::KEY_AB_CONTAINERS {
-                    if let Ok(ab) = serde_json::from_str::<crate::parquet_metadata::AbContainers>(value) {
+                    if let Ok(ab) =
+                        serde_json::from_str::<crate::parquet_metadata::AbContainers>(value)
+                    {
                         println!(
                             "  ab_containers: baseline={} (sources: {:?}) experiment={} (sources: {:?})",
                             ab.baseline.alias,

@@ -178,10 +178,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
                 .into());
             }
         }
-        let flat: Vec<String> = inputs
-            .iter()
-            .flat_map(flatten_input_sources)
-            .collect();
+        let flat: Vec<String> = inputs.iter().flat_map(flatten_input_sources).collect();
         let available: Vec<&str> = flat.iter().map(|s| s.as_str()).collect();
         Some(parse_ab_args(&ab_raw, &available)?)
     } else {
@@ -456,10 +453,7 @@ fn combine_and_write(
                 } else if input_sources.iter().any(|s| experiment.sources.contains(s)) {
                     "experiment"
                 } else {
-                    unreachable!(
-                        "input sources {:?} not in any --ab side",
-                        input_sources
-                    )
+                    unreachable!("input sources {:?} not in any --ab side", input_sources)
                 }
             })
             .collect()
@@ -2181,10 +2175,7 @@ mod tests {
 
     #[test]
     fn parse_ab_args_happy_path() {
-        let raw = vec![
-            "baseline=vllm".to_string(),
-            "experiment=sglang".to_string(),
-        ];
+        let raw = vec!["baseline=vllm".to_string(), "experiment=sglang".to_string()];
         let (baseline, experiment) = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap();
         assert_eq!(baseline.alias, "vllm");
         assert_eq!(baseline.sources, vec!["vllm".to_string()]);
@@ -2217,10 +2208,7 @@ mod tests {
 
     #[test]
     fn parse_ab_args_rejects_duplicate_side() {
-        let raw = vec![
-            "baseline=vllm".to_string(),
-            "baseline=sglang".to_string(),
-        ];
+        let raw = vec!["baseline=vllm".to_string(), "baseline=sglang".to_string()];
         let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
         assert!(
             err.to_string().contains("baseline"),
@@ -2230,10 +2218,7 @@ mod tests {
 
     #[test]
     fn parse_ab_args_rejects_unknown_side() {
-        let raw = vec![
-            "control=vllm".to_string(),
-            "treatment=sglang".to_string(),
-        ];
+        let raw = vec!["control=vllm".to_string(), "treatment=sglang".to_string()];
         let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
         assert!(
             err.to_string().contains("control") || err.to_string().contains("baseline"),
@@ -2267,10 +2252,7 @@ mod tests {
             }
         };
 
-        let inputs = vec![
-            make_input("vllm", "ttft"),
-            make_input("sglang", "ttft"),
-        ];
+        let inputs = vec![make_input("vllm", "ttft"), make_input("sglang", "ttft")];
 
         let (_primary_idx, schema) =
             build_merged_schema(&inputs, Some(&["baseline", "experiment"]));
@@ -2391,7 +2373,8 @@ mod tests {
 
         let kv = merge_metadata(&inputs, None).unwrap();
         assert!(
-            !kv.iter().any(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS),
+            !kv.iter()
+                .any(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS),
             "non-AB combine must not emit ab_containers"
         );
     }
@@ -2402,10 +2385,7 @@ mod tests {
         // flattened source names to the validator. The user names ONE of
         // them in --ab; the side-mapping code (in combine_and_write) is
         // responsible for back-resolving which input contributes the side.
-        let raw = vec![
-            "baseline=vllm".to_string(),
-            "experiment=sglang".to_string(),
-        ];
+        let raw = vec!["baseline=vllm".to_string(), "experiment=sglang".to_string()];
         // Flat list as combine_and_write would compute it.
         let available = ["rezolus", "vllm", "rezolus", "sglang"];
         let (baseline, experiment) = parse_ab_args(&raw, &available).unwrap();
@@ -2415,10 +2395,7 @@ mod tests {
 
     #[test]
     fn parse_ab_args_rejects_same_source_on_both_sides() {
-        let raw = vec![
-            "baseline=vllm".to_string(),
-            "experiment=vllm".to_string(),
-        ];
+        let raw = vec!["baseline=vllm".to_string(), "experiment=vllm".to_string()];
         let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
         assert!(
             err.to_string().contains("different"),
