@@ -672,16 +672,6 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
 
             m('div.selection-actions', [
                 m('button.selection-btn', {
-                    disabled: hasAnyNote,
-                    title: hasAnyNote
-                        ? 'Selection has notes \u2014 use Save as Report (annotate parquet) to keep them with the data, or clear notes first.'
-                        : 'Download a JSON pattern (charts + toggles only)',
-                    onclick: () => exportJSON(notebookStore, attrs),
-                }, [
-                    'Save as Selection (JSON) ',
-                    downloadIcon,
-                ]),
-                m('button.selection-btn', {
                     disabled: inTwoFileCompare,
                     title: inTwoFileCompare
                         ? 'Two-file A/B mode has no single parquet to embed in. Use `parquet combine --ab` first.'
@@ -689,6 +679,16 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     onclick: () => saveToParquet(notebookStore, attrs),
                 }, [
                     'Save as Report (annotate parquet) ',
+                    downloadIcon,
+                ]),
+                m('button.selection-btn.selection-btn-success', {
+                    disabled: hasAnyNote,
+                    title: hasAnyNote
+                        ? 'Selection has notes \u2014 use Save as Report (annotate parquet) to keep them with the data, or clear notes first.'
+                        : 'Download a JSON pattern (charts + toggles only)',
+                    onclick: () => exportJSON(notebookStore, attrs),
+                }, [
+                    'Save as Selection (JSON) ',
                     downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-danger', {
@@ -722,19 +722,16 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     })
                     : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
-                    m('div.selection-card-header', [
-                        m('span.chart-title', selectionCardTitle(entry, spec)),
-                        m('button.selection-card-remove', {
-                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
-                            title: 'Remove',
-                        }, '\u00d7'),  // multiplication sign × — better visual than X
-                    ]),
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('span.chart-title', selectionCardTitle(entry, spec)),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
                         chartBody,
+                        m('button.selection-card-remove', {
+                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
+                            title: 'Remove from Notebook',
+                        }, '\u00d7'),
                     ]),
                     (() => {
                         const hasNote = entry.note && entry.note.length > 0;
@@ -839,9 +836,6 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 return m('div.selection-card', [
-                    m('div.selection-card-header', [
-                        m('span.chart-title', selectionCardTitle(entry, spec)),
-                    ]),
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('span.chart-title', selectionCardTitle(entry, spec)),
@@ -897,9 +891,6 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 return m('div.selection-card', [
-                    m('div.selection-card-header', [
-                        m('span.chart-title', selectionCardTitle(entry, spec)),
-                    ]),
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('span.chart-title', selectionCardTitle(entry, spec)),

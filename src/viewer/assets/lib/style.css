@@ -2287,6 +2287,23 @@ main {
     border-color: var(--danger);
 }
 
+.selection-btn-success {
+    background: color-mix(in srgb, var(--success) 15%, transparent);
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+
+.selection-btn-success:hover {
+    background: color-mix(in srgb, var(--success) 25%, transparent);
+    color: var(--success);
+    border-color: var(--success);
+}
+
+.selection-btn-success:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .save-modal-input-row + .save-modal-options {
     margin-top: -11px;
 }
@@ -2318,62 +2335,36 @@ main {
 }
 
 .selection-card {
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    background: var(--bg-surface);
     margin-bottom: 1.5rem;
-    overflow: hidden;
-}
-
-.selection-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 8px 16px;
-    background: var(--bg-inset);
-    border-bottom: 1px solid var(--border-default);
-    font-family: var(--font-mono);
-    font-size: 12px;
-}
-
-.selection-card-section-link {
-    color: var(--accent);
-    text-decoration: none;
-}
-
-.selection-card-section-link:hover {
-    text-decoration: underline;
-}
-
-.selection-card-sep {
-    color: var(--fg-muted);
-}
-
-.selection-card-title {
-    color: var(--fg);
-}
-
-.selection-card-desc {
-    color: var(--fg-muted);
-    font-size: 0.85em;
-    flex: 1;
 }
 
 .selection-card-remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
     background: transparent;
-    border: none;
-    font-family: var(--font-mono);
-    font-size: 14px;
-    font-weight: 600;
+    border: 1px solid transparent;
+    border-radius: 4px;
     color: var(--fg-muted);
     cursor: pointer;
-    padding: 0 0.25rem;
-    transition: color var(--transition-base);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 6px;
+    opacity: 0;
+    transition: all var(--transition-base);
+    z-index: 10;
+}
+
+.chart-wrapper:hover .selection-card-remove {
+    opacity: 0.6;
 }
 
 .selection-card-remove:hover {
+    opacity: 1 !important;
     color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+    background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
 .notes-affordance {
