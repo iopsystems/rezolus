@@ -119,35 +119,6 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get -q update
 apt-get -q install -y build-essential curl jq lsb-release unzip gpg
 
-# aws-lc-sys 0.40 hard-panics on gcc < 11.3 (gcc bug 95189: memcmp). Debian
-# bullseye ships gcc 10 and Ubuntu focal ships gcc 9, so pull a newer gcc on
-# those releases and point `gcc`/`g++`/`<triple>-gcc`/`<triple>-g++` at it
-# via update-alternatives. Everywhere else, the distro's default gcc is fine.
-TRIPLE=$(dpkg-architecture -qDEB_BUILD_GNU_TYPE)
-upgrade_gcc() {
-    local v="$1"
-    update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-$v" 100
-    update-alternatives --install /usr/bin/g++ g++ "/usr/bin/g++-$v" 100
-    update-alternatives --install "/usr/bin/$TRIPLE-gcc" "$TRIPLE-gcc" "/usr/bin/gcc-$v" 100
-    update-alternatives --install "/usr/bin/$TRIPLE-g++" "$TRIPLE-g++" "/usr/bin/g++-$v" 100
-}
-case "$(lsb_release -cs)" in
-    bullseye)
-        echo "deb http://deb.debian.org/debian bullseye-backports main" \
-            > /etc/apt/sources.list.d/backports.list
-        apt-get -q update
-        apt-get -q install -y -t bullseye-backports gcc-12 g++-12
-        upgrade_gcc 12
-        ;;
-    focal)
-        apt-get -q install -y software-properties-common
-        add-apt-repository -y ppa:ubuntu-toolchain-r/test
-        apt-get -q update
-        apt-get -q install -y gcc-11 g++-11
-        upgrade_gcc 11
-        ;;
-esac
-
 nextgroup install rust
 curl -sSf https://sh.rustup.rs | sh /dev/stdin -y
 . "$HOME/.cargo/env"
