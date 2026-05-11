@@ -2376,6 +2376,23 @@ main {
     color: var(--danger);
 }
 
+.notes-affordance {
+    align-self: flex-start;
+    background: transparent;
+    border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    padding: 0.25rem 0.75rem 0.5rem;
+    border-radius: 4px;
+    transition: color var(--transition-base);
+}
+
+.notes-affordance:hover {
+    color: var(--accent);
+}
+
 .selection-card-notes {
     display: flex;
     flex-direction: column;

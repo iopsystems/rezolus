@@ -260,8 +260,10 @@ const removeEntry = (store, id) => {
     const idx = store.entries.findIndex(e => e.id === id);
     if (idx >= 0) {
         store.entries.splice(idx, 1);
-        if (store === selectionStore) persistSelection();
-        else if (store === reportStore) persistReport();
+        if (store === selectionStore) {
+            SelectionView._expandedNotes.delete(id);
+            persistSelection();
+        } else if (store === reportStore) persistReport();
     }
 };
 
@@ -292,6 +294,7 @@ const clearStore = (store) => {
     if (store === reportStore) {
         localStorage.removeItem(REPORT_STORAGE_KEY);
     } else if (store === selectionStore) {
+        SelectionView._expandedNotes.clear();
         localStorage.removeItem(SELECTION_STORAGE_KEY);
     }
 };
@@ -541,6 +544,7 @@ const chartLoaderMixin = (store, component) => ({
 
 const SelectionView = {
     _needsReload: false,
+    _expandedNotes: new Set(),  // entry.id values
 };
 Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
     view({ attrs }) {
@@ -640,7 +644,32 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                         ]),
                         chartBody,
                     ]),
-                    // Notes section rendered by Task 6 (placeholder for now)
+                    (() => {
+                        const hasNote = entry.note && entry.note.length > 0;
+                        const expanded = SelectionView._expandedNotes.has(entry.id);
+                        if (!hasNote && !expanded) {
+                            return m('button.notes-affordance', {
+                                onclick: () => {
+                                    SelectionView._expandedNotes.add(entry.id);
+                                    m.redraw();
+                                },
+                            }, '+ Add note');
+                        }
+                        return m('div.selection-card-notes', [
+                            m('label.selection-notes-label', 'Notes'),
+                            m('textarea.selection-notes', {
+                                placeholder: 'Add notes\u2026',
+                                value: entry.note,
+                                oninput: (e) => { entry.note = e.target.value; persistSelection(); },
+                                onblur: (e) => {
+                                    if (!e.target.value) {
+                                        SelectionView._expandedNotes.delete(entry.id);
+                                        m.redraw();
+                                    }
+                                },
+                            }),
+                        ]);
+                    })(),
                 ]);
             }),
         ]);
