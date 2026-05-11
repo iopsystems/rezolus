@@ -473,7 +473,12 @@ fn combine_and_write(
     )?;
 
     // Step 5: Merge metadata and write
-    let mut merged_kv = merge_metadata(inputs)?;
+    let ab_containers = ab.as_ref().map(|(baseline, experiment)| AbContainers {
+        version: AbContainers::SCHEMA_VERSION,
+        baseline: baseline.clone(),
+        experiment: experiment.clone(),
+    });
+    let mut merged_kv = merge_metadata(inputs, ab_containers.as_ref())?;
     if let Some(pinned_node) = pinned {
         merged_kv.push(KeyValue {
             key: KEY_PINNED_NODE.to_string(),
@@ -793,7 +798,10 @@ fn concatenate_columns(input: &InputFile) -> Result<Vec<ArrayRef>, Box<dyn std::
 
 // ── Metadata merge ──────────────────────────────────────────────────────
 
-fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
+fn merge_metadata(
+    inputs: &[InputFile],
+    ab: Option<&AbContainers>,
+) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
     let mut result: Vec<KeyValue> = Vec::new();
 
     // source: deduplicated JSON array of all source names. If an input is
@@ -1023,6 +1031,13 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         result.push(KeyValue {
             key: KEY_EVENTS.to_string(),
             value: Some(serde_json::to_string(&events)?),
+        });
+    }
+
+    if let Some(ab) = ab {
+        result.push(KeyValue {
+            key: crate::parquet_metadata::KEY_AB_CONTAINERS.to_string(),
+            value: Some(serde_json::to_string(ab)?),
         });
     }
 
@@ -1995,7 +2010,7 @@ mod tests {
         );
 
         let inputs = vec![load(&p1)];
-        let kv = merge_metadata(&inputs).unwrap();
+        let kv = merge_metadata(&inputs, None).unwrap();
 
         let psm_str = kv
             .iter()
@@ -2030,7 +2045,7 @@ mod tests {
         let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "vllm", "1000");
 
         let inputs = vec![load(&p1), load(&p2)];
-        let kv = merge_metadata(&inputs).unwrap();
+        let kv = merge_metadata(&inputs, None).unwrap();
 
         let source_val = kv
             .iter()
@@ -2075,7 +2090,7 @@ mod tests {
         );
 
         let inputs = vec![load(&p1), load(&p2)];
-        let kv = merge_metadata(&inputs).unwrap();
+        let kv = merge_metadata(&inputs, None).unwrap();
 
         let psm_str = kv
             .iter()
@@ -2283,5 +2298,76 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn merge_metadata_writes_ab_containers_when_provided() {
+        let ab = AbContainers {
+            version: AbContainers::SCHEMA_VERSION,
+            baseline: AbSide {
+                alias: "vllm".to_string(),
+                sources: vec!["vllm".to_string()],
+            },
+            experiment: AbSide {
+                alias: "sglang".to_string(),
+                sources: vec!["sglang".to_string()],
+            },
+        };
+        let make_input = |source: &str| {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("timestamp", DataType::UInt64, false),
+                Field::new("duration", DataType::UInt64, true),
+                Field::new("metric", DataType::Int64, true),
+            ]));
+            InputFile {
+                path: format!("/tmp/{source}.parquet").into(),
+                source: source.to_string(),
+                kv_metadata: vec![],
+                sampling_interval_ms: Some("1000".to_string()),
+                node: None,
+                instance: None,
+                schema,
+                batches: vec![],
+            }
+        };
+        let inputs = vec![make_input("vllm"), make_input("sglang")];
+
+        let kv = merge_metadata(&inputs, Some(&ab)).unwrap();
+        let entry = kv
+            .iter()
+            .find(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS)
+            .expect("merged metadata should include ab_containers");
+        let parsed: AbContainers = serde_json::from_str(entry.value.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed.version, AbContainers::SCHEMA_VERSION);
+        assert_eq!(parsed.baseline.alias, "vllm");
+        assert_eq!(parsed.experiment.alias, "sglang");
+    }
+
+    #[test]
+    fn merge_metadata_omits_ab_containers_when_absent() {
+        let make_input = |source: &str| {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("timestamp", DataType::UInt64, false),
+                Field::new("duration", DataType::UInt64, true),
+                Field::new("metric", DataType::Int64, true),
+            ]));
+            InputFile {
+                path: format!("/tmp/{source}.parquet").into(),
+                source: source.to_string(),
+                kv_metadata: vec![],
+                sampling_interval_ms: Some("1000".to_string()),
+                node: None,
+                instance: None,
+                schema,
+                batches: vec![],
+            }
+        };
+        let inputs = vec![make_input("vllm"), make_input("sglang")];
+
+        let kv = merge_metadata(&inputs, None).unwrap();
+        assert!(
+            !kv.iter().any(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS),
+            "non-AB combine must not emit ab_containers"
+        );
     }
 }
