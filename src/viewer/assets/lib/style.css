@@ -41,6 +41,12 @@
     --accent-subtle: rgba(56, 139, 253, 0.15);
     --accent-glow: rgba(56, 139, 253, 0.25);
 
+    /* Selection brand color — indigo, distinct from Notebook (green) and Report (blue). */
+    --indigo: #a371f7;
+    --indigo-emphasis: #c297fc;
+    --indigo-muted: rgba(163, 113, 247, 0.4);
+    --indigo-subtle: rgba(163, 113, 247, 0.15);
+
     /* A/B compare mode — baseline is blue, experiment is green. */
     --compare-baseline: #2E5BFF;
     --compare-baseline-bg: rgba(46, 91, 255, 0.08);
@@ -719,14 +725,14 @@ body::after {
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded {
-    color: var(--success);
-    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+    color: var(--indigo);
+    border-color: var(--indigo-muted);
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded:hover {
-    background: color-mix(in srgb, var(--success) 15%, transparent);
-    color: var(--success);
-    box-shadow: 0 0 12px color-mix(in srgb, var(--success) 20%, transparent);
+    background: var(--indigo-subtle);
+    color: var(--indigo);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--indigo) 20%, transparent);
 }
 
 #topnav .theme-toggle-btn {
@@ -2287,19 +2293,19 @@ main {
     border-color: var(--danger);
 }
 
-.selection-btn-success {
-    background: color-mix(in srgb, var(--success) 15%, transparent);
-    color: var(--success);
-    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+.selection-btn-indigo {
+    background: var(--indigo-subtle);
+    color: var(--indigo);
+    border-color: var(--indigo-muted);
 }
 
-.selection-btn-success:hover {
-    background: color-mix(in srgb, var(--success) 25%, transparent);
-    color: var(--success);
-    border-color: var(--success);
+.selection-btn-indigo:hover {
+    background: color-mix(in srgb, var(--indigo) 25%, transparent);
+    color: var(--indigo);
+    border-color: var(--indigo);
 }
 
-.selection-btn-success:disabled {
+.selection-btn-indigo:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
@@ -2496,7 +2502,14 @@ main {
 
 .selection-link {
     font-weight: 600 !important;
+}
+
+.notebook-link {
     color: var(--success) !important;
+}
+
+.loaded-selection-link {
+    color: var(--indigo) !important;
 }
 
 .report-link {

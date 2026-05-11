@@ -268,8 +268,8 @@ const Sidebar = {
                 m.route.Link,
                 {
                     class: attrs.activeSection?.route === '/notebook'
-                        ? 'selected selection-link'
-                        : 'selection-link',
+                        ? 'selected selection-link notebook-link'
+                        : 'selection-link notebook-link',
                     href: '/notebook',
                 },
                 `Notebook (${notebookStore.entries.length})`,
@@ -280,8 +280,8 @@ const Sidebar = {
                 m.route.Link,
                 {
                     class: attrs.activeSection?.route === '/selection'
-                        ? 'selected selection-link'
-                        : 'selection-link',
+                        ? 'selected selection-link loaded-selection-link'
+                        : 'selection-link loaded-selection-link',
                     href: '/selection',
                 },
                 `Selection (${loadedSelectionStore.entries.length})`,

@@ -694,7 +694,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     'Save as Report (parquet, Selection & Notes) ',
                     downloadIcon,
                 ]),
-                m('button.selection-btn.selection-btn-success', {
+                m('button.selection-btn.selection-btn-indigo', {
                     disabled: hasAnyNote,
                     title: hasAnyNote
                         ? 'Selection has notes \u2014 use Save as Report (parquet, Selection & Notes) to keep them with the data, or clear notes first.'
