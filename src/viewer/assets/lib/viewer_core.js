@@ -598,6 +598,7 @@ export function createGroupComponent(getState) {
                         selectButton(spec, sectionRoute, sectionName, attrs.name, compareMode ? {
                             baselineAlias: captureLabels.baseline,
                             experimentAlias: captureLabels.experiment,
+                            categoryMembers,
                         } : null),
                     ]),
                 ]);
