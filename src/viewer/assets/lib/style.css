@@ -2400,6 +2400,31 @@ main {
     border-top: 1px solid var(--border-default);
 }
 
+.report-card-notes {
+    padding: 12px;
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-inset);
+}
+
+.report-notes-label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.4rem;
+}
+
+.report-notes-text {
+    margin: 0;
+    color: var(--fg);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
 .selection-notes-label {
     font-family: var(--font-mono);
     font-size: 10px;

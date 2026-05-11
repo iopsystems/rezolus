@@ -299,6 +299,31 @@ const clearStore = (store) => {
     }
 };
 
+const openReportInNotebook = () => {
+    if (selectionStore.entries.length > 0) {
+        const ok = confirm(
+            'Notebook has unsaved entries. Discard them and load the Report?',
+        );
+        if (!ok) return;
+    }
+    resetStoreState(selectionStore);
+    selectionStore.tagline = reportStore.tagline || '';
+    selectionStore.anchors = { ...(reportStore.anchors || { baseline: 0, experiment: 0 }) };
+    selectionStore.chartToggles = { ...(reportStore.chartToggles || {}) };
+    selectionStore.compare = reportStore.compare ? { ...reportStore.compare } : null;
+    // Shallow copy with fresh ids. chartOpts is shared by reference
+    // with the source reportStore entry, which is fine because the
+    // viewer never mutates chartOpts post-load (only reads it). If
+    // that ever changes, switch to a structured-clone or JSON
+    // round-trip here.
+    selectionStore.entries = reportStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
+    SelectionView._expandedNotes.clear();
+    persistSelection();
+    notify('info', 'Report opened in Notebook');
+    // Navigate to /selection. (The route will be renamed /notebook in Task 9.)
+    m.route.set('/selection');
+};
+
 // ── Export / Import / Parquet ─────────────────────────────────────
 
 const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
@@ -740,6 +765,10 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                         onclick: attrs.onToggleHeatmap,
                         disabled: attrs.heatmapLoading,
                     }, attrs.heatmapLoading ? 'LOADING...' : (attrs.heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
+                    reportStore.entries.length > 0 && m('button.section-action-btn', {
+                        onclick: openReportInNotebook,
+                        title: 'Copy this Report into the Notebook for editing',
+                    }, 'OPEN IN NOTEBOOK'),
                 ]),
             ]),
             reportStore.tagline && m('p.selection-tagline-text', reportStore.tagline),
@@ -766,9 +795,9 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                         ]),
                         m(Chart, { spec, chartsState: attrs.chartsState, interval }),
                     ]),
-                    entry.note && m('div.selection-card-notes', [
-                        m('label.selection-notes-label', 'Notes'),
-                        m('p.selection-notes-text', entry.note),
+                    entry.note && m('div.report-card-notes', [
+                        m('label.report-notes-label', 'Notes'),
+                        m('p.report-notes-text', entry.note),
                     ]),
                 ]);
             }),
