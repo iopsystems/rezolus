@@ -146,6 +146,19 @@ pub fn command() -> Command {
                         .long("pinned")
                         .help("Default rezolus node to display in the viewer (node name or filename)")
                         .value_parser(clap::value_parser!(String)),
+                )
+                .arg(
+                    clap::Arg::new("ab")
+                        .long("ab")
+                        .help(
+                            "Tag the output as a combined-A/B parquet. \
+                             Requires exactly two input files. Pass \
+                             `baseline=<src> experiment=<src>` mapping \
+                             each side to one of the inputs' source names.",
+                        )
+                        .value_parser(value_parser!(String))
+                        .num_args(2)
+                        .action(clap::ArgAction::Append),
                 ),
         )
         .subcommand(
