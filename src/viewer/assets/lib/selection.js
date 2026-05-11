@@ -217,20 +217,20 @@ const setAnchor = (captureId, ms) => {
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
-/**
- * Write a per-chart toggle (e.g. the compare-mode heatmap `diff`
- * flag) into the selection store. Persists + triggers a redraw.
- */
-const setChartToggle = (chartId, key, value) => {
+// Per-chart toggle writer bound to a specific store. `persistFn` is
+// optional (loadedSelectionStore is in-memory only).
+const chartToggleSetter = (store, persistFn) => (chartId, key, value) => {
     if (!chartId || !key) return;
-    if (!notebookStore.chartToggles) notebookStore.chartToggles = {};
-    if (!notebookStore.chartToggles[chartId]) {
-        notebookStore.chartToggles[chartId] = {};
-    }
-    notebookStore.chartToggles[chartId][key] = value;
-    persistNotebook();
+    if (!store.chartToggles) store.chartToggles = {};
+    if (!store.chartToggles[chartId]) store.chartToggles[chartId] = {};
+    store.chartToggles[chartId][key] = value;
+    if (persistFn) persistFn();
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
+
+const setChartToggle = chartToggleSetter(notebookStore, persistNotebook);
+const setReportChartToggle = chartToggleSetter(reportStore, persistReport);
+const setLoadedSelectionChartToggle = chartToggleSetter(loadedSelectionStore, null);
 
 // Stores are restored when setStorageScope() is called with a file fingerprint,
 // or eagerly here for the default (unscoped) keys as a fallback.
@@ -900,13 +900,40 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 if (spec.unavailable) return unavailableCard(entry, spec);
+                const captureLabels = {
+                    baseline: attrs.baselineAlias || 'baseline',
+                    experiment: attrs.experimentAlias || 'experiment',
+                };
+                const originalSectionRoute = entry.section ? `/${entry.section}` : '/report';
+                const chartBody = (attrs.compareMode && spec.promql_query)
+                    ? m(CompareChartWrapper, {
+                        spec,
+                        chartsState: attrs.chartsState,
+                        interval,
+                        anchors: reportStore.anchors,
+                        toggles: reportStore.chartToggles,
+                        setChartToggle: setReportChartToggle,
+                        sectionRoute: originalSectionRoute,
+                        step: interval,
+                        experimentQueryRange: attrs.experimentQueryRange,
+                        captureLabels,
+                        categoryMembers: entry.category_members,
+                    })
+                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
-                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            m('div.chart-title-row', [
+                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                attrs.compareMode && compareToggle(spec, {
+                                    compareMode: attrs.compareMode,
+                                    toggles: reportStore.chartToggles,
+                                    setChartToggle: setReportChartToggle,
+                                }),
+                            ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
-                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                        chartBody,
                     ]),
                     entry.note && m('div.report-card-notes', [
                         m('label.report-notes-label', 'Notes'),
@@ -956,13 +983,40 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 if (spec.unavailable) return unavailableCard(entry, spec);
+                const captureLabels = {
+                    baseline: attrs.baselineAlias || 'baseline',
+                    experiment: attrs.experimentAlias || 'experiment',
+                };
+                const originalSectionRoute = entry.section ? `/${entry.section}` : '/selection';
+                const chartBody = (attrs.compareMode && spec.promql_query)
+                    ? m(CompareChartWrapper, {
+                        spec,
+                        chartsState: attrs.chartsState,
+                        interval,
+                        anchors: loadedSelectionStore.anchors,
+                        toggles: loadedSelectionStore.chartToggles,
+                        setChartToggle: setLoadedSelectionChartToggle,
+                        sectionRoute: originalSectionRoute,
+                        step: interval,
+                        experimentQueryRange: attrs.experimentQueryRange,
+                        captureLabels,
+                        categoryMembers: entry.category_members,
+                    })
+                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
-                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            m('div.chart-title-row', [
+                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                attrs.compareMode && compareToggle(spec, {
+                                    compareMode: attrs.compareMode,
+                                    toggles: loadedSelectionStore.chartToggles,
+                                    setChartToggle: setLoadedSelectionChartToggle,
+                                }),
+                            ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
-                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                        chartBody,
                     ]),
                 ]);
             }),
