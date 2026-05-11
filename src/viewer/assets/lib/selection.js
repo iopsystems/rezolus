@@ -223,7 +223,7 @@ const selectionCardTitle = (entry, spec) => {
 
 // ── Selection API (write mode) ───────────────────────────────────
 
-const toggleSelection = (spec, sectionKey, sectionName, groupName) => {
+const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta = null) => {
     const idx = selectionStore.entries.findIndex(e => e.chartId === spec.opts.id);
     if (idx >= 0) {
         selectionStore.entries.splice(idx, 1);
@@ -240,6 +240,16 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName) => {
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
     });
+    // Capture compare metadata on first pin in compare mode. Don't
+    // overwrite later pins so the first author's intent wins (e.g.,
+    // the user pinned a chart, attached a different experiment, then
+    // pinned more — the original baseline_alias stands).
+    if (compareMeta && !selectionStore.compare) {
+        selectionStore.compare = {
+            baseline_alias: compareMeta.baselineAlias || null,
+            experiment_alias: compareMeta.experimentAlias || null,
+        };
+    }
     persistSelection();
     return true;
 };
