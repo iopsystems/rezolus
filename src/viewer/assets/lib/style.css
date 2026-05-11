@@ -927,10 +927,6 @@ main {
     flex-shrink: 0;
 }
 
-.section-title-report {
-    color: var(--accent);
-}
-
 .section-actions {
     display: flex;
     align-items: center;
@@ -2504,7 +2500,7 @@ main {
 }
 
 .report-link {
-    color: var(--success) !important;
+    color: var(--accent) !important;
 }
 
 /* Report metadata */
