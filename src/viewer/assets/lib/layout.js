@@ -1,5 +1,5 @@
 import { TimeRangeBar, GranularitySelector } from './controls.js';
-import { selectionStore, reportStore, importJSON } from './selection.js';
+import { notebookStore, reportStore, importJSON } from './selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from './group_utils.js';
 
@@ -263,16 +263,16 @@ const Sidebar = {
                 `Report (${reportStore.entries.length})`,
             ),
 
-            // Selection section (shown only when entries exist)
-            selectionStore.entries.length > 0 && m(
+            // Notebook section (shown only when entries exist)
+            notebookStore.entries.length > 0 && m(
                 m.route.Link,
                 {
-                    class: attrs.activeSection?.route === '/selection'
+                    class: attrs.activeSection?.route === '/notebook'
                         ? 'selected selection-link'
                         : 'selection-link',
-                    href: '/selection',
+                    href: '/notebook',
                 },
-                `Selection (${selectionStore.entries.length})`,
+                `Notebook (${notebookStore.entries.length})`,
             ),
 
             // Overview section first (if exists)

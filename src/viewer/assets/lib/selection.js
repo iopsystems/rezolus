@@ -36,7 +36,7 @@ const uuidv7 = () => {
 
 // ── Stores ───────────────────────────────────────────────────────
 
-const selectionStore = {
+const notebookStore = {
     version: SELECTION_SCHEMA_VERSION,
     tagline: '',
     entries: [],
@@ -68,7 +68,7 @@ const reportStore = {
 // ── LocalStorage persistence ─────────────────────────────────────
 
 let REPORT_STORAGE_KEY = 'rezolus_report';
-let SELECTION_STORAGE_KEY = 'rezolus_selection';
+let NOTEBOOK_STORAGE_KEY = 'rezolus_notebook';
 
 /**
  * Scope localStorage keys by a file fingerprint so each parquet file
@@ -87,14 +87,14 @@ const setStorageScope = (info) => {
         .reduce((h, b) => ((h << 5) - h + b) | 0, 0)
         .toString(36);
     REPORT_STORAGE_KEY = `rezolus_report_${suffix}`;
-    SELECTION_STORAGE_KEY = `rezolus_selection_${suffix}`;
+    NOTEBOOK_STORAGE_KEY = `rezolus_notebook_${suffix}`;
     // In-memory reset only — must NOT purge localStorage at the
     // (just-set) scoped key, otherwise we wipe the file's persisted
-    // selection on every page load before restoring it.
-    resetStoreState(selectionStore);
+    // notebook on every page load before restoring it.
+    resetStoreState(notebookStore);
     resetStoreState(reportStore);
     restoreStore(REPORT_STORAGE_KEY, reportStore);
-    restoreStore(SELECTION_STORAGE_KEY, selectionStore);
+    restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 };
 
 const persistStore = (key, store) => {
@@ -172,7 +172,7 @@ const restoreStore = (key, store) => {
 };
 
 const persistReport = () => persistStore(REPORT_STORAGE_KEY, reportStore);
-const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStore);
+const persistNotebook = () => persistStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 
 // ── Anchors + per-chart toggles (compare-mode state) ─────────────
 
@@ -182,9 +182,9 @@ const persistSelection = () => persistStore(SELECTION_STORAGE_KEY, selectionStor
  */
 const setAnchor = (captureId, ms) => {
     if (captureId !== CAPTURE_BASELINE && captureId !== CAPTURE_EXPERIMENT) return;
-    if (!selectionStore.anchors) selectionStore.anchors = { baseline: 0, experiment: 0 };
-    selectionStore.anchors[captureId] = Number(ms) || 0;
-    persistSelection();
+    if (!notebookStore.anchors) notebookStore.anchors = { baseline: 0, experiment: 0 };
+    notebookStore.anchors[captureId] = Number(ms) || 0;
+    persistNotebook();
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
@@ -194,19 +194,19 @@ const setAnchor = (captureId, ms) => {
  */
 const setChartToggle = (chartId, key, value) => {
     if (!chartId || !key) return;
-    if (!selectionStore.chartToggles) selectionStore.chartToggles = {};
-    if (!selectionStore.chartToggles[chartId]) {
-        selectionStore.chartToggles[chartId] = {};
+    if (!notebookStore.chartToggles) notebookStore.chartToggles = {};
+    if (!notebookStore.chartToggles[chartId]) {
+        notebookStore.chartToggles[chartId] = {};
     }
-    selectionStore.chartToggles[chartId][key] = value;
-    persistSelection();
+    notebookStore.chartToggles[chartId][key] = value;
+    persistNotebook();
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
 // Stores are restored when setStorageScope() is called with a file fingerprint,
 // or eagerly here for the default (unscoped) keys as a fallback.
 restoreStore(REPORT_STORAGE_KEY, reportStore);
-restoreStore(SELECTION_STORAGE_KEY, selectionStore);
+restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 
 // Build the displayed chart title for a selection card. The dashboard
 // gives charts visual context via section/group breadcrumbs ("CPU >
@@ -224,13 +224,13 @@ const selectionCardTitle = (entry, spec) => {
 // ── Selection API (write mode) ───────────────────────────────────
 
 const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta = null) => {
-    const idx = selectionStore.entries.findIndex(e => e.chartId === spec.opts.id);
+    const idx = notebookStore.entries.findIndex(e => e.chartId === spec.opts.id);
     if (idx >= 0) {
-        selectionStore.entries.splice(idx, 1);
-        persistSelection();
+        notebookStore.entries.splice(idx, 1);
+        persistNotebook();
         return false;
     }
-    selectionStore.entries.push({
+    notebookStore.entries.push({
         id: crypto.randomUUID(),
         chartId: spec.opts.id,
         section: sectionKey,
@@ -244,25 +244,25 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
     // overwrite later pins so the first author's intent wins (e.g.,
     // the user pinned a chart, attached a different experiment, then
     // pinned more — the original baseline_alias stands).
-    if (compareMeta && !selectionStore.compare) {
-        selectionStore.compare = {
+    if (compareMeta && !notebookStore.compare) {
+        notebookStore.compare = {
             baseline_alias: compareMeta.baselineAlias || null,
             experiment_alias: compareMeta.experimentAlias || null,
         };
     }
-    persistSelection();
+    persistNotebook();
     return true;
 };
 
-const isSelected = (chartId) => selectionStore.entries.some(e => e.chartId === chartId);
+const isSelected = (chartId) => notebookStore.entries.some(e => e.chartId === chartId);
 
 const removeEntry = (store, id) => {
     const idx = store.entries.findIndex(e => e.id === id);
     if (idx >= 0) {
         store.entries.splice(idx, 1);
-        if (store === selectionStore) {
-            SelectionView._expandedNotes.delete(id);
-            persistSelection();
+        if (store === notebookStore) {
+            NotebookView._expandedNotes.delete(id);
+            persistNotebook();
         } else if (store === reportStore) persistReport();
     }
 };
@@ -293,35 +293,34 @@ const clearStore = (store) => {
     resetStoreState(store);
     if (store === reportStore) {
         localStorage.removeItem(REPORT_STORAGE_KEY);
-    } else if (store === selectionStore) {
-        SelectionView._expandedNotes.clear();
-        localStorage.removeItem(SELECTION_STORAGE_KEY);
+    } else if (store === notebookStore) {
+        NotebookView._expandedNotes.clear();
+        localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
     }
 };
 
 const openReportInNotebook = () => {
-    if (selectionStore.entries.length > 0) {
+    if (notebookStore.entries.length > 0) {
         const ok = confirm(
             'Notebook has unsaved entries. Discard them and load the Report?',
         );
         if (!ok) return;
     }
-    resetStoreState(selectionStore);
-    selectionStore.tagline = reportStore.tagline || '';
-    selectionStore.anchors = { ...(reportStore.anchors || { baseline: 0, experiment: 0 }) };
-    selectionStore.chartToggles = { ...(reportStore.chartToggles || {}) };
-    selectionStore.compare = reportStore.compare ? { ...reportStore.compare } : null;
+    resetStoreState(notebookStore);
+    notebookStore.tagline = reportStore.tagline || '';
+    notebookStore.anchors = { ...(reportStore.anchors || { baseline: 0, experiment: 0 }) };
+    notebookStore.chartToggles = { ...(reportStore.chartToggles || {}) };
+    notebookStore.compare = reportStore.compare ? { ...reportStore.compare } : null;
     // Shallow copy with fresh ids. chartOpts is shared by reference
     // with the source reportStore entry, which is fine because the
     // viewer never mutates chartOpts post-load (only reads it). If
     // that ever changes, switch to a structured-clone or JSON
     // round-trip here.
-    selectionStore.entries = reportStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
-    SelectionView._expandedNotes.clear();
-    persistSelection();
+    notebookStore.entries = reportStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
+    NotebookView._expandedNotes.clear();
+    persistNotebook();
     notify('info', 'Report opened in Notebook');
-    // Navigate to /selection. (The route will be renamed /notebook in Task 9.)
-    m.route.set('/selection');
+    m.route.set('/notebook');
 };
 
 // ── Export / Import / Parquet ─────────────────────────────────────
@@ -565,13 +564,13 @@ const chartLoaderMixin = (store, component) => ({
     },
 });
 
-// ── SelectionView (write mode) ───────────────────────────────────
+// ── NotebookView (write mode) ────────────────────────────────────
 
-const SelectionView = {
+const NotebookView = {
     _needsReload: false,
     _expandedNotes: new Set(),  // entry.id values
 };
-Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
+Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
     view({ attrs }) {
         this._checkReload();
         this._applyZoom(attrs);
@@ -579,8 +578,8 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
         const interval = attrs.interval || 1;
         const cs = attrs.chartsState;
         const hasChartSelection = cs?.hasActiveSelection();
-        const hasHistograms = selectionStore.entries.some(e => isHistogramPlot(e));
-        const hasAnyNote = selectionStore.entries.some(e => e.note && e.note.length > 0);
+        const hasHistograms = notebookStore.entries.some(e => isHistogramPlot(e));
+        const hasAnyNote = notebookStore.entries.some(e => e.note && e.note.length > 0);
         const inTwoFileCompare = attrs.compareMode && !attrs.combinedAB;
         const downloadIcon = m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>');
 
@@ -588,7 +587,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             m('div.section-header-row', [
                 m('h1.section-title', [
                     sectionTitlePin(),
-                    attrs.title || 'Selection',
+                    attrs.title || 'Notebook',
                 ]),
                 m('div.section-actions', [
                     hasChartSelection && m('button.section-action-btn', {
@@ -604,8 +603,8 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
             m('input.selection-tagline', {
                 type: 'text',
                 placeholder: 'Add a tagline\u2026',
-                value: selectionStore.tagline,
-                oninput: (e) => { selectionStore.tagline = e.target.value; persistSelection(); },
+                value: notebookStore.tagline,
+                oninput: (e) => { notebookStore.tagline = e.target.value; persistNotebook(); },
             }),
         ]);
 
@@ -622,7 +621,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                     title: hasAnyNote
                         ? 'Selection has notes \u2014 use Save as Report (annotate parquet) to keep them with the data, or clear notes first.'
                         : 'Download a JSON pattern (charts + toggles only)',
-                    onclick: () => exportJSON(selectionStore, attrs),
+                    onclick: () => exportJSON(notebookStore, attrs),
                 }, [
                     'Save as Selection (JSON) ',
                     downloadIcon,
@@ -632,17 +631,17 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                     title: inTwoFileCompare
                         ? 'Two-file A/B mode has no single parquet to embed in. Use `parquet combine --ab` first.'
                         : 'Embed selection + notes in the loaded parquet',
-                    onclick: () => saveToParquet(selectionStore, attrs),
+                    onclick: () => saveToParquet(notebookStore, attrs),
                 }, [
                     'Save as Report (annotate parquet) ',
                     downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-danger', {
-                    onclick: () => { clearStore(selectionStore); m.redraw(); },
+                    onclick: () => { clearStore(notebookStore); m.redraw(); },
                 }, 'Clear All'),
             ]),
 
-            selectionStore.entries.map((entry) => {
+            notebookStore.entries.map((entry) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 // In compare mode, render through CompareChartWrapper so
@@ -661,7 +660,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                         anchors: attrs.anchors,
                         toggles: attrs.toggles,
                         setChartToggle: attrs.setChartToggle,
-                        sectionRoute: '/selection',
+                        sectionRoute: '/notebook',
                         step: interval,
                         experimentQueryRange: attrs.experimentQueryRange,
                         captureLabels,
@@ -671,7 +670,7 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                     m('div.selection-card-header', [
                         m('span.chart-title', selectionCardTitle(entry, spec)),
                         m('button.selection-card-remove', {
-                            onclick: () => { removeEntry(selectionStore, entry.id); m.redraw(); },
+                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
                             title: 'Remove',
                         }, '\u00d7'),  // multiplication sign × — better visual than X
                     ]),
@@ -684,11 +683,11 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                     ]),
                     (() => {
                         const hasNote = entry.note && entry.note.length > 0;
-                        const expanded = SelectionView._expandedNotes.has(entry.id);
+                        const expanded = NotebookView._expandedNotes.has(entry.id);
                         if (!hasNote && !expanded) {
                             return m('button.notes-affordance', {
                                 onclick: () => {
-                                    SelectionView._expandedNotes.add(entry.id);
+                                    NotebookView._expandedNotes.add(entry.id);
                                     m.redraw();
                                 },
                             }, '+ Add note');
@@ -698,10 +697,10 @@ Object.assign(SelectionView, chartLoaderMixin(selectionStore, SelectionView), {
                             m('textarea.selection-notes', {
                                 placeholder: 'Add notes\u2026',
                                 value: entry.note,
-                                oninput: (e) => { entry.note = e.target.value; persistSelection(); },
+                                oninput: (e) => { entry.note = e.target.value; persistNotebook(); },
                                 onblur: (e) => {
                                     if (!e.target.value) {
-                                        SelectionView._expandedNotes.delete(entry.id);
+                                        NotebookView._expandedNotes.delete(entry.id);
                                         m.redraw();
                                     }
                                 },
@@ -806,10 +805,10 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
 });
 
 export {
-    selectionStore,
+    notebookStore,
     reportStore,
     setStorageScope,
-    persistSelection,
+    persistNotebook,
     toggleSelection,
     isSelected,
     clearStore,
@@ -817,7 +816,7 @@ export {
     loadPayloadIntoStore,
     setAnchor,
     setChartToggle,
-    SelectionView,
+    NotebookView,
     ReportView,
     migrateSelection,
     SELECTION_SCHEMA_VERSION,
