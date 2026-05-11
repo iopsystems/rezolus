@@ -128,6 +128,29 @@ impl CaptureRegistry {
         *self.baseline.file_metadata.write() = file_metadata;
     }
 
+    /// Wire the experiment slot to share the baseline TSDB. Used when
+    /// the loaded parquet carries `ab_containers` metadata — both sides
+    /// live in one TSDB and are distinguished by a `container` label
+    /// injected at query time on the JS side.
+    pub fn attach_combined_ab(
+        &self,
+        baseline_alias: Option<String>,
+        experiment_alias: Option<String>,
+    ) {
+        if let Some(alias) = baseline_alias {
+            *self.baseline.alias.write() = Some(alias);
+        }
+        let baseline_tsdb = self.baseline.tsdb.clone();
+        let baseline_systeminfo = self.baseline.systeminfo.read().clone();
+        let baseline_file_metadata = self.baseline.file_metadata.read().clone();
+        *self.experiment.write() = Some(CaptureSlot {
+            tsdb: baseline_tsdb,
+            systeminfo: RwLock::new(baseline_systeminfo),
+            file_metadata: RwLock::new(baseline_file_metadata),
+            alias: RwLock::new(experiment_alias),
+        });
+    }
+
     pub fn attach_experiment(
         &self,
         tsdb: Tsdb,
