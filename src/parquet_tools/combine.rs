@@ -27,6 +27,67 @@ struct InputFile {
     instance: Option<String>,
 }
 
+/// Parse a `--ab` argument list into (baseline, experiment) sides.
+///
+/// `raw` is the clap-collected Vec, each entry `key=value`. `available_sources`
+/// is the flat list of source names across all inputs (for validation).
+fn parse_ab_args(
+    raw: &[String],
+    available_sources: &[&str],
+) -> Result<(AbSide, AbSide), Box<dyn std::error::Error>> {
+    let mut baseline: Option<String> = None;
+    let mut experiment: Option<String> = None;
+
+    for entry in raw {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("--ab entry {entry:?} must be key=value"))?;
+        match key {
+            "baseline" => {
+                if baseline.is_some() {
+                    return Err("--ab baseline= specified more than once".into());
+                }
+                baseline = Some(value.to_string());
+            }
+            "experiment" => {
+                if experiment.is_some() {
+                    return Err("--ab experiment= specified more than once".into());
+                }
+                experiment = Some(value.to_string());
+            }
+            other => {
+                return Err(format!(
+                    "--ab key {other:?} not recognized (valid: baseline, experiment)"
+                )
+                .into());
+            }
+        }
+    }
+
+    let baseline = baseline.ok_or("--ab requires baseline=<source>")?;
+    let experiment = experiment.ok_or("--ab requires experiment=<source>")?;
+
+    for (label, value) in [("baseline", &baseline), ("experiment", &experiment)] {
+        if !available_sources.contains(&value.as_str()) {
+            return Err(format!(
+                "--ab {label}={value:?} does not match any input source (available: {available_sources:?})"
+            )
+            .into());
+        }
+    }
+
+    Ok((
+        AbSide {
+            alias: baseline.clone(),
+            sources: vec![baseline],
+        },
+        AbSide {
+            alias: experiment.clone(),
+            sources: vec![experiment],
+        },
+    ))
+}
+
 /// Combine multiple parquet files into one. Used by the `parquet combine` CLI
 /// command and by the multi-endpoint recorder for combined output.
 pub(crate) fn combine_files(
@@ -2016,6 +2077,68 @@ mod tests {
         assert_eq!(
             quantize(2 * interval + interval / 2, interval),
             3 * interval
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_happy_path() {
+        let raw = vec![
+            "baseline=vllm".to_string(),
+            "experiment=sglang".to_string(),
+        ];
+        let (baseline, experiment) = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap();
+        assert_eq!(baseline.alias, "vllm");
+        assert_eq!(baseline.sources, vec!["vllm".to_string()]);
+        assert_eq!(experiment.alias, "sglang");
+        assert_eq!(experiment.sources, vec!["sglang".to_string()]);
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_unknown_source() {
+        let raw = vec![
+            "baseline=vllm".to_string(),
+            "experiment=does_not_exist".to_string(),
+        ];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("does_not_exist"),
+            "error should name the missing source: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_missing_side() {
+        let raw = vec!["baseline=vllm".to_string()];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("experiment"),
+            "error should name the missing side: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_duplicate_side() {
+        let raw = vec![
+            "baseline=vllm".to_string(),
+            "baseline=sglang".to_string(),
+        ];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("baseline"),
+            "error should name the duplicated side: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_unknown_side() {
+        let raw = vec![
+            "control=vllm".to_string(),
+            "treatment=sglang".to_string(),
+        ];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("control") || err.to_string().contains("baseline"),
+            "error should explain valid sides: {err}"
         );
     }
 }
