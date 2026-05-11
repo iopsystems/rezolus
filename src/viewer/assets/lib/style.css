@@ -927,6 +927,10 @@ main {
     flex-shrink: 0;
 }
 
+.section-title-report {
+    color: var(--accent);
+}
+
 .section-actions {
     display: flex;
     align-items: center;

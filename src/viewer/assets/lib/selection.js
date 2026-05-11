@@ -839,7 +839,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                 ]),
             )),
             m('div.section-header-row', [
-                m('h1.section-title', attrs.title || 'Report'),
+                m('h1.section-title.section-title-report', attrs.title || 'Report'),
                 m('div.section-actions', [
                     hasChartSelection && m('button.section-action-btn', {
                         onclick: () => { cs.resetAll(); m.redraw(); },
