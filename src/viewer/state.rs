@@ -161,6 +161,19 @@ impl AppState {
             .expect("baseline capture is always present")
     }
 
+    /// True when the baseline parquet was produced by `parquet combine --ab`
+    /// and the experiment slot points at the same TSDB. Drives JS-side
+    /// `container` label injection per capture.
+    pub fn combined_ab(&self) -> bool {
+        let Some(meta_str) = self.captures.file_metadata(CaptureId::Baseline) else {
+            return false;
+        };
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_str) else {
+            return false;
+        };
+        meta.get(crate::parquet_metadata::KEY_AB_CONTAINERS).is_some()
+    }
+
     /// Build the navigation + global params payload for `/api/v1/sections`.
     /// When no context has been loaded yet (live mode pre-refresh,
     /// upload-only mode pre-upload) returns a minimal payload with empty
