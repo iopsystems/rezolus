@@ -136,9 +136,10 @@ const TopNav = {
                     m('span', 'Load Parquet'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
-                // Import selection JSON (server viewer only). Hidden in
-                // compare mode — selections are single-capture today.
-                attrs.onUploadParquet && !compareMode && m('button.transport-btn.import-btn', {
+                // Import selection JSON (server viewer only). Visible in
+                // compare mode too: LoadedSelectionView honors compareMode
+                // and renders both arms when an experiment is attached.
+                attrs.onUploadParquet && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
                     onclick: () => importSelection(),
