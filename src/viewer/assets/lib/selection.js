@@ -37,7 +37,6 @@ const uuidv7 = () => {
 // ── Stores ───────────────────────────────────────────────────────
 
 const notebookStore = {
-    version: SELECTION_SCHEMA_VERSION,
     tagline: '',
     entries: [],
     zoom: null,
@@ -48,7 +47,6 @@ const notebookStore = {
 };
 
 const reportStore = {
-    version: SELECTION_SCHEMA_VERSION,
     tagline: '',
     entries: [],
     zoom: null,
@@ -66,7 +64,6 @@ const reportStore = {
 };
 
 const loadedSelectionStore = {
-    version: SELECTION_SCHEMA_VERSION,
     tagline: '',
     entries: [],
     zoom: null,
@@ -76,6 +73,26 @@ const loadedSelectionStore = {
     compare: null,
     loadedFrom: null,  // filename of the dropped JSON
 };
+
+// Per-card "notes textarea expanded" tracker for NotebookView.
+// Module-level rather than view-local because removeEntry,
+// clearStore, and openInNotebook all need to clear it before the
+// view next mounts. UI-only state — never persisted.
+const expandedNotes = new Set();
+
+// Hydrate an entries list from a JSON payload. Used by all three
+// load paths (restoreStore, loadPayloadIntoStore, loadJsonIntoSelection)
+// so the entry shape stays in one place.
+const entriesFromPayload = (entries) => (entries || []).map(e => ({
+    id: crypto.randomUUID(),
+    chartId: e.chartId,
+    section: e.section,
+    sectionName: e.sectionName,
+    groupName: e.groupName || '',
+    promql_query: e.promql_query,
+    note: e.note || '',
+    chartOpts: e.chartOpts,
+}));
 
 // ── LocalStorage persistence ─────────────────────────────────────
 
@@ -153,7 +170,6 @@ const restoreStore = (key, store) => {
         const parsed = JSON.parse(raw);
         if (!parsed.entries || !Array.isArray(parsed.entries)) return;
         const data = migrateSelection(parsed);
-        store.version = data.version;
         store.tagline = data.tagline || '';
         store.zoom = data.zoom || null;
         store.stepOverride = data.stepOverride ?? null;
@@ -167,16 +183,7 @@ const restoreStore = (key, store) => {
         if (data.fileChecksum !== undefined) store.fileChecksum = data.fileChecksum;
         if (data.timeRange !== undefined) store.timeRange = data.timeRange;
         if (data.rezolusVersion !== undefined) store.rezolusVersion = data.rezolusVersion;
-        store.entries = data.entries.map(e => ({
-            id: crypto.randomUUID(),
-            chartId: e.chartId,
-            section: e.section,
-            sectionName: e.sectionName,
-            groupName: e.groupName || '',
-            promql_query: e.promql_query,
-            note: e.note || '',
-            chartOpts: e.chartOpts,
-        }));
+        store.entries = entriesFromPayload(data.entries);
     } catch (e) {
         if (e?.message?.includes('unsupported selection schema')) {
             console.warn('[selection] dropped stale localStorage entry:', e.message);
@@ -277,7 +284,7 @@ const removeEntry = (store, id) => {
     if (idx >= 0) {
         store.entries.splice(idx, 1);
         if (store === notebookStore) {
-            NotebookView._expandedNotes.delete(id);
+            expandedNotes.delete(id);
             persistNotebook();
         } else if (store === reportStore) persistReport();
     }
@@ -313,56 +320,35 @@ const clearStore = (store) => {
     if (store === reportStore) {
         localStorage.removeItem(REPORT_STORAGE_KEY);
     } else if (store === notebookStore) {
-        NotebookView._expandedNotes.clear();
+        expandedNotes.clear();
         localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
     }
     // loadedSelectionStore is in-memory only; no localStorage to clear
 };
 
-const openReportInNotebook = () => {
+// Copy a source store (Report or LoadedSelection) into the live
+// Notebook with overwrite-confirm. Shallow-spread on entries with
+// fresh ids — chartOpts is shared by reference with the source,
+// which is safe because the viewer reads chartOpts but never
+// mutates it. Switch to structuredClone if that ever changes.
+const openInNotebook = (sourceStore, kindLabel) => {
     if (notebookStore.entries.length > 0) {
-        const ok = confirm(
-            'Notebook has unsaved entries. Discard them and load the Report?',
-        );
-        if (!ok) return;
+        if (!confirm(`Notebook has unsaved entries. Discard them and load the ${kindLabel}?`)) return;
     }
     resetStoreState(notebookStore);
-    notebookStore.tagline = reportStore.tagline || '';
-    notebookStore.anchors = { ...(reportStore.anchors || { baseline: 0, experiment: 0 }) };
-    notebookStore.chartToggles = { ...(reportStore.chartToggles || {}) };
-    notebookStore.compare = reportStore.compare ? { ...reportStore.compare } : null;
-    // Shallow copy with fresh ids. chartOpts is shared by reference
-    // with the source reportStore entry, which is fine because the
-    // viewer never mutates chartOpts post-load (only reads it). If
-    // that ever changes, switch to a structured-clone or JSON
-    // round-trip here.
-    notebookStore.entries = reportStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
-    NotebookView._expandedNotes.clear();
+    notebookStore.tagline = sourceStore.tagline || '';
+    notebookStore.anchors = { ...(sourceStore.anchors || { baseline: 0, experiment: 0 }) };
+    notebookStore.chartToggles = { ...(sourceStore.chartToggles || {}) };
+    notebookStore.compare = sourceStore.compare ? { ...sourceStore.compare } : null;
+    notebookStore.entries = sourceStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
+    expandedNotes.clear();
     persistNotebook();
-    notify('info', 'Report opened in Notebook');
+    notify('info', `${kindLabel} opened in Notebook`);
     m.route.set('/notebook');
 };
 
-const openLoadedSelectionInNotebook = () => {
-    if (notebookStore.entries.length > 0) {
-        const ok = confirm(
-            'Notebook has unsaved entries. Discard them and load the Selection?',
-        );
-        if (!ok) return;
-    }
-    resetStoreState(notebookStore);
-    notebookStore.tagline = loadedSelectionStore.tagline || '';
-    notebookStore.anchors = { ...(loadedSelectionStore.anchors || { baseline: 0, experiment: 0 }) };
-    notebookStore.chartToggles = { ...(loadedSelectionStore.chartToggles || {}) };
-    notebookStore.compare = loadedSelectionStore.compare ? { ...loadedSelectionStore.compare } : null;
-    // Shallow copy with fresh ids; chartOpts shared by reference
-    // (viewer reads chartOpts but never mutates it).
-    notebookStore.entries = loadedSelectionStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
-    NotebookView._expandedNotes.clear();
-    persistNotebook();
-    notify('info', 'Selection opened in Notebook');
-    m.route.set('/notebook');
-};
+const openReportInNotebook = () => openInNotebook(reportStore, 'Report');
+const openLoadedSelectionInNotebook = () => openInNotebook(loadedSelectionStore, 'Selection');
 
 // ── Export / Import / Parquet ─────────────────────────────────────
 
@@ -416,23 +402,13 @@ const exportJSON = async (store, attrs) => {
 const loadPayloadIntoStore = (store, payload) => {
     try {
         const migrated = migrateSelection(payload);
-        store.version = migrated.version;
         store.tagline = migrated.tagline || '';
         store.zoom = migrated.zoom || null;
         store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
         store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
         store.chartToggles = migrated.chartToggles || {};
         store.compare = migrated.compare || null;
-        store.entries = payload.entries.map(e => ({
-            id: crypto.randomUUID(),
-            chartId: e.chartId,
-            section: e.section,
-            sectionName: e.sectionName,
-            groupName: e.groupName || '',
-            promql_query: e.promql_query,
-            note: e.note || '',
-            chartOpts: e.chartOpts,
-        }));
+        store.entries = entriesFromPayload(payload.entries);
         if (store === reportStore) {
             store.reportId = payload.report_id || null;
             store.savedAt = payload.saved_at || null;
@@ -495,16 +471,7 @@ const loadJsonIntoSelection = (json, filename) => {
         loadedSelectionStore.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
         loadedSelectionStore.chartToggles = migrated.chartToggles || {};
         loadedSelectionStore.compare = migrated.compare || null;
-        loadedSelectionStore.entries = (migrated.entries || []).map(e => ({
-            id: crypto.randomUUID(),
-            chartId: e.chartId,
-            section: e.section,
-            sectionName: e.sectionName,
-            groupName: e.groupName || '',
-            promql_query: e.promql_query,
-            note: e.note || '',
-            chartOpts: e.chartOpts,
-        }));
+        loadedSelectionStore.entries = entriesFromPayload(migrated.entries);
         loadedSelectionStore.loadedFrom = filename;
         return true;
     } catch (e) {
@@ -628,7 +595,6 @@ const chartLoaderMixin = (store, component) => ({
 
 const NotebookView = {
     _needsReload: false,
-    _expandedNotes: new Set(),  // entry.id values
 };
 Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
     view({ attrs }) {
@@ -740,11 +706,11 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     ]),
                     (() => {
                         const hasNote = entry.note && entry.note.length > 0;
-                        const expanded = NotebookView._expandedNotes.has(entry.id);
+                        const expanded = expandedNotes.has(entry.id);
                         if (!hasNote && !expanded) {
                             return m('button.notes-affordance', {
                                 onclick: () => {
-                                    NotebookView._expandedNotes.add(entry.id);
+                                    expandedNotes.add(entry.id);
                                     m.redraw();
                                 },
                             }, '+ Add note');
@@ -757,7 +723,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                                 oninput: (e) => { entry.note = e.target.value; persistNotebook(); },
                                 onblur: (e) => {
                                     if (!e.target.value) {
-                                        NotebookView._expandedNotes.delete(entry.id);
+                                        expandedNotes.delete(entry.id);
                                         m.redraw();
                                     }
                                 },
