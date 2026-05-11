@@ -423,6 +423,23 @@ fn combine_and_write(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let interval_ns = resolve_interval_ns(inputs)?;
 
+    // Map each input to its AB side string, if AB mode is active.
+    let ab_sides: Option<Vec<&'static str>> = ab.as_ref().map(|(baseline, experiment)| {
+        inputs
+            .iter()
+            .map(|input| {
+                if baseline.sources.iter().any(|s| s == &input.source) {
+                    "baseline"
+                } else if experiment.sources.iter().any(|s| s == &input.source) {
+                    "experiment"
+                } else {
+                    // parse_ab_args validated every input source matches one side
+                    unreachable!("input source {:?} not in any --ab side", input.source)
+                }
+            })
+            .collect()
+    });
+
     // Step 1: Build quantized-timestamp → row-index maps
     let ts_maps: Vec<HashMap<u64, usize>> = inputs
         .iter()
@@ -444,7 +461,7 @@ fn combine_and_write(
     }
 
     // Step 3: Build merged schema
-    let (primary_idx, merged_schema) = build_merged_schema(inputs);
+    let (primary_idx, merged_schema) = build_merged_schema(inputs, ab_sides.as_deref());
 
     // Step 4: Build output record batch with aligned rows
     let output_batch = build_output_batch(
@@ -627,7 +644,10 @@ fn compute_common_timestamps(ts_maps: &[HashMap<u64, usize>]) -> Vec<u64> {
     common
 }
 
-fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
+fn build_merged_schema(
+    inputs: &[InputFile],
+    ab_sides: Option<&[&'static str]>,
+) -> (usize, SchemaRef) {
     // Prefer rezolus file as primary (for timestamp/duration), else first file
     let primary_idx = inputs
         .iter()
@@ -646,7 +666,7 @@ fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
     }
 
     // All metric columns from each input, prefixed and labeled
-    for input in inputs {
+    for (input_idx, input) in inputs.iter().enumerate() {
         let (prefix, label_key, label_value) = if input.source == "rezolus" {
             let node = input.node.as_deref().unwrap_or("unknown");
             (node.to_string(), "node".to_string(), node.to_string())
@@ -667,6 +687,12 @@ fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
                 meta.entry("source".to_string())
                     .or_insert_with(|| input.source.clone());
                 meta.insert(label_key.clone(), label_value.clone());
+                if let Some(side) = ab_sides.and_then(|sides| sides.get(input_idx)) {
+                    meta.insert(
+                        crate::parquet_metadata::COLUMN_LABEL_CONTAINER.to_string(),
+                        side.to_string(),
+                    );
+                }
                 let new_field = Field::new(
                     prefixed_name,
                     field.data_type().clone(),
@@ -2173,5 +2199,89 @@ mod tests {
             err.to_string().contains("control") || err.to_string().contains("baseline"),
             "error should explain valid sides: {err}"
         );
+    }
+
+    #[test]
+    fn build_merged_schema_tags_columns_with_container() {
+        // Two single-metric inputs from different sources; neither is "rezolus"
+        // so both get instance-prefixed column names. We only care that the
+        // container label ends up on every non-time field.
+        let make_input = |source: &str, metric_name: &str| -> InputFile {
+            let mut metric_meta = HashMap::new();
+            metric_meta.insert("metric_type".to_string(), "gauge".to_string());
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("timestamp", DataType::UInt64, false),
+                Field::new("duration", DataType::UInt64, true),
+                Field::new(metric_name, DataType::Int64, true).with_metadata(metric_meta),
+            ]));
+            InputFile {
+                path: format!("/tmp/{source}.parquet").into(),
+                source: source.to_string(),
+                kv_metadata: vec![],
+                sampling_interval_ms: Some("1000".to_string()),
+                node: None,
+                instance: None,
+                schema,
+                batches: vec![],
+            }
+        };
+
+        let inputs = vec![
+            make_input("vllm", "ttft"),
+            make_input("sglang", "ttft"),
+        ];
+
+        let (_primary_idx, schema) =
+            build_merged_schema(&inputs, Some(&["baseline", "experiment"]));
+
+        let containers: Vec<Option<&String>> = schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() != "timestamp" && f.name() != "duration")
+            .map(|f| f.metadata().get("container"))
+            .collect();
+        assert_eq!(
+            containers,
+            vec![
+                Some(&"baseline".to_string()),
+                Some(&"experiment".to_string())
+            ],
+            "non-time columns should carry container=baseline / experiment"
+        );
+    }
+
+    #[test]
+    fn build_merged_schema_no_container_without_ab_sides() {
+        // Passing None for ab_sides must not inject container metadata.
+        let make_input = |source: &str, metric_name: &str| -> InputFile {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("timestamp", DataType::UInt64, false),
+                Field::new("duration", DataType::UInt64, true),
+                Field::new(metric_name, DataType::Int64, true),
+            ]));
+            InputFile {
+                path: format!("/tmp/{source}.parquet").into(),
+                source: source.to_string(),
+                kv_metadata: vec![],
+                sampling_interval_ms: Some("1000".to_string()),
+                node: None,
+                instance: None,
+                schema,
+                batches: vec![],
+            }
+        };
+
+        let inputs = vec![make_input("vllm", "ttft")];
+        let (_primary_idx, schema) = build_merged_schema(&inputs, None);
+
+        for field in schema.fields() {
+            if field.name() != "timestamp" && field.name() != "duration" {
+                assert!(
+                    !field.metadata().contains_key("container"),
+                    "non-AB combine must not set container label"
+                );
+            }
+        }
     }
 }
