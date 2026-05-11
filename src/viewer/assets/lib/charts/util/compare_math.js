@@ -203,3 +203,33 @@ export const canonicalQuantileLabel = (input) => {
     const pct = q <= 1 ? q * 100 : q;
     return `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
 };
+
+// Compose-mode match key for percentile (scatter) series. Quantile dim
+// → "pXX"; other dims appended (key-sorted, value-only) joined with " · ".
+// `excludeValues` drops dims whose values are capture-identity names
+// (category members) so cross-capture compare doesn't end up with
+// disjoint key sets. See tests for examples.
+export const composeScatterLabel = (metric, { excludeValues } = {}) => {
+    if (!metric || typeof metric !== 'object') return null;
+    const dims = { ...metric };
+    delete dims.__name__;
+
+    if (excludeValues && excludeValues.size > 0) {
+        for (const k of Object.keys(dims)) {
+            if (excludeValues.has(dims[k])) delete dims[k];
+        }
+    }
+
+    let head = null;
+    if ('quantile' in dims) {
+        head = canonicalQuantileLabel(dims.quantile);
+        delete dims.quantile;
+    }
+
+    const tail = Object.keys(dims).sort().map((k) => dims[k]);
+
+    if (head && tail.length > 0) return `${head} · ${tail.join(' · ')}`;
+    if (head) return head;
+    if (tail.length > 0) return tail.join(' · ');
+    return null;
+};

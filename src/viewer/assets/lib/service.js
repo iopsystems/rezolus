@@ -56,7 +56,10 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
             : null,
         m('div#groups',
             (attrs.groups || []).map((group) =>
-                m(Group, { ...group, sectionRoute, sectionName, interval })
+                // sectionMetadata (not `metadata`) so per-group config
+                // isn't clobbered. Group consumes category_members
+                // for the compare-mode bridge.
+                m(Group, { ...group, sectionRoute, sectionName, interval, sectionMetadata: meta })
             )
         ),
         renderSectionNotes({

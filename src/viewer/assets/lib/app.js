@@ -536,6 +536,10 @@ const SectionContent = {
                 ...sectionMeta,
                 chartsState,
                 stepOverride: currentGranularity,
+                compareMode,
+                experimentQueryRange,
+                baselineAlias,
+                experimentAlias,
             });
         }
 
@@ -550,6 +554,10 @@ const SectionContent = {
                 heatmapLoading,
                 stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
+                compareMode,
+                experimentQueryRange,
+                baselineAlias,
+                experimentAlias,
             });
         }
 

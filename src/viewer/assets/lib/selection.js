@@ -4,6 +4,7 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { CompareChartWrapper } from './viewer_core.js';
+import { compareToggle } from './chart_controls.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
@@ -90,6 +91,9 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     sectionName: e.sectionName,
     groupName: e.groupName || '',
     promql_query: e.promql_query,
+    // Optional on pre-fix payloads; null degrades to single-query compare.
+    promql_query_experiment: e.promql_query_experiment || null,
+    category_members: e.category_members || null,
     note: e.note || '',
     chartOpts: e.chartOpts,
 }));
@@ -153,6 +157,8 @@ const persistStore = (key, store) => {
                 sectionName: e.sectionName,
                 groupName: e.groupName || '',
                 promql_query: e.promql_query,
+                promql_query_experiment: e.promql_query_experiment || undefined,
+                category_members: e.category_members || undefined,
                 note: e.note,
                 chartOpts: e.chartOpts,
             })),
@@ -211,20 +217,20 @@ const setAnchor = (captureId, ms) => {
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
-/**
- * Write a per-chart toggle (e.g. the compare-mode heatmap `diff`
- * flag) into the selection store. Persists + triggers a redraw.
- */
-const setChartToggle = (chartId, key, value) => {
+// Per-chart toggle writer bound to a specific store. `persistFn` is
+// optional (loadedSelectionStore is in-memory only).
+const chartToggleSetter = (store, persistFn) => (chartId, key, value) => {
     if (!chartId || !key) return;
-    if (!notebookStore.chartToggles) notebookStore.chartToggles = {};
-    if (!notebookStore.chartToggles[chartId]) {
-        notebookStore.chartToggles[chartId] = {};
-    }
-    notebookStore.chartToggles[chartId][key] = value;
-    persistNotebook();
+    if (!store.chartToggles) store.chartToggles = {};
+    if (!store.chartToggles[chartId]) store.chartToggles[chartId] = {};
+    store.chartToggles[chartId][key] = value;
+    if (persistFn) persistFn();
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
+
+const setChartToggle = chartToggleSetter(notebookStore, persistNotebook);
+const setReportChartToggle = chartToggleSetter(reportStore, persistReport);
+const setLoadedSelectionChartToggle = chartToggleSetter(loadedSelectionStore, null);
 
 // Stores are restored when setStorageScope() is called with a file fingerprint,
 // or eagerly here for the default (unscoped) keys as a fallback.
@@ -279,6 +285,11 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
         sectionName,
         groupName: groupName || '',
         promql_query: spec.promql_query,
+        // Bridge fields for category KPIs: without these, Notebook
+        // re-renders only the baseline arm (experiment runs the
+        // wrong query and returns no data).
+        promql_query_experiment: spec.promql_query_experiment || null,
+        category_members: compareMeta?.categoryMembers || null,
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
     });
@@ -395,6 +406,8 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
         sectionName: e.sectionName,
         groupName: e.groupName || '',
         promql_query: e.promql_query,
+        promql_query_experiment: e.promql_query_experiment || undefined,
+        category_members: e.category_members || undefined,
         note: includeNotes ? e.note : '',
         chartOpts: e.chartOpts,
     })),
@@ -571,6 +584,8 @@ const chartLoaderMixin = (store, component) => ({
             const spec = {
                 opts: { ...entry.chartOpts },
                 promql_query: entry.promql_query,
+                // Bridge: per-side experiment query for category KPIs.
+                promql_query_experiment: entry.promql_query_experiment || undefined,
                 data: [],
             };
             if (!entry.promql_query) {
@@ -740,6 +755,11 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     baseline: attrs.baselineAlias || 'baseline',
                     experiment: attrs.experimentAlias || 'experiment',
                 };
+                // Use the entry's home route so buildEffectiveQuery's
+                // /service/* gate (skip node injection) still applies
+                // — otherwise the baseline's hostname gets injected
+                // into bridge queries and returns zero matches.
+                const originalSectionRoute = entry.section ? `/${entry.section}` : '/notebook';
                 const chartBody = (attrs.compareMode && spec.promql_query)
                     ? m(CompareChartWrapper, {
                         spec,
@@ -748,16 +768,27 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         anchors: attrs.anchors,
                         toggles: attrs.toggles,
                         setChartToggle: attrs.setChartToggle,
-                        sectionRoute: '/notebook',
+                        sectionRoute: originalSectionRoute,
                         step: interval,
                         experimentQueryRange: attrs.experimentQueryRange,
                         captureLabels,
+                        // Stored on the pinned entry so the bridge
+                        // survives even though /notebook has no
+                        // category_members metadata of its own.
+                        categoryMembers: entry.category_members,
                     })
                     : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
-                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            m('div.chart-title-row', [
+                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                attrs.compareMode && compareToggle(spec, {
+                                    compareMode: attrs.compareMode,
+                                    toggles: attrs.toggles,
+                                    setChartToggle: attrs.setChartToggle,
+                                }),
+                            ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
                         chartBody,
@@ -869,13 +900,40 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 if (spec.unavailable) return unavailableCard(entry, spec);
+                const captureLabels = {
+                    baseline: attrs.baselineAlias || 'baseline',
+                    experiment: attrs.experimentAlias || 'experiment',
+                };
+                const originalSectionRoute = entry.section ? `/${entry.section}` : '/report';
+                const chartBody = (attrs.compareMode && spec.promql_query)
+                    ? m(CompareChartWrapper, {
+                        spec,
+                        chartsState: attrs.chartsState,
+                        interval,
+                        anchors: reportStore.anchors,
+                        toggles: reportStore.chartToggles,
+                        setChartToggle: setReportChartToggle,
+                        sectionRoute: originalSectionRoute,
+                        step: interval,
+                        experimentQueryRange: attrs.experimentQueryRange,
+                        captureLabels,
+                        categoryMembers: entry.category_members,
+                    })
+                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
-                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            m('div.chart-title-row', [
+                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                attrs.compareMode && compareToggle(spec, {
+                                    compareMode: attrs.compareMode,
+                                    toggles: reportStore.chartToggles,
+                                    setChartToggle: setReportChartToggle,
+                                }),
+                            ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
-                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                        chartBody,
                     ]),
                     entry.note && m('div.report-card-notes', [
                         m('label.report-notes-label', 'Notes'),
@@ -925,13 +983,40 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 if (spec.unavailable) return unavailableCard(entry, spec);
+                const captureLabels = {
+                    baseline: attrs.baselineAlias || 'baseline',
+                    experiment: attrs.experimentAlias || 'experiment',
+                };
+                const originalSectionRoute = entry.section ? `/${entry.section}` : '/selection';
+                const chartBody = (attrs.compareMode && spec.promql_query)
+                    ? m(CompareChartWrapper, {
+                        spec,
+                        chartsState: attrs.chartsState,
+                        interval,
+                        anchors: loadedSelectionStore.anchors,
+                        toggles: loadedSelectionStore.chartToggles,
+                        setChartToggle: setLoadedSelectionChartToggle,
+                        sectionRoute: originalSectionRoute,
+                        step: interval,
+                        experimentQueryRange: attrs.experimentQueryRange,
+                        captureLabels,
+                        categoryMembers: entry.category_members,
+                    })
+                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
-                            m('span.chart-title', selectionCardTitle(entry, spec)),
+                            m('div.chart-title-row', [
+                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                attrs.compareMode && compareToggle(spec, {
+                                    compareMode: attrs.compareMode,
+                                    toggles: loadedSelectionStore.chartToggles,
+                                    setChartToggle: setLoadedSelectionChartToggle,
+                                }),
+                            ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
-                        m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+                        chartBody,
                     ]),
                 ]);
             }),

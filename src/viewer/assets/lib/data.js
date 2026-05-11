@@ -245,6 +245,11 @@ const applyResultToPlot = (plot, result) => {
             } else {
                 const allData = [];
                 const seriesNames = [];
+                // Parallel to seriesNames; the raw metrics let compare-
+                // mode's baseline path re-derive labels symmetrically
+                // with the experiment path (composeScatterLabel needs
+                // the full label set, not the lossy series_names string).
+                const seriesMetrics = [];
                 let timestamps = null;
 
                 result.data.result.forEach((item, idx) => {
@@ -261,6 +266,7 @@ const applyResultToPlot = (plot, result) => {
 
                         if (item.values.length > 0) {
                             seriesNames.push(seriesName);
+                            seriesMetrics.push(item.metric || {});
 
                             if (!timestamps) {
                                 timestamps = item.values.map(([ts, _]) => ts);
@@ -276,9 +282,11 @@ const applyResultToPlot = (plot, result) => {
                 if (allData.length > 1) {
                     plot.data = allData;
                     plot.series_names = seriesNames;
+                    plot.series_metrics = seriesMetrics;
                 } else {
                     plot.data = [];
                     plot.series_names = [];
+                    plot.series_metrics = [];
                 }
             }
         } else {
