@@ -401,7 +401,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
 });
 
 const exportJSON = async (store, attrs) => {
-    const defaultPrefix = `report-${Date.now()}`;
+    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
     const result = await showSaveModal(defaultPrefix, '.json');
     if (!result) return;
     const filename = result.filename;
@@ -500,7 +500,7 @@ const loadJsonIntoSelection = (json, filename) => {
 };
 
 const saveToParquet = async (store, attrs) => {
-    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-annotated';
+    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
     const cs = attrs.chartsState;
     const hasZoom = cs && !cs.isDefaultZoom();
     const checkboxes = hasZoom
