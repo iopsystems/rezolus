@@ -5,6 +5,7 @@ import {
     intersectLabels,
     unifyHistogramRange,
     buildDeltaSpectrum,
+    composeScatterLabel,
 } from '../src/viewer/assets/lib/charts/util/compare_math.js';
 
 test('nullDiff: numbers', () => {
@@ -197,4 +198,169 @@ test('buildDeltaSpectrum: identical captures yield dMin === dMax === 0', () => {
     // before handing off to a diverging palette renderer.
     assert.equal(r.dMin, 0);
     assert.equal(r.dMax, 0);
+});
+
+// ── composeScatterLabel ──────────────────────────────────────────
+// Builds a stable multi-dim label for compare-mode label matching of
+// percentile/scatter charts. Quantile dim → "pXX"; other dims appended
+// (alpha-sorted by key, value-only) joined by " · ". Replaces the
+// asymmetric label extraction that dropped extra dims (broke compare
+// for category-split percentile metrics like inference-library TTFT).
+
+test('composeScatterLabel: pure quantile (fraction form)', () => {
+    assert.equal(composeScatterLabel({ quantile: '0.5' }), 'p50');
+    assert.equal(composeScatterLabel({ quantile: '0.95' }), 'p95');
+    assert.equal(composeScatterLabel({ quantile: '0.999' }), 'p99.9');
+});
+
+test('composeScatterLabel: pure quantile (percent form)', () => {
+    assert.equal(composeScatterLabel({ quantile: '50' }), 'p50');
+    assert.equal(composeScatterLabel({ quantile: 'p99' }), 'p99');
+});
+
+test('composeScatterLabel: quantile + one extra dim — sub-chart label includes value', () => {
+    assert.equal(
+        composeScatterLabel({ quantile: '0.5', category: 'vllm' }),
+        'p50 · vllm',
+    );
+});
+
+test('composeScatterLabel: quantile + multiple extra dims — alpha-sorted by key', () => {
+    // Insertion order varies; the label should be deterministic.
+    const a = composeScatterLabel({ quantile: '0.95', engine: 'sglang', node: 'gpu-1' });
+    const b = composeScatterLabel({ node: 'gpu-1', quantile: '0.95', engine: 'sglang' });
+    assert.equal(a, 'p95 · sglang · gpu-1');
+    assert.equal(a, b);
+});
+
+test('composeScatterLabel: __name__ stripped from extra dims', () => {
+    assert.equal(
+        composeScatterLabel({ __name__: 'ttft_seconds', quantile: '0.5', category: 'vllm' }),
+        'p50 · vllm',
+    );
+});
+
+test('composeScatterLabel: no quantile — falls back to extra dims only', () => {
+    assert.equal(composeScatterLabel({ category: 'vllm' }), 'vllm');
+    assert.equal(
+        composeScatterLabel({ engine: 'sglang', node: 'gpu-1' }),
+        'sglang · gpu-1',
+    );
+});
+
+test('composeScatterLabel: missing/empty input → null', () => {
+    assert.equal(composeScatterLabel(null), null);
+    assert.equal(composeScatterLabel(undefined), null);
+    assert.equal(composeScatterLabel({}), null);
+    assert.equal(composeScatterLabel({ __name__: 'x' }), null);
+    assert.equal(composeScatterLabel('not-an-object'), null);
+});
+
+test('composeScatterLabel: unparseable quantile + extra dims still surfaces extra dims', () => {
+    // Quantile that can't be parsed gets dropped; extra dims still
+    // contribute. Better than silently returning null on a malformed
+    // metric — partial info is more diagnostic than no info.
+    assert.equal(
+        composeScatterLabel({ quantile: 'oops', category: 'vllm' }),
+        'vllm',
+    );
+});
+
+test('composeScatterLabel: numeric quantile values', () => {
+    assert.equal(composeScatterLabel({ quantile: 0.5 }), 'p50');
+    assert.equal(composeScatterLabel({ quantile: 95 }), 'p95');
+});
+
+test('composeScatterLabel: baseline+experiment with same dims agree', () => {
+    // The original bug: baseline produced "vllm" (or "0.5") and
+    // experiment produced "p50" — disjoint sets, "no shared labels".
+    // After the fix, both sides yield the same key.
+    const baseline = composeScatterLabel({ __name__: 'ttft', quantile: '0.5', category: 'vllm' });
+    const experiment = composeScatterLabel({ __name__: 'ttft', quantile: '0.5', category: 'vllm' });
+    assert.equal(baseline, experiment);
+    assert.equal(baseline, 'p50 · vllm');
+});
+
+// ── composeScatterLabel: excludeValues for category-mode compare ─
+
+// In category-mode compare (e.g. inference-library, baseline=vllm vs
+// experiment=sglang) the per-side queries produce series whose labels
+// intentionally differ on a capture-identity dim like `source=vllm`
+// vs `source=sglang`. Including that dim in the match key would put
+// baseline and experiment in disjoint sets ("no shared labels").
+// The Group component plumbs `category_members` down so the composer
+// can drop label values that match category-member names.
+
+test('composeScatterLabel: excludeValues drops the matching label entirely', () => {
+    const excludeValues = new Set(['vllm', 'sglang']);
+    assert.equal(
+        composeScatterLabel(
+            { __name__: 'ttft', quantile: '0.5', source: 'vllm' },
+            { excludeValues },
+        ),
+        'p50',
+    );
+    assert.equal(
+        composeScatterLabel(
+            { __name__: 'ttft', quantile: '0.5', source: 'sglang' },
+            { excludeValues },
+        ),
+        'p50',
+    );
+});
+
+test('composeScatterLabel: excludeValues — baseline+experiment agree on match key', () => {
+    const excludeValues = new Set(['vllm', 'sglang']);
+    const baseline = composeScatterLabel(
+        { __name__: 'vllm_ttft', quantile: '0.5', source: 'vllm' },
+        { excludeValues },
+    );
+    const experiment = composeScatterLabel(
+        { __name__: 'sglang_ttft', quantile: '0.5', source: 'sglang' },
+        { excludeValues },
+    );
+    assert.equal(baseline, experiment);
+    assert.equal(baseline, 'p50');
+});
+
+test('composeScatterLabel: excludeValues preserves non-matching dims', () => {
+    // A real subseries dim (e.g. cgroup) shouldn't be dropped just
+    // because excludeValues is set. Only values matching the exclude
+    // set are removed.
+    const excludeValues = new Set(['vllm', 'sglang']);
+    assert.equal(
+        composeScatterLabel(
+            { quantile: '0.5', source: 'vllm', cgroup: 'workload-a' },
+            { excludeValues },
+        ),
+        'p50 · workload-a',
+    );
+});
+
+test('composeScatterLabel: excludeValues empty/missing → no filtering', () => {
+    assert.equal(
+        composeScatterLabel({ quantile: '0.5', source: 'vllm' }),
+        'p50 · vllm',
+    );
+    assert.equal(
+        composeScatterLabel({ quantile: '0.5', source: 'vllm' }, {}),
+        'p50 · vllm',
+    );
+    assert.equal(
+        composeScatterLabel(
+            { quantile: '0.5', source: 'vllm' },
+            { excludeValues: new Set() },
+        ),
+        'p50 · vllm',
+    );
+});
+
+test('composeScatterLabel: excludeValues drops all dims → falls back to quantile only', () => {
+    const excludeValues = new Set(['vllm']);
+    // When the only non-quantile dim is excluded, the result is just
+    // the canonical quantile.
+    assert.equal(
+        composeScatterLabel({ quantile: '0.95', source: 'vllm' }, { excludeValues }),
+        'p95',
+    );
 });

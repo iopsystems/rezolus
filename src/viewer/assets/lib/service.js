@@ -56,7 +56,13 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
             : null,
         m('div#groups',
             (attrs.groups || []).map((group) =>
-                m(Group, { ...group, sectionRoute, sectionName, interval })
+                // Forward section-level metadata as a sibling prop
+                // (not `metadata`, which is reserved for per-group
+                // config like no_collapse). Group reads
+                // sectionMetadata.category_members in compare mode to
+                // drop the capture-identity dim — e.g. source=vllm vs
+                // sglang — from cross-capture label matching.
+                m(Group, { ...group, sectionRoute, sectionName, interval, sectionMetadata: meta })
             )
         ),
         renderSectionNotes({

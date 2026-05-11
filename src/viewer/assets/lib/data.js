@@ -245,6 +245,14 @@ const applyResultToPlot = (plot, result) => {
             } else {
                 const allData = [];
                 const seriesNames = [];
+                // Parallel array of raw PromQL metric objects, one per
+                // kept series. Stashed on plot so compare-mode's baseline
+                // path can re-derive labels with the same multi-dim
+                // logic as the experiment path (both call
+                // composeScatterLabel on the metric). Otherwise the
+                // baseline would only have the lossy first-non-__name__
+                // string in series_names.
+                const seriesMetrics = [];
                 let timestamps = null;
 
                 result.data.result.forEach((item, idx) => {
@@ -261,6 +269,7 @@ const applyResultToPlot = (plot, result) => {
 
                         if (item.values.length > 0) {
                             seriesNames.push(seriesName);
+                            seriesMetrics.push(item.metric || {});
 
                             if (!timestamps) {
                                 timestamps = item.values.map(([ts, _]) => ts);
@@ -276,9 +285,11 @@ const applyResultToPlot = (plot, result) => {
                 if (allData.length > 1) {
                     plot.data = allData;
                     plot.series_names = seriesNames;
+                    plot.series_metrics = seriesMetrics;
                 } else {
                     plot.data = [];
                     plot.series_names = [];
+                    plot.series_metrics = [];
                 }
             }
         } else {

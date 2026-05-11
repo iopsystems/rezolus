@@ -203,3 +203,61 @@ export const canonicalQuantileLabel = (input) => {
     const pct = q <= 1 ? q * 100 : q;
     return `p${pct.toFixed(2).replace(/\.?0+$/, '')}`;
 };
+
+// Compose a stable, dimension-aware label for compare-mode label
+// matching of percentile (scatter-style) charts. Quantile dim is
+// canonicalized to "pXX"; remaining label dims are appended (sorted
+// by key for determinism, value-only) joined with " · ".
+//
+// Replaces the asymmetry where baseline used "first non-__name__ value"
+// (whichever label happened to come first in iteration order) and
+// experiment used canonicalQuantileLabel(item) (dropped extra dims) —
+// for percentile metrics with extra dims (per-cgroup, per-host) the
+// two sides produced disjoint key sets and the compare view failed
+// with "no shared labels between captures".
+//
+// `options.excludeValues` is the category bridge: in category-mode
+// compare (e.g. inference-library, baseline=vllm vs experiment=sglang)
+// the per-side queries return series whose labels intentionally differ
+// on a capture-identity dim like `source=vllm` vs `source=sglang`.
+// Including that dim in the match key would put the two sides in
+// disjoint sets. Caller passes the set of category-member names
+// (`["vllm","sglang"]`) so the composer drops any dim whose value is
+// in that set — restoring "p50" / "p95" as the cross-capture match
+// keys. Filtering by VALUE rather than KEY keeps the rule template-
+// agnostic (works for any future capture-identity label).
+//
+// Examples (no excludeValues):
+//   { quantile: "0.5" }                    → "p50"
+//   { quantile: "0.5", category: "vllm" }  → "p50 · vllm"
+//   { category: "vllm" }                   → "vllm"  (no quantile fallback)
+//   {}                                     → null
+//
+// Examples (excludeValues = Set(["vllm","sglang"])):
+//   { quantile: "0.5", source: "vllm" }    → "p50"
+//   { quantile: "0.5", source: "sglang" }  → "p50"  (matches the line above)
+//   { quantile: "0.5", source: "vllm", cgroup: "a" } → "p50 · a"
+export const composeScatterLabel = (metric, { excludeValues } = {}) => {
+    if (!metric || typeof metric !== 'object') return null;
+    const dims = { ...metric };
+    delete dims.__name__;
+
+    if (excludeValues && excludeValues.size > 0) {
+        for (const k of Object.keys(dims)) {
+            if (excludeValues.has(dims[k])) delete dims[k];
+        }
+    }
+
+    let head = null;
+    if ('quantile' in dims) {
+        head = canonicalQuantileLabel(dims.quantile);
+        delete dims.quantile;
+    }
+
+    const tail = Object.keys(dims).sort().map((k) => dims[k]);
+
+    if (head && tail.length > 0) return `${head} · ${tail.join(' · ')}`;
+    if (head) return head;
+    if (tail.length > 0) return tail.join(' · ');
+    return null;
+};

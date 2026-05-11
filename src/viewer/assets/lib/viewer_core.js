@@ -11,7 +11,7 @@ import {
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
     fetchQuantileSpectrumForPlot,
 } from './data.js';
-import { canonicalQuantileLabel } from './charts/util/compare_math.js';
+import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
@@ -21,7 +21,7 @@ import { ViewerApi } from './viewer_api.js';
 // Convert the baseline plot spec's already-populated data into a
 // capture-shaped object keyed by `id: 'baseline'`. The shape depends on
 // chart style so the compare strategies can consume it uniformly.
-const extractBaselineCapture = (spec) => {
+const extractBaselineCapture = (spec, options = {}) => {
     const style = resolvedStyle(spec);
     const cap = { id: CAPTURE_BASELINE };
 
@@ -40,14 +40,26 @@ const extractBaselineCapture = (spec) => {
     if (style === 'multi' || style === 'scatter') {
         const data = spec.data;
         const names = spec.series_names || [];
+        const metrics = spec.series_metrics || [];
         const map = new Map();
         if (Array.isArray(data) && data.length >= 2) {
             const timeData = data[0] || [];
             for (let i = 1; i < data.length; i++) {
                 let label = names[i - 1];
                 if (style === 'scatter') {
-                    const canonical = canonicalQuantileLabel(label);
-                    if (canonical) label = canonical;
+                    // Use the multi-dim-aware composer when the raw
+                    // metric is available (applyResultToPlot now stashes
+                    // it on spec.series_metrics). Falls back to the
+                    // legacy single-string path for any caller that
+                    // populates spec.data without going through the
+                    // standard pipeline.
+                    const metric = metrics[i - 1];
+                    const composed = metric ? composeScatterLabel(metric, options) : null;
+                    if (composed) label = composed;
+                    else {
+                        const canonical = canonicalQuantileLabel(label);
+                        if (canonical) label = canonical;
+                    }
                 }
                 if (label == null) continue;
                 map.set(String(label), { timeData, valueData: data[i] || [] });
@@ -73,7 +85,7 @@ const extractBaselineCapture = (spec) => {
 // Convert an experiment PromQL range result (same JSON shape as the
 // baseline got through applyResultToPlot) into the same capture shape
 // produced by extractBaselineCapture.
-const extractExperimentCapture = (spec, promqlResult) => {
+const extractExperimentCapture = (spec, promqlResult, options = {}) => {
     const style = resolvedStyle(spec);
     const cap = { id: CAPTURE_EXPERIMENT };
     const results = promqlResult?.data?.result;
@@ -108,7 +120,15 @@ const extractExperimentCapture = (spec, promqlResult) => {
     }
 
     if (style === 'scatter') {
-        cap.seriesMap = promqlResultToSeriesMap(results, (item) => canonicalQuantileLabel(item));
+        // Multi-dim-aware label so percentile metrics with extra dims
+        // (per-cgroup, per-host) match the baseline path key-for-key.
+        // `options.excludeValues` (the category bridge) drops capture-
+        // identity dims (e.g. source=vllm vs source=sglang in
+        // inference-library) so cross-capture matching still works.
+        // Falls back to legacy canonicalQuantileLabel for malformed
+        // metrics with no usable dims so we don't drop series silently.
+        cap.seriesMap = promqlResultToSeriesMap(results, (item) =>
+            composeScatterLabel(item.metric, options) || canonicalQuantileLabel(item));
         return cap;
     }
 
@@ -326,7 +346,7 @@ export const CompareChartWrapper = {
             }
         }
 
-        const { spec, chartsState, interval, anchors, toggles, setChartToggle, captureLabels } = vnode.attrs;
+        const { spec, chartsState, interval, anchors, toggles, setChartToggle, captureLabels, categoryMembers } = vnode.attrs;
 
         if (vnode.state.error) {
             return m('div.chart-error', `compare error: ${vnode.state.error}`);
@@ -335,6 +355,16 @@ export const CompareChartWrapper = {
             return m('div.chart-loading', 'Loading experiment\u2026');
         }
 
+        // The category bridge: when this chart belongs to a category
+        // section (e.g. inference-library), the per-side queries
+        // produce series whose labels intentionally differ on a
+        // capture-identity dim like `source=vllm` vs `source=sglang`.
+        // Pass the member-name set down so composeScatterLabel drops
+        // those dims from the cross-capture match key.
+        const captureExtractOpts = (categoryMembers && categoryMembers.length > 0)
+            ? { excludeValues: new Set(categoryMembers) }
+            : {};
+
         // Memoize both captures on vnode.state keyed by spec.data /
         // experimentResult identity. Each extractor walks the raw data
         // (heatmap extract does an O(rows×bins) normalize), and nothing
@@ -342,11 +372,11 @@ export const CompareChartWrapper = {
         // tooltip/hover/zoom just re-run view() with the same inputs.
         if (vnode.state._capData !== spec.data) {
             vnode.state._capData = spec.data;
-            vnode.state._baselineCap = extractBaselineCapture(spec);
+            vnode.state._baselineCap = extractBaselineCapture(spec, captureExtractOpts);
         }
         if (vnode.state._capExpResult !== vnode.state.experimentResult) {
             vnode.state._capExpResult = vnode.state.experimentResult;
-            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult);
+            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult, captureExtractOpts);
         }
         const baselineCap = vnode.state._baselineCap;
         const experimentCap = vnode.state._experimentCap;
@@ -484,6 +514,16 @@ export function createGroupComponent(getState) {
             ]);
 
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
+            // Category bridge: when the section's metadata declares
+            // `category_members`, the compare-mode label composer drops
+            // labels whose values are member names so the cross-capture
+            // match key reduces to the real subseries dims (e.g. just
+            // the percentile, not "p50 · vllm" vs "p50 · sglang").
+            // sectionMetadata is forwarded by renderServiceSection;
+            // attrs.metadata holds per-group config and is unrelated.
+            const categoryMembers = Array.isArray(attrs.sectionMetadata?.category_members)
+                ? attrs.sectionMetadata.category_members
+                : null;
 
             // Compat shim: if the incoming JSON still uses the legacy
             // `plots` shape (an array directly on the group), promote it
@@ -525,6 +565,7 @@ export function createGroupComponent(getState) {
                     step: getStepOverride() || interval,
                     experimentQueryRange,
                     captureLabels,
+                    categoryMembers,
                 })
                 : m(Chart, { spec: renderSpec, chartsState, interval });
 
