@@ -197,5 +197,37 @@ if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersi
          "no old store identifiers" "$LOGDIR/file.log"
 fi
 
+PORT_AB_COMBINED=18504
+COMBINED_AB_PARQUET="$LOGDIR/combined-ab.parquet"
+
+echo "==> parquet combine --ab produces a combined-AB file"
+./target/debug/rezolus parquet combine \
+    "$PARQUET_AB_A" "$PARQUET_AB_B" \
+    -o "$COMBINED_AB_PARQUET" \
+    --ab baseline=cachecannon experiment=localhost-4241 \
+    > "$LOGDIR/combine-ab.log" 2>&1 \
+    || fail "parquet combine --ab failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
+
+ab_meta=$(./target/debug/rezolus parquet metadata -i "$COMBINED_AB_PARQUET" 2>&1 | grep ab_containers || true)
+[ -n "$ab_meta" ] || fail "metadata missing ab_containers" "$ab_meta" "ab_containers: …" "$LOGDIR/combine-ab.log"
+
+echo "==> viewer auto-detects combined-AB and reports compare_mode"
+./target/debug/rezolus view "$COMBINED_AB_PARQUET" \
+    --listen 127.0.0.1:$PORT_AB_COMBINED \
+    > "$LOGDIR/ab-combined.log" 2>&1 &
+PID_AB_COMBINED=$!
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_AB_COMBINED 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+
+wait_for_port $PORT_AB_COMBINED || {
+    echo "--- log for combined-AB viewer ---"
+    cat "$LOGDIR/ab-combined.log"
+    exit 1
+}
+
+mode=$(curl -fsS "http://127.0.0.1:$PORT_AB_COMBINED/api/v1/mode")
+eq "combined-AB combined_ab"  "$(echo "$mode" | jq -r .combined_ab)"  "true" "$LOGDIR/ab-combined.log"
+eq "combined-AB compare_mode" "$(echo "$mode" | jq -r .compare_mode)" "true" "$LOGDIR/ab-combined.log"
+eq "combined-AB loaded"       "$(echo "$mode" | jq -r .loaded)"       "true" "$LOGDIR/ab-combined.log"
+
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"
