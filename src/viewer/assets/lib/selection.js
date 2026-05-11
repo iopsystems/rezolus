@@ -701,7 +701,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         : 'Download a JSON pattern (charts + toggles only)',
                     onclick: () => exportJSON(notebookStore, attrs),
                 }, [
-                    'Save as Selection (JSON, Notes dropped) ',
+                    'Save as Selection (JSON, no Notes) ',
                     downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-danger', {
