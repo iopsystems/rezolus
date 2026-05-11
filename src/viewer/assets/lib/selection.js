@@ -705,6 +705,19 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     downloadIcon,
                 ]),
                 m('button.selection-btn.selection-btn-danger', {
+                    disabled: !hasAnyNote,
+                    title: hasAnyNote
+                        ? 'Clear notes from all pinned charts (charts and toggles preserved)'
+                        : 'No notes to clear',
+                    onclick: () => {
+                        if (!confirm('Clear notes from all pinned charts? This cannot be undone.')) return;
+                        notebookStore.entries.forEach(e => { e.note = ''; });
+                        expandedNotes.clear();
+                        persistNotebook();
+                        m.redraw();
+                    },
+                }, 'Clear Notes'),
+                m('button.selection-btn.selection-btn-danger', {
                     onclick: () => { clearStore(notebookStore); m.redraw(); },
                 }, 'Clear All'),
             ]),
