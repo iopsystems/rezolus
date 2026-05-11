@@ -68,7 +68,15 @@ notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"
 parking_lot = "0.12.5"
-parquet = "58.2.0"
+parquet = { version = "58.2.0", default-features = false, features = [
+    "arrow",
+    "base64",
+    "flate2-zlib-rs",
+    "lz4",
+    "simdutf8",
+    "snap",
+    "zstd",
+] }
 prometheus-parse = "0.2.5"
 plain = "0.2.3"
 rayon = "1.12"
@@ -109,8 +117,10 @@ tokio = { version = "1.52.2", features = [
 toml = "1.1.2"
 tower = { version = "0.5.3", features = ["tokio"] }
 tower-http = { version = "0.6.8", features = [
-    "compression-full",
-    "decompression-full",
+    "compression-gzip",
+    "compression-zstd",
+    "decompression-gzip",
+    "decompression-zstd",
     "fs",
 ] }
 tower-livereload = "0.10.3"
