@@ -180,7 +180,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         }
         let flat: Vec<String> = inputs
             .iter()
-            .flat_map(|i| flatten_input_sources(i))
+            .flat_map(flatten_input_sources)
             .collect();
         let available: Vec<&str> = flat.iter().map(|s| s.as_str()).collect();
         Some(parse_ab_args(&ab_raw, &available)?)
