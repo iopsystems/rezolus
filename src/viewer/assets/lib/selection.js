@@ -765,6 +765,15 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     baseline: attrs.baselineAlias || 'baseline',
                     experiment: attrs.experimentAlias || 'experiment',
                 };
+                // Use the entry's ORIGINAL section route, not '/notebook'.
+                // buildEffectiveQuery gates node-label injection on the
+                // sectionRoute prefix — `/service/*` skips injection
+                // (service KPIs are already scoped by source=...).
+                // Hardcoding '/notebook' bypassed that gate and the
+                // experiment-side fetch ended up with the baseline's
+                // hostname injected into bridge queries that have no
+                // node label, returning zero series.
+                const originalSectionRoute = entry.section ? `/${entry.section}` : '/notebook';
                 const chartBody = (attrs.compareMode && spec.promql_query)
                     ? m(CompareChartWrapper, {
                         spec,
@@ -773,7 +782,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         anchors: attrs.anchors,
                         toggles: attrs.toggles,
                         setChartToggle: attrs.setChartToggle,
-                        sectionRoute: '/notebook',
+                        sectionRoute: originalSectionRoute,
                         step: interval,
                         experimentQueryRange: attrs.experimentQueryRange,
                         captureLabels,
