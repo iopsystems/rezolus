@@ -177,5 +177,22 @@ for path in / /about /lib/style.css; do
     eq "static $path" "$status" "200" "$LOGDIR/upload.log"
 done
 
+echo "==> served JS bundle has the Notebook rename + new Selection sidebar"
+selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection.js")
+echo "$selection_js" | grep -q "notebookStore" \
+    || fail "selection.js missing notebookStore identifier" "" "notebookStore present" "$LOGDIR/file.log"
+echo "$selection_js" | grep -q "loadedSelectionStore" \
+    || fail "selection.js missing loadedSelectionStore identifier" "" "loadedSelectionStore present" "$LOGDIR/file.log"
+echo "$selection_js" | grep -q "LoadedSelectionView" \
+    || fail "selection.js missing LoadedSelectionView" "" "LoadedSelectionView present" "$LOGDIR/file.log"
+# Sanity: the old identifiers should be gone (modulo the unrelated
+# `toggleSelection`, `isSelected`, `selectionCardTitle`, etc. which
+# stay — only the workspace-store identifiers were renamed).
+if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/null; then
+    fail "selection.js still has old workspace identifiers" \
+         "$(echo "$selection_js" | grep -nE '(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)' | head -3)" \
+         "no old store identifiers" "$LOGDIR/file.log"
+fi
+
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"
