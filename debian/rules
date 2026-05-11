@@ -31,7 +31,7 @@ override_dh_auto_configure:
 	bash debian/cargo/create-config.sh > debian/cargo_home/config.toml
 
 override_dh_auto_build:
-	TARGET_CC=clang TARGET_CXX=clang++ $(CARGO) build --target $(DEB_HOST_RUST_TYPE) --profile $(PROFILE) --bins $(CARGOFLAGS)
+	$(CARGO) build --target $(DEB_HOST_RUST_TYPE) --profile $(PROFILE) --bins $(CARGOFLAGS)
 
 override_dh_auto_install:
 	@mkdir -p debian/tmp/bin
