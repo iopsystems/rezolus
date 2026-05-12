@@ -54,12 +54,10 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     }
 
     if events_requested {
-        super::events::run(path, &event_files, &inline_events, clear_events).unwrap_or_else(
-            |e| {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            },
-        );
+        super::events::run(path, &event_files, &inline_events, clear_events).unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        });
     }
 
     let custom_file = args.get_one::<PathBuf>("queries");

@@ -894,9 +894,9 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         {
             match serde_json::from_str::<::dashboard::Events>(raw) {
                 Ok(mut e) => events.events.append(&mut e.events),
-                Err(e) => eprintln!(
-                    "warning: ignoring malformed events payload in input file: {e}"
-                ),
+                Err(e) => {
+                    eprintln!("warning: ignoring malformed events payload in input file: {e}")
+                }
             }
         }
     }

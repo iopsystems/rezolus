@@ -169,16 +169,16 @@ mod tests {
             labels: BTreeMap::new(),
             duration_ns: None,
         };
-        let mut events = Events::new(vec![
-            make(2, None),
-            make(1, Some("")),
-            make(3, Some("")),
-        ]);
+        let mut events = Events::new(vec![make(2, None), make(1, Some("")), make(3, Some(""))]);
         events.normalize();
         // Empty id is treated as no-id; nothing gets deduped.
         assert_eq!(events.events.len(), 3);
         assert_eq!(
-            events.events.iter().map(|e| e.timestamp).collect::<Vec<_>>(),
+            events
+                .events
+                .iter()
+                .map(|e| e.timestamp)
+                .collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
     }

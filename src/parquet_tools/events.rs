@@ -212,8 +212,8 @@ fn parse_jsonl(content: &str) -> Result<Vec<Event>, String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let v: serde_json::Value = serde_json::from_str(line)
-            .map_err(|e| format!("line {}: invalid JSON: {e}", i + 1))?;
+        let v: serde_json::Value =
+            serde_json::from_str(line).map_err(|e| format!("line {}: invalid JSON: {e}", i + 1))?;
         let event = value_to_event(v).map_err(|e| format!("line {}: {e}", i + 1))?;
         out.push(event);
     }
@@ -515,14 +515,16 @@ mod tests {
 
     #[test]
     fn parses_jsonl_payload() {
-        let json = "{\"timestamp\":1,\"description\":\"a\"}\n{\"timestamp\":2,\"description\":\"b\"}";
+        let json =
+            "{\"timestamp\":1,\"description\":\"a\"}\n{\"timestamp\":2,\"description\":\"b\"}";
         let events = parse_events_payload(json, true).unwrap();
         assert_eq!(events.len(), 2);
     }
 
     #[test]
     fn detects_jsonl_without_extension() {
-        let json = "{\"timestamp\":1,\"description\":\"a\"}\n{\"timestamp\":2,\"description\":\"b\"}";
+        let json =
+            "{\"timestamp\":1,\"description\":\"a\"}\n{\"timestamp\":2,\"description\":\"b\"}";
         // Heuristic kicks in because two top-level `{...}` lines appear.
         let events = parse_events_payload(json, false).unwrap();
         assert_eq!(events.len(), 2);
@@ -530,8 +532,7 @@ mod tests {
 
     #[test]
     fn parses_rfc3339_timestamp() {
-        let json =
-            r#"[{"timestamp":"2026-05-12T15:23:00Z","description":"restart"}]"#;
+        let json = r#"[{"timestamp":"2026-05-12T15:23:00Z","description":"restart"}]"#;
         let events = parse_events_payload(json, false).unwrap();
         // 2026-05-12T15:23:00Z in nanos
         let expected = DateTime::parse_from_rfc3339("2026-05-12T15:23:00Z")
@@ -570,9 +571,10 @@ mod tests {
 
     #[test]
     fn parses_inline_event_rfc3339() {
-        let e =
-            parse_inline_event(r#"time=2026-05-12T15:23:00Z,kind=restart,description="vllm restart""#)
-                .unwrap();
+        let e = parse_inline_event(
+            r#"time=2026-05-12T15:23:00Z,kind=restart,description="vllm restart""#,
+        )
+        .unwrap();
         assert_eq!(e.kind.as_deref(), Some("restart"));
         assert_eq!(e.description, "vllm restart");
     }
@@ -585,10 +587,8 @@ mod tests {
 
     #[test]
     fn parses_inline_event_with_labels() {
-        let e = parse_inline_event(
-            "time=1,description=d,label.reason=OOM,label.deployer=ci",
-        )
-        .unwrap();
+        let e =
+            parse_inline_event("time=1,description=d,label.reason=OOM,label.deployer=ci").unwrap();
         assert_eq!(e.labels.get("reason").map(|s| s.as_str()), Some("OOM"));
         assert_eq!(e.labels.get("deployer").map(|s| s.as_str()), Some("ci"));
     }
@@ -674,9 +674,12 @@ mod tests {
             .set_key_value_metadata(Some(kv))
             .build();
         let tmp = NamedTempFile::new().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(std::fs::File::create(tmp.path()).unwrap(), schema, Some(props))
-                .unwrap();
+        let mut writer = ArrowWriter::try_new(
+            std::fs::File::create(tmp.path()).unwrap(),
+            schema,
+            Some(props),
+        )
+        .unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         tmp
@@ -694,13 +697,7 @@ mod tests {
         let events_file =
             write_events_file(r#"{"events":[{"timestamp":1,"description":"restart"}]}"#);
 
-        let changed = run(
-            parquet.path(),
-            &[events_file.path()],
-            &[],
-            false,
-        )
-        .unwrap();
+        let changed = run(parquet.path(), &[events_file.path()], &[], false).unwrap();
         assert!(changed);
 
         let stored = read_events(parquet.path()).unwrap().unwrap();
@@ -782,8 +779,9 @@ mod tests {
         run(parquet.path(), &[file.path()], &[], false).unwrap();
 
         let kv = crate::parquet_tools::read_file_metadata(parquet.path()).unwrap();
-        assert!(kv.iter().any(|kv| kv.key == "source"
-            && kv.value.as_deref() == Some("rezolus")));
+        assert!(kv
+            .iter()
+            .any(|kv| kv.key == "source" && kv.value.as_deref() == Some("rezolus")));
         assert!(kv
             .iter()
             .any(|kv| kv.key == "node" && kv.value.as_deref() == Some("web01")));
@@ -792,14 +790,10 @@ mod tests {
     #[test]
     fn run_dedupes_by_id_keeping_earlier() {
         let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let first = write_events_file(
-            r#"[{"timestamp":1,"description":"orig","id":"dup"}]"#,
-        );
+        let first = write_events_file(r#"[{"timestamp":1,"description":"orig","id":"dup"}]"#);
         run(parquet.path(), &[first.path()], &[], false).unwrap();
 
-        let second = write_events_file(
-            r#"[{"timestamp":2,"description":"new","id":"dup"}]"#,
-        );
+        let second = write_events_file(r#"[{"timestamp":2,"description":"new","id":"dup"}]"#);
         run(parquet.path(), &[second.path()], &[], false).unwrap();
 
         let stored = read_events(parquet.path()).unwrap().unwrap();
