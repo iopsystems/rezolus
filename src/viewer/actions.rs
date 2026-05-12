@@ -578,26 +578,54 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
     if let Some(path) = parquet_path {
         let is_combined_ab = state.combined_ab_marker.read().is_some();
         if is_combined_ab {
-            // Combined-A/B repack lands in Task 11; keep today's untrimmed
-            // rewrite so the build stays green.
+            let payload: report_save::ReportPayload =
+                match serde_json::from_str(&selection_json) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return ApiResponse::<()>::err(
+                            format!("invalid selection payload: {e}"),
+                            "bad_data",
+                        )
+                        .into_response();
+                    }
+                };
+            // `state.parquet_path` points at the extracted baseline parquet;
+            // the experiment parquet lives at `state.cli_experiment_path`.
+            let Some(experiment_path) = state.cli_experiment_path.read().clone() else {
+                return ApiResponse::<()>::err(
+                    "combined-A/B state missing experiment_path",
+                    "internal",
+                )
+                .into_response();
+            };
+            let manifest = state
+                .combined_ab_marker
+                .read()
+                .clone()
+                .expect("combined_ab_marker checked above");
+            let baseline_tsdb = state.baseline_tsdb();
+            let experiment_tsdb = state
+                .captures
+                .get(CaptureId::Experiment)
+                .expect("experiment slot must be attached in combined-A/B mode");
             let result = tokio::task::spawn_blocking({
-                let path = path.clone();
+                let baseline_path = path.clone();
                 let body = selection_json.clone();
                 move || {
-                    use parquet::file::metadata::KeyValue;
-                    let mut kv_meta = crate::parquet_tools::read_file_metadata(&path)
-                        .map_err(|e| e.to_string())?;
-                    kv_meta.retain(|kv| kv.key != "selection");
-                    kv_meta.push(KeyValue {
-                        key: "selection".to_string(),
-                        value: Some(body),
-                    });
-                    crate::parquet_tools::rewrite_parquet(&path, kv_meta, None)
-                        .map_err(|e| e.to_string())
+                    report_save::trim_combined_ab_to_tarball(
+                        &baseline_path,
+                        &experiment_path,
+                        &payload,
+                        &body,
+                        &baseline_tsdb,
+                        &experiment_tsdb,
+                        &manifest,
+                    )
+                    .map_err(|e| e.to_string())
                 }
             })
             .await;
-            return finalize_report_attachment(result);
+            return finalize_report_attachment_tarball(result);
         }
 
         let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
@@ -668,4 +696,34 @@ fn finalize_report_attachment(
             server_error("internal error")
         }
     }
+}
+
+fn finalize_report_attachment_tarball(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+) -> Response {
+    match result {
+        Ok(Ok(output)) => {
+            info!("saved combined-A/B report tarball ({} bytes)", output.len());
+            tar_attachment("rezolus-report.parquet.ab.tar", output)
+        }
+        Ok(Err(e)) => {
+            error!("report tarball build failed: {e}");
+            server_error(format!("report build failed: {e}"))
+        }
+        Err(e) => {
+            error!("report tarball task panicked: {e}");
+            server_error("internal error")
+        }
+    }
+}
+
+fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-tar")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(body))
+        .unwrap()
 }

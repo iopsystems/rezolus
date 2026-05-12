@@ -178,6 +178,62 @@ fn filter_descriptions(
     }
 }
 
+/// Trim a combined-A/B tarball's per-side parquets and repack. Returns a
+/// POSIX tar (`baseline.parquet` + `experiment.parquet` + `ab.json`). The
+/// manifest is written through unchanged — alias, sources, and category
+/// survive the round-trip.
+#[allow(clippy::too_many_arguments)]
+pub fn trim_combined_ab_to_tarball(
+    baseline_path: &std::path::Path,
+    experiment_path: &std::path::Path,
+    payload: &ReportPayload,
+    selection_json: &str,
+    baseline_tsdb: &Arc<RwLock<Tsdb>>,
+    experiment_tsdb: &Arc<RwLock<Tsdb>>,
+    manifest: &crate::parquet_metadata::AbContainers,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let baseline_kept = {
+        let t = baseline_tsdb.read();
+        let engine = QueryEngine::new(&*t);
+        resolve_kept_columns(payload, &engine, Side::Baseline)
+    };
+    let experiment_kept = {
+        let t = experiment_tsdb.read();
+        let engine = QueryEngine::new(&*t);
+        resolve_kept_columns(payload, &engine, Side::Experiment)
+    };
+
+    let baseline_bytes = trim_parquet_to_columns(baseline_path, &baseline_kept, selection_json)?;
+    let experiment_bytes =
+        trim_parquet_to_columns(experiment_path, &experiment_kept, selection_json)?;
+    let manifest_bytes = serde_json::to_vec_pretty(manifest)?;
+
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut buf);
+        builder.mode(tar::HeaderMode::Deterministic);
+        append_tar_entry(&mut builder, "baseline.parquet", &baseline_bytes)?;
+        append_tar_entry(&mut builder, "experiment.parquet", &experiment_bytes)?;
+        append_tar_entry(&mut builder, "ab.json", &manifest_bytes)?;
+        builder.into_inner()?;
+    }
+    Ok(buf)
+}
+
+fn append_tar_entry<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
+    name: &str,
+    data: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut header = tar::Header::new_gnu();
+    header.set_path(name)?;
+    header.set_size(data.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder.append(&header, data)?;
+    Ok(())
+}
+
 /// HTTP-friendly wrapper for the single-parquet trim path. Resolves kept
 /// columns against the supplied Tsdb, trims the source parquet, and returns
 /// the bytes ready to stream. The original JSON body is embedded verbatim
@@ -407,5 +463,95 @@ mod tests {
             .and_then(|kv| kv.value.as_deref())
             .unwrap();
         assert_eq!(sel, selection);
+    }
+
+    #[test]
+    fn combined_ab_round_trip_trims_each_side_and_repacks() {
+        use crate::parquet_metadata::{AbContainers, AbSide};
+
+        let (tsdb_a, tmp_a) = build_test_tsdb();
+        let (tsdb_b, tmp_b) = build_test_tsdb();
+        let tsdb_a = std::sync::Arc::new(parking_lot::RwLock::new(tsdb_a));
+        let tsdb_b = std::sync::Arc::new(parking_lot::RwLock::new(tsdb_b));
+
+        let payload = ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: Some("m_b".into()),
+            }],
+        };
+        let body = r#"{"version":1,"entries":[]}"#;
+        let manifest = AbContainers {
+            version: AbContainers::SCHEMA_VERSION,
+            baseline: AbSide { alias: "a".into(), sources: vec!["svc".into()] },
+            experiment: AbSide { alias: "b".into(), sources: vec!["svc".into()] },
+            category: None,
+        };
+
+        let out = trim_combined_ab_to_tarball(
+            tmp_a.path(),
+            tmp_b.path(),
+            &payload,
+            body,
+            &tsdb_a,
+            &tsdb_b,
+            &manifest,
+        )
+        .expect("AB trim succeeds");
+
+        // Verify tar contains the three expected entries.
+        let mut archive = tar::Archive::new(std::io::Cursor::new(&out));
+        let mut names = Vec::new();
+        let mut baseline_bytes: Vec<u8> = Vec::new();
+        let mut experiment_bytes: Vec<u8> = Vec::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap().to_path_buf();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            names.push(name.clone());
+            match name.as_str() {
+                "baseline.parquet" => {
+                    std::io::copy(&mut entry, &mut baseline_bytes).unwrap();
+                }
+                "experiment.parquet" => {
+                    std::io::copy(&mut entry, &mut experiment_bytes).unwrap();
+                }
+                _ => {}
+            }
+        }
+        assert!(names.iter().any(|n| n == "baseline.parquet"));
+        assert!(names.iter().any(|n| n == "experiment.parquet"));
+        assert!(names.iter().any(|n| n == "ab.json"));
+
+        // Write to tempfiles to use File-based parquet readers.
+        let verify_b = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(verify_b.path(), &baseline_bytes).unwrap();
+        let verify_e = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(verify_e.path(), &experiment_bytes).unwrap();
+
+        let b_schema = ParquetRecordBatchReaderBuilder::try_new(
+            std::fs::File::open(verify_b.path()).unwrap(),
+        )
+        .unwrap()
+        .schema()
+        .clone();
+        let e_schema = ParquetRecordBatchReaderBuilder::try_new(
+            std::fs::File::open(verify_e.path()).unwrap(),
+        )
+        .unwrap()
+        .schema()
+        .clone();
+        let b_names: Vec<&str> = b_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        let e_names: Vec<&str> = e_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        assert_eq!(b_names, vec!["timestamp", "duration", "m_a"]);
+        assert_eq!(e_names, vec!["timestamp", "duration", "m_b"]);
     }
 }
