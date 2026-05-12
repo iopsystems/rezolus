@@ -472,6 +472,10 @@ fn init_file_mode_combined_ab(
     state
         .captures
         .set_baseline_file_metadata(baseline_file_meta);
+    *state.trimmed_report_marker.write() = read_footer_kv(
+        &extracted.baseline_path,
+        crate::parquet_metadata::KEY_REPORT,
+    );
     state.captures.set_baseline_alias(Some(baseline_alias));
 
     state.captures.attach_experiment(
