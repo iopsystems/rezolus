@@ -201,10 +201,14 @@ PORT_AB_COMBINED=18504
 COMBINED_AB_PARQUET="$LOGDIR/combined-ab.parquet"
 
 echo "==> parquet combine --ab produces a combined-AB file"
+# Use single-source fixtures so --ab can unambiguously assign each input
+# to a side. The AB_base/AB_base_pin files are already multi-source and
+# can't be used here.
 ./target/debug/rezolus parquet combine \
-    "$PARQUET_AB_A" "$PARQUET_AB_B" \
+    site/viewer/data/ab_source_a.parquet \
+    site/viewer/data/ab_source_b.parquet \
     -o "$COMBINED_AB_PARQUET" \
-    --ab baseline=cachecannon experiment=localhost-4241 \
+    --ab baseline=source-a experiment=source-b \
     > "$LOGDIR/combine-ab.log" 2>&1 \
     || fail "parquet combine --ab failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
 
