@@ -5,7 +5,7 @@ on:
     paths-ignore:
       - 'site/**'
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
     paths-ignore:
       - 'site/**'
 
@@ -14,12 +14,8 @@ env:
   RUST_BACKTRACE: full
 
 jobs:
-  # First stage: these are quick jobs that give immediate feedback on a PR.
-  # They already ran while the PR was a draft, so on ready_for_review we
-  # skip them and only build the new release matrix added below.
   check:
     name: check
-    if: github.event.action != 'ready_for_review'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -38,7 +34,6 @@ jobs:
           cargo check --all-targets
 
   clippy:
-    if: github.event.action != 'ready_for_review'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -80,7 +75,6 @@ jobs:
         sarif_file: clippy.sarif
 
   audit:
-    if: github.event.action != 'ready_for_review'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -96,7 +90,6 @@ jobs:
 
   rustfmt:
     name: rustfmt
-    if: github.event.action != 'ready_for_review'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -119,7 +112,6 @@ jobs:
   # `Table.grow(): failed to grow table by 4`.
   wasm-viewer:
     name: wasm-viewer
-    if: github.event.action != 'ready_for_review'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -169,10 +161,9 @@ jobs:
       - name: determine build profiles
         id: set-profiles
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.action }}" == "ready_for_review" ]]; then
-            # Draft already covered debug; only the release matrix is new.
-            echo 'profiles=["release"]' >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.draft }}" == "true" ]]; then
+          # PRs build debug only; release builds run on push (to main) and
+          # in release.yml at tag time, where packaging happens.
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             echo 'profiles=["debug"]' >> $GITHUB_OUTPUT
           else
             echo 'profiles=["release", "debug"]' >> $GITHUB_OUTPUT
@@ -249,8 +240,6 @@ jobs:
 
   check-success:
     name: verify all tests pass
-    # Run even when some deps are skipped (e.g. on ready_for_review the
-    # quick-feedback jobs are skipped because the draft already ran them).
     if: always()
     runs-on: ubuntu-latest
     needs:
