@@ -191,7 +191,7 @@ pub fn strip_sections_from_section_payload(value: &mut serde_json::Value) {
 
 /// Reports viewer mode (live/file/upload-only, compare attached, etc.).
 async fn mode(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let loaded = !state.sections.read().is_empty();
+    let loaded = !state.sections.read().is_empty() || state.is_trimmed_report();
     // The static-site bundle reports "direct" for its own URL input;
     // the binary viewer never reports "direct" — URL loads always go
     // through the local proxy.
@@ -205,6 +205,7 @@ async fn mode(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
         "combined_ab": state.combined_ab(),
+        "report": state.is_trimmed_report(),
         "category": state.category_name.read().clone(),
         "url_loading": url_loading,
     }))
