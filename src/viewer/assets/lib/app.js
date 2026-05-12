@@ -66,6 +66,7 @@ const getCachedSections = () => getSections(sectionCacheState);
 // Compare-mode state (Stage 4 of A/B compare plan)
 let compareMode = false;
 let combinedAB = false;
+let reportMode = false;
 let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
@@ -674,6 +675,7 @@ const initDashboard = (config = {}) => {
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
     combinedAB = config.combinedAB === true;
+    reportMode = config.reportMode === true;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
     experimentQueryRange = config.experimentQueryRange || null;
@@ -749,9 +751,11 @@ const initDashboard = (config = {}) => {
     // rendered map at all.
     const categoryName = config.categoryName || null;
     const serviceNames = Object.keys(serviceInstances || {});
-    const defaultRoute = categoryName
-        ? `/service/${categoryName}`
-        : (serviceNames.length > 0 ? `/service/${serviceNames[0]}` : '/overview');
+    const defaultRoute = reportMode
+        ? '/report'
+        : (categoryName
+            ? `/service/${categoryName}`
+            : (serviceNames.length > 0 ? `/service/${serviceNames[0]}` : '/overview'));
 
     // A stale hash (e.g. `#/service/llm-perf` from a previous session
     // or external link to a different capture) would otherwise drive
