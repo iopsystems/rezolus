@@ -19,6 +19,16 @@
         h2 { font-weight: 600; font-size: 1.05rem; margin-top: 2rem; }
         p { line-height: 1.5; }
         code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 0.92em; }
+        .status {
+            padding: 0.6rem 0.9rem;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+            background: #f9fafb;
+            font-size: 0.9rem;
+            margin: 0.5rem 0 1rem;
+        }
+        .status.ok      { border-color: #bbf7d0; background: #f0fdf4; }
+        .status.fallback { border-color: #fde68a; background: #fffbeb; }
         rezolus-chart {
             background: #fff;
             border: 1px solid #e5e7eb;
@@ -30,43 +40,88 @@
 </head>
 <body>
     <h1>&lt;rezolus-chart&gt; embed spike</h1>
-    <p>Lit web component consuming a <code>Plot</code> descriptor (the shape
-       produced by <code>crates/dashboard/</code>) with inline series data. The
-       component lives in its own Shadow DOM, so this page's CSS does not leak
-       into the chart and vice versa.</p>
+    <p>Renders the <strong>Rezolus → Resource Usage → CPU %</strong> plot from the
+       <code>rezolus</code> self-report section. Plot descriptor (the JSON shape
+       produced by <code>crates/dashboard/src/dashboard/rezolus.rs</code>) and series
+       data are fetched from <code>/data/rezolus.json</code> served by a running
+       viewer with a recording loaded. Falls back to the same descriptor with
+       synthetic data when the fetch fails so the demo renders standalone too.</p>
 
-    <h2>Single series with synthetic data</h2>
-    <rezolus-chart id="c1"></rezolus-chart>
-
-    <h2>Empty plot</h2>
-    <rezolus-chart id="c2"></rezolus-chart>
+    <div id="status" class="status">Loading from <code>/data/rezolus.json</code>…</div>
+    <rezolus-chart id="chart"></rezolus-chart>
 
     <script type="module">
-        const now = Date.now();
-        const times = Array.from({ length: 180 }, (_, i) => now - (180 - i) * 1000);
-        const values = times.map((_, i) =>
-            55 + 22 * Math.sin(i / 9) + 8 * Math.sin(i / 2.3) + (Math.random() - 0.5) * 4
-        );
+        const chartEl = document.getElementById('chart');
+        const statusEl = document.getElementById('status');
 
-        document.getElementById('c1').plot = {
-            data: [times, values],
+        // Hand-authored descriptor matching what rezolus.rs emits for the
+        // first plot of the Rezolus → Resource Usage subgroup. Used as the
+        // standalone fallback so the demo renders even without a viewer.
+        const fallbackDescriptor = {
             opts: {
-                title: 'CPU Usage (synthetic)',
-                id: 'cpu-usage-demo',
-                type: 'gauge',
-                format: { unit_system: 'percentage', y_axis_label: '%' },
+                title: 'CPU %',
+                id: 'cpu',
+                type: 'delta_counter',
+                format: {
+                    unit_system: 'percentage',
+                    precision: 2,
+                    range: { min: 0, max: 100 },
+                },
             },
+            promql_query: 'sum(irate(rezolus_cpu_usage[5m])) / 1000000000',
         };
 
-        document.getElementById('c2').plot = {
-            data: [],
-            opts: {
-                title: 'No data available',
-                id: 'empty-demo',
-                type: 'gauge',
-                format: {},
-            },
-        };
+        function syntheticData(descriptor) {
+            const nowS = Math.floor(Date.now() / 1000);
+            const times = Array.from({ length: 180 }, (_, i) => nowS - (180 - i));
+            const values = times.map((_, i) =>
+                0.4 + 0.25 * Math.sin(i / 12) + 0.15 * Math.sin(i / 3.1) + (Math.random() - 0.5) * 0.08
+            );
+            return { ...descriptor, data: [times, values] };
+        }
+
+        function findCpuPlot(view) {
+            const group = (view?.groups || []).find(g => g.id === 'rezolus');
+            const subgroup = group?.subgroups?.find(sg => sg.name === 'Resource Usage');
+            return subgroup?.plots?.find(p => p.opts?.id === 'cpu') ?? null;
+        }
+
+        function hasSeriesData(plot) {
+            return Array.isArray(plot?.data) && plot.data.length >= 2
+                && Array.isArray(plot.data[0]) && plot.data[0].length > 0;
+        }
+
+        async function loadRealOrFallback() {
+            try {
+                const res = await fetch('/data/rezolus.json', { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const view = await res.json();
+                const plot = findCpuPlot(view);
+                if (!plot) throw new Error('CPU % plot not found in rezolus section');
+
+                if (hasSeriesData(plot)) {
+                    chartEl.plot = plot;
+                    statusEl.className = 'status ok';
+                    statusEl.innerHTML = `Loaded real plot from <code>/data/rezolus.json</code>
+                        — ${plot.data[0].length} data points.`;
+                    return;
+                }
+
+                // Descriptor available, but no recording loaded yet.
+                chartEl.plot = syntheticData(plot);
+                statusEl.className = 'status fallback';
+                statusEl.innerHTML = `Got real descriptor from <code>/data/rezolus.json</code>
+                    but no series data (no recording loaded). Showing synthetic series on the
+                    real descriptor.`;
+            } catch (err) {
+                chartEl.plot = syntheticData(fallbackDescriptor);
+                statusEl.className = 'status fallback';
+                statusEl.innerHTML = `Fetch failed (<code>${err.message}</code>). Showing
+                    hand-authored fallback descriptor with synthetic series.`;
+            }
+        }
+
+        loadRealOrFallback();
     </script>
 </body>
 </html>

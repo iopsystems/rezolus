@@ -92,7 +92,8 @@ class RezolusChart extends LitElement {
         }
 
         const [times, values] = data;
-        const seriesData = times.map((t, i) => [t, values[i]]);
+        // PromQL convention: timestamps are seconds since epoch. echarts wants ms.
+        const seriesData = times.map((t, i) => [t * 1000, values[i]]);
         const fmt = this.plot.opts?.format ?? {};
 
         this._chart.setOption({
