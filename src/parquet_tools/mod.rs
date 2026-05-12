@@ -162,6 +162,21 @@ pub fn command() -> Command {
                         .value_parser(value_parser!(String))
                         .num_args(2)
                         .action(clap::ArgAction::Append),
+                )
+                .arg(
+                    clap::Arg::new("category")
+                        .long("category")
+                        .value_name("NAME")
+                        .help(
+                            "Category template name to embed in the AB \
+                             tarball's manifest (e.g. `inference-library`). \
+                             The viewer auto-applies it on load when the \
+                             user did not pass `--category` themselves. \
+                             Only meaningful with `--ab`; not validated \
+                             against the template registry at combine time.",
+                        )
+                        .value_parser(value_parser!(String))
+                        .requires("ab"),
                 ),
         )
         .subcommand(

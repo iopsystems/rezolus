@@ -119,6 +119,14 @@ pub struct AbContainers {
     pub version: u32,
     pub baseline: AbSide,
     pub experiment: AbSide,
+    /// Optional category template name (e.g. `"inference-library"`) the
+    /// viewer should auto-apply when loading this tarball. Set at
+    /// combine time via `parquet combine --ab --category <name>`. CLI
+    /// `--category` on `rezolus view` still wins. Optional so older
+    /// manifests (and `--ab` runs without `--category`) deserialize
+    /// without bumping `version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

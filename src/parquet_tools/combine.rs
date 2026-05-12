@@ -241,6 +241,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    let ab_category = args.get_one::<String>("category").cloned();
     let ab_active = ab.is_some();
     combine_and_write(
         &inputs,
@@ -249,6 +250,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             bypass_time_check,
             pinned,
             ab,
+            ab_category,
         },
     )?;
 
@@ -514,6 +516,9 @@ struct CombineOptions<'a> {
     pinned: Option<&'a String>,
     /// When set, tag the output as a combined-A/B parquet.
     ab: Option<(AbSide, AbSide)>,
+    /// Optional category template name to embed in the AB manifest.
+    /// Only honored when `ab` is also set.
+    ab_category: Option<String>,
 }
 
 fn combine_and_write(
@@ -525,10 +530,17 @@ fn combine_and_write(
         bypass_time_check,
         pinned,
         ab,
+        ab_category,
     } = options;
 
     if let Some((baseline_side, experiment_side)) = ab.as_ref() {
-        return write_ab_tarball(inputs, output, baseline_side, experiment_side);
+        return write_ab_tarball(
+            inputs,
+            output,
+            baseline_side,
+            experiment_side,
+            ab_category.as_deref(),
+        );
     }
 
     let interval_ns = resolve_interval_ns(inputs)?;
@@ -583,6 +595,7 @@ fn write_ab_tarball(
     output: &PathBuf,
     baseline_side: &AbSide,
     experiment_side: &AbSide,
+    category: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Read;
 
@@ -593,6 +606,7 @@ fn write_ab_tarball(
         version: AbContainers::SCHEMA_VERSION,
         baseline: baseline_side.clone(),
         experiment: experiment_side.clone(),
+        category: category.map(str::to_string),
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
 

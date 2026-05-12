@@ -442,7 +442,12 @@ fn init_file_mode_combined_ab(
     let experiment_alias = ab.experiment.alias.clone();
 
     let state = AppState::new(baseline_tsdb, registry.clone());
-    *state.parquet_path.write() = Some(path.to_path_buf());
+    // Point parquet_path at the *extracted* baseline parquet (not the
+    // tar itself) so `regenerate_dashboards` and other parquet-aware
+    // consumers can read its metadata. Same for the experiment side via
+    // cli_experiment_path.
+    *state.parquet_path.write() = Some(extracted.baseline_path.clone());
+    *state.cli_experiment_path.write() = Some(extracted.experiment_path.clone());
     state
         .captures
         .set_baseline_systeminfo(baseline_multinode.or(baseline_systeminfo));
@@ -469,7 +474,20 @@ fn init_file_mode_combined_ab(
         warn!("--experiment ignored: combined-A/B tarball already carries both sides");
     }
 
-    if let Some(ref cat_name) = config.category_name {
+    // CLI --category wins. Fall back to the manifest's embedded category
+    // so a tarball produced with `combine --ab --category <name>` activates
+    // the bridge view without the user remembering the flag.
+    let effective_category = config.category_name.clone().or_else(|| {
+        state
+            .combined_ab_marker
+            .read()
+            .as_ref()
+            .and_then(|m| m.category.clone())
+    });
+    if let Some(ref cat_name) = effective_category {
+        if config.category_name.is_none() {
+            info!("Applying category {cat_name:?} from combined-A/B manifest");
+        }
         validate_category_at_startup(&state, registry, cat_name, &baseline_service_exts, config);
     }
 
@@ -493,7 +511,15 @@ fn validate_category_at_startup(
         std::process::exit(1);
     });
     let baseline_sources: Vec<String> = baseline_exts.iter().map(|(s, _)| s.clone()).collect();
-    let experiment_path = config.experiment_path.as_ref().unwrap_or_else(|| {
+    // Two-file mode supplies the experiment via `--experiment <path>`.
+    // Combined-A/B mode unpacks both sides from a tarball and stashes the
+    // extracted experiment parquet under `cli_experiment_path`. Either
+    // source is fine for category validation.
+    let experiment_path_owned = config
+        .experiment_path
+        .clone()
+        .or_else(|| state.cli_experiment_path.read().clone());
+    let experiment_path = experiment_path_owned.as_ref().unwrap_or_else(|| {
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
         std::process::exit(1);
     });

@@ -203,6 +203,7 @@ mod tests {
                 alias: "sglang".into(),
                 sources: vec!["sglang".into()],
             },
+            category: None,
         };
         let manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
 
