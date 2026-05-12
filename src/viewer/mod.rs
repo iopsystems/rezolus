@@ -40,6 +40,7 @@ mod proxy_allow;
 mod ab_extract;
 mod actions;
 mod metadata;
+mod report_save;
 mod routes;
 mod state;
 
