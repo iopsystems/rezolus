@@ -5,6 +5,9 @@
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::path::Path;
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use metriken_query::{QueryEngine, Tsdb};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -175,6 +178,23 @@ fn filter_descriptions(
     }
 }
 
+/// HTTP-friendly wrapper for the single-parquet trim path. Resolves kept
+/// columns against the supplied Tsdb, trims the source parquet, and returns
+/// the bytes ready to stream. The original JSON body is embedded verbatim
+/// under `selection` in the output footer.
+pub fn trim_single_parquet(
+    source_path: &std::path::Path,
+    payload: &ReportPayload,
+    selection_json: &str,
+    tsdb: &Arc<RwLock<Tsdb>>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let tsdb_read = tsdb.read();
+    let engine = QueryEngine::new(&*tsdb_read);
+    let kept = resolve_kept_columns(payload, &engine, Side::Baseline);
+    drop(tsdb_read);
+    trim_parquet_to_columns(source_path, &kept, selection_json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +331,34 @@ mod tests {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
+
+    #[test]
+    fn single_parquet_round_trip_trims_to_one_column() {
+        let (tsdb, tmp) = build_test_tsdb();
+        let tsdb_arc = std::sync::Arc::new(parking_lot::RwLock::new(tsdb));
+        let payload = ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: None,
+            }],
+        };
+        let body = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
+        let out = trim_single_parquet(tmp.path(), &payload, body, &tsdb_arc)
+            .expect("trim_single_parquet succeeds");
+        let verify = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(verify.path(), &out).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(
+            std::fs::File::open(verify.path()).unwrap(),
+        )
+        .unwrap();
+        let names: Vec<String> = builder
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, vec!["timestamp", "duration", "m_a"]);
+    }
 
     #[test]
     fn trim_keeps_only_named_columns_plus_timestamp_duration() {

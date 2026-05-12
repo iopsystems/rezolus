@@ -22,6 +22,7 @@ use super::metadata::{
     build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
     extract_service_extension_metadata, regenerate_dashboards, validate_service_extensions,
 };
+use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use super::tsdb::Tsdb;
 use ::dashboard;
@@ -575,33 +576,51 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
     let selection_json = body;
 
     if let Some(path) = parquet_path {
-        let result = tokio::task::spawn_blocking(move || {
-            use parquet::file::metadata::KeyValue;
-            let mut kv_meta =
-                crate::parquet_tools::read_file_metadata(&path).map_err(|e| e.to_string())?;
-            kv_meta.retain(|kv| kv.key != "selection");
-            kv_meta.push(KeyValue {
-                key: "selection".to_string(),
-                value: Some(selection_json),
-            });
-            let output = crate::parquet_tools::rewrite_parquet(&path, kv_meta, None)
-                .map_err(|e| e.to_string())?;
-            info!("saved annotated parquet ({} bytes)", output.len());
-            Ok::<Vec<u8>, String>(output)
-        })
-        .await;
+        let is_combined_ab = state.combined_ab_marker.read().is_some();
+        if is_combined_ab {
+            // Combined-A/B repack lands in Task 11; keep today's untrimmed
+            // rewrite so the build stays green.
+            let result = tokio::task::spawn_blocking({
+                let path = path.clone();
+                let body = selection_json.clone();
+                move || {
+                    use parquet::file::metadata::KeyValue;
+                    let mut kv_meta = crate::parquet_tools::read_file_metadata(&path)
+                        .map_err(|e| e.to_string())?;
+                    kv_meta.retain(|kv| kv.key != "selection");
+                    kv_meta.push(KeyValue {
+                        key: "selection".to_string(),
+                        value: Some(body),
+                    });
+                    crate::parquet_tools::rewrite_parquet(&path, kv_meta, None)
+                        .map_err(|e| e.to_string())
+                }
+            })
+            .await;
+            return finalize_report_attachment(result);
+        }
 
-        return match result {
-            Ok(Ok(output)) => parquet_attachment("rezolus-capture-annotated.parquet", output),
-            Ok(Err(e)) => {
-                error!("failed to annotate parquet: {e}");
-                server_error(format!("parquet annotation failed: {e}"))
-            }
+        let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
+            Ok(p) => p,
             Err(e) => {
-                error!("parquet annotation task panicked: {e}");
-                server_error("internal error")
+                return ApiResponse::<()>::err(
+                    format!("invalid selection payload: {e}"),
+                    "bad_data",
+                )
+                .into_response();
             }
         };
+        let tsdb_handle = state.baseline_tsdb();
+        let result = tokio::task::spawn_blocking({
+            let path = path.clone();
+            let body = selection_json.clone();
+            move || {
+                report_save::trim_single_parquet(&path, &payload, &body, &tsdb_handle)
+                    .map_err(|e| e.to_string())
+            }
+        })
+        .await;
+        return finalize_report_attachment(result);
     }
 
     // Live mode: convert snapshots with the selection metadata.
@@ -627,6 +646,25 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         }
         Err(e) => {
             error!("parquet conversion task panicked: {e}");
+            server_error("internal error")
+        }
+    }
+}
+
+fn finalize_report_attachment(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+) -> Response {
+    match result {
+        Ok(Ok(output)) => {
+            info!("saved report parquet ({} bytes)", output.len());
+            parquet_attachment("rezolus-report.parquet", output)
+        }
+        Ok(Err(e)) => {
+            error!("report parquet build failed: {e}");
+            server_error(format!("report build failed: {e}"))
+        }
+        Err(e) => {
+            error!("report parquet task panicked: {e}");
             server_error("internal error")
         }
     }
