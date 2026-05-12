@@ -370,6 +370,24 @@ pub fn lookup_category<'a>(
 /// Called at CLI startup after the experiment attaches, and on every
 /// HTTP attach/detach so the section list stays in sync.
 pub fn regenerate_dashboards(state: &AppState) {
+    if state.is_trimmed_report() {
+        // Trimmed reports carry only the saved selection's columns;
+        // the rezolus topics, service sections, and Query Explorer
+        // would all render mostly empty. Default-construct an empty
+        // context — frontend lands on `/report` instead.
+        let filesize = state
+            .parquet_path
+            .read()
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
+        let context = ::dashboard::dashboard::DashboardContext {
+            filesize,
+            ..Default::default()
+        };
+        *state.sections.write() = LazySectionStore::new(context);
+        return;
+    }
+
     let registry = &state.templates;
     let baseline_path = state.parquet_path.read().clone();
     // Prefer the HTTP-owned temp path; fall back to the CLI-supplied
@@ -417,4 +435,20 @@ pub fn regenerate_dashboards(state: &AppState) {
 
     let context = dashboard::dashboard::build_dashboard_context(filesize, &service_refs, category);
     *state.sections.write() = LazySectionStore::new(context);
+}
+
+#[cfg(test)]
+mod report_mode_tests {
+    use super::*;
+    use ::dashboard::TemplateRegistry;
+    use metriken_query::Tsdb;
+
+    #[test]
+    fn regenerate_returns_empty_sections_for_trimmed_report() {
+        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        *state.trimmed_report_marker.write() = Some("trimmed".to_string());
+        regenerate_dashboards(&state);
+        let sections = state.sections.read();
+        assert!(sections.is_empty(), "trimmed report should have no sections");
+    }
 }
