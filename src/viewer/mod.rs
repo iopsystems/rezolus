@@ -375,10 +375,9 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
         } else {
             Some(ab.baseline.alias.clone())
         };
-        state.captures.attach_combined_ab(
-            baseline_alias,
-            Some(ab.experiment.alias.clone()),
-        );
+        state
+            .captures
+            .attach_combined_ab(baseline_alias, Some(ab.experiment.alias.clone()));
         info!(
             "combined-A/B parquet detected: baseline={} experiment={}",
             ab.baseline.alias, ab.experiment.alias,

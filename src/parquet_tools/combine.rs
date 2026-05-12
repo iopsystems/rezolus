@@ -253,7 +253,11 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     combine_and_write(
         &inputs,
         output,
-        CombineOptions { bypass_time_check, pinned, ab },
+        CombineOptions {
+            bypass_time_check,
+            pinned,
+            ab,
+        },
     )?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
