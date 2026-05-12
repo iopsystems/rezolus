@@ -320,6 +320,19 @@ pub fn run(config: Config) {
     std::thread::sleep(Duration::from_millis(200));
 }
 
+/// Pull a single KV value out of a parquet file's footer. Returns
+/// `None` for missing-key, malformed-file, or missing-value cases.
+fn read_footer_kv(path: &Path, key: &str) -> Option<String> {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    let file = std::fs::File::open(path).ok()?;
+    let reader = SerializedFileReader::new(file).ok()?;
+    let kv = reader.metadata().file_metadata().key_value_metadata()?;
+    kv.iter()
+        .find(|entry| entry.key == key)
+        .and_then(|entry| entry.value.clone())
+}
+
 /// Build initial AppState for a parquet file source, including the
 /// optional experiment attach and category validation.
 fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> AppState {
@@ -358,6 +371,8 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     *state.selection.write() = selection;
     *state.file_checksum.write() = file_checksum;
     state.captures.set_baseline_file_metadata(file_meta);
+    *state.trimmed_report_marker.write() =
+        read_footer_kv(path, crate::parquet_metadata::KEY_REPORT);
     state
         .captures
         .set_baseline_alias(config.baseline_alias.clone());
@@ -759,5 +774,46 @@ mod tests {
         let store = LazySectionStore::default();
         assert!(store.is_empty());
         assert_eq!(store.sections().len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod report_kv_tests {
+    use super::read_footer_kv;
+    use arrow::array::UInt64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::metadata::KeyValue;
+    use parquet::file::properties::WriterProperties;
+    use std::sync::Arc;
+
+    #[test]
+    fn reads_present_key() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("timestamp", DataType::UInt64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(UInt64Array::from(vec![1u64]))],
+        )
+        .unwrap();
+        let kv = vec![KeyValue {
+            key: "report".to_string(),
+            value: Some("trimmed".to_string()),
+        }];
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(kv))
+            .build();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(tmp.reopen().unwrap(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        assert_eq!(
+            read_footer_kv(tmp.path(), "report"),
+            Some("trimmed".to_string())
+        );
+        assert_eq!(read_footer_kv(tmp.path(), "missing"), None);
     }
 }
