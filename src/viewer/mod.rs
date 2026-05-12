@@ -357,31 +357,33 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     // Combined-A/B detection: a single parquet that contains both sides
     // (produced by `parquet combine --ab`) auto-attaches the experiment
     // slot to the same TSDB. JS injects container=baseline|experiment
-    // at query time.
-    //
-    // `extract_parquet_metadata` JSON-decodes every KV value, so
-    // ab_containers arrives as a Value::Object (not a raw string) — use
-    // from_value, not from_str.
-    if let Some(file_meta_str) = state
+    // at query time. Cache the parsed marker on AppState so the
+    // /api/v1/mode handler doesn't re-parse on every poll.
+    let ab = state
         .captures
         .file_metadata(capture_registry::CaptureId::Baseline)
-    {
-        if let Ok(file_meta) = serde_json::from_str::<serde_json::Value>(&file_meta_str) {
-            if let Some(ab_val) = file_meta.get(crate::parquet_metadata::KEY_AB_CONTAINERS) {
-                if let Ok(ab) =
-                    serde_json::from_value::<crate::parquet_metadata::AbContainers>(ab_val.clone())
-                {
-                    state.captures.attach_combined_ab(
-                        Some(ab.baseline.alias.clone()),
-                        Some(ab.experiment.alias.clone()),
-                    );
-                    info!(
-                        "combined-A/B parquet detected: baseline={} experiment={}",
-                        ab.baseline.alias, ab.experiment.alias,
-                    );
-                }
-            }
-        }
+        .as_deref()
+        .and_then(state::detect_ab_containers);
+    if let Some(ab) = ab {
+        // CLI alias wins; fall back to the parquet-baked alias only when the
+        // user didn't supply one. Experiment alias has no CLI source for
+        // combined-AB (the single positional arg is the baseline-shaped
+        // path), so always take it from the parquet metadata.
+        let baseline_alias = if config.baseline_alias.is_some() {
+            // set_baseline_alias already wrote the CLI value; don't clobber.
+            None
+        } else {
+            Some(ab.baseline.alias.clone())
+        };
+        state.captures.attach_combined_ab(
+            baseline_alias,
+            Some(ab.experiment.alias.clone()),
+        );
+        info!(
+            "combined-A/B parquet detected: baseline={} experiment={}",
+            ab.baseline.alias, ab.experiment.alias,
+        );
+        *state.combined_ab_marker.write() = Some(ab);
     }
 
     if let Some(ref cat_name) = config.category_name {

@@ -115,6 +115,11 @@ pub struct AppState {
     /// SHA-256 hex digest of the source parquet file (file mode only).
     pub file_checksum: RwLock<Option<String>>,
     pub proxy: ProxyState,
+    /// Cached result of detecting ab_containers in baseline file metadata.
+    /// Set during init_file_mode; read by combined_ab() and the JS-facing
+    /// /api/v1/mode handler. Avoids re-parsing the file-metadata JSON
+    /// blob on every mode poll.
+    pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
 }
 
 impl AppState {
@@ -132,6 +137,7 @@ impl AppState {
             selection: RwLock::new(None),
             file_checksum: RwLock::new(None),
             proxy: ProxyState::default(),
+            combined_ab_marker: RwLock::new(None),
         }
     }
 
@@ -165,14 +171,7 @@ impl AppState {
     /// and the experiment slot points at the same TSDB. Drives JS-side
     /// `container` label injection per capture.
     pub fn combined_ab(&self) -> bool {
-        let Some(meta_str) = self.captures.file_metadata(CaptureId::Baseline) else {
-            return false;
-        };
-        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_str) else {
-            return false;
-        };
-        meta.get(crate::parquet_metadata::KEY_AB_CONTAINERS)
-            .is_some()
+        self.combined_ab_marker.read().is_some()
     }
 
     /// Build the navigation + global params payload for `/api/v1/sections`.
@@ -324,4 +323,18 @@ pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
         Unsupported(_) => "unsupported",
         MetricNotFound(_) => "not_found",
     }
+}
+
+/// Decode the `ab_containers` block from a parquet's file-metadata JSON
+/// blob. Returns None when the metadata is missing/malformed/lacks the key.
+/// Used by both `init_file_mode` (one-shot at load) and `combined_ab()`
+/// (cached lookup). The double-parse (string → Value → AbContainers) is
+/// because rezolus stores parquet KV metadata as JSON-encoded values
+/// inside a JSON map.
+pub fn detect_ab_containers(
+    file_meta_str: &str,
+) -> Option<crate::parquet_metadata::AbContainers> {
+    let v: serde_json::Value = serde_json::from_str(file_meta_str).ok()?;
+    let ab_val = v.get(crate::parquet_metadata::KEY_AB_CONTAINERS)?;
+    serde_json::from_value(ab_val.clone()).ok()
 }
