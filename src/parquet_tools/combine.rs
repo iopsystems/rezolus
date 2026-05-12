@@ -145,7 +145,7 @@ fn resolve_ab_input_indices(
             "--ab: expected exactly one input matching baseline source(s) {:?}, got {} (inputs: {:?})",
             baseline.sources,
             baseline_idxs.len(),
-            inputs.iter().map(|i| flatten_input_sources(i)).collect::<Vec<_>>(),
+            inputs.iter().map(flatten_input_sources).collect::<Vec<_>>(),
         )
         .into());
     }
@@ -154,7 +154,7 @@ fn resolve_ab_input_indices(
             "--ab: expected exactly one input matching experiment source(s) {:?}, got {} (inputs: {:?})",
             experiment.sources,
             experiment_idxs.len(),
-            inputs.iter().map(|i| flatten_input_sources(i)).collect::<Vec<_>>(),
+            inputs.iter().map(flatten_input_sources).collect::<Vec<_>>(),
         )
         .into());
     }
