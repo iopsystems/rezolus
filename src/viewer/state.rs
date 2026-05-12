@@ -115,6 +115,12 @@ pub struct AppState {
     /// SHA-256 hex digest of the source parquet file (file mode only).
     pub file_checksum: RwLock<Option<String>>,
     pub proxy: ProxyState,
+    /// Set during init_file_mode when the input was a `*.parquet.ab.tar`
+    /// archive. Carries the manifest extracted from the tarball; the
+    /// presence of `Some` is what `/api/v1/mode` exposes as
+    /// `combined_ab: true` so the frontend can pick UX appropriate for
+    /// a single-artifact compare.
+    pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
 }
 
 impl AppState {
@@ -132,6 +138,7 @@ impl AppState {
             selection: RwLock::new(None),
             file_checksum: RwLock::new(None),
             proxy: ProxyState::default(),
+            combined_ab_marker: RwLock::new(None),
         }
     }
 
@@ -159,6 +166,14 @@ impl AppState {
         self.captures
             .get(CaptureId::Baseline)
             .expect("baseline capture is always present")
+    }
+
+    /// True when the input artifact was a combined-A/B tarball
+    /// (extracted at startup into two per-side TSDBs). The frontend uses
+    /// this to distinguish a single-file compare from a two-file compare
+    /// in download / save flows.
+    pub fn combined_ab(&self) -> bool {
+        self.combined_ab_marker.read().is_some()
     }
 
     /// Build the navigation + global params payload for `/api/v1/sections`.

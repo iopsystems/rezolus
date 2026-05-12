@@ -27,6 +27,146 @@ struct InputFile {
     instance: Option<String>,
 }
 
+/// Flatten an `InputFile.source` field into one or more flat source names.
+/// Already-combined inputs carry a JSON-array string (e.g. `"[\"rezolus\",\"vllm\"]"`);
+/// single-source inputs carry the bare name. This returns the flat list either way.
+fn flatten_input_sources(input: &InputFile) -> Vec<String> {
+    if let Ok(arr) = serde_json::from_str::<Vec<String>>(&input.source) {
+        arr
+    } else {
+        vec![input.source.clone()]
+    }
+}
+
+/// Parse a `--ab` argument list into (baseline, experiment) sides.
+///
+/// `raw` is the clap-collected Vec, each entry `key=value`. `available_sources`
+/// is the flat list of source names across all inputs (for validation).
+fn parse_ab_args(
+    raw: &[String],
+    available_sources: &[&str],
+) -> Result<(AbSide, AbSide), Box<dyn std::error::Error>> {
+    let mut baseline: Option<String> = None;
+    let mut experiment: Option<String> = None;
+
+    for entry in raw {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("--ab entry {entry:?} must be key=value"))?;
+        match key {
+            "baseline" => {
+                if baseline.is_some() {
+                    return Err("--ab baseline= specified more than once".into());
+                }
+                baseline = Some(value.to_string());
+            }
+            "experiment" => {
+                if experiment.is_some() {
+                    return Err("--ab experiment= specified more than once".into());
+                }
+                experiment = Some(value.to_string());
+            }
+            other => {
+                return Err(format!(
+                    "--ab key {other:?} not recognized (valid: baseline, experiment)"
+                )
+                .into());
+            }
+        }
+    }
+
+    let baseline = baseline.ok_or("--ab requires baseline=<source>")?;
+    let experiment = experiment.ok_or("--ab requires experiment=<source>")?;
+
+    for (label, value) in [("baseline", &baseline), ("experiment", &experiment)] {
+        if !available_sources.contains(&value.as_str()) {
+            return Err(format!(
+                "--ab {label}={value:?} does not match any input source (available: {available_sources:?})"
+            )
+            .into());
+        }
+    }
+
+    if baseline == experiment {
+        return Err(format!(
+            "--ab baseline and experiment must be different sources (both are {baseline:?})"
+        )
+        .into());
+    }
+
+    Ok((
+        AbSide {
+            alias: baseline.clone(),
+            sources: vec![baseline],
+        },
+        AbSide {
+            alias: experiment.clone(),
+            sources: vec![experiment],
+        },
+    ))
+}
+
+/// Resolve which input file maps to baseline vs experiment in --ab mode.
+///
+/// Each input must match exactly ONE side via its (possibly multi-source)
+/// flat source list, and the two inputs must be different. Returns the
+/// (baseline_idx, experiment_idx) tuple. Errors are user-actionable —
+/// the upfront check catches both ambiguous mappings (input matches both
+/// sides) and orphan inputs (input matches neither side) BEFORE the
+/// column writer would silently mis-route data.
+fn resolve_ab_input_indices(
+    inputs: &[InputFile],
+    baseline: &AbSide,
+    experiment: &AbSide,
+) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+    let baseline_idxs: Vec<usize> = inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| {
+            flatten_input_sources(i)
+                .iter()
+                .any(|s| baseline.sources.contains(s))
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+    let experiment_idxs: Vec<usize> = inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| {
+            flatten_input_sources(i)
+                .iter()
+                .any(|s| experiment.sources.contains(s))
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    if baseline_idxs.len() != 1 {
+        return Err(format!(
+            "--ab: expected exactly one input matching baseline source(s) {:?}, got {} (inputs: {:?})",
+            baseline.sources,
+            baseline_idxs.len(),
+            inputs.iter().map(flatten_input_sources).collect::<Vec<_>>(),
+        )
+        .into());
+    }
+    if experiment_idxs.len() != 1 {
+        return Err(format!(
+            "--ab: expected exactly one input matching experiment source(s) {:?}, got {} (inputs: {:?})",
+            experiment.sources,
+            experiment_idxs.len(),
+            inputs.iter().map(flatten_input_sources).collect::<Vec<_>>(),
+        )
+        .into());
+    }
+    if baseline_idxs[0] == experiment_idxs[0] {
+        return Err(
+            "--ab: baseline and experiment resolved to the same input file (sources overlap)"
+                .into(),
+        );
+    }
+    Ok((baseline_idxs[0], experiment_idxs[0]))
+}
+
 /// Combine multiple parquet files into one. Used by the `parquet combine` CLI
 /// command and by the multi-endpoint recorder for combined output.
 pub(crate) fn combine_files(
@@ -37,7 +177,7 @@ pub(crate) fn combine_files(
     validate_sampling_interval(&inputs)?;
     validate_labels(&mut inputs)?;
     validate_time_overlap(&inputs)?;
-    combine_and_write(&inputs, output, false, None)
+    combine_and_write(&inputs, output, CombineOptions::default())
 }
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
@@ -52,10 +192,19 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut inputs = load_inputs(&files)?;
 
-    // Phase 2: Validate (cheapest checks first)
-    validate_sampling_interval(&inputs)?;
-    validate_labels(&mut inputs)?;
-    validate_time_overlap(&inputs)?;
+    let ab_raw: Vec<String> = args
+        .get_many::<String>("ab")
+        .map(|i| i.cloned().collect())
+        .unwrap_or_default();
+
+    // Phase 2: Validate (cheapest checks first). --ab mode packages two
+    // independent captures into a tarball; they aren't row-merged so
+    // label/interval/time-overlap consistency is irrelevant.
+    if ab_raw.is_empty() {
+        validate_sampling_interval(&inputs)?;
+        validate_labels(&mut inputs)?;
+        validate_time_overlap(&inputs)?;
+    }
 
     // Validate --pinned matches an actual rezolus node
     if let Some(pinned_node) = pinned {
@@ -73,15 +222,53 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    combine_and_write(&inputs, output, bypass_time_check, pinned)?;
+    let ab = if !ab_raw.is_empty() {
+        if inputs.len() != 2 {
+            return Err(format!(
+                "--ab requires exactly two input files (got {})",
+                inputs.len()
+            )
+            .into());
+        }
+        let flat: Vec<String> = inputs.iter().flat_map(flatten_input_sources).collect();
+        let available: Vec<&str> = flat.iter().map(|s| s.as_str()).collect();
+        let parsed = parse_ab_args(&ab_raw, &available)?;
+        // Upfront validation — catches multi-source ambiguity before
+        // `write_ab_tarball` would silently mis-route data.
+        let _ = resolve_ab_input_indices(&inputs, &parsed.0, &parsed.1)?;
+        Some(parsed)
+    } else {
+        None
+    };
+
+    let ab_category = args.get_one::<String>("category").cloned();
+    let ab_active = ab.is_some();
+    combine_and_write(
+        &inputs,
+        output,
+        CombineOptions {
+            bypass_time_check,
+            pinned,
+            ab,
+            ab_category,
+        },
+    )?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
-    println!(
-        "Combined {} files ({}) into {:?}",
-        inputs.len(),
-        source_names.join(", "),
-        output
-    );
+    if ab_active {
+        println!(
+            "Packaged A/B captures ({}) into {:?}",
+            source_names.join(" vs "),
+            output
+        );
+    } else {
+        println!(
+            "Combined {} files ({}) into {:?}",
+            inputs.len(),
+            source_names.join(", "),
+            output
+        );
+    }
 
     Ok(())
 }
@@ -321,38 +508,64 @@ fn timestamp_range(input: &InputFile) -> Result<(u64, u64), Box<dyn std::error::
 
 // ── Combine ─────────────────────────────────────────────────────────────
 
+#[derive(Default)]
+struct CombineOptions<'a> {
+    /// Skip the >=95% timestamp-alignment quality check.
+    bypass_time_check: bool,
+    /// Default rezolus node to display in the viewer (set by --pinned).
+    pinned: Option<&'a String>,
+    /// When set, tag the output as a combined-A/B parquet.
+    ab: Option<(AbSide, AbSide)>,
+    /// Optional category template name to embed in the AB manifest.
+    /// Only honored when `ab` is also set.
+    ab_category: Option<String>,
+}
+
 fn combine_and_write(
     inputs: &[InputFile],
     output: &PathBuf,
-    bypass_time_check: bool,
-    pinned: Option<&String>,
+    options: CombineOptions<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let CombineOptions {
+        bypass_time_check,
+        pinned,
+        ab,
+        ab_category,
+    } = options;
+
+    if let Some((baseline_side, experiment_side)) = ab.as_ref() {
+        return write_ab_tarball(
+            inputs,
+            output,
+            baseline_side,
+            experiment_side,
+            ab_category.as_deref(),
+        );
+    }
+
     let interval_ns = resolve_interval_ns(inputs)?;
 
-    // Step 1: Build quantized-timestamp → row-index maps
+    // Build quantized-timestamp → row-index maps
     let ts_maps: Vec<HashMap<u64, usize>> = inputs
         .iter()
         .map(|input| build_timestamp_map(input, interval_ns))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Step 2: Compute intersection of all quantized timestamp sets (sorted)
+    // Compute intersection of all quantized timestamp sets (sorted)
     let common_timestamps = compute_common_timestamps(&ts_maps);
     if common_timestamps.is_empty() {
         return Err("no common timestamps across all input files".into());
     }
 
-    // Step 2b: Validate alignment quality — at least 95% of matched
-    // timestamps must have raw values within 10% of the interval.
+    // Validate alignment quality — at least 95% of matched timestamps
+    // must have raw values within 10% of the interval.
     if bypass_time_check {
         eprintln!("warning: skipping timestamp alignment quality check (--bypass-time-check)");
     } else {
         validate_alignment_quality(inputs, &common_timestamps, interval_ns)?;
     }
 
-    // Step 3: Build merged schema
     let (primary_idx, merged_schema) = build_merged_schema(inputs);
-
-    // Step 4: Build output record batch with aligned rows
     let output_batch = build_output_batch(
         inputs,
         &ts_maps,
@@ -361,7 +574,6 @@ fn combine_and_write(
         &merged_schema,
     )?;
 
-    // Step 5: Merge metadata and write
     let mut merged_kv = merge_metadata(inputs)?;
     if let Some(pinned_node) = pinned {
         merged_kv.push(KeyValue {
@@ -373,6 +585,68 @@ fn combine_and_write(
 
     Ok(())
 }
+
+/// AB combine: package each side's parquet bytes (unmodified) + an
+/// `ab.json` manifest into a tar archive. No schema merging, no row
+/// alignment — the two captures stay independently valid. Viewer-side
+/// extraction lives in `src/viewer/ab_extract.rs`.
+fn write_ab_tarball(
+    inputs: &[InputFile],
+    output: &PathBuf,
+    baseline_side: &AbSide,
+    experiment_side: &AbSide,
+    category: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+
+    let (baseline_idx, experiment_idx) =
+        resolve_ab_input_indices(inputs, baseline_side, experiment_side)?;
+
+    let manifest = AbContainers {
+        version: AbContainers::SCHEMA_VERSION,
+        baseline: baseline_side.clone(),
+        experiment: experiment_side.clone(),
+        category: category.map(str::to_string),
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+
+    let file = std::fs::File::create(output)?;
+    let mut builder = tar::Builder::new(file);
+    builder.mode(tar::HeaderMode::Deterministic);
+
+    for (name, src_path) in [
+        ("baseline.parquet", &inputs[baseline_idx].path),
+        ("experiment.parquet", &inputs[experiment_idx].path),
+    ] {
+        let mut src = std::fs::File::open(src_path)?;
+        let len = src.metadata()?.len();
+        let mut header = tar::Header::new_gnu();
+        header.set_path(name)?;
+        header.set_size(len);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut buf = Vec::with_capacity(len as usize);
+        src.read_to_end(&mut buf)?;
+        builder.append(&header, &buf[..])?;
+    }
+
+    {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(AB_MANIFEST_NAME)?;
+        header.set_size(manifest_bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append(&header, &manifest_bytes[..])?;
+    }
+
+    builder.into_inner()?.sync_all()?;
+    Ok(())
+}
+
+/// Filename used for the AbContainers manifest inside the tarball.
+pub(crate) const AB_MANIFEST_NAME: &str = "ab.json";
+pub(crate) const AB_BASELINE_NAME: &str = "baseline.parquet";
+pub(crate) const AB_EXPERIMENT_NAME: &str = "experiment.parquet";
 
 /// Parse the (already-validated-identical) sampling interval as nanoseconds.
 fn resolve_interval_ns(inputs: &[InputFile]) -> Result<u64, Box<dyn std::error::Error>> {
@@ -552,7 +826,7 @@ fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
     }
 
     // All metric columns from each input, prefixed and labeled
-    for input in inputs {
+    for input in inputs.iter() {
         let (prefix, label_key, label_value) = if input.source == "rezolus" {
             let node = input.node.as_deref().unwrap_or("unknown");
             (node.to_string(), "node".to_string(), node.to_string())
@@ -645,6 +919,7 @@ fn build_output_batch(
     Ok(batch)
 }
 
+/// Build the merged schema for an --ab column-union output.
 fn concatenate_columns(input: &InputFile) -> Result<Vec<ArrayRef>, Box<dyn std::error::Error>> {
     if input.batches.is_empty() {
         return Err(format!("{:?}: file has no data", input.path).into());
@@ -681,14 +956,7 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
     // array — flatten it in rather than pushing the array-string verbatim,
     // so the final result is one flat array.
     let sources: Vec<String> = {
-        let mut s: Vec<String> = Vec::new();
-        for input in inputs {
-            if let Ok(arr) = serde_json::from_str::<Vec<String>>(&input.source) {
-                s.extend(arr);
-            } else {
-                s.push(input.source.clone());
-            }
-        }
+        let mut s: Vec<String> = inputs.iter().flat_map(flatten_input_sources).collect();
         s.sort();
         s.dedup();
         s
@@ -781,8 +1049,7 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         // metadata but a JSON-array `source`, expand it into one
         // per_source_metadata entry per array element, duplicating the
         // top-level fields (version, node, instance) into each.
-        let source_names: Vec<String> = serde_json::from_str::<Vec<String>>(&input.source)
-            .unwrap_or_else(|_| vec![input.source.clone()]);
+        let source_names: Vec<String> = flatten_input_sources(input);
 
         let version = input
             .kv_metadata
@@ -1094,7 +1361,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         // Read back
         let file = std::fs::File::open(&out_path).unwrap();
@@ -1160,7 +1427,7 @@ mod tests {
         validate_sampling_interval(&inputs).unwrap();
         validate_labels(&mut inputs).unwrap();
         validate_time_overlap(&inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         // Read back and verify schema
         let file = std::fs::File::open(&out_path).unwrap();
@@ -1221,7 +1488,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1305,7 +1572,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1347,7 +1614,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false, None);
+        let result = combine_and_write(&inputs, &out_path, CombineOptions::default());
         assert!(result.is_err());
     }
 
@@ -1376,7 +1643,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1423,7 +1690,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false, None);
+        let result = combine_and_write(&inputs, &out_path, CombineOptions::default());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -1672,7 +1939,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1734,7 +2001,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1787,7 +2054,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2), load(&p3)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1830,7 +2097,7 @@ mod tests {
 
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
-        combine_and_write(&inputs, &out_path, false, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let meta_reader =
             SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
@@ -2017,5 +2284,178 @@ mod tests {
             quantize(2 * interval + interval / 2, interval),
             3 * interval
         );
+    }
+
+    #[test]
+    fn parse_ab_args_happy_path() {
+        let raw = vec!["baseline=vllm".to_string(), "experiment=sglang".to_string()];
+        let (baseline, experiment) = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap();
+        assert_eq!(baseline.alias, "vllm");
+        assert_eq!(baseline.sources, vec!["vllm".to_string()]);
+        assert_eq!(experiment.alias, "sglang");
+        assert_eq!(experiment.sources, vec!["sglang".to_string()]);
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_unknown_source() {
+        let raw = vec![
+            "baseline=vllm".to_string(),
+            "experiment=does_not_exist".to_string(),
+        ];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("does_not_exist"),
+            "error should name the missing source: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_missing_side() {
+        let raw = vec!["baseline=vllm".to_string()];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("experiment"),
+            "error should name the missing side: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_duplicate_side() {
+        let raw = vec!["baseline=vllm".to_string(), "baseline=sglang".to_string()];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("baseline"),
+            "error should name the duplicated side: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_unknown_side() {
+        let raw = vec!["control=vllm".to_string(), "treatment=sglang".to_string()];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("control") || err.to_string().contains("baseline"),
+            "error should explain valid sides: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_ab_args_accepts_multi_source_input() {
+        // Already-combined inputs (e.g. rezolus+vllm) expose all their
+        // flattened source names to the validator. The user names ONE of
+        // them in --ab; the side-mapping code (in combine_and_write) is
+        // responsible for back-resolving which input contributes the side.
+        let raw = vec!["baseline=vllm".to_string(), "experiment=sglang".to_string()];
+        // Flat list as combine_and_write would compute it.
+        let available = ["rezolus", "vllm", "rezolus", "sglang"];
+        let (baseline, experiment) = parse_ab_args(&raw, &available).unwrap();
+        assert_eq!(baseline.alias, "vllm");
+        assert_eq!(experiment.alias, "sglang");
+    }
+
+    #[test]
+    fn parse_ab_args_rejects_same_source_on_both_sides() {
+        let raw = vec!["baseline=vllm".to_string(), "experiment=vllm".to_string()];
+        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
+        assert!(
+            err.to_string().contains("different"),
+            "error should explain that sides must differ: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_ab_input_indices_rejects_ambiguous_inputs() {
+        // Both inputs are ["rezolus","vllm"]; baseline=rezolus experiment=vllm
+        // is ambiguous — each input's flat sources contain BOTH side names.
+        // First-match-wins would silently put both on baseline.
+        let make_input = |source_json: &str| InputFile {
+            path: "/tmp/x.parquet".into(),
+            source: source_json.to_string(),
+            kv_metadata: vec![],
+            sampling_interval_ms: Some("1000".to_string()),
+            node: None,
+            instance: None,
+            schema: Arc::new(arrow::datatypes::Schema::empty()),
+            batches: vec![],
+        };
+        let inputs = vec![
+            make_input(r#"["rezolus","vllm"]"#),
+            make_input(r#"["rezolus","vllm"]"#),
+        ];
+        let baseline = AbSide {
+            alias: "rezolus".into(),
+            sources: vec!["rezolus".into()],
+        };
+        let experiment = AbSide {
+            alias: "vllm".into(),
+            sources: vec!["vllm".into()],
+        };
+        let err = resolve_ab_input_indices(&inputs, &baseline, &experiment).unwrap_err();
+        assert!(
+            err.to_string().contains("expected exactly one"),
+            "ambiguous mapping should be rejected upfront: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_ab_input_indices_rejects_orphan_input() {
+        // Input #2 matches neither side. Used to panic in the writer's
+        // unreachable!() arm; now caught upfront.
+        let make_input = |source_json: &str| InputFile {
+            path: "/tmp/x.parquet".into(),
+            source: source_json.to_string(),
+            kv_metadata: vec![],
+            sampling_interval_ms: Some("1000".to_string()),
+            node: None,
+            instance: None,
+            schema: Arc::new(arrow::datatypes::Schema::empty()),
+            batches: vec![],
+        };
+        let inputs = vec![
+            make_input(r#"["rezolus","vllm","sglang"]"#),
+            make_input(r#"["rezolus"]"#),
+        ];
+        let baseline = AbSide {
+            alias: "vllm".into(),
+            sources: vec!["vllm".into()],
+        };
+        let experiment = AbSide {
+            alias: "sglang".into(),
+            sources: vec!["sglang".into()],
+        };
+        let err = resolve_ab_input_indices(&inputs, &baseline, &experiment).unwrap_err();
+        assert!(
+            err.to_string().contains("experiment"),
+            "orphan input (no experiment match) should be named in error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_ab_input_indices_happy_path() {
+        let make_input = |source_json: &str| InputFile {
+            path: "/tmp/x.parquet".into(),
+            source: source_json.to_string(),
+            kv_metadata: vec![],
+            sampling_interval_ms: Some("1000".to_string()),
+            node: None,
+            instance: None,
+            schema: Arc::new(arrow::datatypes::Schema::empty()),
+            batches: vec![],
+        };
+        let inputs = vec![
+            make_input(r#"["rezolus","vllm"]"#),
+            make_input(r#"["rezolus","sglang"]"#),
+        ];
+        let baseline = AbSide {
+            alias: "vllm".into(),
+            sources: vec!["vllm".into()],
+        };
+        let experiment = AbSide {
+            alias: "sglang".into(),
+            sources: vec!["sglang".into()],
+        };
+        let (b, e) = resolve_ab_input_indices(&inputs, &baseline, &experiment).unwrap();
+        assert_eq!(b, 0);
+        assert_eq!(e, 1);
     }
 }

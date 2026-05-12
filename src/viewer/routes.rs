@@ -204,6 +204,7 @@ async fn mode(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "live": state.live.load(Ordering::Relaxed),
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
+        "combined_ab": state.combined_ab(),
         "category": state.category_name.read().clone(),
         "url_loading": url_loading,
     }))

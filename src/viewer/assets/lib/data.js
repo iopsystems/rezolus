@@ -44,6 +44,7 @@ let _selectedInstances = {};  // { serviceName: instanceId | null }
 
 const setSelectedNode = (node) => { _selectedNode = node; };
 const getSelectedNode = () => _selectedNode;
+
 const setSelectedInstance = (serviceName, instanceId) => {
     _selectedInstances[serviceName] = instanceId;
 };

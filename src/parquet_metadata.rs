@@ -105,3 +105,40 @@ pub const KEY_PINNED_NODE: &str = "pinned_node";
 /// than inheriting from file-level metadata, so the payload stays
 /// self-describing across combine.
 pub const KEY_EVENTS: &str = "events";
+
+// ── Combined A/B tarball manifest ───────────────────────────────────
+
+/// Wire shape of the `ab.json` manifest inside a `*.parquet.ab.tar`
+/// archive produced by `parquet combine --ab`. The two captures live
+/// next to the manifest as unmodified parquet entries
+/// (`baseline.parquet`, `experiment.parquet`). Schema is versioned so
+/// future additions (per-side descriptions, etc.) can land without
+/// breaking older readers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AbContainers {
+    pub version: u32,
+    pub baseline: AbSide,
+    pub experiment: AbSide,
+    /// Optional category template name (e.g. `"inference-library"`) the
+    /// viewer should auto-apply when loading this tarball. Set at
+    /// combine time via `parquet combine --ab --category <name>`. CLI
+    /// `--category` on `rezolus view` still wins. Optional so older
+    /// manifests (and `--ab` runs without `--category`) deserialize
+    /// without bumping `version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AbSide {
+    /// Display alias for this side (e.g. "vllm", "sglang").
+    pub alias: String,
+    /// Source names contributed by this side. A multi-source input
+    /// (service + loadgen) lists all its sources here. Informational —
+    /// nothing in the load path branches on it.
+    pub sources: Vec<String>,
+}
+
+impl AbContainers {
+    pub const SCHEMA_VERSION: u32 = 1;
+}

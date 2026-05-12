@@ -313,6 +313,7 @@ const showCompareLanding = () => {
 
 const bootstrap = async () => {
     let compareMode = false;
+    let combinedAB = false;
     let categoryName = null;
     setSplashLabel('Connecting to viewer');
     try {
@@ -324,6 +325,7 @@ const bootstrap = async () => {
         liveMode = response.live === true;
         compareMode = response.compare_mode === true;
         categoryName = response.category || null;
+        combinedAB = response.combined_ab === true;
     } catch (_) { /* assume loaded file mode */ }
 
     setSplashLabel('Loading capture metadata');
@@ -378,6 +380,7 @@ const bootstrap = async () => {
         selectionPayload,
         liveMode,
         compareMode,
+        combinedAB,
         categoryName,
         baselineAlias,
         experimentSystemInfo,

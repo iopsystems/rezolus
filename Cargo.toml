@@ -27,7 +27,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.13.1-alpha.2"
+version = "5.13.1-alpha.3"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -123,6 +123,7 @@ tower-livereload = "0.10.3"
 dashboard.workspace = true
 systeminfo = { path = "crates/systeminfo" }
 walkdir.workspace = true
+tar = { version = "0.4.45", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.26.2" }

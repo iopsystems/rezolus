@@ -37,6 +37,7 @@ use tsdb::*;
 pub mod capture_registry;
 mod proxy_allow;
 
+mod ab_extract;
 mod actions;
 mod metadata;
 mod routes;
@@ -322,14 +323,21 @@ pub fn run(config: Config) {
 /// optional experiment attach and category validation.
 fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> AppState {
     info!("Loading data from parquet file...");
+
+    // Combined-A/B tarball detection runs first — bare parquets fall
+    // through to the normal load path below.
+    if ab_extract::looks_like_ab_tarball(path) {
+        return init_file_mode_combined_ab(config, path, registry);
+    }
+
+    let (systeminfo, selection, file_meta) = metadata::extract_parquet_metadata(path);
+    let multinode_sysinfo = metadata::build_multinode_systeminfo(path);
+
     let data = Tsdb::load(path).unwrap_or_else(|e| {
         eprintln!("failed to load data from parquet: {e}");
         std::process::exit(1);
     });
 
-    let (systeminfo, selection, file_meta) = metadata::extract_parquet_metadata(path);
-    // CLI-startup log only; the canonical extraction happens inside
-    // `regenerate_dashboards` below.
     let mut service_exts = metadata::extract_service_extension_metadata(path, registry);
     metadata::validate_service_extensions(&data, &mut service_exts);
 
@@ -343,7 +351,6 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
 
     let state = AppState::new(data, registry.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
-    let multinode_sysinfo = metadata::build_multinode_systeminfo(path);
     state
         .captures
         .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
@@ -367,6 +374,128 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     state
 }
 
+/// Combined-A/B file mode: extract the tar, load each per-side parquet
+/// as its own Tsdb, and wire them into the baseline/experiment slots.
+/// CLI baseline alias still wins over the manifest-supplied alias.
+/// The CLI experiment-path flag is ignored — combined-A/B carries both
+/// sides in a single artifact.
+fn init_file_mode_combined_ab(
+    config: &Config,
+    path: &Path,
+    registry: &TemplateRegistry,
+) -> AppState {
+    info!("Combined-A/B tarball detected — extracting per-side parquets");
+
+    let extracted = ab_extract::extract_ab_tarball(path).unwrap_or_else(|e| {
+        eprintln!("failed to extract combined-A/B tarball: {e}");
+        std::process::exit(1);
+    });
+    let ab = extracted.manifest.clone();
+    info!(
+        "Loading baseline={} (sources={:?}) experiment={} (sources={:?})",
+        ab.baseline.alias, ab.baseline.sources, ab.experiment.alias, ab.experiment.sources,
+    );
+
+    let (baseline_systeminfo, baseline_selection, baseline_file_meta) =
+        metadata::extract_parquet_metadata(&extracted.baseline_path);
+    let baseline_multinode = metadata::build_multinode_systeminfo(&extracted.baseline_path);
+    let (experiment_systeminfo, _experiment_selection, experiment_file_meta) =
+        metadata::extract_parquet_metadata(&extracted.experiment_path);
+    let experiment_multinode = metadata::build_multinode_systeminfo(&extracted.experiment_path);
+
+    let mut baseline_tsdb = Tsdb::load(&extracted.baseline_path).unwrap_or_else(|e| {
+        eprintln!("failed to load baseline parquet from tarball: {e}");
+        std::process::exit(1);
+    });
+    let mut experiment_tsdb = Tsdb::load(&extracted.experiment_path).unwrap_or_else(|e| {
+        eprintln!("failed to load experiment parquet from tarball: {e}");
+        std::process::exit(1);
+    });
+    // Tsdb's filename defaults to the on-disk path of the extracted parquet
+    // (a tempdir path that disappears on shutdown). Replace it with the
+    // tarball's filename so user-facing displays show the artifact the
+    // user actually pointed at.
+    let display_filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("combined-ab.parquet.ab.tar")
+        .to_string();
+    baseline_tsdb.set_filename(display_filename.clone());
+    experiment_tsdb.set_filename(display_filename);
+
+    let mut baseline_service_exts =
+        metadata::extract_service_extension_metadata(&extracted.baseline_path, registry);
+    metadata::validate_service_extensions(&baseline_tsdb, &mut baseline_service_exts);
+    log_service_exts(&baseline_service_exts, "baseline");
+    let mut experiment_service_exts =
+        metadata::extract_service_extension_metadata(&extracted.experiment_path, registry);
+    metadata::validate_service_extensions(&experiment_tsdb, &mut experiment_service_exts);
+    log_service_exts(&experiment_service_exts, "experiment");
+
+    info!("Computing file checksum...");
+    let file_checksum = metadata::compute_file_checksum(path);
+
+    let baseline_alias = config
+        .baseline_alias
+        .clone()
+        .unwrap_or_else(|| ab.baseline.alias.clone());
+    let experiment_alias = ab.experiment.alias.clone();
+
+    let state = AppState::new(baseline_tsdb, registry.clone());
+    // Point parquet_path at the *extracted* baseline parquet (not the
+    // tar itself) so `regenerate_dashboards` and other parquet-aware
+    // consumers can read its metadata. Same for the experiment side via
+    // cli_experiment_path.
+    *state.parquet_path.write() = Some(extracted.baseline_path.clone());
+    *state.cli_experiment_path.write() = Some(extracted.experiment_path.clone());
+    state
+        .captures
+        .set_baseline_systeminfo(baseline_multinode.or(baseline_systeminfo));
+    *state.selection.write() = baseline_selection;
+    *state.file_checksum.write() = file_checksum;
+    state
+        .captures
+        .set_baseline_file_metadata(baseline_file_meta);
+    state.captures.set_baseline_alias(Some(baseline_alias));
+
+    state.captures.attach_experiment(
+        experiment_tsdb,
+        experiment_multinode.or(experiment_systeminfo),
+        experiment_file_meta,
+        Some(experiment_alias),
+    );
+
+    *state.combined_ab_marker.write() = Some(ab);
+    // Keep the extracted tempdir alive for the duration of the process so
+    // the per-side parquets remain readable for any later re-load.
+    std::mem::forget(extracted);
+
+    if config.experiment_path.is_some() {
+        warn!("--experiment ignored: combined-A/B tarball already carries both sides");
+    }
+
+    // CLI --category wins. Fall back to the manifest's embedded category
+    // so a tarball produced with `combine --ab --category <name>` activates
+    // the bridge view without the user remembering the flag.
+    let effective_category = config.category_name.clone().or_else(|| {
+        state
+            .combined_ab_marker
+            .read()
+            .as_ref()
+            .and_then(|m| m.category.clone())
+    });
+    if let Some(ref cat_name) = effective_category {
+        if config.category_name.is_none() {
+            info!("Applying category {cat_name:?} from combined-A/B manifest");
+        }
+        validate_category_at_startup(&state, registry, cat_name, &baseline_service_exts, config);
+    }
+
+    info!("Generating dashboards...");
+    metadata::regenerate_dashboards(&state);
+    state
+}
+
 /// Validate `--category`: the named category must exist, both captures'
 /// detected sources must appear in its `members`. Refuses to launch on
 /// misconfiguration; silent fall-back hides user intent.
@@ -382,7 +511,15 @@ fn validate_category_at_startup(
         std::process::exit(1);
     });
     let baseline_sources: Vec<String> = baseline_exts.iter().map(|(s, _)| s.clone()).collect();
-    let experiment_path = config.experiment_path.as_ref().unwrap_or_else(|| {
+    // Two-file mode supplies the experiment via `--experiment <path>`.
+    // Combined-A/B mode unpacks both sides from a tarball and stashes the
+    // extracted experiment parquet under `cli_experiment_path`. Either
+    // source is fine for category validation.
+    let experiment_path_owned = config
+        .experiment_path
+        .clone()
+        .or_else(|| state.cli_experiment_path.read().clone());
+    let experiment_path = experiment_path_owned.as_ref().unwrap_or_else(|| {
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
         std::process::exit(1);
     });

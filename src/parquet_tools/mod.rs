@@ -146,6 +146,37 @@ pub fn command() -> Command {
                         .long("pinned")
                         .help("Default rezolus node to display in the viewer (node name or filename)")
                         .value_parser(clap::value_parser!(String)),
+                )
+                .arg(
+                    clap::Arg::new("ab")
+                        .long("ab")
+                        .help(
+                            "Package two captures into a combined-A/B tarball \
+                             instead of row-merging into one parquet. The output \
+                             path should end in `.parquet.ab.tar`. Requires \
+                             exactly two input files. Pass `baseline=<src> \
+                             experiment=<src>` mapping each side to one of \
+                             the inputs' source names; the captures are stored \
+                             unmodified next to an `ab.json` manifest.",
+                        )
+                        .value_parser(value_parser!(String))
+                        .num_args(2)
+                        .action(clap::ArgAction::Append),
+                )
+                .arg(
+                    clap::Arg::new("category")
+                        .long("category")
+                        .value_name("NAME")
+                        .help(
+                            "Category template name to embed in the AB \
+                             tarball's manifest (e.g. `inference-library`). \
+                             The viewer auto-applies it on load when the \
+                             user did not pass `--category` themselves. \
+                             Only meaningful with `--ab`; not validated \
+                             against the template registry at combine time.",
+                        )
+                        .value_parser(value_parser!(String))
+                        .requires("ab"),
                 ),
         )
         .subcommand(

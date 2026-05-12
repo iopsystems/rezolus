@@ -197,5 +197,44 @@ if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersi
          "no old store identifiers" "$LOGDIR/file.log"
 fi
 
+PORT_AB_COMBINED=18504
+COMBINED_AB_TAR="$LOGDIR/combined-ab.parquet.ab.tar"
+
+echo "==> parquet combine --ab produces a *.parquet.ab.tar tarball"
+# Use single-source fixtures so --ab can unambiguously assign each input
+# to a side. The AB_base/AB_base_pin files are multi-source and can't be
+# used here.
+./target/debug/rezolus parquet combine \
+    site/viewer/data/ab_source_a.parquet \
+    site/viewer/data/ab_source_b.parquet \
+    -o "$COMBINED_AB_TAR" \
+    --ab baseline=source-a experiment=source-b \
+    > "$LOGDIR/combine-ab.log" 2>&1 \
+    || fail "parquet combine --ab failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
+
+ab_listing=$(tar tf "$COMBINED_AB_TAR" 2>&1 | tr '\n' ' ')
+case "$ab_listing" in
+    *baseline.parquet*experiment.parquet*ab.json*|*baseline.parquet*ab.json*experiment.parquet*|*experiment.parquet*baseline.parquet*ab.json*|*experiment.parquet*ab.json*baseline.parquet*|*ab.json*baseline.parquet*experiment.parquet*|*ab.json*experiment.parquet*baseline.parquet*) : ;;
+    *) fail "combined-AB tarball missing expected entries" "$ab_listing" "baseline.parquet, experiment.parquet, ab.json" "$LOGDIR/combine-ab.log" ;;
+esac
+
+echo "==> viewer auto-detects combined-AB tarball and reports compare_mode"
+./target/debug/rezolus view "$COMBINED_AB_TAR" \
+    --listen 127.0.0.1:$PORT_AB_COMBINED \
+    > "$LOGDIR/ab-combined.log" 2>&1 &
+PID_AB_COMBINED=$!
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_AB_COMBINED 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+
+wait_for_port $PORT_AB_COMBINED || {
+    echo "--- log for combined-AB viewer ---"
+    cat "$LOGDIR/ab-combined.log"
+    exit 1
+}
+
+mode=$(curl -fsS "http://127.0.0.1:$PORT_AB_COMBINED/api/v1/mode")
+eq "combined-AB combined_ab"  "$(echo "$mode" | jq -r .combined_ab)"  "true" "$LOGDIR/ab-combined.log"
+eq "combined-AB compare_mode" "$(echo "$mode" | jq -r .compare_mode)" "true" "$LOGDIR/ab-combined.log"
+eq "combined-AB loaded"       "$(echo "$mode" | jq -r .loaded)"       "true" "$LOGDIR/ab-combined.log"
+
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"

@@ -65,6 +65,7 @@ const getCachedSections = () => getSections(sectionCacheState);
 
 // Compare-mode state (Stage 4 of A/B compare plan)
 let compareMode = false;
+let combinedAB = false;
 let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
@@ -524,8 +525,7 @@ const SectionContent = {
                 experimentQueryRange,
                 baselineAlias,
                 experimentAlias,
-                // TODO PR 3: set true when loaded parquet has ab_containers metadata
-                combinedAB: false,
+                combinedAB,
             });
         }
 
@@ -673,6 +673,7 @@ const initDashboard = (config = {}) => {
     // reported compare_mode=true).
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
+    combinedAB = config.combinedAB === true;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
     experimentQueryRange = config.experimentQueryRange || null;
