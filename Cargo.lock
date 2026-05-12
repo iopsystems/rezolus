@@ -2796,6 +2796,7 @@ dependencies = [
  "syscall-numbers",
  "sysconf",
  "systeminfo",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3313,6 +3314,16 @@ dependencies = [
  "serde",
  "serde_json",
  "walkdir",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]

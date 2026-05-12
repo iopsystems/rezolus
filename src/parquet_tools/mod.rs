@@ -151,10 +151,13 @@ pub fn command() -> Command {
                     clap::Arg::new("ab")
                         .long("ab")
                         .help(
-                            "Tag the output as a combined-A/B parquet. \
-                             Requires exactly two input files. Pass \
-                             `baseline=<src> experiment=<src>` mapping \
-                             each side to one of the inputs' source names.",
+                            "Package two captures into a combined-A/B tarball \
+                             instead of row-merging into one parquet. The output \
+                             path should end in `.parquet.ab.tar`. Requires \
+                             exactly two input files. Pass `baseline=<src> \
+                             experiment=<src>` mapping each side to one of \
+                             the inputs' source names; the captures are stored \
+                             unmodified next to an `ab.json` manifest.",
                         )
                         .value_parser(value_parser!(String))
                         .num_args(2)

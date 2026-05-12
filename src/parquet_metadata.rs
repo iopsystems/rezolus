@@ -106,24 +106,14 @@ pub const KEY_PINNED_NODE: &str = "pinned_node";
 /// self-describing across combine.
 pub const KEY_EVENTS: &str = "events";
 
-// ── Combined A/B parquet artifact (PR 3) ────────────────────────────
+// ── Combined A/B tarball manifest ───────────────────────────────────
 
-/// File-level marker that the parquet was produced by `parquet combine --ab`.
-/// Value is JSON-encoded `AbContainers`. Presence flips the viewer into
-/// compare mode automatically and routes `container=baseline|experiment`
-/// as a per-capture label injection.
-pub const KEY_AB_CONTAINERS: &str = "ab_containers";
-
-/// Column-metadata key that tags every column in a combined-AB file
-/// with its container side. Values are exactly `"baseline"` or
-/// `"experiment"`. Lives alongside existing labels (`source`, `node`,
-/// …) — does not replace them. Named `KEY_*` (not `COLUMN_LABEL_*`)
-/// for symmetry with `KEY_NODE` / `KEY_INSTANCE`, which are also
-/// dual-scoped (file-level + column-level).
-pub const KEY_CONTAINER: &str = "container";
-
-/// Wire shape for `KEY_AB_CONTAINERS`. Schema is versioned because
-/// adding fields later (e.g. side-specific descriptions) is plausible.
+/// Wire shape of the `ab.json` manifest inside a `*.parquet.ab.tar`
+/// archive produced by `parquet combine --ab`. The two captures live
+/// next to the manifest as unmodified parquet entries
+/// (`baseline.parquet`, `experiment.parquet`). Schema is versioned so
+/// future additions (per-side descriptions, etc.) can land without
+/// breaking older readers.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AbContainers {
     pub version: u32,
@@ -135,10 +125,9 @@ pub struct AbContainers {
 pub struct AbSide {
     /// Display alias for this side (e.g. "vllm", "sglang").
     pub alias: String,
-    /// Source names from the input parquet that landed on this side.
-    /// A multi-source input (e.g. service+loadgen) contributes all its
-    /// sources here. The viewer's compare uses this for nothing
-    /// load-bearing — informational only.
+    /// Source names contributed by this side. A multi-source input
+    /// (service + loadgen) lists all its sources here. Informational —
+    /// nothing in the load path branches on it.
     pub sources: Vec<String>,
 }
 

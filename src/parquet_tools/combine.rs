@@ -192,10 +192,19 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut inputs = load_inputs(&files)?;
 
-    // Phase 2: Validate (cheapest checks first)
-    validate_sampling_interval(&inputs)?;
-    validate_labels(&mut inputs)?;
-    validate_time_overlap(&inputs)?;
+    let ab_raw: Vec<String> = args
+        .get_many::<String>("ab")
+        .map(|i| i.cloned().collect())
+        .unwrap_or_default();
+
+    // Phase 2: Validate (cheapest checks first). --ab mode packages two
+    // independent captures into a tarball; they aren't row-merged so
+    // label/interval/time-overlap consistency is irrelevant.
+    if ab_raw.is_empty() {
+        validate_sampling_interval(&inputs)?;
+        validate_labels(&mut inputs)?;
+        validate_time_overlap(&inputs)?;
+    }
 
     // Validate --pinned matches an actual rezolus node
     if let Some(pinned_node) = pinned {
@@ -213,11 +222,6 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let ab_raw: Vec<String> = args
-        .get_many::<String>("ab")
-        .map(|i| i.cloned().collect())
-        .unwrap_or_default();
-
     let ab = if !ab_raw.is_empty() {
         if inputs.len() != 2 {
             return Err(format!(
@@ -226,30 +230,18 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             )
             .into());
         }
-        for input in &inputs {
-            if input
-                .kv_metadata
-                .iter()
-                .any(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS)
-            {
-                return Err(format!(
-                    "{:?} is already a combined-A/B parquet — re-combining --ab is not supported",
-                    input.path
-                )
-                .into());
-            }
-        }
         let flat: Vec<String> = inputs.iter().flat_map(flatten_input_sources).collect();
         let available: Vec<&str> = flat.iter().map(|s| s.as_str()).collect();
         let parsed = parse_ab_args(&ab_raw, &available)?;
-        // Upfront validation — catches multi-source ambiguity before the
-        // column writer would silently mis-route data.
+        // Upfront validation — catches multi-source ambiguity before
+        // `write_ab_tarball` would silently mis-route data.
         let _ = resolve_ab_input_indices(&inputs, &parsed.0, &parsed.1)?;
         Some(parsed)
     } else {
         None
     };
 
+    let ab_active = ab.is_some();
     combine_and_write(
         &inputs,
         output,
@@ -261,12 +253,20 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
-    println!(
-        "Combined {} files ({}) into {:?}",
-        inputs.len(),
-        source_names.join(", "),
-        output
-    );
+    if ab_active {
+        println!(
+            "Packaged A/B captures ({}) into {:?}",
+            source_names.join(" vs "),
+            output
+        );
+    } else {
+        println!(
+            "Combined {} files ({}) into {:?}",
+            inputs.len(),
+            source_names.join(", "),
+            output
+        );
+    }
 
     Ok(())
 }
@@ -526,50 +526,34 @@ fn combine_and_write(
         pinned,
         ab,
     } = options;
+
+    if let Some((baseline_side, experiment_side)) = ab.as_ref() {
+        return write_ab_tarball(inputs, output, baseline_side, experiment_side);
+    }
+
     let interval_ns = resolve_interval_ns(inputs)?;
 
-    // Map each input to its AB side string, if AB mode is active.
-    let ab_sides: Option<Vec<&'static str>> = if let Some((baseline, experiment)) = ab.as_ref() {
-        // resolve_ab_input_indices was already validated in run(); call
-        // it again here to derive the same mapping for the writer. The
-        // production CLI path always validates upfront, but combine_files
-        // (the lib helper called from the recorder) calls combine_and_write
-        // directly without --ab, so the Some(_) branch only fires when
-        // --ab was provided AND validated.
-        let (baseline_idx, experiment_idx) =
-            resolve_ab_input_indices(inputs, baseline, experiment)?;
-        let mut sides = vec![""; inputs.len()];
-        sides[baseline_idx] = "baseline";
-        sides[experiment_idx] = "experiment";
-        Some(sides)
-    } else {
-        None
-    };
-
-    // Step 1: Build quantized-timestamp → row-index maps
+    // Build quantized-timestamp → row-index maps
     let ts_maps: Vec<HashMap<u64, usize>> = inputs
         .iter()
         .map(|input| build_timestamp_map(input, interval_ns))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Step 2: Compute intersection of all quantized timestamp sets (sorted)
+    // Compute intersection of all quantized timestamp sets (sorted)
     let common_timestamps = compute_common_timestamps(&ts_maps);
     if common_timestamps.is_empty() {
         return Err("no common timestamps across all input files".into());
     }
 
-    // Step 2b: Validate alignment quality — at least 95% of matched
-    // timestamps must have raw values within 10% of the interval.
+    // Validate alignment quality — at least 95% of matched timestamps
+    // must have raw values within 10% of the interval.
     if bypass_time_check {
         eprintln!("warning: skipping timestamp alignment quality check (--bypass-time-check)");
     } else {
         validate_alignment_quality(inputs, &common_timestamps, interval_ns)?;
     }
 
-    // Step 3: Build merged schema
-    let (primary_idx, merged_schema) = build_merged_schema(inputs, ab_sides.as_deref());
-
-    // Step 4: Build output record batch with aligned rows
+    let (primary_idx, merged_schema) = build_merged_schema(inputs);
     let output_batch = build_output_batch(
         inputs,
         &ts_maps,
@@ -578,13 +562,7 @@ fn combine_and_write(
         &merged_schema,
     )?;
 
-    // Step 5: Merge metadata and write
-    let ab_containers = ab.as_ref().map(|(baseline, experiment)| AbContainers {
-        version: AbContainers::SCHEMA_VERSION,
-        baseline: baseline.clone(),
-        experiment: experiment.clone(),
-    });
-    let mut merged_kv = merge_metadata(inputs, ab_containers.as_ref())?;
+    let mut merged_kv = merge_metadata(inputs)?;
     if let Some(pinned_node) = pinned {
         merged_kv.push(KeyValue {
             key: KEY_PINNED_NODE.to_string(),
@@ -595,6 +573,66 @@ fn combine_and_write(
 
     Ok(())
 }
+
+/// AB combine: package each side's parquet bytes (unmodified) + an
+/// `ab.json` manifest into a tar archive. No schema merging, no row
+/// alignment — the two captures stay independently valid. Viewer-side
+/// extraction lives in `src/viewer/ab_extract.rs`.
+fn write_ab_tarball(
+    inputs: &[InputFile],
+    output: &PathBuf,
+    baseline_side: &AbSide,
+    experiment_side: &AbSide,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+
+    let (baseline_idx, experiment_idx) =
+        resolve_ab_input_indices(inputs, baseline_side, experiment_side)?;
+
+    let manifest = AbContainers {
+        version: AbContainers::SCHEMA_VERSION,
+        baseline: baseline_side.clone(),
+        experiment: experiment_side.clone(),
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+
+    let file = std::fs::File::create(output)?;
+    let mut builder = tar::Builder::new(file);
+    builder.mode(tar::HeaderMode::Deterministic);
+
+    for (name, src_path) in [
+        ("baseline.parquet", &inputs[baseline_idx].path),
+        ("experiment.parquet", &inputs[experiment_idx].path),
+    ] {
+        let mut src = std::fs::File::open(src_path)?;
+        let len = src.metadata()?.len();
+        let mut header = tar::Header::new_gnu();
+        header.set_path(name)?;
+        header.set_size(len);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut buf = Vec::with_capacity(len as usize);
+        src.read_to_end(&mut buf)?;
+        builder.append(&header, &buf[..])?;
+    }
+
+    {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(AB_MANIFEST_NAME)?;
+        header.set_size(manifest_bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append(&header, &manifest_bytes[..])?;
+    }
+
+    builder.into_inner()?.sync_all()?;
+    Ok(())
+}
+
+/// Filename used for the AbContainers manifest inside the tarball.
+pub(crate) const AB_MANIFEST_NAME: &str = "ab.json";
+pub(crate) const AB_BASELINE_NAME: &str = "baseline.parquet";
+pub(crate) const AB_EXPERIMENT_NAME: &str = "experiment.parquet";
 
 /// Parse the (already-validated-identical) sampling interval as nanoseconds.
 fn resolve_interval_ns(inputs: &[InputFile]) -> Result<u64, Box<dyn std::error::Error>> {
@@ -755,10 +793,7 @@ fn compute_common_timestamps(ts_maps: &[HashMap<u64, usize>]) -> Vec<u64> {
     common
 }
 
-fn build_merged_schema(
-    inputs: &[InputFile],
-    ab_sides: Option<&[&'static str]>,
-) -> (usize, SchemaRef) {
+fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
     // Prefer rezolus file as primary (for timestamp/duration), else first file
     let primary_idx = inputs
         .iter()
@@ -777,7 +812,7 @@ fn build_merged_schema(
     }
 
     // All metric columns from each input, prefixed and labeled
-    for (input_idx, input) in inputs.iter().enumerate() {
+    for input in inputs.iter() {
         let (prefix, label_key, label_value) = if input.source == "rezolus" {
             let node = input.node.as_deref().unwrap_or("unknown");
             (node.to_string(), "node".to_string(), node.to_string())
@@ -798,12 +833,6 @@ fn build_merged_schema(
                 meta.entry("source".to_string())
                     .or_insert_with(|| input.source.clone());
                 meta.insert(label_key.clone(), label_value.clone());
-                if let Some(side) = ab_sides.and_then(|sides| sides.get(input_idx)) {
-                    meta.insert(
-                        crate::parquet_metadata::KEY_CONTAINER.to_string(),
-                        side.to_string(),
-                    );
-                }
                 let new_field = Field::new(
                     prefixed_name,
                     field.data_type().clone(),
@@ -876,6 +905,7 @@ fn build_output_batch(
     Ok(batch)
 }
 
+/// Build the merged schema for an --ab column-union output.
 fn concatenate_columns(input: &InputFile) -> Result<Vec<ArrayRef>, Box<dyn std::error::Error>> {
     if input.batches.is_empty() {
         return Err(format!("{:?}: file has no data", input.path).into());
@@ -904,10 +934,7 @@ fn concatenate_columns(input: &InputFile) -> Result<Vec<ArrayRef>, Box<dyn std::
 
 // ── Metadata merge ──────────────────────────────────────────────────────
 
-fn merge_metadata(
-    inputs: &[InputFile],
-    ab: Option<&AbContainers>,
-) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
+fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
     let mut result: Vec<KeyValue> = Vec::new();
 
     // source: deduplicated JSON array of all source names. If an input is
@@ -1129,13 +1156,6 @@ fn merge_metadata(
         result.push(KeyValue {
             key: KEY_EVENTS.to_string(),
             value: Some(serde_json::to_string(&events)?),
-        });
-    }
-
-    if let Some(ab) = ab {
-        result.push(KeyValue {
-            key: crate::parquet_metadata::KEY_AB_CONTAINERS.to_string(),
-            value: Some(serde_json::to_string(ab)?),
         });
     }
 
@@ -2108,7 +2128,7 @@ mod tests {
         );
 
         let inputs = vec![load(&p1)];
-        let kv = merge_metadata(&inputs, None).unwrap();
+        let kv = merge_metadata(&inputs).unwrap();
 
         let psm_str = kv
             .iter()
@@ -2143,7 +2163,7 @@ mod tests {
         let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "vllm", "1000");
 
         let inputs = vec![load(&p1), load(&p2)];
-        let kv = merge_metadata(&inputs, None).unwrap();
+        let kv = merge_metadata(&inputs).unwrap();
 
         let source_val = kv
             .iter()
@@ -2188,7 +2208,7 @@ mod tests {
         );
 
         let inputs = vec![load(&p1), load(&p2)];
-        let kv = merge_metadata(&inputs, None).unwrap();
+        let kv = merge_metadata(&inputs).unwrap();
 
         let psm_str = kv
             .iter()
@@ -2302,159 +2322,6 @@ mod tests {
         assert!(
             err.to_string().contains("control") || err.to_string().contains("baseline"),
             "error should explain valid sides: {err}"
-        );
-    }
-
-    #[test]
-    fn build_merged_schema_tags_columns_with_container() {
-        // Two single-metric inputs from different sources; neither is "rezolus"
-        // so both get instance-prefixed column names. We only care that the
-        // container label ends up on every non-time field.
-        let make_input = |source: &str, metric_name: &str| -> InputFile {
-            let mut metric_meta = HashMap::new();
-            metric_meta.insert("metric_type".to_string(), "gauge".to_string());
-
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("timestamp", DataType::UInt64, false),
-                Field::new("duration", DataType::UInt64, true),
-                Field::new(metric_name, DataType::Int64, true).with_metadata(metric_meta),
-            ]));
-            InputFile {
-                path: format!("/tmp/{source}.parquet").into(),
-                source: source.to_string(),
-                kv_metadata: vec![],
-                sampling_interval_ms: Some("1000".to_string()),
-                node: None,
-                instance: None,
-                schema,
-                batches: vec![],
-            }
-        };
-
-        let inputs = vec![make_input("vllm", "ttft"), make_input("sglang", "ttft")];
-
-        let (_primary_idx, schema) =
-            build_merged_schema(&inputs, Some(&["baseline", "experiment"]));
-
-        let containers: Vec<Option<&String>> = schema
-            .fields()
-            .iter()
-            .filter(|f| f.name() != "timestamp" && f.name() != "duration")
-            .map(|f| f.metadata().get("container"))
-            .collect();
-        assert_eq!(
-            containers,
-            vec![
-                Some(&"baseline".to_string()),
-                Some(&"experiment".to_string())
-            ],
-            "non-time columns should carry container=baseline / experiment"
-        );
-    }
-
-    #[test]
-    fn build_merged_schema_no_container_without_ab_sides() {
-        // Passing None for ab_sides must not inject container metadata.
-        let make_input = |source: &str, metric_name: &str| -> InputFile {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("timestamp", DataType::UInt64, false),
-                Field::new("duration", DataType::UInt64, true),
-                Field::new(metric_name, DataType::Int64, true),
-            ]));
-            InputFile {
-                path: format!("/tmp/{source}.parquet").into(),
-                source: source.to_string(),
-                kv_metadata: vec![],
-                sampling_interval_ms: Some("1000".to_string()),
-                node: None,
-                instance: None,
-                schema,
-                batches: vec![],
-            }
-        };
-
-        let inputs = vec![make_input("vllm", "ttft")];
-        let (_primary_idx, schema) = build_merged_schema(&inputs, None);
-
-        for field in schema.fields() {
-            if field.name() != "timestamp" && field.name() != "duration" {
-                assert!(
-                    !field.metadata().contains_key("container"),
-                    "non-AB combine must not set container label"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn merge_metadata_writes_ab_containers_when_provided() {
-        let ab = AbContainers {
-            version: AbContainers::SCHEMA_VERSION,
-            baseline: AbSide {
-                alias: "vllm".to_string(),
-                sources: vec!["vllm".to_string()],
-            },
-            experiment: AbSide {
-                alias: "sglang".to_string(),
-                sources: vec!["sglang".to_string()],
-            },
-        };
-        let make_input = |source: &str| {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("timestamp", DataType::UInt64, false),
-                Field::new("duration", DataType::UInt64, true),
-                Field::new("metric", DataType::Int64, true),
-            ]));
-            InputFile {
-                path: format!("/tmp/{source}.parquet").into(),
-                source: source.to_string(),
-                kv_metadata: vec![],
-                sampling_interval_ms: Some("1000".to_string()),
-                node: None,
-                instance: None,
-                schema,
-                batches: vec![],
-            }
-        };
-        let inputs = vec![make_input("vllm"), make_input("sglang")];
-
-        let kv = merge_metadata(&inputs, Some(&ab)).unwrap();
-        let entry = kv
-            .iter()
-            .find(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS)
-            .expect("merged metadata should include ab_containers");
-        let parsed: AbContainers = serde_json::from_str(entry.value.as_deref().unwrap()).unwrap();
-        assert_eq!(parsed.version, AbContainers::SCHEMA_VERSION);
-        assert_eq!(parsed.baseline.alias, "vllm");
-        assert_eq!(parsed.experiment.alias, "sglang");
-    }
-
-    #[test]
-    fn merge_metadata_omits_ab_containers_when_absent() {
-        let make_input = |source: &str| {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("timestamp", DataType::UInt64, false),
-                Field::new("duration", DataType::UInt64, true),
-                Field::new("metric", DataType::Int64, true),
-            ]));
-            InputFile {
-                path: format!("/tmp/{source}.parquet").into(),
-                source: source.to_string(),
-                kv_metadata: vec![],
-                sampling_interval_ms: Some("1000".to_string()),
-                node: None,
-                instance: None,
-                schema,
-                batches: vec![],
-            }
-        };
-        let inputs = vec![make_input("vllm"), make_input("sglang")];
-
-        let kv = merge_metadata(&inputs, None).unwrap();
-        assert!(
-            !kv.iter()
-                .any(|kv| kv.key == crate::parquet_metadata::KEY_AB_CONTAINERS),
-            "non-AB combine must not emit ab_containers"
         );
     }
 

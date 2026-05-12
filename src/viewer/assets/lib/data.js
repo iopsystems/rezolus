@@ -45,9 +45,6 @@ let _selectedInstances = {};  // { serviceName: instanceId | null }
 const setSelectedNode = (node) => { _selectedNode = node; };
 const getSelectedNode = () => _selectedNode;
 
-let _combinedAB = false;
-const setCombinedAB = (value) => { _combinedAB = value === true; };
-
 const setSelectedInstance = (serviceName, instanceId) => {
     _selectedInstances[serviceName] = instanceId;
 };
@@ -403,13 +400,6 @@ const createDataApi = ({
             const inst = _selectedInstances[serviceName];
             if (inst) q = injectLabel(q, 'instance', inst);
         }
-        if (_combinedAB) {
-            // Combined-A/B parquet: every query is scoped to one container side.
-            // The baseline-side path passes crossCapture=false (default), the
-            // experiment-side path passes crossCapture=true.
-            const container = crossCapture ? 'experiment' : 'baseline';
-            q = injectLabel(q, 'container', container);
-        }
         return q;
     };
 
@@ -707,7 +697,6 @@ export {
     getSelectedNode,
     setSelectedInstance,
     getSelectedInstance,
-    setCombinedAB,
     injectLabel,
     buildEffectiveQuery,
 };

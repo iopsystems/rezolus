@@ -115,10 +115,11 @@ pub struct AppState {
     /// SHA-256 hex digest of the source parquet file (file mode only).
     pub file_checksum: RwLock<Option<String>>,
     pub proxy: ProxyState,
-    /// Cached result of detecting ab_containers in baseline file metadata.
-    /// Set during init_file_mode; read by combined_ab() and the JS-facing
-    /// /api/v1/mode handler. Avoids re-parsing the file-metadata JSON
-    /// blob on every mode poll.
+    /// Set during init_file_mode when the input was a `*.parquet.ab.tar`
+    /// archive. Carries the manifest extracted from the tarball; the
+    /// presence of `Some` is what `/api/v1/mode` exposes as
+    /// `combined_ab: true` so the frontend can pick UX appropriate for
+    /// a single-artifact compare.
     pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
 }
 
@@ -167,9 +168,10 @@ impl AppState {
             .expect("baseline capture is always present")
     }
 
-    /// True when the baseline parquet was produced by `parquet combine --ab`
-    /// and the experiment slot points at the same TSDB. Drives JS-side
-    /// `container` label injection per capture.
+    /// True when the input artifact was a combined-A/B tarball
+    /// (extracted at startup into two per-side TSDBs). The frontend uses
+    /// this to distinguish a single-file compare from a two-file compare
+    /// in download / save flows.
     pub fn combined_ab(&self) -> bool {
         self.combined_ab_marker.read().is_some()
     }
@@ -323,16 +325,4 @@ pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
         Unsupported(_) => "unsupported",
         MetricNotFound(_) => "not_found",
     }
-}
-
-/// Decode the `ab_containers` block from a parquet's file-metadata JSON
-/// blob. Returns None when the metadata is missing/malformed/lacks the key.
-/// Used by both `init_file_mode` (one-shot at load) and `combined_ab()`
-/// (cached lookup). The double-parse (string → Value → AbContainers) is
-/// because rezolus stores parquet KV metadata as JSON-encoded values
-/// inside a JSON map.
-pub fn detect_ab_containers(file_meta_str: &str) -> Option<crate::parquet_metadata::AbContainers> {
-    let v: serde_json::Value = serde_json::from_str(file_meta_str).ok()?;
-    let ab_val = v.get(crate::parquet_metadata::KEY_AB_CONTAINERS)?;
-    serde_json::from_value(ab_val.clone()).ok()
 }

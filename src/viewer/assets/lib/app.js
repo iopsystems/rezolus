@@ -8,7 +8,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setCombinedAB, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -674,7 +674,6 @@ const initDashboard = (config = {}) => {
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
     combinedAB = config.combinedAB === true;
-    setCombinedAB(combinedAB);
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
     experimentQueryRange = config.experimentQueryRange || null;

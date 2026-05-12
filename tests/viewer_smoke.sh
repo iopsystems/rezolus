@@ -198,25 +198,28 @@ if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersi
 fi
 
 PORT_AB_COMBINED=18504
-COMBINED_AB_PARQUET="$LOGDIR/combined-ab.parquet"
+COMBINED_AB_TAR="$LOGDIR/combined-ab.parquet.ab.tar"
 
-echo "==> parquet combine --ab produces a combined-AB file"
+echo "==> parquet combine --ab produces a *.parquet.ab.tar tarball"
 # Use single-source fixtures so --ab can unambiguously assign each input
-# to a side. The AB_base/AB_base_pin files are already multi-source and
-# can't be used here.
+# to a side. The AB_base/AB_base_pin files are multi-source and can't be
+# used here.
 ./target/debug/rezolus parquet combine \
     site/viewer/data/ab_source_a.parquet \
     site/viewer/data/ab_source_b.parquet \
-    -o "$COMBINED_AB_PARQUET" \
+    -o "$COMBINED_AB_TAR" \
     --ab baseline=source-a experiment=source-b \
     > "$LOGDIR/combine-ab.log" 2>&1 \
     || fail "parquet combine --ab failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
 
-ab_meta=$(./target/debug/rezolus parquet metadata -i "$COMBINED_AB_PARQUET" 2>&1 | grep ab_containers || true)
-[ -n "$ab_meta" ] || fail "metadata missing ab_containers" "$ab_meta" "ab_containers: …" "$LOGDIR/combine-ab.log"
+ab_listing=$(tar tf "$COMBINED_AB_TAR" 2>&1 | tr '\n' ' ')
+case "$ab_listing" in
+    *baseline.parquet*experiment.parquet*ab.json*|*baseline.parquet*ab.json*experiment.parquet*|*experiment.parquet*baseline.parquet*ab.json*|*experiment.parquet*ab.json*baseline.parquet*|*ab.json*baseline.parquet*experiment.parquet*|*ab.json*experiment.parquet*baseline.parquet*) : ;;
+    *) fail "combined-AB tarball missing expected entries" "$ab_listing" "baseline.parquet, experiment.parquet, ab.json" "$LOGDIR/combine-ab.log" ;;
+esac
 
-echo "==> viewer auto-detects combined-AB and reports compare_mode"
-./target/debug/rezolus view "$COMBINED_AB_PARQUET" \
+echo "==> viewer auto-detects combined-AB tarball and reports compare_mode"
+./target/debug/rezolus view "$COMBINED_AB_TAR" \
     --listen 127.0.0.1:$PORT_AB_COMBINED \
     > "$LOGDIR/ab-combined.log" 2>&1 &
 PID_AB_COMBINED=$!
