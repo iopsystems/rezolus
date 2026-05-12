@@ -128,6 +128,49 @@
     --chart-grid-line: rgba(48, 54, 61, 0.5);
     --chart-shadow: rgba(0, 0, 0, 0.4);
     --chart-shadow-strong: rgba(0, 0, 0, 0.5);
+
+    /* Series accent colors — theme-invariant (same hues on light/dark). */
+    --chart-blue:   #3b82f6;
+    --chart-cyan:   #06b6d4;
+    --chart-teal:   #14b8a6;
+    --chart-green:  #22c55e;
+    --chart-lime:   #84cc16;
+    --chart-yellow: #eab308;
+    --chart-orange: #f97316;
+    --chart-red:    #ef4444;
+    --chart-pink:   #ec4899;
+    --chart-purple: #8b5cf6;
+
+    /* Default cycling palette (d3 schemeCategory10). */
+    --chart-1:  #1f77b4;
+    --chart-2:  #ff7f0e;
+    --chart-3:  #2ca02c;
+    --chart-4:  #d62728;
+    --chart-5:  #9467bd;
+    --chart-6:  #8c564b;
+    --chart-7:  #e377c2;
+    --chart-8:  #7f7f7f;
+    --chart-9:  #bcbd22;
+    --chart-10: #17becf;
+
+    /* Hash-indexed cgroup palette (d3 schemeCategory20 with the muted
+       brown + gray pairs removed — leaves 16 vivid hues). */
+    --cgroup-1:  #1f77b4;
+    --cgroup-2:  #aec7e8;
+    --cgroup-3:  #ff7f0e;
+    --cgroup-4:  #ffbb78;
+    --cgroup-5:  #2ca02c;
+    --cgroup-6:  #98df8a;
+    --cgroup-7:  #d62728;
+    --cgroup-8:  #ff9896;
+    --cgroup-9:  #9467bd;
+    --cgroup-10: #c5b0d5;
+    --cgroup-11: #e377c2;
+    --cgroup-12: #f7b6d2;
+    --cgroup-13: #bcbd22;
+    --cgroup-14: #dbdb8d;
+    --cgroup-15: #17becf;
+    --cgroup-16: #9edae5;
 }
 
 /* ==========================================================================
