@@ -121,6 +121,12 @@ pub struct AppState {
     /// `combined_ab: true` so the frontend can pick UX appropriate for
     /// a single-artifact compare.
     pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
+    /// Cached at init from the parquet footer's `KEY_REPORT` value.
+    /// `Some("trimmed")` means this parquet (or, for combined-A/B, its
+    /// per-side parquets) was produced by Save as Report. Drives the
+    /// `regenerate_dashboards` short-circuit and `/api/v1/mode`'s
+    /// `report` flag.
+    pub trimmed_report_marker: RwLock<Option<String>>,
 }
 
 impl AppState {
@@ -139,6 +145,7 @@ impl AppState {
             file_checksum: RwLock::new(None),
             proxy: ProxyState::default(),
             combined_ab_marker: RwLock::new(None),
+            trimmed_report_marker: RwLock::new(None),
         }
     }
 
@@ -174,6 +181,13 @@ impl AppState {
     /// in download / save flows.
     pub fn combined_ab(&self) -> bool {
         self.combined_ab_marker.read().is_some()
+    }
+
+    /// True when this parquet was produced by Save as Report — drives
+    /// report-mode UX (empty section list, default route lands on
+    /// `/report`).
+    pub fn is_trimmed_report(&self) -> bool {
+        self.trimmed_report_marker.read().is_some()
     }
 
     /// Build the navigation + global params payload for `/api/v1/sections`.
@@ -324,5 +338,25 @@ pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
         EvaluationError(_) => "execution",
         Unsupported(_) => "unsupported",
         MetricNotFound(_) => "not_found",
+    }
+}
+
+#[cfg(test)]
+mod report_marker_tests {
+    use super::*;
+    use ::dashboard::TemplateRegistry;
+    use metriken_query::Tsdb;
+
+    #[test]
+    fn default_is_not_a_trimmed_report() {
+        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        assert!(!state.is_trimmed_report());
+    }
+
+    #[test]
+    fn setting_marker_flips_predicate() {
+        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        *state.trimmed_report_marker.write() = Some("trimmed".to_string());
+        assert!(state.is_trimmed_report());
     }
 }
