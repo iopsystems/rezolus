@@ -29,7 +29,9 @@ LOGDIR=$(mktemp -d -t rezolus-smoke-XXXXXX)
 echo "logs: $LOGDIR"
 
 # Build before launching anything so a compile failure surfaces early.
-cargo build --bin rezolus 2>&1 | tail -3
+# Examples include `gen_ab_fixtures`, the AB smoke section's fixture
+# generator — kept out of the production binary.
+cargo build --bin rezolus --example gen_ab_fixtures 2>&1 | tail -3
 
 # Don't pop browser tabs during the smoke test.
 export REZOLUS_NO_OPEN=1
@@ -201,12 +203,18 @@ PORT_AB_COMBINED=18504
 COMBINED_AB_TAR="$LOGDIR/combined-ab.parquet.ab.tar"
 
 echo "==> parquet combine --ab produces a *.parquet.ab.tar tarball"
-# Use single-source fixtures so --ab can unambiguously assign each input
-# to a side. The AB_base/AB_base_pin files are multi-source and can't be
-# used here.
+# Single-source fixtures so --ab can unambiguously assign each input to a
+# side. Generated at test time (see `examples/gen_ab_fixtures.rs`) rather
+# than checked in — keeps the tree free of binary blobs whose meaning
+# would silently drift from the writer.
+AB_A="$LOGDIR/ab_source_a.parquet"
+AB_B="$LOGDIR/ab_source_b.parquet"
+./target/debug/examples/gen_ab_fixtures "$AB_A" "$AB_B" \
+    > "$LOGDIR/gen-ab.log" 2>&1 \
+    || fail "gen_ab_fixtures failed" "$(cat "$LOGDIR/gen-ab.log")" "exit 0" "$LOGDIR/gen-ab.log"
 ./target/debug/rezolus parquet combine \
-    site/viewer/data/ab_source_a.parquet \
-    site/viewer/data/ab_source_b.parquet \
+    "$AB_A" \
+    "$AB_B" \
     -o "$COMBINED_AB_TAR" \
     --ab baseline=source-a experiment=source-b \
     > "$LOGDIR/combine-ab.log" 2>&1 \
