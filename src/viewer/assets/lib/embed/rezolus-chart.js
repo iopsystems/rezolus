@@ -1,13 +1,19 @@
 // <rezolus-chart> — Lit web component that renders a single Plot
 // descriptor (the shape produced by crates/dashboard/) inside Shadow DOM.
 //
-// Chrome (card frame, title typography, sizing) comes from
+// Card chrome (frame, title typography, sizing) comes from
 // /lib/charts.css linked into the shadow root, so the component looks
-// like a regular rezolus chart when embedded inside the viewer. CSS
-// custom properties inherited from the host page's :root (--fg,
-// --accent, --bg-card-gradient, etc.) reach into the shadow root
-// automatically. External embedders need to load the same tokens (or
-// override them per :host) for the chrome to render correctly.
+// like a regular rezolus chart when embedded inside the viewer. The
+// echarts content (axes, gridlines, tooltip, series color) reads the
+// rezolus CSS tokens via getComputedStyle and feeds them to setOption
+// — echarts bakes color strings into its option and doesn't observe
+// CSS, so token changes (theme toggles) only land via a re-render. A
+// MutationObserver on <html> data-theme triggers that re-render.
+//
+// CSS custom properties inherit into the shadow root from the host
+// page's :root, so inside the rezolus viewer everything works for
+// free. External embedders need to load the same tokens (or override
+// them per :host) for chrome and chart contents to render correctly.
 //
 // Spike scope: inline-series adapter only. The component accepts a `plot`
 // property whose `data` field is [[timestamps_s], [values]] (PromQL's
@@ -58,6 +64,19 @@ class RezolusChart extends LitElement {
         this.plot = null;
         this._chart = null;
         this._observer = null;
+        this._themeObserver = null;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        // Re-render when the host page flips data-theme. Token reads in
+        // _readTokens() return the new values; setOption with notMerge
+        // applies them to axis/grid/tooltip/series.
+        this._themeObserver = new MutationObserver(() => this._render());
+        this._themeObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ['data-theme'],
+        });
     }
 
     firstUpdated() {
@@ -73,9 +92,32 @@ class RezolusChart extends LitElement {
 
     disconnectedCallback() {
         super.disconnectedCallback();
+        this._themeObserver?.disconnect();
         this._observer?.disconnect();
         this._chart?.dispose();
         this._chart = null;
+    }
+
+    // Read the rezolus CSS tokens the chart contents (axis, grid, tooltip,
+    // series) depend on. echarts bakes color strings into its option at
+    // setOption time and doesn't observe CSS, so we read on each render
+    // and feed the values in.
+    _readTokens() {
+        const styles = getComputedStyle(this);
+        const v = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
+        return {
+            fg:            v('--fg', '#1a1a1a'),
+            fgSecondary:   v('--fg-secondary', '#6b7280'),
+            gridLine:      v('--chart-grid-line', 'rgba(48,54,61,0.5)'),
+            accent:        v('--accent', '#58a6ff'),
+            bgCard:        v('--bg-card', '#ffffff'),
+            borderDefault: v('--border-default', 'rgba(48,54,61,0.7)'),
+            chart1:        v('--chart-1', '#1f77b4'),
+        };
+    }
+
+    _isDarkTheme() {
+        return document.documentElement?.getAttribute('data-theme') !== 'light';
     }
 
     _render() {
@@ -105,18 +147,49 @@ class RezolusChart extends LitElement {
         // PromQL convention: timestamps are seconds since epoch. echarts wants ms.
         const seriesData = times.map((t, i) => [t * 1000, values[i]]);
         const fmt = this.plot.opts?.format ?? {};
+        const t = this._readTokens();
 
         this._chart.setOption({
-            // Top is large enough to clear the absolutely-positioned
-            // .chart-header (10px padding + 13px title with line-height).
-            grid: { left: 56, right: 16, top: 36, bottom: 28 },
-            xAxis: { type: 'time' },
+            backgroundColor: 'transparent',
+            darkMode: this._isDarkTheme(),
+            textStyle: { color: t.fg },
+            color: [t.chart1],
+            // Top clears the absolutely-positioned .chart-header (10px
+            // padding + 13px title with line-height).
+            grid: { left: 12, right: 17, top: 36, bottom: 24, containLabel: true },
+            xAxis: {
+                type: 'time',
+                axisLine: { show: false },
+                axisTick: { show: false },
+                axisLabel: { color: t.fgSecondary, fontSize: 10 },
+                splitLine: {
+                    show: true,
+                    lineStyle: { color: t.gridLine, type: 'dashed' },
+                },
+            },
             yAxis: {
                 type: fmt.log_scale ? 'log' : 'value',
                 name: fmt.y_axis_label ?? '',
-                nameTextStyle: { fontSize: 11 },
+                nameTextStyle: { fontSize: 11, color: t.fgSecondary },
+                axisLine: { show: false },
+                axisTick: { show: false },
+                axisLabel: { color: t.fgSecondary, fontSize: 10, margin: 12 },
+                splitLine: { lineStyle: { color: t.gridLine, type: 'dashed' } },
             },
-            tooltip: { trigger: 'axis', appendToBody: false },
+            tooltip: {
+                trigger: 'axis',
+                confine: true,
+                backgroundColor: t.bgCard,
+                borderColor: t.borderDefault,
+                borderWidth: 1,
+                textStyle: { color: t.fg },
+                axisPointer: {
+                    type: 'line',
+                    snap: true,
+                    animation: false,
+                    lineStyle: { color: t.accent, opacity: 0.6, width: 1 },
+                },
+            },
             series: [{
                 name: this.plot.opts?.title ?? '',
                 type: 'line',
