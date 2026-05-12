@@ -37,3 +37,9 @@ The system-wide `scheduler_offcpu` is a histogram; the per-cgroup `cgroup_schedu
 Surface boot-time and runtime configuration that affects performance posture: CPU isolation (`isolcpus`, `nohz_full`, cgroup `cpuset`), block device tuning (IO scheduler, completion affinity, NVMe queue mode), and IRQ affinity.
 
 **Why it matters.** A host can be misconfigured against its intended QoS posture in ways that are silent until traffic hits a corner case. Pulling configuration into the metrics stream lets dashboards flag drift (e.g., "completion just landed on a CPU listed in `isolcpus`") and lets fleets compare intent against reality at scale.
+
+## Embed-friendly charts with swappable data backend
+
+Wrap chart/section rendering as web components (e.g. `<rezolus-chart>`, `<rezolus-section>`) that take a `Plot`/`View` descriptor (already produced by `crates/dashboard/`) plus a pluggable data adapter. Two adapters: a WASM adapter that resolves `promql_query` locally against an in-browser TSDB (small, portable, GitHub Pages friendly), and a Datastar/SSE adapter that subscribes to a server-resolved stream (large, live data). Same descriptor and same component API on both sides.
+
+**Why it matters.** It makes Rezolus charts droppable into other dashboards or docs pages without iframing, and gives a clean split between the static file-mode viewer and a future streaming server viewer without forking the frontend.
