@@ -27,7 +27,7 @@ use notify::Watcher;
 
 #[cfg(test)]
 pub use dashboard::Kpi;
-pub use dashboard::{ServiceExtension, TemplateRegistry};
+pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
 pub use metriken_query::promql;
 pub use metriken_query::tsdb;

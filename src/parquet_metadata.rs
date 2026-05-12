@@ -95,3 +95,13 @@ pub const NESTED_INSTANCE: &str = "instance";
 /// The default rezolus node to display when the viewer opens a combined
 /// file with multiple nodes. Set by `parquet combine --pinned <node>`.
 pub const KEY_PINNED_NODE: &str = "pinned_node";
+
+// ── One-off event annotations ───────────────────────────────────────
+
+/// JSON payload of one-off events attached to the recording (restarts,
+/// config changes, anomalies, ...). Value is an object `{"events": [...]}`
+/// where each entry conforms to `dashboard::events::Event`. Each event
+/// carries its own optional `source` / `node` / `instance` scope rather
+/// than inheriting from file-level metadata, so the payload stays
+/// self-describing across combine.
+pub const KEY_EVENTS: &str = "events";
