@@ -880,10 +880,8 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         });
     }
 
-    // events: concatenate from every input, then sort and dedupe by id.
     // Events are self-describing (each carries its own source/node/instance),
-    // so the merged payload stays at the top level rather than nesting under
-    // per_source_metadata.
+    // so they stay at the top level rather than nesting under per_source_metadata.
     let mut events = ::dashboard::Events::default();
     for input in inputs {
         if let Some(raw) = input

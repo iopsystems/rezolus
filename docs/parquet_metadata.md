@@ -235,6 +235,81 @@ target/release/rezolus parquet combine \
 Validation rejects `--pinned <name>` if no rezolus input has a matching `node`
 label.
 
+### `events`
+
+JSON document describing one-off events attached to the recording —
+restarts, config changes, deploys, incidents, anomalies, free-form
+markers. Stored at the top level in both single-source and combined files
+because each event is self-describing (it carries its own optional
+`source` / `node` / `instance` scope) rather than inheriting from
+file-level metadata. Schema lives in
+[crates/dashboard/src/events.rs](../crates/dashboard/src/events.rs).
+
+Payload shape (canonical, sorted by `timestamp`, deduped by `id`):
+
+```json
+{
+  "events": [
+    {
+      "timestamp": 1778598000000000000,
+      "description": "vllm restart for new config",
+      "kind": "restart",
+      "details": "swapped tensor_parallel_size 2 → 4",
+      "source": "vllm",
+      "node": "gpu01",
+      "instance": "0",
+      "labels": { "reason": "OOM" },
+      "duration_ns": 30000000000,
+      "id": "evt-2026-05-12-001"
+    }
+  ]
+}
+```
+
+Only `timestamp` (u64 nanoseconds since the Unix epoch) and `description`
+are required. `kind` is free-form — conventional values are `restart`,
+`config_change`, `deploy`, `incident`, `anomaly`, `marker`, `note`, but
+nothing is validated. `duration_ns` lets an event span an interval rather
+than a point; `id` is a stable identifier used to dedupe across merges
+(later occurrences are dropped on combine).
+
+**Update with `parquet annotate`:**
+
+```bash
+target/release/rezolus parquet annotate file.parquet --add-events events.json
+
+cat events.json | target/release/rezolus parquet annotate file.parquet --add-events -
+
+target/release/rezolus parquet annotate file.parquet \
+    --event 'time=2026-05-12T15:23Z,kind=restart,description="vllm restart",node=gpu01' \
+    --event 'time=2026-05-12T16:00Z,kind=marker,description="benchmark start",label.run=ci-42'
+
+target/release/rezolus parquet annotate file.parquet --clear-events
+
+target/release/rezolus parquet annotate file.parquet --clear-events --add-events new.json
+```
+
+- `--add-events FILE` accepts JSON (`{"events":[...]}`), a bare JSON array,
+  a single JSON object, or JSONL. Use `-` to read from stdin.
+- `--event KV` is a repeatable inline shorthand
+  (`key=value,key=value,...`). Quoted values may contain commas and `=`.
+  Free-form labels go through `label.<name>=<value>`. Aliases: `time`,
+  `desc`, `duration` (alongside the canonical `timestamp`, `description`,
+  `duration_ns`).
+- `--clear-events` wipes existing events. Combine with `--add-events` /
+  `--event` to "replace": order within one invocation is **clear → file
+  events → inline events**.
+- Operations are append-by-default. Events are sorted by timestamp on
+  write; entries whose non-empty `id` collides with an earlier one are
+  dropped (a warning is printed when this happens during an annotate
+  invocation).
+- Inputs accept RFC3339 timestamps (including the seconds-omitted short
+  form `2026-05-12T15:23Z`) and humantime durations (`30s`, `1m30s`);
+  canonical storage is always `u64` nanoseconds.
+
+`--add-events` / `--event` / `--clear-events` do not trigger the
+service-template flow.
+
 ## `per_source_metadata`
 
 Top-level key only used in combined files. Value is a nested JSON object:
@@ -280,7 +355,7 @@ mutators are:
 | Tool | What it can change |
 |------|--------------------|
 | `rezolus record --node`, `--instance`, `--metadata k=v` | Anything written at recording time. The catch-all `--metadata` can set any top-level key. |
-| `rezolus parquet annotate` | Adds/replaces/removes top-level `service_queries`; with `--node NAME` sets/replaces top-level `node`; with `--source NAME` (`--overwrite` to replace) sets/replaces top-level `source`; with `--systeminfo PATH` (or `-` for stdin) sets/replaces top-level `systeminfo`. |
+| `rezolus parquet annotate` | Adds/replaces/removes top-level `service_queries`; with `--node NAME` sets/replaces top-level `node`; with `--source NAME` (`--overwrite` to replace) sets/replaces top-level `source`; with `--systeminfo PATH` (or `-` for stdin) sets/replaces top-level `systeminfo`; with `--add-events PATH` / `--event KV` / `--clear-events` appends, inserts, or wipes one-off `events`. |
 | `rezolus parquet combine --pinned` | Sets `pinned_node` on the output. |
 | `rezolus parquet combine` | Merges and re-derives `source`, `descriptions`, `per_source_metadata`, etc. from the inputs. |
 
@@ -411,6 +486,7 @@ target/release/rezolus parquet metadata -i combined.parquet --field pinned_node
 | `service_queries` | **Removed from top level.** Moves to `per_source_metadata.<source>.<id>.service_queries` so each instance can carry its own KPI definitions. |
 | `pinned_node` | New — added by `--pinned web01`. Validated against the actual rezolus nodes seen in the inputs. |
 | `selection` | Preserved from the primary (rezolus) input if present; otherwise dropped. |
+| `events` | Concatenated across all inputs, sorted by timestamp, deduped by stable `id`. Stays at the top level — each event is self-describing via its own `source`/`node`/`instance` fields. |
 | `per_source_metadata` | Deep-merged. Pre-existing entries from already-combined inputs are preserved; new sub-entries are added per node/instance. |
 
 Schema changes alongside the metadata: every metric column is renamed to

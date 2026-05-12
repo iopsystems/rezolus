@@ -93,9 +93,8 @@ pub(super) fn run(
         println!("No events to add to {:?}", path);
     }
 
-    // Heads-up on inline/file events whose id collides with one that was
-    // already in the file — normalize() keeps the earlier (existing) entry,
-    // which is rarely what a user wants from a new CLI invocation.
+    // normalize() keeps the earlier entry on id collision, so warn loudly
+    // when a new CLI invocation tried to overwrite an existing event.
     let new_ids: Vec<String> = add_files
         .iter()
         .filter_map(|p| read_input_file(p).ok())
@@ -177,8 +176,6 @@ fn parse_events_payload(content: &str, force_jsonl: bool) -> Result<Vec<Event>, 
         return parse_jsonl(content);
     }
 
-    // Detect JSONL when the first character is `{` but there are multiple
-    // top-level objects (no enclosing array/object wrapper).
     if trimmed.starts_with('{') && looks_like_jsonl(content) {
         return parse_jsonl(content);
     }
@@ -232,7 +229,6 @@ fn looks_like_jsonl(content: &str) -> bool {
     if !trimmed_first.starts_with('{') {
         return false;
     }
-    // Two consecutive lines that each start with `{` at column 0-ish ⇒ JSONL.
     lines
         .next()
         .map(|l| l.trim_start().starts_with('{'))
@@ -253,8 +249,6 @@ fn value_to_event(mut v: serde_json::Value) -> Result<Event, String> {
     if let Some(d) = map.get_mut("duration_ns") {
         normalize_duration(d)?;
     }
-    // Also accept `duration` as an alias for `duration_ns` so users can
-    // write `"duration": "30s"` in JSON files.
     if let Some(d) = map.remove("duration") {
         if !map.contains_key("duration_ns") {
             let mut d = d;
@@ -308,9 +302,6 @@ pub(super) fn parse_timestamp_str(s: &str) -> Result<u64, String> {
         }
         return Ok(ns as u64);
     }
-    // Tolerate the seconds-omitted forms users commonly type by hand
-    // (e.g. "2026-05-12T15:23Z" or "2026-05-12T15:23+02:00") by patching
-    // ":00" into the time portion and retrying.
     if let Some(patched) = try_patch_seconds(s) {
         if let Ok(dt) = DateTime::parse_from_rfc3339(&patched) {
             let ns = dt
@@ -319,7 +310,6 @@ pub(super) fn parse_timestamp_str(s: &str) -> Result<u64, String> {
             return Ok(ns as u64);
         }
     }
-    // Try naive forms without timezone, treated as UTC.
     for fmt in &["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"] {
         if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
             let ns = dt
@@ -339,11 +329,8 @@ pub(super) fn parse_timestamp_str(s: &str) -> Result<u64, String> {
 fn try_patch_seconds(s: &str) -> Option<String> {
     let t_pos = s.find('T')?;
     let after_t = &s[t_pos + 1..];
-    // Locate where the time portion ends: 'Z', '+', or '-' (the last '-'
-    // since the date itself contains dashes; but `after_t` strips those).
     let tz_offset_in_after_t = after_t.find(['Z', '+', '-'])?;
     let time_part = &after_t[..tz_offset_in_after_t];
-    // Patch only when the time has exactly one colon (HH:MM, no seconds).
     if time_part.matches(':').count() != 1 {
         return None;
     }
@@ -438,7 +425,6 @@ fn split_kv_pairs(spec: &str) -> Result<Vec<(String, String)>, String> {
     let mut chars = spec.chars().peekable();
 
     loop {
-        // Skip leading whitespace and separator commas.
         while matches!(chars.peek(), Some(c) if c.is_whitespace() || *c == ',') {
             chars.next();
         }
@@ -446,7 +432,6 @@ fn split_kv_pairs(spec: &str) -> Result<Vec<(String, String)>, String> {
             break;
         }
 
-        // key
         let mut key = String::new();
         while let Some(&c) = chars.peek() {
             if c == '=' || c == ',' {
@@ -463,7 +448,6 @@ fn split_kv_pairs(spec: &str) -> Result<Vec<(String, String)>, String> {
             return Err(format!("event key {key:?} is missing '='"));
         }
 
-        // value: optionally quoted
         let mut value = String::new();
         if chars.peek() == Some(&'"') {
             chars.next();
