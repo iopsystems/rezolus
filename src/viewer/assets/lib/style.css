@@ -851,10 +851,17 @@ main {
     top: var(--header-height);
     left: 0;
     width: var(--sidebar-width);
+    /* 100vh on iOS Safari includes the area beneath the address bar, so
+       the sidebar's bottom can sit below the visible viewport and the
+       last items (System Info, Metadata) become unreachable. 100dvh
+       tracks the actual visible viewport; the 100vh declaration above
+       stays as a fallback for browsers that don't support dvh. */
     height: calc(100vh - var(--header-height));
+    height: calc(100dvh - var(--header-height));
     background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg) 100%);
     border-right: 1px solid var(--border-subtle);
     padding: 1.5rem 0;
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
     gap: 0.125rem;
@@ -2310,7 +2317,8 @@ main {
         display: none;
     }
 
-    #sidebar .query-explorer-link {
+    #sidebar .query-explorer-link,
+    #sidebar .sidebar-separator:has(+ .query-explorer-link) {
         display: none;
     }
 
