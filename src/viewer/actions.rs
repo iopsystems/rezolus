@@ -578,17 +578,16 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
     if let Some(path) = parquet_path {
         let is_combined_ab = state.combined_ab_marker.read().is_some();
         if is_combined_ab {
-            let payload: report_save::ReportPayload =
-                match serde_json::from_str(&selection_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return ApiResponse::<()>::err(
-                            format!("invalid selection payload: {e}"),
-                            "bad_data",
-                        )
-                        .into_response();
-                    }
-                };
+            let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ApiResponse::<()>::err(
+                        format!("invalid selection payload: {e}"),
+                        "bad_data",
+                    )
+                    .into_response();
+                }
+            };
             // `state.parquet_path` points at the extracted baseline parquet;
             // the experiment parquet lives at `state.cli_experiment_path`.
             let Some(experiment_path) = state.cli_experiment_path.read().clone() else {

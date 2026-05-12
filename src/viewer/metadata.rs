@@ -449,6 +449,9 @@ mod report_mode_tests {
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         regenerate_dashboards(&state);
         let sections = state.sections.read();
-        assert!(sections.is_empty(), "trimmed report should have no sections");
+        assert!(
+            sections.is_empty(),
+            "trimmed report should have no sections"
+        );
     }
 }

@@ -72,9 +72,7 @@ pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
         match engine.columns(query) {
             Ok(cols) => out.extend(cols),
             Err(e) => {
-                warn!(
-                    "report-save: failed to resolve columns for query {query:?}: {e}"
-                );
+                warn!("report-save: failed to resolve columns for query {query:?}: {e}");
             }
         }
     }
@@ -132,11 +130,7 @@ pub fn trim_parquet_to_columns(
         .collect();
     filter_descriptions(&mut kv_meta, &kept_names);
 
-    Ok(crate::parquet_tools::rewrite_parquet(
-        source_path,
-        kv_meta,
-        Some(&indices),
-    )?)
+    crate::parquet_tools::rewrite_parquet(source_path, kv_meta, Some(&indices))
 }
 
 /// Mirror `parquet filter`'s field-keep predicate: exact match, base
@@ -160,10 +154,7 @@ fn keep_field(f: &arrow::datatypes::Field, kept: &HashSet<String>) -> bool {
     false
 }
 
-fn filter_descriptions(
-    kv_meta: &mut [KeyValue],
-    kept_names: &std::collections::BTreeSet<&str>,
-) {
+fn filter_descriptions(kv_meta: &mut [KeyValue], kept_names: &std::collections::BTreeSet<&str>) {
     if let Some(entry) = kv_meta.iter_mut().find(|kv| kv.key == KEY_DESCRIPTIONS) {
         if let Some(value) = &entry.value {
             if let Ok(mut map) =
@@ -290,15 +281,20 @@ mod tests {
         )
         .unwrap();
         let kv = vec![
-            KeyValue { key: "source".into(), value: Some("svc".into()) },
-            KeyValue { key: "sampling_interval_ms".into(), value: Some("1000".into()) },
+            KeyValue {
+                key: "source".into(),
+                value: Some("svc".into()),
+            },
+            KeyValue {
+                key: "sampling_interval_ms".into(),
+                value: Some("1000".into()),
+            },
         ];
         let props = WriterProperties::builder()
             .set_key_value_metadata(Some(kv))
             .build();
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(tmp.reopen().unwrap(), schema, Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(tmp.reopen().unwrap(), schema, Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         let tsdb = Tsdb::load(tmp.path()).expect("tsdb loads");
@@ -319,7 +315,10 @@ mod tests {
         assert!(kept.contains("timestamp"), "kept must include timestamp");
         assert!(kept.contains("duration"), "kept must include duration");
         assert!(kept.contains("m_a"), "kept must include the queried column");
-        assert!(!kept.contains("m_b"), "kept must NOT include unqueried columns");
+        assert!(
+            !kept.contains("m_b"),
+            "kept must NOT include unqueried columns"
+        );
     }
 
     #[test]
@@ -403,10 +402,9 @@ mod tests {
             .expect("trim_single_parquet succeeds");
         let verify = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(verify.path(), &out).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(
-            std::fs::File::open(verify.path()).unwrap(),
-        )
-        .unwrap();
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(verify.path()).unwrap())
+                .unwrap();
         let names: Vec<String> = builder
             .schema()
             .fields()
@@ -425,8 +423,7 @@ mod tests {
         kept.insert("m_a".to_string());
 
         let selection = r#"{"version": 1, "entries": []}"#;
-        let out = trim_parquet_to_columns(tmp.path(), &kept, selection)
-            .expect("trim succeeds");
+        let out = trim_parquet_to_columns(tmp.path(), &kept, selection).expect("trim succeeds");
 
         // Parse the output and confirm schema + footer.
         // Write to a temp file so we can use File-based readers.
@@ -444,7 +441,8 @@ mod tests {
         assert_eq!(names, vec!["timestamp", "duration", "m_a"]);
 
         // Footer carries the report marker + the new selection.
-        let reader = SerializedFileReader::new(std::fs::File::open(out_tmp.path()).unwrap()).unwrap();
+        let reader =
+            SerializedFileReader::new(std::fs::File::open(out_tmp.path()).unwrap()).unwrap();
         let kv = reader
             .metadata()
             .file_metadata()
@@ -483,8 +481,14 @@ mod tests {
         let body = r#"{"version":1,"entries":[]}"#;
         let manifest = AbContainers {
             version: AbContainers::SCHEMA_VERSION,
-            baseline: AbSide { alias: "a".into(), sources: vec!["svc".into()] },
-            experiment: AbSide { alias: "b".into(), sources: vec!["svc".into()] },
+            baseline: AbSide {
+                alias: "a".into(),
+                sources: vec!["svc".into()],
+            },
+            experiment: AbSide {
+                alias: "b".into(),
+                sources: vec!["svc".into()],
+            },
             category: None,
         };
 
@@ -529,18 +533,16 @@ mod tests {
         let verify_e = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(verify_e.path(), &experiment_bytes).unwrap();
 
-        let b_schema = ParquetRecordBatchReaderBuilder::try_new(
-            std::fs::File::open(verify_b.path()).unwrap(),
-        )
-        .unwrap()
-        .schema()
-        .clone();
-        let e_schema = ParquetRecordBatchReaderBuilder::try_new(
-            std::fs::File::open(verify_e.path()).unwrap(),
-        )
-        .unwrap()
-        .schema()
-        .clone();
+        let b_schema =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(verify_b.path()).unwrap())
+                .unwrap()
+                .schema()
+                .clone();
+        let e_schema =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(verify_e.path()).unwrap())
+                .unwrap()
+                .schema()
+                .clone();
         let b_names: Vec<&str> = b_schema
             .fields()
             .iter()

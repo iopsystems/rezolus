@@ -794,9 +794,11 @@ mod report_kv_tests {
 
     #[test]
     fn reads_present_key() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("timestamp", DataType::UInt64, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "timestamp",
+            DataType::UInt64,
+            false,
+        )]));
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![Arc::new(UInt64Array::from(vec![1u64]))],
@@ -810,8 +812,7 @@ mod report_kv_tests {
             .set_key_value_metadata(Some(kv))
             .build();
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut writer =
-            ArrowWriter::try_new(tmp.reopen().unwrap(), schema, Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(tmp.reopen().unwrap(), schema, Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         assert_eq!(
