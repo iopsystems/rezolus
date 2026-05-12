@@ -16,75 +16,74 @@ function cssVar(name) {
 
 // ── Design tokens ────────────────────────────────────────────────────
 
-// Chart series colors are theme-invariant (same vivid colors on both themes).
-const SERIES_COLORS = {
-    chartBlue: '#3b82f6',
-    chartCyan: '#06b6d4',
-    chartTeal: '#14b8a6',
-    chartGreen: '#22c55e',
-    chartLime: '#84cc16',
-    chartYellow: '#eab308',
-    chartOrange: '#f97316',
-    chartRed: '#ef4444',
-    clamped: '#ef4444',
-    chartPink: '#ec4899',
-    chartPurple: '#8b5cf6',
+// Every key here maps a JS name to a CSS custom property declared in
+// style.css. Reads happen at access time so the active theme always wins.
+const CSS_MAP = {
+    fg:               '--fg',
+    fgSecondary:      '--fg-secondary',
+    fgLabel:          '--fg-muted',
+    fgMuted:          '--fg-muted',
+    fgSubtle:         '--fg-subtle',
+    accent:           '--accent',
+    accentEmphasis:   '--accent-emphasis',
+    accentMuted:      '--accent-muted',
+    accentSubtle:     '--accent-subtle',
+    accentGlow:       '--accent-glow',
+    accentAreaTop:    '--chart-area-top',
+    accentAreaMid:    '--chart-area-mid',
+    accentAreaBottom: '--chart-area-bottom',
+    bgVoid:           '--bg-void',
+    bgCard:           '--bg-card',
+    bgTertiary:       '--bg-tertiary',
+    bgElevated:       '--bg-elevated',
+    borderSubtle:     '--border-subtle',
+    borderMuted:      '--border-default',
+    borderDefault:    '--border-default',
+    gridLine:         '--chart-grid-line',
+    shadow:           '--chart-shadow',
+    shadowStrong:     '--chart-shadow-strong',
+
+    // Series accent colors. Theme-invariant but exposed as tokens so
+    // embedders can override them via CSS without touching JS.
+    chartBlue:   '--chart-blue',
+    chartCyan:   '--chart-cyan',
+    chartTeal:   '--chart-teal',
+    chartGreen:  '--chart-green',
+    chartLime:   '--chart-lime',
+    chartYellow: '--chart-yellow',
+    chartOrange: '--chart-orange',
+    chartRed:    '--chart-red',
+    chartPink:   '--chart-pink',
+    chartPurple: '--chart-purple',
+    // Used for clamped-value markers in scatter/tooltips.
+    clamped:     '--chart-red',
 };
 
-export const COLORS = new Proxy(SERIES_COLORS, {
-    get(target, prop) {
-        // Return series colors directly (theme-invariant)
-        if (prop in target) return target[prop];
-
-        // Map property names to CSS custom properties
-        const cssMap = {
-            fg:               '--fg',
-            fgSecondary:      '--fg-secondary',
-            fgLabel:          '--fg-muted',
-            fgMuted:          '--fg-muted',
-            fgSubtle:         '--fg-subtle',
-            accent:           '--accent',
-            accentEmphasis:   '--accent-emphasis',
-            accentMuted:      '--accent-muted',
-            accentSubtle:     '--accent-subtle',
-            accentGlow:       '--accent-glow',
-            accentAreaTop:    '--chart-area-top',
-            accentAreaMid:    '--chart-area-mid',
-            accentAreaBottom: '--chart-area-bottom',
-            bgVoid:           '--bg-void',
-            bgCard:           '--bg-card',
-            bgTertiary:       '--bg-tertiary',
-            bgElevated:       '--bg-elevated',
-            borderSubtle:     '--border-subtle',
-            borderMuted:      '--border-default',
-            borderDefault:    '--border-default',
-            gridLine:         '--chart-grid-line',
-            shadow:           '--chart-shadow',
-            shadowStrong:     '--chart-shadow-strong',
-        };
-
-        if (cssMap[prop]) return cssVar(cssMap[prop]);
-        return undefined;
+export const COLORS = new Proxy({}, {
+    get(_target, prop) {
+        const cssName = CSS_MAP[prop];
+        return cssName ? cssVar(cssName) : undefined;
     },
 });
+
+// Read N numbered tokens (e.g. --chart-1 … --chart-N) into an array.
+// Falls back to the provided defaults if a token is unset, so callers
+// see the same palette they had before even when CSS hasn't fully
+// applied (e.g. module init in a test harness).
+function readNumberedPalette(prefix, defaults) {
+    return defaults.map((fallback, i) => cssVar(`${prefix}${i + 1}`) || fallback);
+}
 
 // ── Palettes ─────────────────────────────────────────────────────────
 
 // d3 schemeCategory10. More saturated than Tableau Classic 10 — same
 // categorical-discriminability shape (interleaved warm/cool, neutrals
-// included), brighter on dark backgrounds.
-export const CHART_PALETTE = [
-    '#1f77b4', // blue
-    '#ff7f0e', // orange
-    '#2ca02c', // green
-    '#d62728', // red
-    '#9467bd', // purple
-    '#8c564b', // brown
-    '#e377c2', // pink
-    '#7f7f7f', // gray
-    '#bcbd22', // olive
-    '#17becf', // cyan
-];
+// included), brighter on dark backgrounds. Sourced from --chart-1
+// … --chart-10 in style.css so embedders can override.
+export const CHART_PALETTE = readNumberedPalette('--chart-', [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+    '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+]);
 
 /** 5-color subset for percentile scatter charts */
 export const SCATTER_PALETTE = [
@@ -285,16 +284,13 @@ export class ColorMapper {
         // d3 schemeCategory20 with the muted brown + gray pairs
         // dropped — leaves 16 vivid hues (8 dark + 8 light siblings)
         // so hash-indexed charts never roll the dice on a beige slot.
-        this.colorPalette = [
-            '#1f77b4', '#aec7e8', // blue
-            '#ff7f0e', '#ffbb78', // orange
-            '#2ca02c', '#98df8a', // green
-            '#d62728', '#ff9896', // red
-            '#9467bd', '#c5b0d5', // purple
-            '#e377c2', '#f7b6d2', // pink
-            '#bcbd22', '#dbdb8d', // olive
-            '#17becf', '#9edae5', // cyan
-        ];
+        // Sourced from --cgroup-1 … --cgroup-16 in style.css.
+        this.colorPalette = readNumberedPalette('--cgroup-', [
+            '#1f77b4', '#aec7e8', '#ff7f0e', '#ffbb78',
+            '#2ca02c', '#98df8a', '#d62728', '#ff9896',
+            '#9467bd', '#c5b0d5', '#e377c2', '#f7b6d2',
+            '#bcbd22', '#dbdb8d', '#17becf', '#9edae5',
+        ]);
     }
 
     stringToHash(str) {
