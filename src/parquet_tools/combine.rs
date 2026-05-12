@@ -177,7 +177,7 @@ pub(crate) fn combine_files(
     validate_sampling_interval(&inputs)?;
     validate_labels(&mut inputs)?;
     validate_time_overlap(&inputs)?;
-    combine_and_write(&inputs, output, false, None, None)
+    combine_and_write(&inputs, output, CombineOptions::default())
 }
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
@@ -250,7 +250,11 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    combine_and_write(&inputs, output, bypass_time_check, pinned, ab)?;
+    combine_and_write(
+        &inputs,
+        output,
+        CombineOptions { bypass_time_check, pinned, ab },
+    )?;
 
     let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
     println!(
@@ -498,13 +502,26 @@ fn timestamp_range(input: &InputFile) -> Result<(u64, u64), Box<dyn std::error::
 
 // ── Combine ─────────────────────────────────────────────────────────────
 
+#[derive(Default)]
+struct CombineOptions<'a> {
+    /// Skip the >=95% timestamp-alignment quality check.
+    bypass_time_check: bool,
+    /// Default rezolus node to display in the viewer (set by --pinned).
+    pinned: Option<&'a String>,
+    /// When set, tag the output as a combined-A/B parquet.
+    ab: Option<(AbSide, AbSide)>,
+}
+
 fn combine_and_write(
     inputs: &[InputFile],
     output: &PathBuf,
-    bypass_time_check: bool,
-    pinned: Option<&String>,
-    ab: Option<(AbSide, AbSide)>,
+    options: CombineOptions<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let CombineOptions {
+        bypass_time_check,
+        pinned,
+        ab,
+    } = options;
     let interval_ns = resolve_interval_ns(inputs)?;
 
     // Map each input to its AB side string, if AB mode is active.
@@ -1306,7 +1323,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         // Read back
         let file = std::fs::File::open(&out_path).unwrap();
@@ -1372,7 +1389,7 @@ mod tests {
         validate_sampling_interval(&inputs).unwrap();
         validate_labels(&mut inputs).unwrap();
         validate_time_overlap(&inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         // Read back and verify schema
         let file = std::fs::File::open(&out_path).unwrap();
@@ -1433,7 +1450,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1517,7 +1534,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1559,7 +1576,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false, None, None);
+        let result = combine_and_write(&inputs, &out_path, CombineOptions::default());
         assert!(result.is_err());
     }
 
@@ -1588,7 +1605,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1635,7 +1652,7 @@ mod tests {
         let out_path = out_tmp.path().to_path_buf();
 
         let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, false, None, None);
+        let result = combine_and_write(&inputs, &out_path, CombineOptions::default());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -1884,7 +1901,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1946,7 +1963,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -1999,7 +2016,7 @@ mod tests {
 
         let mut inputs = vec![load(&p1), load(&p2), load(&p3)];
         validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let file = std::fs::File::open(&out_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -2042,7 +2059,7 @@ mod tests {
 
         let out_tmp = NamedTempFile::new().unwrap();
         let out_path = out_tmp.path().to_path_buf();
-        combine_and_write(&inputs, &out_path, false, None, None).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
 
         let meta_reader =
             SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
