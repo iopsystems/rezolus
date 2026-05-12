@@ -779,7 +779,7 @@ fn build_merged_schema(
                 meta.insert(label_key.clone(), label_value.clone());
                 if let Some(side) = ab_sides.and_then(|sides| sides.get(input_idx)) {
                     meta.insert(
-                        crate::parquet_metadata::COLUMN_LABEL_CONTAINER.to_string(),
+                        crate::parquet_metadata::KEY_CONTAINER.to_string(),
                         side.to_string(),
                     );
                 }

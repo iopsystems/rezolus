@@ -114,11 +114,13 @@ pub const KEY_EVENTS: &str = "events";
 /// as a per-capture label injection.
 pub const KEY_AB_CONTAINERS: &str = "ab_containers";
 
-/// Per-column metadata key that tags every column in a combined-AB file
+/// Column-metadata key that tags every column in a combined-AB file
 /// with its container side. Values are exactly `"baseline"` or
-/// `"experiment"`. Lives alongside existing labels (`source`, `node`, …)
-/// — does not replace them.
-pub const COLUMN_LABEL_CONTAINER: &str = "container";
+/// `"experiment"`. Lives alongside existing labels (`source`, `node`,
+/// …) — does not replace them. Named `KEY_*` (not `COLUMN_LABEL_*`)
+/// for symmetry with `KEY_NODE` / `KEY_INSTANCE`, which are also
+/// dual-scoped (file-level + column-level).
+pub const KEY_CONTAINER: &str = "container";
 
 /// Wire shape for `KEY_AB_CONTAINERS`. Schema is versioned because
 /// adding fields later (e.g. side-specific descriptions) is plausible.
