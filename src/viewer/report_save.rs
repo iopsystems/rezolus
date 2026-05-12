@@ -4,10 +4,15 @@
 
 use std::collections::HashSet;
 use std::ops::Deref;
+use std::path::Path;
 
 use metriken_query::{QueryEngine, Tsdb};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::file::metadata::KeyValue;
 use serde::Deserialize;
 use tracing::warn;
+
+use crate::parquet_metadata::{KEY_DESCRIPTIONS, KEY_REPORT, KEY_SELECTION, REPORT_VALUE_TRIMMED};
 
 /// Subset of the JSON body POSTed to `/api/v1/save_with_selection`
 /// that the trim path actually consumes. The full body carries more
@@ -71,6 +76,103 @@ pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
         }
     }
     out
+}
+
+/// Trim a parquet file to just the columns whose names appear in `kept`.
+/// Matches against the field name, the `base` before `:suffix`, or the
+/// `metric` metadata key — same predicate `parquet filter` uses.
+///
+/// Stamps the output with `KEY_REPORT = "trimmed"` and the caller's
+/// `selection_json` in the footer KV. Filters `descriptions` to kept names.
+pub fn trim_parquet_to_columns(
+    source_path: &Path,
+    kept: &HashSet<String>,
+    selection_json: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(source_path)?)?;
+    let schema = builder.schema().clone();
+    drop(builder);
+
+    let indices: Vec<usize> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| keep_field(f, kept))
+        .map(|(i, _)| i)
+        .collect();
+
+    if indices.is_empty() {
+        return Err("trim produced an empty column set (source missing timestamp?)".into());
+    }
+
+    let mut kv_meta = crate::parquet_tools::read_file_metadata(source_path)?;
+    kv_meta.retain(|kv| kv.key != KEY_SELECTION && kv.key != KEY_REPORT);
+    kv_meta.push(KeyValue {
+        key: KEY_REPORT.to_string(),
+        value: Some(REPORT_VALUE_TRIMMED.to_string()),
+    });
+    kv_meta.push(KeyValue {
+        key: KEY_SELECTION.to_string(),
+        value: Some(selection_json.to_string()),
+    });
+
+    let kept_names: std::collections::BTreeSet<&str> = indices
+        .iter()
+        .flat_map(|&i| {
+            let f = schema.field(i);
+            let mut names = vec![f.name().as_str()];
+            if let Some(m) = f.metadata().get("metric") {
+                names.push(m.as_str());
+            }
+            names
+        })
+        .collect();
+    filter_descriptions(&mut kv_meta, &kept_names);
+
+    Ok(crate::parquet_tools::rewrite_parquet(
+        source_path,
+        kv_meta,
+        Some(&indices),
+    )?)
+}
+
+/// Mirror `parquet filter`'s field-keep predicate: exact match, base
+/// before `:`, or `metric` metadata fallback.
+fn keep_field(f: &arrow::datatypes::Field, kept: &HashSet<String>) -> bool {
+    let name = f.name();
+    if kept.contains(name) {
+        return true;
+    }
+    if name
+        .split_once(':')
+        .is_some_and(|(base, _)| kept.contains(base))
+    {
+        return true;
+    }
+    if let Some(metric) = f.metadata().get("metric") {
+        if kept.contains(metric) {
+            return true;
+        }
+    }
+    false
+}
+
+fn filter_descriptions(
+    kv_meta: &mut [KeyValue],
+    kept_names: &std::collections::BTreeSet<&str>,
+) {
+    if let Some(entry) = kv_meta.iter_mut().find(|kv| kv.key == KEY_DESCRIPTIONS) {
+        if let Some(value) = &entry.value {
+            if let Ok(mut map) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(value)
+            {
+                map.retain(|k, _| kept_names.contains(k.as_str()));
+                if let Ok(filtered) = serde_json::to_string(&map) {
+                    entry.value = Some(filtered);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -203,5 +305,59 @@ mod tests {
         let json = r#"{ "entries": [{"chartId": "c", "promql_query": "m"}] }"#;
         let payload: ReportPayload = serde_json::from_str(json).unwrap();
         assert!(payload.entries[0].promql_query_experiment.is_none());
+    }
+
+    use crate::parquet_metadata::{KEY_REPORT, REPORT_VALUE_TRIMMED};
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+
+    #[test]
+    fn trim_keeps_only_named_columns_plus_timestamp_duration() {
+        let (_tsdb, tmp) = build_test_tsdb();
+        let mut kept = HashSet::new();
+        kept.insert("timestamp".to_string());
+        kept.insert("duration".to_string());
+        kept.insert("m_a".to_string());
+
+        let selection = r#"{"version": 1, "entries": []}"#;
+        let out = trim_parquet_to_columns(tmp.path(), &kept, selection)
+            .expect("trim succeeds");
+
+        // Parse the output and confirm schema + footer.
+        // Write to a temp file so we can use File-based readers.
+        let out_tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(out_tmp.path(), &out).unwrap();
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(out_tmp.path()).unwrap())
+                .unwrap();
+        let names: Vec<String> = builder
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, vec!["timestamp", "duration", "m_a"]);
+
+        // Footer carries the report marker + the new selection.
+        let reader = SerializedFileReader::new(std::fs::File::open(out_tmp.path()).unwrap()).unwrap();
+        let kv = reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .cloned()
+            .unwrap();
+        let report = kv
+            .iter()
+            .find(|kv| kv.key == KEY_REPORT)
+            .and_then(|kv| kv.value.as_deref())
+            .unwrap();
+        assert_eq!(report, REPORT_VALUE_TRIMMED);
+        let sel = kv
+            .iter()
+            .find(|kv| kv.key == "selection")
+            .and_then(|kv| kv.value.as_deref())
+            .unwrap();
+        assert_eq!(sel, selection);
     }
 }
