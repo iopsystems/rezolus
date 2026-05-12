@@ -1,5 +1,6 @@
 mod annotate;
 pub(crate) mod combine;
+mod events;
 mod filter;
 mod metadata;
 
@@ -87,6 +88,31 @@ pub fn command() -> Command {
                         .help("Embed systeminfo JSON from PATH (or '-' for stdin) into the parquet footer")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set)
+                        .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("add-events")
+                        .long("add-events")
+                        .value_name("PATH")
+                        .help("Add one-off events from a JSON/JSONL file (or '-' for stdin). Repeatable.")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Append)
+                        .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("event")
+                        .long("event")
+                        .value_name("KV")
+                        .help("Add a single event inline, e.g. 'time=2026-05-12T15:23Z,kind=restart,description=\"...\"'. Repeatable.")
+                        .value_parser(value_parser!(String))
+                        .action(clap::ArgAction::Append)
+                        .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("clear-events")
+                        .long("clear-events")
+                        .help("Remove existing events before applying --add-events / --event")
+                        .action(clap::ArgAction::SetTrue)
                         .conflicts_with("undo"),
                 ),
         )

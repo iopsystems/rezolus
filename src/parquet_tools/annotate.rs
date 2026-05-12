@@ -17,6 +17,17 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let sysinfo_path = args.get_one::<PathBuf>("systeminfo");
     let overwrite = args.get_flag("overwrite");
 
+    let event_files: Vec<&Path> = args
+        .get_many::<PathBuf>("add-events")
+        .map(|it| it.map(PathBuf::as_path).collect())
+        .unwrap_or_default();
+    let inline_events: Vec<String> = args
+        .get_many::<String>("event")
+        .map(|it| it.cloned().collect())
+        .unwrap_or_default();
+    let clear_events = args.get_flag("clear-events");
+    let events_requested = clear_events || !event_files.is_empty() || !inline_events.is_empty();
+
     if let Some(n) = node {
         set_node_metadata(path, n).unwrap_or_else(|e| {
             eprintln!("error: failed to set node metadata: {e}");
@@ -42,11 +53,20 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
         println!("Set source={:?} on {:?}", src, path);
     }
 
+    if events_requested {
+        super::events::run(path, &event_files, &inline_events, clear_events).unwrap_or_else(
+            |e| {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            },
+        );
+    }
+
     let custom_file = args.get_one::<PathBuf>("queries");
 
-    // If only individual edits (--node/--source/--systeminfo) were requested,
-    // don't also auto-apply a default service template.
-    if (node.is_some() || new_source.is_some() || sysinfo_path.is_some())
+    // If only individual edits (--node/--source/--systeminfo/events) were
+    // requested, don't also auto-apply a default service template.
+    if (node.is_some() || new_source.is_some() || sysinfo_path.is_some() || events_requested)
         && custom_file.is_none()
         && !args.get_flag("filter")
     {

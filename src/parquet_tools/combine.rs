@@ -880,6 +880,34 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         });
     }
 
+    // events: concatenate from every input, then sort and dedupe by id.
+    // Events are self-describing (each carries its own source/node/instance),
+    // so the merged payload stays at the top level rather than nesting under
+    // per_source_metadata.
+    let mut events = ::dashboard::Events::default();
+    for input in inputs {
+        if let Some(raw) = input
+            .kv_metadata
+            .iter()
+            .find(|kv| kv.key == KEY_EVENTS)
+            .and_then(|kv| kv.value.as_deref())
+        {
+            match serde_json::from_str::<::dashboard::Events>(raw) {
+                Ok(mut e) => events.events.append(&mut e.events),
+                Err(e) => eprintln!(
+                    "warning: ignoring malformed events payload in input file: {e}"
+                ),
+            }
+        }
+    }
+    if !events.events.is_empty() {
+        events.normalize();
+        result.push(KeyValue {
+            key: KEY_EVENTS.to_string(),
+            value: Some(serde_json::to_string(&events)?),
+        });
+    }
+
     Ok(result)
 }
 
