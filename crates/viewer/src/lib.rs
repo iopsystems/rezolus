@@ -4,6 +4,8 @@ use metriken_query::{Bytes, QueryEngine, Tsdb};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+mod report_save;
+
 /// Parse a JS-side capture id into an internal slot selector. Mirrors
 /// the server-side CaptureId::parse but lives here to avoid pulling
 /// the viewer crate dependency graph into the wasm module.
@@ -44,6 +46,34 @@ fn empty_dashboard_context() -> dashboard::dashboard::DashboardContext {
     dashboard::dashboard::DashboardContext::default()
 }
 
+/// Build a synthetic `AbContainers` manifest from two attached viewers
+/// at Save-as-Report time. The WASM viewer's compare mode loads two
+/// independent parquets (no real tar manifest involved), so we
+/// reconstruct one from each slot's alias + source field.
+fn synthesize_manifest(baseline: &Viewer, experiment: &Viewer) -> report_save::AbContainers {
+    let to_sources = |raw: &str| -> Vec<String> {
+        serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| vec![raw.to_string()])
+    };
+    report_save::AbContainers {
+        version: report_save::AbContainers::SCHEMA_VERSION,
+        baseline: report_save::AbSide {
+            alias: baseline
+                .alias
+                .clone()
+                .unwrap_or_else(|| "baseline".to_string()),
+            sources: to_sources(baseline.engine.tsdb().source()),
+        },
+        experiment: report_save::AbSide {
+            alias: experiment
+                .alias
+                .clone()
+                .unwrap_or_else(|| "experiment".to_string()),
+            sources: to_sources(experiment.engine.tsdb().source()),
+        },
+        category: None,
+    }
+}
+
 #[wasm_bindgen]
 pub struct Viewer {
     engine: QueryEngine<Arc<Tsdb>>,
@@ -62,6 +92,11 @@ pub struct Viewer {
     /// one (e.g. via an `alias=path` static-site URL param). None
     /// means the UI falls back to the capture id.
     alias: Option<String>,
+    /// Original parquet bytes kept alongside the Tsdb. Save as Report
+    /// re-encodes a projection from this source, not from the Tsdb
+    /// (which has lost internal Arrow field metadata like the
+    /// `metric` key used by `parquet filter`'s keep-field predicate).
+    source_bytes: Bytes,
 }
 
 #[derive(Serialize)]
@@ -102,6 +137,7 @@ impl Viewer {
     #[wasm_bindgen(constructor)]
     pub fn new(data: &[u8], filename: &str) -> Result<Viewer, JsValue> {
         let bytes = Bytes::from(data.to_vec());
+        let source_bytes = bytes.clone();
         let mut tsdb = Tsdb::load_from_bytes(bytes)
             .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?;
         tsdb.set_filename(filename.to_string());
@@ -120,6 +156,7 @@ impl Viewer {
             context,
             cached_bodies: std::cell::RefCell::new(std::collections::HashMap::new()),
             alias: None,
+            source_bytes,
         })
     }
 
@@ -618,6 +655,47 @@ impl WasmCaptureRegistry {
 
     pub fn get_section(&self, capture: &str, section: &str) -> Option<String> {
         self.slot(capture).and_then(|v| v.get_section(section))
+    }
+
+    /// Produce the bytes that the server's `/api/v1/save_with_selection`
+    /// would return. When only the baseline is attached, returns a
+    /// trimmed (or untrimmed, per `payload.trim_columns`) parquet.
+    /// When both slots are attached, returns a `*.parquet.ab.tar` with
+    /// each side trimmed independently. The JS caller wraps the bytes
+    /// in a Blob and triggers a download — no HTTP needed.
+    pub fn save_with_selection(&self, payload_json: &str) -> Result<Vec<u8>, JsValue> {
+        let payload: report_save::ReportPayload = serde_json::from_str(payload_json)
+            .map_err(|e| JsValue::from_str(&format!("invalid selection payload: {e}")))?;
+
+        let baseline = self
+            .baseline
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("no baseline capture attached"))?;
+
+        match self.experiment.as_ref() {
+            Some(experiment) => {
+                let manifest = synthesize_manifest(baseline, experiment);
+                report_save::save_combined_ab_tarball(
+                    baseline.source_bytes.clone(),
+                    experiment.source_bytes.clone(),
+                    &payload,
+                    payload_json,
+                    baseline.engine.tsdb(),
+                    experiment.engine.tsdb(),
+                    &manifest,
+                    payload.trim_columns,
+                )
+                .map_err(|e| JsValue::from_str(&e))
+            }
+            None => report_save::save_single_parquet(
+                baseline.source_bytes.clone(),
+                &payload,
+                payload_json,
+                baseline.engine.tsdb(),
+                payload.trim_columns,
+            )
+            .map_err(|e| JsValue::from_str(&e)),
+        }
     }
 
     fn slot(&self, capture: &str) -> Option<&Viewer> {

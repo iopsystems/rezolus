@@ -19,5 +19,10 @@ wasm-bindgen.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 console_error_panic_hook.workspace = true
-# Force zstd to disable x86 asm for wasm32 builds
+# Force zstd to disable x86 asm for wasm32 builds. Required because
+# report-save (transitively) pulls in parquet with the `zstd` feature
+# enabled, which compiles zstd to wasm32 via clang.
 zstd-sys = { version = "2", default-features = false, features = ["no_asm"] }
+# Shared parquet projection + tar repack used by Save as Report; both
+# the server viewer and this WASM crate delegate to it.
+report-save.workspace = true

@@ -164,6 +164,28 @@ const ViewerApi = {
         return backendRequest({ method: 'DELETE', url: '/api/v1/captures/experiment' });
     },
 
+    // POST the selection payload and stream the resulting parquet (or
+    // *.parquet.ab.tar in compare mode) back as bytes. Mirrors the
+    // WASM adapter's `saveWithSelection` shape so callers can stay
+    // transport-agnostic. Server's Content-Type / Content-Disposition
+    // tell us which extension to use on the download.
+    async saveWithSelection(payload) {
+        const resp = await fetch('/api/v1/save_with_selection', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            const detail = await resp.text().catch(() => '');
+            throw new Error(`save failed (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`);
+        }
+        const mime = resp.headers.get('content-type') || 'application/octet-stream';
+        const extension = mime.includes('x-tar') ? '.parquet.ab.tar' : '.parquet';
+        const bytes = new Uint8Array(await resp.arrayBuffer());
+        return { bytes, mime, extension };
+    },
+
 };
 
 export { ViewerApi };
