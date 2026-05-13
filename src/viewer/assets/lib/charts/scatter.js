@@ -477,7 +477,9 @@ function toggleSpectrum(chart, kind) {
 //     mobile / narrow viewport widths.
 // The grid rect is only available after echarts has laid out the
 // chart, so we query it via the `finished` event and reposition.
-const SPECTRUM_CONTROLS_NARROW_WIDTH = 500;
+// Threshold picked to cover phones (full-width), phones in compare
+// mode (half-width), tablet portrait, and narrow desktop windows.
+const SPECTRUM_CONTROLS_NARROW_WIDTH = 700;
 function positionControlsAtGridLeft(chart, container) {
     if (!chart.echart) return;
     try {
@@ -494,7 +496,9 @@ function positionControlsAtGridLeft(chart, container) {
             // Narrow chart: stack above the legend on its own line and
             // align to the right edge so it visually anchors to the
             // legend's column rather than floating in the left gutter.
-            container.style.top = '28px';
+            // top:24 keeps a ~6px gap above the legend (at top:42) so
+            // the 13px control font doesn't touch the legend baseline.
+            container.style.top = '24px';
             container.style.left = 'auto';
             container.style.right = '12px';
         } else {
