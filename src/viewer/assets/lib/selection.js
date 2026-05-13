@@ -516,14 +516,18 @@ const saveToParquet = async (store, attrs) => {
     const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
     const cs = attrs.chartsState;
     const hasZoom = cs && !cs.isDefaultZoom();
-    const checkboxes = hasZoom
-        ? [{ key: 'trim', label: 'Trim to selected time range', checked: false }]
-        : [];
+    const checkboxes = [
+        { key: 'trim_columns', label: 'Trim columns to charts in this report', checked: true },
+    ];
+    if (hasZoom) {
+        checkboxes.push({ key: 'trim', label: 'Trim to selected time range', checked: false });
+    }
     const result = await showSaveModal(defaultPrefix, '.parquet', checkboxes);
     if (!result) return;
     const filename = result.filename;
     const trimToSelection = result.trim;
     const payload = buildPayload(store, attrs);
+    payload.trim_columns = result.trim_columns !== false;
 
     // When trimming, compute the absolute time range (ms) from the zoom percentage
     if (trimToSelection) {

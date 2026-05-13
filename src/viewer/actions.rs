@@ -601,6 +601,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             }
         };
         let baseline_tsdb = state.baseline_tsdb();
+        let trim_columns = payload.trim_columns;
         // Bind to a local so the temporary read guard from .read() doesn't
         // extend through the `if let` body and trip Send across the await.
         let ab_manifest = state.combined_ab_marker.read().clone();
@@ -625,7 +626,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 let baseline_path = path.clone();
                 let body = selection_json.clone();
                 move || {
-                    report_save::trim_combined_ab_to_tarball(
+                    report_save::save_combined_ab_tarball(
                         &baseline_path,
                         &experiment_path,
                         &payload,
@@ -633,6 +634,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                         &baseline_tsdb,
                         &experiment_tsdb,
                         &manifest,
+                        trim_columns,
                     )
                     .map_err(|e| e.to_string())
                 }
@@ -644,8 +646,14 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         let result = tokio::task::spawn_blocking({
             let body = selection_json.clone();
             move || {
-                report_save::trim_single_parquet(&path, &payload, &body, &baseline_tsdb)
-                    .map_err(|e| e.to_string())
+                report_save::save_single_parquet(
+                    &path,
+                    &payload,
+                    &body,
+                    &baseline_tsdb,
+                    trim_columns,
+                )
+                .map_err(|e| e.to_string())
             }
         })
         .await;

@@ -17,13 +17,21 @@ use tracing::warn;
 
 use crate::parquet_metadata::{KEY_DESCRIPTIONS, KEY_REPORT, KEY_SELECTION, REPORT_VALUE_TRIMMED};
 
-/// Trim-relevant subset of the `/api/v1/save_with_selection` body.
-/// Only the entries' queries influence which columns the report needs;
-/// other fields (tagline, anchors, chartToggles, …) are ignored here.
+/// Save-relevant subset of the `/api/v1/save_with_selection` body.
+/// Other fields on the wire (tagline, anchors, chartToggles, …) are
+/// ignored here — only `entries` and `trim_columns` shape the output.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportPayload {
     #[serde(default)]
     pub entries: Vec<ReportEntry>,
+    /// Default true so older clients (and any non-UI POSTer) get the
+    /// trim — preserving today's PR4 behavior unless explicitly opted out.
+    #[serde(default = "default_trim_columns")]
+    pub trim_columns: bool,
+}
+
+fn default_trim_columns() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -160,26 +168,50 @@ fn kept_for_side(tsdb: &Arc<RwLock<Tsdb>>, payload: &ReportPayload, side: Side) 
     resolve_kept_columns(payload, &QueryEngine::new(&*t), side)
 }
 
-/// HTTP-friendly wrapper for the single-parquet trim path. The original
-/// body is embedded verbatim under `selection` in the output footer so
-/// loading the report restores the saved Notebook state.
-pub fn trim_single_parquet(
+/// Embed `selection_json` in the source parquet's footer without
+/// touching the columns. Output is byte-for-byte the same shape as the
+/// input plus an updated `selection` KV — no `KEY_REPORT` stamp, so
+/// reading it back behaves like opening a normal capture (full section
+/// list) that happens to carry an embedded selection.
+fn embed_selection_in_parquet(
+    source_path: &Path,
+    selection_json: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut kv_meta = crate::parquet_tools::read_file_metadata(source_path)?;
+    kv_meta.retain(|kv| kv.key != KEY_SELECTION);
+    kv_meta.push(KeyValue {
+        key: KEY_SELECTION.to_string(),
+        value: Some(selection_json.to_string()),
+    });
+    crate::parquet_tools::rewrite_parquet(source_path, kv_meta, None)
+}
+
+/// HTTP-friendly wrapper for the single-parquet save path. With
+/// `trim_columns = true` (the UI default) projects the parquet down to
+/// the saved selection's columns and stamps `KEY_REPORT`; with `false`,
+/// only embeds the selection JSON and leaves all columns intact.
+pub fn save_single_parquet(
     source_path: &Path,
     payload: &ReportPayload,
     selection_json: &str,
     tsdb: &Arc<RwLock<Tsdb>>,
+    trim_columns: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let kept = kept_for_side(tsdb, payload, Side::Baseline);
-    trim_parquet_to_columns(source_path, &kept, selection_json)
+    if trim_columns {
+        let kept = kept_for_side(tsdb, payload, Side::Baseline);
+        trim_parquet_to_columns(source_path, &kept, selection_json)
+    } else {
+        embed_selection_in_parquet(source_path, selection_json)
+    }
 }
 
-/// Trim a combined-A/B tarball's per-side parquets and repack. The
-/// returned bytes are a POSIX tar matching `parquet combine --ab`'s
-/// format: `baseline.parquet` + `experiment.parquet` + `ab.json`. The
-/// manifest is written through unchanged — alias, sources, and category
-/// survive the round-trip.
+/// Combined-A/B equivalent of [`save_single_parquet`]: when trimming,
+/// projects each side independently against its own Tsdb; when not,
+/// passes both per-side parquets through with only the selection
+/// embedded. Either way the manifest survives unchanged inside the
+/// `*.parquet.ab.tar` output.
 #[allow(clippy::too_many_arguments)]
-pub fn trim_combined_ab_to_tarball(
+pub fn save_combined_ab_tarball(
     baseline_path: &Path,
     experiment_path: &Path,
     payload: &ReportPayload,
@@ -187,13 +219,21 @@ pub fn trim_combined_ab_to_tarball(
     baseline_tsdb: &Arc<RwLock<Tsdb>>,
     experiment_tsdb: &Arc<RwLock<Tsdb>>,
     manifest: &crate::parquet_metadata::AbContainers,
+    trim_columns: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let baseline_kept = kept_for_side(baseline_tsdb, payload, Side::Baseline);
-    let experiment_kept = kept_for_side(experiment_tsdb, payload, Side::Experiment);
-
-    let baseline_bytes = trim_parquet_to_columns(baseline_path, &baseline_kept, selection_json)?;
-    let experiment_bytes =
-        trim_parquet_to_columns(experiment_path, &experiment_kept, selection_json)?;
+    let (baseline_bytes, experiment_bytes) = if trim_columns {
+        let baseline_kept = kept_for_side(baseline_tsdb, payload, Side::Baseline);
+        let experiment_kept = kept_for_side(experiment_tsdb, payload, Side::Experiment);
+        (
+            trim_parquet_to_columns(baseline_path, &baseline_kept, selection_json)?,
+            trim_parquet_to_columns(experiment_path, &experiment_kept, selection_json)?,
+        )
+    } else {
+        (
+            embed_selection_in_parquet(baseline_path, selection_json)?,
+            embed_selection_in_parquet(experiment_path, selection_json)?,
+        )
+    };
     let manifest_bytes = serde_json::to_vec_pretty(manifest)?;
 
     let mut buf: Vec<u8> = Vec::new();
@@ -288,6 +328,7 @@ mod tests {
                 promql_query: "m_a".into(),
                 promql_query_experiment: None,
             }],
+            trim_columns: true,
         };
         let kept = resolve_kept_columns(&payload, &engine, Side::Baseline);
         assert!(kept.contains("timestamp"), "kept must include timestamp");
@@ -308,6 +349,7 @@ mod tests {
                 promql_query: "m_a".into(),
                 promql_query_experiment: None,
             }],
+            trim_columns: true,
         };
         let kept = resolve_kept_columns(&payload, &engine, Side::Experiment);
         assert!(kept.contains("m_a"));
@@ -323,6 +365,7 @@ mod tests {
                 promql_query: "m_a".into(),
                 promql_query_experiment: Some("m_b".into()),
             }],
+            trim_columns: true,
         };
         let kept_b = resolve_kept_columns(&payload, &engine, Side::Baseline);
         let kept_e = resolve_kept_columns(&payload, &engine, Side::Experiment);
@@ -360,6 +403,20 @@ mod tests {
         assert!(payload.entries[0].promql_query_experiment.is_none());
     }
 
+    #[test]
+    fn trim_columns_defaults_true_when_omitted() {
+        let json = r#"{ "entries": [] }"#;
+        let payload: ReportPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.trim_columns);
+    }
+
+    #[test]
+    fn trim_columns_false_when_explicit() {
+        let json = r#"{ "entries": [], "trim_columns": false }"#;
+        let payload: ReportPayload = serde_json::from_str(json).unwrap();
+        assert!(!payload.trim_columns);
+    }
+
     use crate::parquet_metadata::{KEY_REPORT, REPORT_VALUE_TRIMMED};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::reader::FileReader;
@@ -374,10 +431,11 @@ mod tests {
                 promql_query: "m_a".into(),
                 promql_query_experiment: None,
             }],
+            trim_columns: true,
         };
         let body = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = trim_single_parquet(tmp.path(), &payload, body, &tsdb_arc)
-            .expect("trim_single_parquet succeeds");
+        let out = save_single_parquet(tmp.path(), &payload, body, &tsdb_arc, true)
+            .expect("save_single_parquet succeeds");
         let verify = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(verify.path(), &out).unwrap();
         let builder =
@@ -390,6 +448,55 @@ mod tests {
             .map(|f| f.name().clone())
             .collect();
         assert_eq!(names, vec!["timestamp", "duration", "m_a"]);
+    }
+
+    #[test]
+    fn save_with_trim_columns_false_preserves_all_columns_and_skips_marker() {
+        let (tsdb, tmp) = build_test_tsdb();
+        let tsdb_arc = std::sync::Arc::new(parking_lot::RwLock::new(tsdb));
+        let payload = ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: None,
+            }],
+            trim_columns: false,
+        };
+        let selection = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
+        let out = save_single_parquet(tmp.path(), &payload, selection, &tsdb_arc, false)
+            .expect("save succeeds with trim_columns=false");
+
+        let out_tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(out_tmp.path(), &out).unwrap();
+        // All four original columns survive — no projection.
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(out_tmp.path()).unwrap())
+                .unwrap();
+        let names: Vec<String> = builder
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, vec!["timestamp", "duration", "m_a", "m_b"]);
+        // No KEY_REPORT stamp — read side won't enter report mode.
+        let reader =
+            SerializedFileReader::new(std::fs::File::open(out_tmp.path()).unwrap()).unwrap();
+        let kv = reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !kv.iter().any(|kv| kv.key == KEY_REPORT),
+            "untrimmed save must not stamp KEY_REPORT"
+        );
+        let sel = kv
+            .iter()
+            .find(|kv| kv.key == "selection")
+            .and_then(|kv| kv.value.as_deref())
+            .unwrap();
+        assert_eq!(sel, selection);
     }
 
     #[test]
@@ -455,6 +562,7 @@ mod tests {
                 promql_query: "m_a".into(),
                 promql_query_experiment: Some("m_b".into()),
             }],
+            trim_columns: true,
         };
         let body = r#"{"version":1,"entries":[]}"#;
         let manifest = AbContainers {
@@ -470,7 +578,7 @@ mod tests {
             category: None,
         };
 
-        let out = trim_combined_ab_to_tarball(
+        let out = save_combined_ab_tarball(
             tmp_a.path(),
             tmp_b.path(),
             &payload,
@@ -478,8 +586,9 @@ mod tests {
             &tsdb_a,
             &tsdb_b,
             &manifest,
+            true,
         )
-        .expect("AB trim succeeds");
+        .expect("AB save succeeds");
 
         // Verify tar contains the three expected entries.
         let mut archive = tar::Archive::new(std::io::Cursor::new(&out));
