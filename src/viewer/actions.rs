@@ -255,10 +255,11 @@ pub fn ingest_baseline_from_path(
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
     data.set_filename(filename.clone());
 
+    // Mirror the regenerate_dashboards short-circuit: a trimmed report
+    // gets an empty section list so /api/v1/sections is consistent with
+    // CLI-mode loading of the same parquet.
     let report_marker = super::read_footer_kv(&temp_path, crate::parquet_metadata::KEY_REPORT);
     let context = if report_marker.is_some() {
-        // Trimmed reports carry only the saved selection's columns;
-        // suppress the section list so the frontend lands on /report.
         ::dashboard::dashboard::DashboardContext {
             filesize,
             ..Default::default()
@@ -579,28 +580,36 @@ pub async fn save_parquet(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// In file mode, stamp the source parquet's footer with the supplied
-/// selection JSON and stream it back. In live mode, convert buffered
-/// snapshots and stamp the same selection at the same time.
+/// File mode: column-trim the loaded parquet (or repack a combined-A/B
+/// tarball with per-side trims) using the saved selection, embed the
+/// selection JSON in the output footer, and stream it back. Live mode:
+/// convert buffered snapshots into a parquet stamped with the selection
+/// (no trim — there's no source parquet to project from).
 pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: String) -> Response {
     let parquet_path = state.parquet_path.read().clone();
     let selection_json = body;
 
     if let Some(path) = parquet_path {
-        let is_combined_ab = state.combined_ab_marker.read().is_some();
-        if is_combined_ab {
-            let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
-                Ok(p) => p,
-                Err(e) => {
-                    return ApiResponse::<()>::err(
-                        format!("invalid selection payload: {e}"),
-                        "bad_data",
-                    )
-                    .into_response();
-                }
-            };
-            // `state.parquet_path` points at the extracted baseline parquet;
-            // the experiment parquet lives at `state.cli_experiment_path`.
+        let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
+            Ok(p) => p,
+            Err(e) => {
+                return ApiResponse::<()>::err(
+                    format!("invalid selection payload: {e}"),
+                    "bad_data",
+                )
+                .into_response();
+            }
+        };
+        let baseline_tsdb = state.baseline_tsdb();
+        // Bind to a local so the temporary read guard from .read() doesn't
+        // extend through the `if let` body and trip Send across the await.
+        let ab_manifest = state.combined_ab_marker.read().clone();
+
+        if let Some(manifest) = ab_manifest {
+            // parquet_path here is the EXTRACTED baseline parquet (set by
+            // init_file_mode_combined_ab); the experiment side lives at
+            // cli_experiment_path. Both paths outlive the process via the
+            // mem::forget'd extractor handle.
             let Some(experiment_path) = state.cli_experiment_path.read().clone() else {
                 return ApiResponse::<()>::err(
                     "combined-A/B state missing experiment_path",
@@ -608,12 +617,6 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 )
                 .into_response();
             };
-            let manifest = state
-                .combined_ab_marker
-                .read()
-                .clone()
-                .expect("combined_ab_marker checked above");
-            let baseline_tsdb = state.baseline_tsdb();
             let experiment_tsdb = state
                 .captures
                 .get(CaptureId::Experiment)
@@ -638,22 +641,10 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             return finalize_report_attachment_tarball(result);
         }
 
-        let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
-            Ok(p) => p,
-            Err(e) => {
-                return ApiResponse::<()>::err(
-                    format!("invalid selection payload: {e}"),
-                    "bad_data",
-                )
-                .into_response();
-            }
-        };
-        let tsdb_handle = state.baseline_tsdb();
         let result = tokio::task::spawn_blocking({
-            let path = path.clone();
             let body = selection_json.clone();
             move || {
-                report_save::trim_single_parquet(&path, &payload, &body, &tsdb_handle)
+                report_save::trim_single_parquet(&path, &payload, &body, &baseline_tsdb)
                     .map_err(|e| e.to_string())
             }
         })
@@ -692,36 +683,33 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
 fn finalize_report_attachment(
     result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
 ) -> Response {
-    match result {
-        Ok(Ok(output)) => {
-            info!("saved report parquet ({} bytes)", output.len());
-            parquet_attachment("rezolus-report.parquet", output)
-        }
-        Ok(Err(e)) => {
-            error!("report parquet build failed: {e}");
-            server_error(format!("report build failed: {e}"))
-        }
-        Err(e) => {
-            error!("report parquet task panicked: {e}");
-            server_error("internal error")
-        }
-    }
+    finalize_attachment(result, "rezolus-report.parquet", parquet_attachment)
 }
 
 fn finalize_report_attachment_tarball(
     result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
 ) -> Response {
+    finalize_attachment(result, "rezolus-report.parquet.ab.tar", tar_attachment)
+}
+
+/// Convert a `spawn_blocking` outcome into a download Response, logging
+/// success and the two failure modes (build error vs. task panic).
+fn finalize_attachment(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+    filename: &'static str,
+    attach: fn(&str, Vec<u8>) -> Response,
+) -> Response {
     match result {
         Ok(Ok(output)) => {
-            info!("saved combined-A/B report tarball ({} bytes)", output.len());
-            tar_attachment("rezolus-report.parquet.ab.tar", output)
+            info!("saved report {filename} ({} bytes)", output.len());
+            attach(filename, output)
         }
         Ok(Err(e)) => {
-            error!("report tarball build failed: {e}");
+            error!("report build failed: {e}");
             server_error(format!("report build failed: {e}"))
         }
         Err(e) => {
-            error!("report tarball task panicked: {e}");
+            error!("report task panicked: {e}");
             server_error("internal error")
         }
     }

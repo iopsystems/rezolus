@@ -145,15 +145,12 @@ impl AbContainers {
 
 // ── Save-as-Report trimmed parquet ───────────────────────────────────
 
-/// File-level marker: this parquet (or each side of a combined-A/B
-/// tarball) was produced by "Save as Report" and column-trimmed to the
-/// saved selection's queries. Presence flips the viewer into report
-/// mode at load time — empty section list, default route lands on
-/// `/report`.
-///
-/// Value is intentionally a string rather than `bool` so future
-/// variants (e.g. `"full"`) don't require a schema bump.
+/// File-level marker: parquet was column-trimmed by "Save as Report"
+/// (combined-A/B tarballs carry the marker in each per-side parquet).
+/// Presence flips the viewer into report mode — empty section list,
+/// frontend defaults to `/report`. String-typed so future variants
+/// (`"full"`, etc.) don't need a schema bump.
 pub const KEY_REPORT: &str = "report";
 
-/// Canonical value written by the current writer.
+/// Canonical `KEY_REPORT` value written by the current writer.
 pub const REPORT_VALUE_TRIMMED: &str = "trimmed";

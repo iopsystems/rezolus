@@ -371,20 +371,18 @@ pub fn lookup_category<'a>(
 /// HTTP attach/detach so the section list stays in sync.
 pub fn regenerate_dashboards(state: &AppState) {
     if state.is_trimmed_report() {
-        // Trimmed reports carry only the saved selection's columns;
-        // the rezolus topics, service sections, and Query Explorer
-        // would all render mostly empty. Default-construct an empty
-        // context — frontend lands on `/report` instead.
+        // Skip section construction — a trimmed report has columns only
+        // for the saved selection's queries, so rezolus / service /
+        // Query Explorer sections would all render empty.
         let filesize = state
             .parquet_path
             .read()
             .as_ref()
             .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
-        let context = ::dashboard::dashboard::DashboardContext {
+        *state.sections.write() = LazySectionStore::new(::dashboard::dashboard::DashboardContext {
             filesize,
             ..Default::default()
-        };
-        *state.sections.write() = LazySectionStore::new(context);
+        });
         return;
     }
 

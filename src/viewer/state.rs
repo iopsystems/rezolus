@@ -121,11 +121,9 @@ pub struct AppState {
     /// `combined_ab: true` so the frontend can pick UX appropriate for
     /// a single-artifact compare.
     pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
-    /// Cached at init from the parquet footer's `KEY_REPORT` value.
-    /// `Some("trimmed")` means this parquet (or, for combined-A/B, its
-    /// per-side parquets) was produced by Save as Report. Drives the
-    /// `regenerate_dashboards` short-circuit and `/api/v1/mode`'s
-    /// `report` flag.
+    /// Footer `KEY_REPORT` value cached at init. `Some("trimmed")`
+    /// flips the viewer into report mode (empty section list, frontend
+    /// defaults to `/report`).
     pub trimmed_report_marker: RwLock<Option<String>>,
 }
 
@@ -183,9 +181,8 @@ impl AppState {
         self.combined_ab_marker.read().is_some()
     }
 
-    /// True when this parquet was produced by Save as Report — drives
-    /// report-mode UX (empty section list, default route lands on
-    /// `/report`).
+    /// True when the loaded parquet carries `KEY_REPORT` — see
+    /// [`AppState::trimmed_report_marker`] for what that flips.
     pub fn is_trimmed_report(&self) -> bool {
         self.trimmed_report_marker.read().is_some()
     }

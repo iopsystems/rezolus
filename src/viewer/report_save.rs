@@ -17,10 +17,9 @@ use tracing::warn;
 
 use crate::parquet_metadata::{KEY_DESCRIPTIONS, KEY_REPORT, KEY_SELECTION, REPORT_VALUE_TRIMMED};
 
-/// Subset of the JSON body POSTed to `/api/v1/save_with_selection`
-/// that the trim path actually consumes. The full body carries more
-/// (tagline, anchors, chartToggles, time_range, …) — we ignore those
-/// here because they don't influence which columns the report needs.
+/// Trim-relevant subset of the `/api/v1/save_with_selection` body.
+/// Only the entries' queries influence which columns the report needs;
+/// other fields (tagline, anchors, chartToggles, …) are ignored here.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportPayload {
     #[serde(default)]
@@ -34,33 +33,30 @@ pub struct ReportEntry {
     pub promql_query_experiment: Option<String>,
 }
 
-/// Which side of an A/B compare a column-resolution call is for.
-/// Drives whether `promql_query_experiment` overrides `promql_query`
-/// when both are present on a Notebook entry.
+/// Picks `promql_query` (Baseline) or `promql_query_experiment` with
+/// fallback to `promql_query` (Experiment) per saved entry.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Side {
     Baseline,
     Experiment,
 }
 
-/// Resolve every relevant query in the payload against the supplied
-/// engine, union the returned column sets, and add `timestamp` +
-/// `duration`. A query that parses but matches no series contributes
-/// nothing (no error) — the matching column set is intentionally
-/// empty in that case.
+/// Resolve every entry's query against `engine`, union the returned
+/// columns, and add `timestamp` + `duration` (which `engine.columns`
+/// never returns but `Tsdb::load` requires).
 ///
-/// A query that fails to PARSE is silently skipped rather than aborting
-/// the whole save, because the writer should produce *something* even
-/// if a single chart's saved query is malformed. (We log the parse
-/// error so the operator can diagnose.)
+/// A query that fails to PARSE is logged and skipped — one malformed
+/// chart shouldn't abort the whole save. Queries that parse but match
+/// no series contribute nothing, which is fine.
 pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
     payload: &ReportPayload,
     engine: &QueryEngine<T>,
     side: Side,
 ) -> HashSet<String> {
-    let mut out = HashSet::new();
-    out.insert("timestamp".to_string());
-    out.insert("duration".to_string());
+    let mut out: HashSet<String> = ["timestamp", "duration"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     for entry in &payload.entries {
         let query = match side {
             Side::Baseline => entry.promql_query.as_str(),
@@ -71,28 +67,25 @@ pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
         };
         match engine.columns(query) {
             Ok(cols) => out.extend(cols),
-            Err(e) => {
-                warn!("report-save: failed to resolve columns for query {query:?}: {e}");
-            }
+            Err(e) => warn!("report-save: skipped malformed query {query:?}: {e}"),
         }
     }
     out
 }
 
-/// Trim a parquet file to just the columns whose names appear in `kept`.
-/// Matches against the field name, the `base` before `:suffix`, or the
-/// `metric` metadata key — same predicate `parquet filter` uses.
-///
-/// Stamps the output with `KEY_REPORT = "trimmed"` and the caller's
-/// `selection_json` in the footer KV. Filters `descriptions` to kept names.
+/// Project the source parquet down to columns matched by `kept`,
+/// stamp `KEY_REPORT` + the selection JSON in the footer, and prune
+/// `descriptions` to the kept names. The marker is what flips the
+/// viewer into report mode at load time.
 pub fn trim_parquet_to_columns(
     source_path: &Path,
     kept: &HashSet<String>,
     selection_json: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(source_path)?)?;
-    let schema = builder.schema().clone();
-    drop(builder);
+    // Open just to read the schema; rewrite_parquet will re-open.
+    let schema = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(source_path)?)?
+        .schema()
+        .clone();
 
     let indices: Vec<usize> = schema
         .fields()
@@ -101,7 +94,6 @@ pub fn trim_parquet_to_columns(
         .filter(|(_, f)| keep_field(f, kept))
         .map(|(i, _)| i)
         .collect();
-
     if indices.is_empty() {
         return Err("trim produced an empty column set (source missing timestamp?)".into());
     }
@@ -121,11 +113,7 @@ pub fn trim_parquet_to_columns(
         .iter()
         .flat_map(|&i| {
             let f = schema.field(i);
-            let mut names = vec![f.name().as_str()];
-            if let Some(m) = f.metadata().get("metric") {
-                names.push(m.as_str());
-            }
-            names
+            std::iter::once(f.name().as_str()).chain(f.metadata().get("metric").map(String::as_str))
         })
         .collect();
     filter_descriptions(&mut kv_meta, &kept_names);
@@ -133,66 +121,75 @@ pub fn trim_parquet_to_columns(
     crate::parquet_tools::rewrite_parquet(source_path, kv_meta, Some(&indices))
 }
 
-/// Mirror `parquet filter`'s field-keep predicate: exact match, base
-/// before `:`, or `metric` metadata fallback.
+/// Same field-keep ladder as `parquet filter`: exact name, base before
+/// `:` (e.g. `foo` for `foo:buckets`), or the `metric` metadata fallback
+/// for Prometheus-sourced columns whose physical name is a numeric ID.
 fn keep_field(f: &arrow::datatypes::Field, kept: &HashSet<String>) -> bool {
     let name = f.name();
-    if kept.contains(name) {
-        return true;
-    }
-    if name
-        .split_once(':')
-        .is_some_and(|(base, _)| kept.contains(base))
-    {
-        return true;
-    }
-    if let Some(metric) = f.metadata().get("metric") {
-        if kept.contains(metric) {
-            return true;
-        }
-    }
-    false
+    kept.contains(name)
+        || name
+            .split_once(':')
+            .is_some_and(|(base, _)| kept.contains(base))
+        || f.metadata().get("metric").is_some_and(|m| kept.contains(m))
 }
 
+/// Drop entries from the JSON-encoded `descriptions` map whose key isn't
+/// in `kept_names`. Silently no-ops if the key is absent or malformed —
+/// a stale `descriptions` blob is harmless.
 fn filter_descriptions(kv_meta: &mut [KeyValue], kept_names: &std::collections::BTreeSet<&str>) {
-    if let Some(entry) = kv_meta.iter_mut().find(|kv| kv.key == KEY_DESCRIPTIONS) {
-        if let Some(value) = &entry.value {
-            if let Ok(mut map) =
-                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(value)
-            {
-                map.retain(|k, _| kept_names.contains(k.as_str()));
-                if let Ok(filtered) = serde_json::to_string(&map) {
-                    entry.value = Some(filtered);
-                }
-            }
-        }
+    let Some(entry) = kv_meta.iter_mut().find(|kv| kv.key == KEY_DESCRIPTIONS) else {
+        return;
+    };
+    let Some(value) = entry.value.as_deref() else {
+        return;
+    };
+    let Ok(mut map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(value)
+    else {
+        return;
+    };
+    map.retain(|k, _| kept_names.contains(k.as_str()));
+    if let Ok(filtered) = serde_json::to_string(&map) {
+        entry.value = Some(filtered);
     }
 }
 
-/// Trim a combined-A/B tarball's per-side parquets and repack. Returns a
-/// POSIX tar (`baseline.parquet` + `experiment.parquet` + `ab.json`). The
+/// Resolve `side`'s kept columns under a short-lived read guard. The
+/// guard is dropped before the caller does disk I/O.
+fn kept_for_side(tsdb: &Arc<RwLock<Tsdb>>, payload: &ReportPayload, side: Side) -> HashSet<String> {
+    let t = tsdb.read();
+    resolve_kept_columns(payload, &QueryEngine::new(&*t), side)
+}
+
+/// HTTP-friendly wrapper for the single-parquet trim path. The original
+/// body is embedded verbatim under `selection` in the output footer so
+/// loading the report restores the saved Notebook state.
+pub fn trim_single_parquet(
+    source_path: &Path,
+    payload: &ReportPayload,
+    selection_json: &str,
+    tsdb: &Arc<RwLock<Tsdb>>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let kept = kept_for_side(tsdb, payload, Side::Baseline);
+    trim_parquet_to_columns(source_path, &kept, selection_json)
+}
+
+/// Trim a combined-A/B tarball's per-side parquets and repack. The
+/// returned bytes are a POSIX tar matching `parquet combine --ab`'s
+/// format: `baseline.parquet` + `experiment.parquet` + `ab.json`. The
 /// manifest is written through unchanged — alias, sources, and category
 /// survive the round-trip.
 #[allow(clippy::too_many_arguments)]
 pub fn trim_combined_ab_to_tarball(
-    baseline_path: &std::path::Path,
-    experiment_path: &std::path::Path,
+    baseline_path: &Path,
+    experiment_path: &Path,
     payload: &ReportPayload,
     selection_json: &str,
     baseline_tsdb: &Arc<RwLock<Tsdb>>,
     experiment_tsdb: &Arc<RwLock<Tsdb>>,
     manifest: &crate::parquet_metadata::AbContainers,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let baseline_kept = {
-        let t = baseline_tsdb.read();
-        let engine = QueryEngine::new(&*t);
-        resolve_kept_columns(payload, &engine, Side::Baseline)
-    };
-    let experiment_kept = {
-        let t = experiment_tsdb.read();
-        let engine = QueryEngine::new(&*t);
-        resolve_kept_columns(payload, &engine, Side::Experiment)
-    };
+    let baseline_kept = kept_for_side(baseline_tsdb, payload, Side::Baseline);
+    let experiment_kept = kept_for_side(experiment_tsdb, payload, Side::Experiment);
 
     let baseline_bytes = trim_parquet_to_columns(baseline_path, &baseline_kept, selection_json)?;
     let experiment_bytes =
@@ -200,14 +197,12 @@ pub fn trim_combined_ab_to_tarball(
     let manifest_bytes = serde_json::to_vec_pretty(manifest)?;
 
     let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut builder = tar::Builder::new(&mut buf);
-        builder.mode(tar::HeaderMode::Deterministic);
-        append_tar_entry(&mut builder, "baseline.parquet", &baseline_bytes)?;
-        append_tar_entry(&mut builder, "experiment.parquet", &experiment_bytes)?;
-        append_tar_entry(&mut builder, "ab.json", &manifest_bytes)?;
-        builder.into_inner()?;
-    }
+    let mut builder = tar::Builder::new(&mut buf);
+    builder.mode(tar::HeaderMode::Deterministic);
+    append_tar_entry(&mut builder, "baseline.parquet", &baseline_bytes)?;
+    append_tar_entry(&mut builder, "experiment.parquet", &experiment_bytes)?;
+    append_tar_entry(&mut builder, "ab.json", &manifest_bytes)?;
+    builder.into_inner()?; // releases the &mut buf borrow
     Ok(buf)
 }
 
@@ -223,23 +218,6 @@ fn append_tar_entry<W: std::io::Write>(
     header.set_cksum();
     builder.append(&header, data)?;
     Ok(())
-}
-
-/// HTTP-friendly wrapper for the single-parquet trim path. Resolves kept
-/// columns against the supplied Tsdb, trims the source parquet, and returns
-/// the bytes ready to stream. The original JSON body is embedded verbatim
-/// under `selection` in the output footer.
-pub fn trim_single_parquet(
-    source_path: &std::path::Path,
-    payload: &ReportPayload,
-    selection_json: &str,
-    tsdb: &Arc<RwLock<Tsdb>>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let tsdb_read = tsdb.read();
-    let engine = QueryEngine::new(&*tsdb_read);
-    let kept = resolve_kept_columns(payload, &engine, Side::Baseline);
-    drop(tsdb_read);
-    trim_parquet_to_columns(source_path, &kept, selection_json)
 }
 
 #[cfg(test)]
