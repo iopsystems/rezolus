@@ -2315,6 +2315,14 @@ main {
         max-width: 100vw;
     }
 
+    /* The topnav switches to `position: relative` above, so it already
+       occupies its natural height in the document flow. The desktop
+       `margin-top: var(--header-height)` then doubles the gap between
+       topnav and the first section title — drop it. */
+    main {
+        margin-top: 0;
+    }
+
     /* ── Section header stacks vertically ── */
     .section-header-row {
         flex-direction: column;
