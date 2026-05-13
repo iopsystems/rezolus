@@ -142,3 +142,15 @@ pub struct AbSide {
 impl AbContainers {
     pub const SCHEMA_VERSION: u32 = 1;
 }
+
+// ── Save-as-Report trimmed parquet ───────────────────────────────────
+
+/// File-level marker: parquet was column-trimmed by "Save as Report"
+/// (combined-A/B tarballs carry the marker in each per-side parquet).
+/// Presence flips the viewer into report mode — empty section list,
+/// frontend defaults to `/report`. String-typed so future variants
+/// (`"full"`, etc.) don't need a schema bump.
+pub const KEY_REPORT: &str = "report";
+
+/// Canonical `KEY_REPORT` value written by the current writer.
+pub const REPORT_VALUE_TRIMMED: &str = "trimmed";

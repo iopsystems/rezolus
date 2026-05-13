@@ -22,6 +22,7 @@ use super::metadata::{
     build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
     extract_service_extension_metadata, regenerate_dashboards, validate_service_extensions,
 };
+use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use super::tsdb::Tsdb;
 use ::dashboard;
@@ -254,10 +255,21 @@ pub fn ingest_baseline_from_path(
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
     data.set_filename(filename.clone());
 
-    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
-    validate_service_extensions(&data, &mut service_exts);
-    let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let context = dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None);
+    // Mirror the regenerate_dashboards short-circuit: a trimmed report
+    // gets an empty section list so /api/v1/sections is consistent with
+    // CLI-mode loading of the same parquet.
+    let report_marker = super::read_footer_kv(&temp_path, crate::parquet_metadata::KEY_REPORT);
+    let context = if report_marker.is_some() {
+        ::dashboard::dashboard::DashboardContext {
+            filesize,
+            ..Default::default()
+        }
+    } else {
+        let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+        validate_service_extensions(&data, &mut service_exts);
+        let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
+        ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None)
+    };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
@@ -269,6 +281,7 @@ pub fn ingest_baseline_from_path(
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
+    *state.trimmed_report_marker.write() = report_marker;
     state
         .captures
         .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
@@ -567,41 +580,84 @@ pub async fn save_parquet(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// In file mode, stamp the source parquet's footer with the supplied
-/// selection JSON and stream it back. In live mode, convert buffered
-/// snapshots and stamp the same selection at the same time.
+/// File mode: column-trim the loaded parquet (or repack a combined-A/B
+/// tarball with per-side trims) using the saved selection, embed the
+/// selection JSON in the output footer, and stream it back. Live mode:
+/// convert buffered snapshots into a parquet stamped with the selection
+/// (no trim — there's no source parquet to project from).
 pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: String) -> Response {
     let parquet_path = state.parquet_path.read().clone();
     let selection_json = body;
 
     if let Some(path) = parquet_path {
-        let result = tokio::task::spawn_blocking(move || {
-            use parquet::file::metadata::KeyValue;
-            let mut kv_meta =
-                crate::parquet_tools::read_file_metadata(&path).map_err(|e| e.to_string())?;
-            kv_meta.retain(|kv| kv.key != "selection");
-            kv_meta.push(KeyValue {
-                key: "selection".to_string(),
-                value: Some(selection_json),
-            });
-            let output = crate::parquet_tools::rewrite_parquet(&path, kv_meta, None)
-                .map_err(|e| e.to_string())?;
-            info!("saved annotated parquet ({} bytes)", output.len());
-            Ok::<Vec<u8>, String>(output)
-        })
-        .await;
-
-        return match result {
-            Ok(Ok(output)) => parquet_attachment("rezolus-capture-annotated.parquet", output),
-            Ok(Err(e)) => {
-                error!("failed to annotate parquet: {e}");
-                server_error(format!("parquet annotation failed: {e}"))
-            }
+        let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
+            Ok(p) => p,
             Err(e) => {
-                error!("parquet annotation task panicked: {e}");
-                server_error("internal error")
+                return ApiResponse::<()>::err(
+                    format!("invalid selection payload: {e}"),
+                    "bad_data",
+                )
+                .into_response();
             }
         };
+        let baseline_tsdb = state.baseline_tsdb();
+        let trim_columns = payload.trim_columns;
+        // Bind to a local so the temporary read guard from .read() doesn't
+        // extend through the `if let` body and trip Send across the await.
+        let ab_manifest = state.combined_ab_marker.read().clone();
+
+        if let Some(manifest) = ab_manifest {
+            // parquet_path here is the EXTRACTED baseline parquet (set by
+            // init_file_mode_combined_ab); the experiment side lives at
+            // cli_experiment_path. Both paths outlive the process via the
+            // mem::forget'd extractor handle.
+            let Some(experiment_path) = state.cli_experiment_path.read().clone() else {
+                return ApiResponse::<()>::err(
+                    "combined-A/B state missing experiment_path",
+                    "internal_error",
+                )
+                .into_response();
+            };
+            let experiment_tsdb = state
+                .captures
+                .get(CaptureId::Experiment)
+                .expect("experiment slot must be attached in combined-A/B mode");
+            let result = tokio::task::spawn_blocking({
+                let baseline_path = path.clone();
+                let body = selection_json.clone();
+                move || {
+                    report_save::save_combined_ab_tarball(
+                        &baseline_path,
+                        &experiment_path,
+                        &payload,
+                        &body,
+                        &baseline_tsdb,
+                        &experiment_tsdb,
+                        &manifest,
+                        trim_columns,
+                    )
+                    .map_err(|e| e.to_string())
+                }
+            })
+            .await;
+            return finalize_report_attachment_tarball(result);
+        }
+
+        let result = tokio::task::spawn_blocking({
+            let body = selection_json.clone();
+            move || {
+                report_save::save_single_parquet(
+                    &path,
+                    &payload,
+                    &body,
+                    &baseline_tsdb,
+                    trim_columns,
+                )
+                .map_err(|e| e.to_string())
+            }
+        })
+        .await;
+        return finalize_report_attachment(result);
     }
 
     // Live mode: convert snapshots with the selection metadata.
@@ -630,4 +686,51 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             server_error("internal error")
         }
     }
+}
+
+fn finalize_report_attachment(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+) -> Response {
+    finalize_attachment(result, "rezolus-report.parquet", parquet_attachment)
+}
+
+fn finalize_report_attachment_tarball(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+) -> Response {
+    finalize_attachment(result, "rezolus-report.parquet.ab.tar", tar_attachment)
+}
+
+/// Convert a `spawn_blocking` outcome into a download Response, logging
+/// success and the two failure modes (build error vs. task panic).
+fn finalize_attachment(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+    filename: &'static str,
+    attach: fn(&str, Vec<u8>) -> Response,
+) -> Response {
+    match result {
+        Ok(Ok(output)) => {
+            info!("saved report {filename} ({} bytes)", output.len());
+            attach(filename, output)
+        }
+        Ok(Err(e)) => {
+            error!("report build failed: {e}");
+            server_error(format!("report build failed: {e}"))
+        }
+        Err(e) => {
+            error!("report task panicked: {e}");
+            server_error("internal error")
+        }
+    }
+}
+
+fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/x-tar")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(body))
+        .unwrap()
 }

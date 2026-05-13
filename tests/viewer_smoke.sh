@@ -244,5 +244,45 @@ eq "combined-AB combined_ab"  "$(echo "$mode" | jq -r .combined_ab)"  "true" "$L
 eq "combined-AB compare_mode" "$(echo "$mode" | jq -r .compare_mode)" "true" "$LOGDIR/ab-combined.log"
 eq "combined-AB loaded"       "$(echo "$mode" | jq -r .loaded)"       "true" "$LOGDIR/ab-combined.log"
 
+echo "==> Save as Report produces a trimmed parquet"
+PORT_REPORT=18505
+# Pin one chart and POST a tiny selection that touches one column.
+SELECTION=$(cat <<JSON
+{
+  "version": 1,
+  "saved_at": "2026-05-12T00:00:00Z",
+  "entries": [
+    {"chartId": "cpu_cores", "section": "/cpu", "promql_query": "cpu_cores"}
+  ]
+}
+JSON
+)
+REPORT_PARQUET="$LOGDIR/report.parquet"
+curl -fsS -X POST -H 'content-type: application/json' \
+     -d "$SELECTION" \
+     "http://127.0.0.1:$PORT_FILE/api/v1/save_with_selection" \
+     --output "$REPORT_PARQUET" \
+     || fail "save_with_selection failed" "" "exit 0" "$LOGDIR/file.log"
+[ -s "$REPORT_PARQUET" ] || fail "report parquet is empty" "0" ">0" "$LOGDIR/file.log"
+
+echo "==> trimmed report loads in a fresh viewer with report mode active"
+./target/debug/rezolus view "$REPORT_PARQUET" \
+    --listen 127.0.0.1:$PORT_REPORT \
+    > "$LOGDIR/report.log" 2>&1 &
+PID_REPORT=$!
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_AB_COMBINED $PID_REPORT 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+
+wait_for_port $PORT_REPORT || {
+    echo "--- log for report viewer ---"
+    cat "$LOGDIR/report.log"
+    exit 1
+}
+
+mode=$(curl -fsS "http://127.0.0.1:$PORT_REPORT/api/v1/mode")
+eq "report mode flag"          "$(echo "$mode" | jq -r .report)"        "true" "$LOGDIR/report.log"
+sections=$(curl -fsS "http://127.0.0.1:$PORT_REPORT/api/v1/sections")
+section_count=$(echo "$sections" | jq -r '.data.sections | length')
+eq "report mode section count" "$section_count"                          "0"    "$LOGDIR/report.log"
+
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"
