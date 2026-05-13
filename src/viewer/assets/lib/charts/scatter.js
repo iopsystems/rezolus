@@ -448,8 +448,14 @@ function renderSpectrumCheckbox(el, chart, kind) {
     const color = on ? COLORS.fg : COLORS.fgSecondary;
     const glyph = on ? '☑' : '☐';
     const label = pending ? `${SPECTRUM_LABELS[kind]}…` : SPECTRUM_LABELS[kind];
+    // Flex centers the 16px glyph against the 13px label baseline so
+    // they share a vertical midline instead of sitting on a manual
+    // pixel-nudge that drifts across browsers.
+    el.style.display = 'inline-flex';
+    el.style.alignItems = 'center';
+    el.style.gap = '4px';
     el.innerHTML =
-        `<span style="font-size: 16px; vertical-align: bottom; position: relative; top: 2px;">${glyph}</span> ${label}`;
+        `<span style="font-size: 16px; line-height: 1;">${glyph}</span><span>${label}</span>`;
     el.style.color = color;
 }
 
@@ -498,9 +504,11 @@ function positionControlsAtGridLeft(chart, container) {
             // legend's column rather than floating in the left gutter.
             // top:24 keeps a ~6px gap above the legend (at top:42) so
             // the 13px control font doesn't touch the legend baseline.
+            // right:28 = 12px chart inset + ~1em breathing room so the
+            // checkboxes don't crowd the legend's rightmost chip.
             container.style.top = '24px';
             container.style.left = 'auto';
-            container.style.right = '12px';
+            container.style.right = '28px';
         } else {
             container.style.top = '42px';
             container.style.right = 'auto';
