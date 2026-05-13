@@ -124,7 +124,45 @@ async function loadParquet(data, filename) {
         fileMetadata: state.fileMetadata,
         selectionPayload: state.selectionPayload,
         reportMode,
+        // Wire the topnav "Load Parquet" button to the same handler the
+        // landing-page dropzone uses. The server viewer uploads via
+        // /api/v1/upload; here we take the File bytes and reuse
+        // loadParquet directly.
+        onUploadParquet: loadFile,
     });
+}
+
+// Shared file-upload entry point: reads the File's bytes and runs the
+// usual loadParquet flow. Used by both the landing-page Choose-File /
+// drop zone and the topnav "Load Parquet" button after a capture is
+// already loaded (which destroys the splash and re-enters loadParquet
+// with the new bytes — same lifecycle as `loadCapture`).
+async function loadFile(file) {
+    if (!file) return;
+    const display = file.name || 'capture.parquet';
+    splashLabel = display;
+    splashProgress = -1;
+    landingError = null;
+    m.redraw();
+    try {
+        const data = new Uint8Array(await file.arrayBuffer());
+        splashLabel = 'Initializing';
+        splashProgress = -1;
+        m.redraw();
+        await loadParquet(data, display);
+        // Drop any URL params that pinned the previous capture so a
+        // refresh doesn't fight the just-uploaded file.
+        const url = new URL(window.location);
+        url.searchParams.delete('demo');
+        url.searchParams.delete('demoA');
+        url.searchParams.delete('demoB');
+        url.searchParams.delete('capture');
+        window.history.replaceState(null, '', url);
+    } catch (e) {
+        splashLabel = null;
+        landingError = `Failed to load ${display}: ${e?.message ?? e ?? 'unknown error'}`;
+        m.redraw();
+    }
 }
 
 // ── Load demo parquet (with download progress) ──────────────────────
@@ -383,6 +421,7 @@ const Root = {
             ]));
         }
         return m('div', m(FileUpload, {
+            onFile: loadFile,
             onDemo: (demo) => {
                 if (demo && Array.isArray(demo.files) && demo.files.length === 2) {
                     loadCompareDemo(
