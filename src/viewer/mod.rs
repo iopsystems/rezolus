@@ -322,7 +322,7 @@ pub fn run(config: Config) {
 
 /// Pull a single KV value out of a parquet file's footer. Returns
 /// `None` for missing-key, malformed-file, or missing-value cases.
-fn read_footer_kv(path: &Path, key: &str) -> Option<String> {
+pub(super) fn read_footer_kv(path: &Path, key: &str) -> Option<String> {
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
     let file = std::fs::File::open(path).ok()?;

@@ -255,10 +255,20 @@ pub fn ingest_baseline_from_path(
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
     data.set_filename(filename.clone());
 
-    let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
-    validate_service_extensions(&data, &mut service_exts);
-    let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let context = dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None);
+    let report_marker = super::read_footer_kv(&temp_path, crate::parquet_metadata::KEY_REPORT);
+    let context = if report_marker.is_some() {
+        // Trimmed reports carry only the saved selection's columns;
+        // suppress the section list so the frontend lands on /report.
+        ::dashboard::dashboard::DashboardContext {
+            filesize,
+            ..Default::default()
+        }
+    } else {
+        let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+        validate_service_extensions(&data, &mut service_exts);
+        let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
+        ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None)
+    };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
@@ -270,6 +280,7 @@ pub fn ingest_baseline_from_path(
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
+    *state.trimmed_report_marker.write() = report_marker;
     state
         .captures
         .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
@@ -593,7 +604,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             let Some(experiment_path) = state.cli_experiment_path.read().clone() else {
                 return ApiResponse::<()>::err(
                     "combined-A/B state missing experiment_path",
-                    "internal",
+                    "internal_error",
                 )
                 .into_response();
             };
@@ -718,6 +729,7 @@ fn finalize_report_attachment_tarball(
 
 fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
     Response::builder()
+        .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/x-tar")
         .header(
             header::CONTENT_DISPOSITION,

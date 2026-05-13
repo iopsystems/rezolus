@@ -555,5 +555,25 @@ mod tests {
             .collect();
         assert_eq!(b_names, vec!["timestamp", "duration", "m_a"]);
         assert_eq!(e_names, vec!["timestamp", "duration", "m_b"]);
+
+        // Each per-side parquet must carry KEY_REPORT = "trimmed".
+        use parquet::file::reader::FileReader;
+        use parquet::file::serialized_reader::SerializedFileReader;
+        for verify in [&verify_b, &verify_e] {
+            let reader =
+                SerializedFileReader::new(std::fs::File::open(verify.path()).unwrap()).unwrap();
+            let kv = reader
+                .metadata()
+                .file_metadata()
+                .key_value_metadata()
+                .cloned()
+                .unwrap();
+            let report = kv
+                .iter()
+                .find(|kv| kv.key == KEY_REPORT)
+                .and_then(|kv| kv.value.as_deref())
+                .unwrap();
+            assert_eq!(report, REPORT_VALUE_TRIMMED);
+        }
     }
 }
