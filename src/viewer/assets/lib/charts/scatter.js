@@ -448,14 +448,14 @@ function renderSpectrumCheckbox(el, chart, kind) {
     const color = on ? COLORS.fg : COLORS.fgSecondary;
     const glyph = on ? '☑' : '☐';
     const label = pending ? `${SPECTRUM_LABELS[kind]}…` : SPECTRUM_LABELS[kind];
-    // Flex centers the 16px glyph against the 13px label baseline so
-    // they share a vertical midline instead of sitting on a manual
-    // pixel-nudge that drifts across browsers.
+    // Flex centers the 16px glyph against the 13px label, then a 2px
+    // upward translate compensates for the ☐/☑ glyph's built-in
+    // bottom whitespace so the visual centers actually line up.
     el.style.display = 'inline-flex';
     el.style.alignItems = 'center';
     el.style.gap = '4px';
     el.innerHTML =
-        `<span style="font-size: 16px; line-height: 1;">${glyph}</span><span>${label}</span>`;
+        `<span style="font-size: 16px; line-height: 1; transform: translateY(-2px);">${glyph}</span><span>${label}</span>`;
     el.style.color = color;
 }
 
