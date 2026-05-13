@@ -28,6 +28,22 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+/// Mirrors the server's `regenerate_dashboards` short-circuit: a parquet
+/// produced by Save as Report carries `KEY_REPORT = "trimmed"` in its
+/// footer, and the viewer should suppress the rezolus / service / Query
+/// Explorer sections (their columns were trimmed away). The frontend
+/// reads the same marker out of `getFileMetadata()` and routes to
+/// `/report` instead of the default landing.
+fn is_trimmed_report(file_metadata: &std::collections::HashMap<String, String>) -> bool {
+    file_metadata.get("report").map(String::as_str) == Some("trimmed")
+}
+
+/// `DashboardContext::default()` returns sections=[], filesize=None — the
+/// shape callers want when a parquet should render only the Report view.
+fn empty_dashboard_context() -> dashboard::dashboard::DashboardContext {
+    dashboard::dashboard::DashboardContext::default()
+}
+
 #[wasm_bindgen]
 pub struct Viewer {
     engine: QueryEngine<Arc<Tsdb>>,
@@ -91,7 +107,11 @@ impl Viewer {
         tsdb.set_filename(filename.to_string());
 
         let file_metadata = tsdb.file_metadata().clone();
-        let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
+        let context = if is_trimmed_report(&file_metadata) {
+            empty_dashboard_context()
+        } else {
+            dashboard::dashboard::build_dashboard_context(None, &[], None)
+        };
         let engine = QueryEngine::new(Arc::new(tsdb));
 
         Ok(Viewer {
@@ -278,11 +298,15 @@ impl Viewer {
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
 
-        let context = dashboard::dashboard::build_dashboard_context(
-            None,
-            &service_refs,
-            None, // single-capture: no category
-        );
+        let context = if is_trimmed_report(&self.file_metadata) {
+            empty_dashboard_context()
+        } else {
+            dashboard::dashboard::build_dashboard_context(
+                None,
+                &service_refs,
+                None, // single-capture: no category
+            )
+        };
         self.context = context;
         self.cached_bodies.borrow_mut().clear();
         Ok(())
@@ -560,7 +584,23 @@ impl WasmCaptureRegistry {
             None => None,
         };
 
-        let context = dashboard::dashboard::build_dashboard_context(None, &service_refs, category);
+        // Trimmed reports — if either slot carries the marker — collapse
+        // both contexts to empty so the frontend lands on /report.
+        let report_mode = self
+            .baseline
+            .as_ref()
+            .map(|v| is_trimmed_report(&v.file_metadata))
+            .unwrap_or(false)
+            || self
+                .experiment
+                .as_ref()
+                .map(|v| is_trimmed_report(&v.file_metadata))
+                .unwrap_or(false);
+        let context = if report_mode {
+            empty_dashboard_context()
+        } else {
+            dashboard::dashboard::build_dashboard_context(None, &service_refs, category)
+        };
         if let Some(baseline) = self.baseline.as_mut() {
             baseline.context = context.clone();
             baseline.cached_bodies.borrow_mut().clear();

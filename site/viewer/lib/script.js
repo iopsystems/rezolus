@@ -115,10 +115,15 @@ async function loadParquet(data, filename) {
     } catch (_) {
         bootstrapSharedSections([]);
     }
+    // Match the server viewer's mode.report flag — the WASM crate stamps
+    // the section list to [] when KEY_REPORT="trimmed", and app.js
+    // reroutes to /report when reportMode is true.
+    const reportMode = state.fileMetadata?.report === 'trimmed';
     initDashboard({
         systemInfo: state.systemInfo,
         fileMetadata: state.fileMetadata,
         selectionPayload: state.selectionPayload,
+        reportMode,
     });
 }
 
@@ -319,6 +324,8 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
         } catch (_) {
             bootstrapSharedSections([]);
         }
+        const reportMode = base.fileMetadata?.report === 'trimmed'
+            || experimentFileMetadata?.report === 'trimmed';
         initDashboard({
             systemInfo: base.systemInfo,
             fileMetadata: base.fileMetadata,
@@ -331,6 +338,7 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
             experimentFileMetadata,
             experimentFilename,
             experimentQueryRange,
+            reportMode,
         });
 
         // Canonicalize the URL: repeated `capture=label=path` (or bare
