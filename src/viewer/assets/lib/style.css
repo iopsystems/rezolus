@@ -1568,10 +1568,30 @@ main {
     margin-bottom: 1.5rem;
 }
 
-.selection-card-remove {
+/* Per-card controls (move up/down + remove) clustered top-right of
+   each Notebook entry. Hidden until the card is hovered, mirroring
+   the previous behavior of the standalone remove button. */
+.selection-card-controls {
     position: absolute;
     top: 8px;
     right: 8px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity var(--transition-base);
+    z-index: 10;
+}
+
+.chart-wrapper:hover .selection-card-controls {
+    opacity: 0.6;
+}
+
+.selection-card-controls:hover {
+    opacity: 1;
+}
+
+.selection-card-move,
+.selection-card-remove {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -1581,17 +1601,21 @@ main {
     font-size: 16px;
     line-height: 1;
     padding: 0 6px;
-    opacity: 0;
     transition: all var(--transition-base);
-    z-index: 10;
 }
 
-.chart-wrapper:hover .selection-card-remove {
-    opacity: 0.6;
+.selection-card-move:hover:not(:disabled) {
+    color: var(--fg);
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
+}
+
+.selection-card-move:disabled {
+    cursor: default;
+    opacity: 0.35;
 }
 
 .selection-card-remove:hover {
-    opacity: 1 !important;
     color: var(--danger);
     border-color: color-mix(in srgb, var(--danger) 40%, transparent);
     background: color-mix(in srgb, var(--danger) 15%, transparent);

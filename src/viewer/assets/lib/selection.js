@@ -255,7 +255,7 @@ const selectionCardTitle = (entry, spec) => {
 // Replaces the previous silent-collapse behavior where the chart's
 // .no-data state hid the entire .chart-wrapper, leaving an empty
 // gap that diverged from the loaded entry count.
-const unavailableCard = (entry, spec, removeBtn = null) =>
+const unavailableCard = (entry, spec, controls = null) =>
     m('div.selection-card', [
         m('div.chart-wrapper.chart-wrapper-unavailable', [
             m('div.chart-unavailable', [
@@ -265,7 +265,7 @@ const unavailableCard = (entry, spec, removeBtn = null) =>
                         ? `Failed to load: ${spec.unavailableReason}`
                         : 'No data available in this capture.'),
             ]),
-            removeBtn,
+            controls,
         ]),
     ]);
 
@@ -318,6 +318,17 @@ const removeEntry = (store, id) => {
             persistNotebook();
         } else if (store === reportStore) persistReport();
     }
+};
+
+// Swap entry at `id` with its neighbor. delta = -1 moves up, +1 down.
+// No-op when the move would push past either end of the list.
+const moveEntry = (store, id, delta) => {
+    const idx = store.entries.findIndex(e => e.id === id);
+    const target = idx + delta;
+    if (idx < 0 || target < 0 || target >= store.entries.length) return;
+    [store.entries[idx], store.entries[target]] = [store.entries[target], store.entries[idx]];
+    if (store === notebookStore) persistNotebook();
+    else if (store === reportStore) persistReport();
 };
 
 // In-memory only — leaves localStorage alone. Used during scope
@@ -741,15 +752,27 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 }, 'Clear All'),
             ]),
 
-            notebookStore.entries.map((entry) => {
+            notebookStore.entries.map((entry, idx, arr) => {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
+                const cardControls = m('div.selection-card-controls', [
+                    m('button.selection-card-move', {
+                        onclick: () => { moveEntry(notebookStore, entry.id, -1); m.redraw(); },
+                        title: 'Move up',
+                        disabled: idx === 0,
+                    }, '\u2191'),
+                    m('button.selection-card-move', {
+                        onclick: () => { moveEntry(notebookStore, entry.id, 1); m.redraw(); },
+                        title: 'Move down',
+                        disabled: idx === arr.length - 1,
+                    }, '\u2193'),
+                    m('button.selection-card-remove', {
+                        onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
+                        title: 'Remove from Notebook',
+                    }, '\u00d7'),
+                ]);
                 if (spec.unavailable) {
-                    return unavailableCard(entry, spec,
-                        m('button.selection-card-remove', {
-                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
-                            title: 'Remove from Notebook',
-                        }, '\u00d7'));
+                    return unavailableCard(entry, spec, cardControls);
                 }
                 // In compare mode, render through CompareChartWrapper so
                 // pinned charts mirror the live A/B view (side-by-side,
@@ -796,10 +819,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
                         chartBody,
-                        m('button.selection-card-remove', {
-                            onclick: () => { removeEntry(notebookStore, entry.id); m.redraw(); },
-                            title: 'Remove from Notebook',
-                        }, '\u00d7'),
+                        cardControls,
                     ]),
                     (() => {
                         const hasNote = entry.note && entry.note.length > 0;
