@@ -2705,6 +2705,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "report-save"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "metriken-query",
+ "parquet",
+ "serde",
+ "serde_json",
+ "tar",
+ "tracing",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2742,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.13.1-alpha.6"
+version = "5.13.1-alpha.7"
 dependencies = [
  "allan",
  "anyhow",
@@ -2786,6 +2799,7 @@ dependencies = [
  "prometheus-parse",
  "rayon",
  "regex",
+ "report-save",
  "reqwest",
  "rmp-serde",
  "rustfft",
@@ -3805,6 +3819,7 @@ dependencies = [
  "console_error_panic_hook",
  "dashboard",
  "metriken-query",
+ "report-save",
  "serde",
  "serde_json",
  "wasm-bindgen",

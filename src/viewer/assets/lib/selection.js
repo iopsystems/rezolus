@@ -9,6 +9,7 @@ import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTUR
 import { notify, showSaveModal } from './overlays.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
+import { ViewerApi } from './viewer_api.js';
 
 const PIN_ICON_PATH = 'M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a5.927 5.927 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707-.195-.195.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a5.922 5.922 0 0 1 1.013.16l3.134-3.133a2.772 2.772 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146z';
 
@@ -574,29 +575,28 @@ const saveToParquet = async (store, attrs) => {
     }
 
     try {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/v1/save_with_selection', true);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.responseType = 'blob';
-        xhr.onload = () => {
-            if (xhr.status !== 200) {
-                notify('error', `Failed to save parquet (HTTP ${xhr.status})`);
-                return;
-            }
-            const blob = xhr.response;
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            notify('info', `Saved ${filename}`);
-        };
-        xhr.send(JSON.stringify(payload));
+        // Transport-agnostic: the server adapter POSTs to
+        // /api/v1/save_with_selection; the WASM adapter projects the
+        // source bytes locally. Both return { bytes, mime, extension }.
+        const { bytes, mime, extension } = await ViewerApi.saveWithSelection(payload);
+        // If the user accepted the default `.parquet` filename, swap the
+        // extension to whatever the adapter reported (AB tarballs come
+        // back with `.parquet.ab.tar`).
+        const finalName = extension && filename.endsWith('.parquet') && extension !== '.parquet'
+            ? filename.slice(0, -'.parquet'.length) + extension
+            : filename;
+        const blob = new Blob([bytes], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = finalName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        notify('info', `Saved ${finalName}`);
     } catch (e) {
-        notify('error', 'Failed to save parquet');
+        notify('error', `Failed to save parquet: ${e?.message ?? e}`);
         console.error('[selection] failed to save to parquet:', e);
     }
 };
