@@ -131,7 +131,10 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 12px;
+    /* Right-side controls (compare toggle, etc.) drop to a second line
+       on narrow screens instead of colliding with a long title. */
+    flex-wrap: wrap;
+    gap: 4px 12px;
     width: 100%;
 }
 

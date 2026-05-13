@@ -448,8 +448,14 @@ function renderSpectrumCheckbox(el, chart, kind) {
     const color = on ? COLORS.fg : COLORS.fgSecondary;
     const glyph = on ? '☑' : '☐';
     const label = pending ? `${SPECTRUM_LABELS[kind]}…` : SPECTRUM_LABELS[kind];
+    // Flex centers the 16px glyph against the 13px label, then a 2px
+    // upward translate compensates for the ☐/☑ glyph's built-in
+    // bottom whitespace so the visual centers actually line up.
+    el.style.display = 'inline-flex';
+    el.style.alignItems = 'center';
+    el.style.gap = '4px';
     el.innerHTML =
-        `<span style="font-size: 16px; vertical-align: bottom; position: relative; top: 2px;">${glyph}</span> ${label}`;
+        `<span style="font-size: 16px; line-height: 1; transform: translateY(-2px);">${glyph}</span><span>${label}</span>`;
     el.style.color = color;
 }
 
@@ -477,7 +483,9 @@ function toggleSpectrum(chart, kind) {
 //     mobile / narrow viewport widths.
 // The grid rect is only available after echarts has laid out the
 // chart, so we query it via the `finished` event and reposition.
-const SPECTRUM_CONTROLS_NARROW_WIDTH = 500;
+// Threshold picked to cover phones (full-width), phones in compare
+// mode (half-width), tablet portrait, and narrow desktop windows.
+const SPECTRUM_CONTROLS_NARROW_WIDTH = 700;
 function positionControlsAtGridLeft(chart, container) {
     if (!chart.echart) return;
     try {
@@ -494,9 +502,13 @@ function positionControlsAtGridLeft(chart, container) {
             // Narrow chart: stack above the legend on its own line and
             // align to the right edge so it visually anchors to the
             // legend's column rather than floating in the left gutter.
-            container.style.top = '28px';
+            // top:24 keeps a ~6px gap above the legend (at top:42) so
+            // the 13px control font doesn't touch the legend baseline.
+            // right:28 = 12px chart inset + ~1em breathing room so the
+            // checkboxes don't crowd the legend's rightmost chip.
+            container.style.top = '24px';
             container.style.left = 'auto';
-            container.style.right = '12px';
+            container.style.right = '28px';
         } else {
             container.style.top = '42px';
             container.style.right = 'auto';
