@@ -255,8 +255,8 @@ const selectionCardTitle = (entry, spec) => {
 // Replaces the previous silent-collapse behavior where the chart's
 // .no-data state hid the entire .chart-wrapper, leaving an empty
 // gap that diverged from the loaded entry count.
-const unavailableCard = (entry, spec, controls = null) =>
-    m('div.selection-card', [
+const unavailableCard = (entry, spec, controls = null, dropAttrs = null) =>
+    m('div.selection-card', dropAttrs || {}, [
         m('div.chart-wrapper.chart-wrapper-unavailable', [
             m('div.chart-unavailable', [
                 m('div.chart-unavailable-title', selectionCardTitle(entry, spec)),
@@ -330,6 +330,27 @@ const moveEntry = (store, id, delta) => {
     if (store === notebookStore) persistNotebook();
     else if (store === reportStore) persistReport();
 };
+
+// Move `draggedId` to land immediately before `targetId`. Powers the
+// drag-and-drop reorder; both directions collapse to "insert before"
+// because the splice-then-insert sequence keeps `toIdx` pointing at
+// the right slot whether we moved up or down.
+const reorderEntry = (store, draggedId, targetId) => {
+    if (!draggedId || draggedId === targetId) return;
+    const fromIdx = store.entries.findIndex(e => e.id === draggedId);
+    const toIdx = store.entries.findIndex(e => e.id === targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const [item] = store.entries.splice(fromIdx, 1);
+    store.entries.splice(toIdx, 0, item);
+    if (store === notebookStore) persistNotebook();
+    else if (store === reportStore) persistReport();
+};
+
+// Module-level drag session state. HTML5 DnD's dataTransfer would also
+// work but requires roundtripping through string serialization; a
+// single-page drag has no need for that.
+let _draggedEntryId = null;
+let _dragOverEntryId = null;
 
 // In-memory only — leaves localStorage alone. Used during scope
 // re-binding where the next step is restoring from the scoped key.
@@ -756,6 +777,24 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 const spec = this.specs.get(entry.chartId);
                 if (!spec) return null;
                 const cardControls = m('div.selection-card-controls', [
+                    // Only the handle is draggable; clicks/drags inside
+                    // the chart body and notes textarea behave normally.
+                    m('span.selection-card-drag-handle', {
+                        draggable: true,
+                        title: 'Drag to reorder',
+                        ondragstart: (e) => {
+                            _draggedEntryId = entry.id;
+                            e.dataTransfer.effectAllowed = 'move';
+                            // Some browsers refuse to start a drag when
+                            // dataTransfer is empty.
+                            try { e.dataTransfer.setData('text/plain', entry.id); } catch (_) {}
+                        },
+                        ondragend: () => {
+                            _draggedEntryId = null;
+                            _dragOverEntryId = null;
+                            m.redraw();
+                        },
+                    }, '\u22ee\u22ee'),
                     m('button.selection-card-move', {
                         onclick: () => { moveEntry(notebookStore, entry.id, -1); m.redraw(); },
                         title: 'Move up',
@@ -771,8 +810,36 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         title: 'Remove from Notebook',
                     }, '\u00d7'),
                 ]);
+                // Drop handlers live on the card root so the entire
+                // card surface is a drop target \u2014 only the handle
+                // initiates a drag.
+                const dropAttrs = {
+                    ondragover: (e) => {
+                        if (!_draggedEntryId || _draggedEntryId === entry.id) return;
+                        e.preventDefault(); // marks this card as a valid drop target
+                        e.dataTransfer.dropEffect = 'move';
+                        if (_dragOverEntryId !== entry.id) {
+                            _dragOverEntryId = entry.id;
+                            m.redraw();
+                        }
+                    },
+                    ondragleave: () => {
+                        if (_dragOverEntryId === entry.id) {
+                            _dragOverEntryId = null;
+                            m.redraw();
+                        }
+                    },
+                    ondrop: (e) => {
+                        e.preventDefault();
+                        reorderEntry(notebookStore, _draggedEntryId, entry.id);
+                        _draggedEntryId = null;
+                        _dragOverEntryId = null;
+                        m.redraw();
+                    },
+                    class: _dragOverEntryId === entry.id ? 'drag-over' : null,
+                };
                 if (spec.unavailable) {
-                    return unavailableCard(entry, spec, cardControls);
+                    return unavailableCard(entry, spec, cardControls, dropAttrs);
                 }
                 // In compare mode, render through CompareChartWrapper so
                 // pinned charts mirror the live A/B view (side-by-side,
@@ -805,7 +872,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         categoryMembers: entry.category_members,
                     })
                     : m(Chart, { spec, chartsState: attrs.chartsState, interval });
-                return m('div.selection-card', [
+                return m('div.selection-card', dropAttrs, [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('div.chart-title-row', [

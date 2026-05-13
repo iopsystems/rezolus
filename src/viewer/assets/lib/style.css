@@ -1591,7 +1591,8 @@ main {
 }
 
 .selection-card-move,
-.selection-card-remove {
+.selection-card-remove,
+.selection-card-drag-handle {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -1602,6 +1603,24 @@ main {
     line-height: 1;
     padding: 0 6px;
     transition: all var(--transition-base);
+}
+
+.selection-card-drag-handle {
+    cursor: grab;
+    user-select: none;
+    /* Slight visual nudge so the handle reads as "grabbable" — denser
+       glyph than the buttons. */
+    letter-spacing: -2px;
+}
+
+.selection-card-drag-handle:active {
+    cursor: grabbing;
+}
+
+.selection-card-drag-handle:hover {
+    color: var(--fg);
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
 }
 
 .selection-card-move:hover:not(:disabled) {
@@ -1619,6 +1638,12 @@ main {
     color: var(--danger);
     border-color: color-mix(in srgb, var(--danger) 40%, transparent);
     background: color-mix(in srgb, var(--danger) 15%, transparent);
+}
+
+/* Drop indicator: a top border on the card the dragged entry will
+   land before. Uses an inset box-shadow so it doesn't shift layout. */
+.selection-card.drag-over {
+    box-shadow: inset 0 3px 0 0 var(--accent, #4a90e2);
 }
 
 /* Placeholder card for entries whose data isn't in the loaded
