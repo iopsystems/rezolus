@@ -14,7 +14,7 @@ use parking_lot::{Mutex, RwLock};
 use reqwest::Client;
 use tracing::error;
 
-use super::capture_registry::{CaptureId, CaptureRegistry};
+use super::capture_registry::{CaptureBackend, CaptureId, CaptureRegistry};
 use super::proxy_allow;
 use super::sql_capture::SqlCapture;
 #[cfg(feature = "live-mode")]
@@ -142,38 +142,34 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Live-agent init constructor. Baseline starts Tsdb-backed; the
+    /// ingest loop will populate it on each poll.
     #[cfg(feature = "live-mode")]
     pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
-        Self::with_registry(CaptureRegistry::new(tsdb, None, None, None), templates)
+        let backend = CaptureBackend::Live(Arc::new(RwLock::new(tsdb)));
+        Self::with_registry(CaptureRegistry::new(Some(backend)), templates)
     }
 
-    /// Upload-only init constructor. The registry baseline is a
-    /// placeholder SqlCapture (no parquet bound); the first
-    /// `/api/v1/upload` or `/api/v1/load_url` call swaps in a real
-    /// SqlCapture via `replace_baseline_with_sql`.
+    /// Upload-only init constructor. The registry starts with no
+    /// baseline; the first `/api/v1/upload` or `/api/v1/load_url`
+    /// installs one via `replace_baseline_with_sql`.
     pub fn new_empty(templates: TemplateRegistry) -> Self {
-        Self::with_registry(
-            CaptureRegistry::new_sql(SqlCapture::empty(), None, None, None),
-            templates,
-        )
+        Self::with_registry(CaptureRegistry::new(None), templates)
     }
 
-    /// File / upload / A-B init constructor. Wires the registry's
-    /// baseline slot to a SqlCapture instead of a Tsdb. The caller
-    /// must have constructed the SqlCapture via the same
-    /// `DuckDbBackend` that will be stored on `state.sql_backend` —
-    /// otherwise the pool warmed by `SqlCapture::open` is unreachable
-    /// from subsequent query handlers (they'd reopen against a fresh
-    /// backend with no warmed pool).
+    /// File / A-B / CLI-experiment init constructor. Wires the
+    /// registry's baseline slot to a SqlCapture. The caller must have
+    /// constructed the SqlCapture via the same `DuckDbBackend` that
+    /// will be stored on `state.sql_backend` — otherwise the pool
+    /// warmed by `SqlCapture::open` is unreachable from subsequent
+    /// query handlers.
     pub fn new_sql(
         capture: SqlCapture,
         backend: Arc<DuckDbBackend>,
         templates: TemplateRegistry,
     ) -> Self {
-        let mut state = Self::with_registry(
-            CaptureRegistry::new_sql(capture, None, None, None),
-            templates,
-        );
+        let inner = CaptureBackend::Sql(Arc::new(RwLock::new(capture)));
+        let mut state = Self::with_registry(CaptureRegistry::new(Some(inner)), templates);
         state.sql_backend = backend;
         state
     }

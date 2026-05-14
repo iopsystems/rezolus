@@ -89,78 +89,91 @@ pub struct CaptureSlot {
 }
 
 pub struct CaptureRegistry {
-    baseline: CaptureSlot,
+    /// Baseline slot. `None` for upload-only mode pre-upload; gets
+    /// populated by the first `replace_baseline_with_sql` (or set at
+    /// construction for file/live-mode inits).
+    baseline: RwLock<Option<CaptureSlot>>,
     experiment: RwLock<Option<CaptureSlot>>,
 }
 
 impl CaptureRegistry {
-    #[cfg(feature = "live-mode")]
-    pub fn new(
-        baseline_tsdb: Tsdb,
-        baseline_systeminfo: Option<String>,
-        baseline_file_metadata: Option<String>,
-        baseline_alias: Option<String>,
-    ) -> Self {
+    /// Unified factory. `baseline = None` initialises an upload-only
+    /// registry; `Some(backend)` wraps it in a fresh `CaptureSlot`
+    /// with empty metadata (set systeminfo / file_metadata / alias
+    /// afterwards via the dedicated setters). The experiment slot
+    /// starts `None` regardless — call `attach_experiment[_sql]` to
+    /// populate.
+    pub fn new(baseline: Option<CaptureBackend>) -> Self {
         Self {
-            baseline: CaptureSlot {
-                backend: RwLock::new(CaptureBackend::Live(Arc::new(RwLock::new(baseline_tsdb)))),
-                systeminfo: RwLock::new(baseline_systeminfo),
-                file_metadata: RwLock::new(baseline_file_metadata),
-                alias: RwLock::new(baseline_alias),
-            },
+            baseline: RwLock::new(baseline.map(|backend| CaptureSlot {
+                backend: RwLock::new(backend),
+                systeminfo: RwLock::new(None),
+                file_metadata: RwLock::new(None),
+                alias: RwLock::new(None),
+            })),
             experiment: RwLock::new(None),
         }
     }
 
     /// Returns the baseline/experiment slot's Tsdb handle, if the slot
-    /// is Tsdb-backed. SQL-backed slots return `None`. Legacy callers
-    /// (live-mode ingest, the metadata handler, dashboard section gen
-    /// until commit 7) flow through this.
+    /// is Tsdb-backed (live mode). SQL-backed slots and an
+    /// unpopulated baseline (upload-only pre-upload) return `None`.
     #[cfg(feature = "live-mode")]
     pub fn get(&self, id: CaptureId) -> Option<Arc<RwLock<Tsdb>>> {
         match id {
-            CaptureId::Baseline => self.baseline.backend.read().as_live(),
+            CaptureId::Baseline => self.baseline.read().as_ref()?.backend.read().as_live(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
-                .as_ref()
-                .and_then(|slot| slot.backend.read().as_live()),
+                .as_ref()?
+                .backend
+                .read()
+                .as_live(),
         }
     }
 
     /// Returns the baseline/experiment slot's SqlCapture handle, if
-    /// the slot is SQL-backed. Tsdb-backed slots return `None`. The
-    /// SQL query handlers and SqlCapture-aware metadata paths consume
-    /// this. Currently always returns `None` — commit 7 wires file
-    /// mode through here.
+    /// the slot is SQL-backed. Tsdb-backed slots and unpopulated
+    /// slots return `None`.
     pub fn get_sql(&self, id: CaptureId) -> Option<Arc<RwLock<SqlCapture>>> {
         match id {
-            CaptureId::Baseline => self.baseline.backend.read().as_sql(),
+            CaptureId::Baseline => self.baseline.read().as_ref()?.backend.read().as_sql(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
-                .as_ref()
-                .and_then(|slot| slot.backend.read().as_sql()),
+                .as_ref()?
+                .backend
+                .read()
+                .as_sql(),
         }
     }
 
-    /// Replace the baseline slot's backend with a fresh SqlCapture.
-    /// Used by upload + URL-load ingest paths (which initialise
-    /// AppState with an empty Live baseline, then swap in the loaded
-    /// SqlCapture). Live-mode reset uses [`reset_baseline_live`].
+    /// Install or replace the baseline slot with a SqlCapture-backed
+    /// one. Used by upload + URL-load ingest paths. Existing metadata
+    /// (systeminfo / file_metadata / alias) is dropped; callers stamp
+    /// fresh values afterward via the setters.
     pub fn replace_baseline_with_sql(&self, capture: SqlCapture) -> Arc<RwLock<SqlCapture>> {
         let handle = Arc::new(RwLock::new(capture));
-        *self.baseline.backend.write() = CaptureBackend::Sql(handle.clone());
+        *self.baseline.write() = Some(CaptureSlot {
+            backend: RwLock::new(CaptureBackend::Sql(handle.clone())),
+            systeminfo: RwLock::new(None),
+            file_metadata: RwLock::new(None),
+            alias: RwLock::new(None),
+        });
         handle
     }
 
     /// Reset the baseline Tsdb in place (live-mode reset handler).
-    /// Panics if the baseline is SQL-backed — live reset doesn't make
-    /// sense for file captures.
+    /// Panics if the baseline is SQL-backed or unpopulated — live
+    /// reset doesn't make sense outside an established live session.
     #[cfg(feature = "live-mode")]
     pub fn reset_baseline_live(&self, tsdb: Tsdb) {
-        let guard = self.baseline.backend.write();
-        match &*guard {
+        let guard = self.baseline.read();
+        let slot = guard
+            .as_ref()
+            .expect("reset_baseline_live called with no baseline");
+        let inner = slot.backend.write();
+        match &*inner {
             CaptureBackend::Live(handle) => {
                 *handle.write() = tsdb;
             }
@@ -168,85 +181,62 @@ impl CaptureRegistry {
                 panic!("reset_baseline_live called on a SQL-backed capture");
             }
         }
-        // guard drops here; the inner handle Arc is unchanged.
+        // both guards drop here; the inner Arc<RwLock<Tsdb>> is unchanged.
+        drop(inner);
         drop(guard);
     }
 
     pub fn systeminfo(&self, id: CaptureId) -> Option<String> {
-        match id {
-            CaptureId::Baseline => self.baseline.systeminfo.read().clone(),
-            CaptureId::Experiment => self
-                .experiment
-                .read()
-                .as_ref()
-                .and_then(|slot| slot.systeminfo.read().clone()),
-        }
+        let guard = match id {
+            CaptureId::Baseline => self.baseline.read(),
+            CaptureId::Experiment => self.experiment.read(),
+        };
+        guard.as_ref().and_then(|slot| slot.systeminfo.read().clone())
     }
 
     pub fn file_metadata(&self, id: CaptureId) -> Option<String> {
-        match id {
-            CaptureId::Baseline => self.baseline.file_metadata.read().clone(),
-            CaptureId::Experiment => self
-                .experiment
-                .read()
-                .as_ref()
-                .and_then(|slot| slot.file_metadata.read().clone()),
-        }
+        let guard = match id {
+            CaptureId::Baseline => self.baseline.read(),
+            CaptureId::Experiment => self.experiment.read(),
+        };
+        guard
+            .as_ref()
+            .and_then(|slot| slot.file_metadata.read().clone())
     }
 
-    /// Display alias for the given capture, when one was provided on the
-    /// command line (or via attach). None = fall back to the identifier
-    /// name on the UI side.
+    /// Display alias for the given capture, when one was provided on
+    /// the command line (or via attach). `None` = fall back to the
+    /// identifier name on the UI side (or no baseline loaded).
     pub fn alias(&self, id: CaptureId) -> Option<String> {
-        match id {
-            CaptureId::Baseline => self.baseline.alias.read().clone(),
-            CaptureId::Experiment => self
-                .experiment
-                .read()
-                .as_ref()
-                .and_then(|slot| slot.alias.read().clone()),
-        }
+        let guard = match id {
+            CaptureId::Baseline => self.baseline.read(),
+            CaptureId::Experiment => self.experiment.read(),
+        };
+        guard.as_ref().and_then(|slot| slot.alias.read().clone())
     }
 
-    /// Overwrite the baseline slot's alias. Useful when the agent mode
-    /// swaps in a newly-recorded baseline without tearing the registry
-    /// down.
+    /// Overwrite the baseline slot's alias. Silently no-ops if no
+    /// baseline is loaded (the caller is expected to load one first).
     pub fn set_baseline_alias(&self, alias: Option<String>) {
-        *self.baseline.alias.write() = alias;
-    }
-
-    /// Construct a registry rooted at a SqlCapture-backed baseline.
-    /// Mirrors `new()` for file/upload/A-B init paths that load
-    /// parquet through DuckDbBackend instead of building an in-memory
-    /// Tsdb. The experiment slot starts empty.
-    pub fn new_sql(
-        baseline_capture: SqlCapture,
-        baseline_systeminfo: Option<String>,
-        baseline_file_metadata: Option<String>,
-        baseline_alias: Option<String>,
-    ) -> Self {
-        Self {
-            baseline: CaptureSlot {
-                backend: RwLock::new(CaptureBackend::Sql(Arc::new(RwLock::new(
-                    baseline_capture,
-                )))),
-                systeminfo: RwLock::new(baseline_systeminfo),
-                file_metadata: RwLock::new(baseline_file_metadata),
-                alias: RwLock::new(baseline_alias),
-            },
-            experiment: RwLock::new(None),
+        if let Some(slot) = self.baseline.read().as_ref() {
+            *slot.alias.write() = alias;
         }
     }
 
-    /// Overwrite the baseline slot's systeminfo. The baseline TSDB Arc is
-    /// unaffected so callers holding it keep working across updates.
+    /// Overwrite the baseline slot's systeminfo. No-op when no
+    /// baseline is loaded.
     pub fn set_baseline_systeminfo(&self, systeminfo: Option<String>) {
-        *self.baseline.systeminfo.write() = systeminfo;
+        if let Some(slot) = self.baseline.read().as_ref() {
+            *slot.systeminfo.write() = systeminfo;
+        }
     }
 
-    /// Overwrite the baseline slot's file_metadata.
+    /// Overwrite the baseline slot's file_metadata. No-op when no
+    /// baseline is loaded.
     pub fn set_baseline_file_metadata(&self, file_metadata: Option<String>) {
-        *self.baseline.file_metadata.write() = file_metadata;
+        if let Some(slot) = self.baseline.read().as_ref() {
+            *slot.file_metadata.write() = file_metadata;
+        }
     }
 
     #[cfg(feature = "live-mode")]
