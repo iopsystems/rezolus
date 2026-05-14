@@ -12,13 +12,9 @@ const formatSize = (bytes) => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 };
 
-// Shared 14px upload arrow used by every Load-parquet trigger (topnav
-// Load Parquet, Load Report, compare badge per-capture Load buttons).
+// Shared 14px upload arrow used by every Load-parquet trigger.
 export const UPLOAD_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>';
 
-// Document-with-folded-corner glyph used by the topnav filename
-// dropdown's summary so the trigger reads as a fixed-size icon on
-// narrow screens (the filename text is hidden by CSS there).
 const FILE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6"/><path d="M9 2v3a1 1 0 001 1h3M9 2l4 4"/></svg>';
 
 // Open a one-shot hidden <input type=file> and forward the selected
@@ -126,14 +122,9 @@ const TopNav = {
 
                 if (compareMode) return null;
 
-                // Single-capture filename trigger. The summary acts as
-                // a button — text on wide viewports, fixed-size icon on
-                // narrow (CSS hides the .topnav-source-name there).
-                // Click reveals the dropdown with the full filename
-                // (untruncated, copyable) plus Load Parquet + Load
-                // Selection actions, which used to crowd .topnav-actions
-                // and bumped the theme toggle off-screen on mid-narrow
-                // viewports.
+                // Filename text in the summary collapses to icon-only
+                // under the mobile media query so the trigger has a
+                // predictable footprint.
                 return m('details.topnav-source', [
                     m('summary.topnav-source-summary', {
                         title: displayLabel,
@@ -163,10 +154,9 @@ const TopNav = {
                 ]);
             })(),
             m('div.topnav-actions', [
-                // Compare mode keeps Load Selection in .topnav-actions
-                // because the new single-capture filename dropdown isn't
-                // rendered in compare mode (the compare-badge plays
-                // that role and only carries per-side Load Parquet).
+                // Single-capture's Load Selection lives in the filename
+                // dropdown; compare mode has no such dropdown, so keep
+                // the button here for that path only.
                 attrs.onUploadParquet && compareMode && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
@@ -180,7 +170,6 @@ const TopNav = {
                     m('span', 'Load Selection'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
-                // Transport controls (live mode only)
                 liveMode && m('div.transport-controls', [
                     m('button.transport-btn.record-btn', {
                         onclick: attrs.onStartRecording,

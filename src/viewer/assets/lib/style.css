@@ -663,12 +663,8 @@ body::after {
     flex-shrink: 0;
 }
 
-/* Single-capture filename dropdown. The <details> trigger reads as a
- * button-styled chip on wide viewports (icon + truncated filename),
- * collapsing to an icon-only fixed-width button on narrow viewports
- * via the mobile media query below. The card body holds the full
- * filename plus Load Parquet / Load Selection actions that used to
- * live in .topnav-actions. */
+/* Single-capture filename dropdown — collapses to icon-only on
+ * narrow viewports via the mobile media query below. */
 .topnav-source {
     margin-left: 1.5rem;
     position: relative;
@@ -2298,12 +2294,9 @@ main {
         font-size: var(--font-size-base);
     }
 
-    /* Collapse the filename dropdown to a fixed-size icon so the
-     * filename text doesn't elbow other topnav items. The full name
-     * still surfaces in the dropdown body on click. The multi-node
-     * <select> child renders a <select> directly under .topnav-source
-     * (no <details> wrapper), so this scope only hits the dropdown
-     * variant. */
+    /* Filename dropdown collapses to an icon-only 32px square. The
+     * multi-node `.topnav-source` is a plain <div> (no <details>),
+     * so the icon-only rule scopes to `details.topnav-source` only. */
     details.topnav-source > .topnav-source-summary {
         max-width: none;
         width: 32px;
@@ -2314,9 +2307,7 @@ main {
         display: none;
     }
 
-    /* Multi-node selector still needs to ellipsize so it doesn't push
-     * the actions out of view. */
-    .topnav-source:not([open]):has(.topnav-node-select) {
+    .topnav-source:has(.topnav-node-select) {
         overflow: hidden;
         text-overflow: ellipsis;
         min-width: 0;
@@ -2407,10 +2398,8 @@ main {
         max-width: 100vw;
     }
 
-    /* The topnav switches to `position: relative` above, so it already
-       occupies its natural height in the document flow. The desktop
-       `margin-top: var(--header-height)` then doubles the gap between
-       topnav and the first section title — drop it. */
+    /* Topnav is `position: relative` here, so the desktop
+       `margin-top: var(--header-height)` would double the gap. */
     main {
         margin-top: 0;
     }
