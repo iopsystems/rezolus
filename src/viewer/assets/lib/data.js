@@ -11,6 +11,12 @@ let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
+// The PromQL helpers below (rewriteCounterQuery, injectLabel,
+// substituteCgroupPattern, and the PromQL branch of buildEffectiveQuery)
+// are reached only when ViewerApi.backend() !== 'sql' — i.e. by the
+// server-backed viewer and MCP path. The static viewer short-circuits
+// before them.
+//
 // ---------------------------------------------------------------------------
 // Query rewriting for non-default granularity (step override)
 // ---------------------------------------------------------------------------

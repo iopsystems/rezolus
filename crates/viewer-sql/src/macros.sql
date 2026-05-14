@@ -1,11 +1,18 @@
--- Pure-SQL implementations of the H2 histogram operators, registered as
--- DuckDB macros. Drop-in replacements (same names, same signatures) for the
--- duckdb-rs vscalar UDFs in /work/duckdb-prototyping/duck/src/udf.rs.
+-- Pure-SQL implementations of the H2 histogram operators and dashboard
+-- rate/delta primitives, registered as DuckDB macros for the WASM viewer.
 --
--- Source of truth for the WASM viewer's macro layer. Validated end-to-end
--- by /work/duckdb-prototyping/wasm-poc/ (11 parity cases against the
--- canonical Rust UDFs, including a real-parquet headline query). Kept in
--- sync with that repo's host/macros_pure_sql.mjs.
+-- **Parallel copy.** The native build registers the same operators as
+-- vscalar UDFs (faster, type-checked) via `register_all()` in
+-- /work/metriken/metriken-query-sql/src/udf.rs and /macros.rs. This file
+-- is the wasm-side substitute because duckdb-wasm doesn't accept Rust
+-- vscalar registrations — the macros have to be pure SQL the JS host can
+-- run via `CREATE OR REPLACE MACRO ...`.
+--
+-- **Keep in sync** with the native macros. The parity scaffold lives at
+-- `crates/viewer-sql/tests/macros.rs` (loads this file into in-memory
+-- DuckDB and asserts behaviour). Drift between this file and the native
+-- macros will surface there. See REVIEWING.md for the "two macro
+-- libraries" hazard.
 --
 -- Conventions:
 --   - p (grouping_power) defaults to 3 (rezolus metrics.parquet uses p=3).
@@ -13,11 +20,6 @@
 --     lambdas (DuckDB macro params are textual; explicit casts give the
 --     binder type info).
 --   - Arithmetic uses // for integer division (DuckDB / is float division).
---
--- Performance: at W=496 buckets × 200 rows, h2_quantile is ~50 ms in the
--- browser via list_reduce-with-target-in-accumulator. See
--- /work/duckdb-prototyping/wasm-poc/host/perf_node.mjs and the perf
--- section of the plan doc.
 
 -- ---- Bound math (single macro w/ default p=3) ----
 -- DuckDB OR REPLACE replaces the entire macro entry, so we use named-default
@@ -142,8 +144,9 @@ CREATE OR REPLACE MACRO hist_rate5m_quantile(buckets, q, ts) AS
     h2_quantile(h2_delta(buckets, LAG(buckets, 300) OVER (ORDER BY ts)), q);
 
 -- ---- Layer A: rate / delta primitives ----
--- Layer A primitives copy verbatim from /work/duckdb-prototyping/duck/src/macros.rs:20-26
--- so dashboard SQL using these names is identical between native and wasm.
+-- Same names + signatures as the native macros in
+-- metriken-query-sql/src/macros.rs (Layer A section), so dashboard SQL
+-- is identical between native and wasm.
 
 -- Per-second rate with PromQL reset semantics: when c < LAG(c), treat
 -- the post-reset value `c` as the increment (matches PromQL's
@@ -198,7 +201,7 @@ CREATE OR REPLACE MACRO irate_lag(curr, prev, dt_ns) AS
 -- ---- Layer B: dashboard-concept helpers ----
 -- Each composes Layer A primitives. Expanding by hand recovers the same SQL
 -- the original PromQL `irate(...)` formulas spell out. Names + signatures
--- match /work/duckdb-prototyping/duck/src/macros.rs:54-89 verbatim.
+-- match the native Layer B macros (metriken-query-sql/src/macros.rs).
 
 -- CPU fraction (0..1) — works for total CPU busy and for per-state usage.
 CREATE OR REPLACE MACRO cpu_busy_pct(usage, cores, ts) AS

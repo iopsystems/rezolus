@@ -139,7 +139,19 @@ function canonicalAlias(colName, restAfterPrefix, metricName, metricType, fieldM
         if (NON_VALUE_METADATA_KEYS.has(k)) continue;
         valueLabels.push([k, v]);
     }
-    valueLabels.sort((a, b) => a[0].localeCompare(b[0]));
+    // Numeric-encoded parquets store metadata alphabetically, but
+    // Rezolus emits column names (in the named-column format) with
+    // non-numeric labels first and numeric IDs last — e.g.
+    // `softirq/<kind>/<id>`, `cpu_usage/<state>/<id>`. Dashboard SQL
+    // regexes only match that order, so the rebuilt alias has to match
+    // too. Sort key: numeric-only values last, alphabetical within each
+    // group.
+    const isNumeric = (v) => /^[0-9]+$/.test(v);
+    valueLabels.sort((a, b) => {
+        const na = isNumeric(a[1]) ? 1 : 0;
+        const nb = isNumeric(b[1]) ? 1 : 0;
+        return na - nb || a[0].localeCompare(b[0]);
+    });
     let name = metricName;
     for (const [, v] of valueLabels) name += `/${v}`;
     if (metricType === 'histogram') name += ':buckets';

@@ -1,30 +1,18 @@
-//! WASM viewer skeleton driving duckdb-wasm via JS instead of the legacy
-//! in-memory Tsdb + PromQL engine.
+//! WASM bridge for the static viewer. Owns Arrow→Prometheus-matrix
+//! marshalling and dashboard metadata; the DuckDB instance lives in JS
+//! (duckdb-wasm) because `duckdb-rs` doesn't build for `wasm32`. See
+//! `REVIEWING.md` for the JS/Rust split rationale and `duckdb.md` for
+//! the duckdb-wasm constraints that shaped it.
 //!
-//! Architecture (see `/home/yurivish/.claude/plans/we-re-interested-in-porting-lexical-squirrel.md`):
-//!
-//!   Browser
-//!     ├─ AsyncDuckDB (worker-backed) — runs SQL, holds parquet
-//!     ├─ JS host shim — boots duckdb, registers parquet + macros (the
-//!     │   pure-SQL macros from /work/duckdb-prototyping/wasm-poc/), then
-//!     │   asks the schema once and constructs ViewerSql with the conn
-//!     │   handle + the schema metadata.
-//!     └─ ViewerSql (this crate)
-//!           ├─ Drives queries against the JS-side conn via JsFuture
-//!           └─ Implements DashboardData via cached schema → reuses the
-//!               same `dashboard::generate_section` generators that the
-//!               legacy viewer uses
-//!
-//! This commit is intentionally a thin scaffold:
-//!   - Crate compiles to wasm32 with the wasm-bindgen surface in place
-//!   - SqlMetadata + DashboardData impl established
-//!   - Async query helpers in place (via wasm_bindgen_futures::JsFuture)
-//!   - Macros source-of-truth lives in this crate so the JS host can pull
-//!     them via wasm-exposed `pure_sql_macros()` and CREATE them on boot
-//!   - Section rendering wired through to dashboard::generate_section
-//!
-//! Future commits add: query_range, init_templates, compare-mode (paired
-//! captures), and the full method surface that mirrors `crates/viewer`.
+//! Surface:
+//!   - `ViewerSql` — implements `DashboardData`; reuses the dashboard
+//!     `generate_section` generators that the rest of Rezolus uses.
+//!   - `ViewerSql::query_range` / `query_sql` — async, run SQL through
+//!     the JS-side `AsyncDuckDBConnection` via wasm-bindgen `JsFuture`.
+//!   - `pure_sql_macros()` — the SQL macros (`macros.sql`) the JS host
+//!     pulls in and registers on the connection at boot.
+//!   - `init_templates` — wires service-extension KPIs into the
+//!     dashboard context.
 
 use dashboard::DashboardData;
 use js_sys::{Function, Promise, Reflect};
@@ -569,7 +557,7 @@ fn arrow_table_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
 
     // Pre-fetch the column vectors by index — avoids per-row Reflect on the table.
     let get_child_at: Function = Reflect::get(table, &"getChildAt".into())?.dyn_into()?;
-    let mut col = |i: usize| -> Result<JsValue, JsValue> {
+    let col = |i: usize| -> Result<JsValue, JsValue> {
         get_child_at.call1(table, &JsValue::from_f64(i as f64))
     };
     let t_col = col(t_idx)?;

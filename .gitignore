@@ -8,3 +8,4 @@ target
 **/*.rs.bk
 .worktrees/
 results/
+node_modules
