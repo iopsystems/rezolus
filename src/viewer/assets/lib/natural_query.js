@@ -139,8 +139,19 @@ export const NaturalQuery = {
         st.promql = '';
         m.redraw();
 
-        st.status = STATUS_EMBEDDING;
-        runPipeline(st.query)
+        // Yield so the browser can render the status before heavy work
+        Promise.resolve().then(() => {
+            st.status = STATUS_EMBEDDING;
+            m.redraw();
+        });
+
+        const mapStatus = (msg) => {
+            if (msg.includes('Loading')) st.status = STATUS_LOADING;
+            else if (msg.includes('Building')) st.status = STATUS_EMBEDDING;
+            else if (msg.includes('Generating')) st.status = STATUS_GENERATING;
+        };
+
+        runPipeline(st.query, { onStatus: mapStatus })
             .then((result) => {
                 st.status = STATUS_RESULT;
                 st.result = result.data;

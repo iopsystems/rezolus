@@ -1,10 +1,10 @@
 // pipeline.js — orchestrates embed → search → generate → TSDB query
 
-import { queryEmbed, buildIndex, isReady as engineReady, reset as resetEngine } from './nq_engine.js';
+import { queryEmbed, buildIndex, reset as resetEngine } from './nq_engine.js';
 import { search, keywordSearch } from './nq_search.js';
-import { generate as llmGenerate, isReady as llmReady, reset as resetLlm } from './nq_generate.js';
+import { generate as llmGenerate, reset as resetLlm } from './nq_generate.js';
 import { buildPrompt, cleanOutput, looksLikePromQL } from './nq_prompt.js';
-import { getMetricNames, getMetricTypes, isMetricNamesLoaded, getSelectedNode } from './data.js';
+import { getMetricNames, getMetricTypes, getSelectedNode } from './data.js';
 import { ViewerApi } from './viewer_api.js';
 
 const MAX_RETRIES = 2;
@@ -13,29 +13,21 @@ const MAX_RETRIES = 2;
  * Run the full NL→PromQL pipeline.
  * @param {string} nlQuery - User's natural language question
  * @param {object} options
+ * @param {function(string): void} options.onStatus - Callback for progress updates
  * @returns {{ promql: string, raw: string, error?: string, data?: object }}
  */
 export async function runPipeline(nlQuery, options = {}) {
-    const { maxRetries = MAX_RETRIES } = options;
+    const { maxRetries = MAX_RETRIES, onStatus } = options;
+    const emit = (msg) => { onStatus?.(msg); };
 
-    // Wait for models to be ready
-    if (!engineReady()) {
-        throw new Error('Embedding engine not loaded');
-    }
-    if (!llmReady()) {
-        throw new Error('LLM not loaded');
-    }
-
-    // Get metric names
-    if (!isMetricNamesLoaded()) {
-        throw new Error('Metrics not loaded — load a parquet file first');
-    }
+    emit('Loading models…');
 
     const metricNames = getMetricNames();
     const metricTypes = getMetricTypes();
     const nodeName = getSelectedNode();
 
     // Build the embedding index (cached, idempotent)
+    emit('Building metrics index…');
     await buildIndex(metricNames, metricTypes);
 
     // Step 1: Embed the user query
@@ -58,6 +50,7 @@ export async function runPipeline(nlQuery, options = {}) {
     let promql = '';
     let retries = 0;
 
+    emit('Generating query…');
     while (retries <= maxRetries) {
         const prompt = buildPrompt(topK, nlQuery, nodeName);
         rawOutput = await llmGenerate(prompt, {
