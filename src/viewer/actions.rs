@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 use super::capture_registry::CaptureId;
 use super::metadata::{
     build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
-    extract_service_extension_metadata, regenerate_dashboards, validate_service_extensions,
+    extract_service_extension_metadata, regenerate_dashboards,
 };
 use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
@@ -245,19 +245,21 @@ pub fn ingest_baseline_from_path(
     temp_path: PathBuf,
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let mut data = match Tsdb::load(&temp_path) {
-        Ok(d) => d,
+    let mut capture = match super::sql_capture::SqlCapture::open(&temp_path, &state.sql_backend) {
+        Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return ApiResponse::err(format!("failed to load parquet: {e}"), "invalid_parquet");
         }
     };
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
-    data.set_filename(filename.clone());
+    capture.set_filename(filename.clone());
 
     // Mirror the regenerate_dashboards short-circuit: a trimmed report
     // gets an empty section list so /api/v1/sections is consistent with
-    // CLI-mode loading of the same parquet.
+    // CLI-mode loading of the same parquet. KPI validation runs against
+    // the SqlCapture; templates without `sql` queries (everything pre
+    // commit 9) default to available.
     let report_marker = super::read_footer_kv(&temp_path, crate::parquet_metadata::KEY_REPORT);
     let context = if report_marker.is_some() {
         ::dashboard::dashboard::DashboardContext {
@@ -265,19 +267,20 @@ pub fn ingest_baseline_from_path(
             ..Default::default()
         }
     } else {
-        let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
-        validate_service_extensions(&data, &mut service_exts);
+        let service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+        // TODO(plan stage 8): once config/templates/*.json carry `sql`
+        // strings alongside `query`, validate each KPI by running its
+        // SQL through state.sql_backend. Until then every KPI lands as
+        // `available: true` and renders empty plots when its data is
+        // absent — degraded but not broken.
         let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
         ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None)
     };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
-    {
-        let tsdb_handle = state.baseline_tsdb();
-        let mut tsdb = tsdb_handle.write();
-        *tsdb = data;
-    }
+    // Swap the baseline backend from Live(empty Tsdb) to Sql(capture).
+    state.captures.replace_baseline_with_sql(capture);
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
@@ -338,8 +341,8 @@ pub async fn attach_experiment(
             .into_response();
     }
 
-    let mut tsdb = match Tsdb::load(&temp_path) {
-        Ok(t) => t,
+    let mut capture = match super::sql_capture::SqlCapture::open(&temp_path, &state.sql_backend) {
+        Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return (
@@ -349,7 +352,7 @@ pub async fn attach_experiment(
                 .into_response();
         }
     };
-    tsdb.set_filename(filename);
+    capture.set_filename(filename);
 
     let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
     // HTTP-attached experiments don't carry an alias today; the
@@ -357,7 +360,7 @@ pub async fn attach_experiment(
     // one through without further signature changes.
     state
         .captures
-        .attach_experiment(tsdb, sysinfo.clone(), file_meta, None);
+        .attach_experiment_sql(capture, sysinfo.clone(), file_meta, None);
     *state.experiment_parquet_path.write() = Some(temp_path);
 
     regenerate_dashboards(&state);
@@ -426,16 +429,14 @@ pub async fn connect_agent(
     tsdb.set_filename(url.to_string());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
 
-    {
-        let tsdb_handle = state.baseline_tsdb();
-        let mut db = tsdb_handle.write();
-        *db = tsdb;
-    }
+    state.captures.reset_baseline_live(tsdb);
     *state.sections.write() = LazySectionStore::new(context);
     state.captures.set_baseline_systeminfo(info.sysinfo);
     state.live.store(true, Ordering::Relaxed);
 
-    let ingest_tsdb = state.baseline_tsdb();
+    let ingest_tsdb = state
+        .baseline_tsdb()
+        .expect("live mode baseline is Tsdb-backed");
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
@@ -469,7 +470,9 @@ pub async fn reset_tsdb(
         return ApiResponse::err("reset is only available in live mode", "bad_request");
     }
 
-    let tsdb_handle = state.baseline_tsdb();
+    let tsdb_handle = state
+        .baseline_tsdb()
+        .expect("live mode baseline is Tsdb-backed");
     let (source, version, filename) = {
         let tsdb = tsdb_handle.read();
         (
@@ -478,14 +481,12 @@ pub async fn reset_tsdb(
             tsdb.filename().to_string(),
         )
     };
-    {
-        let mut tsdb = tsdb_handle.write();
-        *tsdb = Tsdb::default();
-        tsdb.set_sampling_interval_ms(1000);
-        tsdb.set_source(source);
-        tsdb.set_version(version);
-        tsdb.set_filename(filename);
-    }
+    let mut fresh = Tsdb::default();
+    fresh.set_sampling_interval_ms(1000);
+    fresh.set_source(source);
+    fresh.set_version(version);
+    fresh.set_filename(filename);
+    state.captures.reset_baseline_live(fresh);
     state.snapshots.lock().clear();
     info!("TSDB reset by user");
     ApiResponse::ok(serde_json::json!({ "ok": true }))
@@ -600,8 +601,17 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 .into_response();
             }
         };
+        // Column-trim needs a Tsdb (report_save uses PromQL to find
+        // which columns the selection's queries reference). SQL-backed
+        // file captures don't have one — force trim_columns off and
+        // fall back to a plain embed. A follow-up migrates report_save
+        // to walk SqlCapture's catalog and dropped this carve-out.
         let baseline_tsdb = state.baseline_tsdb();
-        let trim_columns = payload.trim_columns;
+        let trim_columns = payload.trim_columns && baseline_tsdb.is_some();
+        // Provide a stand-in Tsdb when SQL-backed: report_save only
+        // reads from `tsdb` when trim_columns is true, so the dummy
+        // is never observed in that mode.
+        let baseline_tsdb = baseline_tsdb.unwrap_or_else(|| Arc::new(RwLock::new(Tsdb::default())));
         // Bind to a local so the temporary read guard from .read() doesn't
         // extend through the `if let` body and trip Send across the await.
         let ab_manifest = state.combined_ab_marker.read().clone();
@@ -618,10 +628,11 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 )
                 .into_response();
             };
+            // Same SQL-fallback contract as baseline_tsdb above.
             let experiment_tsdb = state
                 .captures
                 .get(CaptureId::Experiment)
-                .expect("experiment slot must be attached in combined-A/B mode");
+                .unwrap_or_else(|| Arc::new(RwLock::new(Tsdb::default())));
             let result = tokio::task::spawn_blocking({
                 let baseline_path = path.clone();
                 let body = selection_json.clone();

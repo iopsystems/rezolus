@@ -331,24 +331,49 @@ fn query_time_range(
     backend: &DuckDbBackend,
     data_source: &str,
 ) -> Result<Option<(u64, u64)>, SqlError> {
-    use arrow::array::{Array, AsArray, UInt64Array};
-    use arrow::datatypes::UInt64Type;
+    use arrow::array::Array;
 
+    // Force UBIGINT on both projections — `min(timestamp)` on a UBIGINT
+    // column comes back as a DECIMAL(38,0) under some DuckDB versions,
+    // and an Arrow `as_primitive::<UInt64Type>()` cast panics on that.
     let batches = backend.run_sql(
-        "SELECT min(timestamp) AS lo, max(timestamp) AS hi FROM _src",
+        "SELECT \
+           CAST(min(timestamp) AS UBIGINT) AS lo, \
+           CAST(max(timestamp) AS UBIGINT) AS hi \
+         FROM _src",
         data_source,
     )?;
     for batch in &batches {
         if batch.num_rows() == 0 {
             continue;
         }
-        // Both columns are nullable; an empty parquet returns (NULL, NULL).
-        let lo: &UInt64Array = batch.column(0).as_primitive::<UInt64Type>();
-        let hi: &UInt64Array = batch.column(1).as_primitive::<UInt64Type>();
-        if lo.is_null(0) || hi.is_null(0) {
+        let lo_col = batch.column(0);
+        let hi_col = batch.column(1);
+        if lo_col.is_null(0) || hi_col.is_null(0) {
             return Ok(None);
         }
-        return Ok(Some((lo.value(0), hi.value(0))));
+        let lo = cell_to_u64(lo_col.as_ref(), 0);
+        let hi = cell_to_u64(hi_col.as_ref(), 0);
+        match (lo, hi) {
+            (Some(lo), Some(hi)) => return Ok(Some((lo, hi))),
+            _ => return Ok(None),
+        }
     }
     Ok(None)
+}
+
+/// Read a row's value as `u64` regardless of whether the column came
+/// back as UBIGINT / BIGINT / TIMESTAMP-as-ns. Falls back to `None`
+/// on NULL or unsupported types.
+fn cell_to_u64(arr: &dyn arrow::array::Array, row: usize) -> Option<u64> {
+    use arrow::array::AsArray;
+    use arrow::datatypes::{DataType, Int64Type, UInt64Type};
+    if arr.is_null(row) {
+        return None;
+    }
+    match arr.data_type() {
+        DataType::UInt64 => Some(arr.as_primitive::<UInt64Type>().value(row)),
+        DataType::Int64 => Some(arr.as_primitive::<Int64Type>().value(row) as u64),
+        _ => None,
+    }
 }

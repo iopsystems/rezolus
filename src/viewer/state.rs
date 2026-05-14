@@ -16,6 +16,7 @@ use tracing::error;
 
 use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;
+use super::sql_capture::SqlCapture;
 use super::tsdb::Tsdb;
 use ::dashboard::{self, TemplateRegistry};
 use metriken_query_sql::DuckDbBackend;
@@ -141,9 +142,33 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
+        Self::with_registry(CaptureRegistry::new(tsdb, None, None, None), templates)
+    }
+
+    /// File / upload / A-B init constructor. Wires the registry's
+    /// baseline slot to a SqlCapture instead of a Tsdb. The caller
+    /// must have constructed the SqlCapture via the same
+    /// `DuckDbBackend` that will be stored on `state.sql_backend` —
+    /// otherwise the pool warmed by `SqlCapture::open` is unreachable
+    /// from subsequent query handlers (they'd reopen against a fresh
+    /// backend with no warmed pool).
+    pub fn new_sql(
+        capture: SqlCapture,
+        backend: Arc<DuckDbBackend>,
+        templates: TemplateRegistry,
+    ) -> Self {
+        let mut state = Self::with_registry(
+            CaptureRegistry::new_sql(capture, None, None, None),
+            templates,
+        );
+        state.sql_backend = backend;
+        state
+    }
+
+    fn with_registry(captures: CaptureRegistry, templates: TemplateRegistry) -> Self {
         Self {
             sections: Default::default(),
-            captures: Arc::new(CaptureRegistry::new(tsdb, None, None, None)),
+            captures: Arc::new(captures),
             templates,
             snapshots: Arc::new(Mutex::new(VecDeque::new())),
             live: AtomicBool::new(false),
@@ -178,12 +203,38 @@ impl AppState {
         }
     }
 
-    /// Shorthand for the baseline TSDB handle. The registry guarantees
-    /// the baseline slot is always present.
-    pub fn baseline_tsdb(&self) -> Arc<RwLock<Tsdb>> {
-        self.captures
-            .get(CaptureId::Baseline)
-            .expect("baseline capture is always present")
+    /// Shorthand for the baseline Tsdb handle. Returns `None` for
+    /// SQL-backed slots (file / upload / A-B captures); SQL callers
+    /// use [`baseline_sql`] or the new SqlCapture-aware code paths.
+    /// Live mode is currently the only Tsdb-bearing baseline.
+    pub fn baseline_tsdb(&self) -> Option<Arc<RwLock<Tsdb>>> {
+        self.captures.get(CaptureId::Baseline)
+    }
+
+    /// Shorthand for the baseline SqlCapture handle. Returns `None`
+    /// for Tsdb-backed slots (live mode). File / upload / A-B
+    /// captures produce a `Some`.
+    pub fn baseline_sql(&self) -> Option<Arc<RwLock<SqlCapture>>> {
+        self.captures.get_sql(CaptureId::Baseline)
+    }
+
+    /// Run `f` against the baseline slot's DashboardData view —
+    /// either a `Tsdb` (live mode) or a `SqlCapture` (file mode).
+    /// Wraps the read-guard lifetime so callers don't have to
+    /// branch on backend type for the common metadata reads.
+    pub fn with_baseline_data<R>(
+        &self,
+        f: impl FnOnce(&dyn dashboard::DashboardData) -> R,
+    ) -> Option<R> {
+        if let Some(handle) = self.baseline_sql() {
+            let g = handle.read();
+            Some(f(&*g))
+        } else if let Some(handle) = self.baseline_tsdb() {
+            let g = handle.read();
+            Some(f(&*g))
+        } else {
+            None
+        }
     }
 
     /// True when the input artifact was a combined-A/B tarball
@@ -215,31 +266,37 @@ impl AppState {
         let filesize = store.context().filesize.unwrap_or(0);
         drop(store);
 
-        let tsdb_handle = self.baseline_tsdb();
-        let data = tsdb_handle.read();
-        let interval = data.interval();
-        let source = data.source().to_string();
-        let version = data.version().to_string();
-        let filename = data.filename().to_string();
-        // Tsdb time_range is in nanoseconds; convert to milliseconds to
-        // match the View's convention.
-        let (start_time, end_time) = data
-            .time_range()
-            .map(|(min, max)| (min / 1_000_000, max / 1_000_000))
-            .unwrap_or((0, 0));
-        let num_series = {
-            let mut count = 0usize;
-            for name in data.counter_names() {
-                count += data.counter_labels(name).map_or(0, |l| l.len());
-            }
-            for name in data.gauge_names() {
-                count += data.gauge_labels(name).map_or(0, |l| l.len());
-            }
-            for name in data.histogram_names() {
-                count += data.histogram_labels(name).map_or(0, |l| l.len());
-            }
-            count
-        };
+        // Pull scalar metadata + series count from whichever backend
+        // the baseline slot is using (Tsdb or SqlCapture); the
+        // DashboardData trait abstracts both. Default to zeros when
+        // no baseline is loaded yet (upload-only mode pre-upload).
+        let (interval, source, version, filename, start_time, end_time, num_series) = self
+            .with_baseline_data(|data| {
+                let (start_time, end_time) = data
+                    .time_range()
+                    .map(|(min, max)| (min / 1_000_000, max / 1_000_000))
+                    .unwrap_or((0, 0));
+                let mut num_series = 0usize;
+                for name in data.counter_names() {
+                    num_series += data.counter_label_count(name);
+                }
+                for name in data.gauge_names() {
+                    num_series += data.gauge_label_count(name);
+                }
+                for name in data.histogram_names() {
+                    num_series += data.histogram_label_count(name);
+                }
+                (
+                    data.interval(),
+                    data.source().to_string(),
+                    data.version().to_string(),
+                    data.filename().to_string(),
+                    start_time,
+                    end_time,
+                    num_series,
+                )
+            })
+            .unwrap_or((0.0, String::new(), String::new(), String::new(), 0, 0, 0));
 
         build_sections_metadata_payload(
             sections_array,

@@ -70,7 +70,12 @@ impl CaptureBackend {
 }
 
 pub struct CaptureSlot {
-    pub backend: CaptureBackend,
+    /// Data store. RwLock-wrapped so the upload / reset paths can
+    /// swap the backend (e.g. live→sql when an upload replaces the
+    /// initial empty live baseline) without rebuilding the registry.
+    /// Readers clone the inner Arc out and drop the registry lock
+    /// before doing any real work.
+    pub backend: RwLock<CaptureBackend>,
     pub systeminfo: RwLock<Option<String>>,
     pub file_metadata: RwLock<Option<String>>,
     /// Optional display alias for this capture (e.g. "redis", "valkey").
@@ -92,7 +97,7 @@ impl CaptureRegistry {
     ) -> Self {
         Self {
             baseline: CaptureSlot {
-                backend: CaptureBackend::Live(Arc::new(RwLock::new(baseline_tsdb))),
+                backend: RwLock::new(CaptureBackend::Live(Arc::new(RwLock::new(baseline_tsdb)))),
                 systeminfo: RwLock::new(baseline_systeminfo),
                 file_metadata: RwLock::new(baseline_file_metadata),
                 alias: RwLock::new(baseline_alias),
@@ -107,12 +112,12 @@ impl CaptureRegistry {
     /// until commit 7) flow through this.
     pub fn get(&self, id: CaptureId) -> Option<Arc<RwLock<Tsdb>>> {
         match id {
-            CaptureId::Baseline => self.baseline.backend.as_live(),
+            CaptureId::Baseline => self.baseline.backend.read().as_live(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
                 .as_ref()
-                .and_then(|slot| slot.backend.as_live()),
+                .and_then(|slot| slot.backend.read().as_live()),
         }
     }
 
@@ -123,13 +128,40 @@ impl CaptureRegistry {
     /// mode through here.
     pub fn get_sql(&self, id: CaptureId) -> Option<Arc<RwLock<SqlCapture>>> {
         match id {
-            CaptureId::Baseline => self.baseline.backend.as_sql(),
+            CaptureId::Baseline => self.baseline.backend.read().as_sql(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
                 .as_ref()
-                .and_then(|slot| slot.backend.as_sql()),
+                .and_then(|slot| slot.backend.read().as_sql()),
         }
+    }
+
+    /// Replace the baseline slot's backend with a fresh SqlCapture.
+    /// Used by upload + URL-load ingest paths (which initialise
+    /// AppState with an empty Live baseline, then swap in the loaded
+    /// SqlCapture). Live-mode reset uses [`reset_baseline_live`].
+    pub fn replace_baseline_with_sql(&self, capture: SqlCapture) -> Arc<RwLock<SqlCapture>> {
+        let handle = Arc::new(RwLock::new(capture));
+        *self.baseline.backend.write() = CaptureBackend::Sql(handle.clone());
+        handle
+    }
+
+    /// Reset the baseline Tsdb in place (live-mode reset handler).
+    /// Panics if the baseline is SQL-backed — live reset doesn't make
+    /// sense for file captures.
+    pub fn reset_baseline_live(&self, tsdb: Tsdb) {
+        let guard = self.baseline.backend.write();
+        match &*guard {
+            CaptureBackend::Live(handle) => {
+                *handle.write() = tsdb;
+            }
+            CaptureBackend::Sql(_) => {
+                panic!("reset_baseline_live called on a SQL-backed capture");
+            }
+        }
+        // guard drops here; the inner handle Arc is unchanged.
+        drop(guard);
     }
 
     pub fn systeminfo(&self, id: CaptureId) -> Option<String> {
@@ -175,6 +207,29 @@ impl CaptureRegistry {
         *self.baseline.alias.write() = alias;
     }
 
+    /// Construct a registry rooted at a SqlCapture-backed baseline.
+    /// Mirrors `new()` for file/upload/A-B init paths that load
+    /// parquet through DuckDbBackend instead of building an in-memory
+    /// Tsdb. The experiment slot starts empty.
+    pub fn new_sql(
+        baseline_capture: SqlCapture,
+        baseline_systeminfo: Option<String>,
+        baseline_file_metadata: Option<String>,
+        baseline_alias: Option<String>,
+    ) -> Self {
+        Self {
+            baseline: CaptureSlot {
+                backend: RwLock::new(CaptureBackend::Sql(Arc::new(RwLock::new(
+                    baseline_capture,
+                )))),
+                systeminfo: RwLock::new(baseline_systeminfo),
+                file_metadata: RwLock::new(baseline_file_metadata),
+                alias: RwLock::new(baseline_alias),
+            },
+            experiment: RwLock::new(None),
+        }
+    }
+
     /// Overwrite the baseline slot's systeminfo. The baseline TSDB Arc is
     /// unaffected so callers holding it keep working across updates.
     pub fn set_baseline_systeminfo(&self, systeminfo: Option<String>) {
@@ -194,7 +249,7 @@ impl CaptureRegistry {
         alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
-            backend: CaptureBackend::Live(Arc::new(RwLock::new(tsdb))),
+            backend: RwLock::new(CaptureBackend::Live(Arc::new(RwLock::new(tsdb)))),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
             alias: RwLock::new(alias),
@@ -203,7 +258,7 @@ impl CaptureRegistry {
 
     /// SQL-backed attach. Mirrors `attach_experiment` but stores an
     /// `SqlCapture` instead of a `Tsdb`. Used by the file-mode HTTP
-    /// attach handler once commit 7 lands; unused for now.
+    /// attach handler.
     pub fn attach_experiment_sql(
         &self,
         capture: SqlCapture,
@@ -212,7 +267,7 @@ impl CaptureRegistry {
         alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
-            backend: CaptureBackend::Sql(Arc::new(RwLock::new(capture))),
+            backend: RwLock::new(CaptureBackend::Sql(Arc::new(RwLock::new(capture)))),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
             alias: RwLock::new(alias),

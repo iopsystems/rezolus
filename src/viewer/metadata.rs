@@ -409,8 +409,11 @@ pub fn regenerate_dashboards(state: &AppState) {
         .map(|p| extract_service_extension_metadata(p, registry))
         .unwrap_or_default();
 
-    {
-        let baseline_handle = state.baseline_tsdb();
+    // Validate against the Tsdb when one is loaded (live mode). SQL-
+    // backed captures skip this — the SQL-aware validator lands once
+    // service-extension templates carry `sql` strings (plan stage 8).
+    // Until then SQL captures show every KPI as `available: true`.
+    if let Some(baseline_handle) = state.baseline_tsdb() {
         let baseline_data = baseline_handle.read();
         validate_service_extensions(&baseline_data, &mut baseline_exts);
     }

@@ -32,9 +32,8 @@ use std::path::PathBuf;
 
 use super::actions;
 use super::capture_registry::{self, CaptureId};
-use super::promql::{self, QueryEngine};
 use super::state::{ApiResponse, AppState, CaptureParam};
-use super::tsdb::Tsdb;
+use ::dashboard;
 
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
@@ -154,12 +153,11 @@ async fn data(State(state): State<Arc<AppState>>, AxumPath(path): AxumPath<Strin
     let stem = path.strip_suffix(".json").unwrap_or(&path);
     let route = format!("/{stem}");
 
-    let value = {
-        let tsdb_handle = state.baseline_tsdb();
-        let tsdb = tsdb_handle.read();
+    let value = state.with_baseline_data(|data| {
         let mut store = state.sections.write();
-        store.get_or_generate(&route, &*tsdb).cloned()
-    };
+        store.get_or_generate(&route, data).cloned()
+    });
+    let value = value.flatten();
 
     let Some(mut value) = value else {
         return StatusCode::NOT_FOUND.into_response();
@@ -399,19 +397,20 @@ async fn metadata(
     Query(p): Query<CaptureParam>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let capture = p.capture_id();
-    let Some(tsdb_handle) = state.captures.get(capture) else {
+    // Pull (min_time_ns, max_time_ns, filename) from whichever
+    // backend the slot is using; convert to milliseconds for the
+    // legacy JSON shape (QueryEngine::get_time_range returned ms).
+    let scalar = read_capture_scalar_meta(&state, capture);
+    let Some((min_time_ns, max_time_ns, filename)) = scalar else {
         return ApiResponse::err(
             format!("capture {capture:?} not attached"),
             "capture_not_found",
         );
     };
-    let tsdb = tsdb_handle.read();
-    let engine = QueryEngine::new(&*tsdb);
-    let (min_time, max_time) = engine.get_time_range();
     let mut meta = serde_json::json!({
-        "minTime": min_time,
-        "maxTime": max_time,
-        "filename": tsdb.filename(),
+        "minTime": min_time_ns / 1_000_000,
+        "maxTime": max_time_ns / 1_000_000,
+        "filename": filename,
     });
     if let Some(alias) = state.captures.alias(capture) {
         meta["alias"] = serde_json::json!(alias);
@@ -422,6 +421,28 @@ async fn metadata(
         }
     }
     ApiResponse::ok(meta)
+}
+
+/// Shared helper for the metadata endpoint: pull (min_time_ns,
+/// max_time_ns, filename) from a capture slot regardless of whether
+/// it's backed by a Tsdb or a SqlCapture. Returns `None` for an
+/// unattached experiment slot.
+fn read_capture_scalar_meta(
+    state: &AppState,
+    capture: CaptureId,
+) -> Option<(u64, u64, String)> {
+    use dashboard::DashboardData;
+    let read = |data: &dyn DashboardData| -> (u64, u64, String) {
+        let (lo, hi) = data.time_range().unwrap_or((0, 0));
+        (lo, hi, data.filename().to_string())
+    };
+    if let Some(handle) = state.captures.get_sql(capture) {
+        return Some(read(&*handle.read()));
+    }
+    if let Some(handle) = state.captures.get(capture) {
+        return Some(read(&*handle.read()));
+    }
+    None
 }
 
 // ── Static asset serving (release builds) ─────────────────────────────
