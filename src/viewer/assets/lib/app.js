@@ -657,6 +657,7 @@ const metadataSection = { name: 'Metadata', route: '/metadata' };
 const notebookSection = { name: 'Notebook', route: '/notebook' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
+const naturalQuerySection = { name: 'Natural Query', route: '/natural_query' };
 
 const bootstrapCacheIfNeeded = () => {
     if (Object.keys(sectionResponseCache).length > 0) return;
@@ -941,6 +942,17 @@ const initDashboard = (config = {}) => {
                         sectionResponseCache,
                         getCachedSections,
                         reportSection,
+                        () => compareMode,
+                    );
+                }
+
+                if (params.section === 'natural_query') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        naturalQuerySection,
                         () => compareMode,
                     );
                 }
