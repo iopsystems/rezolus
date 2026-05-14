@@ -20,6 +20,8 @@ import {
 import globalColorMapper, { COLORS } from './util/colormap.js';
 import { themeVersion } from '../theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
+import { eventsStore } from '../events_store.js';
+import { buildMarkLine } from './event_markers.js';
 
 
 export class ChartsState {
@@ -386,6 +388,7 @@ export class Chart {
         if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
+            this._applyEventMarkers();
 
             // Restore zoom state after re-render (notMerge wipes the
             // dataZoom range). In compare mode each Mithril redraw
@@ -426,6 +429,7 @@ export class Chart {
         if (this._pinCleanup) this._pinCleanup();
         if (this._compareCursorOff) this._compareCursorOff();
         if (this._compareCursorUnsub) this._compareCursorUnsub();
+        if (this._eventsUnsub) this._eventsUnsub();
 
         // Remove ourselves from the charts registry so setZoom's fan-out,
         // resetAll, hasActiveSelection, etc. don't walk a stale entry
@@ -577,6 +581,10 @@ export class Chart {
 
         // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
         this.configureChartByType();
+        this._applyEventMarkers();
+        this._eventsUnsub = eventsStore.subscribe(() => {
+            this._applyEventMarkers();
+        });
 
         // Match existing zoom state on first mount. Equivalent to
         // replaying the last setZoom against only this chart.
@@ -865,6 +873,28 @@ export class Chart {
                 min: newMin,
                 max: yAxisMax,
             }
+        });
+    }
+
+    _chartScope() {
+        const o = this.spec?.opts || {};
+        return { source: o.source, node: o.node, instance: o.instance };
+    }
+
+    _applyEventMarkers() {
+        if (!this.echart) return;
+        const visible = eventsStore.filterForChart({
+            chartId: this.chartId,
+            scope: this._chartScope(),
+        });
+        const markLine = buildMarkLine(visible);
+        const opt = this.echart.getOption();
+        const seriesArr = Array.isArray(opt?.series) ? opt.series : [];
+        if (seriesArr.length === 0) return;
+        // Merge by index — series[0] hosts the markLine, the rest are
+        // left untouched. Use notMerge:false so we don't wipe the chart.
+        this.echart.setOption({
+            series: [{ markLine: markLine || { data: [] } }],
         });
     }
 
