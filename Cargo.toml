@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/dashboard", "crates/report-save", "crates/systeminfo", "crates/viewer-sql"]
+members = [".", "crates/dashboard", "crates/prom-matrix", "crates/report-save", "crates/systeminfo", "crates/viewer-sql"]
 exclude = ["xtask"]
 resolver = "2"
 
@@ -22,6 +22,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
 dashboard = { path = "crates/dashboard" }
+prom-matrix = { path = "crates/prom-matrix" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
 walkdir = "2.5.0"

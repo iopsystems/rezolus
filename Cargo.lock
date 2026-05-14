@@ -2935,6 +2935,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prom-matrix"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "prometheus-parse"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4575,6 +4585,7 @@ dependencies = [
  "dashboard",
  "duckdb",
  "js-sys",
+ "prom-matrix",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

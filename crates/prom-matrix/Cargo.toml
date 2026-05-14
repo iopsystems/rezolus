@@ -1,0 +1,28 @@
+[package]
+name = "prom-matrix"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+# Shared Arrow → Prometheus-matrix JSON projection. Native consumers (the
+# rezolus server viewer) pass an `&[RecordBatch]` from duckdb-rs; the WASM
+# viewer passes a JS Arrow `Table` JsValue. Both paths emit the same JSON
+# shape so the frontend can't tell them apart. Keeping the two entry points
+# in one crate is what prevents the shape from drifting.
+
+[dependencies]
+serde_json = { workspace = true }
+# wasm-bindgen + js-sys are unconditional: viewer-sql builds as both
+# cdylib (wasm32) and rlib (host) for its native macro-parity tests,
+# and the rlib target needs the WASM entry point's signatures to
+# resolve. The host build of wasm-bindgen/js-sys compiles but its
+# JsValue helpers panic at runtime — fine since the WASM helper is
+# never called on the host.
+wasm-bindgen = { workspace = true }
+js-sys = "0.3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arrow = { version = "58.2.0", default-features = false }
