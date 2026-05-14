@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/nq_search.js
