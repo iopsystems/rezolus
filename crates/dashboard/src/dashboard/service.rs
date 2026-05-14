@@ -81,10 +81,19 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>, service_ext: &
             None => group.default_subgroup(),
         };
 
-        if kpi.full_width {
-            sg.plot_promql_full(opts, kpi.query.clone());
-        } else {
-            sg.plot_promql(opts, kpi.query.clone());
+        match (kpi.sql.as_deref(), kpi.full_width) {
+            (Some(sql), true) => {
+                sg.plot_promql_with_sql_full(opts, kpi.query.clone(), sql.to_string());
+            }
+            (Some(sql), false) => {
+                sg.plot_promql_with_sql(opts, kpi.query.clone(), sql.to_string());
+            }
+            (None, true) => {
+                sg.plot_promql_full(opts, kpi.query.clone());
+            }
+            (None, false) => {
+                sg.plot_promql(opts, kpi.query.clone());
+            }
         }
     }
 

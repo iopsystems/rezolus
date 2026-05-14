@@ -24,6 +24,13 @@ pub struct Kpi {
     #[serde(default)]
     pub description: Option<String>,
     pub query: String,
+    /// SQL form of the KPI query. Populated for templates that have
+    /// been transcribed to SQL (plan stage 8); `None` for legacy
+    /// templates pending migration. The viewer prefers `sql` when
+    /// available; `query` is kept for one release as a compat field
+    /// used by downstream tools that haven't migrated yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql: Option<String>,
     #[serde(rename = "type")]
     pub metric_type: String,
     #[serde(default)]
