@@ -18,6 +18,7 @@ use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;
 use super::tsdb::Tsdb;
 use ::dashboard::{self, TemplateRegistry};
+use metriken_query_sql::DuckDbBackend;
 
 /// Caches the navigation list (via the owned `DashboardContext`) and
 /// memoizes per-section JSON bodies. `/api/v1/sections` reads the nav
@@ -125,6 +126,13 @@ pub struct AppState {
     /// flips the viewer into report mode (empty section list, frontend
     /// defaults to `/report`).
     pub trimmed_report_marker: RwLock<Option<String>>,
+    /// Shared DuckDB-backed SQL execution backend. One per process,
+    /// cloned (`Arc`) into every handler that needs it. The backend
+    /// holds a per-parquet-path connection pool so the first request
+    /// for a given capture pays the cold-start cost and subsequent
+    /// requests hit the warm pool. Used by the SQL query handlers and
+    /// `SqlCapture` loading.
+    pub sql_backend: Arc<DuckDbBackend>,
 }
 
 impl AppState {
@@ -144,6 +152,7 @@ impl AppState {
             proxy: ProxyState::default(),
             combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
+            sql_backend: Arc::new(DuckDbBackend::new()),
         }
     }
 
