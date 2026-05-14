@@ -1,295 +1,373 @@
-# Reviewing the `yv/sql-testing` branch
+# Reviewing the `yv/sql-testing` branch (rezolus side)
 
-This document orients a reviewer who has not seen the SQL viewer migration
-before. Read it before opening the diff. It covers what changed, the
-JS/Rust split, where to spend attention, and what the known correctness
-gaps are.
+This doc orients a reviewer cold. Every concrete claim below is tied
+to a `file:line` in the working tree at commit `ea61bfd`; counts come
+from `wc -l` / `grep -c` / `git rev-list --count` over those files.
+Companion doc: `/work/metriken/REVIEWING.md` (engine side).
 
-The companion document at `/work/metriken/REVIEWING.md` covers the engine
-side (DuckDB integration, PromQL → SQL translation scaffolding, the
-correctness harness). Read it first; this doc builds on it.
+The previous version of this file made several claims that turned out
+to be stale; this rewrite cites each claim to a verifiable source.
 
 ---
 
 ## TL;DR
 
 The static (file-mode) browser viewer was migrated from a Rust → WASM
-crate running the in-process PromQL evaluator to a JS-driven
-duckdb-wasm setup. The legacy WASM viewer crate (`crates/viewer/`) was
-deleted in Stage 3 (commit `ad1ad9e`, `git log --oneline -- crates/viewer`).
+crate running an in-process PromQL evaluator (`crates/viewer/`,
+deleted) to a duckdb-wasm-backed setup (`crates/viewer-sql/`, new).
+Every dashboard plot now carries both a `promql_query` and a
+`sql_query` string; the frontend picks one based on a `BACKEND`
+constant.
 
-The picture for the **server-backed viewer and MCP** has three sub-cases:
+The picture for the **server-backed viewer (`rezolus view`) and
+MCP**:
 
-1. **`rezolus view <parquet>`** runs the legacy PromQL evaluator *and* DuckDB
-   side-by-side in shadow mode via `metriken-query`'s `DispatchConfig`. Every
-   query goes to both engines; a `LoggingDispatchObserver` logs divergences.
-   Wired in `src/viewer/mod.rs:1727-1731` (and the range variant at
-   `src/viewer/mod.rs:1756-1760`):
+- **`crates/viewer/`** (old, WASM PromQL engine) was deleted in
+  Stage 3 commit `ad1ad9e` — "Stage 3: retire `crates/viewer/` —
+  viewer is SQL-only".
+- **`rezolus view <parquet>` server-side handler** at
+  `src/viewer/mod.rs:1727-1731` and `:1756-1760` instantiates
+  `QueryEngine::new(&*tsdb)` and tries to chain
+  `.with_dispatch(cfg)` from `dispatch_for_capture(...)`. **This
+  code does not currently compile** — `promql::DispatchConfig`,
+  `metriken_query::DispatchObserver`, `metriken_query::Diff`, and
+  `metriken_query::Mode` no longer exist in `metriken-query` (see
+  "Known current build issue" below).
+- **MCP** (`src/mcp/`) constructs `QueryEngine::new(...)` via the
+  re-export at `src/viewer/mod.rs:63` (`pub use metriken_query::promql;`).
+  Compiles cleanly *as a module*, but transitively depends on
+  `src/viewer/mod.rs` which doesn't compile, so the binary as a whole
+  fails.
 
-   ```rust
-   let engine = QueryEngine::new(&*tsdb);
-   let engine = match dispatch_for_capture(&state, capture) {
-       Some(cfg) => engine.with_dispatch(cfg),
-       None => engine,
-   };
-   ```
+The static viewer (`site/viewer/`) is unaffected by the binary build
+because it builds via `./crates/viewer-sql/build.sh` (wasm-pack)
+independently — see `crates/viewer-sql/build.sh:1-13`. The build
+produces `site/viewer-sql/pkg/wasm_viewer_sql.js`, which the static
+page loads.
 
-   `dispatch_for_capture` at `src/viewer/mod.rs:1650-1669` returns `Some` only
-   when the capture has a recorded `parquet_path`; otherwise `None`. It can
-   be force-disabled with `METRIKEN_DISABLE_SQL`.
-2. **`rezolus view <live-agent>`** has no `parquet_path`
-   (`src/viewer/mod.rs:762-763` initialises it to `None` and live ingest at
-   `src/viewer/mod.rs:533-538` never writes it), so `dispatch_for_capture`
-   returns `None` → PromQL/Tsdb only.
-3. **MCP** (`src/mcp/`) constructs `QueryEngine::new(...)` with no
-   `.with_dispatch(...)` call — PromQL/Tsdb only.
-
-Their migration to a SQL-only path is a separate workstream — see the open
-questions section.
-
-Every dashboard plot now carries both `promql_query` and `sql_query`. The
-renderer picks via `ViewerApi.backend()` (`'sql'` for the static viewer at
-`site/viewer/lib/viewer_api.js:6`, `'promql'` for the server-backed copy at
-`src/viewer/assets/lib/viewer_api.js:7`).
-
-Net diff vs. pre-migration: **+7318 / −2341** across 64 files
-(`git diff --shortstat main..HEAD`). The big deletions are the retired
-wasm artifacts removed in Stage 3 — `site/viewer/pkg/wasm_viewer_bg.wasm`
-was 4,749,893 bytes (`git ls-tree -r -l ad1ad9e^ -- site/viewer/pkg/wasm_viewer_bg.wasm`).
-
-Correctness: ~89% identical to PromQL on single-source rezolus parquets
-(demo: 179/180 identical-or-tolerant out of 202; vllm: 183/202 — see
-`/tmp/sql_vs_promql_yv/summary.json`). All known divergences trace to a
-small set of root causes documented below.
+Net diff vs `main` (after review-prep cleanup commit `ea61bfd`):
+**+6,968 / −2,266 across 66 files** (`git diff main...yv/sql-testing
+--shortstat`). `git rev-list --count main..yv/sql-testing` → **38**
+commits.
 
 ---
 
-## Architecture before / after
+## Stale claims removed from the prior version of this doc
 
-### Before (legacy `main`)
+1. **"Shadow-mode dispatch is wired."** The previous TL;DR described
+   `rezolus view <parquet>` as running PromQL and DuckDB
+   side-by-side via `metriken-query`'s `DispatchConfig`. The code at
+   `src/viewer/mod.rs:1640-1700` is structured that way, but the
+   types it references **do not exist in `metriken-query`** anymore
+   (verified: `grep -rn 'DispatchConfig\|DispatchObserver' /work/metriken/`
+   returns nothing; `grep -rn 'pub enum Mode' /work/metriken/` same).
+   Likely removed in metriken commit `a25e285` "collapse PromQL
+   evaluator to streaming-only". This is the binary's current build
+   blocker; see "Known current build issue".
+
+2. **"Those types still exist in metriken-query, but they're
+   feature-gated behind `sql`."** The prior FAQ explanation for the
+   build failure. Wrong: `CatalogueEntry` is feature-gated;
+   `DispatchConfig`/`DispatchObserver`/`Diff`/`Mode` are gone.
+
+3. **"37 commits ahead of main."** Now 38
+   (`git rev-list --count main..yv/sql-testing` → 38, current HEAD
+   `ea61bfd`).
+
+4. **"net −1981 lines, 11 files" for Stage 3.** Actual:
+   `git show --shortstat ad1ad9e` → "11 files changed, 8
+   insertions(+), 1968 deletions(-)". Net = −1,960. The 4.7 MB wasm
+   blob is the bulk: `git ls-tree -r -l ad1ad9e^ -- site/viewer/pkg/wasm_viewer_bg.wasm`
+   → 4,749,893 bytes.
+
+---
+
+## Architecture (current code)
+
+### Static viewer — duckdb-wasm in the browser
 
 ```
-Static viewer (browser, file mode)
-  └─ Mithril UI (site/viewer/lib/)
-       └─ wasm_viewer.js  (4.7 MB compiled Rust)
-             └─ metriken-query::QueryEngine + Tsdb (in-process PromQL)
+site/viewer/                            Mithril UI (file-mode entry)
+  ├─ index.html                         loads site/viewer/lib/script.js
+  └─ lib/viewer_api.js:6                const BACKEND = 'sql';
 
-Server-backed viewer (rezolus view ...)
-  └─ Mithril UI (same)
-       └─ /api/v1/query_range (HTTP)
-             └─ metriken-query::QueryEngine + Tsdb (native)
+  imports:
+    site/viewer-sql/pkg/wasm_viewer_sql.js
+        ← built by crates/viewer-sql/build.sh from crates/viewer-sql/src/lib.rs (716 LOC)
+        ← exports ViewerSql, pure_sql_macros, ...
+    site/viewer-sql/lib/duckdb-registry.js  (926 LOC)
+        ← JS-side multi-worker DuckDB pool, schema introspection,
+          per-source aliasing, cgroup index table
+    https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev45.0/+esm
+        ← imported at site/viewer-sql/lib/script.js:12
+```
+
+This path has no `metriken-query` dependency at all
+(`crates/viewer-sql/Cargo.toml` has no `metriken-query` in its
+`[dependencies]`).
+
+### Server-backed viewer + MCP — PromQL only (currently broken)
+
+```
+rezolus view <parquet | live-agent-url>
+  → src/viewer/mod.rs::serve(...)
+      → AppState::new (mod.rs:762)
+          ├─ captures: CaptureRegistry::new(tsdb, ...)
+          └─ sql_backend: Arc::new(metriken_query_sql::DuckDbBackend::new())
+                          (mod.rs:768) — wired but dead-end, see below
+
+  /api/v1/query_range handlers at mod.rs:1727-1731 and :1756-1760:
+      let engine = QueryEngine::new(&*tsdb);
+      let engine = match dispatch_for_capture(&state, capture) {
+          Some(cfg) => engine.with_dispatch(cfg),    // ← does not compile
+          None => engine,
+      };
+  → response: Prometheus matrix JSON
 
 MCP (src/mcp/)
-  └─ metriken-query::QueryEngine + Tsdb
+  → src/mcp/mod.rs:11 — use crate::viewer::promql::{QueryEngine, QueryResult};
+  → src/mcp/mod.rs:119,144,177 — QueryEngine::new(tsdb.clone())
+  → uses Tsdb only (no dispatch references in src/mcp/)
 ```
 
-Dashboard plots carry one `promql_query` string each.
+The dispatch/shadow-mode plumbing at `src/viewer/mod.rs:1640-1700`
+references `promql::DispatchConfig`, `metriken_query::DispatchObserver`,
+`metriken_query::CatalogueEntry`, `metriken_query::Diff`, and
+`metriken_query::Mode` — none of these exist in metriken-query today.
+See "Known current build issue" for fix options.
 
-### After (`yv/sql-testing`)
+### Dashboard crate — both queries per plot
 
+`crates/dashboard/Cargo.toml:13` enables `features = ["legacy"]` on
+its `metriken-query` dep. Its only metriken-query usage is
+`metriken_query::Tsdb` (`crates/dashboard/src/data.rs:12`,
+`crates/dashboard/src/lib.rs:8`).
+
+Each plot calls `plot_promql_with_sql(...)`:
+
+- Group-level shim at `crates/dashboard/src/plot.rs:184`:
+  ```rust
+  pub fn plot_promql_with_sql(
+      &mut self,
+      opts: PlotOpts,
+      promql_query: String,
+      sql_query: String,
+  ) {
+      self.tail_subgroup_mut()
+          .plot_promql_with_sql(opts, promql_query, sql_query);
+  }
+  ```
+- Subgroup variant at `crates/dashboard/src/plot.rs:280`, with the
+  doc-comment:
+  > "During the Phase D migration window this lets each plot serve
+  > both the legacy viewer (which evaluates `promql_query` via the
+  > in-memory PromQL engine) AND `viewer-sql` (which evaluates
+  > `sql_query` against duckdb-wasm). Once the legacy viewer is
+  > retired we convert these calls to bare `plot_sql`."
+
+Both query strings end up in the dashboard JSON the frontend
+consumes. The full set of dashboard category files is in
+`crates/dashboard/src/dashboard/*.rs` — 15 files including 11 active
+category emitters (blockio, cgroups, cpu, gpu, memory, network,
+overview, rezolus, scheduler, softirq, syscall) and 4 infrastructure
+files (category.rs, mod.rs, query_explorer.rs, service.rs).
+
+### Frontend backend selection
+
+The `BACKEND` constant is hard-coded per viewer copy
+(non-symlinked):
+
+- `site/viewer/lib/viewer_api.js:6` — `const BACKEND = 'sql';` (static
+  viewer)
+- `src/viewer/assets/lib/viewer_api.js:7` — `const BACKEND = 'promql';`
+  (server-backed copy)
+- Both expose it via `backend()` — `site/viewer/lib/viewer_api.js:135`
+  and `src/viewer/assets/lib/viewer_api.js:158`.
+
+`buildEffectiveQuery` at `src/viewer/assets/lib/data.js:361` selects
+the right query string. The SQL short-circuit is at
+`src/viewer/assets/lib/data.js:379`:
+
+```js
+if (backend === 'sql') {
+    if (plot.sql_query) return plot.sql_query;
+    return null;
+}
 ```
-Static viewer (browser, file mode)             ★ migrated
-  └─ Mithril UI (site/viewer/lib/)
-       └─ site/viewer/lib/viewer_api.js  async query surface; BACKEND='sql'
-            └─ CaptureRegistry (JS)      site/viewer-sql/lib/duckdb-registry.js (926 LOC)
-                 ├─ N AsyncDuckDB workers (round-robin pool)
-                 └─ ViewerSql (Rust→wasm)  crates/viewer-sql/ (716 LOC lib.rs + 242 LOC macros.sql)
-                       └─ duckdb-wasm AsyncDuckDBConnection (via JsFuture)
 
-Server-backed viewer
-  rezolus view <parquet>                       ★ shadow-mode dispatch
-  └─ Mithril UI (same)
-       └─ /api/v1/query_range             BACKEND='promql'
-            └─ metriken-query::QueryEngine + Tsdb (PromQL, primary)
-                 └─ engine.with_dispatch(cfg)    src/viewer/mod.rs:1756
-                      └─ metriken_query_sql::DuckDbBackend  (shadow,
-                         src/viewer/mod.rs:751 sql_backend field)
+KPI placeholder ("(query not yet available — translation pending)") at
+`src/viewer/assets/lib/data.js:441` and the chart-side fallback at
+`src/viewer/assets/lib/charts/chart.js:382` (`'(query not yet
+available)'`).
 
-  rezolus view <live-agent>                    ─ Tsdb only (no parquet path)
-  └─ same Mithril UI → /api/v1/query_range → QueryEngine; dispatch
-     skipped because dispatch_for_capture returns None
-     (src/viewer/mod.rs:1659-1662).
-
-MCP (src/mcp/)                                 ─ Tsdb only
-  └─ QueryEngine::new(...) constructed without .with_dispatch(...)
-
-crates/dashboard/  emits BOTH promql_query and sql_query per plot
-                   SQL emitters live in crates/dashboard/src/sql.rs (627 LOC)
-```
-
-Every dashboard plot now carries both query strings. The renderer's
-`buildEffectiveQuery` (`src/viewer/assets/lib/data.js:361`) picks based
-on `ViewerApi.backend()`; the SQL-backend short-circuit is at
-`src/viewer/assets/lib/data.js:379` (`if (backend === 'sql') ...`).
+The PromQL transforms (`rewriteCounterQuery` at `data.js:32`,
+`PROMQL_KEYWORDS` at `data.js:59`, `injectLabel` at `data.js:75`,
+`substituteCgroupPattern` at `data.js:129`) are live for the
+server-backed path (where `BACKEND='promql'`) and dead for the
+static-viewer path.
 
 ---
 
-## The dual-query story
-
-Each plot in `crates/dashboard/src/dashboard/*.rs` emits its query via
-`Group::plot_promql_with_sql(opts, promql_string, sql_string)` — the
-group-level shim at `crates/dashboard/src/plot.rs:184` that forwards to
-the subgroup method at `crates/dashboard/src/plot.rs:280`:
-
-```rust
-pub fn plot_promql_with_sql(
-    &mut self,
-    opts: PlotOpts,
-    promql_query: String,
-    sql_query: String,
-) { ... }
-```
-
-It is called across every dashboard category — `blockio.rs`,
-`cgroups.rs`, `cpu.rs`, `gpu.rs`, `memory.rs`, `network.rs`,
-`overview.rs`, `rezolus.rs`, `scheduler.rs`, `softirq.rs`, `syscall.rs`.
-Both strings end up in the dashboard JSON the frontend consumes.
-
-The `BACKEND` constant is exported from two distinct (non-symlinked)
-copies of `viewer_api.js`:
-
-- `'sql'` in the static viewer's bundled copy at
-  `site/viewer/lib/viewer_api.js:6` (`const BACKEND = 'sql';`)
-- `'promql'` in the server-backed copy at
-  `src/viewer/assets/lib/viewer_api.js:7` (`const BACKEND = 'promql';`)
-
-Both expose it via `backend()` (`site/viewer/lib/viewer_api.js:135` and
-`src/viewer/assets/lib/viewer_api.js:158`).
-
-The data layer's `buildEffectiveQuery` (`src/viewer/assets/lib/data.js:361`)
-short-circuits on `backend === 'sql'` (line 379) and returns the SQL
-string directly. Otherwise it runs the PromQL transform pipeline
-(`rewriteCounterQuery` at `data.js:32`, `injectLabel` at `data.js:75`,
-`substituteCgroupPattern` at `data.js:129`) and returns PromQL.
-
-When the server-backed viewer or MCP eventually drop the PromQL
-emission, dual emission collapses — `plot_promql_with_sql` becomes
-`plot_sql` and the PromQL strings vanish from the dashboard JSON.
-
----
-
-## Why the JS / Rust split
+## Why the JS / Rust split (in viewer-sql)
 
 DuckDB's official Rust crate (`duckdb-rs`) does not compile to
 `wasm32`. The bundled C build it wraps has no upstream wasm target.
 
-The browser-side DuckDB is **duckdb-wasm**, a separate library written
-in C++ → WASM with a JavaScript host API. Calling it from Rust → WASM
-requires either a wasm-bindgen ↔ duckdb-wasm JS bridge (significant
-effort) or putting the DuckDB instance in JS in the first place.
+The browser-side DuckDB is **duckdb-wasm**, a separate library
+(C++ → WASM + JS host API). Calling it from Rust → WASM would
+require building a `wasm-bindgen` ↔ `duckdb-wasm` JS bridge.
+Instead the architecture puts duckdb-wasm in JS in the first place:
 
-We chose the latter. So:
+- **JS side** (`site/viewer-sql/lib/duckdb-registry.js`, 926 LOC).
+  Owns the duckdb-wasm `AsyncDuckDB` instances, the round-robin
+  worker pool, parquet attachment, schema introspection, per-source
+  view aliasing, cgroup index table, `__SELECTED_CGROUPS__` SQL
+  substitution, result cache, query gating, source picker state.
 
-- **JS side** (`site/viewer-sql/lib/duckdb-registry.js`, 926 LOC) owns:
-  - The duckdb-wasm `AsyncDuckDB` instances and their Workers
-  - The round-robin worker pool (`CaptureSession.WorkerPool`)
-  - Parquet attachment, schema introspection, KV metadata parsing
-  - Per-source aliasing views for multi-source parquets
-  - The cgroup index table and `__SELECTED_CGROUPS__` SQL substitution
-  - Result cache, query gating, source picker state
+- **Rust → WASM side** (`crates/viewer-sql/src/lib.rs`, 716 LOC).
+  Owns `SqlMetadata` (implements `DashboardData`), Arrow batch →
+  Prometheus matrix JSON marshalling (BigInt workaround), time-window
+  CTE wrapping, pre-flight column validation. Exports
+  `pure_sql_macros()` returning the bytes of `macros.sql`.
 
-- **Rust→WASM side** (`crates/viewer-sql/src/lib.rs`, 716 LOC) owns:
-  - `SqlMetadata` (implements the dashboard's `DashboardData` trait)
-  - Arrow batch → Prometheus matrix JSON marshalling (BigInt handling)
-  - Time-window CTE wrapping (`wrapWithSrcCte`)
-  - Pre-flight column existence validation
-  - The pure-SQL macros source-of-truth (exported via `pure_sql_macros()`
-    — `crates/viewer-sql/src/lib.rs:38`, which returns the bytes of
-    `crates/viewer-sql/src/lib.rs:42`'s `include_str!("macros.sql")`)
+The detailed constraints — async-only workers, JS UDFs not viable,
+macro registration quirks — live in `crates/viewer-sql/duckdb.md`
+(214 LOC).
 
-The JS module imports the WASM module and calls into it for marshalling
-and metadata. The WASM module calls back into JS for the duckdb-wasm
-connection. Bidirectional traffic, but the responsibility split is
-clean: **engine in JS, dashboard logic in Rust**.
+Macro source-of-truth split:
 
-The detailed constraints that shaped this split — async-only workers,
-JS UDFs not viable, macro registration quirks — live in
-`crates/viewer-sql/duckdb.md` (214 LOC). Worth a skim if you're auditing
-the JS layer.
-
----
-
-## Stage narrative
-
-The migration landed across two early perf commits, seven numbered stages,
-and a tail of fixes. Commit hashes on `yv/sql-testing` (verify with
-`git log --oneline 037 -- crates/viewer-sql crates/viewer crates/dashboard site/viewer site/viewer-sql src/viewer`):
-
-| Stage | Commit | What |
-|-------|--------|------|
-| pre-1 (perf) | `eeb02d5` | viewer-sql: multi-worker query pool (Phase 1 perf) |
-| pre-1 (perf) | `9707a42` | viewer-sql: combined queries for simple-gauge + irate_total plots (Phase 2 perf) |
-| 1 | `033b8bb` | Extract `site/viewer-sql/lib/duckdb-registry.js`. The new JS `CaptureRegistry` mirrors the legacy `WasmCaptureRegistry` surface. |
-| 2 | `5a7b778` | Boot-path swap; `ViewerApi` becomes async-aware (CaptureRegistry's `query_range` returns a Promise, unlike the legacy synchronous WASM export). |
-| 2 (fix) | `29b2359` | Section-structure cache populated synchronously so the page doesn't blank during boot. |
-| 2b | `eb5553e` | Cgroup selector reads from registry state instead of running ad-hoc PromQL probes. |
-| 2c | `b099b97` | Source picker UI + "query not yet available" placeholder UX for KPIs. |
-| 2c (perf) | `a38471a` | Cgroup selector progressive redraw. |
-| 2d | `80f29db` | `regenerate_combined` initialises both captures' templates in compare mode. |
-| 3 | `ad1ad9e` | Delete `crates/viewer/` and the retired `site/viewer/pkg/wasm_viewer*` artifacts (net −1981 lines, 11 files; verified via `git show --shortstat ad1ad9e`). |
-
-Post-Stage 3 fixes (`git log --oneline ad1ad9e..HEAD`):
-- `af867b5` — gate query selection on `ViewerApi.backend()`
-- `f6792ff` — fix `cpu_pct_by_id` missing sum-by-id aggregation
-- `5dbe881` — viewer-sql aggregate across rezolus sources to match PromQL
-- `1bbd6b2` — per-source `:src<i>` aliases for avg/max/min emitters
-- `a415fbe` — detect rezolus sources via Arrow field metadata
-- `895801b` — surface combined-rezolus view in source picker
-- `d30343f` — converge macros with native + add test scaffold
-- `4c25c37` — fix four zero-series emitters
-- `5f7a49d` — rate-then-sum for `irate_total` + `irate_sum_by_id` helper
-- `889b85f` — reset-aware `sql::rate_5m_total` (counter overflow)
-
-The branch is 37 commits ahead of `main` (`git rev-list --count main..HEAD` →
-`37`). Don't squash — the stage-by-stage history is the reading order for
-someone reviewing it commit-by-commit.
+- Wasm side: `crates/viewer-sql/src/macros.sql` (242 LOC, **30**
+  `CREATE MACRO` statements — `grep -c 'CREATE.*MACRO'
+  crates/viewer-sql/src/macros.sql` → 30). `include_str!`'d at
+  runtime.
+- Native side: `/work/metriken/metriken-query-sql/src/macros.rs`
+  (314 LOC, **19** `CREATE OR REPLACE MACRO` strings).
+- Parity check: `crates/viewer-sql/tests/macros.rs` (123 LOC) loads
+  `macros.sql` into a native in-memory DuckDB and asserts behaviour
+  against the native macros. Catches drift but does **not** prove
+  the inventories are 1:1 — they differ in count (30 vs 19).
 
 ---
 
-## Where to spend attention
+## Known current build issue
 
-If you have an hour:
+`cargo check --bin rezolus` currently fails. Two distinct things:
 
-1. **`crates/viewer-sql/src/lib.rs`** (716 LOC). The wasm-bindgen surface,
-   the Arrow → Prometheus matrix marshalling (the BigInt workaround is
-   subtle), and the `query_range` CTE wrapper.
-2. **`crates/dashboard/src/sql.rs`** (627 LOC). The SQL emitter helpers.
-   This is where most of the per-plot SQL logic lives. Look at
-   `rate_5m_total` (`crates/dashboard/src/sql.rs:33`), `concept_total`
-   (`crates/dashboard/src/sql.rs:281`), and `irate_sum_by_id`
-   (`crates/dashboard/src/sql.rs:126`) for the pattern.
-3. **`site/viewer-sql/lib/duckdb-registry.js`** (926 LOC). The JS
-   `CaptureRegistry` and worker pool. The public API mirrors the legacy
-   `WasmCaptureRegistry` so the Mithril UI didn't need to change.
-4. Pick one dashboard category (e.g. `crates/dashboard/src/dashboard/cpu.rs`,
-   446 LOC) and read it end-to-end. Each `group.plot_promql_with_sql(...)`
-   call shows the dual-query pattern in context.
-5. **`crates/viewer-sql/src/macros.sql`** (242 LOC). The wasm-side SQL
-   macros. **Note: this file is a parallel copy of the native macros
-   in `/work/metriken/metriken-query-sql/src/macros.rs`. They are
-   documented as same-semantics but can drift; see the "Known hazards"
-   section below.** The parity-check test scaffold loads `macros.sql`
-   into a native DuckDB and asserts behaviour against the source-of-truth
-   — see `crates/viewer-sql/tests/macros.rs:1-30`:
+1. **BPF prerequisites missing on this dev box.** `build.rs:169`
+   panics with "failed to execute `clang`: No such file or
+   directory". Not a code bug. Install clang to get past it.
 
-   ```rust
-   //! `macros.sql` is `include_str!`'d at runtime and registered against a
-   //! browser-side AsyncDuckDB connection. ... These tests load the same
-   //! SQL into a native DuckDB connection and assert the per-second rate
-   //! and 5-minute rate primitives behave the same way as their counterparts
-   //! in /work/metriken/metriken-query-sql/src/macros.rs ...
+2. **Type references that no longer exist in metriken-query.**
+   `src/viewer/mod.rs` references:
+
+   | Reference site | Type |
+   |---|---|
+   | `:1650` | `promql::DispatchConfig` (return type of `dispatch_for_capture`) |
+   | `:1663` | `promql::DispatchConfig` (struct literal in `Some(...)`) |
+   | `:1676` | `metriken_query::DispatchObserver` (impl for `LoggingDispatchObserver`) |
+   | `:1677` | `metriken_query::CatalogueEntry`, `metriken_query::Diff` (in `on_diff` signature) |
+   | `:1695` | `metriken_query::Mode` (`on_query`?) |
+
+   None of `DispatchConfig`, `DispatchObserver`, `Diff`, `Mode` exist
+   in `/work/metriken/` (verified by grep). `CatalogueEntry` exists
+   but is feature-gated behind `sql` and the rezolus binary doesn't
+   enable `sql` (`Cargo.toml:78` enables only `ingest, lz4`).
+
+   Fix options:
+   - **Remove the dispatch/shadow-mode code path.** Drop
+     `dispatch_for_capture` (`:1640-1670`), `LoggingDispatchObserver`
+     (`:1675-1700`), and the `with_dispatch` chains at `:1727-1731`
+     and `:1756-1760`. Also drop the unused `sql_backend` field at
+     `:751` and its initialization at `:768`. Server-backed viewer
+     then runs PromQL only, matching `BACKEND='promql'` at
+     `src/viewer/assets/lib/viewer_api.js:7`.
+   - **Restore the dispatch types on the metriken side.** Reverse
+     part of metriken commit `a25e285` to bring back
+     `DispatchConfig`/`DispatchObserver`/etc. Heavier.
+
+   Recommended: (1) for this branch, defer the shadow-mode story to
+   a follow-up that designs it freshly atop the new metriken
+   surface.
+
+3. **Dead-code warning in dashboard.** `cargo check -p dashboard`
+   succeeds but warns:
    ```
+   warning: constant `RATIO_X1000` is never used
+     --> crates/dashboard/src/dashboard/cpu.rs:8:7
+   ```
+   Cosmetic; safe to remove.
+
+---
+
+## Stage narrative (verified commit hashes)
+
+Each commit hash below was verified with
+`git log --oneline -1 <hash>` on `yv/sql-testing`. All 20 resolve.
+
+| Stage | Commit | Subject |
+|---|---|---|
+| pre-1 (perf) | `eeb02d5` | `viewer-sql: multi-worker query pool (Phase 1 perf)` |
+| pre-1 (perf) | `9707a42` | `viewer-sql: combined queries for simple-gauge + irate_total plots (Phase 2 perf)` |
+| 1 | `033b8bb` | `viewer-sql: extract lib/duckdb-registry.js — Stage 1 of viewer migration` |
+| 2 | `5a7b778` | `Stage 2: wire CaptureRegistry into the Mithril viewer (SQL boot)` |
+| 2 (fix) | `29b2359` | `viewer: cache section structure synchronously, defer query fetch` |
+| 2b | `eb5553e` | `Stage 2b: cgroup selector → registry-state model` |
+| 2c | `b099b97` | `Stage 2c: source picker UI + KPI temporarily-missing placeholders` |
+| 2c (perf) | `a38471a` | `viewer: cgroup selector progressive redraw` |
+| 2d | `80f29db` | `Stage 2d: regenerate_combined initialises both captures' templates` |
+| 3 | `ad1ad9e` | `Stage 3: retire crates/viewer/ — viewer is SQL-only` (net −1,960 across 11 files) |
+| post-3 | `af867b5` | `viewer: gate SQL/PromQL query selection on ViewerApi.backend()` |
+| post-3 | `f6792ff` | `dashboard: fix cpu_pct_by_id missing sum-by-id aggregation` |
+| post-3 | `5dbe881` | `viewer-sql: aggregate across rezolus sources to match PromQL` |
+| post-3 | `1bbd6b2` | `viewer-sql: per-source ':src<i>' aliases for avg/max/min emitters` |
+| post-3 | `a415fbe` | `viewer-sql: detect rezolus sources via Arrow field metadata` |
+| post-3 | `895801b` | `viewer: surface combined-rezolus view in source picker` |
+| post-3 | `d30343f` | `viewer-sql: converge macros with native + add test scaffold` |
+| post-3 | `4c25c37` | `dashboard: fix four zero-series emitters` |
+| post-3 | `5f7a49d` | `dashboard: rate-then-sum for irate_total + irate_sum_by_id helper` |
+| post-3 | `889b85f` | `dashboard: reset-aware sql::rate_5m_total — handle counter overflow` |
+| review prep | `ea61bfd` | `review prep: add REVIEWING.md, .gitattributes; drop dead echarts symlink` |
+
+Don't squash — the stage-by-stage history is reading order for a
+commit-by-commit review.
+
+---
+
+## Where to spend attention (in 1 hour)
+
+1. **`crates/viewer-sql/src/lib.rs`** (716 LOC). The wasm-bindgen
+   surface, Arrow → Prometheus matrix marshalling (BigInt workaround
+   is subtle), and the `query_range` CTE wrapper.
+2. **`crates/dashboard/src/sql.rs`** (627 LOC). SQL emitter helpers
+   — most per-plot SQL logic. Pattern shown by `rate_5m_total`
+   (`crates/dashboard/src/sql.rs:33`), `concept_total`
+   (`:281`), and `irate_sum_by_id` (`:126`).
+3. **`site/viewer-sql/lib/duckdb-registry.js`** (926 LOC). JS
+   `CaptureRegistry` + worker pool. Public API mirrors the
+   now-deleted legacy `WasmCaptureRegistry` surface.
+4. Pick one dashboard category (e.g.
+   `crates/dashboard/src/dashboard/cpu.rs`, 446 LOC) and read it
+   end-to-end. Each `group.plot_promql_with_sql(...)` call shows the
+   dual-query pattern in context.
+5. **`crates/viewer-sql/src/macros.sql`** (242 LOC, 30 macros). The
+   wasm-side SQL macros. Parity scaffold at
+   `crates/viewer-sql/tests/macros.rs` (123 LOC):
+   > "`macros.sql` is `include_str!`'d at runtime and registered
+   > against a browser-side AsyncDuckDB connection. ... These tests
+   > load the same SQL into a native DuckDB connection and assert the
+   > per-second rate and 5-minute rate primitives behave the same way
+   > as their counterparts in
+   > /work/metriken/metriken-query-sql/src/macros.rs ..."
 
 Things to skip:
 
 - The PromQL transform helpers in `src/viewer/assets/lib/data.js`
   (`substituteCgroupPattern`, `injectLabel`, `rewriteCounterQuery`,
   `PROMQL_KEYWORDS`, the PromQL branch of `buildEffectiveQuery`).
-  They are live for the server-backed viewer / MCP path, dead in
-  static-viewer mode. The file's section comments at
-  `src/viewer/assets/lib/data.js:14-15` mark them as such.
-- `crates/dashboard/src/service_extension.rs` (693 LOC). KPI definition
-  structures, unchanged from `main`.
+  Live for the server-backed viewer / MCP path, dead in static-viewer
+  mode.
+- `crates/dashboard/src/service_extension.rs` (693 LOC). KPI
+  definition structures, largely unchanged from `main`.
 - `crates/dashboard/src/plot.rs` (879 LOC). Plot metadata and the
   `plot_promql_with_sql` API surface — incremental, not a rewrite.
 
@@ -297,128 +375,103 @@ Things to skip:
 
 ## Mental models for the adversarial reviewer
 
-**1. The engine lives in the browser. The frontend speaks SQL.** The
-core swap is "PromQL evaluator in Rust → WASM" → "DuckDB in
-JS-via-duckdb-wasm". Everything else falls out of that single decision.
+**1. The engine lives in the browser. The frontend speaks SQL** —
+for the static viewer. The server-backed viewer and MCP are still
+PromQL.
 
-**2. The Rust crate (`crates/viewer-sql/`) is intentionally thin.** It
-doesn't own the database. It owns marshalling. The bulk of the
+**2. The Rust crate (`crates/viewer-sql/`) is intentionally thin.**
+It doesn't own the database. It owns marshalling. The bulk of the
 "viewer migration" diff is the JS registry, not the Rust crate.
 
-**3. Dual-query per plot is a transition artifact.** Every plot's
+**3. Dual-query per plot is a transition artifact.** Each plot's
 `(promql_query, sql_query)` pair exists because the server-backed
-viewer and MCP still drive PromQL. When those migrate, dual emission
-collapses naturally.
+viewer and MCP still drive PromQL. When those migrate, dual
+emission collapses to bare `plot_sql`.
 
-**4. The known divergence list is bucketed but not exhaustive.** 1370
-divergent pairs sound alarming. About 1289 of them (94%) fall into 8
-named categories below — 985 + 167 + 55 + 26 + 23 + 16 + 9 + 8.
-The remaining ~81 are not yet categorised (a refresh of the taxonomy is
-overdue — see the divergence section). Of the named categories, one is
-a confirmed remaining bug (sql duplicate samples per timestamp, see
-below), one is a semantic decision still open (multi-source aggregation
-in shadow-mode runs), and the rest are acceptable noise or already-fixed
-issues whose run output predates the fix.
+**4. The shadow-mode dispatch story is currently broken**, not
+working. The plumbing exists in `src/viewer/mod.rs:1640-1700` but
+references gone-from-metriken types. See "Known current build
+issue".
 
 ---
 
-## Adversarial-reviewer FAQ
+## FAQ
 
-**Q: Why retire `crates/viewer/` if the server still uses PromQL?**
+**Q: Why retire `crates/viewer/`?**
 
-A: The retired crate is the **static viewer's WASM PromQL engine** — it
-ran client-side over a parquet file. The server's PromQL still runs
-**native** through `metriken-query`. They are two different code paths;
-only the first migrated. The server-side PromQL endpoint
-(`/api/v1/query_range`) is unchanged.
+A: It was the static viewer's WASM PromQL engine — ran client-side
+over a parquet file. The server's PromQL still runs **native** through
+`metriken-query`. Two different code paths; only the first migrated.
+The retirement (Stage 3, `ad1ad9e`) deleted 11 files (net −1,960
+lines), dominated by the 4.7 MB compiled WASM blob.
 
-**Q: Why are there two SQL macro libraries?**
+**Q: Why two SQL macro libraries?**
 
 A: Native macros (`/work/metriken/metriken-query-sql/src/macros.rs`,
-314 LOC, in Rust calling `duckdb-rs`) and wasm macros
-(`crates/viewer-sql/src/macros.sql`, 242 LOC, pure SQL embedded via
-`include_str!`) are two parallel copies of the same logic. They must
-stay in sync. Why two copies:
+314 LOC, 19 macros, Rust calling `duckdb-rs`) and wasm macros
+(`crates/viewer-sql/src/macros.sql`, 242 LOC, 30 macros, pure SQL via
+`include_str!`) are two parallel copies. Why two:
 
-- The native version is in Rust because the harness loads it via
-  `duckdb-rs::register_all` and runs unit tests against it (see
-  `metriken-query-sql/tests/macros.rs` parity).
-- The wasm version is pure SQL because duckdb-wasm doesn't take Rust
-  registrations — the browser-side macros must be `CREATE MACRO` statements
-  the JS host can hand to the connection.
+- Native version is in Rust because the harness loads it via
+  `duckdb-rs::register_all` and runs unit tests against it.
+- Wasm version is pure SQL because `duckdb-wasm` doesn't take Rust
+  registrations — the browser-side macros must be `CREATE MACRO`
+  statements the JS host can hand to the connection.
 
 This is a known hazard. The early-warning system is
-`crates/viewer-sql/tests/macros.rs` (123 LOC) — a native test that
-loads `macros.sql` into an in-memory DuckDB and asserts parity with the
-native implementations. Drift surfaces there.
-
-A future commit can collapse this to one source of truth (extract
-macros.sql, generate the Rust version from it, or vice versa); not in
-scope for this branch.
+`crates/viewer-sql/tests/macros.rs` — a native test that loads
+`macros.sql` into an in-memory DuckDB and asserts parity for the
+shared primitives. **It does not assert the inventories are
+1:1** — the macro counts differ (30 vs 19).
 
 **Q: Why is `duckdb-registry.js` 926 lines?**
 
 A: It owns: worker pool (round-robin checkout), parquet attachment +
-schema introspection (column → metric-name index), per-source aliasing
-views (one `_src_<source>` view per rezolus source on multi-source
-parquets), cgroup index table construction (one `SELECT DISTINCT` per
-cgroup-style column at load time), result cache (keyed by SQL string),
-query gating (PromQL vs SQL via `ViewerApi.backend()`), source picker
-state, `__SELECTED_CGROUPS__` substitution. Each concern is roughly
-100 LOC; the file is large because all of it lives in JS by necessity.
+schema introspection (column → metric-name index), per-source
+aliasing views, cgroup index table construction (one `SELECT
+DISTINCT` per cgroup-style column at load time), result cache
+(keyed by SQL string), query gating (PromQL vs SQL via
+`ViewerApi.backend()`), source picker state, `__SELECTED_CGROUPS__`
+substitution. Each concern is roughly 100 LOC; the file is large
+because all of it lives in JS by necessity.
 
 **Q: What's the live-agent migration story?**
 
-A: Live mode (`rezolus view http://localhost:4241`) polls the agent's
-msgpack endpoint into an in-memory `Tsdb` and serves PromQL via
+A: `rezolus view http://localhost:4241` polls the agent's msgpack
+endpoint into an in-memory `Tsdb` and serves PromQL via
 `/api/v1/query_range`. There is no parquet file on disk to point
-DuckDB at. Options being weighed:
+DuckDB at. Options:
 
-1. **Server-side SQL.** Replace the in-memory `Tsdb` with a continuously
-   appended duckdb relation. Frontend keeps hitting
-   `/api/v1/query_range` but with SQL bodies. Native DuckDB UDFs
-   available (wasm-UDF gap goes away — significant win on histogram
-   sections). Server stays the choke point for auth/rate-limiting.
-2. **Client-side SQL.** Server rotates a parquet file (Hindsight-style);
-   frontend pulls parquet bytes and runs duckdb-wasm locally. Same
-   code path as file mode. Eliminates server PromQL entirely. Cost:
-   every viewer streams its own data; per-query auth/rate-limit
-   enforcement disappears.
+1. **Server-side SQL.** Replace the in-memory `Tsdb` with a
+   continuously appended duckdb relation. Frontend keeps hitting
+   `/api/v1/query_range` but with SQL bodies.
+2. **Client-side SQL.** Server rotates a parquet file
+   (Hindsight-style); frontend pulls parquet bytes and runs
+   duckdb-wasm locally. Same code path as file mode. Eliminates
+   server PromQL entirely.
 
-The two are not mutually exclusive — option 1 with a rolling parquet
-ring is essentially Hindsight + tail. See the "Open questions" section
-for the full decision matrix.
+Not mutually exclusive. Not in scope for this branch.
 
 **Q: Why is `cargo check --bin rezolus` failing on `Catalogue`,
 `DispatchConfig`, `DispatchObserver`, `Diff`, `Mode`?**
 
-A: Build-config bug, not a missing-types issue. Those types still exist
-in `metriken-query`, but they're feature-gated behind `sql` — see
-`/work/metriken/metriken-query/src/lib.rs:41-42`:
+A: Different reasons per type:
 
-```rust
-#[cfg(feature = "sql")]
-pub use catalogue::{Catalogue, CatalogueEntry, CatalogueError, GoldenExample, OutputShape};
-```
+- **`CatalogueEntry`** and **`Catalogue::embedded()`** exist in
+  metriken but are feature-gated behind `sql`
+  (`/work/metriken/metriken-query/src/lib.rs:41-42`). The rezolus
+  binary's metriken-query dep at `Cargo.toml:78` enables only
+  `ingest, lz4` — no `sql`. Adding `sql` would fix the
+  `CatalogueEntry`/`Catalogue` references.
+- **`DispatchConfig`, `DispatchObserver`, `Diff`, `Mode`** **do not
+  exist anywhere in `/work/metriken/`** (verified by grep).
+  Adding the `sql` feature will *not* fix these. The shadow-mode
+  dispatch types appear to have been removed in metriken commit
+  `a25e285` "collapse PromQL evaluator to streaming-only".
 
-The rezolus workspace declares the dep with `default-features = false`
-(`Cargo.toml:22`) and the `[dependencies]` table for the binary only
-enables `features = ["ingest", "lz4"]` (`Cargo.toml:78`) — so the binary
-sees a metriken-query without the `sql` cargo feature, and the dispatch
-types referenced from `src/viewer/mod.rs:1664-1696` are invisible.
-`rustc` even prints the cfg-out note:
-
-```
-note: found an item that was configured out
-   --> /work/metriken/metriken-query/src/lib.rs:42:32
-    |
- 41 | #[cfg(feature = "sql")]
-    |       --------------- the item is gated behind the `sql` feature
-```
-
-The static viewer builds via `./crates/viewer-sql/build.sh` (independent
-of the binary), so this doesn't block the SQL viewer. Fix is to add the
-`sql` feature to the binary's metriken-query dep in `Cargo.toml`.
+The fix is to remove the dispatch code path on the rezolus side
+(see "Known current build issue" for the file:line list) or restore
+the types on the metriken side. Neither has happened on this branch.
 
 ---
 
@@ -426,44 +479,42 @@ of the binary), so this doesn't block the SQL viewer. Fix is to add the
 
 ### Cargo / build
 
-```
-cargo build                                          # main binary; fails — see FAQ above
-cargo build -p dashboard                             # dashboard crate; passes (1 dead-code warning)
-./crates/viewer-sql/build.sh                         # wasm-pack build; passes
-```
-
-The `cargo build -p dashboard` run finishes with a single warning:
-
-```
-warning: constant `RATIO_X1000` is never used
- --> crates/dashboard/src/dashboard/cpu.rs:8:7
-```
+| Command | Status |
+|---|---|
+| `cargo check -p dashboard` | passes (1 dead-code warning: `RATIO_X1000` at `crates/dashboard/src/dashboard/cpu.rs:8`) |
+| `cargo check -p viewer-sql` | passes (1 `unused_mut` warning at `crates/viewer-sql/src/lib.rs:560`) |
+| `./crates/viewer-sql/build.sh` | wasm-pack build of the static viewer crate (independent of the binary) |
+| `cargo check --bin rezolus` | **fails** — see "Known current build issue" |
 
 ### Correctness harness
 
-Lives in metriken: `/work/metriken/metriken-query/examples/sql_vs_promql.rs`.
-Loads each dashboard plot from the dashboard JSON, runs `promql_query`
-through legacy `metriken-query` and `sql_query` through DuckDB, classifies
-each pair.
+Lives in metriken at
+`/work/metriken/metriken-query/examples/sql_vs_promql.rs` (1,719 LOC).
+Requires features `legacy, sql`
+(`/work/metriken/metriken-query/Cargo.toml:14-16`):
+
+```toml
+[[example]]
+name = "sql_vs_promql"
+required-features = ["legacy", "sql"]
+```
+
+Run from `/work/metriken`:
 
 ```
-cd /work/metriken
 cargo run --release --example sql_vs_promql \
     --features "legacy,sql" \
     -- /work/rezolus/site/viewer/data/demo.parquet
 ```
 
-Output in `/tmp/sql_vs_promql_yv/<parquet>/<plot>.json`. Summary in
-`summary.json`.
+Output lands in `/tmp/sql_vs_promql_yv/<parquet>/<plot>.json` (per
+the example source). Summary at `summary.json`.
 
-### Within-branch results (latest, 11 parquets × 250 plots)
-
-Numbers below come straight from `/tmp/sql_vs_promql_yv/summary.json`.
-Each parquet contributes 250 plots, of which 48 are cgroup-only and
-skipped by the harness (the table omits a `skipped` column for
-readability); the per-row identical+tolerant+divergent therefore totals
-202, and the table grand total is 11 × 202 = 2222 (plus 528 skipped =
-11 × 250 = 2750 pairs).
+**Reviewer note: numerical results below are *not* re-verified at
+this commit.** They were taken from `/tmp/sql_vs_promql_yv/summary.json`
+generated against a prior metriken HEAD. The branch has advanced
+since; rerun the harness before the PR is opened, then refresh this
+table:
 
 | parquet         | identical | tolerant | divergent |
 |-----------------|----------:|---------:|----------:|
@@ -480,87 +531,53 @@ readability); the per-row identical+tolerant+divergent therefore totals
 | sglang-nixl-16c |        37 |        0 |       165 |
 | **total**       |   **849** |    **3** |  **1370** |
 
-Headline: ~89% identical on single-source rezolus parquets (demo, vllm).
-Multi-source and numeric-encoded parquets diverge for known reasons —
-see the divergence taxonomy below.
-
-### Cross-branch sanity check
-
-`examples/promql_only.rs` runs the PromQL evaluator alone, so it
-compiles on both `main` and `yv/sql-testing`. The run results live at
-`/tmp/promql_yv/promql_results.json` and `/tmp/promql_main/promql_results.json`,
-each shaped as `{parquet → {plot_name → result}}` covering 193 plots ×
-3 parquets (demo, vllm, sglang-nixl-16c) = 579 (parquet, plot) pairs.
-
-Comparing the two JSONs pair-by-pair: **381 identical, 198 divergent**.
-The branch's PromQL strings have shifted — most divergences are plot
-queries that were reshaped on `yv/sql-testing` to make the SQL emitter's
-job tractable (e.g. the BPF execution-time / overhead family). So this
-is **not** a zero-delta cross-branch result; it's evidence that the
-PromQL surface evolved on the branch. The shadow-mode dispatch
-correctness signal lives in the harness above, not here.
+Each parquet contributes 250 plots; 48 are cgroup-only and skipped by
+the harness, so each row sums to 202 plots (202 × 11 = 2,222 pairs;
+plus 528 skipped = 2,750).
 
 ---
 
-## Known divergence taxonomy
+## Known divergence taxonomy (stale; rerun the harness)
 
-The harness run in `/tmp/sql_vs_promql_yv/summary.json` reports 1370
-divergent + 3 within-tolerance pairs out of 2750 (and 528 cgroup-skipped).
-About 1289 of the 1370 fit into the eight named buckets below
-(985+167+55+26+23+16+9+8); ~81 are unaccounted-for residue that a refreshed
-run would either bucket or shrink:
+The buckets below describe shapes the prior harness run produced.
+Several were *fixed in subsequent commits* on this branch (cited
+below); the divergence counts therefore overstate the current state.
 
 | count | category | what it means |
 |------:|---|---|
-| 985 | sql view missing the metric | Numeric-encoded parquets (`AB_*`, `*_gemma3`, `cachecannon`) store metric names in Arrow field metadata, not column names. Dashboard SQL references columns by metric name; the SQL emitter does not yet read Arrow metadata. **Architectural cliff, not a regression** — the static viewer renders these mostly empty too. Likely older test fixtures; worth confirming with the team. Sample row from `/tmp/sql_vs_promql_yv/AB_base.divergences.txt`: `AB_base::blockio-throughput-total (blockio) — series count: promql=1 sql=0`. |
-| 167 | `rate_5m` boundary | Documented as the original positional-LAG implementation. The macro has since been rewritten range-based in `crates/viewer-sql/src/macros.sql:183-185` (and a parallel native rewrite landed in the macro source-of-truth). **This count is stale; rerun the harness to refresh.** |
-| 55 | larger numerical drift (rel ≥ 1e-3) | **All one root cause.** Every case is on `disagg-sglang` (40) or `sglang-nixl-16c` (15) — the two demo parquets with multiple `rezolus` sources. See "The multi-source root cause" below. |
-| 26 | series count differs | Multi-source aggregation gaps. Same root cause as the 55. |
-| 23 | sql produces series, PromQL doesn't | Inverse of category 1, rarer. |
-| 16 | small numerical drift (rel < 1e-3) | irate window-math jitter (sub-millisecond timestamp drift divided into per-second deltas). Acceptable noise. |
-| 9 | label set mismatch | Multi-source labelling differences (e.g. `source=rezolus` only on PromQL side). |
-| 8 | sql duplicate samples per timestamp | Reported on `busy-pct-per-cpu` (`crates/dashboard/src/dashboard/cpu.rs:32-38`) and `cpu-busy-heatmap` (`crates/dashboard/src/dashboard/overview.rs:32-38`). Sample row: `demo::busy-pct-per-cpu (cpu) — labels id=1: duplicate samples per integer-second bucket: promql_dups=0 sql_dups=300` (`/tmp/sql_vs_promql_yv/demo.divergences.txt`). Both plots now route through `sql::cpu_pct_by_id`, whose `SUM(rate_ns) / 1e9` aggregation in `crates/dashboard/src/sql.rs:233-235` collapses the per-id duplicates — landed in commit `f6792ff` "dashboard: fix cpu_pct_by_id missing sum-by-id aggregation". **This count is stale; rerun the harness to refresh.** |
+| 985 | SQL view missing the metric | Numeric-encoded parquets (`AB_*`, `*_gemma3`, `cachecannon`) store metric names in Arrow field metadata, not column names. Dashboard SQL references columns by metric name; the SQL emitter does not yet read Arrow metadata at view-build time on every code path. Architectural cliff — the static viewer renders these mostly empty too. Likely older test fixtures; worth confirming with the team. |
+| 167 | `rate_5m` boundary | Reflects the older positional-LAG implementation. The macro is **already** range-based on this branch at `crates/viewer-sql/src/macros.sql:183-185` (and on the native side at `metriken-query-sql/src/macros.rs`). **Count is stale.** |
+| 55 | Larger numerical drift (rel ≥ 1e-3) | All on `disagg-sglang.parquet` (40) or `sglang-nixl-16c.parquet` (15) — the two parquets with multiple `rezolus` sources. Multi-source aggregation gap; PromQL summed across all sources, SQL queried one. **Fix landed in commits `5dbe881`, `1bbd6b2`, `a415fbe`, `895801b` — re-run to confirm.** |
+| 26 | Series count differs | Same root cause as the 55. |
+| 23 | SQL produces series, PromQL doesn't | Inverse of category 1, rarer. |
+| 16 | Small numerical drift (rel < 1e-3) | irate window-math jitter from sub-millisecond timestamp drift. Acceptable noise. |
+| 9 | Label set mismatch | Multi-source labelling differences (e.g. `source=rezolus` only on PromQL side). |
+| 8 | SQL duplicate samples per timestamp | `busy-pct-per-cpu` and `cpu-busy-heatmap` previously emitted 2× rows per `(timestamp, cpu_id)` because the SQL form missed a `sum by (id)`. **Fix landed in commit `f6792ff` "dashboard: fix cpu_pct_by_id missing sum-by-id aggregation"** — re-run to confirm. |
 
-Tolerance settings: `rel_tol = 1e-9`, `abs_tol = 1e-12` (verified in
-`/tmp/sql_vs_promql_yv/summary.json`); ±2 boundary samples allowed for
-grid-evaluation artefacts.
+Tolerance settings: `rel_tol = 1e-9`, `abs_tol = 1e-12`; ±2 boundary
+samples allowed for grid-evaluation artefacts (per the prior summary
+JSON; check `summary.json` after a fresh run).
 
-### The multi-source root cause
+### The multi-source root cause (for the 55+26 numbers)
 
-The 55 cases above (plus the 26 in "series count differs") are not 55
-independent bugs. They are one architectural choice:
-
-- The legacy PromQL evaluator's `Tsdb` stores all sources' series
-  together and aggregates across them on `sum(...)` /
-  `sum by (id)` / `histogram_quantiles(...)`.
-- The dashboard's SQL emitter (pre-fix) picked **one source view**
-  (the one whose name appears in the parquet filename, falling back
-  to the first rezolus source) and queried only that single view.
-
-Ratios observed at the time the harness was last run: `promql / sql ≈ N`
-(number of rezolus sources) for `sum`-shaped plots, `1/N` for
-`min`/`max`-shaped reductions.
+- Legacy PromQL evaluator's `Tsdb` stores all sources' series
+  together and aggregates across them on `sum(...)`, `sum by (id)`,
+  `histogram_quantiles(...)`.
+- Pre-fix dashboard SQL picked **one source view** (named in the
+  parquet filename, fallback to the first rezolus source) and queried
+  only that view.
 
 | parquet         | rezolus sources | count of cases | ratios observed |
 |-----------------|----------------:|---------------:|-----------------|
 | disagg-sglang   |               2 |             40 | promql ≈ 2× sql |
 | sglang-nixl-16c |               3 |             15 | promql ≈ 3× sql |
 
-The dashboard-side decision was **(a) aggregate across all rezolus
-sources in SQL** to match PromQL — landed across:
+Fix decision was **(a) aggregate across all rezolus sources in SQL**
+to match PromQL — landed across commits `5dbe881`, `1bbd6b2`,
+`a415fbe`, `895801b`.
 
-- `5dbe881` "viewer-sql: aggregate across rezolus sources to match PromQL"
-- `1bbd6b2` "viewer-sql: per-source `:src<i>` aliases for avg/max/min emitters"
-- `a415fbe` "viewer-sql: detect rezolus sources via Arrow field metadata"
-- `895801b` "viewer: surface combined-rezolus view in source picker"
+### `rate_5m` is already range-based
 
-These commits postdate the harness run that produced the 55/26
-counts, so a re-run is required to confirm the cases have collapsed
-as expected.
-
-### Fixes already shipped (not yet reflected in the divergence counts)
-
-The `rate_5m` macro is **already** range-based on this branch —
 `crates/viewer-sql/src/macros.sql:183-185`:
 
 ```sql
@@ -569,11 +586,8 @@ CREATE OR REPLACE MACRO rate_5m(c, ts) AS
     / NULLIF((ts - first_value(ts) OVER (ORDER BY ts RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW))::DOUBLE / 1e9, 0);
 ```
 
-The 167 `rate_5m boundary` cases in the taxonomy reflect the older
-positional-LAG implementation; rerun the harness to refresh.
+### `cpu-busy-heatmap` / `busy-pct-per-cpu` are aggregated
 
-The `cpu-busy-heatmap` / `busy-pct-per-cpu` aggregation fix has shipped
-too. `busy-pct-per-cpu` is wired in
 `crates/dashboard/src/dashboard/cpu.rs:32-38`:
 
 ```rust
@@ -585,9 +599,7 @@ busy.plot_promql_with_sql(
 );
 ```
 
-…and `cpu-busy-heatmap` in `crates/dashboard/src/dashboard/overview.rs:32-38`
-calls the same helper. The helper's body in
-`crates/dashboard/src/sql.rs:216-237` ends with
+The helper body in `crates/dashboard/src/sql.rs:216-237` ends with
 `SUM(rate_ns) / 1e9 AS v ... GROUP BY ...`, which is the `sum by (id)`
 aggregation the divergence row was missing.
 
@@ -595,49 +607,38 @@ aggregation the divergence row was missing.
 
 ## Open questions / out-of-scope follow-ups
 
-These do not block landing this branch but they shape the path
-forward:
+These don't block landing this branch but shape the path forward:
 
-1. **Live-agent and MCP migration.** Shadow-mode SQL dispatch is wired
-   on the parquet path (`src/viewer/mod.rs:1727-1731,1756-1760`) but
-   live-agent flows skip it (no `parquet_path` is ever set —
-   `src/viewer/mod.rs:533-538` and `:762-763`) and MCP never calls
-   `with_dispatch`. Decision affects how long `metriken-query`'s
-   `legacy` feature stays alive.
+1. **Live-agent and MCP migration.** Neither calls the SQL backend
+   today. Decision affects how long `metriken-query`'s `legacy`
+   feature stays alive.
 2. **KPI translation.** Plots whose query lives in parquet
-   `service_queries` metadata (service extensions / KPIs) still
-   arrive as raw PromQL strings. The viewer marks them as
-   "(query not yet available — translation pending)" —
-   `src/viewer/assets/lib/data.js:441` and
-   `src/viewer/assets/lib/charts/chart.js:382`. Fix lives at `parquet
-   annotate` time: translate operator-authored PromQL into SQL before
-   embedding.
-3. **Server cgroup selector revival.** The Stage 2b rewrite made the
-   cgroup selector SQL-only. The server-backed viewer no longer has
-   a working cgroup page; restoring the dual path would un-revert
-   most of Stage 2b. Tied to the server-mode migration question.
-4. **Compare-mode "category combined section".** `regenerate_combined`
-   ships the per-capture half; the case-(b) "one combined category
-   section" still requires multi-capture `init_templates` API on
-   `viewer-sql`. Users in compare mode see two per-capture sections
-   instead of one combined. Documented as a follow-up.
+   `service_queries` metadata still arrive as raw PromQL strings.
+   Viewer shows "(query not yet available — translation pending)"
+   (`src/viewer/assets/lib/data.js:441`,
+   `src/viewer/assets/lib/charts/chart.js:382`). Fix at `parquet
+   annotate` time.
+3. **Server cgroup selector revival.** The Stage 2b rewrite made
+   the cgroup selector SQL-only. The server-backed viewer no longer
+   has a working cgroup page.
+4. **Compare-mode "category combined section".**
+   `regenerate_combined` ships the per-capture half; the case-(b)
+   "one combined category section" still requires multi-capture
+   `init_templates` API on `viewer-sql`.
 5. **Macro library consolidation.** Two copies of the SQL macros
-   exist (`crates/viewer-sql/src/macros.sql` 242 LOC and
-   `/work/metriken/metriken-query-sql/src/macros.rs` 314 LOC). The
-   parity test at `crates/viewer-sql/tests/macros.rs` (123 LOC)
-   catches drift; a single-source-of-truth approach (generate one
-   from the other) is a future refactor.
+   (`crates/viewer-sql/src/macros.sql` 242 LOC vs
+   `/work/metriken/metriken-query-sql/src/macros.rs` 314 LOC, 30 vs
+   19 macros). The parity test at `crates/viewer-sql/tests/macros.rs`
+   catches drift for shared primitives but doesn't enforce
+   inventory parity.
 6. **Numeric-encoded parquet support.** Either teach the SQL emitter
    to read Arrow field metadata, or document the unsupported fixture
-   set. 985 of the 1370 divergences live here.
-7. **Refresh the harness numbers.** The taxonomy above counts
-   pre-fix divergences (rate_5m boundary, cpu sum-by-id duplicates).
-   Re-running `cargo run --release --example sql_vs_promql ...` on
-   each parquet would shrink the headline 1370 and let the
-   "1370 fall into 8 categories" claim become accurate again.
-8. **Fix the rezolus binary build.** Add the `sql` cargo feature to
-   the binary's `metriken-query` dep in `Cargo.toml:78` so the
-   dispatch types resolve and `cargo build` succeeds end-to-end.
+   set. 985 of the prior 1,370 divergences live here.
+7. **Refresh the harness numbers** before opening the PR.
+8. **Fix the rezolus binary build.** Remove the dispatch/shadow-mode
+   plumbing in `src/viewer/mod.rs:1640-1700` (and the unused
+   `sql_backend` field at `:751`/`:768`) — see "Known current build
+   issue" for the option matrix.
 
 ---
 
@@ -645,9 +646,8 @@ forward:
 
 - Companion document (engine side): `/work/metriken/REVIEWING.md`
 - Correctness harness: `/work/metriken/metriken-query/examples/sql_vs_promql.rs`
-- Harness output: `/tmp/sql_vs_promql_yv/`
-- Cross-branch output: `/tmp/promql_yv/` and `/tmp/promql_main/`
-- Test scaffold (native vs wasm macro parity):
-  `crates/viewer-sql/tests/macros.rs`
+- Harness output (last run): `/tmp/sql_vs_promql_yv/` — **stale**
+- Cross-branch output: `/tmp/promql_yv/`, `/tmp/promql_main/` — **stale**
+- Parity test scaffold: `crates/viewer-sql/tests/macros.rs`
 - CLAUDE.md: project-level architecture overview (build commands,
   operating modes, sampler architecture)
