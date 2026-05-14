@@ -1,12 +1,9 @@
 # Reviewing the `yv/sql-testing` branch (rezolus side)
 
 This doc orients a reviewer cold. Every concrete claim below is tied
-to a `file:line` in the working tree at commit `ea61bfd`; counts come
+to a `file:line` in the working tree at the current HEAD; counts come
 from `wc -l` / `grep -c` / `git rev-list --count` over those files.
 Companion doc: `/work/metriken/REVIEWING.md` (engine side).
-
-The previous version of this file made several claims that turned out
-to be stale; this rewrite cites each claim to a verifiable source.
 
 ---
 
@@ -20,67 +17,51 @@ Every dashboard plot now carries both a `promql_query` and a
 constant.
 
 The picture for the **server-backed viewer (`rezolus view`) and
-MCP**:
+MCP** today:
 
 - **`crates/viewer/`** (old, WASM PromQL engine) was deleted in
   Stage 3 commit `ad1ad9e` — "Stage 3: retire `crates/viewer/` —
   viewer is SQL-only".
 - **`rezolus view <parquet>` server-side handler** at
   `src/viewer/mod.rs:1727-1731` and `:1756-1760` instantiates
-  `QueryEngine::new(&*tsdb)` and tries to chain
-  `.with_dispatch(cfg)` from `dispatch_for_capture(...)`. **This
-  code does not currently compile** — `promql::DispatchConfig`,
-  `metriken_query::DispatchObserver`, `metriken_query::Diff`, and
-  `metriken_query::Mode` no longer exist in `metriken-query` (see
-  "Known current build issue" below).
+  `QueryEngine::new(&*tsdb)` and runs PromQL only. The
+  `dispatch_for_capture` / `LoggingDispatchObserver` plumbing that
+  used to wrap this in shadow-mode evaluation was removed in commit
+  `519c24c` ("viewer: remove dead shadow-mode dispatch plumbing");
+  the dispatch types it referenced (`DispatchConfig`,
+  `DispatchObserver`, `Diff`, `Mode`) had been deleted from
+  metriken-query in commit `a25e285` ("collapse PromQL evaluator to
+  streaming-only").
 - **MCP** (`src/mcp/`) constructs `QueryEngine::new(...)` via the
-  re-export at `src/viewer/mod.rs:63` (`pub use metriken_query::promql;`).
-  Compiles cleanly *as a module*, but transitively depends on
-  `src/viewer/mod.rs` which doesn't compile, so the binary as a whole
-  fails.
+  re-export at `src/viewer/mod.rs:63`
+  (`pub use metriken_query::promql;`). PromQL-only path, unchanged.
 
-The static viewer (`site/viewer/`) is unaffected by the binary build
-because it builds via `./crates/viewer-sql/build.sh` (wasm-pack)
-independently — see `crates/viewer-sql/build.sh:1-13`. The build
-produces `site/viewer-sql/pkg/wasm_viewer_sql.js`, which the static
-page loads.
+The static viewer (`site/viewer/`) builds independently via
+`./crates/viewer-sql/build.sh` (wasm-pack); it produces
+`site/viewer-sql/pkg/wasm_viewer_sql.js`, which the static page
+loads. End-to-end build of the rezolus binary (`cargo check --bin
+rezolus`) **passes cleanly** as of HEAD (verified after the dispatch
+removal; needs `clang` for the BPF samplers' build.rs step).
 
-Net diff vs `main` (after review-prep cleanup commit `ea61bfd`):
-**+6,968 / −2,266 across 66 files** (`git diff main...yv/sql-testing
---shortstat`). `git rev-list --count main..yv/sql-testing` → **38**
-commits.
+Net diff vs `main`: **+7,376 / −2,266 across 81 files**
+(`git diff --shortstat main...yv/sql-testing`).
+`git rev-list --count main..yv/sql-testing` → **42** commits.
 
----
+### Shadow mode in one paragraph
 
-## Stale claims removed from the prior version of this doc
-
-1. **"Shadow-mode dispatch is wired."** The previous TL;DR described
-   `rezolus view <parquet>` as running PromQL and DuckDB
-   side-by-side via `metriken-query`'s `DispatchConfig`. The code at
-   `src/viewer/mod.rs:1640-1700` is structured that way, but the
-   types it references **do not exist in `metriken-query`** anymore
-   (verified: `grep -rn 'DispatchConfig\|DispatchObserver' /work/metriken/`
-   returns nothing; `grep -rn 'pub enum Mode' /work/metriken/` same).
-   Likely removed in metriken commit `a25e285` "collapse PromQL
-   evaluator to streaming-only". This is the binary's current build
-   blocker; see "Known current build issue".
-
-2. **"Those types still exist in metriken-query, but they're
-   feature-gated behind `sql`."** The prior FAQ explanation for the
-   build failure. Wrong: `CatalogueEntry` is feature-gated;
-   `DispatchConfig`/`DispatchObserver`/`Diff`/`Mode` are gone.
-
-3. **"37 commits ahead of main."** Now 38
-   (`git rev-list --count main..yv/sql-testing` → 38, current HEAD
-   `ea61bfd`).
-
-4. **"net −1981 lines, 11 files" for Stage 3.** Actual:
-   `git show --shortstat ad1ad9e` → "11 files changed, 8
-   insertions(+), 1968 deletions(-)". Net = −1,960. The 4.7 MB wasm
-   blob is the bulk: `git ls-tree -r -l ad1ad9e^ -- site/viewer/pkg/wasm_viewer_bg.wasm`
-   → 4,749,893 bytes.
+Shadow mode was a transitional verification mechanism: every viewer
+query routed through both the legacy PromQL evaluator and the new
+DuckDB engine, with a `LoggingDispatchObserver` warning on divergence.
+It served its purpose during the migration window (the harness now
+lives independently at
+`/work/metriken/metriken-query/examples/sql_vs_promql.rs`) and was
+retired. The forward direction is SQL-only: the static viewer
+already runs SQL; the server-backed viewer's PromQL endpoint stays
+until that consumer migrates (see "Open questions" for the live-agent
+and MCP migration sketch).
 
 ---
+
 
 ## Architecture (current code)
 
@@ -249,53 +230,43 @@ Macro source-of-truth split:
 
 ---
 
-## Known current build issue
+## Build status
 
-`cargo check --bin rezolus` currently fails. Two distinct things:
+| Command | Status |
+|---|---|
+| `cargo check -p dashboard` | passes cleanly (`RATIO_X1000` dead-code warning was removed in commit `519c24c`). |
+| `cargo check -p viewer-sql` | passes cleanly. |
+| `cargo check --bin rezolus` | passes cleanly (needs `clang` for the BPF samplers' `build.rs`). |
+| `./crates/viewer-sql/build.sh` | wasm-pack build of the static viewer crate, independent of the binary. |
+| `cargo test --workspace` | all tests pass (66 `#[test]` items on the rezolus side). |
 
-1. **BPF prerequisites missing on this dev box.** `build.rs:169`
-   panics with "failed to execute `clang`: No such file or
-   directory". Not a code bug. Install clang to get past it.
+---
 
-2. **Type references that no longer exist in metriken-query.**
-   `src/viewer/mod.rs` references:
+## Test coverage
 
-   | Reference site | Type |
-   |---|---|
-   | `:1650` | `promql::DispatchConfig` (return type of `dispatch_for_capture`) |
-   | `:1663` | `promql::DispatchConfig` (struct literal in `Some(...)`) |
-   | `:1676` | `metriken_query::DispatchObserver` (impl for `LoggingDispatchObserver`) |
-   | `:1677` | `metriken_query::CatalogueEntry`, `metriken_query::Diff` (in `on_diff` signature) |
-   | `:1695` | `metriken_query::Mode` (`on_query`?) |
+Counts as of HEAD: **66 `#[test]` items across the rezolus tree**,
+plus several JS test files under `tests/`. New SQL-path tests added
+during this branch:
 
-   None of `DispatchConfig`, `DispatchObserver`, `Diff`, `Mode` exist
-   in `/work/metriken/` (verified by grep). `CatalogueEntry` exists
-   but is feature-gated behind `sql` and the rezolus binary doesn't
-   enable `sql` (`Cargo.toml:78` enables only `ingest, lz4`).
+| Layer | Where | What it covers |
+|---|---|---|
+| **Dashboard SQL emitters** | `crates/dashboard/tests/sql_snapshots.rs` + `crates/dashboard/tests/snapshots/*` | `insta` snapshots for every public emitter in `crates/dashboard/src/sql.rs` — 18 tests covering `rate_5m_total`, `irate_total`, `irate_sum_by_id`, `irate_by_id`, `cpu_pct_total`, `cpu_pct_by_id`, `hist_percentile_series`, `concept_total` (×2), `ratio_by_id`, `cgroup_irate_total` (×2), `cgroup_irate_by_name`, `cgroup_ratio_total`, `cgroup_ratio_by_name`, `nway_ratio_by_id`, `scale_v`, `hist_percentile_series_combined`. Each snapshot pins the exact emitted SQL string. Drift surfaces via `cargo insta review`. |
+| **Wasm/native macro parity** | `crates/viewer-sql/tests/macros.rs` | 17 tests asserting wasm `macros.sql` behaviour matches the native `metriken-query-sql/src/macros.rs` source-of-truth for the shared primitives. Covers `irate_1s` (×3 including reset), `rate_5m` (×2), `delta_1s`, `h2_total`, `h2_delta` (saturating), `h2_combine`, `h2_quantile` (×2), `h2_lower`/`h2_upper`, `cpu_busy_pct`, `ipc`, `bps_from_bytes`, `gpu_mem_used_pct`. **Surfaced a real signature divergence in passing:** native `h2_combine` is variadic `UBIGINT[]` while the wasm macro is `LIST<LIST<UBIGINT>>` — documented inline. |
+| **Plot API surface** | `crates/dashboard/src/plot.rs` (inline) | 12 tests on `plot_promql_with_sql` / `plot_sql` JSON round-trip, group/subgroup shape, dual-emission coexistence. |
+| **Service extension / KPI** | `crates/dashboard/src/service_extension.rs` (inline) | 7 tests on KPI deserialization. |
+| **Frontend JS tests** | `tests/*.test.mjs` | 8 files covering compare math, compare/node filter, heatmap data + resolution, section cache, sections API, selection migration, service routes. Run via `node --test tests/*.mjs`. |
 
-   Fix options:
-   - **Remove the dispatch/shadow-mode code path.** Drop
-     `dispatch_for_capture` (`:1640-1670`), `LoggingDispatchObserver`
-     (`:1675-1700`), and the `with_dispatch` chains at `:1727-1731`
-     and `:1756-1760`. Also drop the unused `sql_backend` field at
-     `:751` and its initialization at `:768`. Server-backed viewer
-     then runs PromQL only, matching `BACKEND='promql'` at
-     `src/viewer/assets/lib/viewer_api.js:7`.
-   - **Restore the dispatch types on the metriken side.** Reverse
-     part of metriken commit `a25e285` to bring back
-     `DispatchConfig`/`DispatchObserver`/etc. Heavier.
+What this *doesn't* test directly:
 
-   Recommended: (1) for this branch, defer the shadow-mode story to
-   a follow-up that designs it freshly atop the new metriken
-   surface.
-
-3. **Dead-code warning in dashboard.** `cargo check -p dashboard`
-   succeeds but warns:
-   ```
-   warning: constant `RATIO_X1000` is never used
-     --> crates/dashboard/src/dashboard/cpu.rs:8:7
-   ```
-   Cosmetic; safe to remove.
+- The DuckDB engine itself (`crates/viewer-sql/src/lib.rs` 728 LOC).
+  The library is intentionally thin — Arrow batch marshalling +
+  query-range CTE wrap + pre-flight column validation. Drift would
+  surface end-to-end through the static viewer's smoke tests
+  (`site/viewer-sql/test_smoke.mjs` etc.).
+- JS `site/viewer-sql/lib/duckdb-registry.js` (929 LOC of worker
+  pool / parquet attachment / per-source aliasing). Five
+  smoke/section/preview `.mjs` tests exercise it end-to-end via
+  puppeteer.
 
 ---
 
@@ -452,39 +423,36 @@ DuckDB at. Options:
 
 Not mutually exclusive. Not in scope for this branch.
 
-**Q: Why is `cargo check --bin rezolus` failing on `Catalogue`,
-`DispatchConfig`, `DispatchObserver`, `Diff`, `Mode`?**
+**Q: Whatever happened to shadow-mode dispatch?**
 
-A: Different reasons per type:
+A: Removed. It was a transitional verification mechanism — every
+viewer query routed through both the legacy PromQL evaluator and
+DuckDB, with a `LoggingDispatchObserver` logging divergences. Useful
+during the migration window; not load-bearing for the SQL-only end
+state.
 
-- **`CatalogueEntry`** and **`Catalogue::embedded()`** exist in
-  metriken but are feature-gated behind `sql`
-  (`/work/metriken/metriken-query/src/lib.rs:41-42`). The rezolus
-  binary's metriken-query dep at `Cargo.toml:78` enables only
-  `ingest, lz4` — no `sql`. Adding `sql` would fix the
-  `CatalogueEntry`/`Catalogue` references.
-- **`DispatchConfig`, `DispatchObserver`, `Diff`, `Mode`** **do not
-  exist anywhere in `/work/metriken/`** (verified by grep).
-  Adding the `sql` feature will *not* fix these. The shadow-mode
-  dispatch types appear to have been removed in metriken commit
-  `a25e285` "collapse PromQL evaluator to streaming-only".
+The metriken side dropped the dispatch surface
+(`DispatchConfig`, `DispatchObserver`, `Diff`, `Mode`) in commit
+`a25e285` ("collapse PromQL evaluator to streaming-only"). The
+rezolus side ran broken for a stretch (those types were still
+referenced in `src/viewer/mod.rs:1640-1700`) until commit `519c24c`
+("viewer: remove dead shadow-mode dispatch plumbing") deleted the
+matching plumbing and the unused `sql_backend` field. `cargo check
+--bin rezolus` now passes cleanly.
 
-The fix is to remove the dispatch code path on the rezolus side
-(see "Known current build issue" for the file:line list) or restore
-the types on the metriken side. Neither has happened on this branch.
+The end-to-end correctness signal previously provided by shadow mode
+now lives in
+`/work/metriken/metriken-query/examples/sql_vs_promql.rs` (run
+manually against fixture parquets) plus the unit/snapshot tests
+documented in "Test coverage" above.
 
 ---
 
 ## Verification
 
-### Cargo / build
-
-| Command | Status |
-|---|---|
-| `cargo check -p dashboard` | passes (1 dead-code warning: `RATIO_X1000` at `crates/dashboard/src/dashboard/cpu.rs:8`) |
-| `cargo check -p viewer-sql` | passes (1 `unused_mut` warning at `crates/viewer-sql/src/lib.rs:560`) |
-| `./crates/viewer-sql/build.sh` | wasm-pack build of the static viewer crate (independent of the binary) |
-| `cargo check --bin rezolus` | **fails** — see "Known current build issue" |
+Build status table is in the "Build status" section near the top.
+Test inventory is in "Test coverage". Below is the end-to-end
+correctness harness on real Rezolus parquets.
 
 ### Correctness harness
 
@@ -635,10 +603,6 @@ These don't block landing this branch but shape the path forward:
    to read Arrow field metadata, or document the unsupported fixture
    set. 985 of the prior 1,370 divergences live here.
 7. **Refresh the harness numbers** before opening the PR.
-8. **Fix the rezolus binary build.** Remove the dispatch/shadow-mode
-   plumbing in `src/viewer/mod.rs:1640-1700` (and the unused
-   `sql_backend` field at `:751`/`:768`) — see "Known current build
-   issue" for the option matrix.
 
 ---
 
