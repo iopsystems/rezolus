@@ -42,6 +42,7 @@ mod actions;
 mod metadata;
 mod report_save;
 mod routes;
+pub mod sql_capture;
 mod state;
 
 use capture_registry::CaptureId;
