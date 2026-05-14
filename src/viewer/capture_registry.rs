@@ -1,11 +1,21 @@
-//! Holds the two TSDB stores (baseline + optional experiment) plus their
-//! per-capture metadata. All cross-capture composition lives outside this
-//! module; the registry is intentionally dumb about comparison.
+//! Holds the two capture stores (baseline + optional experiment) plus
+//! their per-capture metadata. All cross-capture composition lives
+//! outside this module; the registry is intentionally dumb about
+//! comparison.
+//!
+//! A capture slot is either SQL-backed (`SqlCapture`, used by file /
+//! upload / A-B paths going forward) or Tsdb-backed (the legacy live-
+//! agent ingest path, which keeps the in-memory TSDB during the
+//! Tsdb→DuckDB migration). The two paths are mutually exclusive per
+//! slot — see [`CaptureBackend`]. As of this commit the file-mode
+//! init paths still construct Tsdb; commit 7 flips them to SqlCapture.
 
 use std::sync::Arc;
 
 use metriken_query::Tsdb;
 use parking_lot::RwLock;
+
+use super::sql_capture::SqlCapture;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -31,8 +41,36 @@ impl CaptureId {
     }
 }
 
+/// Per-slot data store. Each slot is either SQL-backed (the new
+/// DuckDB-driven path for file / upload / A-B captures) or
+/// Tsdb-backed (the legacy live-agent ingest path, retained until
+/// commit 11 gates live mode behind a feature flag).
+pub enum CaptureBackend {
+    Sql(Arc<RwLock<SqlCapture>>),
+    Live(Arc<RwLock<Tsdb>>),
+}
+
+impl CaptureBackend {
+    /// Shorthand for `match self { Live(tsdb) => Some(tsdb), _ => None }`.
+    /// Lets legacy callers continue to ask for a Tsdb specifically; SQL
+    /// slots silently return `None`.
+    pub fn as_live(&self) -> Option<Arc<RwLock<Tsdb>>> {
+        match self {
+            CaptureBackend::Live(tsdb) => Some(tsdb.clone()),
+            CaptureBackend::Sql(_) => None,
+        }
+    }
+
+    pub fn as_sql(&self) -> Option<Arc<RwLock<SqlCapture>>> {
+        match self {
+            CaptureBackend::Sql(cap) => Some(cap.clone()),
+            CaptureBackend::Live(_) => None,
+        }
+    }
+}
+
 pub struct CaptureSlot {
-    pub tsdb: Arc<RwLock<Tsdb>>,
+    pub backend: CaptureBackend,
     pub systeminfo: RwLock<Option<String>>,
     pub file_metadata: RwLock<Option<String>>,
     /// Optional display alias for this capture (e.g. "redis", "valkey").
@@ -54,7 +92,7 @@ impl CaptureRegistry {
     ) -> Self {
         Self {
             baseline: CaptureSlot {
-                tsdb: Arc::new(RwLock::new(baseline_tsdb)),
+                backend: CaptureBackend::Live(Arc::new(RwLock::new(baseline_tsdb))),
                 systeminfo: RwLock::new(baseline_systeminfo),
                 file_metadata: RwLock::new(baseline_file_metadata),
                 alias: RwLock::new(baseline_alias),
@@ -63,14 +101,34 @@ impl CaptureRegistry {
         }
     }
 
+    /// Returns the baseline/experiment slot's Tsdb handle, if the slot
+    /// is Tsdb-backed. SQL-backed slots return `None`. Legacy callers
+    /// (live-mode ingest, the metadata handler, dashboard section gen
+    /// until commit 7) flow through this.
     pub fn get(&self, id: CaptureId) -> Option<Arc<RwLock<Tsdb>>> {
         match id {
-            CaptureId::Baseline => Some(self.baseline.tsdb.clone()),
+            CaptureId::Baseline => self.baseline.backend.as_live(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
                 .as_ref()
-                .map(|slot| slot.tsdb.clone()),
+                .and_then(|slot| slot.backend.as_live()),
+        }
+    }
+
+    /// Returns the baseline/experiment slot's SqlCapture handle, if
+    /// the slot is SQL-backed. Tsdb-backed slots return `None`. The
+    /// SQL query handlers and SqlCapture-aware metadata paths consume
+    /// this. Currently always returns `None` — commit 7 wires file
+    /// mode through here.
+    pub fn get_sql(&self, id: CaptureId) -> Option<Arc<RwLock<SqlCapture>>> {
+        match id {
+            CaptureId::Baseline => self.baseline.backend.as_sql(),
+            CaptureId::Experiment => self
+                .experiment
+                .read()
+                .as_ref()
+                .and_then(|slot| slot.backend.as_sql()),
         }
     }
 
@@ -136,7 +194,25 @@ impl CaptureRegistry {
         alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
-            tsdb: Arc::new(RwLock::new(tsdb)),
+            backend: CaptureBackend::Live(Arc::new(RwLock::new(tsdb))),
+            systeminfo: RwLock::new(systeminfo),
+            file_metadata: RwLock::new(file_metadata),
+            alias: RwLock::new(alias),
+        });
+    }
+
+    /// SQL-backed attach. Mirrors `attach_experiment` but stores an
+    /// `SqlCapture` instead of a `Tsdb`. Used by the file-mode HTTP
+    /// attach handler once commit 7 lands; unused for now.
+    pub fn attach_experiment_sql(
+        &self,
+        capture: SqlCapture,
+        systeminfo: Option<String>,
+        file_metadata: Option<String>,
+        alias: Option<String>,
+    ) {
+        *self.experiment.write() = Some(CaptureSlot {
+            backend: CaptureBackend::Sql(Arc::new(RwLock::new(capture))),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
             alias: RwLock::new(alias),
