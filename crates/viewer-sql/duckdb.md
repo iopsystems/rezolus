@@ -182,8 +182,8 @@ for free.
 ## Bundle/loader notes
 
 - **Browser**: import via jsdelivr CDN (`https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@<ver>/+esm`).
-  Avoids pulling npm into the rezolus repo. The page exists at
-  `site/viewer-sql/lib/script.js`.
+  Avoids pulling npm into the rezolus repo. The loader is
+  `site/viewer-sql/lib/duckdb-registry.js`.
 - **Node** (for headless tests): npm-installed `@duckdb/duckdb-wasm` plus
   `web-worker` polyfill. The polyfill 1.3.0 has a broken ESM entry — use
   `createRequire` to import its CJS variant.
