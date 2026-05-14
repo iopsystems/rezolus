@@ -254,6 +254,13 @@ pub fn ingest_baseline_from_path(
     temp_path: PathBuf,
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
+    // Serialize concurrent uploads. Held across SqlCapture::open +
+    // replace_baseline_with_sql + every `state.*.write()` that
+    // follows so the post-swap snapshot is coherent (registry
+    // baseline, parquet_path, sections, selection, file_checksum,
+    // file_metadata, systeminfo all reference the same parquet by
+    // the time another handler can read them).
+    let _upload_lock = state.upload_mutex.lock();
     let mut capture = match super::sql_capture::SqlCapture::open(&temp_path, &state.sql_backend) {
         Ok(c) => c,
         Err(e) => {
@@ -854,5 +861,46 @@ mod live_to_sql_swap_tests {
         assert!(!state.live.load(Ordering::Relaxed));
         assert!(state.captures.get_sql(CaptureId::Baseline).is_some());
         assert!(state.captures.get(CaptureId::Baseline).is_none());
+    }
+
+    /// Two threads call `ingest_baseline_from_path` simultaneously.
+    /// Without `state.upload_mutex` the registry baseline and
+    /// `state.parquet_path` could land referencing different uploads —
+    /// inconsistent snapshot. With the mutex one upload completes
+    /// entirely before the other starts; the final state is whichever
+    /// upload wrote last, and `parquet_path` matches the registry's
+    /// baseline parquet_path.
+    #[test]
+    fn concurrent_uploads_leave_consistent_state() {
+        use std::sync::Arc as StdArc;
+        let state = StdArc::new(AppState::new_empty(TemplateRegistry::empty()));
+        let path_a = copy_demo_to_tempdir();
+        let path_b = copy_demo_to_tempdir();
+
+        let s1 = StdArc::clone(&state);
+        let p1 = path_a.clone();
+        let t1 = std::thread::spawn(move || {
+            ingest_baseline_from_path(&s1, p1, "a.parquet".into())
+        });
+        let s2 = StdArc::clone(&state);
+        let p2 = path_b.clone();
+        let t2 = std::thread::spawn(move || {
+            ingest_baseline_from_path(&s2, p2, "b.parquet".into())
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        // Whichever upload wrote second wins; the consistency invariant
+        // is that the registry baseline's parquet_path and the
+        // state.parquet_path agree.
+        let final_state_path = state.parquet_path.read().clone().expect("path set");
+        let baseline = state
+            .captures
+            .get_sql(CaptureId::Baseline)
+            .expect("baseline installed");
+        let baseline_path = baseline.read().parquet_path().to_path_buf();
+        assert_eq!(final_state_path, baseline_path);
+        // And it must be one of the two we uploaded — not some half-merged state.
+        assert!(final_state_path == path_a || final_state_path == path_b);
     }
 }

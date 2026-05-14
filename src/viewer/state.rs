@@ -139,6 +139,15 @@ pub struct AppState {
     /// requests hit the warm pool. Used by the SQL query handlers and
     /// `SqlCapture` loading.
     pub sql_backend: Arc<DuckDbBackend>,
+    /// Serializes baseline-ingest operations
+    /// (`actions::ingest_baseline_from_path`). Without this, two
+    /// concurrent `/api/v1/upload` calls can interleave their
+    /// post-swap metadata stamping — registry baseline ends up as
+    /// upload B's capture while `state.parquet_path` points at A's
+    /// path. Held across the parquet load + replace_baseline_with_sql
+    /// + the cluster of `state.*.write()` updates so the world sees
+    /// a single coherent snapshot per upload.
+    pub upload_mutex: Mutex<()>,
 }
 
 impl AppState {
@@ -191,6 +200,7 @@ impl AppState {
             combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
             sql_backend: Arc::new(DuckDbBackend::new()),
+            upload_mutex: Mutex::new(()),
         }
     }
 
