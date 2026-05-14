@@ -318,6 +318,34 @@ impl Viewer {
         }
     }
 
+    /// Return all metric names with their types as JSON string.
+    /// Format: {"metrics": ["m1", ...], "metric_types": {"m1": "counter", ...}}
+    pub fn metrics_json(&self) -> String {
+        let mut metrics = Vec::new();
+        let mut types = serde_json::Map::new();
+
+        for name in self.engine.tsdb().counter_names() {
+            metrics.push(name.to_string());
+            types.insert(name.to_string(), "counter".into());
+        }
+        for name in self.engine.tsdb().gauge_names() {
+            metrics.push(name.to_string());
+            types.insert(name.to_string(), "gauge".into());
+        }
+        for name in self.engine.tsdb().histogram_names() {
+            metrics.push(name.to_string());
+            types.insert(name.to_string(), "histogram".into());
+        }
+
+        let obj = serde_json::Map::from_iter([
+            ("metrics".into(), serde_json::Value::Array(
+                metrics.into_iter().map(serde_json::Value::String).collect(),
+            )),
+            ("metric_types".into(), serde_json::Value::Object(types)),
+        ]);
+        serde_json::to_string(&obj).unwrap_or_default()
+    }
+
     /// Accept a JSON array of templates, detect which service extensions
     /// match the loaded parquet file, and regenerate dashboards accordingly.
     /// The array may include category templates (`category: true`) — those
@@ -524,8 +552,12 @@ impl WasmCaptureRegistry {
             .map(|v| v.query_range(query, start, end, step))
     }
 
-    pub fn query(&self, capture: &str, query: &str, time: f64) -> Result<String, JsValue> {
+   pub fn query(&self, capture: &str, query: &str, time: f64) -> Result<String, JsValue> {
         self.require_slot(capture).map(|v| v.query(query, time))
+    }
+
+    pub fn metrics_json(&self, capture: &str) -> Option<String> {
+        self.slot(capture).and_then(|v| Some(v.metrics_json()))
     }
 
     /// Initialise ServiceExtension templates for the given capture.  Mirrors
