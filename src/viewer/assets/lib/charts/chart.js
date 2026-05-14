@@ -22,6 +22,7 @@ import { themeVersion } from '../theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
 import { eventsStore } from '../events_store.js';
 import { buildMarkLine } from './event_markers.js';
+import { openEventForm } from '../event_form.js';
 
 
 export class ChartsState {
@@ -932,6 +933,25 @@ export class Chart {
         // left untouched. Use notMerge:false so we don't wipe the chart.
         this.echart.setOption({
             series: [{ markLine: markLine || { data: [] } }],
+        });
+    }
+
+    _openAddEventForm(anchorEl) {
+        const opts = this.spec?.opts || {};
+        openEventForm({
+            anchorEl,
+            prefill: {
+                timestamp_ns: this._frozenAxisNs,
+                source: opts.source || '',
+                node: opts.node || '',
+                instance: opts.instance || '',
+                chart_id: this.chartId || '',
+            },
+            onSubmit: (event) => {
+                eventsStore.add(event);
+                // The store's notify already triggers _applyEventMarkers
+                // on every chart through Task 7's subscription.
+            },
         });
     }
 
