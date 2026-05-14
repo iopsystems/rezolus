@@ -27,21 +27,48 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
-/// The pure-SQL macros that replace the canonical Rust UDFs. JS host calls
-/// this once after boot and runs each statement against the AsyncDuckDB
-/// connection. Source of truth for the macro layer lives here so the
-/// macros version with the Rust crate.
+/// The pure-SQL macros the JS host registers against the AsyncDuckDB
+/// connection at boot. Concatenation of:
+///   - SHARED_MACROS — the 19 macros shared with the native viewer
+///     (irate_1s, rate_5m, hist_p*, cpu_busy_pct, …). Source of truth
+///     lives in `metriken-query-sql/src/shared_macros.sql`; we
+///     `include_str!` it via a relative path through the workspace
+///     (paired-repo layout — see comment on `SHARED_MACROS` below).
+///   - macros.sql — the wasm-only H2 replacement macros that stand in
+///     for the Rust vscalar UDFs (`h2_lower`, `h2_upper`, `h2_quantile`,
+///     …) that duckdb-wasm can't run.
 ///
-/// Returns a single SQL script — JS splits on `;` boundaries (or runs as
-/// `executeBatch` if available).
+/// Returns a single SQL script — JS splits on `;` boundaries (or runs
+/// as `executeBatch` if available). H2 macros come second so their
+/// definitions are in the catalog before the shared Layer A.h macros
+/// (`hist_p`, `hist_irate_quantile`, …) try to bind to them … except
+/// DuckDB resolves macro→macro calls at expansion time, not CREATE
+/// time, so ordering here only matters for *readability*. We still put
+/// H2 first so a casual reader sees the primitives ahead of the
+/// composed helpers.
 #[wasm_bindgen]
 pub fn pure_sql_macros() -> String {
-    // Inline because including a string from a separate file would require a
-    // build script for wasm32. The canonical native UDFs live in
-    // /work/metriken/metriken-query-sql/src/{udf,macros}.rs.
-    const MACROS: &str = include_str!("macros.sql");
-    MACROS.to_string()
+    const H2_MACROS: &str = include_str!("macros.sql");
+    let mut out = String::with_capacity(SHARED_MACROS.len() + H2_MACROS.len() + 2);
+    out.push_str(H2_MACROS);
+    out.push('\n');
+    out.push_str(SHARED_MACROS);
+    out
 }
+
+/// Shared macros — one canonical copy across both viewers. We can't depend
+/// on `metriken-query-sql` directly because that crate pulls in `duckdb-rs`
+/// (bundled C++), which doesn't build for `wasm32`. So we `include_str!`
+/// the SQL file through a relative path across the paired-repo layout.
+///
+/// Path: `<rezolus>/crates/viewer-sql/src/lib.rs` →
+///       `<metriken>/metriken-query-sql/src/shared_macros.sql`
+///
+/// Both repos live as siblings under the same parent dir (the developer
+/// laptop layout this project assumes). If you reorganize the repos, the
+/// `include_str!` below has to follow.
+pub const SHARED_MACROS: &str =
+    include_str!("../../../../metriken/metriken-query-sql/src/shared_macros.sql");
 
 /// Read-only snapshot of the loaded parquet's metadata. JS computes this
 /// once at parquet-load time (running DESCRIBE + a couple of summary

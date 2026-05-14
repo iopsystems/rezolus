@@ -50,6 +50,12 @@ imports:
 `crates/viewer-sql/Cargo.toml` has **no `metriken-query` dep** —
 the static viewer is fully decoupled from the legacy engine.
 
+A standalone preview UI lives alongside at `site/viewer-sql/preview.html`
++ `lib/preview.js` (464 LOC). It drives the same `CaptureRegistry` to
+render every migrated section as ECharts, used to eyeball SQL pipeline
+output end-to-end and as a perf experiment surface. Not a replacement
+for the Mithril viewer.
+
 ### Server-backed viewer + MCP — PromQL only, unchanged
 
 `rezolus view <parquet | live-agent-url>` boots `AppState`
@@ -101,24 +107,20 @@ UDFs, macro-registration quirks) live in
 
 ---
 
-## Two macro libraries (known hazard)
+## SQL macro layering
 
-| Side | File | Macros | Mechanism |
-|---|---|---:|---|
-| Native | `/work/metriken/metriken-query-sql/src/macros.rs` | 19 | Rust strings via `register_all` |
-| Wasm | `crates/viewer-sql/src/macros.sql` | 30 | Pure SQL via `CREATE MACRO`, `include_str!`'d |
-
-The extra 11 wasm macros re-implement the Rust H2 vscalar UDFs
-in pure SQL — duckdb-wasm doesn't accept Rust registrations from
-JS. Parity is tested by `crates/viewer-sql/tests/macros.rs` (334
-LOC, 17 tests): loads `macros.sql` into a native in-memory
-DuckDB and asserts shared primitives match.
-
-**This catches behavioural drift, not signature drift.**
-`hist_irate_quantile` / `hist_rate5m_quantile` already differ:
-native is `(buckets, q, ts, p)`, wasm is `(buckets, q, ts)`. A
-single shared `.sql` file `include_str!`'d from both sides would
-close it; deferred to keep this branch focused.
+A single `shared_macros.sql` (`/work/metriken/metriken-query-sql/src/shared_macros.sql`,
+145 LOC, 19 macros) is the canonical source for every macro both
+sides use. Native side `include_str!`s it and registers each
+statement on the connection (see
+`/work/metriken/metriken-query-sql/src/macros.rs`). Wasm side
+`include_str!`s the same file (cross-repo relative path,
+documented inline at `crates/viewer-sql/src/lib.rs`) and
+concatenates it with `crates/viewer-sql/src/macros.sql` (155
+LOC, 10 macros — the pure-SQL re-implementations of Rust H2
+vscalar UDFs duckdb-wasm can't accept). Parity test at
+`crates/viewer-sql/tests/macros.rs` (334 LOC, 17 tests)
+exercises both halves against an in-memory native DuckDB.
 
 ---
 
@@ -135,11 +137,12 @@ on this branch:
 | Plot API surface | `crates/dashboard/src/plot.rs` (inline) | 12 tests on `plot_promql_with_sql` / `plot_sql` round-trip + dual-emission shape. |
 | Service extension / KPI | `crates/dashboard/src/service_extension.rs` (inline) | 7 tests on KPI deserialization. |
 | Frontend JS | `tests/*.test.mjs` | 8 files: compare math, compare/node filter, heatmap data + resolution, section cache, sections API, selection migration, service routes. |
+| Puppeteer smoke | `site/viewer-sql/test_{smoke,sections,preview,sglang}.mjs` + `site/viewer/test_viewer_sql.mjs` | 5 files (637 LOC) that drive a real headless browser against the static viewer end-to-end. |
 
 Not directly unit-tested: `crates/viewer-sql/src/lib.rs` (716
 LOC) and `site/viewer-sql/lib/duckdb-registry.js` (926 LOC).
 Both are intentionally thin and exercised end-to-end by the
-static viewer's puppeteer smoke tests.
+puppeteer smoke tests above.
 
 ---
 
@@ -199,8 +202,10 @@ boundary samples allowed.
    pattern in context; the per-CPU plot at `cpu.rs:31` is the
    one that surfaced the `sum by (id)` divergence fixed in
    `f6792ff`.
-5. **`crates/viewer-sql/src/macros.sql`** (242, 30 macros) plus
-   the parity test at `crates/viewer-sql/tests/macros.rs` (334).
+5. **`crates/viewer-sql/src/macros.sql`** (155, 10 H2-only) +
+   the upstream **`shared_macros.sql`** in metriken (145, 19)
+   plus the parity test at `crates/viewer-sql/tests/macros.rs`
+   (334).
 
 Skip:
 
@@ -256,8 +261,6 @@ Skip:
    ships the per-capture half; case-(b) "one combined category
    section" still needs multi-capture `init_templates` on
    `viewer-sql`.
-5. **Macro library consolidation.** See "Two macro libraries"
-   above. A shared `.sql` file closes the signature-drift gap.
-6. **Numeric-encoded parquet support.** Teach the SQL emitter to
+5. **Numeric-encoded parquet support.** Teach the SQL emitter to
    read Arrow field metadata, or document the unsupported
    fixture set. 985 of the prior 1,370 divergences live here.

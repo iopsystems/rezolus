@@ -1,18 +1,18 @@
--- Pure-SQL implementations of the H2 histogram operators and dashboard
--- rate/delta primitives, registered as DuckDB macros for the WASM viewer.
+-- Wasm-only H2 replacement macros for the static-site viewer.
 --
--- **Parallel copy.** The native build registers the same operators as
--- vscalar UDFs (faster, type-checked) via `register_all()` in
--- /work/metriken/metriken-query-sql/src/udf.rs and /macros.rs. This file
--- is the wasm-side substitute because duckdb-wasm doesn't accept Rust
--- vscalar registrations — the macros have to be pure SQL the JS host can
--- run via `CREATE OR REPLACE MACRO ...`.
+-- The 19 truly-shared macros (irate_1s, rate_5m, hist_p*, cpu_busy_pct,
+-- ipc, frequency_hz, ipns, l3_hit_pct, branch_miss_pct, dtlb_mpki,
+-- gpu_mem_used_pct, bps_from_bytes, hist_irate_quantile,
+-- hist_rate5m_quantile, delta_1s, hist_p*) now live in
+-- /work/metriken/metriken-query-sql/src/shared_macros.sql and are
+-- prepended at runtime by `pure_sql_macros()` in lib.rs.
 --
--- **Keep in sync** with the native macros. The parity scaffold lives at
--- `crates/viewer-sql/tests/macros.rs` (loads this file into in-memory
--- DuckDB and asserts behaviour). Drift between this file and the native
--- macros will surface there. See REVIEWING.md for the "two macro
--- libraries" hazard.
+-- The macros below replace the Rust vscalar UDFs in
+-- /work/metriken/metriken-query-sql/src/udf.rs (h2_lower, h2_upper,
+-- h2_midpoint, h2_total, h2_delta, h2_quantile, h2_count_in_range,
+-- h2_quantiles, h2_combine, irate_lag). The native crate registers
+-- those as C++-backed vscalars; duckdb-wasm doesn't accept Rust
+-- vscalar registrations so we re-implement them in pure SQL here.
 --
 -- Conventions:
 --   - p (grouping_power) defaults to 3 (rezolus metrics.parquet uses p=3).
@@ -20,6 +20,9 @@
 --     lambdas (DuckDB macro params are textual; explicit casts give the
 --     binder type info).
 --   - Arithmetic uses // for integer division (DuckDB / is float division).
+--
+-- Parity tests for both this file and the shared macros live at
+-- crates/viewer-sql/tests/macros.rs.
 
 -- ---- Bound math (single macro w/ default p=3) ----
 -- DuckDB OR REPLACE replaces the entire macro entry, so we use named-default
@@ -77,7 +80,7 @@ CREATE OR REPLACE MACRO h2_delta(b1, b0) AS
                   ELSE 0::UBIGINT END
     );
 
--- h2_quantile(b, q): nearest-rank quantile for default p=3.
+-- h2_quantile(b, q, gp := 3): nearest-rank quantile.
 -- O(W) via list_reduce. Trick: precompute target ONCE in the initial
 -- accumulator's `target` field (DuckDB evaluates the initial expression a
 -- single time). The lambda then reads acc.target for free. The previous
@@ -86,7 +89,13 @@ CREATE OR REPLACE MACRO h2_delta(b1, b0) AS
 --
 -- Body is a raw CASE expression (no SELECT/CTE/subquery) so callers can
 -- invoke h2_quantile from inside a list_transform lambda.
-CREATE OR REPLACE MACRO h2_quantile(b, q) AS
+--
+-- The grouping power is named `gp` (not `p`) to avoid shadowing the
+-- list_reduce lambda's accumulator pair parameter (also named `p` —
+-- DuckDB macro params and lambda params share a namespace at expansion
+-- time, and a name collision would silently bind h2_upper's `p` to the
+-- lambda accumulator). Callers may pass it positionally or by name.
+CREATE OR REPLACE MACRO h2_quantile(b, q, gp := 3) AS
     CASE
         WHEN list_sum(b::UBIGINT[]) IS NULL OR list_sum(b::UBIGINT[])::UBIGINT = 0::UBIGINT
             THEN NULL::UBIGINT
@@ -104,7 +113,7 @@ CREATE OR REPLACE MACRO h2_quantile(b, q) AS
             {val: 0::UBIGINT,
              target: greatest(ceil(q::DOUBLE * list_sum(b::UBIGINT[])::DOUBLE)::UBIGINT, 1::UBIGINT),
              sum: 0::UBIGINT, idx: -1, found: false}
-        ).idx)::UBIGINT
+        ).idx, gp)::UBIGINT
     END;
 
 -- ---- Convenience layer ----
@@ -123,66 +132,13 @@ CREATE OR REPLACE MACRO h2_count_in_range(b, lo, hi, p := 3) AS
     )::UBIGINT;
 
 CREATE OR REPLACE MACRO h2_quantiles(b, qs, p := 3) AS
-    list_transform(qs::DOUBLE[], q -> h2_quantile(b, q));
+    list_transform(qs::DOUBLE[], q -> h2_quantile(b, q, p));
 
 CREATE OR REPLACE MACRO h2_combine(lol) AS
     list_transform(
         generate_series(1, list_max(list_transform(lol, h -> length(h::UBIGINT[])))),
         j -> list_sum(list_transform(lol, h -> coalesce((h::UBIGINT[])[j], 0::UBIGINT)))::UBIGINT
     );
-
-CREATE OR REPLACE MACRO hist_p(buckets, q)         AS h2_quantile(buckets, q);
-CREATE OR REPLACE MACRO hist_p50(buckets)          AS h2_quantile(buckets, 0.50);
-CREATE OR REPLACE MACRO hist_p90(buckets)          AS h2_quantile(buckets, 0.90);
-CREATE OR REPLACE MACRO hist_p99(buckets)          AS h2_quantile(buckets, 0.99);
-CREATE OR REPLACE MACRO hist_p999(buckets)         AS h2_quantile(buckets, 0.999);
-
-CREATE OR REPLACE MACRO hist_irate_quantile(buckets, q, ts) AS
-    h2_quantile(h2_delta(buckets, LAG(buckets) OVER (ORDER BY ts)), q);
-
-CREATE OR REPLACE MACRO hist_rate5m_quantile(buckets, q, ts) AS
-    h2_quantile(h2_delta(buckets, LAG(buckets, 300) OVER (ORDER BY ts)), q);
-
--- ---- Layer A: rate / delta primitives ----
--- Same names + signatures as the native macros in
--- metriken-query-sql/src/macros.rs (Layer A section), so dashboard SQL
--- is identical between native and wasm.
-
--- Per-second rate with PromQL reset semantics: when c < LAG(c), treat
--- the post-reset value `c` as the increment (matches PromQL's
--- `irate(c[w])` reset handling, see metriken-query/src/promql/streaming/
--- {rate,irate}.rs:60-70). Divides by the actual `(ts - LAG(ts))` so a
--- missing sample (gap > sampling interval) yields a rate over the
--- longer interval. NULLIF guards against duplicate timestamps (dt=0).
-CREATE OR REPLACE MACRO irate_1s(c, ts) AS
-    CASE
-        WHEN LAG(c) OVER (ORDER BY ts) IS NULL THEN NULL
-        WHEN c >= LAG(c) OVER (ORDER BY ts) THEN
-            CAST(c - LAG(c) OVER (ORDER BY ts) AS DOUBLE)
-            / NULLIF((ts - LAG(ts) OVER (ORDER BY ts))::DOUBLE / 1e9, 0)
-        ELSE
-            CAST(c AS DOUBLE)
-            / NULLIF((ts - LAG(ts) OVER (ORDER BY ts))::DOUBLE / 1e9, 0)
-    END;
-
-CREATE OR REPLACE MACRO delta_1s(c, ts) AS
-    CASE
-        WHEN LAG(c) OVER (ORDER BY ts) IS NULL THEN NULL
-        WHEN c >= LAG(c) OVER (ORDER BY ts) THEN CAST(c - LAG(c) OVER (ORDER BY ts) AS DOUBLE)
-        ELSE CAST(c AS DOUBLE)
-    END;
-
--- 5-minute average rate over a *time-range* window. Uses RANGE BETWEEN
--- 300000000000 PRECEDING AND CURRENT ROW (300s in nanoseconds — DuckDB
--- 1.1.1 requires a literal here) so:
---   - Parquets shorter than 5 minutes still produce values (positional
---     `LAG(c, 300)` returned NULL on every sample for ≤300-row tables).
---   - Sample gaps don't shift the lookback window by row count.
--- Caveat: monotonic-only. Reset-aware 5-minute rate has to be the CTE
--- pattern in metriken-query/src/translate.rs (counter-rate Rate variant).
-CREATE OR REPLACE MACRO rate_5m(c, ts) AS
-    (c - first_value(c) OVER (ORDER BY ts RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW))
-    / NULLIF((ts - first_value(ts) OVER (ORDER BY ts RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW))::DOUBLE / 1e9, 0);
 
 -- ---- irate_lag: emulates the canonical Rust UDF on the wasm side ----
 -- Native registers a vscalar UDF in /work/metriken/metriken-query-sql/src/udf.rs
@@ -197,46 +153,3 @@ CREATE OR REPLACE MACRO irate_lag(curr, prev, dt_ns) AS
         WHEN curr >= prev THEN ((curr - prev)::DOUBLE / NULLIF(dt_ns::DOUBLE / 1e9, 0))
         ELSE (curr::DOUBLE / NULLIF(dt_ns::DOUBLE / 1e9, 0))
     END;
-
--- ---- Layer B: dashboard-concept helpers ----
--- Each composes Layer A primitives. Expanding by hand recovers the same SQL
--- the original PromQL `irate(...)` formulas spell out. Names + signatures
--- match the native Layer B macros (metriken-query-sql/src/macros.rs).
-
--- CPU fraction (0..1) — works for total CPU busy and for per-state usage.
-CREATE OR REPLACE MACRO cpu_busy_pct(usage, cores, ts) AS
-    irate_1s(usage, ts) / cores / 1e9;
-
--- Instructions per cycle.
-CREATE OR REPLACE MACRO ipc(instructions, cycles, ts) AS
-    irate_1s(instructions, ts) / NULLIF(irate_1s(cycles, ts), 0);
-
--- Effective CPU frequency in Hz.
-CREATE OR REPLACE MACRO frequency_hz(tsc, aperf, mperf, cores, ts) AS
-    irate_1s(tsc, ts) * irate_1s(aperf, ts) / NULLIF(irate_1s(mperf, ts), 0) / cores;
-
--- Instructions per nanosecond (wall-clock-normalised throughput).
-CREATE OR REPLACE MACRO ipns(instructions, cycles, tsc, aperf, mperf, cores, ts) AS
-    ipc(instructions, cycles, ts)
-    * irate_1s(tsc, ts) * irate_1s(aperf, ts)
-    / NULLIF(irate_1s(mperf, ts) * cores * 1e9, 0);
-
--- L3 cache hit fraction.
-CREATE OR REPLACE MACRO l3_hit_pct(miss, access, ts) AS
-    1 - irate_1s(miss, ts) / NULLIF(irate_1s(access, ts), 0);
-
--- Branch misprediction fraction.
-CREATE OR REPLACE MACRO branch_miss_pct(misses, branches, ts) AS
-    irate_1s(misses, ts) / NULLIF(irate_1s(branches, ts), 0);
-
--- DTLB misses per thousand instructions.
-CREATE OR REPLACE MACRO dtlb_mpki(misses, instructions, ts) AS
-    irate_1s(misses, ts) / NULLIF(irate_1s(instructions, ts), 0) * 1000;
-
--- GPU memory used as fraction of total (used + free). No window needed.
-CREATE OR REPLACE MACRO gpu_mem_used_pct(used, free) AS
-    used / NULLIF(used + free, 0);
-
--- Bandwidth in bits per second from a byte counter.
-CREATE OR REPLACE MACRO bps_from_bytes(bytes, ts) AS
-    irate_1s(bytes, ts) * 8;

@@ -16,14 +16,21 @@
 
 use duckdb::Connection;
 
-const MACROS_SQL: &str = include_str!("../src/macros.sql");
+// Load the same SQL the wasm host registers: H2 replacement macros from
+// this crate's macros.sql, then the cross-crate shared macros via
+// viewer_sql::SHARED_MACROS (re-exported from
+// /work/metriken/metriken-query-sql/src/shared_macros.sql).
+const H2_MACROS_SQL: &str = include_str!("../src/macros.sql");
+const SHARED_MACROS_SQL: &str = viewer_sql::SHARED_MACROS;
 
 fn fresh() -> Connection {
     let conn = Connection::open_in_memory().expect("open in-memory");
     // Strip `--` line comments before splitting on `;` — comments may
     // contain semicolons inside parenthetical asides which would
-    // otherwise fragment statements.
-    let stripped: String = MACROS_SQL
+    // otherwise fragment statements. H2 macros first so the shared
+    // Layer A.h macros (hist_p, hist_irate_quantile, …) bind cleanly.
+    let combined = format!("{H2_MACROS_SQL}\n{SHARED_MACROS_SQL}");
+    let stripped: String = combined
         .lines()
         .map(|line| match line.find("--") {
             Some(i) => &line[..i],
