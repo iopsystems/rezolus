@@ -43,7 +43,7 @@ jobs:
     env:
       DEB_BUILD_OPTS: nocheck
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: run packaging script
         run: |
@@ -57,7 +57,7 @@ jobs:
             --chown "$(id -u)"                  \
             --verbose
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           path: target/debian/*
           name: deb_${{ matrix.distro }}_${{ matrix.release }}_${{ matrix.arch }}
@@ -82,7 +82,7 @@ jobs:
         run: |
           yum install -y tar gzip
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install rust
         run: |
@@ -223,10 +223,88 @@ jobs:
             rpm --checksig "$rpm"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           path: target/generate-rpm/*
           name: rpm_${{ matrix.distro }}_${{ matrix.version }}_${{ matrix.arch }}
+
+  build-viewer-static:
+    if: github.repository == 'iopsystems/rezolus'
+    name: build static viewer bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: install wasm-pack
+        run: cargo install wasm-pack --version ^0.14 --locked
+
+      - name: build wasm viewer
+        run: ./crates/viewer/build.sh
+
+      - name: stage viewer bundle
+        run: |
+          TAG="${{ github.ref_name }}"
+          STAGE="target/viewer-static/rezolus-viewer-${TAG}"
+          mkdir -p "$STAGE"
+          # Dereference symlinks (site/viewer/lib/* points back into
+          # src/viewer/assets/lib) so the tarball is self-contained.
+          # Skip data/ — demo parquets aren't part of the package.
+          rsync -aL --exclude='data' site/viewer/ "$STAGE/"
+          cp LICENSE-MIT LICENSE-APACHE "$STAGE/" 2>/dev/null || true
+          cat > "$STAGE/README.md" << 'EOF'
+          # Rezolus Viewer (static bundle)
+
+          This bundle is a self-contained Rezolus parquet viewer that runs
+          entirely in the browser via WebAssembly. Drop the directory on
+          any static webserver (nginx, caddy, S3 + CloudFront, GitHub
+          Pages, `python -m http.server`, …) and visit `/viewer/`.
+
+          ## Loading recordings
+
+          The viewer accepts parquet recordings via:
+
+          - **Drag-and-drop / file picker** on the landing page.
+          - **`?capture=label=path/to/file.parquet`** in the URL — relative
+            paths are fetched from the same origin.
+          - **`?capture=label=https://...`** for absolute URLs — requires
+            either CORS headers on the source, or the local proxy
+            (see "Loading from arbitrary URLs" below).
+
+          Two `?capture=` params (separated by `&`) put the viewer in
+          A/B compare mode.
+
+          ## Loading from arbitrary URLs
+
+          Cross-origin parquet URLs (e.g. another team's S3 bucket, a
+          colleague's webserver) only work when the source serves CORS
+          headers — most don't. To bypass that, run the full `rezolus`
+          binary with `rezolus view --proxy-allow=<glob>`; the local
+          proxy fetches the URL server-side and streams it to the
+          browser.
+
+          ## Customising
+
+          - Demo parquets go in `data/` (not shipped in this bundle).
+          - Service-extension templates live under `templates/`.
+          - Frontend overrides go in `lib/` — the layout mirrors the
+            in-tree `src/viewer/assets/lib/` so existing patches apply.
+          EOF
+
+      - name: tarball viewer bundle
+        run: |
+          TAG="${{ github.ref_name }}"
+          cd target/viewer-static
+          tar -czf "rezolus-viewer-${TAG}.tar.gz" "rezolus-viewer-${TAG}"
+          ls -l "rezolus-viewer-${TAG}.tar.gz"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          path: target/viewer-static/rezolus-viewer-*.tar.gz
+          name: viewer-static
 
   publish:
     if: github.repository == 'iopsystems/rezolus'
@@ -235,8 +313,9 @@ jobs:
     needs:
       - build-deb
       - build-rpm
+      - build-viewer-static
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: check release type
         id: check-release
@@ -253,24 +332,30 @@ jobs:
           fi
 
       # Download deb artifacts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: target/artifacts/
           pattern: deb_*
 
       # Download rpm artifacts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: target/rpm/
           pattern: rpm_*
 
+      # Download static viewer bundle
+      - uses: actions/download-artifact@v5
+        with:
+          path: target/viewer-static/
+          pattern: viewer-static
+
       # Upload debs to systemslab registry
-      - uses: google-github-actions/auth@v1
+      - uses: google-github-actions/auth@v2
         id: auth-systemslab
         with:
           credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
 
-      - uses: google-github-actions/setup-gcloud@v1
+      - uses: google-github-actions/setup-gcloud@v2
 
       - name: upload debs to systemslab registry (all releases)
         run: |
@@ -291,13 +376,13 @@ jobs:
           done
 
       # Upload debs to rezolus registry (stable releases only)
-      - uses: google-github-actions/auth@v1
+      - uses: google-github-actions/auth@v2
         if: steps.check-release.outputs.is_stable == 'true'
         id: auth-rezolus
         with:
           credentials_json: "${{ secrets.GCP_CREDENTIALS_REZOLUS }}"
 
-      - uses: google-github-actions/setup-gcloud@v1
+      - uses: google-github-actions/setup-gcloud@v2
         if: steps.check-release.outputs.is_stable == 'true'
 
       - name: upload debs to rezolus registry (stable releases only)
@@ -383,6 +468,13 @@ jobs:
             mv "$artifact" "target/release-artifacts/${distro}_${version}_${arch}_${name}"
           done
 
+          # Collect static viewer bundle. `actions/download-artifact@v5` with
+          # `pattern:` nests files under `<path>/<artifact_name>/...`, but
+          # `upload-artifact`'s preserved relative path can add extra levels.
+          # `find` locates the tarball regardless of how deep it lands.
+          find target/viewer-static -type f -name 'rezolus-viewer-*.tar.gz' \
+            -exec mv -t target/release-artifacts/ {} +
+
       - name: generate checksums and sign release artifacts
         env:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
@@ -432,16 +524,18 @@ jobs:
       # Update Homebrew formula
       - name: set up Homebrew
         if: steps.check-release.outputs.is_stable == 'true'
-        uses: Homebrew/actions/setup-homebrew@master
+        uses: Homebrew/actions/setup-homebrew@main
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: set up git for Homebrew
         if: steps.check-release.outputs.is_stable == 'true'
-        uses: Homebrew/actions/git-user-config@master
+        uses: Homebrew/actions/git-user-config@main
 
       - name: update Homebrew formula
         if: steps.check-release.outputs.is_stable == 'true'
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"

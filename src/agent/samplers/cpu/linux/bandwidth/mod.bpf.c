@@ -133,7 +133,6 @@ int tg_set_cfs_bandwidth(struct pt_regs* ctx) {
         bpf_map_update_elem(&bandwidth_throttled_time, &cgroup_id, &zero, BPF_ANY);
     }
 
-    // get the bandwidth info and send to userspace
     struct bandwidth_info* bw_info =
         bpf_ringbuf_reserve(&bandwidth_info, sizeof(struct bandwidth_info), 0);
     if (bw_info) {
@@ -173,7 +172,6 @@ int throttle_cfs_rq(struct pt_regs* ctx) {
         bpf_map_update_elem(&throttled_time, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&throttled_count, &cgroup_id, &zero, BPF_ANY);
 
-        // get the bandwidth info and send to userspace
         struct bandwidth_info* bw_info =
             bpf_ringbuf_reserve(&bandwidth_info, sizeof(struct bandwidth_info), 0);
         if (bw_info) {
@@ -184,12 +182,10 @@ int throttle_cfs_rq(struct pt_regs* ctx) {
         }
     }
 
-    // record throttle start time
     u64 now = bpf_ktime_get_ns();
     u32 cgroup_runqueue_idx = cpu * MAX_CGROUPS + (u32)cgroup_id;
     bpf_map_update_elem(&throttle_start, &cgroup_runqueue_idx, &now, BPF_ANY);
 
-    // increment the throttle count
     array_incr(&throttled_count, cgroup_id);
 
     return 0;
@@ -220,7 +216,6 @@ int unthrottle_cfs_rq(struct pt_regs* ctx) {
     if (!elem || *elem != serial_nr)
         return 0;
 
-    // update bandwidth metrics
     int nr_periods = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.nr_periods);
     int nr_throttled = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.nr_throttled);
     u64 cgroup_throttled_time = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.throttled_time);
@@ -228,18 +223,15 @@ int unthrottle_cfs_rq(struct pt_regs* ctx) {
     array_set_if_larger(&bandwidth_throttled_periods, (u32)cgroup_id, (u64)nr_throttled);
     array_set_if_larger(&bandwidth_throttled_time, (u32)cgroup_id, cgroup_throttled_time);
 
-    // lookup start time
     u32 cgroup_runqueue_idx = cpu * MAX_CGROUPS + (u32)cgroup_id;
     u64* start_ts = bpf_map_lookup_elem(&throttle_start, &cgroup_runqueue_idx);
     if (!start_ts || *start_ts == 0)
         return 0;
 
-    // increment the throttled time counter
     u64 now = bpf_ktime_get_ns();
     u64 duration = now - *start_ts;
     array_add(&throttled_time, cgroup_id, duration);
 
-    // clear the throttle start time
     u64 zero = 0;
     bpf_map_update_elem(&throttle_start, &cgroup_runqueue_idx, &zero, BPF_ANY);
 

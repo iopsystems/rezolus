@@ -5,6 +5,8 @@
 !.claude/scripts/
 docs/superpowers/
 target
+site/viewer/pkg/
+site/viewer/templates/manifest.json
 **/*.rs.bk
 .worktrees/
 results/

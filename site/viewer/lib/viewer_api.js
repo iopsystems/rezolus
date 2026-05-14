@@ -133,6 +133,22 @@ const ViewerApi = {
     },
 
     backend() { return BACKEND; },
+
+    // Mirror of the server's POST /api/v1/save_with_selection. The
+    // WASM registry projects the source bytes locally and returns
+    // either a parquet (single capture) or a `*.parquet.ab.tar`
+    // (compare mode). The Blob's MIME is best-effort; the file
+    // extension is the load-bearing signal for the browser download.
+    async saveWithSelection(payload) {
+        ensureAttached('baseline');
+        const bytes = registry.save_with_selection(JSON.stringify(payload));
+        const hasExperiment = registry.has('experiment');
+        return {
+            bytes,
+            mime: hasExperiment ? 'application/x-tar' : 'application/octet-stream',
+            extension: hasExperiment ? '.parquet.ab.tar' : '.parquet',
+        };
+    },
 };
 
 export { ViewerApi };

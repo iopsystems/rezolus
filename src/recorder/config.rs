@@ -1,4 +1,4 @@
-use super::endpoint::{infer_source_name, EndpointConfig, Protocol};
+use super::endpoint::{EndpointConfig, Protocol};
 use crate::Format;
 
 use clap::ArgMatches;
@@ -45,7 +45,6 @@ pub struct RecordingConfig {
 
 impl RecordingConfig {
     pub fn from_args(args: &ArgMatches) -> Result<Self, String> {
-        // Common CLI values shared across all modes
         let verbose = *args.get_one::<u8>("VERBOSE").unwrap_or(&0);
         let interval = *args
             .get_one::<humantime::Duration>("INTERVAL")
@@ -159,12 +158,10 @@ impl RecordingConfig {
             .ok_or_else(|| "OUTPUT is required".to_string())?
             .to_path_buf();
 
-        // Extract source from --metadata source=xxx, else infer
         let source = metadata
             .iter()
             .find(|(k, _)| k == "source")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| infer_source_name(&url));
+            .map(|(_, v)| v.clone());
 
         let endpoint = EndpointConfig {
             url,
@@ -228,8 +225,6 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         }
     }
 
-    let source = source.unwrap_or_else(|| infer_source_name(&url));
-
     Ok(EndpointConfig {
         url,
         source,
@@ -250,14 +245,14 @@ mod tests {
     #[test]
     fn test_parse_endpoint_str_full() {
         let ep = parse_endpoint_str("http://localhost:4241,source=rezolus,role=agent").unwrap();
-        assert_eq!(ep.source, "rezolus");
+        assert_eq!(ep.source.as_deref(), Some("rezolus"));
         assert_eq!(ep.role.as_deref(), Some("agent"));
     }
 
     #[test]
     fn test_parse_endpoint_str_url_only() {
         let ep = parse_endpoint_str("http://localhost:9090/metrics").unwrap();
-        assert_eq!(ep.source, "localhost-9090"); // inferred
+        assert!(ep.source.is_none()); // probe resolves it
         assert!(ep.role.is_none());
     }
 

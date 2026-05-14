@@ -144,6 +144,15 @@ impl DashboardData for SqlMetadata {
     fn histogram_label_count(&self, name: &str) -> usize {
         self.histograms.get(name).copied().unwrap_or(0)
     }
+    fn unique_label_values(&self, _metric: &str, _key: &str) -> usize {
+        // The wasm viewer doesn't surface label-value cardinality from
+        // duckdb-wasm yet; returning 2 keeps per-device gating in
+        // `unique_label_count` permissive (it only suppresses per-device
+        // charts when count <= 1). Wire to a real
+        // SELECT COUNT(DISTINCT ...) when the per-device gate matters
+        // for the static viewer.
+        2
+    }
 }
 
 #[wasm_bindgen]

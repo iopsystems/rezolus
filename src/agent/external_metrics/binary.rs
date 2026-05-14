@@ -59,12 +59,10 @@ pub fn parse_and_ingest(
         return Err(BinaryError::TruncatedHeader);
     }
 
-    // Check magic
     if data[0..4] != MAGIC {
         return Err(BinaryError::InvalidMagic);
     }
 
-    // Check version
     let version_major = data[4];
     let version_minor = data[5];
     if version_major != VERSION_MAJOR {
@@ -109,7 +107,6 @@ fn parse_metrics(
             break;
         }
 
-        // Read message type
         let msg_type = data[0];
         data = &data[1..];
 
@@ -135,7 +132,6 @@ fn parse_metrics(
         };
         data = remaining;
 
-        // Read name length and name
         if data.len() < 2 {
             return Err(BinaryError::TruncatedMetric);
         }
@@ -150,7 +146,6 @@ fn parse_metrics(
             .to_string();
         data = &data[name_len..];
 
-        // Read labels and merge with session labels
         let (mut labels, remaining) = parse_labels(data)?;
         data = remaining;
 
@@ -159,7 +154,6 @@ fn parse_metrics(
             labels.entry(k.clone()).or_insert_with(|| v.clone());
         }
 
-        // Ingest the metric
         if store.upsert(name, labels, value) {
             ctx.metric_count += 1;
             ingested += 1;
@@ -202,7 +196,6 @@ fn parse_histogram(data: &[u8]) -> Result<(ExternalMetricValue, &[u8]), BinaryEr
 
     let data = &data[4..];
 
-    // Read buckets
     let bucket_bytes = bucket_count * 8;
     if data.len() < bucket_bytes {
         return Err(BinaryError::TruncatedMetric);
@@ -235,7 +228,6 @@ fn parse_labels(data: &[u8]) -> Result<(HashMap<String, String>, &[u8]), BinaryE
     let mut labels = HashMap::with_capacity(label_count);
 
     for _ in 0..label_count {
-        // Read key
         if data.is_empty() {
             return Err(BinaryError::TruncatedMetric);
         }
@@ -250,7 +242,6 @@ fn parse_labels(data: &[u8]) -> Result<(HashMap<String, String>, &[u8]), BinaryE
             .to_string();
         data = &data[key_len..];
 
-        // Read value
         if data.is_empty() {
             return Err(BinaryError::TruncatedMetric);
         }

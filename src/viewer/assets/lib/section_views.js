@@ -311,7 +311,7 @@ const renderCgroupSection = ({
             m('div.chart-wrapper', [
                 m(Chart, { spec: prefixedSpec, chartsState, interval }),
                 expandLink(spec, sectionRoute),
-                selectButton(spec, sectionRoute, sectionName),
+                selectButton(spec, sectionRoute, sectionName, null, null),
             ]),
             legend,
         ]);

@@ -101,7 +101,6 @@ fn collect_caches() -> Vec<CacheSummary> {
     // macOS doesn't expose per-CPU cache sharing, so we approximate:
     // L1/L2 are per-core, L3 is shared across all CPUs.
 
-    // L1 data cache
     if let Some(size) = sysctl_u64("hw.l1dcachesize") {
         let shared_cpus = per_core_sharing(cores, threads_per_core);
         caches.push(CacheSummary {
@@ -112,7 +111,6 @@ fn collect_caches() -> Vec<CacheSummary> {
         });
     }
 
-    // L1 instruction cache
     if let Some(size) = sysctl_u64("hw.l1icachesize") {
         let shared_cpus = per_core_sharing(cores, threads_per_core);
         caches.push(CacheSummary {
@@ -123,7 +121,6 @@ fn collect_caches() -> Vec<CacheSummary> {
         });
     }
 
-    // L2 cache
     if let Some(size) = sysctl_u64("hw.l2cachesize") {
         let shared_cpus = per_core_sharing(cores, threads_per_core);
         caches.push(CacheSummary {

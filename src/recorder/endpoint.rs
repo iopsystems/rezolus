@@ -20,11 +20,21 @@ where
 pub struct EndpointConfig {
     #[serde(deserialize_with = "deserialize_url")]
     pub url: Url,
-    pub source: String,
+    /// None until probe resolves it: Msgpack → "rezolus",
+    /// Prometheus → URL-derived (with warning).
+    #[serde(default)]
+    pub source: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
     pub protocol: Option<Protocol>,
+}
+
+impl EndpointConfig {
+    /// "?" only reachable on Pending endpoints (probe hasn't run).
+    pub fn source_label(&self) -> &str {
+        self.source.as_deref().unwrap_or("?")
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -74,14 +84,10 @@ impl EndpointState {
     }
 }
 
-/// Derive a source name from a URL when none is configured.
-/// Logs a warning to stderr.
 pub fn infer_source_name(url: &Url) -> String {
     let host = url.host_str().unwrap_or("unknown");
     let port = url.port().map(|p| format!("-{p}")).unwrap_or_default();
-    let name = format!("{host}{port}");
-    eprintln!("warn: no source name specified for {url}, using \"{name}\"");
-    name
+    format!("{host}{port}")
 }
 
 #[cfg(test)]
@@ -106,7 +112,7 @@ mod tests {
     fn test_endpoint_state_new() {
         let config = EndpointConfig {
             url: "http://localhost:4241".parse().unwrap(),
-            source: "rezolus".to_string(),
+            source: Some("rezolus".to_string()),
             role: None,
             protocol: Some(Protocol::Msgpack),
         };
@@ -120,7 +126,7 @@ mod tests {
     fn test_record_success() {
         let config = EndpointConfig {
             url: "http://localhost:4241".parse().unwrap(),
-            source: "rezolus".to_string(),
+            source: Some("rezolus".to_string()),
             role: None,
             protocol: None,
         };

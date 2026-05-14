@@ -4,21 +4,42 @@
   "slo": null,
   "kpis": [
     {
-      "role": "load",
+      "role": "requests",
       "title": "Requests Running",
       "query": "sglang_num_running_reqs{source=\"sglang-decode\"}",
       "type": "gauge",
       "unit_system": "count"
     },
     {
-      "role": "load",
-      "title": "Requests Waiting",
-      "query": "sglang_num_queue_reqs{source=\"sglang-decode\"}",
+      "role": "requests",
+      "title": "Request Completion Rate",
+      "query": "sum(irate(sglang_num_requests_total{source=\"sglang-decode\"}[5s])) - sum(irate(sglang_num_aborted_requests_total{source=\"sglang-decode\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "requests",
+      "title": "Abort Rate",
+      "query": "sum(irate(sglang_num_aborted_requests_total{source=\"sglang-decode\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "requests",
+      "title": "Paused Requests",
+      "query": "sglang_num_paused_reqs{source=\"sglang-decode\"}",
       "type": "gauge",
       "unit_system": "count"
     },
     {
-      "role": "throughput",
+      "role": "requests",
+      "title": "Retracted Requests",
+      "query": "sglang_num_retracted_reqs{source=\"sglang-decode\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "tokens",
       "title": "Generation Token Rate",
       "query": "sum(irate(sglang_generation_tokens_total{source=\"sglang-decode\"}[5s]))",
       "type": "delta_counter",
@@ -26,16 +47,9 @@
       "denominator": true
     },
     {
-      "role": "throughput",
-      "title": "Request Completion Rate",
-      "query": "sum(irate(sglang_num_requests_total{source=\"sglang-decode\"}[5s])) - sum(irate(sglang_num_aborted_requests_total{source=\"sglang-decode\"}[5s]))",
-      "type": "delta_counter",
-      "unit_system": "rate"
-    },
-    {
-      "role": "error",
-      "title": "Abort Rate",
-      "query": "sum(irate(sglang_num_aborted_requests_total{source=\"sglang-decode\"}[5s]))",
+      "role": "tokens",
+      "title": "Realtime Token Rate (Decode)",
+      "query": "sum(irate(sglang_realtime_tokens_total{source=\"sglang-decode\",mode=\"decode\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
@@ -65,6 +79,71 @@
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
       "unit_system": "time"
+    },
+    {
+      "role": "queueing",
+      "title": "Requests Waiting",
+      "query": "sglang_num_queue_reqs{source=\"sglang-decode\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "queueing",
+      "title": "Queue Time",
+      "query": "sglang_queue_time_seconds{source=\"sglang-decode\"}",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
+      "unit_system": "time"
+    },
+    {
+      "role": "queueing",
+      "title": "Decode Prealloc Queue Requests",
+      "query": "sglang_num_decode_prealloc_queue_reqs{source=\"sglang-decode\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "queueing",
+      "title": "Decode Transfer Queue Requests",
+      "query": "sglang_num_decode_transfer_queue_reqs{source=\"sglang-decode\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "speculative",
+      "title": "Speculative Accept Rate",
+      "query": "sglang_spec_accept_rate{source=\"sglang-decode\"}",
+      "type": "gauge",
+      "unit_system": "percentage"
+    },
+    {
+      "role": "speculative",
+      "title": "Speculative Accept Length",
+      "query": "sglang_spec_accept_length{source=\"sglang-decode\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "gpu",
+      "title": "Estimated FLOPS per GPU",
+      "query": "sum(irate(sglang_estimated_flops_per_gpu_total{source=\"sglang-decode\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "gpu",
+      "title": "Estimated Memory Read Bandwidth per GPU",
+      "query": "sum(irate(sglang_estimated_read_bytes_per_gpu_total{source=\"sglang-decode\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "datarate"
+    },
+    {
+      "role": "gpu",
+      "title": "Estimated Memory Write Bandwidth per GPU",
+      "query": "sum(irate(sglang_estimated_write_bytes_per_gpu_total{source=\"sglang-decode\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "datarate"
     }
   ]
 }

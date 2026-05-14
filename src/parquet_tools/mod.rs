@@ -1,5 +1,6 @@
 mod annotate;
 pub(crate) mod combine;
+mod events;
 mod filter;
 mod metadata;
 
@@ -88,6 +89,31 @@ pub fn command() -> Command {
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set)
                         .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("add-events")
+                        .long("add-events")
+                        .value_name("PATH")
+                        .help("Add one-off events from a JSON/JSONL file (or '-' for stdin). Repeatable.")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Append)
+                        .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("event")
+                        .long("event")
+                        .value_name("KV")
+                        .help("Add a single event inline, e.g. 'time=2026-05-12T15:23Z,kind=restart,description=\"...\"'. Repeatable.")
+                        .value_parser(value_parser!(String))
+                        .action(clap::ArgAction::Append)
+                        .conflicts_with("undo"),
+                )
+                .arg(
+                    clap::Arg::new("clear-events")
+                        .long("clear-events")
+                        .help("Remove existing events before applying --add-events / --event")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("undo"),
                 ),
         )
         .subcommand(
@@ -120,6 +146,37 @@ pub fn command() -> Command {
                         .long("pinned")
                         .help("Default rezolus node to display in the viewer (node name or filename)")
                         .value_parser(clap::value_parser!(String)),
+                )
+                .arg(
+                    clap::Arg::new("ab")
+                        .long("ab")
+                        .help(
+                            "Package two captures into a combined-A/B tarball \
+                             instead of row-merging into one parquet. The output \
+                             path should end in `.parquet.ab.tar`. Requires \
+                             exactly two input files. Pass `baseline=<src> \
+                             experiment=<src>` mapping each side to one of \
+                             the inputs' source names; the captures are stored \
+                             unmodified next to an `ab.json` manifest.",
+                        )
+                        .value_parser(value_parser!(String))
+                        .num_args(2)
+                        .action(clap::ArgAction::Append),
+                )
+                .arg(
+                    clap::Arg::new("category")
+                        .long("category")
+                        .value_name("NAME")
+                        .help(
+                            "Category template name to embed in the AB \
+                             tarball's manifest (e.g. `inference-library`). \
+                             The viewer auto-applies it on load when the \
+                             user did not pass `--category` themselves. \
+                             Only meaningful with `--ab`; not validated \
+                             against the template registry at combine time.",
+                        )
+                        .value_parser(value_parser!(String))
+                        .requires("ab"),
                 ),
         )
         .subcommand(

@@ -1,5 +1,159 @@
 ## [Unreleased]
 
+## [5.13.0] - 2026-05-10
+
+### Added
+
+- BPF: `blockio_requests` sampler now also reports per-op error counts
+  (with a coarse class derived from `blk_status_t` — io / timeout /
+  nospc / target / protection / unsupported / other) and requeue
+  counts, exposed as `blockio_errors` and `blockio_requeues`. The new
+  counters are folded into the existing sampler so the
+  `block_rq_complete` hot path stays single-attach. (#873)
+- Dashboard: new "Exceptions" section consolidating cross-subsystem
+  fault signals — network drops & transmit faults, TCP retransmits,
+  AWS ENA allowance hits, CFS bandwidth throttling, and the new block
+  IO errors / requeues. (#873)
+- Viewer (static site): `?capture=alias=URL` now accepts absolute
+  http(s) URLs in addition to bundled-demo paths, with comma-separated
+  pairs routing straight to A/B compare mode. Landing page split into
+  Demos / Explore sections with a "Load from URL" textarea. (#886)
+- Viewer (server): opt-in URL-fetch proxy via `--proxy-allow
+  <HOST_PATTERN>` (repeatable, shell-style with `*` matching a single
+  DNS label) plus a `--proxy-allow-any` escape hatch. Adds
+  `POST /api/v1/load_url` so the browser can hand off remote parquet
+  captures the server fetches and ingests on its behalf; the landing
+  page greys out URL loading when no allowlist is configured and
+  prints a warning at startup in any-mode. (#888)
+- Viewer: tri-state `urlLoading` (`disabled` / `proxy` / `direct`)
+  exposed via `/api/v1/mode` so the static-site and binary frontends
+  surface accurate hints about how URL fetches will be performed.
+  (#888)
+- CI: release builds publish a self-contained
+  `rezolus-viewer-vX.Y.Z.tar.gz` bundle (WASM + frontend assets, demo
+  parquets excluded, symlinks dereferenced) alongside the deb/rpm
+  packages. (#885)
+- Tests: end-to-end `tests/viewer_smoke.sh` exercising `rezolus view`
+  in upload-only, file, A/B, and proxy modes against checked-in demo
+  parquets, plus a companion `viewer-smoke` skill for triage. (#893)
+- Docs: `docs/principles.md` capturing the design rules Rezolus
+  commits to for BPF samplers (always-on production use, in-kernel
+  aggregation read via mmap, H2 histograms, etc.) and the operational
+  checklist for reviewing or writing a sampler. (#887)
+
+### Changed
+
+- Viewer: split the 2.6k-line `src/viewer/mod.rs` into focused
+  submodules (`state.rs`, `metadata.rs`, `routes.rs`, `actions.rs`).
+  No behavior change. (#892)
+- Viewer: multi-line chart palette swapped to d3 `schemeCategory10` /
+  `schemeCategory20` for stronger discriminability on dark
+  backgrounds; muted brown / gray pairs dropped from the cgroup color
+  rotation. Per-chart description text now renders as a sibling block
+  above the chart card. (#873)
+- Bumped direct deps `arrow` / `parquet` 58.1.0 → 58.2.0 and `tokio`
+  1.52.1 → 1.52.2; refreshed `Cargo.lock` for in-range bumps across
+  `tower-http`, `wasm-bindgen`, `web-sys`, `webpki-root-certs`, the
+  `arrow-*` transitive set, and others. Trimmed unused features
+  (tokio's `full` → eight specific features, dropped axum's `http2`
+  feature and the standalone `h2` direct dep), shrinking the
+  transitive crate count. (#891)
+- Viewer (server): enable reqwest's `rustls` feature so
+  `/api/v1/load_url` can fetch HTTPS URLs. (#888)
+
+### Fixed
+
+- Viewer: cgroup selector columns now truncate long names with
+  ellipsis instead of widening past the flex split. (#873)
+
+## [5.12.1] - 2026-05-10
+
+### Fixed
+
+- Viewer: align compare-mode spectrum fetches with a shared step so the
+  diff path on quantile heatmaps actually renders, instead of falling
+  back to the baseline percentile scatter when the two captures have
+  different durations. (#881)
+- Viewer: pinned histogram (percentile-scatter) charts in the Selection
+  section now wrap their stored query through `buildEffectiveQuery`,
+  fixing the empty-card regression where the raw metric name was being
+  fetched without the `histogram_quantiles(...)` wrapping. (#882)
+- Viewer: persisted selection + notes now actually survive a page
+  refresh — `setStorageScope` was wiping the just-bound file-scoped
+  localStorage key on every load. (#882)
+- Viewer: selection cards now show "Section: Group: Title" so pinned
+  charts carry the same context the dashboard headers provide; spectrum
+  controls use the narrow layout when rendered inside a selection card
+  so they don't crowd the legend. (#882)
+- CI: Homebrew formula bump on release no longer fails on permissions.
+  (#880)
+
+## [5.12.0] - 2026-05-09
+
+### Added
+
+- Viewer A/B compare mode for two parquet captures, with shared cursor/zoom,
+  diff heatmaps, and a compact top-nav compare badge. (#820 #821 #822 #823
+  #827 #828 #832)
+- Quantile heatmap chart for histogram metrics, with Full/Tail toggles and a
+  vertical color legend. Available in compare (A/B) mode with a unified scale
+  and diff variant. (#868 #870 #872)
+- Service templates for inference-library (vllm + sglang) and
+  sglang-router/prefill/decode. Service templates are now embedded in the
+  release binary. (#829 #836 #850)
+- Per-CPU runqueue wait and context switch metrics in the dashboard. (#875)
+- Site landing-page demos: grouped + polished layout and an inference A/B
+  example. (#824 #830 #831)
+- Viewer URL params honor `capture=alias=path`, scaling to N captures, with a
+  matching positional CLI. (#827 #832)
+- Recorder auto-labels `source=rezolus` when probing a Msgpack endpoint, so
+  `--metadata source=rezolus` is no longer required for local agents. (#878)
+- Parquet `annotate` gains `--node`, `--source`, and systeminfo JSON
+  annotation; `--source` rename now updates matching `per_source_metadata`
+  keys. (#840 #841 #853)
+- Viewer: chart controls moved to top-right with icon-only buttons, and
+  unavailable charts listed at the bottom of regular sections. (#859 #869)
+- Viewer WASM is built during the GitHub Pages deploy. (#863)
+
+### Changed
+
+- Viewer: lazy section generation in two phases — split sections metadata
+  from payloads and defer payload construction until a section is rendered.
+  Reduces initial chart load memory and time. (#835 #848 #851)
+- Viewer: observable `ChartsState` with zoom subscriptions; percentile pins
+  stay local per chart. (#825 #828)
+- Viewer: rename `histogram_percentiles` → `histogram_quantiles` and drop the
+  `percentile` label. (#856)
+- Dashboard: suppress per-device charts on single-GPU and single-CPU
+  recordings. (#864)
+- Bumped `metriken-query` 0.9.5 → 0.10.2 — 0.9.6 tightens load-path heap
+  allocations (60–90% reduction on demo parquets, with a corresponding drop
+  in the WASM viewer's memory footprint), and 0.10.x ships the streaming
+  PromQL engine. Also bumped `histogram` and `wasm-bindgen`, and refreshed
+  the rest of the cargo dependencies. (#839 #858)
+- Marked the `rezolus` crate as unpublishable; prepared the `systeminfo`
+  crate for publishing. (#771 #871)
+
+### Fixed
+
+- Viewer: preserve deferred per-cgroup charts when section payload filtering
+  runs before the cgroup selector populates them. (#874)
+- Viewer: missing histograms for service metrics. (#862)
+- Viewer: compare-mode bug bash — legends, zoom, layout, default route — and
+  follow-ups including diff-heatmap polish, narrow-screen time range bar, and
+  pinning the node filter to both captures. (#821 #822 #823 #827 #852 #854)
+- Viewer: redirect stale `#/service/...` hashes to the default route, and
+  break the redirect loop when the default route itself is missing.
+  (#842 #843)
+- Viewer: drive template + category membership from the parquet source,
+  refresh experiment charts when granularity changes, and fix WASM template
+  parsing for inference-library. (#833 #838 #846)
+- Viewer: multi-node selector tappable on mobile. (#865)
+- WASM: rebuild plus a CI gate against bad externref-table layout. (#847)
+- Parquet: flatten existing source arrays when combining, and expand array
+  sources into `per_source_metadata`. (#845 #849)
+- Installer: run as root and create the `rezolus` user on RPM systems. (#844)
+
 ## [5.11.0] - 2026-04-21
 
 ### Added
@@ -640,7 +794,10 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.11.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.13.0...HEAD
+[5.13.0]: https://github.com/iopsystems/rezolus/compare/v5.12.1...v5.13.0
+[5.12.1]: https://github.com/iopsystems/rezolus/compare/v5.12.0...v5.12.1
+[5.12.0]: https://github.com/iopsystems/rezolus/compare/v5.11.0...v5.12.0
 [5.11.0]: https://github.com/iopsystems/rezolus/compare/v5.10.0...v5.11.0
 [5.10.0]: https://github.com/iopsystems/rezolus/compare/v5.9.1...v5.10.0
 [5.9.1]: https://github.com/iopsystems/rezolus/compare/v5.9.0...v5.9.1

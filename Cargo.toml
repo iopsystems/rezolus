@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/dashboard", "crates/systeminfo", "crates/viewer-sql"]
+members = [".", "crates/dashboard", "crates/report-save", "crates/systeminfo", "crates/viewer-sql"]
 exclude = ["xtask"]
 resolver = "2"
 
@@ -11,22 +11,20 @@ homepage = "https://github.com/iopsystems/rezolus"
 [workspace.dependencies]
 anyhow = "1.0.102"
 console_error_panic_hook = "0.1"
-histogram = "1.2.0"
+histogram = "1.3.1"
 libc = "0.2.186"
 log = "0.4.29"
 metriken = "0.9.2"
 metriken-exposition = "0.16.0"
-# Path dep (instead of `version = "0.9.5"`) because the local crate is 0.10.x
-# which doesn't satisfy a 0.9.x semver range — `[patch.crates-io]` would
-# silently fail. Path deps skip the version-range check.
-metriken-query = { path = "../metriken/metriken-query", default-features = false }
+metriken-query = { version = "0.10.4", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
 dashboard = { path = "crates/dashboard" }
+report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
 walkdir = "2.5.0"
-wasm-bindgen = "0.2"
+wasm-bindgen = "0.2.120"
 
 # Local override: use the in-tree metriken workspace instead of the
 # published 0.9.x crate. Drop this section to pin to released versions.
@@ -37,12 +35,13 @@ metriken-query = { path = "../metriken/metriken-query" }
 
 [package]
 name = "rezolus"
-version = "5.11.1-alpha.16"
+version = "5.13.1-alpha.7"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+publish = false
 
 [[bin]]
 name = "rezolus"
@@ -52,9 +51,9 @@ path = "src/main.rs"
 allan = "0.3.0"
 anyhow.workspace = true
 archspec = "0.1.3"
-arrow = "58.1.0"
+arrow = "58.2.0"
 async-trait = "0.1.89"
-axum = { version = "0.8.9", features = ["http2"] }
+axum = "0.8.9"
 backtrace = "0.3.76"
 chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive"] }
@@ -62,7 +61,6 @@ clocksource = "1.0.0"
 core_affinity = "0.8.3"
 ctrlc = { version = "3.5.2", features = ["termination"] }
 futures = "0.3.32"
-h2 = "0.4.13"
 histogram.workspace = true
 http = "1.4.0"
 humantime = "2.3.0"
@@ -73,18 +71,29 @@ linkme = "0.3.36"
 memmap2 = "0.9.10"
 metriken.workspace = true
 metriken-exposition.workspace = true
-metriken-query = { workspace = true, features = ["ingest", "lz4"] }
+metriken-query = { workspace = true, features = ["ingest"] }
 notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"
 parking_lot = "0.12.5"
-parquet = "58.1.0"
+parquet = { version = "58.2.0", default-features = false, features = [
+    "arrow",
+    "simdutf8",
+    "zstd",
+] }
 prometheus-parse = "0.2.5"
 plain = "0.2.3"
 rayon = "1.12"
 regex = "1"
 reqwest = { version = "0.13.3", default-features = false, features = [
     "blocking",
+    "rustls-no-provider",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "logging",
+    "ring",
+    "std",
+    "tls12",
 ] }
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -99,18 +108,31 @@ syscall-numbers = "4.0.3"
 sysconf = "0.3.4"
 tempfile = "3.27.0"
 thiserror.workspace = true
-tokio = { version = "1.52.1", features = ["full"] }
+tokio = { version = "1.52.2", features = [
+    "fs",
+    "io-std",
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
 toml = "1.1.2"
 tower = { version = "0.5.3", features = ["tokio"] }
 tower-http = { version = "0.6.8", features = [
-    "compression-full",
-    "decompression-full",
+    "compression-gzip",
+    "compression-zstd",
+    "decompression-gzip",
+    "decompression-zstd",
     "fs",
 ] }
 tower-livereload = "0.10.3"
 dashboard.workspace = true
+report-save.workspace = true
 systeminfo = { path = "crates/systeminfo" }
 walkdir.workspace = true
+tar = { version = "0.4.45", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.26.2" }

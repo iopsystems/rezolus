@@ -3,7 +3,7 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
-import { FileUpload } from './landing.js';
+import { FileUpload, splitAlias } from './landing.js';
 import { setStorageScope } from './selection.js';
 import { initDashboard, bootstrapSharedSections } from './app.js';
 
@@ -12,19 +12,6 @@ import { initDashboard, bootstrapSharedSections } from './app.js';
 let splashLabel = null;   // non-null = show splash, null = show landing
 let splashProgress = -1;  // -1 = indeterminate, 0–1 = determinate
 let landingError = null;
-
-// Split a "alias=path" string into [alias, path]. Mirrors the Rust
-// split_alias in src/viewer/mod.rs: alias must be non-empty, free of
-// path separators, ':' (URL-scheme guard), and whitespace. Anything
-// else parses as a bare path with alias=null.
-const splitAlias = (raw) => {
-    const eq = raw.indexOf('=');
-    if (eq <= 0) return [null, raw];
-    const lhs = raw.slice(0, eq);
-    const rhs = raw.slice(eq + 1);
-    if (/[\/\\:\s]/.test(lhs)) return [null, raw];
-    return [lhs, rhs];
-};
 
 const demoSections = [
     {
@@ -129,20 +116,66 @@ async function loadParquet(data, filename) {
     } catch (_) {
         bootstrapSharedSections([]);
     }
+    // Match the server viewer's mode.report flag — the WASM crate stamps
+    // the section list to [] when KEY_REPORT="trimmed", and app.js
+    // reroutes to /report when reportMode is true.
+    const reportMode = state.fileMetadata?.report === 'trimmed';
     initDashboard({
         systemInfo: state.systemInfo,
         fileMetadata: state.fileMetadata,
         selectionPayload: state.selectionPayload,
+        reportMode,
+        // Wire the topnav "Load Parquet" button to the same handler the
+        // landing-page dropzone uses. The server viewer uploads via
+        // /api/v1/upload; here we take the File bytes and reuse
+        // loadParquet directly.
+        onUploadParquet: loadFile,
     });
+}
+
+// Shared file-upload entry point: reads the File's bytes and runs the
+// usual loadParquet flow. Used by both the landing-page Choose-File /
+// drop zone and the topnav "Load Parquet" button after a capture is
+// already loaded (which destroys the splash and re-enters loadParquet
+// with the new bytes — same lifecycle as `loadCapture`).
+async function loadFile(file) {
+    if (!file) return;
+    const display = file.name || 'capture.parquet';
+    splashLabel = display;
+    splashProgress = -1;
+    landingError = null;
+    m.redraw();
+    try {
+        const data = new Uint8Array(await file.arrayBuffer());
+        splashLabel = 'Initializing';
+        splashProgress = -1;
+        m.redraw();
+        await loadParquet(data, display);
+        // Drop any URL params that pinned the previous capture so a
+        // refresh doesn't fight the just-uploaded file.
+        const url = new URL(window.location);
+        url.searchParams.delete('demo');
+        url.searchParams.delete('demoA');
+        url.searchParams.delete('demoB');
+        url.searchParams.delete('capture');
+        window.history.replaceState(null, '', url);
+    } catch (e) {
+        splashLabel = null;
+        landingError = `Failed to load ${display}: ${e?.message ?? e ?? 'unknown error'}`;
+        m.redraw();
+    }
 }
 
 // ── Load demo parquet (with download progress) ──────────────────────
 
-// Fetch a demo parquet from `data/<filename>` with optional progress
-// reporting. Returns the raw bytes as a Uint8Array.
-async function fetchDemoBytes(filename, onProgress) {
-    const resp = await fetch('data/' + filename);
-    if (!resp.ok) throw new Error(`Failed to fetch ${filename}: ${resp.status}`);
+// Fetch a parquet by URL or relative path. Relative paths resolve under
+// `data/` (the static-site convention for bundled demos); anything
+// matching `^https?://` is fetched as-is. Returns the raw bytes as a
+// Uint8Array.
+async function fetchParquetBytes(source, onProgress) {
+    const url = /^https?:\/\//i.test(source) ? source : 'data/' + source;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Failed to fetch ${source}: ${resp.status}`);
 
     const contentLength = resp.headers.get('Content-Length');
     if (contentLength && resp.body) {
@@ -175,7 +208,7 @@ async function loadDemo(filename = 'demo.parquet') {
     m.redraw();
 
     try {
-        const data = await fetchDemoBytes(filename, (p) => {
+        const data = await fetchParquetBytes(filename, (p) => {
             splashProgress = p;
             m.redraw();
         });
@@ -201,6 +234,63 @@ async function loadDemo(filename = 'demo.parquet') {
     }
 }
 
+// Filename surfaced in the splash + URL bar. URL paths get their basename
+// (or the explicit alias); relative-path entries stay as-is.
+const captureLabel = (alias, source) => {
+    if (alias) return alias;
+    try {
+        const u = new URL(source);
+        return u.pathname.split('/').filter(Boolean).pop() || source;
+    } catch (_) {
+        return source;
+    }
+};
+
+// Load a single capture from either a relative path (resolved under
+// `data/`) or an absolute http(s) URL. Mirrors loadDemo's lifecycle but
+// canonicalizes the address bar to ?capture=… instead of ?demo=… so
+// URL pins survive a refresh.
+async function loadCapture(source, alias = null) {
+    const display = captureLabel(alias, source);
+    splashLabel = display;
+    splashProgress = -1;
+    landingError = null;
+    m.redraw();
+
+    try {
+        const data = await fetchParquetBytes(source, (p) => {
+            splashProgress = p;
+            m.redraw();
+        });
+
+        splashLabel = 'Initializing';
+        splashProgress = -1;
+        m.redraw();
+
+        await loadParquet(data, display);
+
+        // Canonicalize address bar to ?capture=[alias=]source so the
+        // URL is shareable and bookmarkable.
+        const url = new URL(window.location);
+        url.searchParams.delete('demo');
+        url.searchParams.delete('demoA');
+        url.searchParams.delete('demoB');
+        url.searchParams.delete('capture');
+        url.searchParams.append('capture', alias ? `${alias}=${source}` : source);
+        window.history.replaceState(null, '', url);
+    } catch (e) {
+        splashLabel = null;
+        const msg = e?.message ?? e ?? 'unknown error';
+        // Cross-origin fetch failures usually surface as opaque "Failed
+        // to fetch" — point users at the proxy workaround.
+        const isUrl = /^https?:\/\//i.test(source);
+        landingError = isUrl
+            ? `Failed to load ${display}: ${msg}. If this is a cross-origin URL, the source may be missing CORS headers — host the viewer with \`rezolus view --proxy-allow=<host>\` to bypass.`
+            : `Failed to load ${display}: ${msg}`;
+        m.redraw();
+    }
+}
+
 // Load a pair of demo parquets as baseline + experiment and launch the
 // viewer in compare mode. Triggered by ?demoA=<file>&demoB=<file>.
 async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
@@ -215,12 +305,12 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
         let aDone = 0;
         let bDone = 0;
         const [dataA, dataB] = await Promise.all([
-            fetchDemoBytes(fileA, (p) => {
+            fetchParquetBytes(fileA, (p) => {
                 aDone = p;
                 splashProgress = (aDone + bDone) / 2;
                 m.redraw();
             }),
-            fetchDemoBytes(fileB, (p) => {
+            fetchParquetBytes(fileB, (p) => {
                 bDone = p;
                 splashProgress = (aDone + bDone) / 2;
                 m.redraw();
@@ -273,6 +363,8 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
         } catch (_) {
             bootstrapSharedSections([]);
         }
+        const reportMode = base.fileMetadata?.report === 'trimmed'
+            || experimentFileMetadata?.report === 'trimmed';
         initDashboard({
             systemInfo: base.systemInfo,
             fileMetadata: base.fileMetadata,
@@ -285,6 +377,7 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
             experimentFileMetadata,
             experimentFilename,
             experimentQueryRange,
+            reportMode,
         });
 
         // Canonicalize the URL: repeated `capture=label=path` (or bare
@@ -329,6 +422,7 @@ const Root = {
             ]));
         }
         return m('div', m(FileUpload, {
+            onFile: loadFile,
             onDemo: (demo) => {
                 if (demo && Array.isArray(demo.files) && demo.files.length === 2) {
                     loadCompareDemo(
@@ -341,6 +435,27 @@ const Root = {
                     loadDemo(demo.file);
                 }
             },
+            onLoadUrl: (raw) => {
+                // Comma separates A/B for compare mode. Each entry uses
+                // the same alias=URL grammar as the URL params, so a
+                // paste like `vllm=https://…/a.parquet, sglang=https://…/b.parquet`
+                // seeds legends and routes to compare mode automatically.
+                const entries = raw.split(',').map((s) => s.trim()).filter(Boolean);
+                if (entries.length >= 2) {
+                    const [labelA, fileA] = splitAlias(entries[0]);
+                    const [labelB, fileB] = splitAlias(entries[1]);
+                    const legends = (labelA || labelB)
+                        ? { baseline: labelA, experiment: labelB }
+                        : null;
+                    loadCompareDemo(fileA, fileB, legends, null);
+                } else if (entries.length === 1) {
+                    const [alias, source] = splitAlias(entries[0]);
+                    loadCapture(source, alias);
+                }
+            },
+            // Static-site bundle has no local proxy; URL loading goes
+            // direct from the browser, so CORS on the source matters.
+            urlLoading: 'direct',
             demoSections,
             loading: false,
             error: landingError,
@@ -378,6 +493,11 @@ if (_captureRaw.length >= 2) {
     splashLabel = `${legends?.baseline || fileA} vs ${legends?.experiment || fileB}`;
     m.mount(document.body, Root);
     loadCompareDemo(fileA, fileB, legends, _category);
+} else if (_captureRaw.length === 1) {
+    const [alias, source] = splitAlias(_captureRaw[0]);
+    splashLabel = alias || source;
+    m.mount(document.body, Root);
+    loadCapture(source, alias);
 } else if (_demoA && _demoB) {
     // Legacy A/B compare URL — parsed for one release, rewritten to
     // canonical `?capture=…&capture=…` on load by loadCompareDemo.

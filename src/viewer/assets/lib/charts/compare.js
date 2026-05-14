@@ -38,7 +38,7 @@
 //   anchors: { baseline: ms, experiment: ms }  — subtracted from each
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
-import { nullDiff, intersectLabels, canonicalQuantileLabel } from './util/compare_math.js';
+import { nullDiff, intersectLabels, canonicalQuantileLabel, unifyHistogramRange, buildDeltaSpectrum } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { ensureHeatmapMatrix } from './util/heatmap_data.js';
 import { resolvedStyle } from './metric_types.js';
@@ -86,7 +86,20 @@ export const renderCompareChart = (opts) => {
         case 'line':              return overlayLine(opts);
         case 'heatmap':           return sideBySideHeatmap(opts);
         case 'multi':             return splitMultiToSubgroup(opts);
-        case 'scatter':           return splitScatterToSubgroup(opts);
+        case 'scatter': {
+            // Per-chart spectrumKind toggle promotes the percentile
+            // scatter into a quantile-heatmap pair (or a single diff
+            // heatmap when the diff toggle is also on).
+            const chartId = opts.spec?.opts?.id;
+            const chartToggles = chartId && opts.toggles ? opts.toggles[chartId] : null;
+            const kind = chartToggles?.spectrumKind || null;
+            if (kind === 'full' || kind === 'tail') {
+                return chartToggles?.diff
+                    ? renderDiffQuantileHeatmap(opts)
+                    : sideBySideQuantileHeatmap(opts);
+            }
+            return splitScatterToSubgroup(opts);
+        }
         case 'histogram_heatmap': return sideBySideHistogramHeatmap(opts);
         default:
             return FALLBACK;
@@ -445,3 +458,222 @@ const sideBySideHistogramHeatmap = (opts) => sideBySidePair({
         bucket_bounds: cap.bucketBounds || opts.spec.bucket_bounds,
     }),
 });
+
+/**
+ * Render baseline + experiment quantile-heatmaps side-by-side. Used in
+ * compare mode when the user has the Full or Tail spectrum toggle on
+ * for a percentile chart. Captures must carry pre-fetched spectrum
+ * data on cap.spectrumData / cap.spectrumSeriesNames /
+ * cap.spectrumColorMinAnchor (placed there by CompareChartWrapper).
+ *
+ * Returns FALLBACK when either capture's spectrum is missing, so the
+ * caller can fall back to the existing 5-percentile split.
+ */
+const sideBySideQuantileHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
+    if (!baseline?.spectrumData || !experiment?.spectrumData) return FALLBACK;
+
+    // Unified color scale across both halves so equal cells render
+    // with equal colors. Anchors win when present.
+    const range = unifyHistogramRange(
+        { data: baseline.spectrumData,   color_min_anchor: baseline.spectrumColorMinAnchor },
+        { data: experiment.spectrumData, color_min_anchor: experiment.spectrumColorMinAnchor },
+    );
+
+    const groupId = spec.opts.id;
+    const baselineLabel = labelFor(captureLabels, CAPTURE_BASELINE);
+    const experimentLabel = labelFor(captureLabels, CAPTURE_EXPERIMENT);
+
+    const makeSlotSpec = (cap, role, counterpart) => {
+        const timeData = cap.spectrumTimeData || [];
+        const anchorSec = anchorSecondsFor(anchors, cap.id, timeData);
+        const opts = {
+            ...spec.opts,
+            id: `${spec.opts.id || 'chart'}::${cap.id}`,
+            title: `${spec.opts.title} — ${labelFor(captureLabels, cap.id)}`,
+            style: 'quantile_heatmap',
+        };
+        return {
+            ...spec,
+            opts,
+            time_data: rebase(timeData, anchorSec),
+            data: rebaseSpectrumData(cap.spectrumData, anchorSec),
+            series_names: cap.spectrumSeriesNames,
+            color_min_anchor: range.colorMin,
+            color_max_anchor: range.colorMax,
+            compareGroupId: groupId,
+            compareCounterpartData: { data: counterpart.spectrumData },
+            compareCaptureLabels: { baseline: baselineLabel, experiment: experimentLabel },
+            compareSelfRole: role,
+            xAxisFormatter: relativeTimeFormatter,
+        };
+    };
+
+    const slot = (cap, role, counterpart, dotCls) => m('div.compare-slot', [
+        m('div.compare-slot-label', [
+            m(`span.compare-dot.${dotCls}`, '\u25CF'),
+            m('span', labelFor(captureLabels, cap.id)),
+        ]),
+        m(Chart, { spec: makeSlotSpec(cap, role, counterpart), chartsState, interval }),
+    ]);
+
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-pair', [
+            slot(baseline,   'baseline',   experiment, 'compare-baseline-dot'),
+            slot(experiment, 'experiment', baseline,   'compare-experiment-dot'),
+        ]),
+    };
+};
+
+// Spectrum data has shape [timeCol, q1Col, …]. Rebasing the time column
+// in-place would mutate the cached fetch result; clone the time column
+// only and reuse the value columns by reference.
+function rebaseSpectrumData(data, anchorSec) {
+    if (!Array.isArray(data) || data.length === 0) return data;
+    return [rebase(data[0], anchorSec), ...data.slice(1)];
+}
+
+/**
+ * Render a single (experiment − baseline) quantile-heatmap diff.
+ * Uses the diverging palette resampled so neutral lands on zero.
+ * Returns FALLBACK when either capture is missing spectrum data or
+ * when no non-null deltas exist.
+ */
+const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
+    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
+    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
+    if (!baseline?.spectrumData || !experiment?.spectrumData) return FALLBACK;
+
+    const baseFetch = {
+        time_data: baseline.spectrumTimeData,
+        data: baseline.spectrumData,
+        series_names: baseline.spectrumSeriesNames,
+    };
+    const expFetch = {
+        time_data: experiment.spectrumTimeData,
+        data: experiment.spectrumData,
+        series_names: experiment.spectrumSeriesNames,
+    };
+
+    const delta = buildDeltaSpectrum(baseFetch, expFetch);
+    if (!delta) return FALLBACK;
+
+    let { dMin, dMax } = delta;
+    if (dMin == null || dMax == null) return FALLBACK;
+
+    // Robust scale: trim outliers from each end of the sorted deltas
+    // ONE quantile step at a time (1/100 of the distribution per step)
+    // up to 5 steps from each end (so we never trim past p5 / p95).
+    // A step is trimmed only when both:
+    //   - the trimmed value is at least 2× the magnitude of the next
+    //     value inward (an order-of-magnitude outlier worth dropping)
+    //   - dropping the value doesn't change the sign of the bound
+    //     (a flat percentile cap can map a small +ε cell to the wrong
+    //     side of the diverging palette when the trimmed extreme was
+    //     of the opposite sign — wrong color for that delta)
+    // Stops at the first step that fails either condition. This
+    // anchors each diff scale to its own bulk distribution, making
+    // Full and Tail diffs visually distinct without flipping any
+    // cell's diverging-color sign.
+    const flatDeltas = [];
+    for (let q = 1; q < delta.data.length; q++) {
+        const col = delta.data[q];
+        if (!Array.isArray(col)) continue;
+        for (const v of col) {
+            if (v != null && Number.isFinite(v)) flatDeltas.push(v);
+        }
+    }
+    if (flatDeltas.length >= 20) {
+        flatDeltas.sort((a, b) => a - b);
+        const trimmed = trimDiffOutliers(flatDeltas);
+        if (trimmed.lo !== null && trimmed.hi !== null && trimmed.hi > trimmed.lo) {
+            dMin = trimmed.lo;
+            dMax = trimmed.hi;
+        }
+    }
+
+    if (dMin === dMax) {
+        const pad = Math.max(Math.abs(dMin), 1) * 0.5;
+        dMin -= pad;
+        dMax += pad;
+    }
+
+    const isDark = isDarkTheme();
+    const basePalette = isDark ? DIVERGING_BLUE_GREEN_DARK : DIVERGING_BLUE_GREEN;
+    const resampled = resampleDivergingForRange(basePalette, dMin, dMax);
+
+    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, delta.time_data);
+    const baselineLabel = labelFor(captureLabels, CAPTURE_BASELINE);
+    const experimentLabel = labelFor(captureLabels, CAPTURE_EXPERIMENT);
+
+    const diffSpec = {
+        ...spec,
+        opts: {
+            ...spec.opts,
+            id: `${spec.opts.id || 'chart'}::diff`,
+            title: `${spec.opts.title} (${experimentLabel} − ${baselineLabel})`,
+            style: 'quantile_heatmap',
+        },
+        time_data: rebase(delta.time_data, baselineAnchorSec),
+        data: [rebase(delta.data[0], baselineAnchorSec), ...delta.data.slice(1)],
+        series_names: delta.series_names,
+        color_min_anchor: dMin,
+        color_max_anchor: dMax,
+        colormap: resampled,
+        nullCellColor: nullCellColor(isDark),
+        diffMatrices: delta.matrices,
+        diffCaptureLabels: { baseline: baselineLabel, experiment: experimentLabel },
+        diffLegendLabels: {
+            left:  `${baselineLabel} is higher`,
+            right: `${experimentLabel} is higher`,
+        },
+        xAxisFormatter: relativeTimeFormatter,
+    };
+
+    return {
+        kind: 'vnode',
+        vnode: m('div.compare-heatmap-diff', m(Chart, { spec: diffSpec, chartsState, interval })),
+    };
+};
+
+// Trim outliers from the sorted ascending delta array, walking inward
+// one quantile step (1/100 of the distribution) per iteration. A step
+// is trimmed only when the boundary value is ≥2× the magnitude of the
+// next value inward AND has the same sign — never trim across a sign
+// boundary (that would flip the diverging-palette color of cells near
+// zero). Capped at 5 steps from each end (so the band is never tighter
+// than [p5, p95]). Returns { lo, hi } or { lo: null, hi: null } when
+// the input is too small.
+function trimDiffOutliers(sorted) {
+    const n = sorted.length;
+    if (n < 20) return { lo: null, hi: null };
+    const stepSize = Math.max(1, Math.floor(n / 100));
+    const MAX_STEPS = 5;
+    const REDUCTION = 2;
+
+    let loIdx = 0;
+    for (let step = 0; step < MAX_STEPS; step++) {
+        const nxtIdx = loIdx + stepSize;
+        if (nxtIdx >= n) break;
+        const cur = sorted[loIdx];
+        const nxt = sorted[nxtIdx];
+        if (Math.sign(cur) !== Math.sign(nxt)) break;
+        if (Math.abs(cur) < REDUCTION * Math.abs(nxt)) break;
+        loIdx = nxtIdx;
+    }
+
+    let hiIdx = n - 1;
+    for (let step = 0; step < MAX_STEPS; step++) {
+        const nxtIdx = hiIdx - stepSize;
+        if (nxtIdx < 0) break;
+        const cur = sorted[hiIdx];
+        const nxt = sorted[nxtIdx];
+        if (Math.sign(cur) !== Math.sign(nxt)) break;
+        if (Math.abs(cur) < REDUCTION * Math.abs(nxt)) break;
+        hiIdx = nxtIdx;
+    }
+
+    return { lo: sorted[loIdx], hi: sorted[hiIdx] };
+}

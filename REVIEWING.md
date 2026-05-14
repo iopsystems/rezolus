@@ -50,11 +50,12 @@ imports:
 `crates/viewer-sql/Cargo.toml` has **no `metriken-query` dep** —
 the static viewer is fully decoupled from the legacy engine.
 
-A standalone preview UI lives alongside at `site/viewer-sql/preview.html`
-+ `lib/preview.js` (464 LOC). It drives the same `CaptureRegistry` to
-render every migrated section as ECharts, used to eyeball SQL pipeline
-output end-to-end and as a perf experiment surface. Not a replacement
-for the Mithril viewer.
+A minimal smoke page lives alongside at `site/viewer-sql/index.html` +
+`lib/script.js` — it drops a parquet onto a duckdb-wasm connection and
+renders one section through the same `dashboard::generate_section`
+generators the real viewer uses, as a sanity gate that the SQL pipeline
+boots cleanly. The puppeteer tests under `site/viewer-sql/test_*.mjs`
+drive it.
 
 ### Server-backed viewer + MCP — PromQL only, unchanged
 
@@ -144,7 +145,7 @@ on this branch:
 | Plot API surface | `crates/dashboard/src/plot.rs` (inline) | 12 tests on `plot_promql_with_sql` / `plot_sql` round-trip + dual-emission shape. |
 | Service extension / KPI | `crates/dashboard/src/service_extension.rs` (inline) | 7 tests on KPI deserialization. |
 | Frontend JS | `tests/*.test.mjs` | 8 files: compare math, compare/node filter, heatmap data + resolution, section cache, sections API, selection migration, service routes. |
-| Puppeteer smoke | `site/viewer-sql/test_{smoke,sections,preview,sglang}.mjs` + `site/viewer/test_viewer_sql.mjs` | 5 files (637 LOC) that drive a real headless browser against the static viewer end-to-end. |
+| Puppeteer smoke | `site/viewer-sql/test_{smoke,sections}.mjs` + `site/viewer/test_viewer_sql.mjs` | Three files that drive a real headless browser against the static viewer end-to-end. |
 
 Not directly unit-tested: `crates/viewer-sql/src/lib.rs` (716
 LOC) and `site/viewer-sql/lib/duckdb-registry.js` (926 LOC).

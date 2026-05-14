@@ -41,6 +41,13 @@ pub trait DashboardData {
     fn counter_label_count(&self, name: &str) -> usize;
     fn gauge_label_count(&self, name: &str) -> usize;
     fn histogram_label_count(&self, name: &str) -> usize;
+
+    /// Number of distinct values of `key` (e.g. `"id"`) across all series of
+    /// `metric`, looking across counter/gauge/histogram collections. Returns
+    /// 0 if the metric is unknown. Used by section generators to decide
+    /// whether to render per-device variants of charts — when there's only
+    /// one CPU/GPU, the per-device chart degenerates to the aggregate.
+    fn unique_label_values(&self, metric: &str, key: &str) -> usize;
 }
 
 impl DashboardData for Tsdb {
@@ -76,5 +83,8 @@ impl DashboardData for Tsdb {
     }
     fn histogram_label_count(&self, name: &str) -> usize {
         Tsdb::histogram_labels(self, name).map_or(0, |l| l.len())
+    }
+    fn unique_label_values(&self, metric: &str, key: &str) -> usize {
+        crate::plot::metric_unique_label_count(self, metric, key)
     }
 }

@@ -9,8 +9,10 @@ import {
     queryRangeForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
+    fetchQuantileSpectrumForPlot,
 } from './data.js';
-import { canonicalQuantileLabel } from './charts/util/compare_math.js';
+import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
+import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
 
@@ -19,7 +21,7 @@ import { ViewerApi } from './viewer_api.js';
 // Convert the baseline plot spec's already-populated data into a
 // capture-shaped object keyed by `id: 'baseline'`. The shape depends on
 // chart style so the compare strategies can consume it uniformly.
-const extractBaselineCapture = (spec) => {
+const extractBaselineCapture = (spec, options = {}) => {
     const style = resolvedStyle(spec);
     const cap = { id: CAPTURE_BASELINE };
 
@@ -38,14 +40,26 @@ const extractBaselineCapture = (spec) => {
     if (style === 'multi' || style === 'scatter') {
         const data = spec.data;
         const names = spec.series_names || [];
+        const metrics = spec.series_metrics || [];
         const map = new Map();
         if (Array.isArray(data) && data.length >= 2) {
             const timeData = data[0] || [];
             for (let i = 1; i < data.length; i++) {
                 let label = names[i - 1];
                 if (style === 'scatter') {
-                    const canonical = canonicalQuantileLabel(label);
-                    if (canonical) label = canonical;
+                    // Use the multi-dim-aware composer when the raw
+                    // metric is available (applyResultToPlot now stashes
+                    // it on spec.series_metrics). Falls back to the
+                    // legacy single-string path for any caller that
+                    // populates spec.data without going through the
+                    // standard pipeline.
+                    const metric = metrics[i - 1];
+                    const composed = metric ? composeScatterLabel(metric, options) : null;
+                    if (composed) label = composed;
+                    else {
+                        const canonical = canonicalQuantileLabel(label);
+                        if (canonical) label = canonical;
+                    }
                 }
                 if (label == null) continue;
                 map.set(String(label), { timeData, valueData: data[i] || [] });
@@ -71,7 +85,7 @@ const extractBaselineCapture = (spec) => {
 // Convert an experiment PromQL range result (same JSON shape as the
 // baseline got through applyResultToPlot) into the same capture shape
 // produced by extractBaselineCapture.
-const extractExperimentCapture = (spec, promqlResult) => {
+const extractExperimentCapture = (spec, promqlResult, options = {}) => {
     const style = resolvedStyle(spec);
     const cap = { id: CAPTURE_EXPERIMENT };
     const results = promqlResult?.data?.result;
@@ -106,7 +120,15 @@ const extractExperimentCapture = (spec, promqlResult) => {
     }
 
     if (style === 'scatter') {
-        cap.seriesMap = promqlResultToSeriesMap(results, (item) => canonicalQuantileLabel(item));
+        // Multi-dim-aware label so percentile metrics with extra dims
+        // (per-cgroup, per-host) match the baseline path key-for-key.
+        // `options.excludeValues` (the category bridge) drops capture-
+        // identity dims (e.g. source=vllm vs source=sglang in
+        // inference-library) so cross-capture matching still works.
+        // Falls back to legacy canonicalQuantileLabel for malformed
+        // metrics with no usable dims so we don't drop series silently.
+        cap.seriesMap = promqlResultToSeriesMap(results, (item) =>
+            composeScatterLabel(item.metric, options) || canonicalQuantileLabel(item));
         return cap;
     }
 
@@ -225,7 +247,80 @@ const fetchExperimentResult = (vnode) => {
     })();
 };
 
-const CompareChartWrapper = {
+// Returns null on metadata failure; callers then fall back to data.js's
+// 3600 s-capped baseline range — fine outside the diff path.
+const fetchBaselineRange = async () => {
+    try {
+        const meta = await ViewerApi.getMetadata(CAPTURE_BASELINE);
+        const data = meta?.data ?? meta;
+        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+        if (minT == null || maxT == null) return null;
+        const start = Number(minT);
+        const end = Number(maxT);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+            return null;
+        }
+        return { start, end };
+    } catch (_) {
+        return null;
+    }
+};
+
+// Both captures fetch with a SHARED step so buildDeltaSpectrum can pair
+// samples by index. Without it, baseline (3600 s cap) and experiment
+// (full duration) land on incompatible grids whenever durations differ
+// and the diff path silently falls back to the baseline scatter.
+const kickOffSpectrumFetch = (vnode, spec, kind) => {
+    const expRange = vnode.attrs.experimentQueryRange;
+    const quantiles = quantilesForKind(kind);
+    const plotForFetch = { promql_query: spec.promql_query, opts: spec.opts };
+    // Snapshot _lastFetchedStep: if granularity changes mid-fetch we
+    // discard this result to avoid writing stale data into the cache.
+    const stepAtLaunch = vnode.state._lastFetchedStep;
+
+    (async () => {
+        try {
+            const baseRangeBare = await fetchBaselineRange();
+            let baseRange = null;
+            let expRangeOut = expRange || null;
+            if (baseRangeBare && expRange?.step) {
+                // Coarsest step avoids oversampling either capture.
+                const baseStep = Math.max(1, Math.floor((baseRangeBare.end - baseRangeBare.start) / 500));
+                const sharedStep = Math.max(baseStep, expRange.step);
+                baseRange = { ...baseRangeBare, step: sharedStep };
+                expRangeOut = { ...expRange, step: sharedStep };
+            }
+
+            const [base, exp] = await Promise.all([
+                fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_BASELINE, baseRange),
+                fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_EXPERIMENT, expRangeOut),
+            ]);
+
+            if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
+            if (vnode.state._spectrumPending === kind) {
+                vnode.state._spectrumPending = null;
+            }
+            if (!base || !exp) {
+                m.redraw();
+                return;
+            }
+            vnode.state._spectrumByKind = vnode.state._spectrumByKind || {};
+            vnode.state._spectrumByKind[kind] = { baseline: base, experiment: exp };
+            m.redraw();
+        } catch (err) {
+            if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
+            console.error('[compare] spectrum fetch failed', err);
+            if (vnode.state._spectrumPending === kind) {
+                vnode.state._spectrumPending = null;
+            }
+            vnode.state.error = err?.message || 'spectrum fetch failed';
+            m.redraw();
+        }
+    })();
+};
+
+export const CompareChartWrapper = {
     oninit(vnode) {
         vnode.state.experimentResult = null;
         vnode.state.error = null;
@@ -251,7 +346,7 @@ const CompareChartWrapper = {
             }
         }
 
-        const { spec, chartsState, interval, anchors, toggles, setChartToggle, captureLabels } = vnode.attrs;
+        const { spec, chartsState, interval, anchors, toggles, setChartToggle, captureLabels, categoryMembers } = vnode.attrs;
 
         if (vnode.state.error) {
             return m('div.chart-error', `compare error: ${vnode.state.error}`);
@@ -260,6 +355,12 @@ const CompareChartWrapper = {
             return m('div.chart-loading', 'Loading experiment\u2026');
         }
 
+        // Category bridge — drop capture-identity dims from the
+        // cross-capture match key so bridge KPIs match symmetrically.
+        const captureExtractOpts = (categoryMembers && categoryMembers.length > 0)
+            ? { excludeValues: new Set(categoryMembers) }
+            : {};
+
         // Memoize both captures on vnode.state keyed by spec.data /
         // experimentResult identity. Each extractor walks the raw data
         // (heatmap extract does an O(rows×bins) normalize), and nothing
@@ -267,14 +368,66 @@ const CompareChartWrapper = {
         // tooltip/hover/zoom just re-run view() with the same inputs.
         if (vnode.state._capData !== spec.data) {
             vnode.state._capData = spec.data;
-            vnode.state._baselineCap = extractBaselineCapture(spec);
+            vnode.state._baselineCap = extractBaselineCapture(spec, captureExtractOpts);
         }
         if (vnode.state._capExpResult !== vnode.state.experimentResult) {
             vnode.state._capExpResult = vnode.state.experimentResult;
-            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult);
+            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult, captureExtractOpts);
         }
         const baselineCap = vnode.state._baselineCap;
         const experimentCap = vnode.state._experimentCap;
+
+        // Compare-mode spectrum fetch: when a percentile chart has a
+        // Full or Tail toggle on, we need the full/tail spectrum data
+        // for both captures. Fetched in parallel, cached on vnode.state
+        // by kind, invalidated when granularity changes (mirrors the
+        // existing experiment refetch path).
+        const chartId = spec?.opts?.id;
+        const chartToggles = chartId && toggles ? toggles[chartId] : null;
+        const spectrumKind = chartToggles?.spectrumKind || null;
+
+        // Invalidate the spectrum cache when granularity changes
+        // (we already track _lastFetchedStep for the experiment fetch;
+        // reuse the same trigger).
+        if (vnode.state._spectrumCachedStep !== vnode.state._lastFetchedStep) {
+            vnode.state._spectrumByKind = {};
+            vnode.state._spectrumPending = null;
+            vnode.state._spectrumCachedStep = vnode.state._lastFetchedStep;
+        }
+
+        if (spectrumKind && resolvedStyle(spec) === 'scatter') {
+            const cached = vnode.state._spectrumByKind?.[spectrumKind];
+            if (!cached && vnode.state._spectrumPending !== spectrumKind) {
+                vnode.state._spectrumPending = spectrumKind;
+                kickOffSpectrumFetch(vnode, spec, spectrumKind);
+                return m('div.chart-loading', 'Loading spectrum\u2026');
+            }
+            if (!cached) {
+                return m('div.chart-loading', 'Loading spectrum\u2026');
+            }
+            // Augment captures with spectrum fields for the strategies.
+            baselineCap.spectrumTimeData = cached.baseline.time_data;
+            baselineCap.spectrumData = cached.baseline.data;
+            baselineCap.spectrumSeriesNames = cached.baseline.series_names;
+            baselineCap.spectrumColorMinAnchor = cached.baseline.color_min_anchor;
+            experimentCap.spectrumTimeData = cached.experiment.time_data;
+            experimentCap.spectrumData = cached.experiment.data;
+            experimentCap.spectrumSeriesNames = cached.experiment.series_names;
+            experimentCap.spectrumColorMinAnchor = cached.experiment.color_min_anchor;
+        } else {
+            // Toggle off (or chart is non-scatter): scrub any spectrum
+            // fields left on the memoized capture objects from a prior
+            // toggled-on render. Otherwise downstream consumers would
+            // see stale truthy fields after the user disables the
+            // spectrum view.
+            for (const cap of [baselineCap, experimentCap]) {
+                if (!cap) continue;
+                cap.spectrumTimeData = undefined;
+                cap.spectrumData = undefined;
+                cap.spectrumSeriesNames = undefined;
+                cap.spectrumColorMinAnchor = undefined;
+            }
+        }
 
         const result = renderCompareChart({
             spec,
@@ -343,17 +496,25 @@ export function createGroupComponent(getState) {
                 ? { ...opts, title: `${titlePrefix}: ${opts.title}` }
                 : opts;
 
-            const chartHeader = (opts, spec) => m('div.chart-header', [
+            // Per-chart description renders OUTSIDE the chart-wrapper as
+            // a block above it (see renderChart), so it sits at body
+            // font-size and isn't squeezed by the absolute-positioned
+            // header overlay. The header keeps title + compare toggles only.
+            const chartHeader = (_opts, spec) => m('div.chart-header', [
                 m('div.chart-title-row', [
-                    m('span.chart-title', opts.title),
+                    m('span.chart-title', _opts.title),
                     compareMode && spec && compareToggle(spec, {
                         compareMode, toggles, setChartToggle,
                     }),
                 ]),
-                opts.description && m('span.chart-subtitle', opts.description),
             ]);
 
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
+            // sectionMetadata is the section payload (set by renderServiceSection);
+            // attrs.metadata is per-group config — unrelated.
+            const categoryMembers = Array.isArray(attrs.sectionMetadata?.category_members)
+                ? attrs.sectionMetadata.category_members
+                : null;
 
             // Compat shim: if the incoming JSON still uses the legacy
             // `plots` shape (an array directly on the group), promote it
@@ -402,6 +563,7 @@ export function createGroupComponent(getState) {
                     step: getStepOverride() || interval,
                     experimentQueryRange,
                     captureLabels,
+                    categoryMembers,
                 })
                 : m(Chart, { spec: renderSpec, chartsState, interval });
 
@@ -411,9 +573,11 @@ export function createGroupComponent(getState) {
                 // row. Single line overlays benefit from the wider x-axis
                 // to distinguish blue/green traces; split multi/scatter
                 // and side-by-side heatmaps need the room structurally.
-                const wrapperClass = (spec.width === 'full' || compareMode)
-                    ? 'div.chart-wrapper.full-width'
-                    : 'div.chart-wrapper';
+                // Histogram charts (percentile scatter, bucket heatmap,
+                // quantile heatmap) also go full-width — the x-axis
+                // density and the heatmap legend bar both need the room.
+                const isFull = spec.width === 'full' || compareMode || isHistogramChart;
+                const cellClass = isFull ? 'div.chart-cell.full-width' : 'div.chart-cell';
 
                 let renderSpec;
                 if (isHistogramChart && isHeatmapMode && sectionHeatmapData?.has(spec.opts.id)) {
@@ -422,11 +586,19 @@ export function createGroupComponent(getState) {
                     renderSpec = { ...spec, opts: prefixTitle(spec.opts), noCollapse };
                 }
 
-                return m(wrapperClass, [
-                    chartHeader(renderSpec.opts, renderSpec),
-                    chartBody(renderSpec, spec),
-                    expandLink(spec, sectionRoute),
-                    selectButton(spec, sectionRoute, sectionName),
+                return m(cellClass, [
+                    renderSpec.opts.description
+                        && m('p.chart-description', renderSpec.opts.description),
+                    m('div.chart-wrapper', [
+                        chartHeader(renderSpec.opts, renderSpec),
+                        chartBody(renderSpec, spec),
+                        expandLink(spec, sectionRoute),
+                        selectButton(spec, sectionRoute, sectionName, attrs.name, compareMode ? {
+                            baselineAlias: captureLabels.baseline,
+                            experimentAlias: captureLabels.experiment,
+                            categoryMembers,
+                        } : null),
+                    ]),
                 ]);
             };
 

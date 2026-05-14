@@ -41,6 +41,12 @@
     --accent-subtle: rgba(56, 139, 253, 0.15);
     --accent-glow: rgba(56, 139, 253, 0.25);
 
+    /* Selection brand color — indigo, distinct from Notebook (green) and Report (blue). */
+    --indigo: #a371f7;
+    --indigo-emphasis: #c297fc;
+    --indigo-muted: rgba(163, 113, 247, 0.4);
+    --indigo-subtle: rgba(163, 113, 247, 0.15);
+
     /* A/B compare mode — baseline is blue, experiment is green. */
     --compare-baseline: #2E5BFF;
     --compare-baseline-bg: rgba(46, 91, 255, 0.08);
@@ -122,6 +128,49 @@
     --chart-grid-line: rgba(48, 54, 61, 0.5);
     --chart-shadow: rgba(0, 0, 0, 0.4);
     --chart-shadow-strong: rgba(0, 0, 0, 0.5);
+
+    /* Series accent colors — theme-invariant (same hues on light/dark). */
+    --chart-blue:   #3b82f6;
+    --chart-cyan:   #06b6d4;
+    --chart-teal:   #14b8a6;
+    --chart-green:  #22c55e;
+    --chart-lime:   #84cc16;
+    --chart-yellow: #eab308;
+    --chart-orange: #f97316;
+    --chart-red:    #ef4444;
+    --chart-pink:   #ec4899;
+    --chart-purple: #8b5cf6;
+
+    /* Default cycling palette (d3 schemeCategory10). */
+    --chart-1:  #1f77b4;
+    --chart-2:  #ff7f0e;
+    --chart-3:  #2ca02c;
+    --chart-4:  #d62728;
+    --chart-5:  #9467bd;
+    --chart-6:  #8c564b;
+    --chart-7:  #e377c2;
+    --chart-8:  #7f7f7f;
+    --chart-9:  #bcbd22;
+    --chart-10: #17becf;
+
+    /* Hash-indexed cgroup palette (d3 schemeCategory20 with the muted
+       brown + gray pairs removed — leaves 16 vivid hues). */
+    --cgroup-1:  #1f77b4;
+    --cgroup-2:  #aec7e8;
+    --cgroup-3:  #ff7f0e;
+    --cgroup-4:  #ffbb78;
+    --cgroup-5:  #2ca02c;
+    --cgroup-6:  #98df8a;
+    --cgroup-7:  #d62728;
+    --cgroup-8:  #ff9896;
+    --cgroup-9:  #9467bd;
+    --cgroup-10: #c5b0d5;
+    --cgroup-11: #e377c2;
+    --cgroup-12: #f7b6d2;
+    --cgroup-13: #bcbd22;
+    --cgroup-14: #dbdb8d;
+    --cgroup-15: #17becf;
+    --cgroup-16: #9edae5;
 }
 
 /* ==========================================================================
@@ -614,15 +663,66 @@ body::after {
     flex-shrink: 0;
 }
 
+/* Single-capture filename dropdown. Lives inside .topnav-actions
+ * alongside Load Parquet / Load Selection so the three sit as a
+ * cohesive button group next to the REZOLUS logo. */
 .topnav-source {
+    position: relative;
+}
+.topnav-source-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 36px;
+    padding: 0 0.75rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--fg);
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
-    color: var(--fg);
-    padding: 0.25rem 0.75rem;
-    background: var(--bg-tertiary);
-    border-radius: 4px;
+    list-style: none;
+    outline: none;
+    max-width: 240px;
+}
+.topnav-source-summary::-webkit-details-marker { display: none; }
+.topnav-source-summary::marker { content: ''; }
+.topnav-source-summary:hover {
+    background: var(--bg-card-hover);
+}
+.topnav-source-summary svg {
+    flex-shrink: 0;
+    color: var(--fg-secondary);
+}
+.topnav-source-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.topnav-source-card {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-card);
     border: 1px solid var(--border-subtle);
-    margin-left: 1.5rem;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    z-index: 50;
+    min-width: 240px;
+    max-width: min(90vw, 360px);
+}
+.topnav-source-fullname {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg);
+    word-break: break-all;
+    user-select: text;
 }
 
 
@@ -719,14 +819,14 @@ body::after {
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded {
-    color: var(--success);
-    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+    color: var(--indigo);
+    border-color: var(--indigo-muted);
 }
 
 #topnav .topnav-actions .transport-btn.import-btn.parquet-loaded:hover {
-    background: color-mix(in srgb, var(--success) 15%, transparent);
-    color: var(--success);
-    box-shadow: 0 0 12px color-mix(in srgb, var(--success) 20%, transparent);
+    background: var(--indigo-subtle);
+    color: var(--indigo);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--indigo) 20%, transparent);
 }
 
 #topnav .theme-toggle-btn {
@@ -802,10 +902,17 @@ main {
     top: var(--header-height);
     left: 0;
     width: var(--sidebar-width);
+    /* 100vh on iOS Safari includes the area beneath the address bar, so
+       the sidebar's bottom can sit below the visible viewport and the
+       last items (System Info, Metadata) become unreachable. 100dvh
+       tracks the actual visible viewport; the 100vh declaration above
+       stays as a fallback for browsers that don't support dvh. */
     height: calc(100vh - var(--header-height));
+    height: calc(100dvh - var(--header-height));
     background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg) 100%);
     border-right: 1px solid var(--border-subtle);
     padding: 1.5rem 0;
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
     gap: 0.125rem;
@@ -917,6 +1024,14 @@ main {
     color: var(--fg);
     margin: 0;
     letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.section-title-pin {
+    color: var(--success);
+    flex-shrink: 0;
 }
 
 .section-actions {
@@ -1497,232 +1612,6 @@ main {
 }
 
 /* ==========================================================================
-   Cgroups Section
-   ========================================================================== */
-
-.cgroups-section {
-    width: 100%;
-}
-
-.cgroup-pairs {
-    display: flex;
-    flex-direction: column;
-    gap: 2.5rem;
-}
-
-.cgroup-pair-header {
-    display: flex;
-    flex-direction: column;
-    margin-bottom: 0.75rem;
-}
-
-.cgroup-pair-header .chart-title {
-    font-size: var(--font-size-base);
-    font-weight: 600;
-}
-
-.cgroup-pair-header .chart-subtitle {
-    font-size: var(--font-size-xs);
-    color: var(--fg-muted);
-}
-
-.cgroup-pair-charts {
-    display: flex;
-    gap: 1.5rem;
-}
-
-.cgroup-chart {
-    flex: 1;
-    min-width: 0;
-}
-
-.cgroup-chart-label {
-    display: block;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    color: var(--fg-muted);
-    margin: 0.25rem 0 0 0.25rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.cgroup-pair-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1rem;
-    padding: 0.25rem 0.5rem;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    color: var(--fg-secondary);
-}
-
-.cgroup-legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-}
-
-.cgroup-legend-swatch {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    flex-shrink: 0;
-}
-
-.cgroup-selector {
-    background: var(--bg-card-gradient);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--card-radius);
-    padding: 1.25rem;
-    margin-bottom: 1.5rem;
-}
-
-.cgroup-selector h3 {
-    margin-bottom: 1rem;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-base);
-    font-weight: 600;
-    color: var(--fg);
-}
-
-.cgroup-selector .error-message {
-    background: color-mix(in srgb, var(--danger) 10%, transparent);
-    border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
-    color: var(--danger-fg);
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    margin-bottom: 1rem;
-    font-size: var(--font-size-sm);
-}
-
-.cgroup-list .loading,
-.cgroup-list .empty {
-    padding: 1rem;
-    text-align: center;
-    color: var(--fg-secondary);
-    font-family: var(--font-mono);
-}
-
-.selector-container {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 1rem;
-}
-
-.selector-column {
-    flex: 1;
-}
-
-.selector-column h4 {
-    color: var(--fg-muted);
-}
-
-.cgroup-select {
-    width: 100%;
-    min-height: 8.5rem;
-    max-height: 16rem;
-    overflow-y: auto;
-    background: var(--bg-card);
-    color: var(--fg);
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    padding: 0.25rem;
-    margin: 0;
-    list-style: none;
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-}
-
-.cgroup-select-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 3px;
-    cursor: pointer;
-    user-select: none;
-}
-
-.cgroup-select-item:hover {
-    background: var(--bg-tertiary);
-}
-
-.cgroup-select-item.selected {
-    background: var(--accent);
-    color: var(--bg-void);
-}
-
-.cgroup-select-swatch {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    flex-shrink: 0;
-}
-
-.cgroup-select-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.cgroup-select-empty {
-    padding: 0.375rem 0.5rem;
-    color: var(--fg-muted);
-    font-style: italic;
-    list-style: none;
-}
-
-.selector-controls {
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    gap: 0.375rem;
-    padding: 1.85rem 0.5rem 0;
-    align-self: stretch;
-}
-
-.selector-controls button {
-    padding: 0.25rem 0.75rem;
-    background: var(--bg-tertiary);
-    color: var(--fg);
-    border: 1px solid var(--border-default);
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all var(--transition-base);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-sm);
-    font-weight: 600;
-    min-width: 44px;
-}
-
-.selector-controls button:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--bg-void);
-    border-color: var(--accent);
-    box-shadow: 0 0 12px var(--accent-glow);
-}
-
-.selector-controls button:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-}
-
-/* Arrow direction toggling: show horizontal by default, vertical on mobile */
-.selector-controls button .arrow-ud {
-    display: none;
-}
-
-.selector-info {
-    margin-top: 0.75rem;
-    text-align: center;
-    color: var(--fg-muted);
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-}
-
-/* ==========================================================================
    System Info Section
    ========================================================================== */
 
@@ -1913,259 +1802,6 @@ main {
 }
 
 /* ==========================================================================
-   CPU Topology Diagram
-   ========================================================================== */
-
-.topo-canvas {
-    margin-top: 1.5rem;
-    background: var(--bg-card-gradient);
-    border: 1px solid var(--border-default);
-    border-radius: var(--card-radius);
-    padding: 1.25rem;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    overflow-x: auto;
-}
-
-.topo-inner {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: stretch;
-}
-
-/* Toggle chips */
-.topo-toggles {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-}
-
-.topo-toggle {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    padding: 0.25rem 0.75rem;
-    border-radius: 4px;
-    border: 1px solid transparent;
-    background: var(--bg-elevated);
-    color: var(--fg-muted);
-    cursor: pointer;
-    transition: all var(--transition-base);
-}
-
-.topo-toggle:hover { color: var(--fg-secondary); }
-.topo-toggle.active { color: var(--fg); }
-
-.topo-toggle-threads.active { border-color: var(--topo-threads); }
-.topo-toggle-caches.active  { border-color: var(--topo-cache); }
-.topo-toggle-numa.active    { border-color: var(--topo-numa); }
-
-/* Packages container */
-.topo-packages {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-}
-
-/* Package */
-.topo-package {
-    border: var(--topo-border, 2px) solid var(--border-default);
-    border-radius: var(--card-radius);
-    padding: 0.75rem;
-    background: var(--bg-void);
-}
-
-.topo-package-header {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-    color: var(--fg);
-    margin-bottom: 0.5rem;
-}
-
-/* NUMA grid — 1 or 2 columns driven by JS via --topo-numa-cols */
-.topo-numa-grid {
-    display: grid;
-    grid-template-columns: repeat(var(--topo-numa-cols, 1), auto);
-    gap: 12px;
-}
-
-/* NUMA box */
-.topo-numa-box {
-    border: 1px solid var(--border-subtle);
-    border-radius: 4px;
-    padding: 0.5rem;
-}
-
-.topo-numa-box.numa-highlighted {
-    border-color: var(--topo-numa);
-}
-
-.topo-numa-header {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    font-weight: 400;
-    color: var(--topo-numa-emphasis);
-    margin-bottom: 0.35rem;
-}
-
-/* LLC groups within a NUMA node */
-.topo-llc-groups {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.topo-llc-group {
-    display: grid;
-    gap: var(--topo-border, 2px);
-    flex: 1 1 0;
-}
-
-/* Wrapped LLC group: explicit row packing (no CSS flex-wrap) */
-.topo-llc-group-wrap {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.topo-llc-row {
-    display: flex;
-    gap: 8px;
-}
-
-.topo-subgroup-grid {
-    display: grid;
-    gap: var(--topo-border, 2px);
-}
-
-/* Core cell */
-.topo-core {
-    background: var(--bg);
-    border: var(--topo-border, 2px) solid var(--topo-threads);
-    border-radius: 3px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 8px;
-    min-width: 0;
-    padding: 4px 2px;
-    transition: border-color var(--transition-base);
-}
-
-.topo-core:hover {
-    border-color: var(--topo-threads-emphasis);
-}
-
-.core-id {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--fg);
-    line-height: 1;
-}
-
-/* Thread sub-cells */
-.topo-threads {
-    display: flex;
-    gap: 1px;
-    margin-top: 2px;
-}
-
-.topo-thread {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--fg);
-    background: var(--bg-elevated);
-    border-radius: 2px;
-    padding: 0 2px;
-    line-height: 1.3;
-}
-
-/* L1 pair — orange outline box per core */
-.topo-l1-pair {
-    display: flex;
-    gap: 2px;
-    justify-content: center;
-    align-items: center;
-    background: var(--topo-inset);
-    border: var(--topo-border, 2px) solid var(--topo-cache);
-    border-radius: 3px;
-    padding: 3px 4px;
-    min-width: 0;
-    overflow: hidden;
-}
-
-.topo-l1 {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--fg);
-    background: var(--topo-inset-deep);
-    border-radius: 2px;
-    padding: 2px 4px;
-    line-height: 1.4;
-}
-
-/* Cache bars — span their cores (orange outline) */
-.topo-cache-bar {
-    border: var(--topo-border, 2px) solid var(--topo-cache);
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1px;
-    padding: 3px 6px;
-    min-width: 0;
-    overflow: hidden;
-}
-
-.topo-cache-name {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--fg);
-    line-height: 1.2;
-}
-
-.topo-cache-size {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--fg-secondary);
-    line-height: 1.2;
-}
-
-.topo-mid-cache {
-    background: var(--topo-inset);
-    border-radius: 3px;
-}
-
-.topo-llc {
-    background: var(--topo-inset-deeper);
-    border-radius: 4px;
-}
-
-/* ── Descriptions ─────────────────────────────────────────────────── */
-
-.topo-descriptions {
-    margin-top: 1rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--border-subtle);
-}
-
-.topo-desc {
-    font-family: var(--font-mono);
-    font-size: var(--font-size-xs);
-    color: var(--fg-secondary);
-    line-height: 1.6;
-    margin-bottom: 0.35rem;
-}
-
-/* ==========================================================================
    Scrollbar Styling
    ========================================================================== */
 
@@ -2273,6 +1909,23 @@ main {
     border-color: var(--danger);
 }
 
+.selection-btn-indigo {
+    background: var(--indigo-subtle);
+    color: var(--indigo);
+    border-color: var(--indigo-muted);
+}
+
+.selection-btn-indigo:hover {
+    background: color-mix(in srgb, var(--indigo) 25%, transparent);
+    color: var(--indigo);
+    border-color: var(--indigo);
+}
+
+.selection-btn-indigo:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .save-modal-input-row + .save-modal-options {
     margin-top: -11px;
 }
@@ -2304,89 +1957,162 @@ main {
 }
 
 .selection-card {
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    background: var(--bg-surface);
     margin-bottom: 1.5rem;
-    overflow: hidden;
 }
 
-.selection-card-header {
+/* Per-card controls (move up/down + remove) clustered top-right of
+   each Notebook entry. Hidden until the card is hovered, mirroring
+   the previous behavior of the standalone remove button. */
+.selection-card-controls {
+    position: absolute;
+    top: 8px;
+    right: 8px;
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 8px 16px;
-    background: var(--bg-inset);
-    border-bottom: 1px solid var(--border-default);
+    gap: 4px;
+    opacity: 0;
+    transition: opacity var(--transition-base);
+    z-index: 10;
+}
+
+.chart-wrapper:hover .selection-card-controls {
+    opacity: 0.6;
+}
+
+.selection-card-controls:hover {
+    opacity: 1;
+}
+
+.selection-card-move,
+.selection-card-remove,
+.selection-card-drag-handle {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--fg-muted);
+    cursor: pointer;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 6px;
+    transition: all var(--transition-base);
 }
 
-.selection-card-section-link {
-    color: var(--accent);
-    text-decoration: none;
+.selection-card-drag-handle {
+    cursor: grab;
+    user-select: none;
+    /* Slight visual nudge so the handle reads as "grabbable" — denser
+       glyph than the buttons. */
+    letter-spacing: -2px;
 }
 
-.selection-card-section-link:hover {
-    text-decoration: underline;
+.selection-card-drag-handle:active {
+    cursor: grabbing;
 }
 
-.selection-card-sep {
-    color: var(--fg-muted);
-}
-
-.selection-card-title {
+.selection-card-drag-handle:hover {
     color: var(--fg);
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
 }
 
-.selection-card-desc {
+.selection-card-move:hover:not(:disabled) {
+    color: var(--fg);
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
+}
+
+.selection-card-move:disabled {
+    cursor: default;
+    opacity: 0.35;
+}
+
+.selection-card-remove:hover {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+    background: color-mix(in srgb, var(--danger) 15%, transparent);
+}
+
+/* Drop indicator: a top border on the card the dragged entry will
+   land before. Uses an inset box-shadow so it doesn't shift layout. */
+.selection-card.drag-over {
+    box-shadow: inset 0 3px 0 0 var(--accent, #4a90e2);
+}
+
+/* Placeholder card for entries whose data isn't in the loaded
+   capture (metric absent, query errored, no series matched). */
+.chart-wrapper-unavailable {
+    background: var(--bg-inset);
+    border-style: dashed;
+}
+
+.chart-unavailable {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.chart-unavailable-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
     color: var(--fg-muted);
-    font-size: 0.85em;
-    flex: 1;
 }
 
-.selection-card-remove {
+.chart-unavailable-message {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--fg-muted);
+    font-style: italic;
+}
+
+.notes-affordance {
+    align-self: flex-start;
     background: transparent;
     border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    padding: 0.25rem 0.75rem 0.5rem;
+    border-radius: 4px;
+    transition: color var(--transition-base);
+}
+
+.notes-affordance:hover {
+    color: var(--accent);
+}
+
+.selection-card-notes {
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    border-top: 1px solid var(--border-default);
+}
+
+.report-card-notes {
+    padding: 12px;
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-inset);
+}
+
+.report-notes-label {
+    display: block;
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
     color: var(--fg-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    cursor: pointer;
-    padding: 0;
-    margin-bottom: 6px;
-    transition: color var(--transition-base);
+    margin-bottom: 0.4rem;
 }
 
-.selection-card-remove:hover {
-    color: var(--danger);
-}
-
-.selection-card-body {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0;
-}
-
-.selection-card-chart {
-    flex: 1 1 calc(50% - 1rem);
-    max-width: calc(50% - 1rem);
-    min-width: 300px;
-    padding: 12px;
-}
-
-.selection-card-chart .chart {
-    height: 250px;
-}
-
-.selection-card-notes {
-    flex: 1 1 200px;
-    display: flex;
-    flex-direction: column;
-    padding: 12px;
-    border-left: 1px solid var(--border-default);
+.report-notes-text {
+    margin: 0;
+    color: var(--fg);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
 }
 
 .selection-notes-label {
@@ -2443,8 +2169,16 @@ main {
     font-weight: 600 !important;
 }
 
-.report-link {
+.notebook-link {
     color: var(--success) !important;
+}
+
+.loaded-selection-link {
+    color: var(--indigo) !important;
+}
+
+.report-link {
+    color: var(--accent) !important;
 }
 
 /* Report metadata */
@@ -2874,9 +2608,20 @@ main {
         font-size: var(--font-size-base);
     }
 
-    /* Show filename but hide expandable metadata on mobile */
-    .topnav-source {
-        pointer-events: none;
+    /* Filename dropdown collapses to an icon-only 32px square. The
+     * multi-node `.topnav-source` is a plain <div> (no <details>),
+     * so the icon-only rule scopes to `details.topnav-source` only. */
+    details.topnav-source > .topnav-source-summary {
+        max-width: none;
+        width: 32px;
+        padding: 0.25rem;
+        justify-content: center;
+    }
+    details.topnav-source > .topnav-source-summary .topnav-source-name {
+        display: none;
+    }
+
+    .topnav-source:has(.topnav-node-select) {
         overflow: hidden;
         text-overflow: ellipsis;
         min-width: 0;
@@ -2967,6 +2712,12 @@ main {
         max-width: 100vw;
     }
 
+    /* Topnav is `position: relative` here, so the desktop
+       `margin-top: var(--header-height)` would double the gap. */
+    main {
+        margin-top: 0;
+    }
+
     /* ── Section header stacks vertically ── */
     .section-header-row {
         flex-direction: column;
@@ -3018,7 +2769,8 @@ main {
         display: none;
     }
 
-    #sidebar .query-explorer-link {
+    #sidebar .query-explorer-link,
+    #sidebar .sidebar-separator:has(+ .query-explorer-link) {
         display: none;
     }
 
@@ -3031,19 +2783,6 @@ main {
         white-space: normal;
     }
 
-    /* ── Selection cards: stack vertically ── */
-    .selection-card-body {
-        flex-direction: column;
-    }
-
-    .selection-card-chart {
-        flex: 1 1 100%;
-        max-width: 100%;
-    }
-
-    .selection-card-notes {
-        flex: 1 1 auto;
-    }
 }
 
 /* ---- Landing / File Upload Page ---- */
@@ -3188,6 +2927,48 @@ main {
     margin: 0 0 0.25rem;
 }
 
+.upload-hint {
+    color: var(--fg-muted);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    margin: 0.5rem 0 0;
+}
+
+.upload-hint-disabled {
+    color: var(--fg);
+    font-style: italic;
+}
+
+.upload-section {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-default);
+}
+
+.upload-section:first-of-type {
+    margin-top: 1rem;
+    padding-top: 0;
+    border-top: none;
+}
+
+.upload-section-title {
+    color: var(--accent);
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.75rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.connect-textarea {
+    resize: vertical;
+    min-height: 7rem;
+    text-align: left;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-y: auto;
+}
+
 .connect-input {
     display: block;
     width: 100%;
@@ -3213,313 +2994,3 @@ main {
     opacity: 0.6;
 }
 
-/* ==========================================================================
-   Compare mode — side-by-side + diff layouts
-   ========================================================================== */
-
-/* Pair of heatmap charts (baseline | experiment). Side-by-side on
- * wide viewports, stacked vertically on narrow viewports so each
- * heatmap still has enough horizontal room for the time axis. */
-.compare-heatmap-pair {
-    display: flex;
-    gap: 8px;
-    width: 100%;
-}
-.compare-heatmap-pair .compare-slot {
-    flex: 1 1 0;
-    min-width: 0;
-    position: relative;
-}
-@media (max-width: 900px) {
-    .compare-heatmap-pair {
-        flex-direction: column;
-    }
-    .compare-heatmap-pair .compare-slot {
-        width: 100%;
-    }
-}
-/* Pin the baseline/experiment label just above the heatmap canvas —
- * same treatment as the percentile split label, so it sits above the
- * Y-axis tick labels rather than at the very top of the slot.
- *
- * `top: 44px` sits inside the chart's header band (44px = chart header
- * height). The echarts grid starts at 71px (CHART_GRID_TOP_WITH_LEGEND
- * in charts/base.js); if that constant moves, this value moves too. */
-.compare-heatmap-pair .compare-slot-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    position: absolute;
-    top: 44px;
-    left: 12px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--fg-secondary);
-    letter-spacing: 0.02em;
-    pointer-events: none;
-    z-index: 1;
-}
-.compare-heatmap-pair .compare-slot-label .compare-dot { font-size: 10px; line-height: 1; }
-
-/* Single diff heatmap wrapper — occupies full chart width. Needs
- * positioning context so the absolute-positioned color legend bar
- * anchors inside this wrapper. */
-.compare-heatmap-diff {
-    display: block;
-    width: 100%;
-    position: relative;
-}
-
-/* Sub-grid for split multi/scatter charts (one sub-chart per shared label).
- * Caps at 3 columns per row regardless of container width; at narrow
- * widths auto-fit can still drop to 2 or 1 per the minmax() floor. */
-.compare-split-subgroup {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    grid-auto-columns: 1fr;
-    gap: 8px;
-    width: 100%;
-}
-.compare-split-subgroup > .chart-wrapper {
-    min-width: 0;
-}
-/* Small label above each disaggregated sub-chart (e.g. "p50").
- * Positioned just above the chart canvas, slightly inset from the left
- * so it sits above the Y-axis tick labels rather than spanning the
- * full wrapper width at the very top. */
-.compare-split-subgroup > .chart-wrapper {
-    position: relative;
-}
-.compare-split-label {
-    position: absolute;
-    top: 44px;
-    left: 12px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--fg-secondary);
-    letter-spacing: 0.02em;
-    font-variant-numeric: tabular-nums;
-    pointer-events: none;
-    z-index: 1;
-}
-/* Hard cap at 3 columns when the container is wide enough that auto-fit
- * would otherwise pack 4+ across. */
-@media (min-width: 900px) {
-    .compare-split-subgroup {
-        grid-template-columns: repeat(3, 1fr);
-    }
-}
-
-/* Per-chart "diff" toggle shown in compare mode for heatmaps.
- * Lives in the top-right of the chart header title row, vertically
- * aligned with the title via shared baseline, and matched to the
- * title's font size/family for visual weight. */
-.compare-toggle {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-    font-family: var(--font-mono);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    color: var(--fg-secondary);
-    user-select: none;
-    flex-shrink: 0;
-}
-.compare-toggle input[type=checkbox] {
-    cursor: pointer;
-    margin: 0;
-    transform: translateY(2px);
-    /* Default is dark theme. Tell the UA to use dark chrome for the
-     * native checkbox (background, border, check mark) and set the
-     * accent-color so the "checked" fill picks up the same deep tone
-     * as the rest of the dark palette. */
-    color-scheme: dark;
-    accent-color: var(--bg-tertiary);
-}
-
-[data-theme="light"] .compare-toggle input[type=checkbox] {
-    color-scheme: light;
-    accent-color: var(--accent);
-}
-
-/* Transient states for async compare-mode fetches */
-.chart-loading,
-.chart-error {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 160px;
-    padding: 1rem;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--fg-muted);
-}
-.chart-error {
-    color: var(--danger-fg);
-}
-
-/* ==========================================================================
-   Compare mode — header badge
-
-   Rendered as <details> so the same DOM serves both presentations:
-   - Wide viewports (> 900px): the <summary> is hidden; the capture
-     rows render inline next to each other, always visible.
-   - Narrow viewports: the <summary> becomes a compact dot-only
-     trigger; clicking opens a dropdown card below with the rows
-     stacked and filenames wrapping.
-   ========================================================================== */
-/* Compare badge — always a compact dot-only trigger; clicking opens a
- * dropdown card with per-capture filename + Load button. Same behavior
- * at every viewport width so filenames don't crowd the navbar. */
-.compare-badge {
-    display: inline-flex;
-    align-items: center;
-    margin-left: 8px;
-    font-size: 12px;
-    position: relative;
-}
-.compare-badge-summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 8px;
-    background: var(--compare-baseline-bg);
-    border-radius: 4px;
-    list-style: none;
-    cursor: pointer;
-    outline: none;
-}
-.compare-badge-summary::-webkit-details-marker { display: none; }
-.compare-badge-summary::marker { content: ''; }
-.compare-badge-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-.compare-badge-chip + .compare-badge-chip {
-    padding-left: 8px;
-    border-left: 1px solid var(--border-subtle);
-}
-.compare-badge-label {
-    color: var(--fg);
-    letter-spacing: 0.02em;
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.compare-badge .compare-capture-list {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-    padding: 10px 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: 6px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-    z-index: 50;
-    min-width: 240px;
-    max-width: min(90vw, 360px);
-}
-/* Row = info-cell (stacked: swatch+label on top, filename below) + tall
- * upload button centered in the trailing column. */
-.compare-badge .compare-capture {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-}
-.compare-badge .compare-capture + .compare-capture {
-    border-top: 1px solid var(--border-subtle);
-    padding-top: 8px;
-}
-.compare-badge .compare-capture-info {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 0;
-}
-.compare-badge .compare-capture-head {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-.compare-badge .compare-dot { font-size: 10px; line-height: 1; }
-.compare-badge .compare-capture-label {
-    color: var(--fg);
-    letter-spacing: 0.02em;
-}
-.compare-badge .compare-capture-name {
-    color: var(--fg-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-    font-size: 11px;
-}
-.compare-badge .compare-load {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 8px;
-    align-self: stretch;   /* match row height so icon centers vertically */
-    min-height: 36px;
-    cursor: pointer;
-    border: none;
-    background: transparent;
-    border-radius: 3px;
-    flex-shrink: 0;
-}
-.compare-badge .compare-load svg { display: block; }
-.compare-badge .compare-load:hover {
-    background: var(--bg-card-hover);
-}
-
-/* Capture-color dots + icons. Parent-agnostic so they pick up the
- * right color from the shared theme variables whether they live in
- * the nav badge, heatmap slot label, or anywhere else. */
-.compare-baseline-dot   { color: var(--compare-baseline); }
-.compare-experiment-dot { color: var(--compare-experiment); }
-
-/* ==========================================================================
-   Compare mode — landing (dual dropzone)
-   ========================================================================== */
-.landing-dual {
-    display: flex;
-    gap: 16px;
-    align-items: stretch;
-    width: 100%;
-    max-width: 640px;
-    margin: 0 auto;
-}
-.landing-dual .landing-slot {
-    flex: 1 1 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 0;
-}
-.landing-dual .landing-slot h3 {
-    margin: 0;
-    text-align: center;
-    font-size: 14px;
-    color: var(--fg-muted);
-}
-.landing-dual .upload-dropzone.disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-.landing-dual .upload-check {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--success);
-    margin-bottom: 4px;
-}

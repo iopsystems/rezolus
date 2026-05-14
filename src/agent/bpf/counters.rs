@@ -82,7 +82,6 @@ impl<'a> Counters<'a> {
         // we need temporary buffer so we can total up the per-CPU values
         let values = vec![0; counters.len()];
 
-        // load the BPF counter map
         let counter_map = CounterMap::new(map, counters.len()).expect("failed to initialize");
 
         Self {
@@ -95,7 +94,6 @@ impl<'a> Counters<'a> {
     /// Refreshes the counters by reading from the BPF map and setting each
     /// counter metric to the current value.
     pub fn refresh(&mut self) {
-        // zero out temp counters
         self.values.fill(0);
 
         let bank_width = self.counter_map.bank_width();
@@ -113,7 +111,6 @@ impl<'a> Counters<'a> {
             }
         }
 
-        // set each counter metric to its new combined value
         for (value, counter) in self.values.iter().zip(self.counters.iter_mut()) {
             counter.set(*value);
         }
@@ -132,7 +129,6 @@ impl<'a> CpuCounters<'a> {
     /// Create a new set of counters from the provided BPF map and collection of
     /// counter metrics.
     pub fn new(map: &'a Map, counters: Vec<&'static CounterGroup>) -> Self {
-        // load the BPF counter map
         let counter_map = CounterMap::new(map, counters.len()).expect("failed to initialize");
 
         Self {

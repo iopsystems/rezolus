@@ -1,5 +1,3 @@
-// histogram_heatmap.js - Histogram heatmap chart for latency distributions
-
 import {
     formatDateTime
 } from './util/utils.js';
@@ -23,7 +21,12 @@ import { infernoColor } from './util/colormap.js';
 // Reuse the shared time formatter for latency bucket labels
 const formatLatencyBucket = createAxisLabelFormatter('time');
 
-import { buildGradientCanvas, ensureLegendBar, LABEL_GAP } from './color_legend.js';
+import {
+    buildGradientCanvas,
+    ensureLegendBar,
+    sigDigits,
+    LEGEND_GRID_RIGHT,
+} from './color_legend.js';
 
 /**
  * Configures the Chart for histogram heatmap visualization
@@ -267,12 +270,20 @@ export function configureHistogramHeatmap(chart) {
         ...baseOption,
         grid: {
             left: '12',
-            right: '17',
+            right: String(LEGEND_GRID_RIGHT),
             top: String(CHART_GRID_TOP_WITH_LEGEND),
             bottom: '24',
             containLabel: true,
         },
         dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
+        // Force hover effects onto a separate canvas (the zrender
+        // "hoverLayer") so cell hover doesn't trigger a progressive
+        // re-render of the main canvas. Without this, hovering each
+        // cell repaints the chunk to the right of the cursor — and in
+        // compare-mode side-by-side pairs, the parent layout shift
+        // also fires the sibling chart's ResizeObserver, mirroring
+        // the redraw onto the other chart. Same fix as heatmap.js.
+        hoverLayerThreshold: 0,
         xAxis: {
             type: 'time',
             min: 'dataMin',
@@ -325,6 +336,12 @@ export function configureHistogramHeatmap(chart) {
             },
             data: allCellsData,
             clip: true,
+            // No hover state for these cells — telling ECharts
+            // explicitly avoids the default hover-handling pass that
+            // can trigger a progressive re-render of the right-of-cursor
+            // chunk on every mousemove (visible as flicker in
+            // compare-mode side-by-side pairs).
+            emphasis: { disabled: true },
             progressive: 5000,
             progressiveThreshold: 3000,
             animation: false,
@@ -350,48 +367,113 @@ export function configureHistogramHeatmap(chart) {
     if (pctMax === -Infinity) pctMax = 100;
 
     const countFormatter = createAxisLabelFormatter('count');
-    const rawMinLabel = countFormatter(colorMin);
-    const rawMaxLabel = countFormatter(colorMax);
-    const pctMinLabel = pctMin.toFixed(1) + '%';
-    const pctMaxLabel = pctMax.toFixed(1) + '%';
 
-    // DOM legend bar: [minLabel] [colorBar] [maxLabel] [checkbox] in a flex row.
-    // Mounted inside chart.domNode so Mithril owns the legend's lifetime.
+    // DOM legend bar: vertical gradient with tick marks/labels to the
+    // right of the chart canvas. Mounted inside chart.domNode so
+    // Mithril owns the legend's lifetime.
     const barCanvas = buildGradientCanvas(infernoColor);
 
-    // Build the checkbox element to pass as an extra element into the shared legend bar
-    let checkboxEl = chart.domNode.querySelector('.heatmap-legend-bar .histogram-toggle');
-    const checkboxExtra = [];
+    // "Raw count" checkbox lives at the top-left of the grid (same
+    // position as the spectrum checkboxes on scatter — see
+    // ensureSpectrumCheckboxes in scatter.js). Persist between
+    // renders so the click handler keeps working after reconfigure.
+    let checkboxEl = chart.domNode.querySelector('.histogram-toggle');
     if (!checkboxEl) {
         checkboxEl = document.createElement('span');
         checkboxEl.className = 'histogram-toggle';
-        checkboxEl.style.cssText = `${FONTS.cssControl} cursor: pointer; user-select: none; margin-left: ${LABEL_GAP}px; margin-top: -2px;`;
-        checkboxExtra.push(checkboxEl);
+        checkboxEl.style.cssText = `
+            position: absolute;
+            top: 42px;
+            left: 0px;
+            z-index: 10;
+            ${FONTS.cssControl}
+            cursor: pointer;
+            user-select: none;
+        `;
+        chart.domNode.appendChild(checkboxEl);
     }
 
-    const { minLabel: minLabelEl, maxLabel: maxLabelEl } =
-        ensureLegendBar(chart.domNode, barCanvas, checkboxExtra);
-
-    const updateLabels = () => {
+    // Bar gradient is linear in log1p(count) space (matches cell coloring).
+    // Map evenly spaced positions on the bar back to count via the inverse:
+    //   count = expm1(logMin + pos * logRange)
+    const TICK_COUNT = 5;
+    const buildTicks = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
-        minLabelEl.textContent = isRaw ? rawMinLabel : pctMinLabel;
-        maxLabelEl.textContent = isRaw ? rawMaxLabel : pctMaxLabel;
+        const ticks = [];
+        for (let i = 0; i < TICK_COUNT; i++) {
+            const pos = i / (TICK_COUNT - 1);
+            const count = Math.expm1(logMin + pos * logRange);
+            let label;
+            if (isRaw) {
+                label = countFormatter(sigDigits(count));
+            } else {
+                // Percentage at intermediate positions has no clean
+                // mapping (count ↔ pct depends on per-time-step total).
+                // Anchor the endpoints to pctMin/pctMax and leave
+                // intermediate ticks as bare marks.
+                if (pos === 0) label = pctMin.toFixed(1) + '%';
+                else if (pos === 1) label = pctMax.toFixed(1) + '%';
+                else label = '';
+            }
+            ticks.push({ pos, label });
+        }
+        return ticks;
     };
-    updateLabels();
+
+    // Dedup on grid-rect signature so we don't rebuild the legend DOM
+    // on every hover-emphasis render — `finished` fires on those and
+    // the resulting innerHTML reset would flash the legend (especially
+    // visible in compare-mode side-by-side pairs). The toggle handler
+    // resets `_legendLastSig` to force a re-render when ticks change.
+    const renderLegend = () => {
+        const rect = chart.echart?.getModel()?.getComponent('grid')?.coordinateSystem?.getRect();
+        const sig = rect
+            ? `${rect.x}:${rect.y}:${rect.width}:${rect.height}`
+            : 'none';
+        if (chart._legendLastSig === sig) return;
+        chart._legendLastSig = sig;
+        ensureLegendBar(chart.domNode, barCanvas, {
+            ticks: buildTicks(),
+            barTop: rect?.y,
+            barHeight: rect?.height,
+        });
+        // Pin the "Raw count" checkbox to the grid's left edge so it
+        // sits flush with the inner plot canvas (matches the spectrum
+        // checkboxes on scatter charts).
+        if (rect && Number.isFinite(rect.x)) {
+            checkboxEl.style.left = Math.round(rect.x) + 'px';
+        }
+    };
+    chart._legendLastSig = null;
 
     const updateCheckbox = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
-        const color = isRaw ? COLORS.fg : COLORS.fgLabel;
+        // fgSecondary reads brighter than fgMuted in dark mode — same
+        // choice the spectrum checkboxes on scatter use.
+        const color = isRaw ? COLORS.fg : COLORS.fgSecondary;
         checkboxEl.innerHTML =
-            `<span style="font-size: 16px; vertical-align: bottom;">${isRaw ? '☑' : '☐'}</span> Raw count`;
+            `<span style="font-size: 16px; vertical-align: bottom; position: relative; top: 2px;">${isRaw ? '☑' : '☐'}</span> Raw count`;
         checkboxEl.style.color = color;
     };
     updateCheckbox();
+    renderLegend();
+
+    // Re-run on every echart `finished` event so the bar's height + top
+    // track the chart's grid rect (Y-axis) and the checkbox's left
+    // edge tracks the grid X. First call before layout uses default
+    // dimensions; the next `finished` resizes.
+    if (chart._legendFinishedFn) chart.echart.off('finished', chart._legendFinishedFn);
+    chart._legendFinishedFn = renderLegend;
+    chart.echart.on('finished', renderLegend);
 
     checkboxEl.onclick = () => {
         const isRaw = chart.histogramDisplayMode === 'raw';
         chart.histogramDisplayMode = isRaw ? 'percentage' : 'raw';
         updateCheckbox();
-        updateLabels();
+        // Invalidate the rect-signature cache so renderLegend rebuilds
+        // with the new tick labels (raw count ↔ percentage), since the
+        // grid rect itself hasn't changed.
+        chart._legendLastSig = null;
+        renderLegend();
     };
 }

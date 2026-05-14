@@ -1,5 +1,3 @@
-// scatter.js - Scatter chart configuration with fixed time axis handling
-
 import {
     createAxisLabelFormatter,
 } from './util/units.js';
@@ -17,10 +15,15 @@ import {
     applyChartOption,
     buildOverlayLegendOption,
     CHART_GRID_TOP_WITH_LEGEND,
+    HISTOGRAM_CHART_GRID_LEFT,
     COLORS,
+    FONTS,
 } from './base.js';
 import { SCATTER_PALETTE } from './util/colormap.js';
 import { DEFAULT_PERCENTILES } from './metric_types.js';
+import { configureQuantileHeatmap } from './quantile_heatmap.js';
+import { fetchQuantileSpectrumForPlot } from '../data.js';
+import { quantilesForKind } from './util/spectrum_quantiles.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -39,6 +42,43 @@ export function configureScatterChart(chart) {
         return;
     }
 
+    // Invalidate the cached spectrum data when the underlying scatter
+    // data swaps to a different reference (e.g. parent refetch). The
+    // checkbox state itself is preserved so the user's choice persists
+    // across refreshes; the next render in spectrum mode will refetch.
+    if (chart._spectrumDataSourceRef !== data) {
+        chart._spectrumDataByKind = null;
+        chart._spectrumDataSourceRef = data;
+    }
+
+    // Spectrum mode (`full` or `tail`): render as a quantile heatmap
+    // using the cached result for that kind. If we don't have the data
+    // yet, fall through and render the normal scatter while we kick
+    // off the fetch in the background; once it lands, re-trigger.
+    if (chart.spectrumKind) {
+        const cache = chart._spectrumDataByKind?.[chart.spectrumKind];
+        if (cache) {
+            const originalSpec = chart.spec;
+            chart.spec = {
+                ...originalSpec,
+                data: cache.data,
+                series_names: cache.seriesNames,
+                // Forward the p0 anchor so the quantile-heatmap color
+                // scale starts at p0 (full and tail share the bound).
+                color_min_anchor: cache.colorMinAnchor,
+            };
+            try {
+                configureQuantileHeatmap(chart);
+            } finally {
+                chart.spec = originalSpec;
+            }
+            ensureSpectrumCheckboxes(chart);
+            return;
+        }
+        kickOffSpectrumFetch(chart, chart.spectrumKind);
+        // fall through to normal scatter render while we wait
+    }
+
     const baseOption = getBaseOption();
 
     // Access format properties using snake_case naming to match Rust serialization
@@ -50,7 +90,6 @@ export function configureScatterChart(chart) {
     // For percentile data, the format is [times, percentile1Values, percentile2Values, ...]
     const timeData = data[0];
 
-    // Create series for each percentile
     const series = [];
 
     // Derive labels from query result series names (set by the PromQL engine's
@@ -200,9 +239,19 @@ export function configureScatterChart(chart) {
 
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
+        grid: {
+            ...baseOption.grid,
+            top: String(CHART_GRID_TOP_WITH_LEGEND),
+            // Pin the left gutter so toggling between scatter and the
+            // quantile-heatmap variants doesn't shift the y-axis.
+            left: HISTOGRAM_CHART_GRID_LEFT,
+            containLabel: false,
+        },
         legend: buildOverlayLegendOption(uniqueNamesForLayout, {
             tooltipFormatter: () => 'Click to pin, ⌘/Ctrl+click to multi-select',
+            // Nudge the percentile legend ~2 character widths rightward
+            // so it sits closer to the chart's right edge.
+            right: '0',
         }),
         dataZoom: getDataZoomConfig(minZoomSpan),
         yAxis: yAxisConfig,
@@ -371,5 +420,195 @@ export function configureScatterChart(chart) {
     if (chart.pinnedSet.size > 0) {
         applyPinState();
     }
+
+    ensureSpectrumCheckboxes(chart);
+}
+
+// ── Spectrum toggles ─────────────────────────────────────────────────
+// Two mutually-exclusive checkboxes ("Full" and "Tail") let the user
+// promote a percentile scatter into a quantile-heatmap view. State:
+//   chart.spectrumKind: null | 'full' | 'tail'
+//   chart._spectrumPending: null | 'full' | 'tail' (in-flight fetch)
+//   chart._spectrumDataByKind: { full?, tail? } — cached fetch results,
+//     invalidated on the next configure when the source data ref swaps.
+// The DOM lives in chart.domNode (.chart already has position:relative)
+// so it survives reconfigures and rides along with the chart container.
+
+const SPECTRUM_CONTROLS_CLASS = 'spectrum-controls';
+const SPECTRUM_CHECKBOX_CLASS = 'spectrum-toggle';
+const SPECTRUM_TAIL_CHECKBOX_CLASS = 'spectrum-tail-toggle';
+
+const SPECTRUM_LABELS = { full: 'Full', tail: 'Tail' };
+
+function renderSpectrumCheckbox(el, chart, kind) {
+    const on = chart.spectrumKind === kind;
+    const pending = chart._spectrumPending === kind;
+    // fgSecondary (--fg-secondary) reads brighter than fgMuted in dark
+    // mode; the checkbox + label otherwise get lost against the chart bg.
+    const color = on ? COLORS.fg : COLORS.fgSecondary;
+    const glyph = on ? '☑' : '☐';
+    const label = pending ? `${SPECTRUM_LABELS[kind]}…` : SPECTRUM_LABELS[kind];
+    // Flex centers the 16px glyph against the 13px label, then a 2px
+    // upward translate compensates for the ☐/☑ glyph's built-in
+    // bottom whitespace so the visual centers actually line up.
+    el.style.display = 'inline-flex';
+    el.style.alignItems = 'center';
+    el.style.gap = '4px';
+    el.innerHTML =
+        `<span style="font-size: 16px; line-height: 1; transform: translateY(-2px);">${glyph}</span><span>${label}</span>`;
+    el.style.color = color;
+}
+
+function refreshSpectrumCheckboxes(chart) {
+    const container = chart.domNode.querySelector('.' + SPECTRUM_CONTROLS_CLASS);
+    if (!container) return;
+    const fullEl = container.querySelector('.' + SPECTRUM_CHECKBOX_CLASS);
+    const tailEl = container.querySelector('.' + SPECTRUM_TAIL_CHECKBOX_CLASS);
+    if (fullEl) renderSpectrumCheckbox(fullEl, chart, 'full');
+    if (tailEl) renderSpectrumCheckbox(tailEl, chart, 'tail');
+}
+
+function toggleSpectrum(chart, kind) {
+    chart.spectrumKind = (chart.spectrumKind === kind) ? null : kind;
+    refreshSpectrumCheckboxes(chart);
+    chart.configureChartByType();
+}
+
+// Position the spectrum controls inside chart.domNode so they:
+//   - hug the chart grid's left edge (so they line up with the inner
+//     plot canvas, not the y-axis label gutter)
+//   - sit on the same vertical row as the right-anchored percentile
+//     legend on wide charts, OR move up to the empty area above the
+//     legend on narrow charts so they don't crowd the legend on
+//     mobile / narrow viewport widths.
+// The grid rect is only available after echarts has laid out the
+// chart, so we query it via the `finished` event and reposition.
+// Threshold picked to cover phones (full-width), phones in compare
+// mode (half-width), tablet portrait, and narrow desktop windows.
+const SPECTRUM_CONTROLS_NARROW_WIDTH = 700;
+function positionControlsAtGridLeft(chart, container) {
+    if (!chart.echart) return;
+    try {
+        const grid = chart.echart.getModel().getComponent('grid');
+        const rect = grid?.coordinateSystem?.getRect();
+        const dom = chart.echart.getDom?.();
+        const chartWidth = dom?.clientWidth ?? 0;
+        // Selection cards put notes alongside the chart, so the
+        // histogram is structurally narrow regardless of viewport width.
+        const inSelectionCard = !!dom?.closest?.('.selection-card-chart');
+        const narrow = inSelectionCard
+            || (chartWidth > 0 && chartWidth < SPECTRUM_CONTROLS_NARROW_WIDTH);
+        if (narrow) {
+            // Narrow chart: stack above the legend on its own line and
+            // align to the right edge so it visually anchors to the
+            // legend's column rather than floating in the left gutter.
+            // top:24 keeps a ~6px gap above the legend (at top:42) so
+            // the 13px control font doesn't touch the legend baseline.
+            // right:28 = 12px chart inset + ~1em breathing room so the
+            // checkboxes don't crowd the legend's rightmost chip.
+            container.style.top = '24px';
+            container.style.left = 'auto';
+            container.style.right = '28px';
+        } else {
+            container.style.top = '42px';
+            container.style.right = 'auto';
+            if (rect && Number.isFinite(rect.x)) {
+                container.style.left = Math.round(rect.x) + 'px';
+            }
+        }
+    } catch (_e) {
+        // Layout not ready yet — next 'finished' event will retry.
+    }
+}
+
+function ensureSpectrumCheckboxes(chart) {
+    let container = chart.domNode.querySelector('.' + SPECTRUM_CONTROLS_CLASS);
+    let fullEl, tailEl;
+    if (!container) {
+        container = document.createElement('span');
+        container.className = SPECTRUM_CONTROLS_CLASS;
+        // Sit on the same vertical row as the percentile legend
+        // (top:42 matches buildOverlayLegendOption's default). The
+        // left offset is filled in by positionControlsAtGridLeft once
+        // the grid coordinate system is ready.
+        container.style.cssText = `
+            position: absolute;
+            top: 42px;
+            left: 0px;
+            z-index: 10;
+            display: inline-flex;
+            gap: 12px;
+            ${FONTS.cssControl}
+            user-select: none;
+        `;
+        fullEl = document.createElement('span');
+        fullEl.className = SPECTRUM_CHECKBOX_CLASS;
+        fullEl.style.cursor = 'pointer';
+        tailEl = document.createElement('span');
+        tailEl.className = SPECTRUM_TAIL_CHECKBOX_CLASS;
+        tailEl.style.cursor = 'pointer';
+        container.appendChild(fullEl);
+        container.appendChild(tailEl);
+        chart.domNode.appendChild(container);
+    } else {
+        fullEl = container.querySelector('.' + SPECTRUM_CHECKBOX_CLASS);
+        tailEl = container.querySelector('.' + SPECTRUM_TAIL_CHECKBOX_CLASS);
+    }
+
+    fullEl.onclick = () => toggleSpectrum(chart, 'full');
+    tailEl.onclick = () => toggleSpectrum(chart, 'tail');
+    renderSpectrumCheckbox(fullEl, chart, 'full');
+    renderSpectrumCheckbox(tailEl, chart, 'tail');
+
+    // Reposition on every render (initial layout, theme swap, resize,
+    // zoom-driven re-layout). Replace any previous listener bound to a
+    // stale closure so we don't stack handlers across reconfigures.
+    if (chart.echart) {
+        if (chart._spectrumFinishedFn) {
+            chart.echart.off('finished', chart._spectrumFinishedFn);
+        }
+        chart._spectrumFinishedFn = () => positionControlsAtGridLeft(chart, container);
+        chart.echart.on('finished', chart._spectrumFinishedFn);
+        positionControlsAtGridLeft(chart, container);
+    }
+}
+
+function kickOffSpectrumFetch(chart, kind) {
+    if (chart._spectrumPending === kind) return;
+    const plotForFetch = {
+        promql_query: chart.spec.promql_query,
+        opts: chart.spec.opts,
+    };
+    if (!plotForFetch.promql_query) return;
+
+    chart._spectrumPending = kind;
+    refreshSpectrumCheckboxes(chart);
+
+    fetchQuantileSpectrumForPlot(plotForFetch, quantilesForKind(kind))
+        .then((res) => {
+            if (chart._spectrumPending === kind) chart._spectrumPending = null;
+            if (!res) {
+                // Fetch returned no usable data — bail back to scatter
+                // (only if the user hasn't switched to a different kind
+                // in the meantime).
+                if (chart.spectrumKind === kind) chart.spectrumKind = null;
+                refreshSpectrumCheckboxes(chart);
+                return;
+            }
+            chart._spectrumDataByKind = chart._spectrumDataByKind || {};
+            chart._spectrumDataByKind[kind] = {
+                data: res.data,
+                seriesNames: res.series_names,
+                colorMinAnchor: res.color_min_anchor,
+            };
+            if (chart.spectrumKind === kind) chart.configureChartByType();
+            else refreshSpectrumCheckboxes(chart);
+        })
+        .catch((err) => {
+            if (chart._spectrumPending === kind) chart._spectrumPending = null;
+            if (chart.spectrumKind === kind) chart.spectrumKind = null;
+            refreshSpectrumCheckboxes(chart);
+            console.error('Failed to fetch quantile spectrum:', err);
+        });
 }
 

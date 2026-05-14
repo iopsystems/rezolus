@@ -217,7 +217,6 @@ static __noinline int handle_new_task(struct task_struct* task) {
     bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
     bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
 
-    // Update the start time
     bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
 
     // Populate and send task info (use ringbuf_reserve to avoid stack allocation)
@@ -251,7 +250,6 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     if (pid == 0 || pid >= MAX_PID)
         return 0;
 
-    // Check if this is a new task
     handle_new_task(task);
 
     curr_utime = BPF_CORE_READ(task, utime);
@@ -276,7 +274,6 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
         delta_stime = curr_stime - *last_stime;
     }
 
-    // Update last seen values
     *last_utime = curr_utime;
     *last_stime = curr_stime;
 
@@ -284,12 +281,10 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     if (delta_utime == 0 && delta_stime == 0)
         return 0;
 
-    // Get CPU index
     cpu = bpf_get_smp_processor_id();
     if (cpu >= MAX_CPUS)
         return 0;
 
-    // Update per-CPU user time
     if (delta_utime > 0) {
         idx = CPU_USAGE_GROUP_WIDTH * cpu + USER_OFFSET;
         if (idx < MAX_CPUS * CPU_USAGE_GROUP_WIDTH) {
@@ -297,7 +292,6 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
         }
     }
 
-    // Update per-CPU system time
     if (delta_stime > 0) {
         idx = CPU_USAGE_GROUP_WIDTH * cpu + SYSTEM_OFFSET;
         if (idx < MAX_CPUS * CPU_USAGE_GROUP_WIDTH) {
@@ -305,13 +299,11 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
         }
     }
 
-    // Update per-task CPU usage (total of user + system)
     u64 delta_total = delta_utime + delta_stime;
     if (delta_total > 0) {
         array_add(&task_cpu_usage, pid, delta_total);
     }
 
-    // Additional accounting on a per-cgroup basis
     struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
     if (!tg)
         return 0;
@@ -328,7 +320,6 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
         bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
     }
 
-    // Update per-cgroup counters
     if (delta_utime > 0) {
         array_add(&cgroup_user, cgroup_id, delta_utime);
     }
@@ -353,12 +344,10 @@ int handle__sched_process_exit(u64* ctx) {
     u64 zero = 0;
     bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
 
-    // Clean up internal tracking state
     bpf_map_update_elem(&task_utime, &pid, &zero, BPF_ANY);
     bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
     bpf_map_update_elem(&task_start_times, &pid, &zero, BPF_ANY);
 
-    // Notify userspace to clear metadata
     struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
     if (exit_event) {
         exit_event->pid = pid;
@@ -389,7 +378,6 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
     u32 idx, cpuusage_idx;
     u32 start_idx = cpu * 8;
 
-    // lookup the start time
     start_ts = bpf_map_lookup_elem(&softirq_start, &start_idx);
 
     // possible we missed the start
@@ -400,10 +388,8 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
     struct task_struct* current = (struct task_struct*)bpf_get_current_task();
     int pid = BPF_CORE_READ(current, pid);
 
-    // calculate the duration
     dur = bpf_ktime_get_ns() - *start_ts;
 
-    // update the softirq time
     idx = SOFTIRQ_GROUP_WIDTH * cpu + args->vec;
     array_add(&softirq_time, idx, dur);
     if (pid == 0) {
@@ -411,7 +397,6 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
         array_add(&cpu_usage, cpuusage_idx, dur);
     }
 
-    // clear the start timestamp
     *start_ts = 0;
 
     return 0;

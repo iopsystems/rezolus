@@ -61,7 +61,6 @@ pub(super) fn perform_cusum_analysis_with_allan(
         return Err("Cannot perform CUSUM analysis on empty dataset".into());
     }
 
-    // Calculate mean and standard deviation
     let mean = values.iter().sum::<f64>() / values.len() as f64;
     let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
     let std_dev = variance.sqrt();
@@ -99,11 +98,9 @@ pub(super) fn perform_cusum_analysis_with_allan(
         });
     }
 
-    // Deduplicate and sort all change points
     all_change_points.sort_unstable();
     all_change_points.dedup();
 
-    // Separate gradual changes from cliffs
     let cliff_indices: Vec<usize> = cliffs.iter().map(|c| c.index).collect();
     let gradual_changes: Vec<usize> = all_change_points
         .iter()
@@ -145,7 +142,6 @@ fn interpolate_allan_dev(allan_analysis: &AllanAnalysis, target_tau: f64) -> f64
         .find(|(_, &dev)| dev > 0.0)
         .map(|(i, _)| i);
 
-    // Find the two points that bracket target_tau
     let mut below_idx = None;
     let mut above_idx = None;
 
@@ -235,7 +231,6 @@ fn detect_window_change_points(
     let step_size = window_size / 2; // 50% overlap for better detection
 
     for i in (window_size..values.len()).step_by(step_size) {
-        // Compare window before this point with window after
         let before_start = i.saturating_sub(window_size);
         let before_end = i;
         let after_start = i;
@@ -249,11 +244,9 @@ fn detect_window_change_points(
         let before_window = &values[before_start..before_end];
         let after_window = &values[after_start..after_end];
 
-        // Calculate means
         let before_mean = before_window.iter().sum::<f64>() / before_window.len() as f64;
         let after_mean = after_window.iter().sum::<f64>() / after_window.len() as f64;
 
-        // Calculate standard deviations
         let before_var = before_window
             .iter()
             .map(|v| (v - before_mean).powi(2))
@@ -268,7 +261,6 @@ fn detect_window_change_points(
             / after_window.len() as f64;
         let _after_std = after_var.sqrt();
 
-        // Calculate mean change percentage
         let mean_change = (after_mean - before_mean).abs();
         let mean_change_pct = if before_mean.abs() > 0.0 {
             mean_change / before_mean.abs()
@@ -316,7 +308,6 @@ fn detect_window_change_points(
             let confidence =
                 (allan_component * 0.5 + t_component * 0.3 + pct_component * 0.2).min(1.0);
 
-            // Check if we already detected a change point nearby
             let too_close = change_points
                 .iter()
                 .any(|cp: &WindowChangePoint| cp.index.abs_diff(i) < window_size);
@@ -334,7 +325,6 @@ fn detect_window_change_points(
         }
     }
 
-    // Sort by confidence (highest first)
     change_points.sort_by(|a, b| {
         b.confidence
             .partial_cmp(&a.confidence)
@@ -406,7 +396,6 @@ fn detect_cliffs(values: &[f64], mean: f64, std_dev: f64) -> Vec<CliffPoint> {
         }
     }
 
-    // Also check for cliffs using running windows
     if values.len() >= 5 {
         for i in 2..values.len() - 2 {
             let before_avg = (values[i - 2] + values[i - 1]) / 2.0;

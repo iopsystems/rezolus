@@ -12,6 +12,9 @@ import {
     configureHistogramHeatmap
 } from './histogram_heatmap.js';
 import {
+    configureQuantileHeatmap
+} from './quantile_heatmap.js';
+import {
     configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
@@ -37,6 +40,10 @@ export class ChartsState {
     // Zoom subscribers. Each entry receives (zoom, source) synchronously
     // after setZoom produces a diff.
     _zoomSubs = new Set();
+    // Compare-mode cursor subscribers, keyed by compare-group id (the
+    // parent spec's opts.id). Two subscribers per group max — the
+    // baseline and experiment halves of a side-by-side pair.
+    _compareCursorSubs = new Map();  // groupId → Set<fn>
     // Global color mapper - for consistent cgroup colors
     colorMapper = globalColorMapper;
 
@@ -48,6 +55,7 @@ export class ChartsState {
         this.globalZoom = null;
         this.charts.clear();
         this._zoomSubs.clear();
+        this._compareCursorSubs.clear();
     }
 
     isDefaultZoom() {
@@ -74,6 +82,55 @@ export class ChartsState {
     subscribeZoom(fn) {
         this._zoomSubs.add(fn);
         return () => { this._zoomSubs.delete(fn); };
+    }
+
+    /**
+     * Subscribe to compare-mode cursor events for a group. The
+     * callback fires synchronously from inside publishCompareCursor
+     * when a sibling chart in the same compare group hovers / leaves
+     * a cell. Payload is either { timeMs, qIdx, sourceChartId } or
+     * null (cursor left the publishing chart).
+     *
+     * Self-sourced events (when sourceChartId equals the subscriber's
+     * own id) are filtered by the publisher; subscribers don't need to
+     * filter themselves.
+     *
+     * Returns an unsubscribe function.
+     */
+    subscribeCompareCursor(groupId, fn) {
+        if (!groupId) return () => {};
+        let set = this._compareCursorSubs.get(groupId);
+        if (!set) {
+            set = new Set();
+            this._compareCursorSubs.set(groupId, set);
+        }
+        set.add(fn);
+        return () => {
+            const s = this._compareCursorSubs.get(groupId);
+            if (!s) return;
+            s.delete(fn);
+            if (s.size === 0) this._compareCursorSubs.delete(groupId);
+        };
+    }
+
+    /**
+     * Publish a compare-mode cursor event to all subscribers in the
+     * group EXCEPT the source chart itself. Payload shape:
+     *   { timeMs, qIdx, sourceChartId } | null
+     * `null` clears (the cursor left the source chart).
+     */
+    publishCompareCursor(groupId, payload) {
+        if (!groupId) return;
+        const set = this._compareCursorSubs.get(groupId);
+        if (!set) return;
+        const sourceId = payload?.sourceChartId;
+        for (const fn of set) {
+            // Subscribers tag their fn with `_chartId` (set in
+            // quantile_heatmap.js) so we can skip the publisher's own
+            // copy without round-tripping through the event payload.
+            if (sourceId && fn._chartId === sourceId) continue;
+            fn(payload);
+        }
     }
 
     /**
@@ -315,7 +372,18 @@ export class Chart {
         // change" and the chart would render stale experiment dots.
         // Detect a multiSeries swap explicitly.
         const multiSeriesChanged = multiSeriesDiffers(oldSpec.multiSeries, this.spec.multiSeries);
-        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged)) {
+        // Compare-mode quantile heatmap (Full ↔ Tail toggle) feeds in
+        // data of identical shape (100 quantile cols, same time range)
+        // for either kind, so shallowSameShape returns true and a kind
+        // switch alone wouldn't trigger reconfigure. The two kinds DO
+        // have distinct series_names arrays (`['p1'..'p100']` vs
+        // `['p99.01'..'p100']`), and the strategy carries the cached
+        // ref through unchanged within a kind, so a reference change
+        // is a reliable kind-switch signal. (Single-capture and other
+        // chart types either don't set series_names or keep the same
+        // ref across renders, so this is a no-op for them.)
+        const seriesNamesChanged = oldSpec.series_names !== this.spec.series_names;
+        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
 
@@ -356,6 +424,8 @@ export class Chart {
 
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
         if (this._pinCleanup) this._pinCleanup();
+        if (this._compareCursorOff) this._compareCursorOff();
+        if (this._compareCursorUnsub) this._compareCursorUnsub();
 
         // Remove ourselves from the charts registry so setZoom's fan-out,
         // resetAll, hasActiveSelection, etc. don't walk a stale entry
@@ -683,7 +753,10 @@ export class Chart {
         const style = resolvedStyle(this.spec)
             || resolveStyle(this.spec.opts.type, this.spec.opts.subtype);
         // Only for chart types with a value/log Y-axis
-        if (style === 'heatmap' || style === 'histogram_heatmap') return;
+        if (style === 'heatmap' || style === 'histogram_heatmap' || style === 'quantile_heatmap') return;
+        // Scatter charts in spectrum mode (full/tail) are rendered as
+        // quantile heatmaps; they own no value Y-axis to rescale.
+        if (style === 'scatter' && this.spectrumKind) return;
 
         // In compare-mode overlays, spec.data holds only the baseline's
         // [timeData, valueData]; the experiment values live in
@@ -815,9 +888,31 @@ export class Chart {
 
         // Clean up heatmap DOM legend bar when switching to a different chart type
         // (e.g. heatmap-mode toggle off). The legend lives inside chart.domNode
-        // now, so clear it from the same scope.
-        if (style !== 'histogram_heatmap' && style !== 'heatmap') {
+        // now, so clear it from the same scope. Scatter charts in spectrum mode
+        // render as a quantile heatmap and own a legend bar too.
+        const ownsLegendBar =
+            style === 'histogram_heatmap'
+            || style === 'heatmap'
+            || style === 'quantile_heatmap'
+            || (style === 'scatter' && this.spectrumKind);
+        if (!ownsLegendBar) {
             this.domNode?.querySelector('.heatmap-legend-bar')?.remove();
+            // Also detach the heatmap configurators' `finished` listener
+            // — without this it stays attached to the echart instance
+            // and re-creates the legend bar on the next render after a
+            // style swap (e.g. heatmap-mode toggled off).
+            if (this._legendFinishedFn && this.echart) {
+                this.echart.off('finished', this._legendFinishedFn);
+                this._legendFinishedFn = null;
+            }
+        }
+        // The spectrum controls only belong on scatter charts.
+        if (style !== 'scatter') {
+            this.domNode?.querySelector('.spectrum-controls')?.remove();
+        }
+        // The "Raw count" toggle only belongs on histogram_heatmap.
+        if (style !== 'histogram_heatmap') {
+            this.domNode?.querySelector('.histogram-toggle')?.remove();
         }
 
         // Handle different chart types by delegating to specialized modules
@@ -827,6 +922,8 @@ export class Chart {
             configureHeatmap(this, this.spec, this.chartsState);
         } else if (style === 'histogram_heatmap') {
             configureHistogramHeatmap(this, this.spec, this.chartsState);
+        } else if (style === 'quantile_heatmap') {
+            configureQuantileHeatmap(this, this.spec, this.chartsState);
         } else if (style === 'scatter') {
             configureScatterChart(this, this.spec, this.chartsState);
         } else if (style === 'multi') {

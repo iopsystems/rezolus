@@ -5,6 +5,10 @@
 Rezolus is a Linux performance telemetry agent that provides detailed insights
 into system behavior through efficient, low-overhead instrumentation.
 
+## Design Principles
+
+Rezolus's BPF samplers follow a specific set of design principles around overhead, kernel compatibility, and the always-on production deployment model. See [`docs/principles.md`](docs/principles.md) for the full list, the operational checklist used when reviewing or writing a sampler, and the current improvement backlog.
+
 ## Quick Start
 
 ```bash

@@ -1,16 +1,12 @@
-// Pure (DOM-free, Mithril-free) selection-migration helpers.
+// Pure (DOM-free, Mithril-free) selection-schema validator.
 //
-// Kept separate from `selection.js` so Node-based tests can import the
-// migration logic without dragging in Mithril, localStorage, or other
-// browser-only globals. Re-exported from `selection.js` for callers
-// that already pull their selection API from one module.
+// Lives separately from selection.js so Node tests can exercise it
+// without pulling in Mithril or localStorage. Re-exported from
+// selection.js for callers that pull all selection APIs from one
+// module.
 
-export const SELECTION_SCHEMA_VERSION = 2;
+export const SELECTION_SCHEMA_VERSION = 3;
 
-/**
- * Return a fresh v2-shaped selection default. Used when the input is
- * null/undefined and as a template for migration fill-ins.
- */
 export const defaultSelection = () => ({
     version: SELECTION_SCHEMA_VERSION,
     tagline: '',
@@ -22,33 +18,35 @@ export const defaultSelection = () => ({
 });
 
 /**
- * Migrate a parsed selection object (as loaded from localStorage or
- * from an imported JSON payload) to the current schema version.
+ * Validate a parsed selection payload against the current schema (v3).
  *
- * Guarantees on the returned object:
- *   - version === SELECTION_SCHEMA_VERSION
- *   - anchors has numeric `baseline` and `experiment` keys
- *   - chartToggles is a plain object (possibly empty)
+ * Returns a normalized v3 object on success. Throws on unsupported
+ * older versions — pre-v3 payloads (v1 unversioned, v2) are not
+ * migrated, by design (see spec non-goals).
  *
- * Callers may pass `null`/`undefined` to get a default selection
- * instead of an empty migration result.
+ * Pass null/undefined to get a fresh default selection.
  */
 export const migrateSelection = (sel) => {
     if (sel == null) return defaultSelection();
+    const version = Number(sel.version) || 1;
+    if (version !== SELECTION_SCHEMA_VERSION) {
+        throw new Error(
+            `unsupported selection schema version ${version} ` +
+            `(expected ${SELECTION_SCHEMA_VERSION}); ` +
+            `re-export from the original session with a v${SELECTION_SCHEMA_VERSION} viewer`,
+        );
+    }
     const out = { ...sel };
-    if (!out.version || out.version < 2) {
-        if (!out.anchors || typeof out.anchors !== 'object') {
-            out.anchors = { baseline: 0, experiment: 0 };
-        } else {
-            out.anchors = {
-                baseline: Number(out.anchors.baseline) || 0,
-                experiment: Number(out.anchors.experiment) || 0,
-            };
-        }
-        if (!out.chartToggles || typeof out.chartToggles !== 'object') {
-            out.chartToggles = {};
-        }
-        out.version = SELECTION_SCHEMA_VERSION;
+    if (!out.anchors || typeof out.anchors !== 'object') {
+        out.anchors = { baseline: 0, experiment: 0 };
+    } else {
+        out.anchors = {
+            baseline: Number(out.anchors.baseline) || 0,
+            experiment: Number(out.anchors.experiment) || 0,
+        };
+    }
+    if (!out.chartToggles || typeof out.chartToggles !== 'object') {
+        out.chartToggles = {};
     }
     return out;
 };

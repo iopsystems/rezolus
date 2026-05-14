@@ -58,7 +58,6 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
         return Ok(None);
     }
 
-    // get metadata we want
     let carrier = read_usize(format!("/sys/class/net/{name}/carrier")).map(|v| v == 1)?;
     let node = read_usize(format!("/sys/class/net/{name}/device/numa_node")).ok();
     let mtu = read_usize(format!("/sys/class/net/{name}/mtu"))?;
@@ -76,7 +75,6 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
         };
     let irqs = read_irqs(format!("/sys/class/net/{name}/device/msi_irqs"));
 
-    //  tx/rx queues
     let mut queues = Queues {
         tx: Vec::new(),
         rx: Vec::new(),

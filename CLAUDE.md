@@ -161,6 +161,10 @@ TOML configs in `config/`:
 - `exporter.toml` - Scrape interval (must match Prometheus), percentile settings
 - `hindsight.toml` - Buffer size, output path
 
+## BPF Sampler Principles
+
+When working on code under `src/agent/samplers/` or `src/agent/bpf/`, read `docs/principles.md` first. It captures the design rules Rezolus commits to for BPF samplers (always-on fleetwide production, in-kernel aggregation read via mmap, H2 histograms, etc.), the operational checklist for reviewing or writing a sampler, and the current improvement backlog. Any change to BPF code should be consistent with that document. If a change appears to conflict with a principle, raise it explicitly with reasoning rather than working around it.
+
 ## Platform Support
 
 - **Linux**: Full support including eBPF (kernel 5.8+)

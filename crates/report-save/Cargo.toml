@@ -1,0 +1,20 @@
+[package]
+name = "report-save"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+arrow = "58.2.0"
+parquet = { version = "58.2.0", default-features = false, features = ["arrow", "simdutf8", "zstd"] }
+tar = { version = "0.4.45", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+metriken-query.workspace = true
+tracing = "0.1"

@@ -66,19 +66,16 @@ pub async fn serve(
     socket_group: Option<&str>,
     socket_mode: Option<u32>,
 ) -> Result<(), std::io::Error> {
-    // Remove existing socket file if present
     if socket_path.exists() {
         std::fs::remove_file(socket_path)?;
     }
 
-    // Ensure parent directory exists
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
     let listener = UnixListener::bind(socket_path)?;
 
-    // Apply socket permissions after bind
     if let Some(mode) = socket_mode {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode))?;
@@ -223,7 +220,6 @@ async fn handle_binary(
     let mut buf = vec![0u8; binary::MAX_MESSAGE_SIZE];
 
     loop {
-        // Read message
         let n = stream.read(&mut buf).await?;
         if n == 0 {
             break; // Connection closed
@@ -252,11 +248,9 @@ async fn handle_binary_with_prefix(
 ) -> Result<(), std::io::Error> {
     let mut buf = vec![0u8; binary::MAX_MESSAGE_SIZE];
 
-    // Copy prefix into buffer
     buf[..prefix.len()].copy_from_slice(prefix);
 
     loop {
-        // Read rest of message (if any)
         let n = stream.read(&mut buf[prefix.len()..]).await?;
         let total = if !prefix.is_empty() {
             prefix.len() + n
@@ -328,7 +322,6 @@ async fn handle_line_with_prefix(
     let reader = BufReader::new(stream);
     let mut lines = reader.lines();
 
-    // Handle first line with prefix
     if let Some(rest) = lines.next_line().await? {
         let full_line = format!("{}{}", prefix_str, rest);
         match line::parse_line_with_context(&full_line, store, ctx, max_metrics_per_connection) {

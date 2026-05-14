@@ -12,9 +12,8 @@
 //   - Pure helpers (`partitionPlots`, `rowsToPerPlotMatrix`,
 //                                  `wrapWithSrcCte`, `sqlReferencesMissingColumn`)
 //
-// Consumers: `site/viewer-sql/lib/preview.js` (the standalone preview)
-// and `site/viewer/lib/...` (the production Mithril viewer, after the
-// Stage 2 swap).
+// Consumed by `site/viewer/lib/...` (the production Mithril viewer)
+// and the `site/viewer-sql/index.html` smoke page.
 
 import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev45.0/+esm';
 import * as arrow from 'https://cdn.jsdelivr.net/npm/apache-arrow@17.0.0/+esm';

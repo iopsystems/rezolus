@@ -1,5 +1,3 @@
-// multi.js - Multi-series chart configuration with deterministic cgroup colors
-
 import {
     createAxisLabelFormatter,
 } from './util/units.js';
@@ -54,7 +52,6 @@ export function configureMultiSeriesChart(chart) {
     const logScale = format.log_scale;
     const range = format.range;
 
-    // Create series configurations for each data series
     const series = [];
 
     const cgroupColors = seriesNames.map(name => globalColorMapper.getColorByName(name));
@@ -62,7 +59,7 @@ export function configureMultiSeriesChart(chart) {
     // For percentile charts, assign z-index so lower quantiles draw on top of higher ones.
     // This ensures p50 is visible when its value equals p99.99.
     const isPercentileChart = chart.spec.promql_query &&
-        chart.spec.promql_query.includes('histogram_percentiles');
+        chart.spec.promql_query.includes('histogram_quantiles');
 
     for (let i = 1; i < data.length; i++) {
         const name = seriesNames[i - 1];

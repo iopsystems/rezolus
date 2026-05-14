@@ -26,7 +26,7 @@ const getStepOverride = () => _stepOverride;
 //
 //   Counter:   irate(m[5m]) → rate(m[Ns])   (true average rate over window)
 //   Gauge:     no rewrite needed (engine samples at step points)
-//   Histogram: stride parameter passed to histogram_percentiles / histogram_heatmap
+//   Histogram: stride parameter passed to histogram_quantiles / histogram_heatmap
 
 // Replace all irate(...[window]) with rate(...[Ns]) in a query string.
 const rewriteCounterQuery = (query, stepSecs) => {
@@ -50,6 +50,7 @@ let _selectedInstances = {};  // { serviceName: instanceId | null }
 
 const setSelectedNode = (node) => { _selectedNode = node; };
 const getSelectedNode = () => _selectedNode;
+
 const setSelectedInstance = (serviceName, instanceId) => {
     _selectedInstances[serviceName] = instanceId;
 };
@@ -59,7 +60,7 @@ const getSelectedInstance = (serviceName) => _selectedInstances[serviceName] || 
 const PROMQL_KEYWORDS = new Set([
     'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
     'bool', 'sum', 'avg', 'min', 'max', 'count', 'rate', 'irate', 'increase',
-    'histogram_percentiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset',
+    'histogram_quantiles', 'histogram_heatmap', 'topk', 'bottomk', 'offset',
     'abs', 'absent', 'ceil', 'floor', 'round', 'sqrt', 'exp', 'ln', 'log2',
     'log10', 'clamp', 'clamp_max', 'clamp_min', 'delta', 'deriv', 'idelta',
     'predict_linear', 'resets', 'changes', 'label_replace', 'label_join',
@@ -251,6 +252,11 @@ const applyResultToPlot = (plot, result) => {
             } else {
                 const allData = [];
                 const seriesNames = [];
+                // Parallel to seriesNames; the raw metrics let compare-
+                // mode's baseline path re-derive labels symmetrically
+                // with the experiment path (composeScatterLabel needs
+                // the full label set, not the lossy series_names string).
+                const seriesMetrics = [];
                 let timestamps = null;
 
                 result.data.result.forEach((item, idx) => {
@@ -267,6 +273,7 @@ const applyResultToPlot = (plot, result) => {
 
                         if (item.values.length > 0) {
                             seriesNames.push(seriesName);
+                            seriesMetrics.push(item.metric || {});
 
                             if (!timestamps) {
                                 timestamps = item.values.map(([ts, _]) => ts);
@@ -282,9 +289,11 @@ const applyResultToPlot = (plot, result) => {
                 if (allData.length > 1) {
                     plot.data = allData;
                     plot.series_names = seriesNames;
+                    plot.series_metrics = seriesMetrics;
                 } else {
                     plot.data = [];
                     plot.series_names = [];
+                    plot.series_metrics = [];
                 }
             }
         } else {
@@ -473,6 +482,47 @@ const createDataApi = ({
             }
         }
 
+        // Surface no-data plots at the bottom (mirrors service KPI UX)
+        // instead of leaving silent empty chart cards mid-section.
+        // Plots whose original query carries the `__SELECTED_CGROUPS__`
+        // placeholder are deferred — they intentionally have no data
+        // until the user picks a cgroup, at which point cgroup_selector
+        // refetches them in place. Stripping them here would remove the
+        // right-side "Individual Cgroups" group entirely on first load
+        // and the cgroup selector would have nothing to repopulate.
+        const unavailable = [];
+        const plotHasData = (plot) =>
+            Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
+        const isDeferredCgroupPlot = (plot) =>
+            typeof plot.promql_query === 'string'
+            && plot.promql_query.includes('__SELECTED_CGROUPS__');
+        for (const group of data.groups || []) {
+            for (const sg of group.subgroups || []) {
+                const surviving = [];
+                for (const plot of (sg.plots || [])) {
+                    if (!plot.promql_query
+                        || plotHasData(plot)
+                        || isDeferredCgroupPlot(plot)) {
+                        surviving.push(plot);
+                    } else {
+                        unavailable.push({
+                            group: group.name,
+                            subgroup: sg.name || null,
+                            title: plot.opts?.title || '(unnamed chart)',
+                            query: plot.promql_query,
+                        });
+                    }
+                }
+                sg.plots = surviving;
+            }
+            group.subgroups = (group.subgroups || []).filter((sg) => (sg.plots || []).length > 0);
+        }
+        data.groups = (data.groups || []).filter((g) => (g.subgroups || []).length > 0);
+        if (unavailable.length > 0) {
+            data.metadata = data.metadata || {};
+            data.metadata.unavailable_charts = unavailable;
+        }
+
         return data;
     };
 
@@ -484,9 +534,9 @@ const createDataApi = ({
         let metricSelector;
         if (plot.opts.type === 'histogram') {
             metricSelector = query;
-        } else if (query.includes('histogram_percentiles')) {
+        } else if (query.includes('histogram_quantiles')) {
             // Legacy fallback: extract base metric from wrapped query
-            const match = query.match(/histogram_percentiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
+            const match = query.match(/histogram_quantiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
             if (!match) return null;
             metricSelector = match[1].trim();
         } else {
@@ -507,6 +557,116 @@ const createDataApi = ({
             };
         }
         return null;
+    };
+
+    // Fetch a custom set of histogram quantiles for a percentile
+    // (scatter) plot. Issues `histogram_quantiles([q1, q2, …], <metric>)`
+    // and returns the result shaped like a percentile fetch: parallel
+    // [times, qA, qB, …] columns plus matching `pXX[.YY]` series names
+    // sorted by quantile. Caller picks the quantile set:
+    //   - Full spectrum (default): [0.01, 0.02, …, 1.00]
+    //   - Tail spectrum:           [0.9901, 0.9902, …, 1.0000]
+    const formatPercentileLabel = (q) => {
+        const trimmed = (q * 100).toFixed(2).replace(/\.?0+$/, '');
+        return `p${trimmed}`;
+    };
+
+    const fetchSpectrumViaCapture = async (wrappedQuery, captureId, range) => {
+        if (captureId === CAPTURE_BASELINE && !range) {
+            return executePromQLRangeQuery(wrappedQuery);
+        }
+        let r = range;
+        if (!r) {
+            const meta = cachedMetadata || await fetchMetadata();
+            const duration = meta.maxTime - meta.minTime;
+            const windowDuration = Math.min(3600, duration);
+            const start = Math.max(meta.minTime, meta.maxTime - windowDuration);
+            const step = _stepOverride || Math.max(1, Math.floor(windowDuration / 500));
+            r = { start, end: meta.maxTime, step };
+        }
+        return queryRange(wrappedQuery, r.start, r.end, r.step, captureId);
+    };
+
+    const fetchQuantileSpectrumForPlot = async (
+        plot,
+        quantiles,
+        captureId = CAPTURE_BASELINE,
+        range = null,  // { start, end, step } — required when captureId !== baseline and the caller has the experiment's range; otherwise computed from cached metadata
+    ) => {
+        const query = plot.promql_query;
+        if (!query) return null;
+
+        let metricSelector;
+        if (plot.opts.type === 'histogram') {
+            metricSelector = query;
+        } else if (query.includes('histogram_quantiles')) {
+            const match = query.match(/histogram_quantiles\s*\(\s*\[[^\]]*\]\s*,\s*(.+)\)$/);
+            if (!match) return null;
+            metricSelector = match[1].trim();
+        } else {
+            return null;
+        }
+
+        if (!Array.isArray(quantiles) || quantiles.length === 0) {
+            // Default: 100-quantile full spectrum.
+            quantiles = [];
+            for (let i = 1; i <= 100; i++) quantiles.push(i / 100);
+        }
+        // Always include q=0 (p0) to anchor the color scale's lower
+        // bound across spectrum kinds. p0's row is hidden from the
+        // heatmap rendering — it's only used to compute color_min so
+        // the Full and Tail views share the same color scale (p0..p100).
+        const queryQuantiles = quantiles.includes(0) ? quantiles : [0, ...quantiles];
+        const strideSuffix = (_stepOverride && _stepOverride > 1) ? `, ${_stepOverride}` : '';
+        const wrapped = `histogram_quantiles([${queryQuantiles.join(', ')}], ${metricSelector}${strideSuffix})`;
+        const result = await fetchSpectrumViaCapture(wrapped, captureId, range);
+
+        if (result.status !== 'success' || !result.data?.result?.length) return null;
+
+        let timestamps = null;
+        const collected = [];
+        for (const item of result.data.result) {
+            if (!item.values || !item.values.length) continue;
+            let name = null;
+            if (item.metric) {
+                for (const [k, v] of Object.entries(item.metric)) {
+                    if (k !== '__name__') { name = v; break; }
+                }
+            }
+            if (name == null) continue;
+            if (!timestamps) timestamps = item.values.map(([ts]) => ts);
+            const values = item.values.map(([, val]) => parseFloat(val));
+            collected.push({ name, values, q: parseFloat(name) });
+        }
+        if (collected.length === 0 || !timestamps) return null;
+
+        collected.sort((a, b) => a.q - b.q);
+
+        // Pop the p0 row (if present) and derive a color-scale lower
+        // bound from it. Done before building dataCols/seriesNames so
+        // the heatmap never sees p0.
+        let colorMinAnchor = null;
+        if (collected.length > 0 && collected[0].q === 0) {
+            const p0 = collected.shift();
+            let m = Infinity;
+            for (const v of p0.values) {
+                if (v != null && !Number.isNaN(v) && v > 0 && v < m) m = v;
+            }
+            if (Number.isFinite(m)) colorMinAnchor = m;
+        }
+
+        const dataCols = [timestamps, ...collected.map((c) => c.values)];
+        // The quantile-heatmap renderer uses these directly as y-axis
+        // tick labels — `pXX` for whole percents (e.g. p10, p100) and
+        // `pXX.YY` for fractional ones (e.g. p99.01).
+        const seriesNames = collected.map((c) => formatPercentileLabel(c.q));
+
+        return {
+            time_data: timestamps,
+            data: dataCols,
+            series_names: seriesNames,
+            color_min_anchor: colorMinAnchor,
+        };
     };
 
     const fetchHeatmapsForGroups = async (groups) => {
@@ -540,6 +700,7 @@ const createDataApi = ({
         executePromQLRangeQuery,
         applyResultToPlot,
         fetchHeatmapForPlot,
+        fetchQuantileSpectrumForPlot,
         fetchHeatmapsForGroups,
         substituteCgroupPattern,
         processDashboardData,
@@ -553,6 +714,7 @@ const defaultDataApi = createDataApi();
 const {
     executePromQLRangeQuery,
     fetchHeatmapForPlot,
+    fetchQuantileSpectrumForPlot,
     fetchHeatmapsForGroups,
     processDashboardData,
     clearMetadataCache,
@@ -563,6 +725,7 @@ export {
     executePromQLRangeQuery,
     applyResultToPlot,
     fetchHeatmapForPlot,
+    fetchQuantileSpectrumForPlot,
     fetchHeatmapsForGroups,
     substituteCgroupPattern,
     processDashboardData,

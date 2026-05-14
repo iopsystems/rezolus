@@ -5,12 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// Declare sub-modules
 mod cusum;
 mod mad;
 mod stability;
 
-// Re-export public types from sub-modules
 pub use cusum::CusumAnalysis;
 pub use mad::MadAnalysis;
 pub use stability::{AllanAnalysis, HadamardAnalysis, ModifiedAllanAnalysis, NoiseType};
@@ -88,9 +86,7 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
             // Check if it has a range vector selector [duration]
             // This is a simple check - a proper parser would be better
 
-            // Find the function start
             if let Some(start_pos) = query.find(func) {
-                // Find the matching closing parenthesis
                 let after_func = &query[start_pos + func.len()..];
                 let mut paren_depth = 1;
                 let mut has_range_vector = false;
@@ -117,7 +113,6 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
                     // Missing range vector - auto-fix with default
                     let default_range = "[1m]"; // 1 minute default
 
-                    // Build the fixed query
                     let before_close = start_pos + func.len() + last_close_paren;
                     let mut fixed_query = String::new();
                     fixed_query.push_str(&query[..before_close]);
@@ -205,7 +200,6 @@ fn show_available_labels(
 ) {
     use std::collections::HashMap;
 
-    // Collect all unique label keys and their values
     let mut label_values: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
 
     for labels in labels_list {
@@ -263,7 +257,6 @@ fn show_available_labels(
         output.push('\n');
     }
 
-    // Show example queries
     output.push_str("\nExample queries:\n");
     output.push_str(&format!("  {}  (all series)\n", metric_name));
 
@@ -280,7 +273,6 @@ fn show_available_labels(
 /// Automatically construct appropriate query based on metric type
 /// If query is just a metric name, construct the right query for its type
 fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std::error::Error>> {
-    // Trim whitespace
     let query = query.trim();
 
     // Check if this looks like a bare metric name (no functions, no brackets, no operators)
@@ -340,16 +332,12 @@ pub fn detect_anomalies(
     // Clean up escaped quotes from JSON
     let query = query.replace("\\\"", "\"");
 
-    // Auto-construct query if it's just a metric name
     let query = auto_construct_query(&query, tsdb)?;
 
-    // Validate and potentially fix the query
     let query = validate_and_fix_query(&query)?;
 
-    // Execute the query to get time series data
     let (start_time, end_time) = engine.get_time_range();
 
-    // Validate time range
     if start_time >= end_time {
         return Err(format!(
             "Invalid time range for anomaly detection: start ({}) >= end ({}). \
@@ -361,7 +349,6 @@ pub fn detect_anomalies(
 
     let step = 1.0; // 1 second resolution
 
-    // Check if we have enough time range for meaningful analysis
     let duration = end_time - start_time;
     if duration < 10.0 {
         return Err(format!(
@@ -372,7 +359,6 @@ pub fn detect_anomalies(
         .into());
     }
 
-    // Try to execute the query
     let query_result = match engine.query_range(&query, start_time, end_time, step) {
         Ok(result) => result,
         Err(e) => {
@@ -380,16 +366,13 @@ pub fn detect_anomalies(
 
             // If metric not found, suggest available metrics and show labels
             if error_msg.contains("Metric not found") || error_msg.contains("not found") {
-                // Extract the metric name from the query
                 let metric_hint = extract_metric_name(&query);
 
-                // Get available metrics for suggestion
                 let mut all_metrics = Vec::new();
                 all_metrics.extend(tsdb.counter_names());
                 all_metrics.extend(tsdb.gauge_names());
                 all_metrics.extend(tsdb.histogram_names());
 
-                // Find similar metrics
                 let mut suggestions = Vec::new();
                 if let Some(hint) = metric_hint {
                     // Normalize the hint to use underscores
@@ -484,14 +467,12 @@ pub fn detect_anomalies(
         }
     };
 
-    // Extract time series data
     let (timestamps, values) = extract_time_series(&query_result, &query)?;
 
     if values.is_empty() {
         // No data - might be invalid label selector
         // Try to provide helpful error message with valid labels
 
-        // Extract metric name from query
         let metric_hint = extract_metric_name(&query);
 
         if let Some(metric_name) = metric_hint {
@@ -503,7 +484,6 @@ pub fn detect_anomalies(
                 query
             );
 
-            // Check if metric exists and show available labels
             if let Some(labels_list) = tsdb.counter_labels(metric_name) {
                 error_msg.push_str(&format!(
                     "\nMetric '{}' (COUNTER) exists with {} series.\n",
@@ -603,7 +583,6 @@ pub fn detect_anomalies(
         &modified_allan_analysis,
     );
 
-    // Calculate overall confidence score
     let confidence_score = calculate_confidence_score(&anomalies, values.len());
 
     Ok(AnomalyDetectionResult {
@@ -737,7 +716,7 @@ fn extract_time_series(
             // Histogram heatmap data - not suitable for standard time series analysis
             Err(
                 "Histogram heatmap data is not suitable for anomaly detection. \
-                Use histogram_percentiles() instead for time series analysis."
+                Use histogram_quantiles() instead for time series analysis."
                     .into(),
             )
         }
@@ -829,7 +808,6 @@ fn identify_anomalies(
     let mut anomalies = Vec::new();
     let mut anomaly_scores: HashMap<usize, f64> = HashMap::new();
 
-    // Score MAD outliers
     for &idx in &mad.outliers {
         *anomaly_scores.entry(idx).or_insert(0.0) += 1.0;
     }
@@ -993,7 +971,6 @@ fn identify_anomalies(
     // 3. Adapt MAD thresholds based on noise characteristics
     // 4. Detect fundamental changes in system dynamics (noise transitions from all three methods)
 
-    // Create anomaly records for high-scoring points
     for (idx, score) in anomaly_scores {
         // Calculate deviation factor for confidence scoring
         let deviation_factor = if mad.mad > 0.0 {
@@ -1078,7 +1055,6 @@ fn identify_anomalies(
         }
     }
 
-    // Sort by timestamp
     anomalies.sort_by(|a, b| {
         a.timestamp
             .partial_cmp(&b.timestamp)
@@ -1094,7 +1070,6 @@ fn calculate_confidence_score(anomalies: &[Anomaly], total_points: usize) -> f64
         return 1.0; // No anomalies found with high confidence
     }
 
-    // Calculate average confidence of detected anomalies
     let avg_confidence: f64 =
         anomalies.iter().map(|a| a.confidence).sum::<f64>() / anomalies.len() as f64;
 
@@ -1133,7 +1108,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         result.confidence_score * 100.0
     ));
 
-    // MAD Analysis
     output.push_str("MAD (Median Absolute Deviation) Analysis\n");
     output.push_str("-----------------------------------------\n");
     output.push_str(&format!("Median: {:.4}\n", result.mad_analysis.median));
@@ -1148,7 +1122,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         (result.mad_analysis.outlier_count as f64 / result.total_points as f64) * 100.0
     ));
 
-    // Show first few outlier timestamps if available
     if !result.mad_analysis.outliers.is_empty() && !result.timestamps.is_empty() {
         output.push_str("  Sample outlier times (first 3):\n");
         for &idx in result.mad_analysis.outliers.iter().take(3) {
@@ -1163,7 +1136,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     }
     output.push('\n');
 
-    // CUSUM Analysis
     output.push_str("CUSUM (Cumulative Sum) Analysis\n");
     output.push_str("--------------------------------\n");
     output.push_str(&format!("Mean: {:.4}\n", result.cusum_analysis.mean));
@@ -1193,7 +1165,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         result.cusum_analysis.window_change_points.len()
     ));
 
-    // Show the Allan-determined window used for regime shift detection
     if let Some(window) = result.smoothing_window {
         output.push_str(&format!(
             "Change-point window (Allan-based): {:.1}s\n",
@@ -1232,7 +1203,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         }
     }
 
-    // Show detected cliffs if any
     if !result.cusum_analysis.cliffs.is_empty() && !result.timestamps.is_empty() {
         output.push_str("\n  Detected Cliffs (dramatic changes):\n");
         for cliff in result.cusum_analysis.cliffs.iter().take(3) {
@@ -1247,7 +1217,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         }
     }
 
-    // Show gradual changes
     if !result.cusum_analysis.gradual_changes.is_empty() && !result.timestamps.is_empty() {
         output.push_str("\n  Sample gradual changes (first 3):\n");
         for &idx in result.cusum_analysis.gradual_changes.iter().take(3) {
@@ -1269,7 +1238,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         }
     }
 
-    // Show sensitivity analysis
     if !result.cusum_analysis.sensitivity_levels.is_empty() {
         output.push_str("\n  Multi-scale Detection:\n");
         for level in &result.cusum_analysis.sensitivity_levels {
@@ -1282,7 +1250,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     }
     output.push('\n');
 
-    // Allan Deviation Analysis
     output.push_str("Allan Deviation Analysis\n");
     output.push_str("------------------------\n");
     output.push_str(&format!(
@@ -1290,7 +1257,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         result.allan_analysis.noise_type
     ));
 
-    // Show smoothing information if applied
     if let Some(window) = result.smoothing_window {
         output.push_str("\nData Smoothing Applied:\n");
         output.push_str(&format!(
@@ -1317,7 +1283,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         output.push_str("\nNo significant cyclic patterns detected\n");
     }
 
-    // Show noise characteristic transitions
     if !result.allan_analysis.noise_transitions.is_empty() {
         output.push_str("\nNoise Characteristic Transitions Detected:\n");
         output.push_str("  (Fundamental changes in system dynamics)\n");
@@ -1356,7 +1321,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
 
     output.push('\n');
 
-    // Hadamard Deviation Analysis
     output.push_str("Hadamard Deviation Analysis\n");
     output.push_str("---------------------------\n");
     output.push_str(&format!(
@@ -1376,7 +1340,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         }
     }
 
-    // Show Hadamard noise transitions
     if !result.hadamard_analysis.noise_transitions.is_empty() {
         output.push_str("\nNoise Transitions (Hadamard view):\n");
         for (i, transition) in result
@@ -1414,7 +1377,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
 
     output.push('\n');
 
-    // Modified Allan Deviation Analysis
     output.push_str("Modified Allan Deviation Analysis\n");
     output.push_str("---------------------------------\n");
     output.push_str(&format!(
@@ -1442,7 +1404,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         output.push_str("No significant patterns detected\n");
     }
 
-    // Show Modified Allan noise transitions
     if !result.modified_allan_analysis.noise_transitions.is_empty() {
         output.push_str("\nNoise Transitions (Modified Allan view):\n");
         for (i, transition) in result
@@ -1480,12 +1441,10 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
 
     output.push('\n');
 
-    // Detected Anomalies
     if !result.anomalies.is_empty() {
         output.push_str("Detected Anomalies (Confidence ≥ 70%)\n");
         output.push_str("--------------------------------------\n");
 
-        // Group by severity
         let mut critical = Vec::new();
         let mut high = Vec::new();
         let mut medium = Vec::new();
@@ -1547,7 +1506,6 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         output.push_str("No high-confidence anomalies detected.\n");
     }
 
-    // Summary
     output.push('\n');
     output.push_str("Summary\n");
     output.push_str("-------\n");

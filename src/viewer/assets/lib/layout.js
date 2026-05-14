@@ -1,5 +1,5 @@
 import { TimeRangeBar, GranularitySelector } from './controls.js';
-import { selectionStore, reportStore, importJSON } from './selection.js';
+import { notebookStore, reportStore, loadedSelectionStore, importSelection } from './selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from './group_utils.js';
 
@@ -12,9 +12,10 @@ const formatSize = (bytes) => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 };
 
-// Shared 14px upload arrow used by every Load-parquet trigger (topnav
-// Load Parquet, Load Report, compare badge per-capture Load buttons).
+// Shared 14px upload arrow used by every Load-parquet trigger.
 export const UPLOAD_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>';
+
+const FILE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6"/><path d="M9 2v3a1 1 0 001 1h3M9 2l4 4"/></svg>';
 
 // Open a one-shot hidden <input type=file> and forward the selected
 // file to the caller's onPick. Returns an onclick handler so the site
@@ -96,19 +97,10 @@ const TopNav = {
                     ]),
                 ]);
             })(),
-            // Node selector / filename display. In compare mode the
-            // filename info is in the compare badge above, so suppress the
-            // duplicate single-capture source label (multi-node selects
-            // still render so the user can pin to one node).
             (() => {
                 const nodes = attrs.nodeList || [];
                 const selNode = attrs.selectedNode;
-                const hasMultiNode = nodes.length > 1;
-
-                const displayLabel = selNode || attrs.filename;
-                if (!displayLabel) return null;
-
-                if (hasMultiNode) {
+                if (nodes.length > 1) {
                     return m('div.topnav-source', [
                         m('select.topnav-node-select', {
                             value: selNode,
@@ -118,12 +110,7 @@ const TopNav = {
                         }, nodes.map(n => m('option', { value: n }, n))),
                     ]);
                 }
-
-                if (compareMode) return null;
-
-                return m('div.topnav-source', [
-                    m('span.topnav-source-name', displayLabel),
-                ]);
+                return null;
             })(),
             // Source picker (multi-source combined parquets only).
             // viewer-sql exposes per-source aliasing views; the user
@@ -151,10 +138,27 @@ const TopNav = {
                     }, sources.map((s) => m('option', { value: s }, labelFor(s)))),
                 ]);
             })(),
+            // Three sibling buttons sit next to REZOLUS in single-capture
+            // mode: file metadata (filename text + dropdown), Load Parquet,
+            // Load Selection. Compare mode puts filename + per-side Load
+            // Parquet inside .compare-badge instead, but Load Selection
+            // still appears here.
             m('div.topnav-actions', [
-                // Upload parquet (file mode only, when handler provided).
-                // Hidden in compare mode — use the per-capture Load buttons
-                // in the compare badge instead.
+                (() => {
+                    const displayLabel = attrs.selectedNode || attrs.filename;
+                    if (!displayLabel || compareMode) return null;
+                    return m('details.topnav-source', [
+                        m('summary.topnav-source-summary', {
+                            title: displayLabel,
+                        }, [
+                            m.trust(FILE_ICON_SVG),
+                            m('span.topnav-source-name', displayLabel),
+                        ]),
+                        m('div.topnav-source-card', [
+                            m('div.topnav-source-fullname', displayLabel),
+                        ]),
+                    ]);
+                })(),
                 attrs.onUploadParquet && !liveMode && !compareMode && m('button.transport-btn.import-btn', {
                     onclick: openParquetPicker(attrs.onUploadParquet),
                     title: 'Upload parquet file',
@@ -162,22 +166,19 @@ const TopNav = {
                     m('span', 'Load Parquet'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
-                // Import report JSON (server viewer only). Hidden in
-                // compare mode — reports are single-capture today.
-                attrs.onUploadParquet && !compareMode && m('button.transport-btn.import-btn', {
+                attrs.onUploadParquet && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
-                    onclick: () => importJSON(attrs.fileChecksum),
+                    onclick: () => importSelection(),
                     title: attrs.filename
-                        ? (reportStore.loadedFrom
-                            ? `Loaded: ${reportStore.loadedFrom} — click to replace`
-                            : 'Import report JSON')
+                        ? (loadedSelectionStore.loadedFrom
+                            ? `Loaded: ${loadedSelectionStore.loadedFrom} — click to replace`
+                            : 'Import selection JSON')
                         : 'Load a parquet file first',
                 }, [
-                    m('span', 'Load Report'),
+                    m('span', 'Load Selection'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
-                // Transport controls (live mode only)
                 liveMode && m('div.transport-controls', [
                     m('button.transport-btn.record-btn', {
                         onclick: attrs.onStartRecording,
@@ -255,9 +256,13 @@ const Sidebar = {
             (s) => s.name === 'Query Explorer',
         );
         const overviewSection = visibleSections.find((s) => s.name === 'Overview');
+        const exceptionsSection = visibleSections.find((s) => s.name === 'Exceptions');
         const serviceSections = visibleSections.filter((s) => s.route.startsWith('/service/'));
         const samplerSections = visibleSections.filter(
-            (s) => s.name !== 'Query Explorer' && s.name !== 'Overview' && !s.route.startsWith('/service/'),
+            (s) => s.name !== 'Query Explorer'
+                && s.name !== 'Overview'
+                && s.name !== 'Exceptions'
+                && !s.route.startsWith('/service/'),
         );
 
         return [
@@ -285,16 +290,28 @@ const Sidebar = {
                 `Report (${reportStore.entries.length})`,
             ),
 
-            // Selection section (shown only when entries exist)
-            selectionStore.entries.length > 0 && m(
+            // Notebook section (shown only when entries exist)
+            notebookStore.entries.length > 0 && m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection?.route === '/notebook'
+                        ? 'selected selection-link notebook-link'
+                        : 'selection-link notebook-link',
+                    href: '/notebook',
+                },
+                `Notebook (${notebookStore.entries.length})`,
+            ),
+
+            // Selection section (shown only when JSON loaded)
+            loadedSelectionStore.entries.length > 0 && m(
                 m.route.Link,
                 {
                     class: attrs.activeSection?.route === '/selection'
-                        ? 'selected selection-link'
-                        : 'selection-link',
+                        ? 'selected selection-link loaded-selection-link'
+                        : 'selection-link loaded-selection-link',
                     href: '/selection',
                 },
-                `Selection (${selectionStore.entries.length})`,
+                `Selection (${loadedSelectionStore.entries.length})`,
             ),
 
             // Overview section first (if exists)
@@ -325,6 +342,18 @@ const Sidebar = {
                     label,
                 );
             }),
+
+            // Exceptions sits between Overview/Services and Samplers —
+            // it's a cross-sampler triage view, not one of the per-
+            // sampler sections.
+            exceptionsSection && m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection === exceptionsSection ? 'selected' : '',
+                    href: exceptionsSection.route,
+                },
+                exceptionsSection.name,
+            ),
 
             // Samplers label
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),

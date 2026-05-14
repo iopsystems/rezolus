@@ -4,28 +4,28 @@
   "slo": null,
   "kpis": [
     {
-      "role": "load",
-      "title": "Prompt Token Rate",
-      "query": "sum(irate(sglang_prompt_tokens_total{source=\"sglang-prefill\"}[5s]))",
-      "type": "delta_counter",
-      "unit_system": "rate"
-    },
-    {
-      "role": "load",
+      "role": "requests",
       "title": "Requests Running",
       "query": "sglang_num_running_reqs{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "count"
     },
     {
-      "role": "load",
-      "title": "Requests Waiting",
-      "query": "sglang_num_queue_reqs{source=\"sglang-prefill\"}",
-      "type": "gauge",
-      "unit_system": "count"
+      "role": "requests",
+      "title": "Request Rate",
+      "query": "sum(irate(sglang_num_requests_total{source=\"sglang-prefill\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
     },
     {
-      "role": "throughput",
+      "role": "requests",
+      "title": "Abort Rate",
+      "query": "sum(irate(sglang_num_aborted_requests_total{source=\"sglang-prefill\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "tokens",
       "title": "Prompt Token Rate",
       "query": "sum(irate(sglang_prompt_tokens_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
@@ -33,16 +33,16 @@
       "denominator": true
     },
     {
-      "role": "throughput",
-      "title": "Request Rate",
-      "query": "sum(irate(sglang_num_requests_total{source=\"sglang-prefill\"}[5s]))",
+      "role": "tokens",
+      "title": "Realtime Token Rate (Prefill Compute)",
+      "query": "sum(irate(sglang_realtime_tokens_total{source=\"sglang-prefill\",mode=\"prefill_compute\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
     {
-      "role": "error",
-      "title": "Abort Rate",
-      "query": "sum(irate(sglang_num_aborted_requests_total{source=\"sglang-prefill\"}[5s]))",
+      "role": "tokens",
+      "title": "Realtime Token Rate (Prefill Cache)",
+      "query": "sum(irate(sglang_realtime_tokens_total{source=\"sglang-prefill\",mode=\"prefill_cache\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate"
     },
@@ -72,6 +72,78 @@
       "subtype": "percentiles",
       "percentiles": [0.5, 0.95],
       "unit_system": "time"
+    },
+    {
+      "role": "queueing",
+      "title": "Requests Waiting",
+      "query": "sglang_num_queue_reqs{source=\"sglang-prefill\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "queueing",
+      "title": "Queue Time",
+      "query": "sglang_queue_time_seconds{source=\"sglang-prefill\"}",
+      "type": "histogram",
+      "subtype": "percentiles",
+      "percentiles": [0.5, 0.95],
+      "unit_system": "time"
+    },
+    {
+      "role": "queueing",
+      "title": "Prefill Prealloc Queue Requests",
+      "query": "sglang_num_prefill_prealloc_queue_reqs{source=\"sglang-prefill\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "queueing",
+      "title": "Prefill Inflight Queue Requests",
+      "query": "sglang_num_prefill_inflight_queue_reqs{source=\"sglang-prefill\"}",
+      "type": "gauge",
+      "unit_system": "count"
+    },
+    {
+      "role": "cache",
+      "title": "Cache Hit Rate",
+      "query": "sglang_cache_hit_rate{source=\"sglang-prefill\"}",
+      "type": "gauge",
+      "unit_system": "percentage"
+    },
+    {
+      "role": "cache",
+      "title": "Cached Token Rate",
+      "query": "sum(irate(sglang_cached_tokens_total{source=\"sglang-prefill\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "cache",
+      "title": "Evicted Token Rate",
+      "query": "sum(irate(sglang_evicted_tokens_total{source=\"sglang-prefill\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "gpu",
+      "title": "Estimated FLOPS per GPU",
+      "query": "sum(irate(sglang_estimated_flops_per_gpu_total{source=\"sglang-prefill\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "rate"
+    },
+    {
+      "role": "gpu",
+      "title": "Estimated Memory Read Bandwidth per GPU",
+      "query": "sum(irate(sglang_estimated_read_bytes_per_gpu_total{source=\"sglang-prefill\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "datarate"
+    },
+    {
+      "role": "gpu",
+      "title": "Estimated Memory Write Bandwidth per GPU",
+      "query": "sum(irate(sglang_estimated_write_bytes_per_gpu_total{source=\"sglang-prefill\"}[5s]))",
+      "type": "delta_counter",
+      "unit_system": "datarate"
     }
   ]
 }

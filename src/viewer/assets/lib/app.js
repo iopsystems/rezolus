@@ -9,7 +9,7 @@ import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
-import { reportStore, selectionStore, persistSelection, setStorageScope, loadPayloadIntoStore, SelectionView, ReportView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
+import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
@@ -18,6 +18,7 @@ import { initTheme } from './theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './service.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
+import { renderSectionNotes } from './section_notes.js';
 import {
     createSectionCacheState,
     storeSectionResponse,
@@ -64,6 +65,8 @@ const getCachedSections = () => getSections(sectionCacheState);
 
 // Compare-mode state (Stage 4 of A/B compare plan)
 let compareMode = false;
+let combinedAB = false;
+let reportMode = false;
 let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
@@ -83,7 +86,7 @@ let experimentAlias = null;
 export const getBaselineAlias = () => baselineAlias;
 export const getExperimentAlias = () => experimentAlias;
 
-// Compare-mode per-chart toggles + anchors live in `selectionStore` so
+// Compare-mode per-chart toggles + anchors live in `notebookStore` so
 // they persist across page reloads. See selection_migration.js for the
 // schema. The accessors below read-through to the store.
 
@@ -108,9 +111,9 @@ const initComponents = () => {
     Group = createGroupComponent(() => ({
         chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
         compareMode,
-        toggles: selectionStore.chartToggles || {},
+        toggles: notebookStore.chartToggles || {},
         setChartToggle,
-        anchors: selectionStore.anchors || { baseline: 0, experiment: 0 },
+        anchors: notebookStore.anchors || { baseline: 0, experiment: 0 },
         experimentQueryRange,
         baselineAlias,
         experimentAlias,
@@ -186,7 +189,7 @@ const attachExperiment = async (file) => {
     // Clamp a stale anchor when the newly-attached experiment is
     // shorter than the previously-saved offset. Avoids a chart starting
     // past the end of its data.
-    const anchors = selectionStore.anchors || { baseline: 0, experiment: 0 };
+    const anchors = notebookStore.anchors || { baseline: 0, experiment: 0 };
     if (experimentDurationMs != null && anchors.experiment > experimentDurationMs) {
         setAnchor(CAPTURE_EXPERIMENT, experimentDurationMs);
         console.info(
@@ -363,6 +366,7 @@ const changeInstance = async (serviceName, instanceId) => {
 };
 
 const CLIENT_ONLY_SECTIONS = new Set([
+    'notebook',
     'selection',
     'report',
     'systeminfo',
@@ -373,8 +377,8 @@ const CLIENT_ONLY_SECTIONS = new Set([
 const changeGranularity = async (step) => {
     currentGranularity = step;
     setStepOverride(step);
-    selectionStore.stepOverride = step ?? null;
-    persistSelection();
+    notebookStore.stepOverride = step ?? null;
+    persistNotebook();
 
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
@@ -535,10 +539,10 @@ const SectionContent = {
             ]);
         }
 
-        if (sectionName === 'Selection') {
+        if (sectionName === 'Notebook') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
-            return m(SelectionView, {
-                title: 'Selection',
+            return m(NotebookView, {
+                title: 'Notebook',
                 ...sectionMeta,
                 chartsState,
                 fileChecksum,
@@ -546,6 +550,31 @@ const SectionContent = {
                 heatmapLoading,
                 stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
+                // Compare-mode plumbing — NotebookView mirrors the
+                // current viewer state, so pinning in compare mode and
+                // visiting /notebook renders the compare view.
+                compareMode,
+                anchors: notebookStore.anchors || { baseline: 0, experiment: 0 },
+                toggles: notebookStore.chartToggles || {},
+                setChartToggle,
+                experimentQueryRange,
+                baselineAlias,
+                experimentAlias,
+                combinedAB,
+            });
+        }
+
+        if (sectionName === 'Selection') {
+            const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
+            return m(LoadedSelectionView, {
+                title: 'Selection',
+                ...sectionMeta,
+                chartsState,
+                stepOverride: currentGranularity,
+                compareMode,
+                experimentQueryRange,
+                baselineAlias,
+                experimentAlias,
             });
         }
 
@@ -560,6 +589,10 @@ const SectionContent = {
                 heatmapLoading,
                 stepOverride: currentGranularity,
                 onToggleHeatmap: toggleGlobalHeatmap,
+                compareMode,
+                experimentQueryRange,
+                baselineAlias,
+                experimentAlias,
             });
         }
 
@@ -601,6 +634,8 @@ const SectionContent = {
             collectGroupPlots(g).some(p => isHistogramPlot(p))
         );
 
+        const unavailableCharts = attrs.metadata?.unavailable_charts || [];
+
         return m('div#section-content', [
             m('div.section-header-row', [
                 m('h1.section-title', titleText),
@@ -627,6 +662,16 @@ const SectionContent = {
             m('div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
             ),
+            renderSectionNotes({
+                title: 'Charts with no data',
+                lead: 'The following charts have no matching data in this recording:',
+                items: unavailableCharts,
+                formatItem: (c) => m('li', [
+                    m('strong', c.title),
+                    c.subgroup ? ` — ${c.subgroup}` : '',
+                    c.group ? ` (${c.group})` : '',
+                ]),
+            }),
         ]);
     },
 };
@@ -635,6 +680,7 @@ const SectionContent = {
 
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
 const metadataSection = { name: 'Metadata', route: '/metadata' };
+const notebookSection = { name: 'Notebook', route: '/notebook' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
 
@@ -662,6 +708,8 @@ const initDashboard = (config = {}) => {
     // reported compare_mode=true).
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
+    combinedAB = config.combinedAB === true;
+    reportMode = config.reportMode === true;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
     experimentQueryRange = config.experimentQueryRange || null;
@@ -681,7 +729,7 @@ const initDashboard = (config = {}) => {
     // (loaded-from-parquet) wins when both exist so a shared annotated
     // parquet shows the granularity its author intended.
     const restoredStep =
-        reportStore.stepOverride ?? selectionStore.stepOverride ?? null;
+        reportStore.stepOverride ?? notebookStore.stepOverride ?? null;
     if (restoredStep != null) {
         currentGranularity = restoredStep;
         setStepOverride(restoredStep);
@@ -737,9 +785,11 @@ const initDashboard = (config = {}) => {
     // rendered map at all.
     const categoryName = config.categoryName || null;
     const serviceNames = Object.keys(serviceInstances || {});
-    const defaultRoute = categoryName
-        ? `/service/${categoryName}`
-        : (serviceNames.length > 0 ? `/service/${serviceNames[0]}` : '/overview');
+    const defaultRoute = reportMode
+        ? '/report'
+        : (categoryName
+            ? `/service/${categoryName}`
+            : (serviceNames.length > 0 ? `/service/${serviceNames[0]}` : '/overview'));
 
     // A stale hash (e.g. `#/service/llm-perf` from a previous session
     // or external link to a different capture) would otherwise drive
@@ -875,6 +925,17 @@ const initDashboard = (config = {}) => {
                         sectionResponseCache,
                         getCachedSections,
                         metadataSection,
+                        () => compareMode,
+                    );
+                }
+
+                if (params.section === 'notebook') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        notebookSection,
                         () => compareMode,
                     );
                 }
