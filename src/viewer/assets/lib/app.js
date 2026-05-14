@@ -3,12 +3,13 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './explorers.js';
+import { NaturalQuery } from './natural_query.js';
 import { CgroupSelector } from './cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
 import { collectGroupPlots } from './group_utils.js';
 import { CpuTopology } from './topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT, setMetricNames } from './data.js';
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
 import { SaveModal } from './overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -365,6 +366,7 @@ const CLIENT_ONLY_SECTIONS = new Set([
     'systeminfo',
     'metadata',
     'query_explorer',
+    'natural_query',
 ]);
 
 const changeGranularity = async (step) => {
@@ -490,6 +492,12 @@ const SectionContent = {
         if (sectionName === 'Query Explorer') {
             return m('div#section-content', [
                 m(QueryExplorer, { liveMode, isRecording: () => recording }),
+            ]);
+        }
+
+        if (sectionName === 'Natural Query') {
+            return m('div#section-content', [
+                m(NaturalQuery),
             ]);
         }
 
@@ -669,6 +677,15 @@ const initDashboard = (config = {}) => {
     systemInfoData = config.systemInfo || null;
     fileChecksum = config.fileChecksum || null;
     fileMetadata = config.fileMetadata || null;
+
+    // Fetch metric names for NL query embedding index
+    if (fileMetadata) {
+        ViewerApi.getMetricNames().then((resp) => {
+            if (resp?.status === 'success') {
+                setMetricNames(resp.data.metrics, resp.data.metric_types);
+            }
+        }).catch(() => {});
+    }
 
     // Compare-mode initial state (supplied by bootstrap when /api/v1/mode
     // reported compare_mode=true).
