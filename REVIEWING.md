@@ -24,7 +24,7 @@ manually against fixture parquets.
 pass cleanly. `cargo test --workspace` is **171 passed, 0
 failed, 11 ignored**.
 
-Branch shape: **44** commits, **+7,350 / −2,266** across **82**
+Branch shape: **47** commits, **+6,946 / −2,266** across **82**
 files (`git diff --shortstat main...yv/sql-testing`,
 `git rev-list --count main..yv/sql-testing`).
 
@@ -81,6 +81,13 @@ per viewer copy (`site/viewer/lib/viewer_api.js:6` = `'sql'`;
 logic in `src/viewer/assets/lib/data.js:361,379`. When the
 server-backed viewer migrates, dual-emission collapses to bare
 `plot_sql` (already defined at `plot.rs:169`).
+
+Frontend support for the SQL backend is otherwise minimal — about
+215 LOC of small edits across `src/viewer/assets/lib/*.js`, most of
+it in `cgroup_selector.js` (rewritten to drive selection through the
+`CaptureRegistry` instead of the legacy WASM viewer's state, per
+Stage 2b commit `eb5553e`). KPI placeholder shown when a plot has
+no SQL twin yet: `data.js:441`, `charts/chart.js:382`.
 
 ### Why the JS/Rust split inside `viewer-sql`
 
