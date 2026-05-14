@@ -20,7 +20,6 @@ metriken-exposition = "0.16.0"
 # which doesn't satisfy a 0.9.x semver range — `[patch.crates-io]` would
 # silently fail. Path deps skip the version-range check.
 metriken-query = { path = "../metriken/metriken-query", default-features = false }
-metriken-query-sql = { path = "../metriken/metriken-query-sql" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -29,9 +28,8 @@ include_dir = "0.7.4"
 walkdir = "2.5.0"
 wasm-bindgen = "0.2"
 
-# Local override: use the in-tree metriken workspace (with the catalogue,
-# dispatcher, and DuckDB-backed SqlBackend) instead of the published
-# 0.9.x crate. Drop this section to pin to released versions.
+# Local override: use the in-tree metriken workspace instead of the
+# published 0.9.x crate. Drop this section to pin to released versions.
 [patch.crates-io]
 metriken = { path = "../metriken/metriken" }
 metriken-exposition = { path = "../metriken/metriken-exposition" }
@@ -76,7 +74,6 @@ memmap2 = "0.9.10"
 metriken.workspace = true
 metriken-exposition.workspace = true
 metriken-query = { workspace = true, features = ["ingest", "lz4"] }
-metriken-query-sql.workspace = true
 notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"

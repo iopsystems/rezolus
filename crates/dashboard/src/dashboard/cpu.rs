@@ -5,7 +5,6 @@ use crate::sql::Arg;
 
 const RATIO: &str = "{n} / NULLIF({d}, 0)";
 const INVERSE_RATIO: &str = "1 - {n} / NULLIF({d}, 0)";
-const RATIO_X1000: &str = "{n} / NULLIF({d}, 0) * 1000";
 
 pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
