@@ -1,0 +1,5 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::scale_v(\"SELECT timestamp::DOUBLE/1e9 AS t, 42::DOUBLE AS v FROM _src\".to_string(),\n1e9,)"
+---
+WITH _w AS (SELECT timestamp::DOUBLE/1e9 AS t, 42::DOUBLE AS v FROM _src) SELECT _w.* REPLACE (_w.v / 1000000000 AS v) FROM _w

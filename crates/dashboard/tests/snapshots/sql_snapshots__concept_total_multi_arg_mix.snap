@@ -1,0 +1,5 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::concept_total(\"ipns\",\n&[(\"instructions\", Arg::Sum(\"^cpu_instructions$\")),\n(\"cycles\", Arg::Sum(\"^cpu_cycles$\")), (\"tsc\", Arg::Sum(\"^cpu_tsc$\")),\n(\"aperf\", Arg::Sum(\"^cpu_aperf$\")), (\"mperf\", Arg::Sum(\"^cpu_mperf$\")),\n(\"cores\", Arg::Col(\"cpu_cores\")),],)"
+---
+WITH agg AS (SELECT timestamp, list_sum([*COLUMNS('^cpu_instructions$')]::UBIGINT[]) AS instructions, list_sum([*COLUMNS('^cpu_cycles$')]::UBIGINT[]) AS cycles, list_sum([*COLUMNS('^cpu_tsc$')]::UBIGINT[]) AS tsc, list_sum([*COLUMNS('^cpu_aperf$')]::UBIGINT[]) AS aperf, list_sum([*COLUMNS('^cpu_mperf$')]::UBIGINT[]) AS mperf, "cpu_cores" AS cores FROM _src) SELECT timestamp::DOUBLE/1e9 AS t, ipns(instructions, cycles, tsc, aperf, mperf, cores, timestamp) AS v FROM agg

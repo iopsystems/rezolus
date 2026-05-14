@@ -1,0 +1,33 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::ratio_by_id(\"^cpu_instructions/[0-9]+$\", \"^cpu_cycles/[0-9]+$\",\n\"/([0-9]+)$\", \"{n_rate} / NULLIF({d_rate}, 0)\",)"
+---
+WITH n_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_instructions/[0-9]+$') FROM _src)
+                  ON COLUMNS('^cpu_instructions/[0-9]+$') INTO NAME col VALUE v
+           ),
+           d_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_cycles/[0-9]+$') FROM _src)
+                  ON COLUMNS('^cpu_cycles/[0-9]+$') INTO NAME col VALUE v
+           ),
+           joined AS (
+              SELECT n.timestamp,
+                     regexp_extract(n.col, '/([0-9]+)$', 1) AS id,
+                     n.v AS num_v,
+                     d.v AS den_v
+              FROM n_unp n JOIN d_unp d
+                  ON n.timestamp = d.timestamp
+                 AND regexp_extract(n.col, '/([0-9]+)$', 1)
+                     = regexp_extract(d.col, '/([0-9]+)$', 1)
+           ),
+           rates AS (
+              SELECT timestamp, id,
+                     irate_lag(num_v,
+                               LAG(num_v) OVER (PARTITION BY id ORDER BY timestamp),
+                               timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS n_rate,
+                     irate_lag(den_v,
+                               LAG(den_v) OVER (PARTITION BY id ORDER BY timestamp),
+                               timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS d_rate
+              FROM joined
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, id, ({n_rate} / NULLIF({d_rate}, 0)) AS v FROM rates

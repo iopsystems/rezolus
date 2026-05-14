@@ -1,0 +1,16 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::cgroup_irate_total(\"cgroup_cpu_usage\", CgroupSide::Individual,\nSome((\"state\", \"user\")),)"
+---
+WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cgroup_cpu_usage(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^cgroup_cpu_usage(/[^:]+)?$') INTO NAME col VALUE v
+           ),
+           joined AS (
+              SELECT u.timestamp, u.v
+              FROM unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_usage' AND idx.labels['state'] = 'user'
+              WHERE idx.name IN __SELECTED_CGROUPS__
+           ),
+           agg AS (SELECT timestamp, SUM(v) AS s FROM joined GROUP BY timestamp)
+           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) AS v FROM agg

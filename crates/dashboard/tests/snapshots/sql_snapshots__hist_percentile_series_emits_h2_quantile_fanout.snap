@@ -1,0 +1,15 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::hist_percentile_series(\"syscall_latency\")"
+---
+WITH d AS (
+              SELECT timestamp,
+                     h2_delta("syscall_latency:buckets",
+                              LAG("syscall_latency:buckets") OVER (ORDER BY timestamp)) AS d
+              FROM _src
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  q::VARCHAR AS quantile,
+                  h2_quantile(d, q)::DOUBLE AS v
+           FROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)
+           WHERE d IS NOT NULL

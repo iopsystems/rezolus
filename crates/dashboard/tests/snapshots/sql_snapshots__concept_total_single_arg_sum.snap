@@ -1,0 +1,5 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::concept_total(\"cpu_busy_pct\",\n&[(\"usage\", Arg::Sum(\"^cpu_usage/[a-z]+$\")),\n(\"cores\", Arg::Col(\"cpu_cores\")),],)"
+---
+WITH agg AS (SELECT timestamp, list_sum([*COLUMNS('^cpu_usage/[a-z]+$')]::UBIGINT[]) AS usage, "cpu_cores" AS cores FROM _src) SELECT timestamp::DOUBLE/1e9 AS t, cpu_busy_pct(usage, cores, timestamp) AS v FROM agg
