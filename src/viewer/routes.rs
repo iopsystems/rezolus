@@ -31,7 +31,7 @@ use std::sync::atomic::Ordering;
 use super::actions;
 use super::capture_registry::{self, CaptureId};
 use super::promql::{self, QueryEngine};
-use super::state::{self, ApiResponse, AppState, CaptureParam, MetricsData};
+use super::state::{self, ApiResponse, AppState, CaptureParam};
 use super::tsdb::Tsdb;
 
 #[cfg(not(feature = "developer-mode"))]
