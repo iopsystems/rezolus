@@ -12,9 +12,10 @@ const formatSize = (bytes) => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 };
 
-// Shared 14px upload arrow used by every Load-parquet trigger (topnav
-// Load Parquet, Load Report, compare badge per-capture Load buttons).
+// Shared 14px upload arrow used by every Load-parquet trigger.
 export const UPLOAD_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>';
+
+const FILE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6"/><path d="M9 2v3a1 1 0 001 1h3M9 2l4 4"/></svg>';
 
 // Open a one-shot hidden <input type=file> and forward the selected
 // file to the caller's onPick. Returns an onclick handler so the site
@@ -96,19 +97,10 @@ const TopNav = {
                     ]),
                 ]);
             })(),
-            // Node selector / filename display. In compare mode the
-            // filename info is in the compare badge above, so suppress the
-            // duplicate single-capture source label (multi-node selects
-            // still render so the user can pin to one node).
             (() => {
                 const nodes = attrs.nodeList || [];
                 const selNode = attrs.selectedNode;
-                const hasMultiNode = nodes.length > 1;
-
-                const displayLabel = selNode || attrs.filename;
-                if (!displayLabel) return null;
-
-                if (hasMultiNode) {
+                if (nodes.length > 1) {
                     return m('div.topnav-source', [
                         m('select.topnav-node-select', {
                             value: selNode,
@@ -118,17 +110,29 @@ const TopNav = {
                         }, nodes.map(n => m('option', { value: n }, n))),
                     ]);
                 }
-
-                if (compareMode) return null;
-
-                return m('div.topnav-source', [
-                    m('span.topnav-source-name', displayLabel),
-                ]);
+                return null;
             })(),
+            // Three sibling buttons sit next to REZOLUS in single-capture
+            // mode: file metadata (filename text + dropdown), Load Parquet,
+            // Load Selection. Compare mode puts filename + per-side Load
+            // Parquet inside .compare-badge instead, but Load Selection
+            // still appears here.
             m('div.topnav-actions', [
-                // Upload parquet (file mode only, when handler provided).
-                // Hidden in compare mode — use the per-capture Load buttons
-                // in the compare badge instead.
+                (() => {
+                    const displayLabel = attrs.selectedNode || attrs.filename;
+                    if (!displayLabel || compareMode) return null;
+                    return m('details.topnav-source', [
+                        m('summary.topnav-source-summary', {
+                            title: displayLabel,
+                        }, [
+                            m.trust(FILE_ICON_SVG),
+                            m('span.topnav-source-name', displayLabel),
+                        ]),
+                        m('div.topnav-source-card', [
+                            m('div.topnav-source-fullname', displayLabel),
+                        ]),
+                    ]);
+                })(),
                 attrs.onUploadParquet && !liveMode && !compareMode && m('button.transport-btn.import-btn', {
                     onclick: openParquetPicker(attrs.onUploadParquet),
                     title: 'Upload parquet file',
@@ -136,9 +140,6 @@ const TopNav = {
                     m('span', 'Load Parquet'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
-                // Import selection JSON (server viewer only). Visible in
-                // compare mode too: LoadedSelectionView honors compareMode
-                // and renders both arms when an experiment is attached.
                 attrs.onUploadParquet && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
@@ -152,7 +153,6 @@ const TopNav = {
                     m('span', 'Load Selection'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
-                // Transport controls (live mode only)
                 liveMode && m('div.transport-controls', [
                     m('button.transport-btn.record-btn', {
                         onclick: attrs.onStartRecording,

@@ -663,15 +663,66 @@ body::after {
     flex-shrink: 0;
 }
 
+/* Single-capture filename dropdown. Lives inside .topnav-actions
+ * alongside Load Parquet / Load Selection so the three sit as a
+ * cohesive button group next to the REZOLUS logo. */
 .topnav-source {
+    position: relative;
+}
+.topnav-source-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 36px;
+    padding: 0 0.75rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--fg);
     font-family: var(--font-mono);
     font-size: var(--font-size-xs);
-    color: var(--fg);
-    padding: 0.25rem 0.75rem;
-    background: var(--bg-tertiary);
-    border-radius: 4px;
+    list-style: none;
+    outline: none;
+    max-width: 240px;
+}
+.topnav-source-summary::-webkit-details-marker { display: none; }
+.topnav-source-summary::marker { content: ''; }
+.topnav-source-summary:hover {
+    background: var(--bg-card-hover);
+}
+.topnav-source-summary svg {
+    flex-shrink: 0;
+    color: var(--fg-secondary);
+}
+.topnav-source-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.topnav-source-card {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-card);
     border: 1px solid var(--border-subtle);
-    margin-left: 1.5rem;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+    z-index: 50;
+    min-width: 240px;
+    max-width: min(90vw, 360px);
+}
+.topnav-source-fullname {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg);
+    word-break: break-all;
+    user-select: text;
 }
 
 
@@ -2216,19 +2267,24 @@ main {
         font-size: var(--font-size-base);
     }
 
-    /* Show filename but hide expandable metadata on mobile.
-     * pointer-events stays on the wrapper for the static-label case, but
-     * scope it to .topnav-source-name so the multi-node <select> child
-     * (rendered without a .topnav-source-name span) remains tappable. */
-    .topnav-source {
+    /* Filename dropdown collapses to an icon-only 32px square. The
+     * multi-node `.topnav-source` is a plain <div> (no <details>),
+     * so the icon-only rule scopes to `details.topnav-source` only. */
+    details.topnav-source > .topnav-source-summary {
+        max-width: none;
+        width: 32px;
+        padding: 0.25rem;
+        justify-content: center;
+    }
+    details.topnav-source > .topnav-source-summary .topnav-source-name {
+        display: none;
+    }
+
+    .topnav-source:has(.topnav-node-select) {
         overflow: hidden;
         text-overflow: ellipsis;
         min-width: 0;
         flex: 1;
-    }
-
-    .topnav-source-name {
-        pointer-events: none;
     }
 
     /* Shrink transport buttons */
@@ -2313,6 +2369,12 @@ main {
     #section-content {
         margin-left: 0;
         max-width: 100vw;
+    }
+
+    /* Topnav is `position: relative` here, so the desktop
+       `margin-top: var(--header-height)` would double the gap. */
+    main {
+        margin-top: 0;
     }
 
     /* ── Section header stacks vertically ── */
