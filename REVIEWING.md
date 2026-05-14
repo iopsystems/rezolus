@@ -20,13 +20,16 @@ commit `519c24c`; that role is now played by
 `/work/metriken/metriken-query/examples/sql_vs_promql.rs`, run
 manually against fixture parquets.
 
-`cargo check --bin rezolus`, `-p dashboard`, and `-p viewer-sql`
-pass cleanly. `cargo test --workspace` is **171 passed, 0
-failed, 11 ignored**.
+`cargo check --bin rezolus`, `cargo check -p dashboard`, and
+`cargo check -p viewer-sql` pass cleanly. `cargo test
+--workspace`: **241 passed, 0 failed, 11 ignored**.
 
-Branch shape: **47** commits, **+6,946 / −2,266** across **82**
-files (`git diff --shortstat main...yv/sql-testing`,
-`git rev-list --count main..yv/sql-testing`).
+Branch shape: **49** commits, **+6,641 / −1,453** across **76**
+files (`git diff --shortstat origin/main...HEAD`,
+`git rev-list --count origin/main..HEAD`). Includes the merge from
+`origin/main` that brought in Save-as-Report, Notebook/Selection
+rework, Exceptions dashboard, per-CPU runqueue wait, per-device
+suppression, and dep trims (drop brotli, rustls→ring).
 
 ---
 
@@ -40,7 +43,7 @@ site/viewer/                                Mithril UI (file-mode entry)
 
 imports:
   site/viewer-sql/pkg/wasm_viewer_sql.js    built from crates/viewer-sql/
-  site/viewer-sql/lib/duckdb-registry.js    926 LOC: JS-side multi-worker
+  site/viewer-sql/lib/duckdb-registry.js    925 LOC: JS-side multi-worker
                                             duckdb-wasm pool, parquet
                                             attachment, per-source aliasing,
                                             cgroup index table, result cache
@@ -73,7 +76,7 @@ on `metriken-query`; the only usage is `Tsdb`
 (`crates/dashboard/src/{data.rs:12, lib.rs:8}`).
 
 Each plot calls `plot_promql_with_sql(opts, promql, sql)`
-(definition at `crates/dashboard/src/plot.rs:184`, 280). **130
+(definition at `crates/dashboard/src/plot.rs:216, 312`). **167
 call sites** across `crates/dashboard/src/dashboard/*.rs`. Both
 strings end up in the dashboard JSON the frontend consumes; the
 frontend picks one based on a compile-time `BACKEND` constant
@@ -81,7 +84,7 @@ per viewer copy (`site/viewer/lib/viewer_api.js:6` = `'sql'`;
 `src/viewer/assets/lib/viewer_api.js:7` = `'promql'`). Selection
 logic in `src/viewer/assets/lib/data.js:361,379`. When the
 server-backed viewer migrates, dual-emission collapses to bare
-`plot_sql` (already defined at `plot.rs:169`).
+`plot_sql` (defined at `plot.rs:201, 302`).
 
 Frontend support for the SQL backend is otherwise minimal — about
 215 LOC of small edits across `src/viewer/assets/lib/*.js`, most of
@@ -98,11 +101,11 @@ Bridging Rust→JS via `wasm-bindgen` would duplicate the JS host
 shim that already ships with the library, so duckdb-wasm lives
 in JS at the boundary:
 
-- **JS** (`site/viewer-sql/lib/duckdb-registry.js`, 926 LOC):
+- **JS** (`site/viewer-sql/lib/duckdb-registry.js`, 925 LOC):
   worker pool, parquet attachment, schema introspection, per-
   source view aliasing, cgroup index table,
   `__SELECTED_CGROUPS__` substitution, result cache.
-- **Rust→WASM** (`crates/viewer-sql/src/lib.rs`, 716 LOC):
+- **Rust→WASM** (`crates/viewer-sql/src/lib.rs`, 752 LOC):
   `SqlMetadata` (implements `DashboardData`), Arrow batch →
   Prometheus matrix marshalling (BigInt workaround),
   `query_range` CTE wrap, pre-flight column validation. Exposes
@@ -127,14 +130,14 @@ documented inline at `crates/viewer-sql/src/lib.rs`) and
 concatenates it with `crates/viewer-sql/src/macros.sql` (155
 LOC, 10 macros — the pure-SQL re-implementations of Rust H2
 vscalar UDFs duckdb-wasm can't accept). Parity test at
-`crates/viewer-sql/tests/macros.rs` (334 LOC, 17 tests)
+`crates/viewer-sql/tests/macros.rs` (341 LOC, 17 tests)
 exercises both halves against an in-memory native DuckDB.
 
 ---
 
 ## Test coverage
 
-171 Rust tests pass, 11 ignored. Eight frontend `.mjs` test
+241 Rust tests pass, 11 ignored. Eight frontend `.mjs` test
 files under `tests/` runnable via `node --test tests/*.mjs`. New
 on this branch:
 
@@ -147,8 +150,8 @@ on this branch:
 | Frontend JS | `tests/*.test.mjs` | 8 files: compare math, compare/node filter, heatmap data + resolution, section cache, sections API, selection migration, service routes. |
 | Puppeteer smoke | `site/viewer-sql/test_{smoke,sections}.mjs` + `site/viewer/test_viewer_sql.mjs` | Three files that drive a real headless browser against the static viewer end-to-end. |
 
-Not directly unit-tested: `crates/viewer-sql/src/lib.rs` (716
-LOC) and `site/viewer-sql/lib/duckdb-registry.js` (926 LOC).
+Not directly unit-tested: `crates/viewer-sql/src/lib.rs` (752
+LOC) and `site/viewer-sql/lib/duckdb-registry.js` (925 LOC).
 Both are intentionally thin and exercised end-to-end by the
 puppeteer smoke tests above.
 
@@ -180,7 +183,7 @@ current state — fixes that landed on this branch are cited.
 | count | category | meaning / status |
 |------:|---|---|
 | 985 | SQL view missing the metric | Numeric-encoded parquets (`AB_*`, `*_gemma3`, `cachecannon`) store metric names in Arrow field metadata, not column names. Static viewer renders these mostly empty too. **Likely older fixtures**; confirm before treating as a real issue. |
-| 167 | `rate_5m` boundary | Old positional-LAG implementation. The macro is range-based on this branch — `macros.sql:183-185`. **Stale.** |
+| 167 | `rate_5m` boundary | Old positional-LAG implementation. The macro is range-based on this branch — `/work/metriken/metriken-query-sql/src/shared_macros.sql:77-79`. **Stale.** |
 | 55 | numerical drift (rel ≥ 1e-3) | Multi-source aggregation gap on the two parquets with multiple `rezolus` sources. **Fixed in `5dbe881`, `1bbd6b2`, `a415fbe`, `895801b`.** |
 | 26 | series count differs | Same root cause as the 55. |
 | 23 | SQL produces series, PromQL doesn't | Inverse of the 985, rarer. |
@@ -201,7 +204,7 @@ boundary samples allowed.
 2. **`crates/dashboard/src/sql.rs`** (627). SQL emitter helpers.
    Pattern shown by `rate_5m_total` (`:33`), `concept_total`
    (`:281`), `irate_sum_by_id` (`:126`).
-3. **`site/viewer-sql/lib/duckdb-registry.js`** (926). JS
+3. **`site/viewer-sql/lib/duckdb-registry.js`** (925). JS
    `CaptureRegistry` + worker pool. Public surface mirrors the
    now-deleted legacy `WasmCaptureRegistry`.
 4. One dashboard category end-to-end — e.g.
@@ -229,7 +232,7 @@ Skip:
 
 ## Reading order
 
-44 commits; **don't squash**. Roughly:
+49 commits; **don't squash**. Roughly:
 
 - **Pre-migration**: viewer-sql crate scaffold, multi-worker
   pool, combined queries.
@@ -245,6 +248,18 @@ Skip:
 - **Cleanup**: dead shadow-mode plumbing removed (`519c24c`),
   unit tests for the DuckDB layer added, ad-hoc puppeteer probes
   dropped.
+- **Macro consolidation** (`cabbc2d`): the 19 shared dashboard
+  macros now live in
+  `/work/metriken/metriken-query-sql/src/shared_macros.sql`; wasm
+  pulls them via cross-repo `include_str!` so the parallel-copy
+  hazard becomes a compile dep.
+- **Merge from `origin/main`** (`be6d1c1`): brings Save-as-Report,
+  Notebook/Selection rework, Exceptions dashboard, per-CPU
+  runqueue wait, per-device suppression, drop-brotli, rustls→ring,
+  and the `src/viewer/mod.rs` → siblings refactor. SQL twins were
+  added to every new dashboard plot main introduced (with four
+  TODOs in `exceptions.rs` for cgroup-keyed throttling metrics
+  that need the `_cgroup_index` join).
 
 ---
 
