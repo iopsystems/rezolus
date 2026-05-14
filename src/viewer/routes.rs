@@ -158,7 +158,7 @@ async fn data(State(state): State<Arc<AppState>>, AxumPath(path): AxumPath<Strin
         let tsdb_handle = state.baseline_tsdb();
         let tsdb = tsdb_handle.read();
         let mut store = state.sections.write();
-        store.get_or_generate(&route, &tsdb).cloned()
+        store.get_or_generate(&route, &*tsdb).cloned()
     };
 
     let Some(mut value) = value else {

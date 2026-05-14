@@ -53,7 +53,11 @@ impl LazySectionStore {
     /// Generate (or return the cached body for) `route` (`/cpu`,
     /// `/service/vllm`, …). Returns `None` when the route is unknown or
     /// the section has no data. Applies `context.filesize` uniformly.
-    pub fn get_or_generate(&mut self, route: &str, data: &Tsdb) -> Option<&serde_json::Value> {
+    pub fn get_or_generate(
+        &mut self,
+        route: &str,
+        data: &dyn dashboard::DashboardData,
+    ) -> Option<&serde_json::Value> {
         let key = format!("{}.json", &route[1..]);
         if !self.cached_bodies.contains_key(&key) {
             let mut view = dashboard::dashboard::generate_section(data, route, &self.context)?;
