@@ -238,11 +238,12 @@ Skip:
 ## Open questions
 
 1. **Live-agent and MCP migration.** Neither uses the SQL
-   backend today. The decision determines how long
-   `metriken-query`'s `legacy` feature stays alive — and is
-   coupled to the metriken-side question of whether to land or
-   demote the unused `Engine` layer (see
-   `/work/metriken/REVIEWING.md`).
+   backend today. They drive the legacy PromQL engine
+   (`metriken_query::promql::QueryEngine`); a migration would
+   either route through `metriken_query::harness::Engine`
+   (currently scaffolding behind the off-by-default `harness`
+   feature) or skip metriken-query entirely by emitting SQL
+   straight to duckdb. See `/work/metriken/REVIEWING.md`.
 2. **KPI translation.** Plots whose query lives in parquet
    `service_queries` metadata still arrive as raw PromQL
    strings; the viewer shows "(query not yet available —
