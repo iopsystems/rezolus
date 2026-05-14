@@ -26,9 +26,11 @@ retains `metriken-query` exclusively for the live-mode path.
 
 ## Branch shape
 
-65 commits ahead of `origin/main`, **+7,539 / −1,847 across 92
+75 commits ahead of `origin/main`, **+7,910 / −1,910 across 93
 files** (`git diff --shortstat origin/main...HEAD`,
-`git rev-list --count origin/main..HEAD`).
+`git rev-list --count origin/main..HEAD`). Includes the 10
+review-pass commits documented under
+"Review pass" below.
 
 Migration arc (most recent first; see `git log origin/main..HEAD`
 for the full list):
@@ -50,6 +52,24 @@ for the full list):
 The migration plan that produced this sequence lives at
 `/home/yurivish/.claude/plans/draft-a-migration-plan-temporal-turing.md`.
 
+A post-merge review pass added 10 more commits — doc accuracy
+fixes, architectural simplifications (Bucket B), and edge-case
+fixes with tests (Bucket C):
+
+| Commit | Bucket | What |
+|---|---|---|
+| `6bfb960` | C8 | viewer wires `DuckDbBackend::invalidate` on detach + baseline-replace. |
+| `f264729` | C8 | upstream `metriken-query-sql`: `DuckDbBackend::invalidate(path)` evicts pool entry; covers detach/reattach pool-staleness. |
+| `64dc788` | C7 | `AppState::upload_mutex` serializes concurrent uploads — prevents inconsistent post-swap snapshot. Concurrency test included. |
+| `e71bc87` | C9 | `prom-matrix` drops NaN/+Inf/-Inf rows as Prometheus gaps (`f64::to_string()` would otherwise produce invalid `"NaN"`/`"inf"` literals). 8 new projection tests. |
+| `89d8251` | C6 | `ingest_baseline_from_path` clears `state.live` after the SQL swap — fixes a reachable `.expect("live mode baseline is Tsdb-backed")` panic on `/api/v1/reset` post-upload. Regression test included. |
+| `12f555a` | B2 | Drop the inner `RwLock<CaptureBackend>` on `CaptureSlot`. Whole-slot replacement via `RwLock<Option<CaptureSlot>>` already serialised swaps. |
+| `2bf7711` | B3 | Drop `baseline_sql()` (one caller, internal). `with_baseline_data` reads the registry directly. |
+| `fe6bdc7` | B4 | `CaptureRegistry::new(Option<CaptureBackend>)` unified factory; baseline becomes `Option<CaptureSlot>`; `SqlCapture::empty()` placeholder is gone. |
+| `3436f64` | — | Fixup: `sql: None` on a missed `Kpi` test literal in `dashboard::dashboard::category::tests`. |
+| `e826092` | B5 | Collapse `save_*_dispatch` cfg-pairs into single functions with internal `#[cfg]` blocks. |
+| `66292ff` | A | Doc accuracy: branch shape + JS test references. |
+
 ## Architecture (post-migration)
 
 ```
@@ -57,26 +77,30 @@ src/viewer/
   state.rs            AppState
                         + sql_backend: Arc<DuckDbBackend>   (one per process)
                         + captures: Arc<CaptureRegistry>
-                        + new(tsdb, templates)              (live mode)
+                        + upload_mutex: Mutex<()>          (serializes uploads)
+                        + new(tsdb, templates)             (live mode)
+                        + new_empty(templates)             (upload-only mode)
                         + new_sql(capture, backend, templates) (file mode)
-                        + baseline_tsdb() -> Option<Arc<RwLock<Tsdb>>>     (live)
-                        + baseline_sql()  -> Option<Arc<RwLock<SqlCapture>>> (file)
-                        + with_baseline_data(|&dyn DashboardData| ...)
+                        + baseline_tsdb() -> Option<Arc<RwLock<Tsdb>>>  (live, cfg-gated)
+                        + with_baseline_data(|&dyn DashboardData| ...)  (backend-agnostic)
 
   sql_capture.rs      SqlCapture { parquet_path, catalog, kind_by_metric,
                                    interval_seconds, time_range,
                                    source, version, filename }
                       open(path, &backend) -> SqlCapture
-                      empty()                         (upload-only placeholder)
                       impl DashboardData for SqlCapture
 
-  capture_registry.rs CaptureSlot.backend: RwLock<CaptureBackend>
+  capture_registry.rs CaptureRegistry {
+                        baseline: RwLock<Option<CaptureSlot>>,
+                        experiment: RwLock<Option<CaptureSlot>>,
+                      }
+                      CaptureSlot.backend: CaptureBackend  (plain enum, no inner lock)
                       enum CaptureBackend { Sql(Arc<RwLock<SqlCapture>>),
                                             #[cfg(live-mode)] Live(Arc<RwLock<Tsdb>>) }
-                      new_sql(capture, ...)          (file mode)
-                      replace_baseline_with_sql(capture)  (upload swap-in)
+                      new(Option<CaptureBackend>)         (unified factory)
+                      replace_baseline_with_sql(capture)  (upload / re-upload)
                       attach_experiment_sql(capture, ...)
-                      get_sql(id) / get(id) (Tsdb)
+                      get_sql(id) / get(id) (Tsdb, cfg-gated)
 
   routes.rs           /api/v1/query{,_range} -> state.sql_backend.run_sql(sql, path)
                                               -> prom_matrix::arrow_to_prom_matrix(...)
@@ -109,10 +133,12 @@ subsequent requests hit the warm pool.
 
 | Layer | Where | Status |
 |---|---|---|
-| Rezolus binary | `cargo test --bin rezolus` | **158 / 158 pass** |
+| Rezolus binary | `cargo test --bin rezolus` | **160 / 160 pass** (was 158; +2 from the review pass — live→SQL swap regression test and concurrent-upload consistency test) |
 | Dashboard inline | `cargo test -p dashboard` (lib) | **34 / 34 pass** |
 | Dashboard SQL snapshots | `crates/dashboard/tests/sql_snapshots.rs` | **18 / 18 pass** |
 | viewer-sql macro parity | `crates/viewer-sql/tests/macros.rs` | **17 / 17 pass** |
+| prom-matrix projection | `crates/prom-matrix/tests/projection.rs` | **8 / 8 pass** (new; covers NULL drop, NaN/Inf drop, label grouping, multi-batch concat, UInt64 string round-trip) |
+| metriken-query-sql pool invalidate | upstream `metriken-query-sql/tests/pool_invalidate.rs` | **3 / 3 pass** (new; covers DuckDbBackend::invalidate) |
 | Frontend JS | `node --test tests/*.mjs` | **76 / 82 pass** (6 failures — see below) |
 | End-to-end smoke | `tests/viewer_smoke.sh` | **Requires `jq`** (not in dev image); verified manually with `curl` |
 
