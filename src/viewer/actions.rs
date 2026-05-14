@@ -289,7 +289,13 @@ pub fn ingest_baseline_from_path(
     let file_checksum = compute_file_checksum(&temp_path);
 
     // Swap the baseline backend from Live(empty Tsdb) to Sql(capture).
+    // Clear `state.live` so live-only handlers (`/api/v1/reset`,
+    // `/api/v1/connect`) reject further requests with a clean
+    // `bad_request` instead of hitting the
+    // `expect("live mode baseline is Tsdb-backed")` panic in
+    // `reset_tsdb` (the baseline is now SQL-backed).
     state.captures.replace_baseline_with_sql(capture);
+    state.live.store(false, Ordering::Relaxed);
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
@@ -802,4 +808,51 @@ fn save_combined_ab_dispatch(
         manifest,
     )
     .map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, feature = "live-mode"))]
+mod live_to_sql_swap_tests {
+    //! Regression: pre-fix, an upload during a live-mode session left
+    //! `state.live = true` but the baseline backend swapped from Tsdb
+    //! to SqlCapture. The next live-only handler hit
+    //! `baseline_tsdb().expect("live mode baseline is Tsdb-backed")`
+    //! and panicked. Fix: `ingest_baseline_from_path` clears
+    //! `state.live` after the swap.
+
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use ::dashboard::TemplateRegistry;
+    use metriken_query::Tsdb;
+
+    /// Demo parquet bundled at site/viewer/data/demo.parquet — small
+    /// (1.2 MB) and exercises the SqlCapture load path end-to-end.
+    /// Copied to a temp path so the production-code's
+    /// "delete on parquet-load failure" branch can't touch the
+    /// source-of-truth.
+    fn copy_demo_to_tempdir() -> PathBuf {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("site/viewer/data/demo.parquet");
+        let dst = baseline_temp_path();
+        std::fs::copy(&src, &dst).expect("demo parquet copy");
+        dst
+    }
+
+    #[test]
+    fn upload_during_live_mode_clears_live_flag() {
+        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        // Simulate the in-flight live-mode session: state.live = true,
+        // baseline is the empty Tsdb constructed by `AppState::new`.
+        state.live.store(true, Ordering::Relaxed);
+        assert!(state.live.load(Ordering::Relaxed));
+
+        let parquet = copy_demo_to_tempdir();
+        let _ = ingest_baseline_from_path(&state, parquet, "demo.parquet".into());
+
+        // After the swap the baseline is SqlCapture-backed. Live-only
+        // handlers must see `state.live = false` or they'll panic on
+        // their `expect("live mode baseline is Tsdb-backed")`.
+        assert!(!state.live.load(Ordering::Relaxed));
+        assert!(state.captures.get_sql(CaptureId::Baseline).is_some());
+        assert!(state.captures.get(CaptureId::Baseline).is_none());
+    }
 }
