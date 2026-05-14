@@ -26,8 +26,9 @@ retains `metriken-query` exclusively for the live-mode path.
 
 ## Branch shape
 
-63 commits ahead of `origin/main`, **+7,500 / −1,833 across 92
-files** (`git diff --shortstat origin/main...HEAD`).
+65 commits ahead of `origin/main`, **+7,539 / −1,847 across 92
+files** (`git diff --shortstat origin/main...HEAD`,
+`git rev-list --count origin/main..HEAD`).
 
 Migration arc (most recent first; see `git log origin/main..HEAD`
 for the full list):
@@ -121,13 +122,19 @@ subsequent requests hit the warm pool.
   `site/viewer/pkg/wasm_viewer.js`, the retired in-process WASM
   PromQL engine (`crates/viewer/` deleted in `ad1ad9e`). Test file
   should be removed in a follow-up cleanup.
-- `tests/compare_node_filter.test.mjs` (×5, tests 39–43) — exercises
-  `buildEffectiveQuery`'s PromQL-side node-label injection. After
-  `BACKEND='sql'` (`f9b392b`) the function short-circuits to the SQL
-  branch and never reaches the injection path; tests assert
-  `node="web01"` was injected and fail. The injection feature is
-  dead code on the server-backed viewer until the SQL side gains an
-  equivalent.
+- `tests/compare_node_filter.test.mjs` (×5, all 5 tests in the file) —
+  exercises `buildEffectiveQuery`'s PromQL-side node-label and
+  instance-label injection. The 5 failing names are
+  *"node label is injected on the cross-capture (experiment) path
+  for non-service routes"*,
+  *"node label is injected on the baseline (non-cross-capture) path too"*,
+  *"node label is NOT injected for /service/\* routes..."*,
+  *"instance label is injected on baseline path but skipped on cross-capture path"*,
+  *"with no selected node, queries pass through unchanged on either path"*.
+  After `BACKEND='sql'` (`f9b392b`) the function short-circuits to the
+  SQL branch and never reaches the injection path; the tests assert
+  PromQL-shape rewriting that's now dead code on the server-backed
+  viewer until the SQL side gains a node-filter equivalent.
 
 ## Known regressions / deferred work
 
