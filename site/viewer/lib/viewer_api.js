@@ -92,9 +92,15 @@ const ViewerApi = {
         return JSON.parse(registry.query_range(captureId, query, start, end, step));
     },
 
-    async getInfo(captureId = 'baseline') {
+   async getInfo(captureId = 'baseline') {
         ensureAttached(captureId);
         return JSON.parse(registry.info(captureId));
+    },
+
+    async getMetricNames(captureId = 'baseline') {
+        ensureAttached(captureId);
+        const json = registry.metrics_json(captureId);
+        return json ? JSON.parse(json) : { metrics: [], metric_types: {} };
     },
 
     initTemplates(templatesJson, captureId = 'baseline') {
