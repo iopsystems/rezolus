@@ -160,6 +160,7 @@ pub fn save_combined_ab_tarball(
     manifest_bytes: &[u8],
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
+    let events_json = events_payload_json(&payload.events);
     let (baseline_out, experiment_out) = if trim_columns {
         let baseline_kept = {
             let engine = QueryEngine::new(baseline_tsdb);
@@ -170,13 +171,23 @@ pub fn save_combined_ab_tarball(
             resolve_kept_columns(payload, &engine, Side::Experiment)
         };
         (
-            trim_parquet_to_columns(baseline_bytes, &baseline_kept, selection_json, None)?,
-            trim_parquet_to_columns(experiment_bytes, &experiment_kept, selection_json, None)?,
+            trim_parquet_to_columns(
+                baseline_bytes,
+                &baseline_kept,
+                selection_json,
+                events_json.as_deref(),
+            )?,
+            trim_parquet_to_columns(
+                experiment_bytes,
+                &experiment_kept,
+                selection_json,
+                events_json.as_deref(),
+            )?,
         )
     } else {
         (
-            embed_selection_in_parquet(baseline_bytes, selection_json, None)?,
-            embed_selection_in_parquet(experiment_bytes, selection_json, None)?,
+            embed_selection_in_parquet(baseline_bytes, selection_json, events_json.as_deref())?,
+            embed_selection_in_parquet(experiment_bytes, selection_json, events_json.as_deref())?,
         )
     };
 
@@ -732,5 +743,65 @@ mod tests {
             !kv.iter().any(|kv| kv.key == "events"),
             "KEY_EVENTS must not be written when payload has no events"
         );
+    }
+
+    #[test]
+    fn combined_ab_writes_events_to_both_sides() {
+        let (bytes_a, tsdb_a) = build_test(true);
+        let (bytes_b, tsdb_b) = build_test(true);
+        let payload = ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: Some("m_b".into()),
+            }],
+            trim_columns: true,
+            events: vec![Event {
+                timestamp: 1,
+                description: "deploy".into(),
+                kind: None,
+                details: None,
+                source: None,
+                node: None,
+                instance: None,
+                labels: Default::default(),
+                duration_ns: None,
+                id: None,
+                chart_id: None,
+            }],
+        };
+        let body = r#"{"entries":[]}"#;
+        let manifest_bytes = br#"{"version":1,"baseline":{"alias":"a","sources":["svc"]},"experiment":{"alias":"b","sources":["svc"]}}"#;
+        let out = save_combined_ab_tarball(
+            bytes_a, bytes_b, &payload, body, &tsdb_a, &tsdb_b, manifest_bytes, true,
+        )
+        .unwrap();
+
+        let mut archive = tar::Archive::new(std::io::Cursor::new(&out));
+        let mut baseline_bytes: Vec<u8> = Vec::new();
+        let mut experiment_bytes: Vec<u8> = Vec::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let p = entry.path().unwrap().to_path_buf();
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            match name.as_str() {
+                "baseline.parquet" => {
+                    std::io::copy(&mut entry, &mut baseline_bytes).unwrap();
+                }
+                "experiment.parquet" => {
+                    std::io::copy(&mut entry, &mut experiment_bytes).unwrap();
+                }
+                _ => {}
+            }
+        }
+        for (label, bytes) in [("baseline", &baseline_bytes), ("experiment", &experiment_bytes)] {
+            let kv = footer_kv(bytes);
+            let val = kv
+                .iter()
+                .find(|kv| kv.key == "events")
+                .and_then(|kv| kv.value.as_deref())
+                .unwrap_or_else(|| panic!("{label} side missing KEY_EVENTS"));
+            let parsed: serde_json::Value = serde_json::from_str(val).unwrap();
+            assert_eq!(parsed["events"].as_array().unwrap().len(), 1);
+        }
     }
 }
