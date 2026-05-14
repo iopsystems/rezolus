@@ -126,6 +126,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get -y install wabt
       - name: Rebuild WASM viewer
         run: ./crates/viewer/build.sh
+      - name: Check template symlinks are committed
+        # build.sh self-heals missing symlinks under site/viewer/templates/
+        # so the deploy doesn't break, but the symlinks must also be in
+        # git so this isn't a CI-only fix. Fail PRs that add a template
+        # without the matching symlink.
+        run: |
+          missing=$(git status --porcelain site/viewer/templates/ | awk '$1 == "??" {print $2}')
+          if [ -n "$missing" ]; then
+            echo "::error::config/templates/ entries are missing symlinks under site/viewer/templates/. Add them so the static-site viewer can serve the JSON:"
+            echo "$missing" | sed 's/^/  /'
+            exit 1
+          fi
       - name: Validate rebuilt WASM structure
         run: |
           wasm=site/viewer/pkg/wasm_viewer_bg.wasm
