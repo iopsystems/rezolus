@@ -75,12 +75,13 @@ impl CaptureBackend {
 }
 
 pub struct CaptureSlot {
-    /// Data store. RwLock-wrapped so the upload / reset paths can
-    /// swap the backend (e.g. live→sql when an upload replaces the
-    /// initial empty live baseline) without rebuilding the registry.
-    /// Readers clone the inner Arc out and drop the registry lock
-    /// before doing any real work.
-    pub backend: RwLock<CaptureBackend>,
+    /// Data store. Immutable for the lifetime of the slot — variant
+    /// swaps (live→sql via upload, sql→sql via re-upload) rebuild
+    /// the whole slot via `RwLock<Option<CaptureSlot>>` on the
+    /// registry, so the inner variant doesn't need its own lock.
+    /// `as_live`/`as_sql` just clone the inner `Arc<RwLock<...>>`
+    /// out — the variant data is locked at the next level down.
+    pub backend: CaptureBackend,
     pub systeminfo: RwLock<Option<String>>,
     pub file_metadata: RwLock<Option<String>>,
     /// Optional display alias for this capture (e.g. "redis", "valkey").
@@ -106,7 +107,7 @@ impl CaptureRegistry {
     pub fn new(baseline: Option<CaptureBackend>) -> Self {
         Self {
             baseline: RwLock::new(baseline.map(|backend| CaptureSlot {
-                backend: RwLock::new(backend),
+                backend,
                 systeminfo: RwLock::new(None),
                 file_metadata: RwLock::new(None),
                 alias: RwLock::new(None),
@@ -121,14 +122,8 @@ impl CaptureRegistry {
     #[cfg(feature = "live-mode")]
     pub fn get(&self, id: CaptureId) -> Option<Arc<RwLock<Tsdb>>> {
         match id {
-            CaptureId::Baseline => self.baseline.read().as_ref()?.backend.read().as_live(),
-            CaptureId::Experiment => self
-                .experiment
-                .read()
-                .as_ref()?
-                .backend
-                .read()
-                .as_live(),
+            CaptureId::Baseline => self.baseline.read().as_ref()?.backend.as_live(),
+            CaptureId::Experiment => self.experiment.read().as_ref()?.backend.as_live(),
         }
     }
 
@@ -137,14 +132,8 @@ impl CaptureRegistry {
     /// slots return `None`.
     pub fn get_sql(&self, id: CaptureId) -> Option<Arc<RwLock<SqlCapture>>> {
         match id {
-            CaptureId::Baseline => self.baseline.read().as_ref()?.backend.read().as_sql(),
-            CaptureId::Experiment => self
-                .experiment
-                .read()
-                .as_ref()?
-                .backend
-                .read()
-                .as_sql(),
+            CaptureId::Baseline => self.baseline.read().as_ref()?.backend.as_sql(),
+            CaptureId::Experiment => self.experiment.read().as_ref()?.backend.as_sql(),
         }
     }
 
@@ -155,7 +144,7 @@ impl CaptureRegistry {
     pub fn replace_baseline_with_sql(&self, capture: SqlCapture) -> Arc<RwLock<SqlCapture>> {
         let handle = Arc::new(RwLock::new(capture));
         *self.baseline.write() = Some(CaptureSlot {
-            backend: RwLock::new(CaptureBackend::Sql(handle.clone())),
+            backend: CaptureBackend::Sql(handle.clone()),
             systeminfo: RwLock::new(None),
             file_metadata: RwLock::new(None),
             alias: RwLock::new(None),
@@ -166,14 +155,16 @@ impl CaptureRegistry {
     /// Reset the baseline Tsdb in place (live-mode reset handler).
     /// Panics if the baseline is SQL-backed or unpopulated — live
     /// reset doesn't make sense outside an established live session.
+    /// State.live gates the caller, so the panic is unreachable in
+    /// production (it would mean a live-only handler ran against a
+    /// non-live AppState).
     #[cfg(feature = "live-mode")]
     pub fn reset_baseline_live(&self, tsdb: Tsdb) {
         let guard = self.baseline.read();
         let slot = guard
             .as_ref()
             .expect("reset_baseline_live called with no baseline");
-        let inner = slot.backend.write();
-        match &*inner {
+        match &slot.backend {
             CaptureBackend::Live(handle) => {
                 *handle.write() = tsdb;
             }
@@ -181,8 +172,7 @@ impl CaptureRegistry {
                 panic!("reset_baseline_live called on a SQL-backed capture");
             }
         }
-        // both guards drop here; the inner Arc<RwLock<Tsdb>> is unchanged.
-        drop(inner);
+        // guard drops here; the inner Arc<RwLock<Tsdb>> is unchanged.
         drop(guard);
     }
 
@@ -248,7 +238,7 @@ impl CaptureRegistry {
         alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
-            backend: RwLock::new(CaptureBackend::Live(Arc::new(RwLock::new(tsdb)))),
+            backend: CaptureBackend::Live(Arc::new(RwLock::new(tsdb))),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
             alias: RwLock::new(alias),
@@ -266,7 +256,7 @@ impl CaptureRegistry {
         alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
-            backend: RwLock::new(CaptureBackend::Sql(Arc::new(RwLock::new(capture)))),
+            backend: CaptureBackend::Sql(Arc::new(RwLock::new(capture))),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
             alias: RwLock::new(alias),
