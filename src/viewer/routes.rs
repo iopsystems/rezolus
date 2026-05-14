@@ -31,7 +31,7 @@ use std::sync::atomic::Ordering;
 use super::actions;
 use super::capture_registry::{self, CaptureId};
 use super::promql::{self, QueryEngine};
-use super::state::{self, ApiResponse, AppState, CaptureParam};
+use super::state::{self, ApiResponse, AppState, CaptureParam, MetricsData};
 use super::tsdb::Tsdb;
 
 #[cfg(not(feature = "developer-mode"))]
@@ -49,6 +49,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/label/{name}/values", get(label_values))
         .route("/metadata", get(metadata))
         .route("/mode", get(mode))
+        .route("/metrics", get(api_metrics))
         .route("/reset", axum::routing::post(actions::reset_tsdb))
         .route("/save", get(actions::save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
@@ -389,6 +390,24 @@ async fn metadata(
         }
     }
     ApiResponse::ok(meta)
+}
+
+/// Return all registered metric names with their types.
+async fn api_metrics(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<CaptureParam>,
+) -> impl IntoResponse {
+    let capture = p.capture_id();
+    let Some(tsdb_handle) = state.captures.get(capture) else {
+        return (StatusCode::NOT_FOUND, "No capture loaded").into_response();
+    };
+    let tsdb = tsdb_handle.read();
+    let data = state::list_metrics(&tsdb);
+    let resp = state::MetricsResponse {
+        status: "success".to_string(),
+        data,
+    };
+    Json(resp).into_response()
 }
 
 // ── Static asset serving (release builds) ─────────────────────────────

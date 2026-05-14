@@ -338,6 +338,44 @@ pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
     }
 }
 
+/// Response envelope for the `/api/v1/metrics` endpoint.
+#[derive(serde::Serialize)]
+pub struct MetricsResponse {
+    pub status: String,
+    pub data: MetricsData,
+}
+
+/// Payload returned by the `/api/v1/metrics` endpoint.
+#[derive(serde::Serialize)]
+pub struct MetricsData {
+    pub metrics: Vec<String>,
+    pub metric_types: HashMap<String, String>,
+}
+
+/// Collect all metric names from the TSDB and map each to its type.
+pub fn list_metrics(tsdb: &Tsdb) -> MetricsData {
+    let mut metrics = Vec::new();
+    let mut metric_types = HashMap::new();
+
+    for name in tsdb.counter_names() {
+        metrics.push(name.to_string());
+        metric_types.insert(name.to_string(), "counter".to_string());
+    }
+    for name in tsdb.gauge_names() {
+        metrics.push(name.to_string());
+        metric_types.insert(name.to_string(), "gauge".to_string());
+    }
+    for name in tsdb.histogram_names() {
+        metrics.push(name.to_string());
+        metric_types.insert(name.to_string(), "histogram".to_string());
+    }
+
+    MetricsData {
+        metrics,
+        metric_types,
+    }
+}
+
 #[cfg(test)]
 mod report_marker_tests {
     use super::*;
