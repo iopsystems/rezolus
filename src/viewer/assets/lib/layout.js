@@ -365,6 +365,20 @@ const Sidebar = {
                 ),
             ],
 
+            // Separator and Natural Query
+            m('div.sidebar-separator'),
+            m(
+                m.route.Link,
+                {
+                    class:
+                        attrs.activeSection?.route === '/natural_query'
+                            ? 'selected natural-query-link'
+                            : 'natural-query-link',
+                    href: '/natural_query',
+                },
+                [m('span.arrow', '→'), ' ', 'Natural Query'],
+            ),
+
             // System Info link (below Query Explorer)
             attrs.hasSystemInfo && [
                 m('div.sidebar-separator'),
