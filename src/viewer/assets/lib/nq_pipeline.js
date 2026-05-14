@@ -1,11 +1,11 @@
 // pipeline.js — orchestrates embed → search → generate → TSDB query
 
-import { queryEmbed, buildIndex, isReady as engineReady, reset as resetEngine } from './engine.js';
-import { search, keywordSearch } from './search.js';
-import { generate as llmGenerate, isReady as llmReady, reset as resetLlm } from './generate.js';
-import { buildPrompt, cleanOutput, looksLikePromQL } from './prompt.js';
-import { getMetricNames, getMetricTypes, isMetricNamesLoaded, getSelectedNode } from '../data.js';
-import { ViewerApi } from '../viewer_api.js';
+import { queryEmbed, buildIndex, isReady as engineReady, reset as resetEngine } from './nq_engine.js';
+import { search, keywordSearch } from './nq_search.js';
+import { generate as llmGenerate, isReady as llmReady, reset as resetLlm } from './nq_generate.js';
+import { buildPrompt, cleanOutput, looksLikePromQL } from './nq_prompt.js';
+import { getMetricNames, getMetricTypes, isMetricNamesLoaded, getSelectedNode } from './data.js';
+import { ViewerApi } from './viewer_api.js';
 
 const MAX_RETRIES = 2;
 

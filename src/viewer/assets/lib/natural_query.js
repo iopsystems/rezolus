@@ -1,6 +1,6 @@
 // natural_query.js — Mithril component for the Natural Query tab
 
-import { runPipeline } from './natural_query/pipeline.js';
+import { runPipeline } from './nq_pipeline.js';
 import { renderQueryChart } from './explorers.js';
 import { ChartsState } from './charts/chart.js';
 
