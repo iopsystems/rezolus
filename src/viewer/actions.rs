@@ -734,39 +734,41 @@ fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
 /// the baseline is Tsdb-backed (column trim resolved via PromQL).
 /// SQL-backed baselines and SQL-only builds skip the trim and just
 /// embed the selection JSON.
-#[cfg(feature = "live-mode")]
+/// Single-parquet save-as-report dispatch. Trim requires a Tsdb
+/// (PromQL drives column resolution in report-save), so under
+/// `live-mode` we attempt that path when the baseline is Tsdb-backed.
+/// SQL-backed baselines and `--features sql-only` builds always
+/// fall through to `embed_only`, which packs the selection JSON
+/// into the footer without dropping columns.
 fn save_single_dispatch(
     state: &AppState,
     path: &std::path::Path,
     payload: &report_save::ReportPayload,
     selection_json: &str,
 ) -> Result<Vec<u8>, String> {
+    #[cfg(feature = "live-mode")]
     if let Some(baseline_tsdb) = state.baseline_tsdb() {
-        report_save::save_single_parquet(
+        return report_save::save_single_parquet(
             path,
             payload,
             selection_json,
             &baseline_tsdb,
             payload.trim_columns,
         )
-        .map_err(|e| e.to_string())
-    } else {
-        report_save::save_single_parquet_embed_only(path, selection_json)
-            .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
     }
-}
-
-#[cfg(not(feature = "live-mode"))]
-fn save_single_dispatch(
-    _state: &AppState,
-    path: &std::path::Path,
-    _payload: &report_save::ReportPayload,
-    selection_json: &str,
-) -> Result<Vec<u8>, String> {
+    // Under sql-only `state` and `payload` are unused — the embed-only
+    // path needs neither. Bind them to silence unused-warnings while
+    // keeping the call signature stable across feature configs.
+    let _ = (state, payload);
     report_save::save_single_parquet_embed_only(path, selection_json).map_err(|e| e.to_string())
 }
 
-#[cfg(feature = "live-mode")]
+/// Combined-A/B (tarball) save-as-report dispatch. Trim requires
+/// BOTH sides to be Tsdb-backed. Combined-A/B is SQL-backed in
+/// practice today, so the trim path is largely unreachable — but the
+/// live-mode branch is kept so a future change can re-enable trim
+/// without re-introducing the cfg pair.
 fn save_combined_ab_dispatch(
     state: &AppState,
     baseline_path: &std::path::Path,
@@ -775,15 +777,12 @@ fn save_combined_ab_dispatch(
     selection_json: &str,
     manifest: &crate::parquet_metadata::AbContainers,
 ) -> Result<Vec<u8>, String> {
-    // Trim path requires both sides to be Tsdb-backed (PromQL column
-    // resolution). Combined-A/B file mode is SQL-backed in practice,
-    // so this falls through to embed-only — but we keep the symmetric
-    // wiring for completeness.
+    #[cfg(feature = "live-mode")]
     if let (Some(baseline_tsdb), Some(experiment_tsdb)) = (
         state.baseline_tsdb(),
         state.captures.get(CaptureId::Experiment),
     ) {
-        report_save::save_combined_ab_tarball(
+        return report_save::save_combined_ab_tarball(
             baseline_path,
             experiment_path,
             payload,
@@ -793,27 +792,9 @@ fn save_combined_ab_dispatch(
             manifest,
             payload.trim_columns,
         )
-        .map_err(|e| e.to_string())
-    } else {
-        report_save::save_combined_ab_tarball_embed_only(
-            baseline_path,
-            experiment_path,
-            selection_json,
-            manifest,
-        )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
     }
-}
-
-#[cfg(not(feature = "live-mode"))]
-fn save_combined_ab_dispatch(
-    _state: &AppState,
-    baseline_path: &std::path::Path,
-    experiment_path: &std::path::Path,
-    _payload: &report_save::ReportPayload,
-    selection_json: &str,
-    manifest: &crate::parquet_metadata::AbContainers,
-) -> Result<Vec<u8>, String> {
+    let _ = (state, payload);
     report_save::save_combined_ab_tarball_embed_only(
         baseline_path,
         experiment_path,
