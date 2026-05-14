@@ -8,6 +8,7 @@ import { notify, showSaveModal } from './overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { eventsStore } from './events_store.js';
 
 // ── Splash ──────────────────────────────────────────────────────────
 // Mounted on body before any async bootstrap step so the page never
@@ -67,6 +68,7 @@ const fetchBackendState = async () => {
     if (fmResult.status === 'fulfilled') {
         fileMetadata = fmResult.value;
     }
+    eventsStore.seedFromMetadata(fileMetadata);
 };
 
 // ── Transport controls ─────────────────────────────────────────────
