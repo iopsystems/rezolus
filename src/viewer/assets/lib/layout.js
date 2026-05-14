@@ -16,6 +16,11 @@ const formatSize = (bytes) => {
 // Load Parquet, Load Report, compare badge per-capture Load buttons).
 export const UPLOAD_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 2v8m0-8l-3 3m3-3l3 3"/></svg>';
 
+// Document-with-folded-corner glyph used by the topnav filename
+// dropdown's summary so the trigger reads as a fixed-size icon on
+// narrow screens (the filename text is hidden by CSS there).
+const FILE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6"/><path d="M9 2v3a1 1 0 001 1h3M9 2l4 4"/></svg>';
+
 // Open a one-shot hidden <input type=file> and forward the selected
 // file to the caller's onPick. Returns an onclick handler so the site
 // can wire it directly to a button.
@@ -121,25 +126,48 @@ const TopNav = {
 
                 if (compareMode) return null;
 
-                return m('div.topnav-source', [
-                    m('span.topnav-source-name', displayLabel),
+                // Single-capture filename trigger. The summary acts as
+                // a button — text on wide viewports, fixed-size icon on
+                // narrow (CSS hides the .topnav-source-name there).
+                // Click reveals the dropdown with the full filename
+                // (untruncated, copyable) plus Load Parquet + Load
+                // Selection actions, which used to crowd .topnav-actions
+                // and bumped the theme toggle off-screen on mid-narrow
+                // viewports.
+                return m('details.topnav-source', [
+                    m('summary.topnav-source-summary', {
+                        title: displayLabel,
+                    }, [
+                        m.trust(FILE_ICON_SVG),
+                        m('span.topnav-source-name', displayLabel),
+                    ]),
+                    m('div.topnav-source-card', [
+                        m('div.topnav-source-fullname', displayLabel),
+                        m('div.topnav-source-card-actions', [
+                            attrs.onUploadParquet && !liveMode && m('button.topnav-source-action', {
+                                onclick: openParquetPicker(attrs.onUploadParquet),
+                                title: 'Upload parquet file',
+                            }, [m.trust(UPLOAD_ICON_SVG), m('span', 'Load Parquet')]),
+                            attrs.onUploadParquet && m('button.topnav-source-action', {
+                                class: attrs.filename ? 'parquet-loaded' : '',
+                                disabled: !attrs.filename,
+                                onclick: () => importSelection(),
+                                title: attrs.filename
+                                    ? (loadedSelectionStore.loadedFrom
+                                        ? `Loaded: ${loadedSelectionStore.loadedFrom} — click to replace`
+                                        : 'Import selection JSON')
+                                    : 'Load a parquet file first',
+                            }, [m.trust(UPLOAD_ICON_SVG), m('span', 'Load Selection')]),
+                        ]),
+                    ]),
                 ]);
             })(),
             m('div.topnav-actions', [
-                // Upload parquet (file mode only, when handler provided).
-                // Hidden in compare mode — use the per-capture Load buttons
-                // in the compare badge instead.
-                attrs.onUploadParquet && !liveMode && !compareMode && m('button.transport-btn.import-btn', {
-                    onclick: openParquetPicker(attrs.onUploadParquet),
-                    title: 'Upload parquet file',
-                }, [
-                    m('span', 'Load Parquet'),
-                    m.trust(UPLOAD_ICON_SVG),
-                ]),
-                // Import selection JSON (server viewer only). Visible in
-                // compare mode too: LoadedSelectionView honors compareMode
-                // and renders both arms when an experiment is attached.
-                attrs.onUploadParquet && m('button.transport-btn.import-btn', {
+                // Compare mode keeps Load Selection in .topnav-actions
+                // because the new single-capture filename dropdown isn't
+                // rendered in compare mode (the compare-badge plays
+                // that role and only carries per-side Load Parquet).
+                attrs.onUploadParquet && compareMode && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
                     onclick: () => importSelection(),
