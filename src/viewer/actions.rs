@@ -305,7 +305,19 @@ pub fn ingest_baseline_from_path(
     state.live.store(false, Ordering::Relaxed);
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
-    *state.parquet_path.write() = Some(temp_path);
+    // Replace parquet_path; if there was a prior baseline parquet
+    // (re-upload, or upload-after-file-mode-init), evict its
+    // DuckDbBackend pool entry so a future query that somehow holds
+    // a stale handle doesn't read against a closed file or — worse —
+    // a different file that recycled the same path. Do NOT delete
+    // the prior file: we can't distinguish viewer-owned temp paths
+    // from a user-supplied parquet that init_file_mode stamped into
+    // state.parquet_path. The pool eviction is the safety-critical
+    // part; eventual /tmp cleanup is the OS's job.
+    let prior_path = std::mem::replace(&mut *state.parquet_path.write(), Some(temp_path));
+    if let Some(prior) = prior_path {
+        state.sql_backend.invalidate(&prior.to_string_lossy());
+    }
     *state.trimmed_report_marker.write() = report_marker;
     state
         .captures
@@ -399,6 +411,14 @@ pub async fn attach_experiment(
 pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
     state.captures.detach_experiment();
     if let Some(path) = state.experiment_parquet_path.write().take() {
+        // Evict the DuckDbBackend pool entry before removing the file:
+        // the pool's `_src` TEMP TABLE was loaded from this path at
+        // pool-init time and is stale once the file is gone. Without
+        // this, a re-upload that lands at the same temp path (rare
+        // but possible — same PID + same nanosecond suffix collision)
+        // would serve queries against the stale schema. See
+        // metriken-query-sql/tests/pool_invalidate.rs.
+        state.sql_backend.invalidate(&path.to_string_lossy());
         let _ = std::fs::remove_file(&path);
     }
     // Clear the CLI-supplied experiment path too so regen below doesn't
