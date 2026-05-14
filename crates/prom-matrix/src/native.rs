@@ -86,13 +86,34 @@ pub fn arrow_to_prom_matrix(batches: &[RecordBatch]) -> String {
 /// Stringify a single Arrow cell. Returns `None` for NULL values (caller
 /// drops the row for `v` columns; for label columns we substitute the
 /// literal `"null"` string instead, matching the WASM path's behavior).
+///
+/// Non-finite floats (`NaN`, `+Inf`, `-Inf`) also return `None`. Their
+/// `Display` impls produce `"NaN"` / `"inf"` / `"-inf"` which are not
+/// valid JSON numbers; the surrounding matrix shape wraps them in
+/// quotes so they don't crash `serde_json::Value` parsing, but the
+/// frontend's `Number(...)` parse of `"NaN"` yields NaN which ECharts
+/// then draws as ugly axis gaps. Treating non-finite values as gaps
+/// (drop the row, just like NULL) matches Prometheus semantics and
+/// keeps plots clean.
 fn cell_to_string_opt(arr: &dyn Array, row: usize) -> Option<String> {
     if arr.is_null(row) {
         return None;
     }
     Some(match arr.data_type() {
-        DataType::Float64 => arr.as_primitive::<arrow::datatypes::Float64Type>().value(row).to_string(),
-        DataType::Float32 => arr.as_primitive::<arrow::datatypes::Float32Type>().value(row).to_string(),
+        DataType::Float64 => {
+            let v = arr.as_primitive::<arrow::datatypes::Float64Type>().value(row);
+            if !v.is_finite() {
+                return None;
+            }
+            v.to_string()
+        }
+        DataType::Float32 => {
+            let v = arr.as_primitive::<arrow::datatypes::Float32Type>().value(row);
+            if !v.is_finite() {
+                return None;
+            }
+            v.to_string()
+        }
         DataType::Int64 => arr.as_primitive::<arrow::datatypes::Int64Type>().value(row).to_string(),
         DataType::Int32 => arr.as_primitive::<arrow::datatypes::Int32Type>().value(row).to_string(),
         DataType::Int16 => arr.as_primitive::<arrow::datatypes::Int16Type>().value(row).to_string(),

@@ -81,9 +81,19 @@ pub fn js_arrow_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
         }
         to_string_via_js(cell)
     };
+    // Non-finite floats (NaN, ±Inf) become gaps too. `f64::to_string()`
+    // produces `"NaN"` / `"inf"` / `"-inf"` which break frontend
+    // `Number(...)` parsing; treating them as NULL matches Prometheus
+    // semantics and keeps plots clean. Mirrors the native
+    // `cell_to_string_opt`'s `is_finite()` guard.
     let cell_to_v_string = |cell: &JsValue| -> Result<Option<String>, JsValue> {
         if cell.is_null() || cell.is_undefined() {
             return Ok(None);
+        }
+        if let Some(n) = cell.as_f64() {
+            if !n.is_finite() {
+                return Ok(None);
+            }
         }
         Ok(Some(to_string_via_js(cell)?))
     };
