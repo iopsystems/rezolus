@@ -186,6 +186,10 @@ const ViewerApi = {
         return { bytes, mime, extension };
     },
 
+    async getMetricNames() {
+        return backendRequest({ method: 'GET', url: '/api/v1/metrics' });
+    },
+
 };
 
 export { ViewerApi };
