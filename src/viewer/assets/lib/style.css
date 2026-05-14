@@ -2653,3 +2653,64 @@ main {
     opacity: 0.6;
 }
 
+.event-form {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid var(--border-default, #333);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 12px;
+    font-family: var(--font-sans);
+    color: var(--fg, #e0e0e0);
+    font-size: 13px;
+}
+.event-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 8px;
+}
+.event-form-row label {
+    font-size: 11px;
+    color: var(--fg-secondary, #a0a0a0);
+}
+.event-form-row input[type="text"] {
+    width: 100%;
+    padding: 4px 6px;
+    background: var(--bg, #111);
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 3px;
+    color: inherit;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+.event-form-error {
+    color: var(--danger, #f85149);
+    font-size: 11px;
+    margin: -4px 0 8px;
+}
+.event-form-checkbox {
+    margin: 4px 0 12px;
+}
+.event-form-checkbox input {
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.event-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.event-form-actions button {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border-default, #444);
+    border-radius: 3px;
+    color: inherit;
+    cursor: pointer;
+}
+.event-form-actions button.primary {
+    background: var(--accent, #1f77b4);
+    border-color: transparent;
+    color: #fff;
+}
+
