@@ -212,38 +212,36 @@ impl AppState {
         }
     }
 
-    /// Shorthand for the baseline Tsdb handle. Returns `None` for
-    /// SQL-backed slots (file / upload / A-B captures); SQL callers
-    /// use [`baseline_sql`] or the new SqlCapture-aware code paths.
-    /// Live mode is currently the only Tsdb-bearing baseline.
+    /// Shorthand for the baseline Tsdb handle. Returns `None` when
+    /// the baseline slot is SQL-backed (file / upload / A-B captures)
+    /// or unpopulated (upload-only pre-upload). Live mode and the
+    /// save-dispatch trim path are the only consumers.
+    ///
+    /// SQL callers wanting the SqlCapture handle reach directly into
+    /// the registry via `self.captures.get_sql(CaptureId::Baseline)`,
+    /// or — far more common — use `with_baseline_data` for the
+    /// backend-agnostic `&dyn DashboardData` view.
     #[cfg(feature = "live-mode")]
     pub fn baseline_tsdb(&self) -> Option<Arc<RwLock<Tsdb>>> {
         self.captures.get(CaptureId::Baseline)
     }
 
-    /// Shorthand for the baseline SqlCapture handle. Returns `None`
-    /// for Tsdb-backed slots (live mode). File / upload / A-B
-    /// captures produce a `Some`.
-    pub fn baseline_sql(&self) -> Option<Arc<RwLock<SqlCapture>>> {
-        self.captures.get_sql(CaptureId::Baseline)
-    }
-
-    /// Run `f` against the baseline slot's DashboardData view —
-    /// either a `Tsdb` (live mode) or a `SqlCapture` (file mode).
-    /// Wraps the read-guard lifetime so callers don't have to
-    /// branch on backend type for the common metadata reads.
+    /// Run `f` against the baseline slot's `DashboardData` view —
+    /// either a `Tsdb` (live mode) or a `SqlCapture` (file / upload
+    /// / A-B). Wraps the read-guard lifetime so handlers don't have
+    /// to branch on backend type for the common metadata reads.
+    /// Returns `None` when no baseline is loaded yet (upload-only
+    /// mode pre-upload).
     pub fn with_baseline_data<R>(
         &self,
         f: impl FnOnce(&dyn dashboard::DashboardData) -> R,
     ) -> Option<R> {
-        if let Some(handle) = self.baseline_sql() {
-            let g = handle.read();
-            return Some(f(&*g));
+        if let Some(handle) = self.captures.get_sql(CaptureId::Baseline) {
+            return Some(f(&*handle.read()));
         }
         #[cfg(feature = "live-mode")]
-        if let Some(handle) = self.baseline_tsdb() {
-            let g = handle.read();
-            return Some(f(&*g));
+        if let Some(handle) = self.captures.get(CaptureId::Baseline) {
+            return Some(f(&*handle.read()));
         }
         None
     }
