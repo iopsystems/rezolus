@@ -255,6 +255,7 @@ mod tests {
                     title: "test".to_string(),
                     description: None,
                     query: q.to_string(),
+                    sql: None,
                     metric_type: "gauge".to_string(),
                     subtype: None,
                     unit_system: None,
