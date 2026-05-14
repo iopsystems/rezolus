@@ -1144,3 +1144,7 @@
     color: var(--success);
     margin-bottom: 4px;
 }
+
+.tooltip-freeze-footer a.tooltip-add-event:hover {
+    text-decoration: underline;
+}

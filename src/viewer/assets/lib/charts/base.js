@@ -38,14 +38,18 @@ export function applyNoData(chart) {
 }
 
 /**
- * Tooltip freeze footer HTML. Shows current freeze state and hint.
+ * Tooltip freeze footer HTML. Shows current freeze state + an
+ * "Add Event" affordance once frozen.
  */
 export function getTooltipFreezeFooter(chart) {
     const frozen = chart && chart._tooltipFrozen;
     const text = frozen ? 'FROZEN · click to unfreeze' : 'click to freeze';
     const color = frozen ? COLORS.accent : COLORS.fgMuted;
+    const addLink = frozen
+        ? `<a href="#" class="tooltip-add-event" data-chart-id="${chart.chartId}" style="color: ${COLORS.accent}; text-decoration: none; margin-right: 12px;">+ Add Event</a>`
+        : '';
     return `<div class="tooltip-freeze-footer" style="border-top: 1px solid ${COLORS.borderMuted}; margin-top: 6px; padding-top: 4px; margin-bottom: -6px; font-size: ${FONTS.footnote.fontSize}px; color: ${color}; text-align: center;">
-        ${text}
+        ${addLink}<span class="tooltip-freeze-state">${text}</span>
     </div>`;
 }
 

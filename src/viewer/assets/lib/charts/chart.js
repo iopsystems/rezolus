@@ -426,6 +426,7 @@ export class Chart {
         }
 
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
+        if (this._tooltipClickCleanup) this._tooltipClickCleanup();
         if (this._pinCleanup) this._pinCleanup();
         if (this._compareCursorOff) this._compareCursorOff();
         if (this._compareCursorUnsub) this._compareCursorUnsub();
@@ -525,12 +526,18 @@ export class Chart {
             });
         }
 
-        // Directly patch the tooltip footer DOM since the formatter won't
-        // re-run on an already-visible tooltip.
+        // Rebuild the freeze footer's content \u2014 it gains/loses the
+        // "+ Add Event" link on freeze, so we can't just rewrite the
+        // state text in place.
         const footer = this.domNode.querySelector('.tooltip-freeze-footer');
         if (footer) {
-            footer.textContent = freeze ? 'FROZEN \u00b7 click to unfreeze' : 'click to freeze';
-            footer.style.color = freeze ? COLORS.accent : COLORS.fgMuted;
+            const text = freeze ? 'FROZEN \u00b7 click to unfreeze' : 'click to freeze';
+            const color = freeze ? COLORS.accent : COLORS.fgMuted;
+            footer.style.color = color;
+            const addLink = freeze
+                ? `<a href="#" class="tooltip-add-event" data-chart-id="${this.chartId}" style="color: ${COLORS.accent}; text-decoration: none; margin-right: 12px;">+ Add Event</a>`
+                : '';
+            footer.innerHTML = `${addLink}<span class="tooltip-freeze-state">${text}</span>`;
         }
     }
 
@@ -716,9 +723,39 @@ export class Chart {
         this.echart.getZr().on('click', (e) => {
             // Only freeze when clicking within the plot area, not on legend/title
             if (this.echart.containPixel('grid', [e.offsetX, e.offsetY])) {
+                if (!this._tooltipFrozen) {
+                    // Stash the cursor's data-coord x for the Add-Event form.
+                    // convertFromPixel returns the value in axis units; for
+                    // our time x-axis that's wall-clock ms. Stored in ns
+                    // for the form (which presents RFC3339 / ns-int).
+                    const xMs = this.echart.convertFromPixel(
+                        { xAxisIndex: 0 },
+                        e.offsetX,
+                    );
+                    this._frozenAxisNs = Number.isFinite(xMs)
+                        ? Math.round(xMs * 1_000_000)
+                        : null;
+                }
                 this._toggleTooltipFreeze();
             }
         });
+
+        // Delegate clicks on the in-tooltip "+ Add Event" link. The
+        // tooltip DOM is recreated by echarts on every render, so we
+        // intercept at the chart container level rather than binding
+        // to the link itself.
+        const onTooltipClick = (e) => {
+            const target = e.target.closest && e.target.closest('.tooltip-add-event');
+            if (!target) return;
+            e.preventDefault();
+            e.stopPropagation();
+            // Wired to the form opener in Task 10.
+            if (this._openAddEventForm) this._openAddEventForm(target);
+        };
+        this.domNode.addEventListener('click', onTooltipClick, true);
+        this._tooltipClickCleanup = () => {
+            this.domNode.removeEventListener('click', onTooltipClick, true);
+        };
 
         const onEscKey = (e) => {
             if (e.key === 'Escape' && this._tooltipFrozen) {
