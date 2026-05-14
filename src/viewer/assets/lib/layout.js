@@ -97,19 +97,10 @@ const TopNav = {
                     ]),
                 ]);
             })(),
-            // Node selector / filename display. In compare mode the
-            // filename info is in the compare badge above, so suppress the
-            // duplicate single-capture source label (multi-node selects
-            // still render so the user can pin to one node).
             (() => {
                 const nodes = attrs.nodeList || [];
                 const selNode = attrs.selectedNode;
-                const hasMultiNode = nodes.length > 1;
-
-                const displayLabel = selNode || attrs.filename;
-                if (!displayLabel) return null;
-
-                if (hasMultiNode) {
+                if (nodes.length > 1) {
                     return m('div.topnav-source', [
                         m('select.topnav-node-select', {
                             value: selNode,
@@ -119,45 +110,37 @@ const TopNav = {
                         }, nodes.map(n => m('option', { value: n }, n))),
                     ]);
                 }
-
-                if (compareMode) return null;
-
-                // Filename text in the summary collapses to icon-only
-                // under the mobile media query so the trigger has a
-                // predictable footprint.
-                return m('details.topnav-source', [
-                    m('summary.topnav-source-summary', {
-                        title: displayLabel,
-                    }, [
-                        m.trust(FILE_ICON_SVG),
-                        m('span.topnav-source-name', displayLabel),
-                    ]),
-                    m('div.topnav-source-card', [
-                        m('div.topnav-source-fullname', displayLabel),
-                        m('div.topnav-source-card-actions', [
-                            attrs.onUploadParquet && !liveMode && m('button.topnav-source-action', {
-                                onclick: openParquetPicker(attrs.onUploadParquet),
-                                title: 'Upload parquet file',
-                            }, [m.trust(UPLOAD_ICON_SVG), m('span', 'Load Parquet')]),
-                            attrs.onUploadParquet && m('button.topnav-source-action', {
-                                class: attrs.filename ? 'parquet-loaded' : '',
-                                disabled: !attrs.filename,
-                                onclick: () => importSelection(),
-                                title: attrs.filename
-                                    ? (loadedSelectionStore.loadedFrom
-                                        ? `Loaded: ${loadedSelectionStore.loadedFrom} — click to replace`
-                                        : 'Import selection JSON')
-                                    : 'Load a parquet file first',
-                            }, [m.trust(UPLOAD_ICON_SVG), m('span', 'Load Selection')]),
-                        ]),
-                    ]),
-                ]);
+                return null;
             })(),
+            // Three sibling buttons sit next to REZOLUS in single-capture
+            // mode: file metadata (filename text + dropdown), Load Parquet,
+            // Load Selection. Compare mode puts filename + per-side Load
+            // Parquet inside .compare-badge instead, but Load Selection
+            // still appears here.
             m('div.topnav-actions', [
-                // Single-capture's Load Selection lives in the filename
-                // dropdown; compare mode has no such dropdown, so keep
-                // the button here for that path only.
-                attrs.onUploadParquet && compareMode && m('button.transport-btn.import-btn', {
+                (() => {
+                    const displayLabel = attrs.selectedNode || attrs.filename;
+                    if (!displayLabel || compareMode) return null;
+                    return m('details.topnav-source', [
+                        m('summary.topnav-source-summary', {
+                            title: displayLabel,
+                        }, [
+                            m.trust(FILE_ICON_SVG),
+                            m('span.topnav-source-name', displayLabel),
+                        ]),
+                        m('div.topnav-source-card', [
+                            m('div.topnav-source-fullname', displayLabel),
+                        ]),
+                    ]);
+                })(),
+                attrs.onUploadParquet && !liveMode && !compareMode && m('button.transport-btn.import-btn', {
+                    onclick: openParquetPicker(attrs.onUploadParquet),
+                    title: 'Upload parquet file',
+                }, [
+                    m('span', 'Load Parquet'),
+                    m.trust(UPLOAD_ICON_SVG),
+                ]),
+                attrs.onUploadParquet && m('button.transport-btn.import-btn', {
                     class: attrs.filename ? 'parquet-loaded' : '',
                     disabled: !attrs.filename,
                     onclick: () => importSelection(),

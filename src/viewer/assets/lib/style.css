@@ -663,17 +663,18 @@ body::after {
     flex-shrink: 0;
 }
 
-/* Single-capture filename dropdown — collapses to icon-only on
- * narrow viewports via the mobile media query below. */
+/* Single-capture filename dropdown. Lives inside .topnav-actions
+ * alongside Load Parquet / Load Selection so the three sit as a
+ * cohesive button group next to the REZOLUS logo. */
 .topnav-source {
-    margin-left: 1.5rem;
     position: relative;
 }
 .topnav-source-summary {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 0.25rem 0.5rem;
+    gap: 0.4rem;
+    height: 36px;
+    padding: 0 0.75rem;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-subtle);
     border-radius: 4px;
@@ -722,34 +723,6 @@ body::after {
     color: var(--fg);
     word-break: break-all;
     user-select: text;
-}
-.topnav-source-card-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    border-top: 1px solid var(--border-subtle);
-    padding-top: 8px;
-}
-.topnav-source-action {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    background: transparent;
-    border: none;
-    border-radius: 3px;
-    color: var(--fg);
-    cursor: pointer;
-    font-family: var(--font-sans);
-    font-size: 12px;
-    text-align: left;
-}
-.topnav-source-action:hover:not(:disabled) {
-    background: var(--bg-card-hover);
-}
-.topnav-source-action:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
 }
 
 
