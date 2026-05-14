@@ -30,9 +30,16 @@ use notify::Watcher;
 pub use dashboard::Kpi;
 pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
+// PromQL + Tsdb re-exports survive only when the live-mode feature
+// is on. The legacy ingest path consumes them, as do the
+// not-yet-migrated `mcp` and `parquet annotate` subcommands. SQL-only
+// builds drop the whole `metriken-query` crate.
+#[cfg(feature = "live-mode")]
 pub use metriken_query::promql;
+#[cfg(feature = "live-mode")]
 pub use metriken_query::tsdb;
 
+#[cfg(feature = "live-mode")]
 use tsdb::*;
 
 pub mod capture_registry;
@@ -278,7 +285,7 @@ pub fn run(config: Config) {
         Source::Live(url) => init_live_mode(&rt, url, &registry),
         Source::Empty => {
             info!("No input file — starting in upload-only mode");
-            AppState::new(Tsdb::default(), registry.clone())
+            AppState::new_empty(registry.clone())
         }
     };
 
@@ -631,6 +638,7 @@ fn log_service_exts(exts: &[(String, ServiceExtension)], capture: &str) {
     }
 }
 
+#[cfg(feature = "live-mode")]
 fn init_live_mode(
     rt: &tokio::runtime::Runtime,
     url: &Url,
@@ -683,6 +691,22 @@ fn init_live_mode(
     ));
 
     state
+}
+
+/// SQL-only stub. The CLI argument parser still accepts `http://…` so
+/// scripts that depend on argument shape don't change unexpectedly,
+/// but actually initialising a live agent connection requires the
+/// `live-mode` feature.
+#[cfg(not(feature = "live-mode"))]
+fn init_live_mode(
+    _rt: &tokio::runtime::Runtime,
+    url: &Url,
+    _registry: &TemplateRegistry,
+) -> AppState {
+    eprintln!(
+        "live-agent input ({url}) requires the `live-mode` feature; this binary was built with --no-default-features."
+    );
+    std::process::exit(1);
 }
 
 async fn serve(listener: std::net::TcpListener, state: AppState) {

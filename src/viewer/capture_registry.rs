@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "live-mode")]
 use metriken_query::Tsdb;
 use parking_lot::RwLock;
 
@@ -43,10 +44,12 @@ impl CaptureId {
 
 /// Per-slot data store. Each slot is either SQL-backed (the new
 /// DuckDB-driven path for file / upload / A-B captures) or
-/// Tsdb-backed (the legacy live-agent ingest path, retained until
-/// commit 11 gates live mode behind a feature flag).
+/// Tsdb-backed (the legacy live-agent ingest path). The `Live`
+/// variant only exists when the `live-mode` feature is on — SQL-only
+/// builds drop both the variant and the `metriken-query` link.
 pub enum CaptureBackend {
     Sql(Arc<RwLock<SqlCapture>>),
+    #[cfg(feature = "live-mode")]
     Live(Arc<RwLock<Tsdb>>),
 }
 
@@ -54,6 +57,7 @@ impl CaptureBackend {
     /// Shorthand for `match self { Live(tsdb) => Some(tsdb), _ => None }`.
     /// Lets legacy callers continue to ask for a Tsdb specifically; SQL
     /// slots silently return `None`.
+    #[cfg(feature = "live-mode")]
     pub fn as_live(&self) -> Option<Arc<RwLock<Tsdb>>> {
         match self {
             CaptureBackend::Live(tsdb) => Some(tsdb.clone()),
@@ -64,6 +68,7 @@ impl CaptureBackend {
     pub fn as_sql(&self) -> Option<Arc<RwLock<SqlCapture>>> {
         match self {
             CaptureBackend::Sql(cap) => Some(cap.clone()),
+            #[cfg(feature = "live-mode")]
             CaptureBackend::Live(_) => None,
         }
     }
@@ -89,6 +94,7 @@ pub struct CaptureRegistry {
 }
 
 impl CaptureRegistry {
+    #[cfg(feature = "live-mode")]
     pub fn new(
         baseline_tsdb: Tsdb,
         baseline_systeminfo: Option<String>,
@@ -110,6 +116,7 @@ impl CaptureRegistry {
     /// is Tsdb-backed. SQL-backed slots return `None`. Legacy callers
     /// (live-mode ingest, the metadata handler, dashboard section gen
     /// until commit 7) flow through this.
+    #[cfg(feature = "live-mode")]
     pub fn get(&self, id: CaptureId) -> Option<Arc<RwLock<Tsdb>>> {
         match id {
             CaptureId::Baseline => self.baseline.backend.read().as_live(),
@@ -150,6 +157,7 @@ impl CaptureRegistry {
     /// Reset the baseline Tsdb in place (live-mode reset handler).
     /// Panics if the baseline is SQL-backed — live reset doesn't make
     /// sense for file captures.
+    #[cfg(feature = "live-mode")]
     pub fn reset_baseline_live(&self, tsdb: Tsdb) {
         let guard = self.baseline.backend.write();
         match &*guard {
@@ -241,6 +249,7 @@ impl CaptureRegistry {
         *self.baseline.file_metadata.write() = file_metadata;
     }
 
+    #[cfg(feature = "live-mode")]
     pub fn attach_experiment(
         &self,
         tsdb: Tsdb,

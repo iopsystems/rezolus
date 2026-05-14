@@ -1,5 +1,7 @@
 use crate::data::DashboardData;
+#[cfg(feature = "live-mode")]
 use metriken_query::Tsdb;
+#[cfg(feature = "live-mode")]
 use metriken_query::tsdb::Labels;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -8,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 /// key are skipped. Used by section generators to decide whether
 /// per-device charts are worth showing (a single GPU/CPU makes the
 /// per-device variant identical to the aggregate).
+#[cfg(feature = "live-mode")]
 pub fn unique_label_count(labels: &[Labels], key: &str) -> usize {
     let mut seen: HashSet<&str> = HashSet::new();
     for l in labels {
@@ -21,6 +24,7 @@ pub fn unique_label_count(labels: &[Labels], key: &str) -> usize {
 /// Convenience: how many distinct values of `key` exist for `metric`
 /// in `data`, looking across counter/gauge/histogram collections.
 /// Returns 0 if the metric is unknown.
+#[cfg(feature = "live-mode")]
 pub fn metric_unique_label_count(data: &Tsdb, metric: &str, key: &str) -> usize {
     if let Some(l) = data.gauge_labels(metric) {
         return unique_label_count(&l, key);
@@ -892,12 +896,14 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "live-mode")]
     #[test]
     fn unique_label_count_returns_zero_for_empty_input() {
         let labels: Vec<metriken_query::tsdb::Labels> = vec![];
         assert_eq!(unique_label_count(&labels, "id"), 0);
     }
 
+    #[cfg(feature = "live-mode")]
     #[test]
     fn unique_label_count_counts_distinct_values() {
         use metriken_query::tsdb::Labels;
@@ -910,6 +916,7 @@ mod tests {
         assert_eq!(unique_label_count(&labels, "id"), 2);
     }
 
+    #[cfg(feature = "live-mode")]
     #[test]
     fn unique_label_count_ignores_series_missing_the_key() {
         use metriken_query::tsdb::Labels;

@@ -50,7 +50,6 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/label/{name}/values", get(label_values))
         .route("/metadata", get(metadata))
         .route("/mode", get(mode))
-        .route("/reset", axum::routing::post(actions::reset_tsdb))
         .route("/save", get(actions::save_parquet))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
@@ -67,21 +66,29 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
                 .delete(actions::detach_experiment)
                 .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
-        .route("/connect", axum::routing::post(actions::connect_agent))
         .route(
             "/save_with_selection",
             axum::routing::post(actions::save_with_selection),
         )
-        .route("/load_url", axum::routing::post(actions::load_url))
-        .layer(axum::middleware::map_response(
-            |mut response: Response| async move {
-                response.headers_mut().insert(
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static("no-store"),
-                );
-                response
-            },
-        ));
+        .route("/load_url", axum::routing::post(actions::load_url));
+
+    // Live-only routes — present only when the live-agent path is
+    // compiled in. SQL-only builds reject `/api/v1/connect` and
+    // `/api/v1/reset` with the framework's default 404.
+    #[cfg(feature = "live-mode")]
+    let api_routes = api_routes
+        .route("/reset", axum::routing::post(actions::reset_tsdb))
+        .route("/connect", axum::routing::post(actions::connect_agent));
+
+    let api_routes = api_routes.layer(axum::middleware::map_response(
+        |mut response: Response| async move {
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                header::HeaderValue::from_static("no-store"),
+            );
+            response
+        },
+    ));
 
     let router = Router::new()
         .route("/about", get(about))
@@ -439,6 +446,7 @@ fn read_capture_scalar_meta(
     if let Some(handle) = state.captures.get_sql(capture) {
         return Some(read(&*handle.read()));
     }
+    #[cfg(feature = "live-mode")]
     if let Some(handle) = state.captures.get(capture) {
         return Some(read(&*handle.read()));
     }

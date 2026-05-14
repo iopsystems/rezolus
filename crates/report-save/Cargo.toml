@@ -10,11 +10,21 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[features]
+# Default-on during the Tsdb→DuckDB migration. When off, only the
+# embed-selection path is compiled — trim_columns requires a Tsdb to
+# resolve the column set, and `metriken-query` is excluded under
+# sql-only. Callers gate behind their own `live-mode` and force
+# `trim_columns = false`.
+default = ["live-mode"]
+live-mode = ["dep:metriken-query"]
+
 [dependencies]
 arrow = "58.2.0"
+bytes = "1"
 parquet = { version = "58.2.0", default-features = false, features = ["arrow", "simdutf8", "zstd"] }
 tar = { version = "0.4.45", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
-metriken-query.workspace = true
+metriken-query = { workspace = true, optional = true }
 tracing = "0.1"

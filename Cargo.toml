@@ -21,9 +21,9 @@ metriken-query-sql = { path = "../metriken/metriken-query-sql" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
-dashboard = { path = "crates/dashboard" }
+dashboard = { path = "crates/dashboard", default-features = false }
 prom-matrix = { path = "crates/prom-matrix" }
-report-save = { path = "crates/report-save" }
+report-save = { path = "crates/report-save", default-features = false }
 include_dir = "0.7.4"
 walkdir = "2.5.0"
 wasm-bindgen = "0.2.120"
@@ -57,6 +57,7 @@ arrow = "58.2.0"
 async-trait = "0.1.89"
 axum = "0.8.9"
 backtrace = "0.3.76"
+bytes = "1"
 chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive"] }
 clocksource = "1.0.0"
@@ -73,7 +74,7 @@ linkme = "0.3.36"
 memmap2 = "0.9.10"
 metriken.workspace = true
 metriken-exposition.workspace = true
-metriken-query = { workspace = true, features = ["ingest"] }
+metriken-query = { workspace = true, features = ["ingest"], optional = true }
 metriken-query-sql.workspace = true
 prom-matrix.workspace = true
 notify = "8.2.0"
@@ -153,8 +154,20 @@ plist = "1.9"
 libbpf-cargo = { version = "0.26.2" }
 
 [features]
-default = []
+default = ["live-mode"]
 developer-mode = []
+# Compile in the legacy live-agent ingest path: `rezolus view http://…`,
+# the `metriken-query` in-memory Tsdb + PromQL engine, and the MCP /
+# `parquet annotate` subcommands that still depend on it. Default-on
+# during the Tsdb→DuckDB migration; flip it off (e.g. `--no-default-features
+# --features sql-only`) to build a SQL-only viewer binary with zero
+# `metriken-query` linkage.
+live-mode = ["dashboard/live-mode", "report-save/live-mode", "dep:metriken-query"]
+# Marker feature for the SQL-only configuration. Exists so the command
+# `cargo build --no-default-features --features sql-only` reads as
+# "build the SQL-only viewer" rather than the slightly mysterious bare
+# `--no-default-features`. No code currently gates on it.
+sql-only = []
 
 [profile.bench]
 debug = true

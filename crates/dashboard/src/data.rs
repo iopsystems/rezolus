@@ -9,6 +9,7 @@
 //! drive both the legacy in-memory PromQL backend and the upcoming DuckDB/SQL
 //! backend (which will read parquet column metadata to satisfy the same
 //! questions).
+#[cfg(feature = "live-mode")]
 use metriken_query::Tsdb;
 
 /// Read-only metadata about a loaded recording. Implemented for `Tsdb`
@@ -50,6 +51,7 @@ pub trait DashboardData {
     fn unique_label_values(&self, metric: &str, key: &str) -> usize;
 }
 
+#[cfg(feature = "live-mode")]
 impl DashboardData for Tsdb {
     fn interval(&self) -> f64 {
         Tsdb::interval(self)

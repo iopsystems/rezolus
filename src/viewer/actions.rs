@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+#[cfg(feature = "live-mode")]
 use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
@@ -13,9 +14,13 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json, Response};
 use http::{header, StatusCode};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
+#[cfg(feature = "live-mode")]
+use parking_lot::RwLock;
 use reqwest::{Client, Url};
-use tracing::{debug, error, info, warn};
+#[cfg(feature = "live-mode")]
+use tracing::debug;
+use tracing::{error, info, warn};
 
 use super::capture_registry::CaptureId;
 use super::metadata::{
@@ -24,12 +29,14 @@ use super::metadata::{
 };
 use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
+#[cfg(feature = "live-mode")]
 use super::tsdb::Tsdb;
 use ::dashboard;
 
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
 
 /// Background task that polls a live agent and ingests snapshots.
+#[cfg(feature = "live-mode")]
 pub async fn ingest_loop(
     url: Url,
     tsdb: Arc<RwLock<Tsdb>>,
@@ -106,6 +113,7 @@ pub async fn ingest_loop(
 
 /// Fetch the agent banner (`source version`) and `/systeminfo`. Used by
 /// CLI startup and the runtime `/api/v1/connect` handler.
+#[cfg(feature = "live-mode")]
 pub async fn fetch_agent_info(client: &Client, url: &Url) -> Result<AgentInfo, String> {
     let resp = client
         .get(url.clone())
@@ -137,6 +145,7 @@ pub async fn fetch_agent_info(client: &Client, url: &Url) -> Result<AgentInfo, S
     })
 }
 
+#[cfg(feature = "live-mode")]
 pub struct AgentInfo {
     pub source: String,
     pub version: String,
@@ -390,6 +399,7 @@ pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
 // ── Live agent connect / reset ────────────────────────────────────────
 
 /// Connect to a live Rezolus agent at runtime.
+#[cfg(feature = "live-mode")]
 pub async fn connect_agent(
     State(state): State<Arc<AppState>>,
     body: Bytes,
@@ -463,6 +473,7 @@ pub async fn connect_agent(
 }
 
 /// Reset the TSDB — clears all data and buffered snapshots.
+#[cfg(feature = "live-mode")]
 pub async fn reset_tsdb(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<serde_json::Value>> {
@@ -601,17 +612,6 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 .into_response();
             }
         };
-        // Column-trim needs a Tsdb (report_save uses PromQL to find
-        // which columns the selection's queries reference). SQL-backed
-        // file captures don't have one — force trim_columns off and
-        // fall back to a plain embed. A follow-up migrates report_save
-        // to walk SqlCapture's catalog and dropped this carve-out.
-        let baseline_tsdb = state.baseline_tsdb();
-        let trim_columns = payload.trim_columns && baseline_tsdb.is_some();
-        // Provide a stand-in Tsdb when SQL-backed: report_save only
-        // reads from `tsdb` when trim_columns is true, so the dummy
-        // is never observed in that mode.
-        let baseline_tsdb = baseline_tsdb.unwrap_or_else(|| Arc::new(RwLock::new(Tsdb::default())));
         // Bind to a local so the temporary read guard from .read() doesn't
         // extend through the `if let` body and trip Send across the await.
         let ab_manifest = state.combined_ab_marker.read().clone();
@@ -628,26 +628,18 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 )
                 .into_response();
             };
-            // Same SQL-fallback contract as baseline_tsdb above.
-            let experiment_tsdb = state
-                .captures
-                .get(CaptureId::Experiment)
-                .unwrap_or_else(|| Arc::new(RwLock::new(Tsdb::default())));
             let result = tokio::task::spawn_blocking({
                 let baseline_path = path.clone();
                 let body = selection_json.clone();
                 move || {
-                    report_save::save_combined_ab_tarball(
+                    save_combined_ab_dispatch(
+                        &state,
                         &baseline_path,
                         &experiment_path,
                         &payload,
                         &body,
-                        &baseline_tsdb,
-                        &experiment_tsdb,
                         &manifest,
-                        trim_columns,
                     )
-                    .map_err(|e| e.to_string())
                 }
             })
             .await;
@@ -656,16 +648,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
 
         let result = tokio::task::spawn_blocking({
             let body = selection_json.clone();
-            move || {
-                report_save::save_single_parquet(
-                    &path,
-                    &payload,
-                    &body,
-                    &baseline_tsdb,
-                    trim_columns,
-                )
-                .map_err(|e| e.to_string())
-            }
+            move || save_single_dispatch(&state, &path, &payload, &body)
         })
         .await;
         return finalize_report_attachment(result);
@@ -744,4 +727,98 @@ fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
         )
         .body(Body::from(body))
         .unwrap()
+}
+
+/// Pick the right report-save entry point for the single-parquet case.
+/// With `live-mode` on: respect the payload's `trim_columns` flag when
+/// the baseline is Tsdb-backed (column trim resolved via PromQL).
+/// SQL-backed baselines and SQL-only builds skip the trim and just
+/// embed the selection JSON.
+#[cfg(feature = "live-mode")]
+fn save_single_dispatch(
+    state: &AppState,
+    path: &std::path::Path,
+    payload: &report_save::ReportPayload,
+    selection_json: &str,
+) -> Result<Vec<u8>, String> {
+    if let Some(baseline_tsdb) = state.baseline_tsdb() {
+        report_save::save_single_parquet(
+            path,
+            payload,
+            selection_json,
+            &baseline_tsdb,
+            payload.trim_columns,
+        )
+        .map_err(|e| e.to_string())
+    } else {
+        report_save::save_single_parquet_embed_only(path, selection_json)
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(not(feature = "live-mode"))]
+fn save_single_dispatch(
+    _state: &AppState,
+    path: &std::path::Path,
+    _payload: &report_save::ReportPayload,
+    selection_json: &str,
+) -> Result<Vec<u8>, String> {
+    report_save::save_single_parquet_embed_only(path, selection_json).map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "live-mode")]
+fn save_combined_ab_dispatch(
+    state: &AppState,
+    baseline_path: &std::path::Path,
+    experiment_path: &std::path::Path,
+    payload: &report_save::ReportPayload,
+    selection_json: &str,
+    manifest: &crate::parquet_metadata::AbContainers,
+) -> Result<Vec<u8>, String> {
+    // Trim path requires both sides to be Tsdb-backed (PromQL column
+    // resolution). Combined-A/B file mode is SQL-backed in practice,
+    // so this falls through to embed-only — but we keep the symmetric
+    // wiring for completeness.
+    if let (Some(baseline_tsdb), Some(experiment_tsdb)) = (
+        state.baseline_tsdb(),
+        state.captures.get(CaptureId::Experiment),
+    ) {
+        report_save::save_combined_ab_tarball(
+            baseline_path,
+            experiment_path,
+            payload,
+            selection_json,
+            &baseline_tsdb,
+            &experiment_tsdb,
+            manifest,
+            payload.trim_columns,
+        )
+        .map_err(|e| e.to_string())
+    } else {
+        report_save::save_combined_ab_tarball_embed_only(
+            baseline_path,
+            experiment_path,
+            selection_json,
+            manifest,
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(not(feature = "live-mode"))]
+fn save_combined_ab_dispatch(
+    _state: &AppState,
+    baseline_path: &std::path::Path,
+    experiment_path: &std::path::Path,
+    _payload: &report_save::ReportPayload,
+    selection_json: &str,
+    manifest: &crate::parquet_metadata::AbContainers,
+) -> Result<Vec<u8>, String> {
+    report_save::save_combined_ab_tarball_embed_only(
+        baseline_path,
+        experiment_path,
+        selection_json,
+        manifest,
+    )
+    .map_err(|e| e.to_string())
 }

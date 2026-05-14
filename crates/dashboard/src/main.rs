@@ -6,10 +6,25 @@
 //! Without arguments, prints all section JSON to stdout.
 //! With a directory argument, writes each section as a pretty-printed JSON file.
 
+// The dump binary still drives generators with a `Tsdb::default()`
+// stand-in — the `DashboardData` trait is what `generate_section`
+// actually consumes, but no SQL-side equivalent exists for the
+// empty-context case yet. Gate behind `live-mode` so the SQL-only
+// configuration of the workspace doesn't try to compile this binary.
+#[cfg(not(feature = "live-mode"))]
+fn main() {
+    eprintln!("`cargo run -p dashboard` requires the live-mode feature (Tsdb-backed dump).");
+    std::process::exit(1);
+}
+
+#[cfg(feature = "live-mode")]
 use dashboard::Tsdb;
+#[cfg(feature = "live-mode")]
 use dashboard::dashboard::{build_dashboard_context, generate_section};
+#[cfg(feature = "live-mode")]
 use std::collections::HashMap;
 
+#[cfg(feature = "live-mode")]
 fn main() {
     let output_dir = std::env::args().nth(1);
 
@@ -31,6 +46,7 @@ fn main() {
     }
 }
 
+#[cfg(feature = "live-mode")]
 fn print_to_stdout(rendered: &HashMap<String, String>) {
     let mut keys: Vec<&String> = rendered.keys().collect();
     keys.sort();
@@ -51,6 +67,7 @@ fn print_to_stdout(rendered: &HashMap<String, String>) {
     }
 }
 
+#[cfg(feature = "live-mode")]
 fn write_to_dir(dir: &str, rendered: &HashMap<String, String>) {
     let path = std::path::Path::new(dir);
     std::fs::create_dir_all(path).expect("failed to create output directory");

@@ -110,6 +110,27 @@ impl SqlCapture {
         })
     }
 
+    /// Placeholder constructor for upload-only mode (no input on the
+    /// CLI). The slot is created with no parquet bound; the upload
+    /// handler then swaps in a real `SqlCapture` via
+    /// `CaptureRegistry::replace_baseline_with_sql`. Methods on this
+    /// empty capture all return defaults — `DashboardData::time_range`
+    /// is `None`, the metric-name vectors are empty, etc. — so the
+    /// `/api/v1/mode` response stays consistent (loaded=false) until
+    /// the first upload.
+    pub fn empty() -> Self {
+        Self {
+            parquet_path: PathBuf::new(),
+            catalog: Arc::new(MetricCatalog::default()),
+            kind_by_metric: HashMap::new(),
+            interval_seconds: 1.0,
+            time_range: None,
+            source: String::new(),
+            version: String::new(),
+            filename: String::new(),
+        }
+    }
+
     /// Path to the parquet file on disk. Used as the `DuckDbBackend`
     /// data_source key when handlers run queries against this capture.
     pub fn parquet_path(&self) -> &Path {

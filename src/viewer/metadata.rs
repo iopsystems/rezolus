@@ -11,9 +11,12 @@ use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use tracing::warn;
 
+#[cfg(feature = "live-mode")]
 use super::capture_registry::CaptureId;
+#[cfg(feature = "live-mode")]
 use super::promql::{self, QueryEngine};
 use super::state::{AppState, LazySectionStore};
+#[cfg(feature = "live-mode")]
 use super::tsdb::Tsdb;
 use ::dashboard::{self, CategoryExtension, ServiceExtension, TemplateRegistry};
 
@@ -321,6 +324,7 @@ pub fn extract_service_extension_metadata(
 
 /// Run each KPI's PromQL against the loaded TSDB so the dashboard can
 /// hide KPIs whose queries return no data (e.g. zero-traffic histograms).
+#[cfg(feature = "live-mode")]
 pub fn validate_service_extensions(tsdb: &Tsdb, exts: &mut [(String, ServiceExtension)]) {
     let engine = QueryEngine::new(tsdb);
     let (start, end) = engine.get_time_range();
@@ -413,14 +417,17 @@ pub fn regenerate_dashboards(state: &AppState) {
     // backed captures skip this — the SQL-aware validator lands once
     // service-extension templates carry `sql` strings (plan stage 8).
     // Until then SQL captures show every KPI as `available: true`.
-    if let Some(baseline_handle) = state.baseline_tsdb() {
-        let baseline_data = baseline_handle.read();
-        validate_service_extensions(&baseline_data, &mut baseline_exts);
-    }
-    if !experiment_exts.is_empty() {
-        if let Some(experiment_handle) = state.captures.get(CaptureId::Experiment) {
-            let experiment_data = experiment_handle.read();
-            validate_service_extensions(&experiment_data, &mut experiment_exts);
+    #[cfg(feature = "live-mode")]
+    {
+        if let Some(baseline_handle) = state.baseline_tsdb() {
+            let baseline_data = baseline_handle.read();
+            validate_service_extensions(&baseline_data, &mut baseline_exts);
+        }
+        if !experiment_exts.is_empty() {
+            if let Some(experiment_handle) = state.captures.get(CaptureId::Experiment) {
+                let experiment_data = experiment_handle.read();
+                validate_service_extensions(&experiment_data, &mut experiment_exts);
+            }
         }
     }
 
@@ -438,7 +445,7 @@ pub fn regenerate_dashboards(state: &AppState) {
     *state.sections.write() = LazySectionStore::new(context);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "live-mode"))]
 mod report_mode_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;

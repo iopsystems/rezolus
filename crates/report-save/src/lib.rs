@@ -11,10 +11,13 @@
 //! through, and the WASM viewer reuses the bytes it already holds.
 
 use std::collections::{BTreeSet, HashSet};
+#[cfg(feature = "live-mode")]
 use std::ops::Deref;
 
 use arrow::datatypes::Field;
-use metriken_query::{Bytes, QueryEngine, Tsdb};
+use bytes::Bytes;
+#[cfg(feature = "live-mode")]
+use metriken_query::{QueryEngine, Tsdb};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 use parquet::file::metadata::KeyValue;
@@ -22,6 +25,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use serde::Deserialize;
+#[cfg(feature = "live-mode")]
 use tracing::warn;
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -78,6 +82,7 @@ pub enum Side {
 /// Queries that fail to PARSE are logged and skipped — one malformed
 /// chart shouldn't abort the whole save. Queries that parse but match
 /// no series contribute nothing.
+#[cfg(feature = "live-mode")]
 pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
     payload: &ReportPayload,
     engine: &QueryEngine<T>,
@@ -109,6 +114,7 @@ pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
 /// (when `trim_columns` is true), or just embed the selection JSON in
 /// the footer (when false). Returns the new parquet bytes ready to
 /// stream / download.
+#[cfg(feature = "live-mode")]
 pub fn save_single_parquet(
     source_bytes: Bytes,
     payload: &ReportPayload,
@@ -125,11 +131,24 @@ pub fn save_single_parquet(
     }
 }
 
+/// Trim-free variant: write the source parquet back out with the
+/// selection JSON embedded in the footer. SQL-only callers use this —
+/// column trimming requires PromQL `engine.columns(query)` which only
+/// the legacy `metriken-query` engine provides. A future SQL-aware
+/// resolver would let us drop the live-mode requirement on trim.
+pub fn save_single_parquet_embed_only(
+    source_bytes: Bytes,
+    selection_json: &str,
+) -> Result<Vec<u8>, String> {
+    embed_selection_in_parquet(source_bytes, selection_json)
+}
+
 /// Trim each per-side parquet independently (or embed-only when
 /// `trim_columns` is false) and repack into a `*.parquet.ab.tar`. The
 /// caller-supplied `manifest_bytes` (typically `serde_json::to_vec_pretty`
 /// of an `AbContainers`) is written into the tar verbatim; this crate
 /// doesn't need to know the manifest's shape.
+#[cfg(feature = "live-mode")]
 #[allow(clippy::too_many_arguments)]
 pub fn save_combined_ab_tarball(
     baseline_bytes: Bytes,
@@ -161,6 +180,28 @@ pub fn save_combined_ab_tarball(
         )
     };
 
+    pack_ab_tarball(baseline_out, experiment_out, manifest_bytes)
+}
+
+/// Trim-free counterpart to `save_combined_ab_tarball` for SQL-only
+/// callers. Per-side parquets are embed-stamped with the selection
+/// JSON and packed verbatim.
+pub fn save_combined_ab_tarball_embed_only(
+    baseline_bytes: Bytes,
+    experiment_bytes: Bytes,
+    selection_json: &str,
+    manifest_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let baseline_out = embed_selection_in_parquet(baseline_bytes, selection_json)?;
+    let experiment_out = embed_selection_in_parquet(experiment_bytes, selection_json)?;
+    pack_ab_tarball(baseline_out, experiment_out, manifest_bytes)
+}
+
+fn pack_ab_tarball(
+    baseline_out: Vec<u8>,
+    experiment_out: Vec<u8>,
+    manifest_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
     let mut buf: Vec<u8> = Vec::new();
     let mut builder = tar::Builder::new(&mut buf);
     builder.mode(tar::HeaderMode::Deterministic);
@@ -325,7 +366,7 @@ fn append_tar_entry<W: std::io::Write>(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "live-mode"))]
 mod tests {
     use super::*;
     use arrow::array::{Int64Array, UInt64Array};

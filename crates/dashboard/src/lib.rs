@@ -7,6 +7,7 @@ pub mod sql;
 
 pub use data::DashboardData;
 pub use events::{Event, Events};
+#[cfg(feature = "live-mode")]
 pub use metriken_query::Tsdb;
 pub use plot::*;
 pub use service_extension::{CategoryExtension, Kpi, ServiceExtension, TemplateRegistry};

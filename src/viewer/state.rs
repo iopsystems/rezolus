@@ -17,6 +17,7 @@ use tracing::error;
 use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;
 use super::sql_capture::SqlCapture;
+#[cfg(feature = "live-mode")]
 use super::tsdb::Tsdb;
 use ::dashboard::{self, TemplateRegistry};
 use metriken_query_sql::DuckDbBackend;
@@ -141,8 +142,20 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[cfg(feature = "live-mode")]
     pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
         Self::with_registry(CaptureRegistry::new(tsdb, None, None, None), templates)
+    }
+
+    /// Upload-only init constructor. The registry baseline is a
+    /// placeholder SqlCapture (no parquet bound); the first
+    /// `/api/v1/upload` or `/api/v1/load_url` call swaps in a real
+    /// SqlCapture via `replace_baseline_with_sql`.
+    pub fn new_empty(templates: TemplateRegistry) -> Self {
+        Self::with_registry(
+            CaptureRegistry::new_sql(SqlCapture::empty(), None, None, None),
+            templates,
+        )
     }
 
     /// File / upload / A-B init constructor. Wires the registry's
@@ -207,6 +220,7 @@ impl AppState {
     /// SQL-backed slots (file / upload / A-B captures); SQL callers
     /// use [`baseline_sql`] or the new SqlCapture-aware code paths.
     /// Live mode is currently the only Tsdb-bearing baseline.
+    #[cfg(feature = "live-mode")]
     pub fn baseline_tsdb(&self) -> Option<Arc<RwLock<Tsdb>>> {
         self.captures.get(CaptureId::Baseline)
     }
@@ -228,13 +242,14 @@ impl AppState {
     ) -> Option<R> {
         if let Some(handle) = self.baseline_sql() {
             let g = handle.read();
-            Some(f(&*g))
-        } else if let Some(handle) = self.baseline_tsdb() {
-            let g = handle.read();
-            Some(f(&*g))
-        } else {
-            None
+            return Some(f(&*g));
         }
+        #[cfg(feature = "live-mode")]
+        if let Some(handle) = self.baseline_tsdb() {
+            let g = handle.read();
+            return Some(f(&*g));
+        }
+        None
     }
 
     /// True when the input artifact was a combined-A/B tarball
@@ -398,6 +413,7 @@ impl<T: serde::Serialize> ApiResponse<T> {
     }
 }
 
+#[cfg(feature = "live-mode")]
 pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
     use super::promql::QueryError::*;
     match e {
@@ -408,7 +424,7 @@ pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "live-mode"))]
 mod report_marker_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;

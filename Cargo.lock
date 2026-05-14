@@ -3212,6 +3212,7 @@ name = "report-save"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "bytes",
  "metriken-query",
  "parquet",
  "serde",
@@ -3307,6 +3308,7 @@ dependencies = [
  "async-trait",
  "axum",
  "backtrace",
+ "bytes",
  "chrono",
  "clap",
  "clocksource",
