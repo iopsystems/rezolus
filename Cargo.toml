@@ -75,6 +75,7 @@ metriken.workspace = true
 metriken-exposition.workspace = true
 metriken-query = { workspace = true, features = ["ingest"] }
 metriken-query-sql.workspace = true
+prom-matrix.workspace = true
 notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"

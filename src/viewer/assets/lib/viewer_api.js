@@ -2,9 +2,11 @@
 // Defines a transport abstraction that mirrors the site/viewer WASM adapter.
 
 // Tells data.js which of plot.{sql_query, promql_query} to prefer when
-// both are present. Server `/api/v1/query_range` is metriken-query's
-// PromQL engine; sending the SQL form would parse-error.
-const BACKEND = 'promql';
+// both are present. As of the Tsdb→DuckDB server migration, the server
+// runs SQL through metriken-query-sql::DuckDbBackend; sending the
+// PromQL form would parse-error. The static (WASM) viewer is also on
+// SQL via duckdb-wasm, so both deployments speak SQL uniformly.
+const BACKEND = 'sql';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB — must match server DefaultBodyLimit
 

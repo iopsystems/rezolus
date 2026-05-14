@@ -28,10 +28,12 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use std::sync::atomic::Ordering;
 
+use std::path::PathBuf;
+
 use super::actions;
 use super::capture_registry::{self, CaptureId};
 use super::promql::{self, QueryEngine};
-use super::state::{self, ApiResponse, AppState, CaptureParam};
+use super::state::{ApiResponse, AppState, CaptureParam};
 use super::tsdb::Tsdb;
 
 #[cfg(not(feature = "developer-mode"))]
@@ -265,11 +267,18 @@ async fn file_metadata_handler(
         .into_response()
 }
 
-// ── PromQL handlers ───────────────────────────────────────────────────
+// ── SQL handlers ──────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
 struct QueryParams {
+    /// SQL string. Dashboard plots ship one of these in
+    /// `plot.sql_query`; the frontend forwards it verbatim. Schema
+    /// contract: `t` (DOUBLE seconds), `v` (numeric), zero or more
+    /// label columns. See `crates/dashboard/src/sql.rs` for emitters.
     query: String,
+    /// Unused on the SQL path (queries are self-contained). Accepted
+    /// for URL-shape compatibility with the legacy PromQL endpoint.
+    #[allow(dead_code)]
     time: Option<f64>,
     #[serde(default)]
     capture: Option<String>,
@@ -278,54 +287,78 @@ struct QueryParams {
 #[derive(serde::Deserialize)]
 struct RangeQueryParams {
     query: String,
+    /// Unused — frontend embeds time bounds in the SQL body (`_src`
+    /// CTE on the WASM side, plain `WHERE timestamp BETWEEN …` here
+    /// if the caller wants it). Accepted for URL-shape compatibility.
+    #[allow(dead_code)]
     start: f64,
+    #[allow(dead_code)]
     end: f64,
+    #[allow(dead_code)]
     step: f64,
     #[serde(default)]
     capture: Option<String>,
 }
 
-/// Run `f` against the resolved capture's `QueryEngine`; on a missing
-/// capture, return a `capture_not_found` ApiResponse.
-fn run_query<F>(
-    state: &AppState,
-    capture: Option<&str>,
-    f: F,
-) -> Json<ApiResponse<promql::QueryResult>>
-where
-    F: FnOnce(&QueryEngine<&Tsdb>) -> Result<promql::QueryResult, promql::QueryError>,
-{
+/// Resolve the parquet path for the requested capture. Returns `None`
+/// in live-agent mode (no parquet on disk) or when the experiment
+/// slot is empty — caller surfaces those as 503 / capture_not_found.
+fn parquet_path_for(state: &AppState, capture: CaptureId) -> Option<PathBuf> {
+    match capture {
+        CaptureId::Baseline => state.parquet_path.read().clone(),
+        CaptureId::Experiment => state
+            .experiment_parquet_path
+            .read()
+            .clone()
+            .or_else(|| state.cli_experiment_path.read().clone()),
+    }
+}
+
+/// Run `sql` against the resolved capture's parquet through the
+/// shared `DuckDbBackend`. Returns a Prometheus matrix-shape JSON
+/// envelope (success + matrix or success + empty matrix). Errors are
+/// surfaced as `ApiResponse::err` with a `sql_error` type tag.
+fn run_sql(state: &AppState, capture: Option<&str>, sql: &str) -> Response {
     let capture = CaptureId::parse_opt(capture);
-    let Some(tsdb_handle) = state.captures.get(capture) else {
-        return ApiResponse::err(
-            format!("capture '{capture:?}' not attached"),
+    let Some(path) = parquet_path_for(state, capture) else {
+        // Live-agent mode (no parquet) or unattached experiment.
+        // Live mode is a known carve-out during the SQL migration —
+        // see plan stages 3-9. Surfaced as capture_not_found so users
+        // notice early.
+        return ApiResponse::<serde_json::Value>::err(
+            format!("capture '{capture:?}' has no parquet (live mode or unattached)"),
             "capture_not_found",
-        );
+        )
+        .into_response();
     };
-    let tsdb = tsdb_handle.read();
-    let engine = QueryEngine::new(&*tsdb);
-    match f(&engine) {
-        Ok(result) => ApiResponse::ok(result),
-        Err(e) => ApiResponse::err(e.to_string(), state::promql_error_type(&e)),
+    let data_source = path.to_string_lossy().to_string();
+    match state.sql_backend.run_sql(sql, &data_source) {
+        Ok(batches) => {
+            let body = prom_matrix::arrow_to_prom_matrix(&batches);
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response()
+        }
+        Err(e) => ApiResponse::<serde_json::Value>::err(e.to_string(), "sql_error")
+            .into_response(),
     }
 }
 
 async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<promql::QueryResult>> {
-    run_query(&state, params.capture.as_deref(), |engine| {
-        engine.query(&params.query, params.time)
-    })
+) -> Response {
+    run_sql(&state, params.capture.as_deref(), &params.query)
 }
 
 async fn range_query(
     Query(params): Query<RangeQueryParams>,
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<promql::QueryResult>> {
-    run_query(&state, params.capture.as_deref(), |engine| {
-        engine.query_range(&params.query, params.start, params.end, params.step)
-    })
+) -> Response {
+    run_sql(&state, params.capture.as_deref(), &params.query)
 }
 
 async fn label_names(State(_state): State<Arc<AppState>>) -> Json<ApiResponse<Vec<String>>> {

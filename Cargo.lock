@@ -3340,6 +3340,7 @@ dependencies = [
  "perf-event2",
  "plain",
  "plist",
+ "prom-matrix",
  "prometheus-parse",
  "rayon",
  "regex",
