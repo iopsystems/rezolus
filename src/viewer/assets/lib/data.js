@@ -11,6 +11,16 @@ let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
+// Metric names cache for NL query embedding index
+let _metricNames = null;
+let _metricTypes = null;
+let _metricNamesLoaded = false;
+const setMetricNames = (names, types) => { _metricNames = names; _metricTypes = types; _metricNamesLoaded = true; };
+export { setMetricNames };
+export const getMetricNames = () => _metricNames || [];
+export const getMetricTypes = () => _metricTypes || {};
+export const isMetricNamesLoaded = () => _metricNamesLoaded;
+
 // ---------------------------------------------------------------------------
 // Query rewriting for non-default granularity (step override)
 // ---------------------------------------------------------------------------
