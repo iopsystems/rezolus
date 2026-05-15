@@ -974,8 +974,12 @@ export class Chart {
             },
             onSubmit: (event) => {
                 eventsStore.add(event);
-                // The store's notify already triggers _applyEventMarkers
-                // on every chart through Task 7's subscription.
+                // After the event lands as a permanent marker, drop the
+                // transient freeze + axis-pointer line so the chart
+                // returns to its idle state.
+                if (this._tooltipFrozen) this._toggleTooltipFreeze(false);
+                this.dispatchAction({ type: 'hideTip' });
+                this.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
             },
         });
     }

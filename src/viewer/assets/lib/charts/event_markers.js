@@ -6,7 +6,7 @@
 // "merge into series[0]" decision because that depends on the chart's
 // current configured options.
 
-const EVENT_MARKER_COLOR = '#cc6600';
+const EVENT_MARKER_COLOR = '#a85d23';
 
 export function buildMarkLine(events) {
     if (!Array.isArray(events) || events.length === 0) return null;
