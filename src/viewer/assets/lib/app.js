@@ -605,8 +605,19 @@ const SectionContent = {
             });
         }
 
-        const { withData } = countCharts(attrs.groups);
-        const titleText = `${sectionName} (${withData})`;
+        // Section title shows the total plot count once the section
+        // structure has loaded. `total` is stable from the moment
+        // the section JSON arrives (it's the number of plots emitted
+        // by the dashboard generator), so the title doesn't flicker
+        // between `(0)` and `(N)` as per-plot data arrives. Before
+        // the section JSON itself lands, show `(…)`.
+        const groupsLoaded = Array.isArray(attrs.groups);
+        const { total } = groupsLoaded
+            ? countCharts(attrs.groups)
+            : { total: 0 };
+        const titleText = groupsLoaded
+            ? `${sectionName} (${total})`
+            : `${sectionName} (…)`;
 
         if (attrs.section.route === '/cgroups') {
             return renderCgroupSection({
@@ -617,8 +628,36 @@ const SectionContent = {
                 Chart,
                 CgroupSelector,
                 executePromQLRangeQuery: (query, ...args) => {
+                    // 1) `injectLabel` is PromQL-shaped (wraps tokens
+                    //    in `{label="value"}` braces). Applying it to
+                    //    a SELECT/WITH body produces invalid SQL — e.g.
+                    //    `SELECT 0::DOUBLE AS t, name AS name, COUNT(*)::DOUBLE AS v`
+                    //    → `SELECT{node=…} 0::DOUBLE{node=…} AS t…`,
+                    //    which DuckDB binder-errors on. Skip the
+                    //    injector for SQL bodies; node filtering for
+                    //    multi-node parquets on SQL is a deferred
+                    //    carve-out.
+                    // 2) `__SELECTED_CGROUPS__` substitution. On the
+                    //    WASM viewer the registry layer substitutes
+                    //    inside duckdb-wasm; on the server backend
+                    //    the placeholder otherwise reaches DuckDB and
+                    //    binder-errors. Build a SQL IN-list literal
+                    //    `('name1','name2')` from the current
+                    //    `activeCgroupPattern` (set by
+                    //    `setActiveCgroupPattern` below from the
+                    //    selector's emitted names) and substitute
+                    //    before send. Empty selection → IN-list with
+                    //    a single empty string (`('')`) which matches
+                    //    nothing on the individual side and (via the
+                    //    `NOT IN` filter) matches everything on the
+                    //    aggregate side, matching legacy behaviour.
                     const node = getSelectedNode();
-                    if (node) query = injectLabel(query, 'node', node);
+                    const isSqlQuery = /^\s*(?:WITH|SELECT)\b/i.test(query);
+                    if (node && !isSqlQuery) query = injectLabel(query, 'node', node);
+                    if (query.includes('__SELECTED_CGROUPS__')) {
+                        const pattern = activeCgroupPattern || "('')";
+                        query = substituteCgroupPattern(query, pattern);
+                    }
                     return executePromQLRangeQuery(query, ...args);
                 },
                 applyResultToPlot,

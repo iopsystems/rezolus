@@ -331,8 +331,15 @@ const Sidebar = {
             serviceSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
                 const cached = sectionResponseCache[sectionKey];
+                // Sidebar label: show the section's total plot count
+                // once its JSON is cached. `total` is stable (set by
+                // the dashboard generator), so the count doesn't
+                // flicker as per-plot data lands. No suffix until
+                // the section JSON itself is fetched.
                 const count = cached ? countCharts(cached.groups) : null;
-                const label = count ? `${section.name} (${count.withData})` : section.name;
+                const label = count
+                    ? `${section.name} (${count.total})`
+                    : section.name;
                 return m(
                     m.route.Link,
                     {
@@ -362,8 +369,15 @@ const Sidebar = {
             samplerSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
                 const cached = sectionResponseCache[sectionKey];
+                // Sidebar label: show the section's total plot count
+                // once its JSON is cached. `total` is stable (set by
+                // the dashboard generator), so the count doesn't
+                // flicker as per-plot data lands. No suffix until
+                // the section JSON itself is fetched.
                 const count = cached ? countCharts(cached.groups) : null;
-                const label = count ? `${section.name} (${count.withData})` : section.name;
+                const label = count
+                    ? `${section.name} (${count.total})`
+                    : section.name;
                 return m(
                     m.route.Link,
                     {

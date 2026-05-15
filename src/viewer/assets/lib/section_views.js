@@ -323,10 +323,34 @@ const renderCgroupSection = ({
             groups: attrs.groups,
             executeQuery: executePromQLRangeQuery,
             applyResultToPlot: applyResultToPlot,
-            // Tell the registry which cgroups are selected; viewer-sql
-            // substitutes `__SELECTED_CGROUPS__` server-side from this
-            // state. No per-plot string rewriting needed.
-            setSelectedCgroups: (names) => ViewerApi.setSelectedCgroups(names),
+            // The cgroup_selector emits the picked names as a string[].
+            // Two consumers need that:
+            //   1. The wasm-viewer registry (substitutes inside
+            //      duckdb-wasm). On the server build this is a no-op
+            //      stub but we still call it for cross-build symmetry.
+            //   2. The server build's `__SELECTED_CGROUPS__`
+            //      substitution wrapper around `executePromQLRangeQuery`
+            //      in `app.js` — it reads `activeCgroupPattern` and
+            //      inserts it before every executeQuery call. We
+            //      convert names → SQL IN-list literal here and push
+            //      it through `setActiveCgroupPattern`.
+            setSelectedCgroups: (names) => {
+                ViewerApi.setSelectedCgroups(names);
+                if (setActiveCgroupPattern) {
+                    if (names && names.length > 0) {
+                        const escaped = names
+                            .map((n) => "'" + String(n).replace(/'/g, "''") + "'")
+                            .join(',');
+                        setActiveCgroupPattern(`(${escaped})`);
+                    } else {
+                        // No selection — pattern that filters out
+                        // empty-name rows. `('')` so the individual
+                        // side matches nothing and the aggregate side
+                        // (which uses `NOT IN`) includes everything.
+                        setActiveCgroupPattern("('')");
+                    }
+                }
+            },
         }),
         m('div.cgroup-pairs',
             pairs.map((pair) => {

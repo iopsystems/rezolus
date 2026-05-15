@@ -25,6 +25,33 @@ const captureQS = (captureId) =>
     (captureId && captureId !== 'baseline') ? `?capture=${captureId}` : '';
 
 const ViewerApi = {
+    // Server-backed viewer has no JS-side source registry — captures
+    // live in `AppState.captures` on the Rust side and the source-picker
+    // UI is a no-op here. Returning null lets `app.js`'s
+    // `ViewerApi.registry()?.has?.('baseline')` patterns short-circuit
+    // cleanly. The static-viewer adapter (site/viewer/lib/viewer_api.js)
+    // overrides this to return the duckdb-wasm CaptureRegistry.
+    registry() {
+        return null;
+    },
+
+    // Server-backed viewer: cgroup selection is round-tripped through
+    // the client-side `activeCgroupPattern` (see `data.js` for the
+    // `__SELECTED_CGROUPS__` substitution). The static-viewer adapter
+    // overrides this to push the selection into the duckdb-wasm
+    // CaptureRegistry so each fresh capture-load also re-applies it.
+    // Server-side captures live in `AppState.captures` and don't need
+    // that round-trip, so this is a no-op stub.
+    setSelectedCgroups(_names, _captureId = 'baseline') {},
+
+    // Mirror the static-viewer surface so any caller using
+    // `getSelectedCgroups` on the server build gets a sensible
+    // empty-set default rather than a TypeError. Real state lives
+    // in the cgroup_selector component on this build.
+    getSelectedCgroups(_captureId = 'baseline') {
+        return [];
+    },
+
     async getMode() {
         return backendRequest({ method: 'GET', url: '/api/v1/mode' });
     },
