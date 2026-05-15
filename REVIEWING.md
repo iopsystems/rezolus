@@ -8,17 +8,17 @@ onto DuckDB-driven SQL through `metriken_query_sql::DuckDbBackend`.
 The WASM static viewer was already on duckdb-wasm; this branch
 brings the server-backed viewer to parity. Several adjacent paths
 (MCP, `report-save`, live-agent ingest) remain on PromQL/Tsdb as
-deliberate carve-outs; the *Removing Tsdb entirely* section at the
+deliberate carve-outs; the _Removing Tsdb entirely_ section at the
 end is the roadmap for those.
 
-| Path | Engine | Status |
-|---|---|---|
-| `rezolus view <parquet>` — file / upload / A-B / experiment | `DuckDbBackend` via `SqlCapture` | **migrated** |
-| `rezolus view http://agent:4241` — live agent | `Tsdb` (ingest only) | **carve-out**; query handlers return `capture_not_found` in live mode |
-| WASM static viewer (`site/viewer/`) | duckdb-wasm | unchanged (already DuckDB) |
-| MCP (`src/mcp/`) | `Tsdb` + PromQL `QueryEngine` | **carve-out**, gated by `live-mode` feature |
-| `rezolus parquet annotate` | `DuckDbBackend` | **migrated** — validates KPIs via SQL |
-| Save-as-Report (`crates/report-save/`) | `Tsdb` + PromQL `QueryEngine` | **carve-out**, gated by `live-mode` feature |
+| Path                                                        | Engine                           | Status                                                                |
+| ----------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| `rezolus view <parquet>` — file / upload / A-B / experiment | `DuckDbBackend` via `SqlCapture` | **migrated**                                                          |
+| `rezolus view http://agent:4241` — live agent               | `Tsdb` (ingest only)             | **carve-out**; query handlers return `capture_not_found` in live mode |
+| WASM static viewer (`site/viewer/`)                         | duckdb-wasm                      | unchanged (already DuckDB)                                            |
+| MCP (`src/mcp/`)                                            | `Tsdb` + PromQL `QueryEngine`    | **carve-out**, gated by `live-mode` feature                           |
+| `rezolus parquet annotate`                                  | `DuckDbBackend`                  | **migrated** — validates KPIs via SQL                                 |
+| Save-as-Report (`crates/report-save/`)                      | `Tsdb` + PromQL `QueryEngine`    | **carve-out**, gated by `live-mode` feature                           |
 
 ## Build matrix
 
@@ -81,8 +81,9 @@ crates/dashboard/
 
 `Arc<DuckDbBackend>` lives once on `AppState`; handlers borrow it.
 First request for a parquet pays cold-start (open + register UDFs
-+ macros + `_src` + `_cgroup_index`); subsequent requests hit a
-warm slot.
+
+- macros + `_src` + `_cgroup_index`); subsequent requests hit a
+  warm slot.
 
 ---
 
@@ -110,13 +111,15 @@ All carve-outs sit behind the `live-mode` feature (default-on).
 `--no-default-features --features sql-only` drops the lot.
 
 ### 1. MCP entirely on PromQL
+
 `src/mcp/` continues using `Tsdb::load` + `QueryEngine` across
 seven files: `mcp query`, anomaly detection, correlation,
 `describe-recording`, `describe-metrics`. The whole module is
 `#[cfg(feature = "live-mode")]`-gated in `src/main.rs`. Migration
-plan in *Removing Tsdb entirely*.
+plan in _Removing Tsdb entirely_.
 
 ### 2. Live-agent query path
+
 `rezolus view http://agent:4241` ingests snapshots into a `Tsdb`
 (`actions.rs::ingest_loop`), but `/api/v1/query{,_range}` return
 `capture_not_found` for live mode by design — the SQL handlers
@@ -124,9 +127,10 @@ need a parquet on disk and there isn't one. The only PromQL
 execution that still happens in live mode is
 `validate_service_extensions` (KPI availability check on load).
 Storage choice for live ingest is the architectural question;
-sketched in *Removing Tsdb entirely*.
+sketched in _Removing Tsdb entirely_.
 
 ### 3. Service-extension KPI templates still PromQL-only
+
 The 11 templates in `config/templates/*.json` carry a PromQL
 `query` field but no `sql` field. With the frontend on
 `BACKEND='sql'`, plot bodies that need `plot.sql_query` see
@@ -139,13 +143,15 @@ already emits the SQL-aware path when `Kpi.sql` is `Some`; this
 is purely a template-content task.
 
 ### 4. Save-as-Report column trim disabled on SQL-backed captures
+
 `src/viewer/actions.rs::save_with_selection` forces
 `trim_columns=false` when the baseline is SQL-backed. The
 embed-only path still runs (full parquet + selection JSON in the
 footer); the column-trim optimisation needs `report-save`'s SQL
-migration to land. See *Removing Tsdb entirely*.
+migration to land. See _Removing Tsdb entirely_.
 
 ### 5. Multi-node selection doesn't filter server-side
+
 The top-nav node picker injects `node="..."` only on the PromQL
 side; the SQL backend has no equivalent. WASM viewer has the
 same gap. On multi-node parquets the server returns aggregated
@@ -153,6 +159,7 @@ data regardless of selection. Future work; not unique to this
 branch.
 
 ### 6. Multi-rezolus aggregation
+
 Two-or-more rezolus sources in one parquet is not yet aggregated
 server-side. The `COALESCE + sum` / `h2_combine_lol` projection
 shape that the WASM viewer's `_src_rezolus_combined` builds isn't
@@ -177,22 +184,22 @@ End-to-end browser audit on `demo.parquet` and
   labels) — not binder errors.
 
 The cross-source aggregation (carve-out 6) is the only remaining
-*structural* gap. Everything else is "this parquet doesn't carry
+_structural_ gap. Everything else is "this parquet doesn't carry
 that metric".
 
 ---
 
 ## Tests
 
-| Command | Covers |
-|---|---|
-| `cargo test --bin rezolus` | Binary including viewer, actions, MCP-conditional code. |
-| `cargo test -p dashboard` | DashboardData impls, plot emitters, sql_snapshots. |
-| `cargo test -p prom-matrix` | Arrow → Prometheus matrix projection (incl. NaN/Inf row-dropping). |
-| `cargo test -p viewer-sql` | WASM crate's SHARED_MACROS parity against the native engine. |
-| `cargo test -p metriken-query-sql` | UDFs, backend pool, concurrent invalidate stress. |
-| `node --test tests/*.mjs` | Frontend pure-JS tests. |
-| `bash tests/viewer_smoke.sh` | End-to-end (upload / file / A-B / proxy). Requires `jq`. |
+| Command                            | Covers                                                             |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| `cargo test --bin rezolus`         | Binary including viewer, actions, MCP-conditional code.            |
+| `cargo test -p dashboard`          | DashboardData impls, plot emitters, sql_snapshots.                 |
+| `cargo test -p prom-matrix`        | Arrow → Prometheus matrix projection (incl. NaN/Inf row-dropping). |
+| `cargo test -p viewer-sql`         | WASM crate's SHARED_MACROS parity against the native engine.       |
+| `cargo test -p metriken-query-sql` | UDFs, backend pool, concurrent invalidate stress.                  |
+| `node --test tests/*.mjs`          | Frontend pure-JS tests.                                            |
+| `bash tests/viewer_smoke.sh`       | End-to-end (upload / file / A-B / proxy). Requires `jq`.           |
 
 Frontend JS has 6 pre-existing failures referencing the retired
 in-process WASM PromQL viewer (`crates/viewer/` deleted) and the
@@ -244,6 +251,7 @@ call-site classes still need it. Each is independent and can land
 in its own PR.
 
 ### 1. MCP (`src/mcp/`, seven files)
+
 The biggest holdout. `mcp query` accepts PromQL and runs it
 through `QueryEngine`. `detect-anomalies`, `analyze-correlation`,
 and `discover-correlations` evaluate PromQL queries internally
@@ -256,7 +264,7 @@ Two paths:
 - **Translate.** Wire `harness::Engine` (the metriken-side
   PromQL→SQL translator) into MCP. The existing PromQL strings
   keep working; the harness lands a real consumer; the catalogue
-  stays alive. This is the *land* exit on the metriken-side open
+  stays alive. This is the _land_ exit on the metriken-side open
   question.
 - **Rewrite.** Replace the PromQL queries with SQL strings (parallel
   to what the dashboard crate already emits) and operate on
@@ -272,6 +280,7 @@ Either path requires no work on the agent side: MCP runs against
 parquet files on disk, which `DuckDbBackend` already reads.
 
 ### 2. `crates/report-save/`
+
 The HTML report renderer loads a parquet into a `Tsdb`, runs the
 dashboard's queries through `QueryEngine`, and embeds the data
 plus the parquet itself into a self-contained HTML file. Same
@@ -291,6 +300,7 @@ disabled on SQL captures) falls out for free —
 instead of running PromQL.
 
 ### 3. `validate_service_extensions` (`src/viewer/metadata.rs`)
+
 Small. Runs each KPI's PromQL against the live-agent `Tsdb` to
 mark KPIs `available=false` when their data is empty. Two
 dependencies:
@@ -303,6 +313,7 @@ After both, this function is a half-page rewrite: run each
 `kpi.sql` through `DuckDbBackend`, check non-empty.
 
 ### 4. Service-extension KPI templates (carve-out 3)
+
 The 11 templates in `config/templates/*.json` need a `sql` field
 on every KPI. The dashboard's emitter is already SQL-aware; this
 is content work, one template at a time. `parquet annotate`
@@ -311,6 +322,7 @@ failures as `available: false` with a warning, so the migration
 can land template-by-template with no big-bang.
 
 ### 5. Dashboard crate's `Tsdb` re-export + `DashboardData` impl
+
 `crates/dashboard/src/lib.rs:11` re-exports `Tsdb`, and
 `data.rs:13` `impl DashboardData for Tsdb` (cfg-gated to
 `live-mode`). The dump binary at `crates/dashboard/src/main.rs`
@@ -331,6 +343,7 @@ fixtures across `dashboard/src/dashboard/{mod,category,service}.rs`,
 `DashboardData` once the trait is the only contract.
 
 ### 6. The live-agent ingest path (storage choice)
+
 This is the architectural question. Today
 `src/viewer/actions.rs::ingest_loop` polls `/metrics/binary` from
 the agent and calls `tsdb.ingest(snapshot)`. To remove `Tsdb`,
@@ -361,6 +374,7 @@ mode and post-incident snapshot into one storage path with two
 viewers — is the long-term architectural win.
 
 ### What deletes when all six land
+
 - `promql-parser` dep goes.
 - `metriken-query/src/promql/` (4,716 LOC) goes.
 - `metriken-query/src/tsdb/` (1,863 LOC) goes.
