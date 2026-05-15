@@ -389,7 +389,7 @@ export class Chart {
         if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
-            this._applyEventMarkers();
+            this._applyEventMarkers({ reconfigured: true });
 
             // Restore zoom state after re-render (notMerge wipes the
             // dataZoom range). In compare mode each Mithril redraw
@@ -589,7 +589,7 @@ export class Chart {
 
         // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
         this.configureChartByType();
-        this._applyEventMarkers();
+        this._applyEventMarkers({ reconfigured: true });
         this._eventsUnsub = eventsStore.subscribe(() => {
             this._applyEventMarkers();
         });
@@ -750,8 +750,7 @@ export class Chart {
             if (!target) return;
             e.preventDefault();
             e.stopPropagation();
-            // Wired to the form opener in Task 10.
-            if (this._openAddEventForm) this._openAddEventForm(target);
+            this._openAddEventForm(target);
         };
         this.domNode.addEventListener('click', onTooltipClick, true);
         this._tooltipClickCleanup = () => {
@@ -919,21 +918,41 @@ export class Chart {
         return { source: o.source, node: o.node, instance: o.instance };
     }
 
-    _applyEventMarkers() {
+    _applyEventMarkers({ reconfigured = false } = {}) {
         if (!this.echart) return;
+
+        if (reconfigured) {
+            // Capture the chart-style module's markLine BEFORE we overlay
+            // events on it. Several chart configurators (scatter's OOB
+            // separator, etc.) set series[0].markLine; we need to preserve
+            // them across event re-renders. Refresh on every reconfigure
+            // since the underlying data / chart type may change.
+            const opt = this.echart.getOption();
+            const ml = opt?.series?.[0]?.markLine;
+            this._chartStyleMarkLineSnapshot = ml ? JSON.parse(JSON.stringify(ml)) : null;
+        }
+
         const visible = eventsStore.filterForChart({
             chartId: this.chartId,
             scope: this._chartScope(),
         });
-        const markLine = buildMarkLine(visible);
+        const eventMarkLine = buildMarkLine(visible);
         const opt = this.echart.getOption();
         const seriesArr = Array.isArray(opt?.series) ? opt.series : [];
         if (seriesArr.length === 0) return;
-        // Merge by index — series[0] hosts the markLine, the rest are
-        // left untouched. Use notMerge:false so we don't wipe the chart.
-        this.echart.setOption({
-            series: [{ markLine: markLine || { data: [] } }],
-        });
+
+        const baseMl = this._chartStyleMarkLineSnapshot;
+        const baseData = Array.isArray(baseMl?.data) ? baseMl.data : [];
+        const eventData = eventMarkLine ? eventMarkLine.data : [];
+        const mergedData = baseData.concat(eventData);
+
+        // Use the chart-style markLine's config as the base when present;
+        // event-only markLines fall back to buildMarkLine's defaults.
+        const merged = baseMl
+            ? { ...baseMl, data: mergedData }
+            : (eventMarkLine ? { ...eventMarkLine, data: mergedData } : { data: [] });
+
+        this.echart.setOption({ series: [{ markLine: merged }] });
     }
 
     _openAddEventForm(anchorEl) {
