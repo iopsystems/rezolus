@@ -2728,8 +2728,12 @@ main {
 }
 .event-bubble-tag {
     position: absolute;
-    top: 3px;
-    transform: translateX(-50%);
+    /* `top` is set per-tag in JS to the plot-grid top; translateY(-100%)
+     * grows the tag upward so its bottom edge sits just above the
+     * hairline. width:max-content keeps the hit/cursor box the size of
+     * the visible bubble (not a full max-width block). */
+    transform: translate(-50%, -100%);
+    width: max-content;
     max-width: 180px;
     padding: 5px 10px;
     font-family: var(--font-sans);

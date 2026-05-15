@@ -1006,6 +1006,9 @@ export class Chart {
             const tag = document.createElement('div');
             tag.className = 'event-bubble-tag';
             tag.style.left = px + 'px';
+            // Sit just above the hairline's top (the plot-grid top);
+            // the CSS translateY(-100%) grows the tag upward + a 4px gap.
+            tag.style.top = (rect.y - 4) + 'px';
             tag.textContent = e.description || '(no description)';
             tag.title = e.description || '';
             tag.addEventListener('click', (ev) => {
