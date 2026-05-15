@@ -115,10 +115,14 @@ The binary operates in seven modes via subcommands:
      `Arc<DuckDbBackend>` lives on `AppState`. The `/api/v1/query{,_range}` handlers
      accept raw SQL and project Arrow → Prometheus matrix JSON via the
      `prom-matrix` crate.
-   - **Live agent** path runs PromQL through `metriken-query::Tsdb` (the legacy
-     in-memory store). Gated by the `live-mode` Cargo feature (default-on);
-     `--no-default-features --features sql-only` drops it and removes
-     `metriken-query` from the dep tree.
+   - **Live agent** path ingests into `metriken-query::Tsdb` (the legacy
+     in-memory store), but `/api/v1/query{,_range}` currently return
+     `capture_not_found` for live mode — query path is a carve-out
+     pending stages 3-9. Gated by the `live-mode` Cargo feature
+     (default-on); `--no-default-features --features sql-only` drops
+     it and removes `metriken-query` from the dep tree. The only
+     PromQL execution still happening in live mode is
+     `validate_service_extensions` (KPI availability check on load).
    - Service-extension KPI sections still ship PromQL-only templates pending
      transcription — see REVIEWING.md for the deferred work list.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation,
@@ -173,7 +177,7 @@ structs). Each `Kpi` carries both `query` (PromQL, legacy) and an
 optional `sql` field (`fd285bb`). The dashboard's
 `service.rs::generate` calls `plot_promql_with_sql{,_full}` when
 `sql` is present and `plot_promql{,_full}` otherwise. Templates live
-in `config/templates/{cachecannon,vllm,vllm-prefill,vllm-decode,sglang,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`
+in `config/templates/{cachecannon,vllm,vllm-prefill,vllm-decode,sglang,sglang-decode,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`
 and currently ship PromQL-only — transcription to SQL is the next
 known piece of work (see REVIEWING.md). `parquet annotate` validates
 each KPI's SQL by running it through `DuckDbBackend`; KPIs without

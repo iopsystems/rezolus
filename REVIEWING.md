@@ -11,7 +11,7 @@ server-backed viewer to parity.
 | Path | Engine | Status |
 |---|---|---|
 | `rezolus view <parquet>` — file / upload / A-B / attach-experiment | `DuckDbBackend` via `SqlCapture` | **migrated** |
-| `rezolus view http://agent:4241` — live agent | `Tsdb` + PromQL | **carve-out**, behind `live-mode` feature (default-on) |
+| `rezolus view http://agent:4241` — live agent | `Tsdb` (ingest only) | **carve-out**, behind `live-mode` feature (default-on); `/api/v1/query{,_range}` return `capture_not_found` in live mode pending stages 3-9 |
 | WASM static viewer (`site/viewer/`) | duckdb-wasm | unchanged (already DuckDB) |
 | MCP (`src/mcp/`) | `Tsdb` + PromQL | **carve-out**, gated by `live-mode` feature |
 | `rezolus parquet annotate` | `DuckDbBackend` | **migrated** — validates KPIs via SQL |
@@ -26,7 +26,7 @@ retains `metriken-query` exclusively for the live-mode path.
 
 ## Branch shape
 
-81 commits ahead of `origin/main`, **+8,560 / −1,905 across 94
+82 commits ahead of `origin/main`, **+8,571 / −1,905 across 94
 files** (`git diff --shortstat origin/main...HEAD`,
 `git rev-list --count origin/main..HEAD`). Includes the 10
 review-pass commits documented under "Review pass" below, plus
@@ -309,7 +309,7 @@ go hunting:
 1. **Service-extension KPIs render as "temporarily unavailable"
    placeholders** on the migrated server viewer (and the WASM
    viewer when loading multi-source captures). Cause: `BACKEND='sql'`
-   asks the frontend to send `plot.sql_query`, but the 10 service
+   asks the frontend to send `plot.sql_query`, but the 11 service
    templates in `config/templates/*.json` still ship `query` (PromQL)
    only — `Kpi.sql` is `None` for every template. The frontend
    reads null and renders a "query not yet available" stub.
@@ -317,7 +317,7 @@ go hunting:
    `site/viewer-sql/lib/duckdb-registry.js::buildSourceViews` in
    `SqlCapture::open`), then transcribe each template's KPIs to
    SQL against the aliased view. Templates ship in
-   `config/templates/{cachecannon,vllm,vllm-decode,vllm-prefill,sglang,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`.
+   `config/templates/{cachecannon,vllm,vllm-decode,vllm-prefill,sglang,sglang-decode,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`.
 
 2. **Multi-node selection** (the top-nav node picker) doesn't filter
    server-side queries. Frontend `buildEffectiveQuery` only injects
