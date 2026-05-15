@@ -163,23 +163,19 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
     m.mount(overlay, Form);
 }
 
-// Tiny confirmation popover anchored at a click point. Used when a user
-// clicks an event marker to delete it. `event` is just for display
-// ({timestamp, description}); `onConfirm` runs only if the user clicks
-// Delete, then the popover dismisses itself.
-export function openEventDelete({ anchorPoint, event, onConfirm }) {
+// Read-only "more information" popover for an event — the viewing
+// counterpart of openEventForm. Shows every populated field; offers a
+// Delete action (with inline confirm) only when `onDelete` is passed
+// (Notebook). Anchored above the clicked bubble, flips below on clip.
+export function openEventInfo({ anchorPoint, event, onDelete }) {
     if (!anchorPoint) return;
-    document.querySelectorAll('.event-form-overlay, .event-delete-overlay').forEach((n) => n.remove());
+    document.querySelectorAll('.event-form-overlay, .event-info-overlay').forEach((n) => n.remove());
 
     const overlay = document.createElement('div');
-    overlay.className = 'event-delete-overlay';
+    overlay.className = 'event-info-overlay';
     document.body.appendChild(overlay);
 
-    const POPOVER_W = 240;
-    let left = anchorPoint.x - POPOVER_W / 2;
-    if (left < 8) left = 8;
-    if (left + POPOVER_W > window.innerWidth) left = window.innerWidth - POPOVER_W - 8;
-    let top = anchorPoint.y + 12;
+    let confirmingDelete = false;
 
     const close = () => {
         document.removeEventListener('keydown', onKey, true);
@@ -200,98 +196,53 @@ export function openEventDelete({ anchorPoint, event, onConfirm }) {
     document.addEventListener('keydown', onKey, true);
     document.addEventListener('mousedown', onClickOutside, true);
 
-    const Confirm = {
-        oncreate: (vnode) => {
-            const h = vnode.dom.getBoundingClientRect().height;
-            const maxTop = window.innerHeight - h - 8;
-            if (top > maxTop) {
-                top = Math.max(8, maxTop);
-                vnode.dom.style.top = top + 'px';
-            }
-        },
-        view: () => m('div.event-delete', {
-            style: `position: fixed; top: ${top}px; left: ${left}px; width: ${POPOVER_W}px; z-index: 10000;`,
-        }, [
-            m('div.event-delete-text', `Delete "${event.description || '(no description)'}"?`),
-            m('div.event-form-actions', [
-                m('button', { onclick: close }, 'Cancel'),
-                m('button.danger', { onclick: () => { onConfirm(); close(); } }, 'Delete'),
-            ]),
-        ]),
-    };
-    m.mount(overlay, Confirm);
-}
+    // [label, value] pairs; blank values are dropped so the popover only
+    // shows what the event actually carries.
+    const rows = [
+        ['Timestamp', formatNsAsRfc3339(event.timestamp)],
+        ['Description', event.description],
+        ['Kind', event.kind],
+        ['Source', event.source],
+        ['Node', event.node],
+        ['Instance', event.instance],
+    ].filter(([, v]) => v != null && String(v).trim() !== '');
 
-// Small inline bubble shown next to an event marker on click. Replaces
-// the regular axis-trigger tooltip for that interaction so the user
-// sees just the event description instead of every series's value at
-// that x. `onDelete` is optional — only passed in Notebook so non-edit
-// surfaces show description-only. `onClose` fires on every dismissal
-// path (outside-click / ESC / × click) so callers can restore the
-// suppressed regular tooltip.
-export function openEventBubble({ anchorPoint, event, onDelete, onClose }) {
-    if (!anchorPoint) return;
-    document.querySelectorAll('.event-bubble-overlay, .event-form-overlay, .event-delete-overlay').forEach((n) => n.remove());
+    const POPOVER_W = 300;
 
-    const overlay = document.createElement('div');
-    overlay.className = 'event-bubble-overlay';
-    document.body.appendChild(overlay);
-
-    let closed = false;
-    const close = () => {
-        if (closed) return;
-        closed = true;
-        document.removeEventListener('keydown', onKey, true);
-        document.removeEventListener('mousedown', onClickOutside, true);
-        m.mount(overlay, null);
-        overlay.remove();
-        if (onClose) onClose();
-    };
-
-    const onKey = (e) => {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            close();
-        }
-    };
-    const onClickOutside = (e) => {
-        if (!overlay.contains(e.target)) close();
-    };
-    document.addEventListener('keydown', onKey, true);
-    document.addEventListener('mousedown', onClickOutside, true);
-
-    const Bubble = {
+    const Info = {
         oncreate: (vnode) => {
             const r = vnode.dom.getBoundingClientRect();
-            // Center horizontally over the anchor; clamp to viewport.
             let left = anchorPoint.x - r.width / 2;
             if (left < 8) left = 8;
             if (left + r.width > window.innerWidth) left = window.innerWidth - r.width - 8;
-            // Default ABOVE the anchor (sits above the hairline); flip
-            // below if it would clip the top of the viewport.
             let top = anchorPoint.y - r.height - 6;
             if (top < 8) top = anchorPoint.y + 10;
             vnode.dom.style.left = left + 'px';
             vnode.dom.style.top = top + 'px';
         },
-        view: () => m('div.event-bubble', {
-            // Initial off-screen position; oncreate measures + reseats.
-            style: 'position: fixed; left: -9999px; top: -9999px; z-index: 10000;',
+        view: () => m('div.event-info', {
+            style: `position: fixed; left: -9999px; top: -9999px; width: ${POPOVER_W}px; z-index: 10000;`,
         }, [
-            m('span.event-bubble-desc', event.description || '(no description)'),
-            onDelete ? m('a.event-bubble-delete', {
-                href: '#',
-                title: 'Delete event',
-                onclick: (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // Close the bubble first so the confirmation popover
-                    // doesn't visually overlap with it.
-                    close();
-                    onDelete();
-                },
-            }, '×') : null,
+            ...rows.map(([label, value]) => m('div.event-info-row', [
+                m('div.event-info-label', label),
+                m('div.event-info-value', String(value)),
+            ])),
+            onDelete ? m('div.event-form-actions', [
+                confirmingDelete
+                    ? m('span.event-info-confirm', 'Delete this event?')
+                    : null,
+                m('button', { onclick: close }, 'Close'),
+                confirmingDelete
+                    ? m('button.danger', {
+                        onclick: () => { onDelete(); close(); },
+                    }, 'Confirm delete')
+                    : m('button.danger', {
+                        onclick: () => { confirmingDelete = true; m.redraw(); },
+                    }, 'Delete'),
+            ]) : m('div.event-form-actions', [
+                m('button', { onclick: close }, 'Close'),
+            ]),
         ]),
     };
-    m.mount(overlay, Bubble);
+    m.mount(overlay, Info);
 }

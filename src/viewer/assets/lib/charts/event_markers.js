@@ -1,12 +1,16 @@
 // Build an ECharts `markLine` config that renders each event as a
-// vertical dashed line at its timestamp. Returns null when there's
-// nothing to render so callers can branch trivially.
+// subtle vertical dashed hairline at its timestamp. Returns null when
+// there's nothing to render so callers can branch trivially.
+//
+// The description is NOT rendered here — it lives in an HTML bubble
+// above the plot grid (see chart.js::_renderEventBubbles) so it can't
+// overlap the on-canvas data tooltip and stays clickable.
 //
 // Pure module — no chart instance, no DOM. The caller owns the
 // "merge into series[0]" decision because that depends on the chart's
 // current configured options.
 
-const EVENT_MARKER_COLOR = '#a85d23';
+export const EVENT_MARKER_COLOR = '#a85d23';
 
 export function buildMarkLine(events) {
     if (!Array.isArray(events) || events.length === 0) return null;
@@ -20,35 +24,17 @@ export function buildMarkLine(events) {
     }
     if (data.length === 0) return null;
     return {
-        silent: false,
+        // Not interactive — the HTML bubble owns hover/click; the line
+        // is just a visual locator.
+        silent: true,
         symbol: 'none',
         data,
         lineStyle: {
             color: EVENT_MARKER_COLOR,
             type: 'dashed',
             width: 1,
-            opacity: 0.85,
+            opacity: 0.45,
         },
-        // Hidden until hover; emphasis pins it at the top end of the line
-        // (above the plot grid) and renders horizontally so the
-        // description stays legible regardless of line direction.
-        label: {
-            show: false,
-            position: 'end',
-            distance: 4,
-            rotate: 0,
-            align: 'center',
-            verticalAlign: 'bottom',
-            formatter: '{b}',
-            color: '#fff',
-            backgroundColor: EVENT_MARKER_COLOR,
-            padding: [2, 6],
-            borderRadius: 3,
-            fontSize: 11,
-        },
-        emphasis: {
-            label: { show: true },
-            lineStyle: { width: 2, opacity: 1 },
-        },
+        label: { show: false },
     };
 }

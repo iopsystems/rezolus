@@ -22,7 +22,7 @@ import { themeVersion } from '../theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
 import { eventsStore } from '../events_store.js';
 import { buildMarkLine } from './event_markers.js';
-import { openEventForm, openEventDelete, openEventBubble } from '../event_form.js';
+import { openEventForm, openEventInfo } from '../event_form.js';
 import { buildFreezeFooterContent, isEventEditingAllowed } from './base.js';
 
 
@@ -344,6 +344,7 @@ export class Chart {
         this.resizeObserver = new ResizeObserver(() => {
             if (this.echart) {
                 this.echart.resize();
+                this._renderEventBubbles();
             }
         });
         this.resizeObserver.observe(this.domNode);
@@ -433,6 +434,10 @@ export class Chart {
         if (this._compareCursorOff) this._compareCursorOff();
         if (this._compareCursorUnsub) this._compareCursorUnsub();
         if (this._eventsUnsub) this._eventsUnsub();
+        if (this._eventBubbleLayer) {
+            this._eventBubbleLayer.remove();
+            this._eventBubbleLayer = null;
+        }
 
         // Remove ourselves from the charts registry so setZoom's fan-out,
         // resetAll, hasActiveSelection, etc. don't walk a stale entry
@@ -604,6 +609,9 @@ export class Chart {
         }
 
         this.echart.on('datazoom', (event) => {
+            // Event bubbles are positioned by data-x; any zoom/pan moves
+            // them, so reposition on every datazoom (cheap DOM work).
+            this._renderEventBubbles();
             // Reconfigure (applyChartOption → setOption({notMerge:true}))
             // wipes and rebuilds the dataZoom component, which fires a
             // synthetic datazoom event with the default {0,100} range.
@@ -723,55 +731,7 @@ export class Chart {
         // Escape also unfreezes.
         this._tooltipFrozen = false;
 
-        // Click on an event marker → suppress the regular axis-trigger
-        // tooltip (which would show every series's value at that x) and
-        // pop a small standalone bubble with just the event description
-        // + × delete (in Notebook). Suppresses the zr freeze toggle on
-        // the same physical click via _suppressFreezeClick.
-        this.echart.on('click', (params) => {
-            if (params.componentType !== 'markLine' || !params.data) return;
-            if (!Number.isFinite(params.data.xAxis)) return;
-            this._suppressFreezeClick = true;
-            const tsMs = params.data.xAxis;
-            const tsNs = Math.round(tsMs * 1_000_000);
-            const description = params.data.name || '';
-            // Anchor the bubble at the top of the hairline (top of the
-            // plot grid at the marker's x), translated from canvas to
-            // viewport coords so position:fixed lands in the right spot.
-            const pixelX = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
-            const grid = this.echart.getModel()?.getComponent('grid', 0);
-            const gridRect = grid?.coordinateSystem?.getRect?.();
-            const pixelY = gridRect ? gridRect.y : 0;
-            const chartRect = this.domNode.getBoundingClientRect();
-            const native = params.event?.event;
-            const anchorPoint = Number.isFinite(pixelX)
-                ? { x: chartRect.left + pixelX, y: chartRect.top + pixelY }
-                : { x: native?.clientX ?? 0, y: native?.clientY ?? 0 };
-            this._suppressRegularTooltip();
-            const evt = { timestamp: tsNs, description };
-            openEventBubble({
-                anchorPoint,
-                event: evt,
-                onDelete: isEventEditingAllowed()
-                    ? () => {
-                        openEventDelete({
-                            anchorPoint,
-                            event: evt,
-                            onConfirm: () => {
-                                eventsStore.remove({ timestamp: tsNs, description });
-                            },
-                        });
-                    }
-                    : null,
-                onClose: () => this._restoreRegularTooltip(),
-            });
-        });
-
         this.echart.getZr().on('click', (e) => {
-            if (this._suppressFreezeClick) {
-                this._suppressFreezeClick = false;
-                return;
-            }
             // Only freeze when clicking within the plot area, not on legend/title
             if (this.echart.containPixel('grid', [e.offsetX, e.offsetY])) {
                 if (!this._tooltipFrozen) {
@@ -1005,6 +965,65 @@ export class Chart {
             : (eventMarkLine ? { ...eventMarkLine, data: mergedData } : { data: [] });
 
         this.echart.setOption({ series: [{ markLine: merged }] });
+        this._renderEventBubbles();
+    }
+
+    // Render one persistent HTML description tag per visible event in a
+    // layer above the plot grid (off the canvas data area, so it never
+    // collides with the hover tooltip). Re-run on every render / zoom /
+    // resize since each tag is positioned by its event's data-x.
+    _renderEventBubbles() {
+        if (!this.echart || !this.domNode) return;
+
+        let layer = this._eventBubbleLayer;
+        if (!layer) {
+            layer = document.createElement('div');
+            layer.className = 'event-bubble-layer';
+            this.domNode.appendChild(layer);
+            this._eventBubbleLayer = layer;
+        }
+        layer.textContent = '';
+
+        const visible = eventsStore.filterForChart({
+            chartId: this.chartId,
+            scope: this._chartScope(),
+        });
+        if (visible.length === 0) return;
+
+        const grid = this.echart.getModel()?.getComponent('grid', 0);
+        const rect = grid?.coordinateSystem?.getRect?.();
+        if (!rect) return;
+        const left = rect.x;
+        const right = rect.x + rect.width;
+
+        for (const e of visible) {
+            if (!Number.isFinite(e.timestamp)) continue;
+            const tsMs = e.timestamp / 1_000_000;
+            const px = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
+            // Hide tags whose event is scrolled out of the zoom window.
+            if (!Number.isFinite(px) || px < left - 1 || px > right + 1) continue;
+
+            const tag = document.createElement('div');
+            tag.className = 'event-bubble-tag';
+            tag.style.left = px + 'px';
+            tag.textContent = e.description || '(no description)';
+            tag.title = e.description || '';
+            tag.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const r = tag.getBoundingClientRect();
+                openEventInfo({
+                    anchorPoint: { x: r.left + r.width / 2, y: r.top },
+                    event: e,
+                    onDelete: isEventEditingAllowed()
+                        ? () => eventsStore.remove({
+                            timestamp: e.timestamp,
+                            description: e.description,
+                        })
+                        : null,
+                });
+            });
+            layer.appendChild(tag);
+        }
     }
 
     _openAddEventForm(anchorEl) {
@@ -1039,20 +1058,6 @@ export class Chart {
         };
         tearDown();
         requestAnimationFrame(tearDown);
-    }
-
-    // Used while the standalone event bubble is open: hide the regular
-    // axis-trigger tooltip and stop it from re-showing on mousemove.
-    // Restored when the bubble closes.
-    _suppressRegularTooltip() {
-        if (!this.echart) return;
-        this.echart.setOption({ tooltip: { triggerOn: 'none' } });
-        this.dispatchAction({ type: 'hideTip' });
-        this.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
-    }
-    _restoreRegularTooltip() {
-        if (!this.echart) return;
-        this.echart.setOption({ tooltip: { triggerOn: 'mousemove|click' } });
     }
 
     configureChartByType() {

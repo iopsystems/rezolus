@@ -2717,7 +2717,40 @@ main {
     color: #fff;
 }
 
-.event-delete {
+/* Persistent description tag rendered in the band above the plot grid
+ * (inside the chart container but off the canvas data area). One per
+ * visible event, x-aligned to its hairline; chart.js positions them. */
+.event-bubble-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+.event-bubble-tag {
+    position: absolute;
+    top: 4px;
+    transform: translateX(-50%);
+    max-width: 160px;
+    padding: 1px 6px;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    line-height: 1.4;
+    color: #fff;
+    background: #a85d23;
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    pointer-events: auto;
+    opacity: 0.85;
+}
+.event-bubble-tag:hover {
+    opacity: 1;
+}
+
+/* Read-only "more info" popover. */
+.event-info {
     background: var(--bg-card, #1e1e1e);
     border: 1px solid var(--border-default, #333);
     border-radius: 6px;
@@ -2727,41 +2760,24 @@ main {
     color: var(--fg, #e0e0e0);
     font-size: 13px;
 }
-.event-delete-text {
-    margin-bottom: 10px;
-    word-wrap: break-word;
+.event-info-row {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-bottom: 8px;
 }
-
-.event-bubble {
-    background: var(--bg-card, #1e1e1e);
-    border: 1px solid var(--border-default, #333);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    padding: 6px 10px;
-    font-family: var(--font-sans);
-    color: var(--fg, #e0e0e0);
-    font-size: 12px;
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    max-width: 360px;
+.event-info-label {
+    font-size: 11px;
+    color: var(--fg-secondary, #a0a0a0);
 }
-.event-bubble-desc {
-    color: var(--fg, #e0e0e0);
+.event-info-value {
     word-wrap: break-word;
     overflow-wrap: anywhere;
 }
-.event-bubble-delete {
+.event-info-confirm {
+    flex: 1;
+    align-self: center;
+    font-size: 12px;
     color: var(--danger, #f85149);
-    text-decoration: none;
-    font-weight: bold;
-    font-size: 16px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0 4px;
-    border-radius: 2px;
-}
-.event-bubble-delete:hover {
-    background: rgba(248, 81, 73, 0.15);
 }
 

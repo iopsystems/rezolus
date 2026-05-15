@@ -15,7 +15,9 @@ test('builds one markLine entry per event with xAxis in ms', () => {
     const ml = buildMarkLine(events);
     assert.ok(ml);
     assert.equal(ml.symbol, 'none');
-    assert.equal(ml.silent, false);
+    // Hairline is non-interactive; the HTML bubble owns clicks.
+    assert.equal(ml.silent, true);
+    assert.equal(ml.label.show, false);
     assert.equal(ml.data.length, 2);
     // ns -> ms conversion
     assert.equal(ml.data[0].xAxis, 1715625600000);
