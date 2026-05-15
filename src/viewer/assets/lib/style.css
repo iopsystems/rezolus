@@ -2732,3 +2732,36 @@ main {
     word-wrap: break-word;
 }
 
+.event-bubble {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid var(--border-default, #333);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    padding: 6px 10px;
+    font-family: var(--font-sans);
+    color: var(--fg, #e0e0e0);
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 360px;
+}
+.event-bubble-desc {
+    color: var(--fg, #e0e0e0);
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+.event-bubble-delete {
+    color: var(--danger, #f85149);
+    text-decoration: none;
+    font-weight: bold;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    border-radius: 2px;
+}
+.event-bubble-delete:hover {
+    background: rgba(248, 81, 73, 0.15);
+}
+

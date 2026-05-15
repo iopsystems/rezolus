@@ -22,7 +22,7 @@ import { themeVersion } from '../theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
 import { eventsStore } from '../events_store.js';
 import { buildMarkLine } from './event_markers.js';
-import { openEventForm, openEventDelete } from '../event_form.js';
+import { openEventForm, openEventDelete, openEventBubble } from '../event_form.js';
 import { buildFreezeFooterContent, isEventEditingAllowed } from './base.js';
 
 
@@ -530,8 +530,7 @@ export class Chart {
 
         const footer = this.domNode.querySelector('.tooltip-freeze-footer');
         if (footer) {
-            const eventCtx = freeze ? this._frozenEvent : null;
-            footer.style.color = eventCtx ? COLORS.fg : (freeze ? COLORS.accent : COLORS.fgMuted);
+            footer.style.color = freeze ? COLORS.accent : COLORS.fgMuted;
             footer.innerHTML = buildFreezeFooterContent(this);
 
             // ECharts caches the tooltip wrapper's pointer-events:none and
@@ -724,10 +723,11 @@ export class Chart {
         // Escape also unfreezes.
         this._tooltipFrozen = false;
 
-        // Click on an event marker → freeze the data tooltip at the
-        // marker's x position and show its description + × in the
-        // footer. Suppresses the zr handler below so the same physical
-        // click doesn't ALSO toggle freeze.
+        // Click on an event marker → suppress the regular axis-trigger
+        // tooltip (which would show every series's value at that x) and
+        // pop a small standalone bubble with just the event description
+        // + × delete (in Notebook). Suppresses the zr freeze toggle on
+        // the same physical click via _suppressFreezeClick.
         this.echart.on('click', (params) => {
             if (params.componentType !== 'markLine' || !params.data) return;
             if (!Number.isFinite(params.data.xAxis)) return;
@@ -735,28 +735,29 @@ export class Chart {
             const tsMs = params.data.xAxis;
             const tsNs = Math.round(tsMs * 1_000_000);
             const description = params.data.name || '';
-            this._frozenEvent = { timestamp: tsNs, description };
-            this._frozenAxisNs = tsNs;
-
-            // Freeze BEFORE showTip — otherwise the next mousemove can
-            // auto-hide the tooltip we just programmatically showed.
-            // Calling _toggleTooltipFreeze(true) when already frozen is
-            // idempotent for state and re-renders the footer with the
-            // new _frozenEvent context.
-            this._toggleTooltipFreeze(true);
-
-            // showTip needs (x, y) inside the plot grid for axis-trigger
-            // tooltips to register; pull from the grid rect rather than
-            // guessing a y that might fall above the chart on tall charts.
-            const pixelX = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
-            const grid = this.echart.getModel()?.getComponent('grid', 0);
-            const rect = grid?.coordinateSystem?.getRect?.();
-            const pixelY = rect
-                ? rect.y + Math.round(rect.height / 2)
-                : Math.round(this.echart.getHeight() / 2);
-            if (Number.isFinite(pixelX)) {
-                this.echart.dispatchAction({ type: 'showTip', x: pixelX, y: pixelY });
-            }
+            const native = params.event?.event;
+            const anchorPoint = {
+                x: native?.clientX ?? 0,
+                y: native?.clientY ?? 0,
+            };
+            this._suppressRegularTooltip();
+            const evt = { timestamp: tsNs, description };
+            openEventBubble({
+                anchorPoint,
+                event: evt,
+                onDelete: isEventEditingAllowed()
+                    ? () => {
+                        openEventDelete({
+                            anchorPoint,
+                            event: evt,
+                            onConfirm: () => {
+                                eventsStore.remove({ timestamp: tsNs, description });
+                            },
+                        });
+                    }
+                    : null,
+                onClose: () => this._restoreRegularTooltip(),
+            });
         });
 
         this.echart.getZr().on('click', (e) => {
@@ -779,17 +780,14 @@ export class Chart {
                         ? Math.round(xMs * 1_000_000)
                         : null;
                 }
-                // Empty-grid freeze always clears any prior marker-event
-                // context so the footer falls back to FROZEN + Add Event.
-                this._frozenEvent = null;
                 this._toggleTooltipFreeze();
             }
         });
 
-        // Delegate clicks on in-tooltip affordances ("+ Add Event" or
-        // the "×" delete on a marker-frozen tooltip). The tooltip DOM
-        // is recreated by echarts on every render, so we intercept at
-        // the chart container level rather than binding to the links.
+        // Delegate clicks on the in-tooltip "+ Add Event" link. The
+        // tooltip DOM is recreated by echarts on every render, so we
+        // intercept at the chart container level rather than binding
+        // to the link itself.
         const onTooltipClick = (e) => {
             if (!e.target.closest) return;
             const addLink = e.target.closest('.tooltip-add-event');
@@ -797,14 +795,6 @@ export class Chart {
                 e.preventDefault();
                 e.stopPropagation();
                 this._openAddEventForm(addLink);
-                return;
-            }
-            const deleteLink = e.target.closest('.tooltip-delete-event');
-            if (deleteLink) {
-                e.preventDefault();
-                e.stopPropagation();
-                this._openDeleteEventConfirm(deleteLink);
-                return;
             }
         };
         this.domNode.addEventListener('click', onTooltipClick, true);
@@ -1029,21 +1019,6 @@ export class Chart {
         });
     }
 
-    _openDeleteEventConfirm(anchorEl) {
-        if (!isEventEditingAllowed()) return;
-        const evt = this._frozenEvent;
-        if (!evt) return;
-        const rect = anchorEl.getBoundingClientRect();
-        openEventDelete({
-            anchorPoint: { x: rect.left + rect.width / 2, y: rect.bottom },
-            event: evt,
-            onConfirm: () => {
-                eventsStore.remove({ timestamp: evt.timestamp, description: evt.description });
-                this._teardownFreezeAndAxisPointer();
-            },
-        });
-    }
-
     // Drop freeze, hide tooltip, and clear the axis-pointer hairline.
     // Runs once synchronously and once on the next frame because the
     // tooltip option update needs a paint to flush — without the rAF
@@ -1052,12 +1027,25 @@ export class Chart {
     _teardownFreezeAndAxisPointer() {
         const tearDown = () => {
             if (this._tooltipFrozen) this._toggleTooltipFreeze(false);
-            this._frozenEvent = null;
             this.dispatchAction({ type: 'hideTip' });
             this.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
         };
         tearDown();
         requestAnimationFrame(tearDown);
+    }
+
+    // Used while the standalone event bubble is open: hide the regular
+    // axis-trigger tooltip and stop it from re-showing on mousemove.
+    // Restored when the bubble closes.
+    _suppressRegularTooltip() {
+        if (!this.echart) return;
+        this.echart.setOption({ tooltip: { triggerOn: 'none' } });
+        this.dispatchAction({ type: 'hideTip' });
+        this.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
+    }
+    _restoreRegularTooltip() {
+        if (!this.echart) return;
+        this.echart.setOption({ tooltip: { triggerOn: 'mousemove|click' } });
     }
 
     configureChartByType() {

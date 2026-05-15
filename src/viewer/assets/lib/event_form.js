@@ -221,3 +221,78 @@ export function openEventDelete({ anchorPoint, event, onConfirm }) {
     };
     m.mount(overlay, Confirm);
 }
+
+// Small inline bubble shown next to an event marker on click. Replaces
+// the regular axis-trigger tooltip for that interaction so the user
+// sees just the event description instead of every series's value at
+// that x. `onDelete` is optional — only passed in Notebook so non-edit
+// surfaces show description-only. `onClose` fires on every dismissal
+// path (outside-click / ESC / × click) so callers can restore the
+// suppressed regular tooltip.
+export function openEventBubble({ anchorPoint, event, onDelete, onClose }) {
+    if (!anchorPoint) return;
+    document.querySelectorAll('.event-bubble-overlay, .event-form-overlay, .event-delete-overlay').forEach((n) => n.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'event-bubble-overlay';
+    document.body.appendChild(overlay);
+
+    let closed = false;
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('mousedown', onClickOutside, true);
+        m.mount(overlay, null);
+        overlay.remove();
+        if (onClose) onClose();
+    };
+
+    const onKey = (e) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            close();
+        }
+    };
+    const onClickOutside = (e) => {
+        if (!overlay.contains(e.target)) close();
+    };
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('mousedown', onClickOutside, true);
+
+    const Bubble = {
+        oncreate: (vnode) => {
+            const r = vnode.dom.getBoundingClientRect();
+            // Center horizontally over the anchor; clamp to viewport.
+            let left = anchorPoint.x - r.width / 2;
+            if (left < 8) left = 8;
+            if (left + r.width > window.innerWidth) left = window.innerWidth - r.width - 8;
+            // Default below the anchor; flip above if it would clip.
+            let top = anchorPoint.y + 10;
+            if (top + r.height > window.innerHeight - 8) {
+                top = Math.max(8, anchorPoint.y - r.height - 10);
+            }
+            vnode.dom.style.left = left + 'px';
+            vnode.dom.style.top = top + 'px';
+        },
+        view: () => m('div.event-bubble', {
+            // Initial off-screen position; oncreate measures + reseats.
+            style: 'position: fixed; left: -9999px; top: -9999px; z-index: 10000;',
+        }, [
+            m('span.event-bubble-desc', event.description || '(no description)'),
+            onDelete ? m('a.event-bubble-delete', {
+                href: '#',
+                title: 'Delete event',
+                onclick: (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // Close the bubble first so the confirmation popover
+                    // doesn't visually overlap with it.
+                    close();
+                    onDelete();
+                },
+            }, '×') : null,
+        ]),
+    };
+    m.mount(overlay, Bubble);
+}
