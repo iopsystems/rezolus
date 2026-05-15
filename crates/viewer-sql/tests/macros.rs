@@ -214,25 +214,21 @@ fn h2_delta_is_elementwise_saturating_sub() {
 }
 
 #[test]
-fn h2_combine_sums_elementwise_widest_wins() {
+fn h2_combine_lol_sums_elementwise_widest_wins() {
     let conn = fresh();
-    // **Parity hazard discovered by this test.** The wasm macro takes
-    // a single LIST<LIST<UBIGINT>> (param `lol`), while the native UDF
-    // is variadic UBIGINT[]. They aren't drop-in interchangeable from a
-    // bare-SQL caller. The dashboard SQL emits
-    // `h2_combine([*COLUMNS(...)])` which constructs a single
-    // list-of-lists (wasm shape) — so this matches the dashboard's
-    // calling convention. If you ever call h2_combine directly with
-    // variadic args, the native UDF accepts it but the wasm macro
-    // rejects it. See macros.sql for the wasm signature, udf.rs for
-    // the native one.
+    // `h2_combine_lol(lol)` lives in `shared_macros.sql` and is the
+    // cross-backend surface for the list-of-lists shape that the
+    // dashboard emits as `h2_combine_lol([*COLUMNS('regex')])`.
+    // The native variadic UDF `h2_combine(c1, c2, ..., cN)` is the
+    // fast path for direct column-by-column callers; `h2_combine_lol`
+    // is the pure-SQL macro both backends share.
     //
     // Behaviour: per-element sum across N inner lists, output length
     // = max inner length, missing entries treated as 0.
     assert_eq!(
         one_list_u64(
             &conn,
-            "SELECT h2_combine([[1,2,3]::UBIGINT[], [10,20,30,40]::UBIGINT[]])",
+            "SELECT h2_combine_lol([[1,2,3]::UBIGINT[], [10,20,30,40]::UBIGINT[]])",
         ),
         Some(vec![11, 22, 33, 40])
     );

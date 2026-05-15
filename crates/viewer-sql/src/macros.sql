@@ -134,11 +134,12 @@ CREATE OR REPLACE MACRO h2_count_in_range(b, lo, hi, p := 3) AS
 CREATE OR REPLACE MACRO h2_quantiles(b, qs, p := 3) AS
     list_transform(qs::DOUBLE[], q -> h2_quantile(b, q, p));
 
-CREATE OR REPLACE MACRO h2_combine(lol) AS
-    list_transform(
-        generate_series(1, list_max(list_transform(lol, h -> length(h::UBIGINT[])))),
-        j -> list_sum(list_transform(lol, h -> coalesce((h::UBIGINT[])[j], 0::UBIGINT)))::UBIGINT
-    );
+-- h2_combine(lol) used to live here for the wasm side. It moved into
+-- shared_macros.sql under the name `h2_combine_lol` so the native and
+-- wasm backends use the same name + body for the LIST<LIST<UBIGINT>>
+-- shape. The variadic `h2_combine(c1, c2, ...)` UDF on native is
+-- intentionally not mirrored here (DuckDB macros can't be variadic);
+-- direct-column callers stay native-only.
 
 -- ---- irate_lag: emulates the canonical Rust UDF on the wasm side ----
 -- Native registers a vscalar UDF in /work/metriken/metriken-query-sql/src/udf.rs
