@@ -5,8 +5,9 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::viewer::promql::QueryEngine;
-use crate::viewer::tsdb::Tsdb;
+use metriken_query_sql::DuckDbBackend;
+
+use crate::viewer::sql_capture::SqlCapture;
 
 /// MCP protocol methods
 #[derive(Debug)]
@@ -60,17 +61,26 @@ impl From<&str> for McpTool {
     }
 }
 
-/// MCP server state
+/// MCP server state.
+///
+/// One shared [`DuckDbBackend`] for the lifetime of the server — it
+/// maintains its own per-source connection pool keyed by parquet
+/// path, so we don't need a separate cache.
+///
+/// `capture_cache` memoises the per-parquet metadata (interval, time
+/// range, catalog) so repeated tool calls against the same file
+/// don't re-read parquet KV. `Arc<SqlCapture>` is cheap to clone
+/// across handler invocations.
 pub struct Server {
-    tsdb_cache: Arc<RwLock<HashMap<String, Arc<Tsdb>>>>,
-    query_engine_cache: Arc<RwLock<HashMap<String, Arc<QueryEngine>>>>,
+    backend: Arc<DuckDbBackend>,
+    capture_cache: Arc<RwLock<HashMap<String, Arc<SqlCapture>>>>,
 }
 
 impl Server {
     pub fn new() -> Self {
         Self {
-            tsdb_cache: Arc::new(RwLock::new(HashMap::new())),
-            query_engine_cache: Arc::new(RwLock::new(HashMap::new())),
+            backend: Arc::new(DuckDbBackend::new()),
+            capture_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -175,7 +185,7 @@ impl Server {
                             },
                             {
                                 "name": "analyze_correlation",
-                                "description": "Analyze correlation between two metrics using PromQL",
+                                "description": "Analyze correlation between two metrics. Each metric is either a bare metric name (auto-resolved to the canonical rate/sum/quantile SQL based on its kind) or a full DuckDB SQL string projecting `t DOUBLE, v DOUBLE`.",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -185,11 +195,11 @@ impl Server {
                                         },
                                         "metric1": {
                                             "type": "string",
-                                            "description": "First metric PromQL expression"
+                                            "description": "First metric name or DuckDB SQL"
                                         },
                                         "metric2": {
                                             "type": "string",
-                                            "description": "Second metric PromQL expression"
+                                            "description": "Second metric name or DuckDB SQL"
                                         }
                                     },
                                     "required": ["parquet_file", "metric1", "metric2"]
@@ -211,7 +221,7 @@ impl Server {
                             },
                             {
                                 "name": "detect_anomalies",
-                                "description": "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis. IMPORTANT: Call describe_metrics first to see available metrics and labels before constructing your query. The query must result in a SINGLE time series - use sum() to aggregate multiple series.",
+                                "description": "Detect anomalies using MAD, CUSUM, and Allan/Hadamard stability analysis. Call describe_metrics first to discover available metric names. The query collapses to a single time series.",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -221,7 +231,7 @@ impl Server {
                                         },
                                         "query": {
                                             "type": "string",
-                                            "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use rate() to get per-second rates, e.g., 'sum(rate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output."
+                                            "description": "Bare metric name (auto-resolved to canonical SQL — counter → sum of irate_1s, gauge → sum, histogram → p99) or full DuckDB SQL projecting `t DOUBLE, v DOUBLE`."
                                         }
                                     },
                                     "required": ["parquet_file", "query"]
@@ -229,7 +239,7 @@ impl Server {
                             },
                             {
                                 "name": "query",
-                                "description": "Execute a PromQL query and return results as JSON. Returns Prometheus-compatible format with resultType (vector/matrix/scalar) and result data. Use describe_metrics first to see available metrics and their types. Results can be used programmatically by other tools.",
+                                "description": "Execute a DuckDB SQL query against the recording (exposed as `_src`). Returns Prometheus-shaped matrix JSON when the projection has `t`/`v` columns; otherwise returns the empty-matrix response. Shared macros (irate_1s, rate_5m, hist_p99, …) are pre-registered.",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -239,7 +249,7 @@ impl Server {
                                         },
                                         "query": {
                                             "type": "string",
-                                            "description": "PromQL query expression. For COUNTERS use rate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
+                                            "description": "DuckDB SQL string projecting `t DOUBLE, v <numeric>, labels...`. The parquet is exposed as `_src`."
                                         }
                                     },
                                     "required": ["parquet_file", "query"]
@@ -478,66 +488,37 @@ impl Server {
             .get("parquet_file")
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
-
-        let path = Path::new(parquet_file);
-        if !path.exists() {
-            return Err(format!("Parquet file not found: {parquet_file}").into());
-        }
-
-        let tsdb = Arc::new(Tsdb::load(path)?);
-
-        use crate::viewer::promql::QueryEngine;
-        let engine = QueryEngine::new(Arc::clone(&tsdb));
-
-        let output = super::format_recording_info(parquet_file, &tsdb, &engine);
-        Ok(output)
+        let capture = self.get_capture(parquet_file).await?;
+        Ok(super::format_recording_info_sql(parquet_file, &capture))
     }
 
-    /// Load or get cached TSDB
-    async fn get_tsdb(&self, parquet_file: &str) -> Result<Arc<Tsdb>, Box<dyn std::error::Error>> {
-        {
-            let cache = self.tsdb_cache.read().unwrap();
-            if let Some(tsdb) = cache.get(parquet_file) {
-                return Ok(Arc::clone(tsdb));
-            }
-        }
-
-        let path = Path::new(parquet_file);
-        if !path.exists() {
-            return Err(format!("Parquet file not found: {parquet_file}").into());
-        }
-
-        let tsdb = Arc::new(Tsdb::load(path)?);
-
-        {
-            let mut cache = self.tsdb_cache.write().unwrap();
-            cache.insert(parquet_file.to_string(), Arc::clone(&tsdb));
-        }
-
-        Ok(tsdb)
-    }
-
-    /// Load or get cached QueryEngine
-    async fn get_query_engine(
+    /// Load or get cached `SqlCapture` for a parquet path.
+    /// Centralises the existence check + the eager metadata read, so
+    /// every handler can rely on a warm capture.
+    async fn get_capture(
         &self,
         parquet_file: &str,
-    ) -> Result<Arc<QueryEngine>, Box<dyn std::error::Error>> {
+    ) -> Result<Arc<SqlCapture>, Box<dyn std::error::Error>> {
         {
-            let cache = self.query_engine_cache.read().unwrap();
-            if let Some(engine) = cache.get(parquet_file) {
-                return Ok(Arc::clone(engine));
+            let cache = self.capture_cache.read().unwrap();
+            if let Some(cap) = cache.get(parquet_file) {
+                return Ok(Arc::clone(cap));
             }
         }
-
-        let tsdb = self.get_tsdb(parquet_file).await?;
-        let engine = Arc::new(QueryEngine::new(tsdb));
-
-        {
-            let mut cache = self.query_engine_cache.write().unwrap();
-            cache.insert(parquet_file.to_string(), Arc::clone(&engine));
+        let path = Path::new(parquet_file);
+        if !path.exists() {
+            return Err(format!("Parquet file not found: {parquet_file}").into());
         }
-
-        Ok(engine)
+        // Reuse the shared backend so the parquet's per-source pool
+        // warms once and stays warm across handlers.
+        let capture = SqlCapture::open(path, &self.backend)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        let arc = Arc::new(capture);
+        {
+            let mut cache = self.capture_cache.write().unwrap();
+            cache.insert(parquet_file.to_string(), Arc::clone(&arc));
+        }
+        Ok(arc)
     }
 
     /// Analyze correlation between two metrics
@@ -549,23 +530,23 @@ impl Server {
             .get("parquet_file")
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
-
         let metric1 = arguments
             .get("metric1")
             .and_then(|m| m.as_str())
             .ok_or("Missing metric1")?;
-
         let metric2 = arguments
             .get("metric2")
             .and_then(|m| m.as_str())
             .ok_or("Missing metric2")?;
 
-        let tsdb = self.get_tsdb(parquet_file).await?;
-        let engine = self.get_query_engine(parquet_file).await?;
+        let capture = self.get_capture(parquet_file).await?;
+        let sql1 = super::resolve_query_to_sql(&capture, metric1)
+            .ok_or_else(|| format!("metric1 '{metric1}' is not a recognised metric and doesn't look like SQL"))?;
+        let sql2 = super::resolve_query_to_sql(&capture, metric2)
+            .ok_or_else(|| format!("metric2 '{metric2}' is not a recognised metric and doesn't look like SQL"))?;
 
-        use crate::mcp::correlation::{calculate_correlation, format_correlation_result};
-
-        let result = calculate_correlation(&engine, &tsdb, metric1, metric2)?;
+        use crate::mcp::correlation::{calculate_correlation_sql, format_correlation_result};
+        let result = calculate_correlation_sql(&self.backend, &capture, &sql1, &sql2)?;
         Ok(format_correlation_result(&result))
     }
 
@@ -578,11 +559,10 @@ impl Server {
             .get("parquet_file")
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
-
-        let tsdb = self.get_tsdb(parquet_file).await?;
-
-        use crate::mcp::describe_metrics::format_metrics_description;
-        Ok(format_metrics_description(&tsdb))
+        let capture = self.get_capture(parquet_file).await?;
+        Ok(crate::mcp::describe_metrics::format_metrics_description_sql(
+            &capture,
+        ))
     }
 
     /// Detect anomalies in time series data
@@ -594,48 +574,51 @@ impl Server {
             .get("parquet_file")
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
-
         let query = arguments
             .get("query")
             .and_then(|q| q.as_str())
             .ok_or("Missing query")?;
 
-        let tsdb = self.get_tsdb(parquet_file).await?;
-        let engine = self.get_query_engine(parquet_file).await?;
-
-        use crate::mcp::anomaly_detection::{detect_anomalies, format_anomaly_detection_result};
-
-        let result = detect_anomalies(&engine, &tsdb, query)?;
+        let capture = self.get_capture(parquet_file).await?;
+        let result = super::detect_anomalies_for_input(&self.backend, &capture, query)?;
+        use crate::mcp::anomaly_detection::format_anomaly_detection_result;
         Ok(format_anomaly_detection_result(&result))
     }
 
-    /// Execute a PromQL query and return results as JSON
+    /// Execute a DuckDB SQL query and return results as Prometheus-
+    /// matrix JSON. The SQL is expected to project `t DOUBLE, v
+    /// <numeric>, labels...` — `crates/prom-matrix` converts the
+    /// Arrow output to the canonical resultType-shaped JSON the AI
+    /// agent reads.
     async fn execute_query(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
         let parquet_file = arguments
             .get("parquet_file")
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
-
         let query = arguments
             .get("query")
             .and_then(|q| q.as_str())
             .ok_or("Missing query")?;
 
-        let engine = self.get_query_engine(parquet_file).await?;
-
-        let (start_time, end_time) = engine.get_time_range();
-        let step = 1.0;
-
-        let result = engine.query_range(query, start_time, end_time, step)?;
-
-        Ok(serde_json::to_string_pretty(&result)?)
+        let capture = self.get_capture(parquet_file).await?;
+        let path_str = capture.parquet_path().to_string_lossy().to_string();
+        let batches = self.backend.run_sql(query, &path_str)?;
+        Ok(prom_matrix::arrow_to_prom_matrix(&batches))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::viewer::promql::QueryResult;
+    use std::path::PathBuf;
+
+    fn demo_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("site")
+            .join("viewer")
+            .join("data")
+            .join("demo.parquet")
+    }
 
     #[test]
     fn test_mcp_tool_from_str_query() {
@@ -673,61 +656,78 @@ mod tests {
         let server = Server::new();
         let args = json!({
             "parquet_file": "/nonexistent/file.parquet",
-            "query": "cpu_cores"
+            "query": "SELECT 1"
         });
         let result = server.execute_query(&args).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_query_result_scalar_json_format() {
-        let result = QueryResult::Scalar {
-            result: (1704067200.0, 42.0),
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"resultType\":\"scalar\""));
-        assert!(json.contains("\"result\":[1704067200.0,42.0]"));
+    /// `execute_query` returns Prometheus-shaped matrix JSON when the
+    /// SQL projection has `t`/`v` columns. Pinned to lock the
+    /// contract between the MCP server and AI agent consumers:
+    /// `resultType` is `matrix`, and the `result` array carries one
+    /// entry per series.
+    #[tokio::test]
+    async fn test_execute_query_returns_prom_matrix_json() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let server = Server::new();
+        let args = json!({
+            "parquet_file": path.to_string_lossy(),
+            "query": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, \"cpu_cores\"::DOUBLE AS v FROM _src LIMIT 3",
+        });
+        let response = server.execute_query(&args).await.expect("execute query");
+        assert!(
+            response.contains("\"resultType\":\"matrix\""),
+            "expected resultType:matrix in: {response}",
+        );
+        // The single-series projection should have one `result` entry.
+        assert!(response.contains("\"result\""), "no result field: {response}");
     }
 
-    #[test]
-    fn test_query_result_vector_json_format() {
-        use crate::viewer::promql::Sample;
-        use std::collections::HashMap;
-
-        let mut metric = HashMap::new();
-        metric.insert("__name__".to_string(), "cpu_cores".to_string());
-
-        let result = QueryResult::Vector {
-            result: vec![Sample {
-                metric,
-                value: (1704067200.0, 4.0),
-            }],
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"resultType\":\"vector\""));
-        assert!(json.contains("\"result\""));
-        assert!(json.contains("\"metric\""));
-        assert!(json.contains("\"value\""));
+    /// Empty result projection still returns valid Prometheus matrix
+    /// JSON (the canonical empty-matrix response) rather than
+    /// erroring. Pinned to match the file-mode viewer's
+    /// `/api/v1/query_range` UX.
+    #[tokio::test]
+    async fn test_execute_query_empty_result_returns_empty_matrix() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let server = Server::new();
+        let args = json!({
+            "parquet_file": path.to_string_lossy(),
+            "query": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, NULL AS v FROM _src WHERE FALSE",
+        });
+        let response = server.execute_query(&args).await.expect("execute query");
+        assert!(
+            response.contains("\"resultType\":\"matrix\""),
+            "expected resultType:matrix even when empty: {response}",
+        );
     }
 
-    #[test]
-    fn test_query_result_matrix_json_format() {
-        use crate::viewer::promql::MatrixSample;
-        use std::collections::HashMap;
-
-        let mut metric = HashMap::new();
-        metric.insert("__name__".to_string(), "cpu_cycles".to_string());
-
-        let result = QueryResult::Matrix {
-            result: vec![MatrixSample {
-                metric,
-                values: vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
-            }],
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"resultType\":\"matrix\""));
-        assert!(json.contains("\"result\""));
-        assert!(json.contains("\"metric\""));
-        assert!(json.contains("\"values\""));
+    /// describe_recording produces the standard "Recording Information"
+    /// header for an existing parquet. End-to-end check that the
+    /// SqlCapture-backed handler path returns sensible output.
+    #[tokio::test]
+    async fn test_describe_recording_returns_metadata() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let server = Server::new();
+        let args = json!({ "parquet_file": path.to_string_lossy() });
+        let response = server
+            .describe_recording(&args)
+            .await
+            .expect("describe_recording");
+        assert!(response.contains("Recording Information"), "missing header: {response}");
+        assert!(response.contains("Source: rezolus"), "missing source: {response}");
     }
 }

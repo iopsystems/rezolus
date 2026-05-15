@@ -18,13 +18,14 @@ use std::time::{Duration, Instant};
 mod agent;
 mod exporter;
 mod hindsight;
-// MCP still depends on the legacy Tsdb + PromQL engine; gate its
-// compilation behind `live-mode` until it's migrated to
-// SqlCapture/DuckDB (separate stage). `parquet_tools` itself stays
-// unconditional — the `combine` submodule is shared with `recorder`
-// and the viewer's A/B extraction; only `parquet annotate` (Tsdb-
-// flavoured KPI validation) is gated, inside the submodule.
-#[cfg(feature = "live-mode")]
+// MCP runs against parquet files via `metriken_query_sql::DuckDbBackend`
+// (post-May-2026 migration). It builds unconditionally and is
+// available in both default and `sql-only` builds. Legacy Tsdb/PromQL
+// entry points inside `src/mcp/` remain cfg-gated to `live-mode`
+// until a separate audit PR deletes them. `parquet_tools` itself
+// stays unconditional — the `combine` submodule is shared with
+// `recorder` and the viewer's A/B extraction; only `parquet annotate`
+// (Tsdb-flavoured KPI validation) is gated, inside the submodule.
 mod mcp;
 mod parquet_metadata;
 mod parquet_tools;
@@ -85,10 +86,8 @@ fn main() {
         .subcommand(hindsight::command())
         .subcommand(parquet_tools::command())
         .subcommand(recorder::command())
-        .subcommand(viewer::command());
-
-    #[cfg(feature = "live-mode")]
-    let cli = cli.subcommand(mcp::command());
+        .subcommand(viewer::command())
+        .subcommand(mcp::command());
 
     let cli = cli.get_matches();
 
@@ -108,7 +107,6 @@ fn main() {
 
             hindsight::run(config)
         }
-        #[cfg(feature = "live-mode")]
         Some(("mcp", args)) => {
             let config = mcp::Config::try_from(args.clone()).expect("failed to configure");
 

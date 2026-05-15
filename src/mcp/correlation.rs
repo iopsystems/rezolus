@@ -1,7 +1,14 @@
-use crate::viewer::promql::{MatrixSample, QueryEngine, QueryResult};
+use crate::mcp::backend::Series;
+// Legacy PromQL/Tsdb path — `calculate_correlation` and
+// `extract_matrix_samples` are cfg-gated to `live-mode` below. Once
+// no caller exists, this whole legacy entry point can be deleted.
+#[cfg(feature = "live-mode")]
+use crate::viewer::promql::{QueryEngine, QueryResult};
+#[cfg(feature = "live-mode")]
 use crate::viewer::tsdb::Tsdb;
 use rayon::prelude::*;
 use std::collections::HashMap;
+#[cfg(feature = "live-mode")]
 use std::sync::Arc;
 
 // Fixed time intervals optimized for system performance analysis
@@ -60,6 +67,7 @@ pub struct SeriesCorrelation {
 /// The time range and step are determined automatically from the underlying TSDB.
 ///
 /// Note: Use describe_metrics tool to identify counter vs gauge metrics.
+#[cfg(feature = "live-mode")]
 pub fn calculate_correlation(
     engine: &Arc<QueryEngine>,
     tsdb: &Arc<Tsdb>,
@@ -79,85 +87,13 @@ pub fn calculate_correlation(
         return Err("No data returned from queries".into());
     }
 
-    // Calculate cross-correlations between all series pairs in parallel
-    let series_results: Vec<_> = samples1
-        .par_iter()
-        .flat_map(|s1| {
-            samples2.par_iter().filter_map(move |s2| {
-                calculate_series_cross_correlation(s1, s2, step).map(|corr| {
-                    (
-                        SeriesCorrelation {
-                            labels1: s1.metric.clone(),
-                            labels2: s2.metric.clone(),
-                            max_correlation: corr.max_correlation,
-                            optimal_lag: corr.optimal_lag,
-                            sample_count: corr.sample_count,
-                        },
-                        (corr.max_correlation, corr.optimal_lag, corr.sample_count),
-                    )
-                })
-            })
-        })
-        .collect();
-
-    let mut series_pairs: Vec<SeriesCorrelation> = Vec::new();
-    let mut all_correlations: Vec<(f64, i64, usize)> = Vec::new();
-
-    for (series_corr, corr_tuple) in series_results {
-        series_pairs.push(series_corr);
-        all_correlations.push(corr_tuple);
-    }
-
-    if all_correlations.is_empty() {
-        return Err("No valid correlations found (insufficient overlapping data)".into());
-    }
-
-    // Find the best overall correlation (highest absolute value)
-    let (max_correlation, optimal_lag, total_samples) = if all_correlations.len() == 1 {
-        all_correlations[0]
-    } else {
-        // For multiple series pairs, find the strongest correlation
-        all_correlations
-            .iter()
-            .max_by(|a, b| {
-                a.0.abs()
-                    .partial_cmp(&b.0.abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .cloned()
-            .unwrap_or((0.0, 0, 0))
-    };
-
-    let correlations_at_lag = if samples1.len() == 1 && samples2.len() == 1 {
-        calculate_lag_correlations(&samples1[0], &samples2[0], step)
-    } else {
-        vec![]
-    };
-
-    series_pairs.sort_by(|a, b| {
-        b.max_correlation
-            .abs()
-            .partial_cmp(&a.max_correlation.abs())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    Ok(CorrelationResult {
-        metric1: expr1.to_string(),
-        metric2: expr2.to_string(),
-        metric1_name: Some(expr1.to_string()),
-        metric2_name: Some(expr2.to_string()),
-        max_correlation,
-        optimal_lag,
-        sample_count: total_samples,
-        correlations_at_lag,
-        series_pairs,
-    })
+    correlate_samples(samples1, samples2, expr1, expr2, step)
 }
 
 /// Calculate cross-correlation between two specific time series
 fn calculate_series_cross_correlation(
-    series1: &MatrixSample,
-    series2: &MatrixSample,
+    series1: &Series,
+    series2: &Series,
     step: f64,
 ) -> Option<CrossCorrelationResult> {
     let data1 = prepare_series_data(series1);
@@ -243,7 +179,7 @@ struct CrossCorrelationResult {
 }
 
 /// Prepare time series data by normalizing and detrending
-fn prepare_series_data(series: &MatrixSample) -> Vec<f64> {
+fn prepare_series_data(series: &Series) -> Vec<f64> {
     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
 
     if values.is_empty() {
@@ -368,8 +304,8 @@ fn calculate_correlation_at_lag(data1: &[f64], data2: &[f64], lag: i64) -> Optio
 
 /// Calculate correlations at multiple lags for display
 fn calculate_lag_correlations(
-    series1: &MatrixSample,
-    series2: &MatrixSample,
+    series1: &Series,
+    series2: &Series,
     step: f64,
 ) -> Vec<LagCorrelation> {
     let data1 = prepare_series_data(series1);
@@ -414,25 +350,32 @@ fn calculate_lag_correlations(
 }
 
 /// Extract matrix samples from a query result
+#[cfg(feature = "live-mode")]
 fn extract_matrix_samples(
     result: &QueryResult,
-) -> Result<Vec<MatrixSample>, Box<dyn std::error::Error>> {
+) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
     match result {
-        QueryResult::Matrix { result } => Ok(result.clone()),
+        QueryResult::Matrix { result } => Ok(result
+            .iter()
+            .map(|m| Series {
+                labels: m.metric.clone(),
+                values: m.values.clone(),
+            })
+            .collect()),
         QueryResult::Vector { result } => {
             // Convert vector to single-sample matrix
             Ok(result
                 .iter()
-                .map(|s| MatrixSample {
-                    metric: s.metric.clone(),
+                .map(|s| Series {
+                    labels: s.metric.clone(),
                     values: vec![s.value],
                 })
                 .collect())
         }
         QueryResult::Scalar { result } => {
             // Convert scalar to single-sample matrix
-            Ok(vec![MatrixSample {
-                metric: HashMap::new(),
+            Ok(vec![Series {
+                labels: HashMap::new(),
                 values: vec![*result],
             }])
         }
@@ -445,6 +388,118 @@ fn extract_matrix_samples(
             )
         }
     }
+}
+
+/// SQL-backed entry point parallel to [`calculate_correlation`].
+/// Mirrors the legacy signature but takes a backend + capture + two
+/// SQL strings (each must project `t DOUBLE, v <numeric>, labels...`).
+/// Empty SQL inputs or queries that produce no rows return the same
+/// "no data" error the PromQL path emits.
+pub fn calculate_correlation_sql(
+    backend: &metriken_query_sql::DuckDbBackend,
+    capture: &crate::viewer::sql_capture::SqlCapture,
+    sql1: &str,
+    sql2: &str,
+) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
+    use dashboard::DashboardData;
+
+    let path_str = capture.parquet_path().to_string_lossy().to_string();
+    let step = capture.interval();
+
+    let batches1 = backend.run_sql(sql1, &path_str)?;
+    let batches2 = backend.run_sql(sql2, &path_str)?;
+
+    let samples1 = crate::mcp::backend::batches_to_series(&batches1);
+    let samples2 = crate::mcp::backend::batches_to_series(&batches2);
+
+    if samples1.is_empty() || samples2.is_empty() {
+        return Err("No data returned from queries".into());
+    }
+
+    correlate_samples(samples1, samples2, sql1, sql2, step)
+}
+
+/// Shared correlation body. Used by both the legacy PromQL entry
+/// point ([`calculate_correlation`]) — which translates QueryResult
+/// → `Vec<Series>` via [`extract_matrix_samples`] — and the SQL
+/// entry point ([`calculate_correlation_sql`]) — which gets
+/// `Vec<Series>` directly from `batches_to_series`. The algorithm
+/// is identical because `Series` and the legacy `MatrixSample`
+/// share the same `{labels, values}` shape.
+fn correlate_samples(
+    samples1: Vec<Series>,
+    samples2: Vec<Series>,
+    expr1: &str,
+    expr2: &str,
+    step: f64,
+) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
+    let series_results: Vec<_> = samples1
+        .par_iter()
+        .flat_map(|s1| {
+            samples2.par_iter().filter_map(move |s2| {
+                calculate_series_cross_correlation(s1, s2, step).map(|corr| {
+                    (
+                        SeriesCorrelation {
+                            labels1: s1.labels.clone(),
+                            labels2: s2.labels.clone(),
+                            max_correlation: corr.max_correlation,
+                            optimal_lag: corr.optimal_lag,
+                            sample_count: corr.sample_count,
+                        },
+                        (corr.max_correlation, corr.optimal_lag, corr.sample_count),
+                    )
+                })
+            })
+        })
+        .collect();
+
+    let mut series_pairs: Vec<SeriesCorrelation> = Vec::new();
+    let mut all_correlations: Vec<(f64, i64, usize)> = Vec::new();
+    for (series_corr, corr_tuple) in series_results {
+        series_pairs.push(series_corr);
+        all_correlations.push(corr_tuple);
+    }
+    if all_correlations.is_empty() {
+        return Err("No valid correlations found (insufficient overlapping data)".into());
+    }
+    let (max_correlation, optimal_lag, total_samples) = if all_correlations.len() == 1 {
+        all_correlations[0]
+    } else {
+        all_correlations
+            .iter()
+            .max_by(|a, b| {
+                a.0.abs()
+                    .partial_cmp(&b.0.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned()
+            .unwrap_or((0.0, 0, 0))
+    };
+
+    let correlations_at_lag = if samples1.len() == 1 && samples2.len() == 1 {
+        calculate_lag_correlations(&samples1[0], &samples2[0], step)
+    } else {
+        vec![]
+    };
+
+    series_pairs.sort_by(|a, b| {
+        b.max_correlation
+            .abs()
+            .partial_cmp(&a.max_correlation.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(CorrelationResult {
+        metric1: expr1.to_string(),
+        metric2: expr2.to_string(),
+        metric1_name: Some(expr1.to_string()),
+        metric2_name: Some(expr2.to_string()),
+        max_correlation,
+        optimal_lag,
+        sample_count: total_samples,
+        correlations_at_lag,
+        series_pairs,
+    })
 }
 
 /// Format correlation result for display

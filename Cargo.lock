@@ -3214,6 +3214,7 @@ dependencies = [
  "arrow",
  "bytes",
  "metriken-query",
+ "metriken-query-sql",
  "parquet",
  "serde",
  "serde_json",

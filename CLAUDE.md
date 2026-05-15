@@ -15,7 +15,9 @@ cargo build
 # Build (release)
 cargo build --release
 
-# Build SQL-only — drops live-agent mode + MCP, no metriken-query in dep tree.
+# Build SQL-only — drops live-agent mode. MCP is included (post-May-2026
+# migration onto DuckDbBackend). Legacy metriken-query (Tsdb + PromQL) is
+# not in the dep tree.
 # Verify with `cargo tree -p rezolus --no-default-features --features sql-only`.
 cargo build --bin rezolus --no-default-features --features sql-only
 
@@ -87,16 +89,18 @@ target/release/rezolus parquet annotate file.parquet                # add servic
 target/release/rezolus parquet annotate file.parquet --queries ext.json
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet
 
-# MCP - AI analysis server or CLI commands. STILL ON PromQL/Tsdb — the
-# Tsdb→DuckDB migration is deferred for MCP and gated by the `live-mode`
-# feature. Building --no-default-features --features sql-only excludes MCP.
+# MCP - AI analysis server or CLI commands. Runs against parquet files via
+# metriken_query_sql::DuckDbBackend (post-May-2026 migration). Built in
+# both default and sql-only configurations. `query` takes DuckDB SQL;
+# `detect-anomalies` and `analyze-correlation` accept either a bare metric
+# name (auto-resolved to canonical rate/sum/quantile SQL) or full SQL.
 target/release/rezolus mcp                                                    # stdio server
 target/release/rezolus mcp describe-recording file.parquet                    # describe recording
 target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
 target/release/rezolus mcp detect-anomalies file.parquet                      # exhaustive anomaly detection
-target/release/rezolus mcp detect-anomalies file.parquet "cpu_usage"          # targeted anomaly detection
-target/release/rezolus mcp query file.parquet "sum(rate(cpu_cycles[1m]))"     # PromQL (will become SQL post-migration)
-target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
+target/release/rezolus mcp detect-anomalies file.parquet cpu_usage            # targeted anomaly detection (bare metric name)
+target/release/rezolus mcp query file.parquet "SELECT count(*) FROM _src"     # DuckDB SQL
+target/release/rezolus mcp analyze-correlation file.parquet cpu_cycles cpu_instructions
 ```
 
 ## Architecture
@@ -126,8 +130,14 @@ The binary operates in seven modes via subcommands:
    - Service-extension KPI sections still ship PromQL-only templates pending
      transcription — see REVIEWING.md for the deferred work list.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation,
-   PromQL queries). Still on `Tsdb`+PromQL; migration deferred. Gated by
-   the `live-mode` feature.
+   SQL queries). Runs against parquet files via
+   `metriken_query_sql::DuckDbBackend` after the May-2026 migration. The
+   helper module `src/mcp/backend.rs` owns parquet opening
+   (`open_capture`), Arrow → series projection (`batches_to_series`), and
+   SQL builders for the three metric kinds (`counter_sum_rate_sql`,
+   `gauge_sum_sql`, `histogram_quantile_sql`). Legacy Tsdb/PromQL entry
+   points within the module are cfg-gated to `live-mode` until they're
+   audited and deleted.
 7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata`
    (inspect), `annotate` (validates KPIs by running their SQL through
    `DuckDbBackend`; KPIs without `sql` are marked unavailable),
@@ -218,8 +228,8 @@ zero or more label columns.
 
 - `metriken` - Metric registration core (unconditional)
 - `metriken-exposition` - Snapshot serialization and msgpack-to-parquet conversion (unconditional)
-- `metriken-query-sql` - DuckDB-backed SQL engine: `DuckDbBackend::run_sql`, `describe_parquet`, `MetricCatalog`. The server viewer's primary query engine.
-- `metriken-query` - Legacy in-memory `Tsdb` + PromQL engine. **Optional dep behind `live-mode` feature** — pulled in only when live-agent mode or MCP is compiled in.
+- `metriken-query-sql` - DuckDB-backed SQL engine: `DuckDbBackend::run_sql`, `describe_parquet`, `MetricCatalog`. The query engine for the server viewer **and** the MCP CLI/server.
+- `metriken-query` - Legacy in-memory `Tsdb` + PromQL engine. **Optional dep behind `live-mode` feature** — pulled in only when the live-agent ingest path is compiled in. MCP no longer requires it post-May-2026.
 - `libbpf-rs` / `libbpf-cargo` - eBPF program management (Linux)
 - `axum` - HTTP server
 - `tokio` - Async runtime

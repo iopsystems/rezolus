@@ -1,8 +1,15 @@
+// Legacy PromQL/Tsdb path. The legacy `detect_anomalies` and its
+// supporting helpers are cfg-gated below. The SQL pipeline goes
+// through `analyze_time_series` (always available) called by the
+// orchestration code in `src/mcp/mod.rs`.
+#[cfg(feature = "live-mode")]
 use crate::viewer::promql::{QueryEngine, QueryResult};
+#[cfg(feature = "live-mode")]
 use crate::viewer::tsdb::Tsdb;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(feature = "live-mode")]
 use std::sync::Arc;
 
 mod cusum;
@@ -59,6 +66,7 @@ pub enum AnomalySeverity {
 }
 
 /// Validate and fix common query issues
+#[cfg(feature = "live-mode")]
 fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Error>> {
     // Check for rate/irate/increase/delta/deriv functions that require range vectors
     let range_vector_functions = [
@@ -159,6 +167,7 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
 }
 
 /// Extract metric name from a query string
+#[cfg(feature = "live-mode")]
 fn extract_metric_name(query: &str) -> Option<&str> {
     // Try to find metric name in various query patterns
 
@@ -193,6 +202,7 @@ fn extract_metric_name(query: &str) -> Option<&str> {
 }
 
 /// Show available labels for a metric
+#[cfg(feature = "live-mode")]
 fn show_available_labels(
     output: &mut String,
     metric_name: &str,
@@ -272,6 +282,7 @@ fn show_available_labels(
 
 /// Automatically construct appropriate query based on metric type
 /// If query is just a metric name, construct the right query for its type
+#[cfg(feature = "live-mode")]
 fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std::error::Error>> {
     let query = query.trim();
 
@@ -323,7 +334,10 @@ fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std:
     }
 }
 
-/// Perform anomaly detection on a time series
+/// Perform anomaly detection on a time series (legacy PromQL/Tsdb
+/// path). The SQL entry point is
+/// `crate::mcp::detect_anomalies_for_input`.
+#[cfg(feature = "live-mode")]
 pub fn detect_anomalies(
     engine: &Arc<QueryEngine>,
     tsdb: &Arc<Tsdb>,
@@ -469,6 +483,101 @@ pub fn detect_anomalies(
 
     let (timestamps, values) = extract_time_series(&query_result, &query)?;
 
+    analyze_time_series_or_help(&query, tsdb, timestamps, values, step)
+}
+
+/// Run the statistical analyses (Allan/Hadamard/MAD/CUSUM) on
+/// `(timestamps, values)` and assemble the `AnomalyDetectionResult`.
+/// Shared between the legacy PromQL path ([`detect_anomalies`]) and
+/// the SQL path ([`detect_anomalies_sql`]). `query_label` is recorded
+/// on the result for user-facing display; `step` is the sampling
+/// interval in seconds.
+pub fn analyze_time_series(
+    query_label: String,
+    timestamps: Vec<f64>,
+    values: Vec<f64>,
+    step: f64,
+) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
+    if values.is_empty() {
+        return Err(
+            "No data points to analyze. The query returned an empty time series.".into(),
+        );
+    }
+
+    // Allan/Hadamard/Modified Allan determine the noise type + optimal
+    // smoothing window.
+    let allan_analysis = stability::perform_allan_analysis(&values, step)?;
+    let hadamard_analysis = stability::perform_hadamard_analysis(&values, step)?;
+    let modified_allan_analysis = stability::perform_modified_allan_analysis(&values, step)?;
+
+    let allan_window = if !allan_analysis.minima.is_empty() {
+        allan_analysis.minima[0].tau_seconds
+    } else {
+        match allan_analysis.noise_type {
+            NoiseType::WhitePhase | NoiseType::FlickerPhase => 15.0 * step,
+            NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 30.0 * step,
+            NoiseType::RandomWalk | NoiseType::FlickerWalk => 60.0 * step,
+            NoiseType::Unknown => 30.0,
+        }
+    };
+
+    let (smoothed_values, smoothing_window) =
+        apply_allan_smoothing(&values, &allan_analysis, step);
+    let use_smoothed = smoothing_window > 0.0;
+    let analysis_values = if use_smoothed { &smoothed_values } else { &values };
+
+    let mad_threshold = match allan_analysis.noise_type {
+        NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0,
+        NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 5.0,
+        NoiseType::RandomWalk | NoiseType::FlickerWalk => 6.5,
+        NoiseType::Unknown => 5.0,
+    };
+    let mad_analysis = mad::perform_mad_analysis(analysis_values, mad_threshold)?;
+    let cusum_analysis =
+        cusum::perform_cusum_analysis_with_allan(&values, step, allan_window, &allan_analysis)?;
+
+    let anomalies = identify_anomalies(
+        &timestamps,
+        analysis_values,
+        &mad_analysis,
+        &cusum_analysis,
+        &allan_analysis,
+        &hadamard_analysis,
+        &modified_allan_analysis,
+    );
+    let confidence_score = calculate_confidence_score(&anomalies, values.len());
+    let total_points = values.len();
+
+    Ok(AnomalyDetectionResult {
+        query: query_label,
+        total_points,
+        timestamps,
+        values,
+        smoothed_values: if use_smoothed { Some(smoothed_values) } else { None },
+        smoothing_window: if use_smoothed { Some(smoothing_window) } else { None },
+        mad_analysis,
+        cusum_analysis,
+        allan_analysis,
+        hadamard_analysis,
+        modified_allan_analysis,
+        anomalies,
+        confidence_score,
+    })
+}
+
+/// Wrap [`analyze_time_series`] with the legacy path's "empty result"
+/// helpful-error branch — pre-existing behaviour that surfaces label
+/// hints when a query returns no data. The SQL path uses
+/// [`analyze_time_series`] directly because its error UX is different
+/// (the SQL engine surfaces binder errors with column names).
+#[cfg(feature = "live-mode")]
+fn analyze_time_series_or_help(
+    query: &str,
+    tsdb: &Arc<Tsdb>,
+    timestamps: Vec<f64>,
+    values: Vec<f64>,
+    step: f64,
+) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
     if values.is_empty() {
         // No data - might be invalid label selector
         // Try to provide helpful error message with valid labels
@@ -518,99 +627,11 @@ pub fn detect_anomalies(
         return Err("Query returned no data points. The metric might not exist or label selectors filtered out all series.".into());
     }
 
-    // Perform Allan Deviation analysis - this determines optimal smoothing window
-    let allan_analysis = stability::perform_allan_analysis(&values, step)?;
-
-    // Perform Hadamard Deviation analysis
-    let hadamard_analysis = stability::perform_hadamard_analysis(&values, step)?;
-
-    // Perform Modified Allan Deviation analysis
-    let modified_allan_analysis = stability::perform_modified_allan_analysis(&values, step)?;
-
-    // Extract Allan-determined window for both smoothing and change-point detection
-    let allan_window = if !allan_analysis.minima.is_empty() {
-        allan_analysis.minima[0].tau_seconds
-    } else {
-        // Fallback based on noise type
-        match allan_analysis.noise_type {
-            NoiseType::WhitePhase | NoiseType::FlickerPhase => 15.0 * step,
-            NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 30.0 * step,
-            NoiseType::RandomWalk | NoiseType::FlickerWalk => 60.0 * step,
-            NoiseType::Unknown => 30.0,
-        }
-    };
-
-    // Apply Allan-based smoothing to reduce spike noise and detect regime shifts
-    let (smoothed_values, smoothing_window) = apply_allan_smoothing(&values, &allan_analysis, step);
-
-    // Determine if smoothing was applied (window > 0 means it was)
-    let use_smoothed = smoothing_window > 0.0;
-
-    // Run anomaly detection on smoothed data to detect regime shifts
-    // Use smoothed values for MAD and CUSUM to focus on level shifts not spikes
-    let analysis_values = if use_smoothed {
-        &smoothed_values
-    } else {
-        &values
-    };
-
-    // Perform MAD analysis with Allan-based adaptive threshold
-    // Different noise types require different sensitivity:
-    // - White/Flicker Phase: Low noise → stricter threshold (more sensitive)
-    // - Frequency noise: Medium → moderate threshold
-    // - Random Walk/drift: Expected to wander → looser threshold (less sensitive)
-    let mad_threshold = match allan_analysis.noise_type {
-        NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0, // Stricter for low-noise systems
-        NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 5.0, // Standard threshold
-        NoiseType::RandomWalk | NoiseType::FlickerWalk => 6.5,  // Looser for drifting systems
-        NoiseType::Unknown => 5.0,                              // Default conservative threshold
-    };
-    let mad_analysis = mad::perform_mad_analysis(analysis_values, mad_threshold)?;
-
-    // Perform CUSUM analysis - run on RAW values with Allan window for change-point detection
-    // Window-based change-point detection uses Allan-determined optimal window and significance
-    let cusum_analysis =
-        cusum::perform_cusum_analysis_with_allan(&values, step, allan_window, &allan_analysis)?;
-
-    // Combine analyses to identify high-confidence anomalies
-    let anomalies = identify_anomalies(
-        &timestamps,
-        analysis_values,
-        &mad_analysis,
-        &cusum_analysis,
-        &allan_analysis,
-        &hadamard_analysis,
-        &modified_allan_analysis,
-    );
-
-    let confidence_score = calculate_confidence_score(&anomalies, values.len());
-
-    Ok(AnomalyDetectionResult {
-        query: query.to_string(),
-        total_points: values.len(),
-        timestamps,
-        values,
-        smoothed_values: if use_smoothed {
-            Some(smoothed_values)
-        } else {
-            None
-        },
-        smoothing_window: if use_smoothed {
-            Some(smoothing_window)
-        } else {
-            None
-        },
-        mad_analysis,
-        cusum_analysis,
-        allan_analysis,
-        hadamard_analysis,
-        modified_allan_analysis,
-        anomalies,
-        confidence_score,
-    })
+    analyze_time_series(query.to_string(), timestamps, values, step)
 }
 
 /// Extract time series data from query result
+#[cfg(feature = "live-mode")]
 fn extract_time_series(
     result: &QueryResult,
     query: &str,
