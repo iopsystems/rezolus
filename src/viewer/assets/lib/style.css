@@ -2209,10 +2209,8 @@ main {
    ========================================================================== */
 
 @media (max-width: 1199px) {
-    .group .charts {
-        grid-template-columns: 1fr;
-    }
-
+    /* `.group .charts` lives in charts.css (loaded later); the override
+     * for that selector at this breakpoint also lives there. */
     .sysinfo-grid {
         grid-template-columns: 1fr;
     }
