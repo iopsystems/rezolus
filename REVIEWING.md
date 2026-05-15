@@ -78,6 +78,11 @@ crates/dashboard/
   data.rs             DashboardData trait — implemented by SqlCapture AND
                       (cfg(live-mode)) Tsdb. Generators read schema through
                       this; query execution is elsewhere.
+  sql.rs              16 SQL builder helpers (rate_5m_total, irate_total,
+                      hist_percentile_series, cpu_pct_total, cgroup_irate_total,
+                      …) that the per-section dashboard generators in
+                      dashboard/*.rs call to produce each plot's `sql` argument.
+                      ~130 plot call sites route through these helpers.
   service_extension.rs Kpi.sql: Option<String>  (added; templates carry None
                                                   for now — see carve-outs)
   service.rs          plot_promql_with_sql{,_full} when kpi.sql is Some;
@@ -135,7 +140,7 @@ Per-source views (`_src_<source>`) now exist on the engine side and
 128 of 218 template KPIs ship a `sql` field alongside their PromQL
 `query`. Plot bodies that need `plot.sql_query` no longer see `null`
 for gauges and counters; the SQL-only frontend renders them through
-the SQL pipeline. The remaining 100 KPIs split into histogram
+the SQL pipeline. The remaining 90 KPIs split into histogram
 percentile fan-outs (skipped pending engine-side `grouping_power`
 plumbing into the substitution layer), compound expressions
 (`A - B`, `A / B` — non-trivial to translate), regex-multi-value
@@ -210,8 +215,6 @@ auto-transcription. The remaining 90 stay PromQL-only — the
 dashboard emitter falls back to the PromQL path when `kpi.sql`
 is `None`, so live-mode and the legacy PromQL viewer continue
 to render them.
-`_src` directly for rezolus metrics. Templates remain PromQL-only
-until the architectural choice is made and the engine piece lands.
 
 ### 3. Multi-node selection doesn't filter server-side
 
@@ -266,7 +269,7 @@ entirely_.
 `metriken_query_sql::DuckDbBackend` via `SqlCapture`. `mod mcp;` is
 unconditional in `src/main.rs`; MCP builds in `--features sql-only`.
 
-New `src/mcp/backend.rs` (468 LOC) is the shared helper layer:
+New `src/mcp/backend.rs` (488 LOC) is the shared helper layer:
 
 - `open_capture(path) -> (Arc<DuckDbBackend>, SqlCapture)` —
   parquet open + warm pool, same shape the file-mode viewer uses.
