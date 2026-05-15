@@ -23,7 +23,7 @@ import { resolveStyle, resolvedStyle } from './metric_types.js';
 import { eventsStore } from '../events_store.js';
 import { buildMarkLine } from './event_markers.js';
 import { openEventForm, openEventDelete } from '../event_form.js';
-import { buildFreezeFooterContent } from './base.js';
+import { buildFreezeFooterContent, isEventEditingAllowed } from './base.js';
 
 
 export class ChartsState {
@@ -737,13 +737,26 @@ export class Chart {
             const description = params.data.name || '';
             this._frozenEvent = { timestamp: tsNs, description };
             this._frozenAxisNs = tsNs;
-            const pixelX = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
-            if (Number.isFinite(pixelX)) {
-                // y inside the plot area; ECharts snaps to the right
-                // series for axis-trigger tooltips regardless.
-                this.echart.dispatchAction({ type: 'showTip', x: pixelX, y: 60 });
-            }
+
+            // Freeze BEFORE showTip — otherwise the next mousemove can
+            // auto-hide the tooltip we just programmatically showed.
+            // Calling _toggleTooltipFreeze(true) when already frozen is
+            // idempotent for state and re-renders the footer with the
+            // new _frozenEvent context.
             this._toggleTooltipFreeze(true);
+
+            // showTip needs (x, y) inside the plot grid for axis-trigger
+            // tooltips to register; pull from the grid rect rather than
+            // guessing a y that might fall above the chart on tall charts.
+            const pixelX = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
+            const grid = this.echart.getModel()?.getComponent('grid', 0);
+            const rect = grid?.coordinateSystem?.getRect?.();
+            const pixelY = rect
+                ? rect.y + Math.round(rect.height / 2)
+                : Math.round(this.echart.getHeight() / 2);
+            if (Number.isFinite(pixelX)) {
+                this.echart.dispatchAction({ type: 'showTip', x: pixelX, y: pixelY });
+            }
         });
 
         this.echart.getZr().on('click', (e) => {
@@ -998,6 +1011,7 @@ export class Chart {
     }
 
     _openAddEventForm(anchorEl) {
+        if (!isEventEditingAllowed()) return;
         const opts = this.spec?.opts || {};
         openEventForm({
             anchorEl,
@@ -1016,6 +1030,7 @@ export class Chart {
     }
 
     _openDeleteEventConfirm(anchorEl) {
+        if (!isEventEditingAllowed()) return;
         const evt = this._frozenEvent;
         if (!evt) return;
         const rect = anchorEl.getBoundingClientRect();
