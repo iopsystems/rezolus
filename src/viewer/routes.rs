@@ -347,8 +347,27 @@ fn run_sql(state: &AppState, capture: Option<&str>, sql: &str) -> Response {
             )
                 .into_response()
         }
-        Err(e) => ApiResponse::<serde_json::Value>::err(e.to_string(), "sql_error")
-            .into_response(),
+        Err(e) => {
+            // "No matching columns" is DuckDB's binder error when a
+            // `COLUMNS('regex')` spread matches zero columns — which
+            // is "this metric is not in this parquet", not a SQL
+            // bug. Translate it to an empty matrix so the frontend
+            // renders the chart as "no data" instead of as an error.
+            // Mirrors the legacy `Tsdb`+PromQL behaviour where an
+            // unknown metric simply returned an empty result set.
+            let msg = e.to_string();
+            if msg.contains("No matching columns")
+                || msg.contains("not found in FROM clause")
+            {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    prom_matrix::EMPTY_PROM_MATRIX.to_string(),
+                )
+                    .into_response();
+            }
+            ApiResponse::<serde_json::Value>::err(msg, "sql_error").into_response()
+        }
     }
 }
 
