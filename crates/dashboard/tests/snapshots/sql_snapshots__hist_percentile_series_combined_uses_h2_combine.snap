@@ -4,7 +4,7 @@ expression: "sql::hist_percentile_series_combined(\"^syscall_latency/[a-z]+:buck
 ---
 WITH combined AS (
               SELECT timestamp,
-                     h2_combine([*COLUMNS('^syscall_latency/[a-z]+:buckets$')]) AS b
+                     h2_combine_lol([*COLUMNS('^syscall_latency/[a-z]+:buckets$')]) AS b
               FROM _src
            ),
            d AS (

@@ -436,7 +436,12 @@ pub fn cgroup_irate_by_name(
               WHERE {name_clause}
            ),
            by_name AS (
-              SELECT timestamp, name, SUM(v) AS s FROM joined GROUP BY timestamp, name
+              -- Cast SUM(v) back to UBIGINT: DuckDB promotes SUM(UBIGINT)
+              -- to HUGEINT to dodge u64 overflow, but `irate_lag` takes
+              -- UBIGINT. Single-server cgroup sums fit u64 with room to
+              -- spare (max ~1.8e19) so the explicit cast is safe.
+              SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
+              FROM joined GROUP BY timestamp, name
            )
            SELECT timestamp::DOUBLE/1e9 AS t, name,
                   irate_lag(s,
@@ -507,8 +512,13 @@ pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide
                   ON idx.column_name = u.col AND idx.metric = '{den_metric}'
               WHERE {name_clause}
            ),
-           n_by AS (SELECT timestamp, name, SUM(v) AS s FROM n_join GROUP BY timestamp, name),
-           d_by AS (SELECT timestamp, name, SUM(v) AS s FROM d_join GROUP BY timestamp, name),
+           -- SUM(UBIGINT) promotes to HUGEINT in DuckDB; cast back so
+           -- `irate_lag` (which is UBIGINT-typed) binds. See
+           -- `cgroup_irate_by_name` for the rationale and overflow note.
+           n_by AS (SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
+                    FROM n_join GROUP BY timestamp, name),
+           d_by AS (SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
+                    FROM d_join GROUP BY timestamp, name),
            n_rate AS (
               SELECT timestamp, name,
                      irate_lag(s,
@@ -607,10 +617,20 @@ pub fn scale_v(inner: String, divisor: f64) -> String {
 /// histogram (`syscall_latency`) implicitly aggregates across labels; the SQL
 /// emits `h2_combine` over the matching label-suffixed columns.
 pub fn hist_percentile_series_combined(buckets_re: &str) -> String {
+    // Emits `h2_combine_lol(...)`, a shared pure-SQL macro
+    // (defined in `metriken-query-sql/src/shared_macros.sql`) that
+    // accepts a single `LIST<LIST<UBIGINT>>` and folds it element-
+    // wise. The macro is loaded on both the native and wasm DuckDB
+    // builds via `SHARED_MACROS`, so the same dashboard SQL binds on
+    // both backends. The native variadic UDF `h2_combine(c1, …, cN)`
+    // is the fast path for direct column-by-column callers and is
+    // unchanged; this macro exists specifically for the
+    // `[*COLUMNS('regex')]` column-spread shape, which wraps the
+    // spread in a LIST literal that the variadic UDF can't bind.
     format!(
         r#"WITH combined AS (
               SELECT timestamp,
-                     h2_combine([*COLUMNS('{buckets_re}')]) AS b
+                     h2_combine_lol([*COLUMNS('{buckets_re}')]) AS b
               FROM _src
            ),
            d AS (

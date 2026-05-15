@@ -415,6 +415,9 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             PlotOpts::counter("Misses (Per-CPU)", "dtlb-misses-per-cpu", Unit::Rate),
             "sum by (id) (irate(cpu_dtlb_miss[5m]))".to_string(),
             // Aggregate across op variants per id, then irate.
+            // SUM(UBIGINT) promotes to HUGEINT in DuckDB; cast back so
+            // `irate_lag`'s UBIGINT signature binds. cpu_dtlb_miss
+            // counts per CPU fit u64 with extreme headroom.
             r#"WITH unp AS (
                   UNPIVOT (SELECT timestamp, COLUMNS('^cpu_dtlb_miss(/[^:]+)?$') FROM _src)
                       ON COLUMNS('^cpu_dtlb_miss(/[^:]+)?$') INTO NAME col VALUE v
@@ -422,7 +425,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                by_id AS (
                   SELECT timestamp,
                          regexp_extract(col, '/([0-9]+)$', 1) AS id,
-                         SUM(v) AS s
+                         CAST(SUM(v) AS UBIGINT) AS s
                   FROM unp
                   GROUP BY timestamp, id
                )
@@ -469,7 +472,11 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                       ON COLUMNS('^cpu_dtlb_miss(/[^:]+)?$') INTO NAME col VALUE v
                ),
                miss_by_id AS (
-                  SELECT timestamp, regexp_extract(col, '/([0-9]+)$', 1) AS id, SUM(v) AS s
+                  -- CAST(SUM(v) AS UBIGINT): DuckDB promotes
+                  -- SUM(UBIGINT) → HUGEINT, but `irate_lag` is
+                  -- UBIGINT-typed. Per-CPU miss counts fit u64.
+                  SELECT timestamp, regexp_extract(col, '/([0-9]+)$', 1) AS id,
+                         CAST(SUM(v) AS UBIGINT) AS s
                   FROM miss_unp GROUP BY timestamp, id
                ),
                instr_unp AS (

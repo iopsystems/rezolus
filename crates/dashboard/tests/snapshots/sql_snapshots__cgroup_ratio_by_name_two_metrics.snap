@@ -1,5 +1,6 @@
 ---
 source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 139
 expression: "sql::cgroup_ratio_by_name(\"cgroup_cpu_instructions\", \"cgroup_cpu_cycles\",\nCgroupSide::Individual,)"
 ---
 WITH n_unp AS (
@@ -22,8 +23,13 @@ WITH n_unp AS (
                   ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_cycles'
               WHERE idx.name IN __SELECTED_CGROUPS__
            ),
-           n_by AS (SELECT timestamp, name, SUM(v) AS s FROM n_join GROUP BY timestamp, name),
-           d_by AS (SELECT timestamp, name, SUM(v) AS s FROM d_join GROUP BY timestamp, name),
+           -- SUM(UBIGINT) promotes to HUGEINT in DuckDB; cast back so
+           -- `irate_lag` (which is UBIGINT-typed) binds. See
+           -- `cgroup_irate_by_name` for the rationale and overflow note.
+           n_by AS (SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
+                    FROM n_join GROUP BY timestamp, name),
+           d_by AS (SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
+                    FROM d_join GROUP BY timestamp, name),
            n_rate AS (
               SELECT timestamp, name,
                      irate_lag(s,
