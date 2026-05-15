@@ -5,10 +5,9 @@
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload, CompareLanding, splitAlias } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
-import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
+import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
-import { eventsStore } from './events_store.js';
 
 // ── Splash ──────────────────────────────────────────────────────────
 // Mounted on body before any async bootstrap step so the page never
@@ -68,7 +67,6 @@ const fetchBackendState = async () => {
     if (fmResult.status === 'fulfilled') {
         fileMetadata = fmResult.value;
     }
-    eventsStore.seedFromMetadata(fileMetadata);
 };
 
 // ── Transport controls ─────────────────────────────────────────────
@@ -111,6 +109,9 @@ const uploadParquet = async (file) => {
         if (fileChecksum) {
             setStorageScope({ filename: fileChecksum });
         }
+        // After scope is set (so a persisted working set wins): seed
+        // events from the footer when there's nothing persisted.
+        seedEventsFromMetadata(fileMetadata);
 
         // If the uploaded parquet has an embedded selection/report, load
         // it into the reportStore so the "Report" sidebar link appears
@@ -344,6 +345,7 @@ const bootstrap = async () => {
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
     }
+    seedEventsFromMetadata(fileMetadata);
 
     let experimentSystemInfo = null;
     let experimentFileMetadata = null;

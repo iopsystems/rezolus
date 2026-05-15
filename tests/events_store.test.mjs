@@ -70,6 +70,24 @@ test('remove: returns false when no match and does not notify', () => {
     assert.equal(calls, 0);
 });
 
+test('replaceAll: swaps the set and notifies', () => {
+    const s = new EventsStore();
+    s.add({ timestamp: 1, description: 'old' });
+    let calls = 0;
+    s.subscribe(() => { calls += 1; });
+    s.replaceAll([{ timestamp: 2, description: 'a' }, { timestamp: 3, description: 'b' }]);
+    assert.equal(s.all().length, 2);
+    assert.equal(s.all()[0].description, 'a');
+    assert.equal(calls, 1);
+});
+
+test('replaceAll: non-array yields empty', () => {
+    const s = new EventsStore();
+    s.add({ timestamp: 1, description: 'old' });
+    s.replaceAll(null);
+    assert.deepEqual(s.all(), []);
+});
+
 test('add: appends and notifies subscribers', () => {
     const s = new EventsStore();
     let calls = 0;

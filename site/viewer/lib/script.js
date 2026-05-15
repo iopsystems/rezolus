@@ -4,9 +4,8 @@
 
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload, splitAlias } from './landing.js';
-import { setStorageScope } from './selection.js';
+import { setStorageScope, seedEventsFromMetadata } from './selection.js';
 import { initDashboard, bootstrapSharedSections } from './app.js';
-import { eventsStore } from './events_store.js';
 
 // ── UI state ────────────────────────────────────────────────────────
 
@@ -110,7 +109,10 @@ const fetchInitialState = async () => {
 async function loadParquet(data, filename) {
     await initWasmViewer(data, filename);
     const state = await fetchInitialState();
-    eventsStore.seedFromMetadata(state.fileMetadata);
+    // initWasmViewer already called setStorageScope, so a persisted
+    // working set (if any) has been restored; this only seeds the
+    // footer events when nothing was persisted.
+    seedEventsFromMetadata(state.fileMetadata);
     try {
         const sections = await ViewerApi.getSections();
         bootstrapSharedSections(Array.isArray(sections) ? sections : (sections?.data?.sections || []));

@@ -104,6 +104,16 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
 
 let REPORT_STORAGE_KEY = 'rezolus_report';
 let NOTEBOOK_STORAGE_KEY = 'rezolus_notebook';
+let EVENTS_STORAGE_KEY = 'rezolus_events';
+
+// True once a localStorage working set was restored for the active
+// scope — seedEventsFromMetadata then becomes a no-op so the persisted
+// (possibly-edited) set wins over the parquet footer, mirroring how
+// Notebook localStorage overrides embedded report state.
+let eventsRestoredFromStorage = false;
+// Guards persistEvents during restore / seed so we only ever persist
+// genuine user mutations (add / delete), never the initial hydration.
+let suspendEventsPersist = false;
 
 /**
  * Scope localStorage keys by a file fingerprint so each parquet file
@@ -123,6 +133,7 @@ const setStorageScope = (info) => {
         .toString(36);
     REPORT_STORAGE_KEY = `rezolus_report_${suffix}`;
     NOTEBOOK_STORAGE_KEY = `rezolus_notebook_${suffix}`;
+    EVENTS_STORAGE_KEY = `rezolus_events_${suffix}`;
     // In-memory reset only — must NOT purge localStorage at the
     // (just-set) scoped key, otherwise we wipe the file's persisted
     // notebook on every page load before restoring it.
@@ -134,7 +145,56 @@ const setStorageScope = (info) => {
     resetStoreState(loadedSelectionStore);
     restoreStore(REPORT_STORAGE_KEY, reportStore);
     restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
+    // Drop the previous file's in-memory events, then either restore
+    // this file's persisted working set or leave it empty for
+    // seedEventsFromMetadata to fill from the footer.
+    suspendEventsPersist = true;
+    eventsStore.clear();
+    suspendEventsPersist = false;
+    restoreEvents();
 };
+
+const persistEvents = () => {
+    if (suspendEventsPersist) return;
+    try {
+        localStorage.setItem(
+            EVENTS_STORAGE_KEY,
+            JSON.stringify({ version: SELECTION_SCHEMA_VERSION, events: eventsStore.all() }),
+        );
+    } catch (e) {
+        console.warn('[selection] failed to persist events:', e);
+    }
+};
+
+const restoreEvents = () => {
+    eventsRestoredFromStorage = false;
+    try {
+        const raw = localStorage.getItem(EVENTS_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.events)) return;
+        suspendEventsPersist = true;
+        eventsStore.replaceAll(parsed.events);
+        suspendEventsPersist = false;
+        eventsRestoredFromStorage = true;
+    } catch (e) {
+        console.warn('[selection] failed to restore events:', e);
+    }
+};
+
+// Seed the events store from the parquet footer — unless a persisted
+// working set was already restored for this scope (then the persisted
+// set is authoritative, so unsaved adds/deletes survive a refresh).
+// Suspends persistence so the footer-only seed never lands in
+// localStorage; only genuine user edits get persisted thereafter.
+export const seedEventsFromMetadata = (fileMetadata) => {
+    if (eventsRestoredFromStorage) return;
+    suspendEventsPersist = true;
+    eventsStore.seedFromMetadata(fileMetadata);
+    suspendEventsPersist = false;
+};
+
+eventsStore.subscribe(persistEvents);
 
 const persistStore = (key, store) => {
     try {
@@ -238,6 +298,7 @@ const setLoadedSelectionChartToggle = chartToggleSetter(loadedSelectionStore, nu
 // or eagerly here for the default (unscoped) keys as a fallback.
 restoreStore(REPORT_STORAGE_KEY, reportStore);
 restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
+restoreEvents();
 
 // Build the displayed chart title for a selection card. The dashboard
 // gives charts visual context via section/group breadcrumbs ("CPU >
@@ -386,6 +447,12 @@ const clearStore = (store) => {
     } else if (store === notebookStore) {
         expandedNotes.clear();
         localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
+        // Events are Notebook-scoped content — clear them alongside it.
+        suspendEventsPersist = true;
+        eventsStore.clear();
+        suspendEventsPersist = false;
+        eventsRestoredFromStorage = false;
+        localStorage.removeItem(EVENTS_STORAGE_KEY);
     }
     // loadedSelectionStore is in-memory only; no localStorage to clear
 };

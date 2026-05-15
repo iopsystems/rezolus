@@ -47,6 +47,13 @@ export class EventsStore {
         return this._events.slice();
     }
 
+    // Replace the whole set (used by the localStorage restore path so
+    // an unsaved working set survives a page refresh).
+    replaceAll(events) {
+        this._events = Array.isArray(events) ? events.slice() : [];
+        this._notify();
+    }
+
     clear() {
         this._events = [];
         this._notify();
