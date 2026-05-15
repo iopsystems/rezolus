@@ -527,18 +527,24 @@ export class Chart {
             });
         }
 
-        // Rebuild the freeze footer's content \u2014 it gains/loses the
-        // "+ Add Event" link on freeze, so we can't just rewrite the
-        // state text in place.
         const footer = this.domNode.querySelector('.tooltip-freeze-footer');
         if (footer) {
             const text = freeze ? 'FROZEN \u00b7 click to unfreeze' : 'click to freeze';
             const color = freeze ? COLORS.accent : COLORS.fgMuted;
             footer.style.color = color;
             const addLink = freeze
-                ? `<a href="#" class="tooltip-add-event" data-chart-id="${this.chartId}" style="display: block; margin-top: 4px; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
+                ? `<a href="#" class="tooltip-add-event" data-chart-id="${this.chartId}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
                 : '';
             footer.innerHTML = `<span class="tooltip-freeze-state">${text}</span>${addLink}`;
+
+            // ECharts caches the tooltip wrapper's pointer-events:none and
+            // doesn't reapply it when enterable toggles mid-display. Walk
+            // up to the wrapper (direct child of chart.domNode) and patch.
+            let wrapper = footer.parentElement;
+            while (wrapper && wrapper.parentElement !== this.domNode) {
+                wrapper = wrapper.parentElement;
+            }
+            if (wrapper) wrapper.style.pointerEvents = freeze ? 'auto' : '';
         }
     }
 

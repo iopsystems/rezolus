@@ -46,7 +46,7 @@ export function getTooltipFreezeFooter(chart) {
     const text = frozen ? 'FROZEN · click to unfreeze' : 'click to freeze';
     const color = frozen ? COLORS.accent : COLORS.fgMuted;
     const addLink = frozen
-        ? `<a href="#" class="tooltip-add-event" data-chart-id="${chart.chartId}" style="display: block; margin-top: 4px; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
+        ? `<a href="#" class="tooltip-add-event" data-chart-id="${chart.chartId}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
         : '';
     return `<div class="tooltip-freeze-footer" style="border-top: 1px solid ${COLORS.borderMuted}; margin-top: 6px; padding-top: 4px; margin-bottom: -6px; font-size: ${FONTS.footnote.fontSize}px; color: ${color}; text-align: center;">
         <span class="tooltip-freeze-state">${text}</span>${addLink}
