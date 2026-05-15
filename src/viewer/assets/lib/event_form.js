@@ -9,25 +9,8 @@
 // description; chart_id is set when "Show only on this chart" stays
 // checked (defaulted ON per spec).
 
-const RFC3339_FORMATTER = (nsTimestamp) => {
-    if (!Number.isFinite(nsTimestamp)) return '';
-    const ms = Math.round(nsTimestamp / 1_000_000);
-    return new Date(ms).toISOString();
-};
-
-// Parse RFC3339 back to ns. Returns null on failure so the submit
-// handler can show inline feedback rather than silently using the
-// pre-filled value.
-const parseRfc3339Ns = (str) => {
-    const ms = Date.parse(str);
-    if (!Number.isFinite(ms)) return null;
-    return ms * 1_000_000;
-};
-
 export function openEventForm({ anchorEl, prefill, onSubmit }) {
     if (!anchorEl) return;
-    // Tear down any existing form (single-instance — reopening from
-    // another chart cancels the prior one).
     document.querySelectorAll('.event-form-overlay').forEach((n) => n.remove());
 
     const overlay = document.createElement('div');
@@ -35,24 +18,22 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
     document.body.appendChild(overlay);
 
     const rect = anchorEl.getBoundingClientRect();
-    // Anchor below the link; if it would clip the viewport bottom,
-    // flip above. Width clamps to 320px or available space.
     const POPOVER_W = 320;
-    const POPOVER_H_EST = 320;  // rough — recalculated below if needed
+    const POPOVER_H_EST = 280;
     let top = rect.bottom + 8;
     if (top + POPOVER_H_EST > window.innerHeight) top = Math.max(8, rect.top - POPOVER_H_EST - 8);
     let left = rect.left;
     if (left + POPOVER_W > window.innerWidth) left = window.innerWidth - POPOVER_W - 8;
     if (left < 8) left = 8;
 
-    let timestampStr = RFC3339_FORMATTER(prefill.timestamp_ns);
+    const timestampNs = Number.isFinite(prefill.timestamp_ns) ? prefill.timestamp_ns : null;
     let description = '';
     let kind = '';
     let source = prefill.source || '';
     let node = prefill.node || '';
     let instance = prefill.instance || '';
     let onlyThisChart = true;
-    let descError = '';
+    let formError = '';
 
     const close = () => {
         document.removeEventListener('keydown', onKey, true);
@@ -75,18 +56,17 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
 
     const submit = () => {
         if (!description.trim()) {
-            descError = 'Description is required';
+            formError = 'Description is required';
             m.redraw();
             return;
         }
-        const ts = parseRfc3339Ns(timestampStr);
-        if (ts == null) {
-            descError = 'Timestamp is not a valid RFC3339 string';
+        if (timestampNs == null) {
+            formError = 'No timestamp captured — re-freeze on the chart and retry';
             m.redraw();
             return;
         }
         const event = {
-            timestamp: ts,
+            timestamp: timestampNs,
             description: description.trim(),
         };
         if (kind.trim()) event.kind = kind.trim();
@@ -103,23 +83,15 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
             style: `position: fixed; top: ${top}px; left: ${left}px; width: ${POPOVER_W}px; z-index: 10000;`,
         }, [
             m('div.event-form-row', [
-                m('label', 'Timestamp'),
-                m('input', {
-                    type: 'text',
-                    value: timestampStr,
-                    oninput: (e) => { timestampStr = e.target.value; },
-                }),
-            ]),
-            m('div.event-form-row', [
                 m('label', 'Description'),
                 m('input', {
                     type: 'text',
                     value: description,
-                    oninput: (e) => { description = e.target.value; descError = ''; },
+                    oninput: (e) => { description = e.target.value; formError = ''; },
                     autofocus: true,
                 }),
             ]),
-            descError ? m('div.event-form-error', descError) : null,
+            formError ? m('div.event-form-error', formError) : null,
             m('div.event-form-row', [
                 m('label', 'Kind'),
                 m('input', {

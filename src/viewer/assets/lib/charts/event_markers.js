@@ -5,6 +5,9 @@
 // Pure module — no chart instance, no DOM. The caller owns the
 // "merge into series[0]" decision because that depends on the chart's
 // current configured options.
+
+const EVENT_MARKER_COLOR = '#0d8b8b';
+
 export function buildMarkLine(events) {
     if (!Array.isArray(events) || events.length === 0) return null;
     const data = [];
@@ -21,17 +24,23 @@ export function buildMarkLine(events) {
         symbol: 'none',
         data,
         lineStyle: {
-            color: '#1f77b4',  // fallback; CSS var --accent read at runtime in browser
+            color: EVENT_MARKER_COLOR,
             type: 'dashed',
             width: 1,
-            opacity: 0.7,
+            opacity: 0.85,
         },
+        // Inline label is hidden until hover; emphasis flips it on so
+        // the description appears next to the line under the cursor.
         label: {
             show: false,
+            position: 'insideEndTop',
+            formatter: '{b}',
+            color: EVENT_MARKER_COLOR,
+            fontSize: 11,
         },
-        tooltip: {
-            show: true,
-            formatter: (p) => p.name,
+        emphasis: {
+            label: { show: true },
+            lineStyle: { width: 2, opacity: 1 },
         },
     };
 }
