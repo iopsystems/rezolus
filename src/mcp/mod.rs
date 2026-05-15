@@ -9,29 +9,17 @@ pub mod correlation;
 mod describe_metrics;
 mod server;
 
-// Legacy PromQL/Tsdb types — only used by `format_recording_info`,
-// `run_exhaustive_detection`, and `format_query_result` below, which
-// are themselves cfg-gated to `live-mode`. Once those functions are
-// audited and deleted, this import block goes with them.
-#[cfg(feature = "live-mode")]
-use crate::viewer::promql::{QueryEngine, QueryResult};
-#[cfg(feature = "live-mode")]
-use crate::viewer::tsdb::Tsdb;
 use chrono::{DateTime, Utc};
 
-/// Format recording information for display (DuckDB-backed CLI path).
-///
-/// Mirrors [`format_recording_info`] but pulls metadata from
-/// [`crate::viewer::sql_capture::SqlCapture`] (no `Tsdb` involved).
-/// The legacy function below stays in place for `src/mcp/server.rs`
-/// until that file is migrated too — keeping the layout one-to-one
-/// makes the future server.rs migration mechanical.
-pub fn format_recording_info_sql(file_path: &str, capture: &crate::viewer::sql_capture::SqlCapture) -> String {
+/// Format recording information for display.
+pub fn format_recording_info_sql(
+    file_path: &str,
+    capture: &crate::viewer::sql_capture::SqlCapture,
+) -> String {
     use dashboard::DashboardData;
 
     // `time_range()` is `(min, max)` in nanoseconds — convert to
-    // float seconds to match the legacy `QueryEngine::get_time_range`
-    // contract that the prose template was authored against.
+    // float seconds to match the prose template's units.
     let (start_time, end_time) = match capture.time_range() {
         Some((lo_ns, hi_ns)) => (lo_ns as f64 / 1e9, hi_ns as f64 / 1e9),
         None => (0.0, 0.0),
@@ -68,55 +56,6 @@ pub fn format_recording_info_sql(file_path: &str, capture: &crate::viewer::sql_c
         file_path,
         capture.version(),
         capture.source(),
-        duration_str,
-        duration_seconds,
-        start_datetime,
-        start_time,
-        end_datetime,
-        end_time
-    )
-}
-
-/// Format recording information for display
-#[cfg(feature = "live-mode")]
-pub fn format_recording_info(file_path: &str, tsdb: &Arc<Tsdb>, engine: &QueryEngine) -> String {
-    let (start_time, end_time) = engine.get_time_range();
-    let duration_seconds = end_time - start_time;
-
-    // Format duration nicely
-    let hours = (duration_seconds / 3600.0) as u64;
-    let minutes = ((duration_seconds % 3600.0) / 60.0) as u64;
-    let seconds = (duration_seconds % 60.0) as u64;
-
-    let duration_str = if hours > 0 {
-        format!("{hours}h {minutes}m {seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
-    };
-
-    // Convert Unix timestamps to UTC datetime strings
-    let start_datetime = DateTime::from_timestamp(start_time as i64, 0)
-        .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("{start_time:.0} (invalid timestamp)"));
-
-    let end_datetime = DateTime::from_timestamp(end_time as i64, 0)
-        .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("{end_time:.0} (invalid timestamp)"));
-
-    format!(
-        "Recording Information\n\
-         =====================\n\
-         File: {}\n\
-         Rezolus Version: {}\n\
-         Source: {}\n\
-         Recording Duration: {} ({:.1} seconds)\n\
-         Start Time: {} (epoch: {:.0})\n\
-         End Time: {} (epoch: {:.0})",
-        file_path,
-        tsdb.version(),
-        tsdb.source(),
         duration_str,
         duration_seconds,
         start_datetime,
@@ -263,18 +202,16 @@ fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
     run_exhaustive_detection_sql(&backend, &capture);
 }
 
-/// SQL-backed exhaustive anomaly detection. Mirrors
-/// [`run_exhaustive_detection`] but iterates the SqlCapture catalog
-/// and uses the SQL builders in [`backend`].
+/// Exhaustive anomaly detection: iterate the `SqlCapture` catalog and
+/// run each metric through the SQL builders in [`backend`].
 fn run_exhaustive_detection_sql(
     backend: &metriken_query_sql::DuckDbBackend,
     capture: &crate::viewer::sql_capture::SqlCapture,
 ) {
     use dashboard::DashboardData;
 
-    // Same skip list as the legacy path — these metrics are raw
-    // building blocks or NUMA-policy fields where standalone anomaly
-    // detection isn't meaningful.
+    // Skip raw building-block counters and NUMA-policy fields — standalone
+    // anomaly detection on these isn't meaningful.
     let skip_metrics = [
         "cpu_tsc",
         "cpu_aperf",
@@ -525,206 +462,6 @@ fn print_exhaustive_summary(
     }
 }
 
-#[cfg(feature = "live-mode")]
-#[allow(dead_code)] // legacy Tsdb-backed exhaustive detection;
-                    // run_exhaustive_detection_sql is the live path.
-fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
-    // Metrics to skip - these are raw building blocks or redundant metrics
-    let skip_metrics = [
-        // CPU building blocks - only meaningful when combined
-        "cpu_tsc",          // Raw TSC counter - only useful for frequency calculation
-        "cpu_aperf",        // Actual perf counter - combine with mperf for frequency
-        "cpu_mperf",        // Max perf counter - combine with aperf for frequency
-        "cgroup_cpu_aperf", // Same for cgroup versions
-        "cgroup_cpu_mperf",
-        // NUMA metrics - focus on local (good) and foreign (bad) instead of these
-        "memory_numa_hit",        // Redundant with local/foreign
-        "memory_numa_miss",       // Redundant with local/foreign
-        "memory_numa_other",      // Less actionable than foreign
-        "memory_numa_interleave", // Rarely used policy
-        // Cgroup CPU bandwidth config - skip static configuration values
-        "cgroup_cpu_bandwidth_periods", // Total periods elapsed - not actionable
-        "cgroup_cpu_bandwidth_period_duration", // Static config value
-        "cgroup_cpu_bandwidth_quota",   // Static config value
-    ];
-
-    let mut metrics_to_analyze = Vec::new();
-
-    for name in tsdb.counter_names() {
-        if !skip_metrics.contains(&name) {
-            metrics_to_analyze.push((name.to_string(), "counter", None));
-        }
-    }
-
-    for name in tsdb.gauge_names() {
-        if !skip_metrics.contains(&name) {
-            metrics_to_analyze.push((name.to_string(), "gauge", None));
-        }
-    }
-
-    for name in tsdb.histogram_names() {
-        metrics_to_analyze.push((name.to_string(), "histogram_p50", None));
-        metrics_to_analyze.push((name.to_string(), "histogram_p90", None));
-        metrics_to_analyze.push((name.to_string(), "histogram_p99", None));
-    }
-
-    // Add derived metrics that combine raw counters into meaningful calculations
-    let mut derived_metrics = Vec::new();
-
-    // CPU Frequency = (aperf / mperf) - shows actual vs max performance
-    if tsdb.counter_names().contains(&"cpu_aperf") && tsdb.counter_names().contains(&"cpu_mperf") {
-        derived_metrics.push((
-            "cpu_frequency_ratio".to_string(),
-            "derived",
-            Some("sum(rate(cpu_aperf[1m])) / sum(rate(cpu_mperf[1m]))".to_string()),
-        ));
-    }
-
-    // CPU Instructions Per Cycle (IPC) - efficiency metric
-    if tsdb.counter_names().contains(&"cpu_instructions")
-        && tsdb.counter_names().contains(&"cpu_cycles")
-    {
-        derived_metrics.push((
-            "cpu_instructions_per_cycle".to_string(),
-            "derived",
-            Some("sum(rate(cpu_instructions[1m])) / sum(rate(cpu_cycles[1m]))".to_string()),
-        ));
-    }
-
-    // Cgroup versions of the same
-    if tsdb.counter_names().contains(&"cgroup_cpu_aperf")
-        && tsdb.counter_names().contains(&"cgroup_cpu_mperf")
-    {
-        derived_metrics.push((
-            "cgroup_cpu_frequency_ratio".to_string(),
-            "derived",
-            Some("sum(rate(cgroup_cpu_aperf[1m])) / sum(rate(cgroup_cpu_mperf[1m]))".to_string()),
-        ));
-    }
-
-    if tsdb.counter_names().contains(&"cgroup_cpu_instructions")
-        && tsdb.counter_names().contains(&"cgroup_cpu_cycles")
-    {
-        derived_metrics.push((
-            "cgroup_cpu_instructions_per_cycle".to_string(),
-            "derived",
-            Some(
-                "sum(rate(cgroup_cpu_instructions[1m])) / sum(rate(cgroup_cpu_cycles[1m]))"
-                    .to_string(),
-            ),
-        ));
-    }
-
-    metrics_to_analyze.extend(derived_metrics);
-
-    println!(
-        "Exhaustive Anomaly Detection\n\
-         ============================\n\
-         Analyzing {} metrics from recording\n",
-        metrics_to_analyze.len()
-    );
-
-    let mut total_anomalies = 0;
-    let mut metrics_with_anomalies = Vec::new();
-
-    for (metric_name, metric_type, custom_query) in &metrics_to_analyze {
-        // Use custom query if provided, otherwise construct based on type
-        let query = if let Some(q) = custom_query {
-            q.clone()
-        } else {
-            match &**metric_type {
-                "counter" => format!("sum(rate({}[1m]))", metric_name),
-                "gauge" => format!("sum({})", metric_name),
-                "histogram_p50" => format!("histogram_quantile(0.50, {})", metric_name),
-                "histogram_p90" => format!("histogram_quantile(0.90, {})", metric_name),
-                "histogram_p99" => format!("histogram_quantile(0.99, {})", metric_name),
-                _ => continue,
-            }
-        };
-
-        match anomaly_detection::detect_anomalies(&engine, &tsdb, &query) {
-            Ok(result) => {
-                if !result.anomalies.is_empty() {
-                    let high_severity = result
-                        .anomalies
-                        .iter()
-                        .filter(|a| {
-                            matches!(
-                                a.severity,
-                                anomaly_detection::AnomalySeverity::High
-                                    | anomaly_detection::AnomalySeverity::Critical
-                            )
-                        })
-                        .count();
-                    let medium_severity = result
-                        .anomalies
-                        .iter()
-                        .filter(|a| {
-                            matches!(a.severity, anomaly_detection::AnomalySeverity::Medium)
-                        })
-                        .count();
-                    let low_severity = result
-                        .anomalies
-                        .iter()
-                        .filter(|a| matches!(a.severity, anomaly_detection::AnomalySeverity::Low))
-                        .count();
-
-                    total_anomalies += result.anomalies.len();
-                    metrics_with_anomalies.push((
-                        metric_name.clone(),
-                        metric_type.to_string(),
-                        result.anomalies.len(),
-                        high_severity,
-                        medium_severity,
-                        low_severity,
-                    ));
-                }
-            }
-            Err(_e) => {
-                // Silently skip metrics that fail (e.g., histograms that don't exist)
-            }
-        }
-    }
-
-    println!("\nSummary");
-    println!("=======");
-    println!(
-        "Analyzed {} metrics, found anomalies in {} metrics",
-        metrics_to_analyze.len(),
-        metrics_with_anomalies.len()
-    );
-    println!("Total anomalies detected: {}\n", total_anomalies);
-
-    if !metrics_with_anomalies.is_empty() {
-        println!("Metrics with Anomalies:");
-        println!("----------------------");
-
-        // Sort by total anomalies (descending)
-        metrics_with_anomalies.sort_by_key(|k| std::cmp::Reverse(k.2));
-
-        for (metric, metric_type, total, high, medium, low) in metrics_with_anomalies {
-            let type_label = match metric_type.as_ref() {
-                "counter" => "COUNTER",
-                "gauge" => "GAUGE",
-                "histogram_p50" => "HISTOGRAM (p50)",
-                "histogram_p90" => "HISTOGRAM (p90)",
-                "histogram_p99" => "HISTOGRAM (p99)",
-                "derived" => "DERIVED",
-                _ => &metric_type,
-            };
-
-            println!(
-                "• {} ({}) - {} anomalies (HIGH: {}, MEDIUM: {}, LOW: {})",
-                metric, type_label, total, high, medium, low
-            );
-        }
-
-        println!(
-            "\nRun 'detect-anomalies <file> <metric>' for detailed analysis of specific metrics."
-        );
-    }
-}
-
 fn run_query(file: PathBuf, query: String) {
     match execute_query(&file, &query) {
         Ok(text) => println!("{text}"),
@@ -852,101 +589,6 @@ fn reduce_series_to_pair(series: &[backend::Series]) -> (Vec<f64>, Vec<f64>) {
     (timestamps, values)
 }
 
-#[cfg(feature = "live-mode")]
-#[allow(dead_code)] // retained behind live-mode; deletable once the legacy
-                    // QueryResult-formatting code path is audited away.
-fn format_query_result(result: &QueryResult) -> String {
-    use std::fmt::Write;
-    let mut output = String::new();
-
-    match result {
-        QueryResult::Vector { result } => {
-            writeln!(&mut output, "Instant Vector Result:").unwrap();
-            writeln!(&mut output, "======================").unwrap();
-            for sample in result {
-                writeln!(
-                    &mut output,
-                    "{} = {}",
-                    format_metric(&sample.metric),
-                    sample.value.1
-                )
-                .unwrap();
-            }
-        }
-        QueryResult::Matrix { result } => {
-            writeln!(&mut output, "Range Vector Result:").unwrap();
-            writeln!(&mut output, "====================").unwrap();
-            for series in result {
-                writeln!(&mut output, "{}:", format_metric(&series.metric)).unwrap();
-                writeln!(
-                    &mut output,
-                    "  Time series with {} points",
-                    series.values.len()
-                )
-                .unwrap();
-                if !series.values.is_empty() {
-                    let first = &series.values[0];
-                    let last = &series.values[series.values.len() - 1];
-                    writeln!(&mut output, "  First: {} = {}", first.0, first.1).unwrap();
-                    writeln!(&mut output, "  Last:  {} = {}", last.0, last.1).unwrap();
-
-                    // Calculate basic stats
-                    let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
-                    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-                    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                    let sum: f64 = values.iter().sum();
-                    let mean = sum / values.len() as f64;
-
-                    writeln!(&mut output, "  Min:   {}", min).unwrap();
-                    writeln!(&mut output, "  Max:   {}", max).unwrap();
-                    writeln!(&mut output, "  Mean:  {}", mean).unwrap();
-                }
-                writeln!(&mut output).unwrap();
-            }
-        }
-        QueryResult::Scalar { result } => {
-            writeln!(&mut output, "Scalar Result:").unwrap();
-            writeln!(&mut output, "==============").unwrap();
-            writeln!(&mut output, "{} = {}", result.0, result.1).unwrap();
-        }
-        QueryResult::HistogramHeatmap { result } => {
-            writeln!(&mut output, "Histogram Heatmap Result:").unwrap();
-            writeln!(&mut output, "=========================").unwrap();
-            writeln!(
-                &mut output,
-                "Time points: {}, Buckets: {}, Data points: {}",
-                result.timestamps.len(),
-                result.bucket_bounds.len(),
-                result.data.len()
-            )
-            .unwrap();
-            writeln!(
-                &mut output,
-                "Value range: {:.2} - {:.2}",
-                result.min_value, result.max_value
-            )
-            .unwrap();
-        }
-    }
-
-    output
-}
-
-#[cfg(feature = "live-mode")]
-fn format_metric(metric: &std::collections::HashMap<String, String>) -> String {
-    if metric.is_empty() {
-        return String::from("{}");
-    }
-
-    let mut parts: Vec<String> = metric
-        .iter()
-        .map(|(k, v)| format!("{}=\"{}\"", k, v))
-        .collect();
-    parts.sort();
-
-    format!("{{{}}}", parts.join(", "))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -970,8 +612,8 @@ mod tests {
             eprintln!("skipping: fixture {} missing", path.display());
             return;
         }
-        let text = execute_query(&path, "SELECT count(*) AS n FROM _src")
-            .expect("scalar SELECT runs");
+        let text =
+            execute_query(&path, "SELECT count(*) AS n FROM _src").expect("scalar SELECT runs");
         // `arrow::util::pretty::pretty_format_batches` renders this as
         // a 3-row text table with a single "n" column and a 302 value.
         assert!(text.contains("| n"), "missing 'n' header: {text}");
@@ -995,12 +637,18 @@ mod tests {
 
         // Counter → contains irate_1s.
         let counter_sql = resolve_query_to_sql(&capture, "cpu_cycles").expect("cpu_cycles counter");
-        assert!(counter_sql.contains("irate_1s"), "counter SQL: {counter_sql}");
+        assert!(
+            counter_sql.contains("irate_1s"),
+            "counter SQL: {counter_sql}"
+        );
 
         // Gauge → no rate fn, just COALESCE(col, 0).
         let gauge_sql = resolve_query_to_sql(&capture, "cpu_cores").expect("cpu_cores gauge");
         assert!(gauge_sql.contains("COALESCE"), "gauge SQL: {gauge_sql}");
-        assert!(!gauge_sql.contains("irate_1s"), "gauge must not use rate: {gauge_sql}");
+        assert!(
+            !gauge_sql.contains("irate_1s"),
+            "gauge must not use rate: {gauge_sql}"
+        );
 
         // Pass-through: a SQL string contains characters bare names can't.
         let user_sql = "SELECT count(*) AS v FROM _src";
@@ -1027,9 +675,8 @@ mod tests {
         let (backend, capture) = backend::open_capture(&path).expect("open");
         let sql1 = resolve_query_to_sql(&capture, "cpu_cycles").expect("cpu_cycles");
         let sql2 = resolve_query_to_sql(&capture, "cpu_instructions").expect("cpu_instructions");
-        let result =
-            correlation::calculate_correlation_sql(&backend, &capture, &sql1, &sql2)
-                .expect("correlation runs");
+        let result = correlation::calculate_correlation_sql(&backend, &capture, &sql1, &sql2)
+            .expect("correlation runs");
         assert!(result.sample_count > 0, "have sample points");
         assert!(
             result.max_correlation.is_finite(),

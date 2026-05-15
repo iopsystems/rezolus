@@ -1,5 +1,5 @@
-use super::common::{find_deviation_minima, identify_noise_type};
 use super::common::{CycleMinima, NoiseType};
+use super::common::{find_deviation_minima, identify_noise_type};
 use allan::Allan;
 use serde::{Deserialize, Serialize};
 

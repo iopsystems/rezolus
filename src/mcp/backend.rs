@@ -11,12 +11,10 @@
 //! the `SqlCapture` (dashboard metadata + cached time range). Both are
 //! reference-counted: the MCP stdio server caches them per parquet path.
 //!
-//! [`Series`] + [`batches_to_series`] mirror the legacy
-//! `metriken_query::promql::MatrixSample` shape so the statistical
-//! consumers in `correlation.rs` and `anomaly_detection/` can switch
-//! from `QueryResult` to Arrow without changing their algorithms.
-//! The projection contract is the same one
-//! `crates/prom-matrix/src/native.rs::arrow_to_prom_matrix` honours:
+//! [`Series`] + [`batches_to_series`] project Arrow batches into the
+//! `{labels, values}` shape that the statistical consumers in
+//! `correlation.rs` and `anomaly_detection/` operate on. The projection
+//! contract matches `crates/prom-matrix/src/native.rs::arrow_to_prom_matrix`:
 //! one `t` field (DOUBLE seconds), one `v` field (numeric — NULL/NaN
 //! drops the row), all other fields become per-series labels.
 
@@ -32,10 +30,8 @@ use metriken_query_sql::DuckDbBackend;
 use crate::viewer::sql_capture::SqlCapture;
 
 /// One time series — label set plus `(timestamp_seconds, value)`
-/// tuples. Local to MCP; parallel to (but independent of) the legacy
-/// `metriken_query::promql::MatrixSample`. Algorithms in
-/// `correlation.rs` and `anomaly_detection/` consume this directly so
-/// they don't need to know which engine produced the data.
+/// tuples. Local to MCP; algorithms in `correlation.rs` and
+/// `anomaly_detection/` consume this directly.
 #[derive(Debug, Clone, Default)]
 pub struct Series {
     pub labels: HashMap<String, String>,
@@ -51,8 +47,8 @@ pub fn open_capture(
     path: &Path,
 ) -> Result<(Arc<DuckDbBackend>, SqlCapture), Box<dyn std::error::Error>> {
     let backend = Arc::new(DuckDbBackend::new());
-    let capture = SqlCapture::open(path, &backend)
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    let capture =
+        SqlCapture::open(path, &backend).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
     Ok((backend, capture))
 }
 
@@ -172,7 +168,12 @@ pub fn counter_sum_rate_sql(
     }
     let v_expr = series
         .iter()
-        .map(|s| format!("COALESCE(irate_1s({}, timestamp), 0)", quote_ident(&s.physical)))
+        .map(|s| {
+            format!(
+                "COALESCE(irate_1s({}, timestamp), 0)",
+                quote_ident(&s.physical)
+            )
+        })
         .collect::<Vec<_>>()
         .join(" + ");
     Some(format!(
@@ -183,10 +184,7 @@ pub fn counter_sum_rate_sql(
 /// Build SQL for summing a gauge metric's series at each timestamp.
 /// Matches PromQL `sum(M)`. Returns `None` if the metric isn't in
 /// the catalog.
-pub fn gauge_sum_sql(
-    catalog: &metriken_query_sql::MetricCatalog,
-    metric: &str,
-) -> Option<String> {
+pub fn gauge_sum_sql(catalog: &metriken_query_sql::MetricCatalog, metric: &str) -> Option<String> {
     let series = catalog.series_by_metric.get(metric)?;
     if series.is_empty() {
         return None;
@@ -248,12 +246,20 @@ fn cell_to_f64(arr: &dyn Array, row: usize) -> Option<f64> {
         return None;
     }
     Some(match arr.data_type() {
-        DataType::Float64 => arr.as_primitive::<arrow::datatypes::Float64Type>().value(row),
-        DataType::Float32 => arr.as_primitive::<arrow::datatypes::Float32Type>().value(row) as f64,
+        DataType::Float64 => arr
+            .as_primitive::<arrow::datatypes::Float64Type>()
+            .value(row),
+        DataType::Float32 => arr
+            .as_primitive::<arrow::datatypes::Float32Type>()
+            .value(row) as f64,
         DataType::Int64 => arr.as_primitive::<arrow::datatypes::Int64Type>().value(row) as f64,
         DataType::Int32 => arr.as_primitive::<arrow::datatypes::Int32Type>().value(row) as f64,
-        DataType::UInt64 => arr.as_primitive::<arrow::datatypes::UInt64Type>().value(row) as f64,
-        DataType::UInt32 => arr.as_primitive::<arrow::datatypes::UInt32Type>().value(row) as f64,
+        DataType::UInt64 => arr
+            .as_primitive::<arrow::datatypes::UInt64Type>()
+            .value(row) as f64,
+        DataType::UInt32 => arr
+            .as_primitive::<arrow::datatypes::UInt32Type>()
+            .value(row) as f64,
         _ => return None,
     })
 }
@@ -268,11 +274,26 @@ fn cell_to_string(arr: &dyn Array, row: usize) -> Option<String> {
     Some(match arr.data_type() {
         DataType::Utf8 => arr.as_string::<i32>().value(row).to_string(),
         DataType::LargeUtf8 => arr.as_string::<i64>().value(row).to_string(),
-        DataType::Float64 => arr.as_primitive::<arrow::datatypes::Float64Type>().value(row).to_string(),
-        DataType::Int64 => arr.as_primitive::<arrow::datatypes::Int64Type>().value(row).to_string(),
-        DataType::Int32 => arr.as_primitive::<arrow::datatypes::Int32Type>().value(row).to_string(),
-        DataType::UInt64 => arr.as_primitive::<arrow::datatypes::UInt64Type>().value(row).to_string(),
-        DataType::UInt32 => arr.as_primitive::<arrow::datatypes::UInt32Type>().value(row).to_string(),
+        DataType::Float64 => arr
+            .as_primitive::<arrow::datatypes::Float64Type>()
+            .value(row)
+            .to_string(),
+        DataType::Int64 => arr
+            .as_primitive::<arrow::datatypes::Int64Type>()
+            .value(row)
+            .to_string(),
+        DataType::Int32 => arr
+            .as_primitive::<arrow::datatypes::Int32Type>()
+            .value(row)
+            .to_string(),
+        DataType::UInt64 => arr
+            .as_primitive::<arrow::datatypes::UInt64Type>()
+            .value(row)
+            .to_string(),
+        DataType::UInt32 => arr
+            .as_primitive::<arrow::datatypes::UInt32Type>()
+            .value(row)
+            .to_string(),
         DataType::Boolean => arr.as_boolean().value(row).to_string(),
         _ => format!("{arr:?}#{row}"),
     })
@@ -299,8 +320,7 @@ mod tests {
             eprintln!("skipping: fixture {} missing", path.display());
             return;
         }
-        let (_backend, capture) =
-            open_capture(&path).expect("open demo.parquet");
+        let (_backend, capture) = open_capture(&path).expect("open demo.parquet");
         // demo.parquet is a single-source rezolus recording.
         assert_eq!(capture.source(), "rezolus");
         // Time range must be populated for a non-empty recording.
@@ -441,8 +461,8 @@ mod tests {
             names[0].to_string()
         };
         let path_str = capture.parquet_path().to_string_lossy().to_string();
-        let sql = histogram_quantile_sql(&capture.catalog(), &hist_name, 0.5)
-            .expect("histogram present");
+        let sql =
+            histogram_quantile_sql(&capture.catalog(), &hist_name, 0.5).expect("histogram present");
         let batches = backend.run_sql(&sql, &path_str).expect("run_sql");
         // We don't assert on series count or row count — sparse
         // histograms can be all-NULL on some recordings. What matters

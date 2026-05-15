@@ -1,16 +1,6 @@
-// Legacy PromQL/Tsdb path. The legacy `detect_anomalies` and its
-// supporting helpers are cfg-gated below. The SQL pipeline goes
-// through `analyze_time_series` (always available) called by the
-// orchestration code in `src/mcp/mod.rs`.
-#[cfg(feature = "live-mode")]
-use crate::viewer::promql::{QueryEngine, QueryResult};
-#[cfg(feature = "live-mode")]
-use crate::viewer::tsdb::Tsdb;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-#[cfg(feature = "live-mode")]
-use std::sync::Arc;
 
 mod cusum;
 mod mad;
@@ -65,433 +55,10 @@ pub enum AnomalySeverity {
     Critical,
 }
 
-/// Validate and fix common query issues
-#[cfg(feature = "live-mode")]
-fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // Check for rate/irate/increase/delta/deriv functions that require range vectors
-    let range_vector_functions = [
-        "rate(",
-        "irate(",
-        "increase(",
-        "delta(",
-        "deriv(",
-        "rate_over_time(",
-        "avg_over_time(",
-        "min_over_time(",
-        "max_over_time(",
-        "sum_over_time(",
-        "count_over_time(",
-        "stddev_over_time(",
-        "stdvar_over_time(",
-        "changes(",
-        "resets(",
-        "holt_winters(",
-        "predict_linear(",
-    ];
-
-    for func in &range_vector_functions {
-        if query.contains(func) {
-            // Check if it has a range vector selector [duration]
-            // This is a simple check - a proper parser would be better
-
-            if let Some(start_pos) = query.find(func) {
-                let after_func = &query[start_pos + func.len()..];
-                let mut paren_depth = 1;
-                let mut has_range_vector = false;
-                let mut last_close_paren = 0;
-
-                for (i, ch) in after_func.chars().enumerate() {
-                    match ch {
-                        '(' => paren_depth += 1,
-                        ')' => {
-                            paren_depth -= 1;
-                            if paren_depth == 0 {
-                                last_close_paren = i;
-                                break;
-                            }
-                        }
-                        '[' if paren_depth > 0 => {
-                            has_range_vector = true;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if !has_range_vector && paren_depth == 0 {
-                    // Missing range vector - auto-fix with default
-                    let default_range = "[1m]"; // 1 minute default
-
-                    let before_close = start_pos + func.len() + last_close_paren;
-                    let mut fixed_query = String::new();
-                    fixed_query.push_str(&query[..before_close]);
-                    fixed_query.push_str(default_range);
-                    fixed_query.push_str(&query[before_close..]);
-
-                    // Log the auto-fix (in production, this would go to stderr or logs)
-                    eprintln!(
-                        "WARNING: Query '{}' was missing range vector for {}. Auto-fixed to: {}",
-                        query,
-                        func.trim_end_matches('('),
-                        fixed_query
-                    );
-
-                    return Ok(fixed_query);
-                }
-            }
-        }
-    }
-
-    // Check for bare range vectors (not allowed in queries)
-    if query.contains('[') && query.contains(']') {
-        // Check if it's a bare range vector like "metric[5m]" without a function
-        let has_function = range_vector_functions.iter().any(|f| query.contains(f));
-        if !has_function {
-            // Check if it's just a metric with range vector
-            if !query.contains("(") {
-                return Err(format!(
-                    "Query '{}' appears to be a bare range vector selector.\n\
-                    \n\
-                    Range vectors must be used with a function.\n\
-                    For counters, use: rate({})\n\
-                    For gauges, use: avg_over_time({})\n\
-                    \n\
-                    Range vectors alone cannot be graphed or analyzed.",
-                    query, query, query
-                )
-                .into());
-            }
-        }
-    }
-
-    Ok(query.to_string())
-}
-
-/// Extract metric name from a query string
-#[cfg(feature = "live-mode")]
-fn extract_metric_name(query: &str) -> Option<&str> {
-    // Try to find metric name in various query patterns
-
-    // Pattern: rate(metric_name[...]) or sum(rate(metric_name[...]))
-    if let Some(start) = query.rfind("rate(") {
-        let after_rate = &query[start + 5..];
-        if let Some(end) = after_rate.find(['[', '{', ')']) {
-            return Some(after_rate[..end].trim());
-        }
-    }
-
-    // Pattern: sum(metric_name) or avg(metric_name)
-    for func in &["sum(", "avg(", "min(", "max(", "count("] {
-        if let Some(start) = query.find(func) {
-            let after_func = &query[start + func.len()..];
-            if let Some(end) = after_func.find(['{', ')', '[']) {
-                let metric = after_func[..end].trim();
-                if !metric.is_empty() && !metric.contains('(') {
-                    return Some(metric);
-                }
-            }
-        }
-    }
-
-    // Pattern: bare metric or metric{labels}
-    if let Some(end) = query.find(['{', '[', '(', ' ']) {
-        return Some(query[..end].trim());
-    }
-
-    // Just the metric name
-    Some(query.trim())
-}
-
-/// Show available labels for a metric
-#[cfg(feature = "live-mode")]
-fn show_available_labels(
-    output: &mut String,
-    metric_name: &str,
-    labels_list: &[crate::viewer::tsdb::Labels],
-) {
-    use std::collections::HashMap;
-
-    let mut label_values: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-
-    for labels in labels_list {
-        for (key, value) in labels.inner.iter() {
-            // Skip metadata labels
-            if key != "metric" && key != "unit" && key != "metric_type" {
-                label_values
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(value.clone());
-            }
-        }
-    }
-
-    if label_values.is_empty() {
-        output.push_str(&format!(
-            "  No labels available (use just '{}')\n",
-            metric_name
-        ));
-        return;
-    }
-
-    output.push_str("\nAvailable labels and values:\n");
-    let mut sorted_keys: Vec<_> = label_values.keys().collect();
-    sorted_keys.sort();
-
-    for key in sorted_keys {
-        let values = &label_values[key];
-        let mut sorted_values: Vec<_> = values.iter().collect();
-        sorted_values.sort();
-
-        output.push_str(&format!("  {}: ", key));
-
-        if sorted_values.len() <= 10 {
-            // Show all values
-            output.push_str(
-                &sorted_values
-                    .iter()
-                    .map(|v| format!("\"{}\"", v))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-        } else {
-            // Show first 10 values
-            output.push_str(
-                &sorted_values
-                    .iter()
-                    .take(10)
-                    .map(|v| format!("\"{}\"", v))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            output.push_str(&format!(" ... ({} more)", sorted_values.len() - 10));
-        }
-        output.push('\n');
-    }
-
-    output.push_str("\nExample queries:\n");
-    output.push_str(&format!("  {}  (all series)\n", metric_name));
-
-    if let Some((first_key, first_values)) = label_values.iter().next() {
-        if let Some(first_value) = first_values.iter().next() {
-            output.push_str(&format!(
-                "  {}{{{}=\"{}\"}}  (filtered by label)\n",
-                metric_name, first_key, first_value
-            ));
-        }
-    }
-}
-
-/// Automatically construct appropriate query based on metric type
-/// If query is just a metric name, construct the right query for its type
-#[cfg(feature = "live-mode")]
-fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std::error::Error>> {
-    let query = query.trim();
-
-    // Check if this looks like a bare metric name (no functions, no brackets, no operators)
-    let is_bare_metric = !query.contains('(')
-        && !query.contains('[')
-        && !query.contains('+')
-        && !query.contains('-')
-        && !query.contains('*')
-        && !query.contains('/');
-
-    if !is_bare_metric {
-        // Already a full query, return as-is
-        return Ok(query.to_string());
-    }
-
-    // Extract metric name (might have label selectors)
-    let metric_name = if let Some(pos) = query.find('{') {
-        &query[..pos]
-    } else {
-        query
-    };
-
-    // Check metric type and construct appropriate query
-    if tsdb.counter_names().contains(&metric_name) {
-        // Counter: use sum(rate(metric[1m]))
-        eprintln!(
-            "Auto-detected '{}' as COUNTER, using: sum(rate({}[1m]))",
-            metric_name, query
-        );
-        Ok(format!("sum(rate({}[1m]))", query))
-    } else if tsdb.gauge_names().contains(&metric_name) {
-        // Gauge: use sum(metric)
-        eprintln!(
-            "Auto-detected '{}' as GAUGE, using: sum({})",
-            metric_name, query
-        );
-        Ok(format!("sum({})", query))
-    } else if tsdb.histogram_names().contains(&metric_name) {
-        // Histogram: use histogram_quantile for p99
-        eprintln!(
-            "Auto-detected '{}' as HISTOGRAM, using: histogram_quantile(0.99, {})",
-            metric_name, query
-        );
-        Ok(format!("histogram_quantile(0.99, {})", query))
-    } else {
-        // Unknown metric - return as-is and let normal error handling deal with it
-        Ok(query.to_string())
-    }
-}
-
-/// Perform anomaly detection on a time series (legacy PromQL/Tsdb
-/// path). The SQL entry point is
-/// `crate::mcp::detect_anomalies_for_input`.
-#[cfg(feature = "live-mode")]
-pub fn detect_anomalies(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
-    query: &str,
-) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
-    // Clean up escaped quotes from JSON
-    let query = query.replace("\\\"", "\"");
-
-    let query = auto_construct_query(&query, tsdb)?;
-
-    let query = validate_and_fix_query(&query)?;
-
-    let (start_time, end_time) = engine.get_time_range();
-
-    if start_time >= end_time {
-        return Err(format!(
-            "Invalid time range for anomaly detection: start ({}) >= end ({}). \
-            The parquet file may not contain enough data.",
-            start_time, end_time
-        )
-        .into());
-    }
-
-    let step = 1.0; // 1 second resolution
-
-    let duration = end_time - start_time;
-    if duration < 10.0 {
-        return Err(format!(
-            "Time range too short for anomaly detection: {:.1} seconds. \
-            Need at least 10 seconds of data for meaningful analysis.",
-            duration
-        )
-        .into());
-    }
-
-    let query_result = match engine.query_range(&query, start_time, end_time, step) {
-        Ok(result) => result,
-        Err(e) => {
-            let error_msg = e.to_string();
-
-            // If metric not found, suggest available metrics and show labels
-            if error_msg.contains("Metric not found") || error_msg.contains("not found") {
-                let metric_hint = extract_metric_name(&query);
-
-                let mut all_metrics = Vec::new();
-                all_metrics.extend(tsdb.counter_names());
-                all_metrics.extend(tsdb.gauge_names());
-                all_metrics.extend(tsdb.histogram_names());
-
-                let mut suggestions = Vec::new();
-                if let Some(hint) = metric_hint {
-                    // Normalize the hint to use underscores
-                    let hint_normalized = hint.replace(['/', '-'], "_");
-
-                    for metric in &all_metrics {
-                        // Check for exact match first
-                        if *metric == hint || *metric == hint_normalized {
-                            suggestions.insert(0, *metric);
-                        }
-                        // Then check for partial matches
-                        else if metric.contains(&hint_normalized)
-                            || metric.starts_with(&format!("{}_", hint_normalized))
-                            || metric.ends_with(&format!("_{}", hint_normalized))
-                        {
-                            suggestions.push(*metric);
-                        }
-                    }
-                }
-
-                let mut error_with_help = format!("Query failed: {}", error_msg);
-
-                // Check if query has label selectors - might be invalid label values
-                if query.contains('{') {
-                    if let Some(metric_name) = metric_hint {
-                        // Check if the metric actually exists (exact match in suggestions means it exists)
-                        if !suggestions.is_empty() && suggestions[0] == metric_name {
-                            error_with_help.push_str("\n\nThe metric exists but your label selector might be filtering out all series.");
-
-                            // Show available labels for this metric
-                            if let Some(labels_list) = tsdb.counter_labels(metric_name) {
-                                error_with_help.push_str(&format!(
-                                    "\n\nMetric '{}' (COUNTER) has {} series.",
-                                    metric_name,
-                                    labels_list.len()
-                                ));
-                                show_available_labels(
-                                    &mut error_with_help,
-                                    metric_name,
-                                    &labels_list,
-                                );
-                            } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
-                                error_with_help.push_str(&format!(
-                                    "\n\nMetric '{}' (GAUGE) has {} series.",
-                                    metric_name,
-                                    labels_list.len()
-                                ));
-                                show_available_labels(
-                                    &mut error_with_help,
-                                    metric_name,
-                                    &labels_list,
-                                );
-                            } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
-                                error_with_help.push_str(&format!(
-                                    "\n\nMetric '{}' (HISTOGRAM) has {} series.",
-                                    metric_name,
-                                    labels_list.len()
-                                ));
-                                show_available_labels(
-                                    &mut error_with_help,
-                                    metric_name,
-                                    &labels_list,
-                                );
-                            }
-
-                            return Err(error_with_help.into());
-                        }
-                    }
-                }
-
-                // Metric doesn't exist - show suggestions
-                if !suggestions.is_empty() {
-                    error_with_help.push_str("\n\nDid you mean one of these metrics?");
-                    for suggestion in suggestions.iter().take(5) {
-                        error_with_help.push_str(&format!("\n  - {}", suggestion));
-                    }
-                } else if !all_metrics.is_empty() {
-                    error_with_help.push_str("\n\nAvailable metrics include:");
-                    for metric in all_metrics.iter().take(10) {
-                        error_with_help.push_str(&format!("\n  - {}", metric));
-                    }
-                    if all_metrics.len() > 10 {
-                        error_with_help
-                            .push_str(&format!("\n  ... and {} more", all_metrics.len() - 10));
-                    }
-                }
-
-                return Err(error_with_help.into());
-            }
-
-            return Err(Box::new(e));
-        }
-    };
-
-    let (timestamps, values) = extract_time_series(&query_result, &query)?;
-
-    analyze_time_series_or_help(&query, tsdb, timestamps, values, step)
-}
-
 /// Run the statistical analyses (Allan/Hadamard/MAD/CUSUM) on
-/// `(timestamps, values)` and assemble the `AnomalyDetectionResult`.
-/// Shared between the legacy PromQL path ([`detect_anomalies`]) and
-/// the SQL path ([`detect_anomalies_sql`]). `query_label` is recorded
-/// on the result for user-facing display; `step` is the sampling
-/// interval in seconds.
+/// `(timestamps, values)` and assemble the [`AnomalyDetectionResult`].
+/// `query_label` is recorded on the result for user-facing display;
+/// `step` is the sampling interval in seconds.
 pub fn analyze_time_series(
     query_label: String,
     timestamps: Vec<f64>,
@@ -499,9 +66,7 @@ pub fn analyze_time_series(
     step: f64,
 ) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
     if values.is_empty() {
-        return Err(
-            "No data points to analyze. The query returned an empty time series.".into(),
-        );
+        return Err("No data points to analyze. The query returned an empty time series.".into());
     }
 
     // Allan/Hadamard/Modified Allan determine the noise type + optimal
@@ -521,10 +86,13 @@ pub fn analyze_time_series(
         }
     };
 
-    let (smoothed_values, smoothing_window) =
-        apply_allan_smoothing(&values, &allan_analysis, step);
+    let (smoothed_values, smoothing_window) = apply_allan_smoothing(&values, &allan_analysis, step);
     let use_smoothed = smoothing_window > 0.0;
-    let analysis_values = if use_smoothed { &smoothed_values } else { &values };
+    let analysis_values = if use_smoothed {
+        &smoothed_values
+    } else {
+        &values
+    };
 
     let mad_threshold = match allan_analysis.noise_type {
         NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0,
@@ -553,8 +121,16 @@ pub fn analyze_time_series(
         total_points,
         timestamps,
         values,
-        smoothed_values: if use_smoothed { Some(smoothed_values) } else { None },
-        smoothing_window: if use_smoothed { Some(smoothing_window) } else { None },
+        smoothed_values: if use_smoothed {
+            Some(smoothed_values)
+        } else {
+            None
+        },
+        smoothing_window: if use_smoothed {
+            Some(smoothing_window)
+        } else {
+            None
+        },
         mad_analysis,
         cusum_analysis,
         allan_analysis,
@@ -563,185 +139,6 @@ pub fn analyze_time_series(
         anomalies,
         confidence_score,
     })
-}
-
-/// Wrap [`analyze_time_series`] with the legacy path's "empty result"
-/// helpful-error branch — pre-existing behaviour that surfaces label
-/// hints when a query returns no data. The SQL path uses
-/// [`analyze_time_series`] directly because its error UX is different
-/// (the SQL engine surfaces binder errors with column names).
-#[cfg(feature = "live-mode")]
-fn analyze_time_series_or_help(
-    query: &str,
-    tsdb: &Arc<Tsdb>,
-    timestamps: Vec<f64>,
-    values: Vec<f64>,
-    step: f64,
-) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
-    if values.is_empty() {
-        // No data - might be invalid label selector
-        // Try to provide helpful error message with valid labels
-
-        let metric_hint = extract_metric_name(&query);
-
-        if let Some(metric_name) = metric_hint {
-            let mut error_msg = format!(
-                "Query returned no data points: {}\n\nThis usually means:\n\
-                1. The metric doesn't exist in this recording\n\
-                2. The label selector filters out all series\n\
-                3. The time range is too short for rate calculations\n",
-                query
-            );
-
-            if let Some(labels_list) = tsdb.counter_labels(metric_name) {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' (COUNTER) exists with {} series.\n",
-                    metric_name,
-                    labels_list.len()
-                ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' (GAUGE) exists with {} series.\n",
-                    metric_name,
-                    labels_list.len()
-                ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' (HISTOGRAM) exists with {} series.\n",
-                    metric_name,
-                    labels_list.len()
-                ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' not found in this recording.\n",
-                    metric_name
-                ));
-            }
-
-            return Err(error_msg.into());
-        }
-
-        return Err("Query returned no data points. The metric might not exist or label selectors filtered out all series.".into());
-    }
-
-    analyze_time_series(query.to_string(), timestamps, values, step)
-}
-
-/// Extract time series data from query result
-#[cfg(feature = "live-mode")]
-fn extract_time_series(
-    result: &QueryResult,
-    query: &str,
-) -> Result<(Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
-    match result {
-        QueryResult::Vector { result } => {
-            // Vector results from query_range indicate something is wrong
-            // This shouldn't happen with properly formed rate() queries
-
-            // Debug: Check if this is a rate/irate query with range vector
-            let has_range_vector = query.contains("[") && query.contains("]");
-            let is_rate_query =
-                query.contains("rate(") || query.contains("irate(") || query.contains("increase(");
-
-            if is_rate_query && has_range_vector {
-                // This should have returned a Matrix, not a Vector!
-                return Err(format!(
-                    "Unexpected result type for query '{}'. \
-                    The query appears correct but returned instant values instead of a time series. \
-                    This might indicate:\n\
-                    1. The time range in the parquet file is too short\n\
-                    2. There's insufficient data for the rate calculation\n\
-                    3. The query engine encountered an issue\n\
-                    \nDebug info: Result contains {} series",
-                    query,
-                    result.len()
-                ).into());
-            }
-
-            let example_query = if query.contains("rate(") || query.contains("irate(") {
-                // Query has rate() but missing the range vector
-                let fixed = query.replace("))", "[1m]))").replace("})", "}[1m]))");
-                format!(
-                    "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
-                    fixed
-                )
-            } else if query.contains("increase(") {
-                let fixed = query.replace("))", "[1m]))").replace("})", "}[1m]))");
-                format!(
-                    "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
-                    fixed
-                )
-            } else {
-                "\n\nFor counter metrics, use: rate(metric_name[1m]) or irate(metric_name[1m])\nFor gauge metrics that need smoothing, use: avg_over_time(metric_name[1m])".to_string()
-            };
-
-            if result.is_empty() {
-                return Err(format!(
-                    "Query returned no time series data. The query executed as an instant vector, \
-                    which returns only current values, not a time series.{}",
-                    example_query
-                )
-                .into());
-            }
-
-            // Even with data, it's still just instant values
-            Err(format!(
-                "Query returned instant values instead of time series data. \
-                Anomaly detection requires metrics with range vectors to analyze patterns over time.{}",
-                example_query
-            ).into())
-        }
-        QueryResult::Matrix { result } => {
-            // For matrix results, we have time series data
-            if result.is_empty() {
-                return Ok((vec![], vec![]));
-            }
-
-            // If there are multiple series, sum them by timestamp
-            if result.len() > 1 {
-                // Aggregate multiple series by summing values at each timestamp
-                let mut timestamp_values: std::collections::BTreeMap<i64, f64> =
-                    std::collections::BTreeMap::new();
-
-                for series in result {
-                    for (ts, val) in &series.values {
-                        let ts_key = ts.round() as i64;
-                        *timestamp_values.entry(ts_key).or_insert(0.0) += val;
-                    }
-                }
-
-                let timestamps: Vec<f64> = timestamp_values.keys().map(|&ts| ts as f64).collect();
-                let values: Vec<f64> = timestamp_values.values().copied().collect();
-                Ok((timestamps, values))
-            } else {
-                // Single series - use it directly
-                let series = &result[0];
-                let timestamps: Vec<f64> = series.values.iter().map(|(ts, _)| *ts).collect();
-                let values: Vec<f64> = series.values.iter().map(|(_, val)| *val).collect();
-                Ok((timestamps, values))
-            }
-        }
-        QueryResult::Scalar { result } => {
-            // Single scalar value - not enough for anomaly detection
-            Err(format!(
-                "Scalar query returned a single value ({:.4}). \
-                Anomaly detection requires time series data with multiple points.",
-                result.1
-            )
-            .into())
-        }
-        QueryResult::HistogramHeatmap { .. } => {
-            // Histogram heatmap data - not suitable for standard time series analysis
-            Err(
-                "Histogram heatmap data is not suitable for anomaly detection. \
-                Use histogram_quantiles() instead for time series analysis."
-                    .into(),
-            )
-        }
-    }
 }
 
 /// Apply moving average smoothing using Allan-determined window
@@ -852,7 +249,7 @@ fn identify_anomalies(
     // Score CUSUM cliffs with highest weight (dramatic changes)
     for cliff in &cusum.cliffs {
         *anomaly_scores.entry(cliff.index).or_insert(0.0) += 3.0; // Highest weight for cliffs
-                                                                  // Mark surrounding points with lower weight
+        // Mark surrounding points with lower weight
         if cliff.index > 0 {
             *anomaly_scores.entry(cliff.index - 1).or_insert(0.0) += 0.8;
         }

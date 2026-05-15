@@ -294,11 +294,15 @@ by kind; SQL strings pass through unchanged. `mcp query` now takes
 DuckDB SQL (breaking CLI change vs PromQL — the M-in-MCP clients
 are LLMs, fluent in SQL). Output is the prom-matrix JSON shape.
 
-Legacy `format_recording_info`, `format_metrics_description`,
-`calculate_correlation`, `detect_anomalies`,
-`extract_matrix_samples`, `extract_time_series`,
-`auto_construct_query`, etc. are now `#[cfg(feature = "live-mode")]`
-holdouts pending an audit delete.
+The legacy `Tsdb`/`QueryEngine` helpers
+(`format_recording_info`, `format_metrics_description`,
+`calculate_correlation`, `extract_matrix_samples`, `detect_anomalies`,
+`extract_time_series`, `auto_construct_query`,
+`run_exhaustive_detection`, `format_query_result`/`format_metric`) plus
+the unwired `discover_correlations.rs` and `resource_usage.rs` files
+have been deleted from `src/mcp/` — `~2,100` LOC down across the
+module. `src/mcp/` no longer references `metriken-query` or
+`QueryEngine`/`Tsdb` in any build configuration.
 
 22 in-process MCP tests pin the contract (open / extract /
 SQL-builder / auto-resolve / detect / correlate / `execute_query`
@@ -424,43 +428,30 @@ becomes a thin re-export shell over `metriken-query-sql`; the
 harness's land-or-delete decision (see the metriken doc) is part
 of how this lands.
 
-The default build still pulls in `metriken-query` because **four**
-call-site classes still need it. Each is independent and can land
-in its own PR. (MCP and report-save column-trim were items #1 and
-#4 in the previous version of this section; both landed and are
-covered in _Recently landed_ above. They are listed here only as
-"audit-and-delete" residuals.)
+The default build still pulls in `metriken-query` because **three**
+call-site classes still need it: the live-agent ingest path
+(item D below), `validate_service_extensions` on live mode
+(item B), and the dashboard crate's cfg-gated `Tsdb`
+re-export/`DashboardData` impl (item C). The plan defers all three
+behind a live-ingest storage decision; MCP, report-save column trim,
+the MCP audit-and-delete, and `parquet annotate` have all landed.
 
-### A. MCP legacy helpers (audit-and-delete)
+### A. report-save live-mode column trim (deferred — keeps Tsdb in
+live mode)
 
-The MCP migration left behind a handful of PromQL/Tsdb helpers
-gated `#[cfg(feature = "live-mode")]` — `format_recording_info`,
-`format_metrics_description`, `calculate_correlation`,
-`detect_anomalies`, `extract_matrix_samples`,
-`extract_time_series`, `auto_construct_query`, plus their callers
-under `mcp/anomaly_detection/` and `mcp/correlation.rs`. None are
-reachable on the default-build production path; they exist as a
-safety net while the SQL-backed equivalents bed in. An audit PR
-deletes them and unhooks the `live-mode` cfg from `src/mcp/`.
+The HTML report renderer's live-mode `save_single_parquet` /
+`save_combined_ab_tarball` use a `Tsdb` only to drive the PromQL
+column-trim path (`resolve_kept_columns`). report-save **does not run
+queries** — it only embeds selection JSON into parquet footer
+metadata via `embed_selection_in_parquet`; query execution happens
+client-side at view time. Deleting the live-mode PromQL trim would
+make live-mode captures fall through to `embed_only` (full parquet
+bytes, no trim) — acceptable but a UX regression. Tied to the
+live-ingest decision (item D); once that lands and live captures are
+SQL-backed, the live-mode branch is dead and the trim path drops out
+naturally.
 
-### B. `crates/report-save/` — live-mode query embed
-
-The HTML report renderer still loads a parquet into a `Tsdb` and
-runs the dashboard's queries through `QueryEngine` for the actual
-plot-body embed on live-mode captures. (The column-trim half landed
-in `a761906` — see _Recently landed_ — so `save_single_parquet_sql`
-and `save_combined_ab_tarball_sql` already handle the SQL-backed
-caller path.) The remaining work is the query embed: route PromQL
-strings through the harness, or rewrite to SQL.
-
-The SQL-rewrite is simpler than MCP — `report-save` doesn't do
-analytical computation, just runs each plot's query and lays out
-the result. The dashboard crate's SQL-emitting path
-(`plot_promql_with_sql`) gives `report-save` the SQL strings to
-run; mostly the rewrite is at the trait/Tsdb-vs-SqlCapture
-boundary.
-
-### C. `validate_service_extensions` (`src/viewer/metadata.rs`)
+### B. `validate_service_extensions` (`src/viewer/metadata.rs`)
 
 Small. Runs each KPI's PromQL against the live-agent `Tsdb` to
 mark KPIs `available=false` when their data is empty. Two
@@ -468,12 +459,12 @@ dependencies:
 
 - Carve-out 2 (service-extension SQL templates) must land first
   so KPIs carry SQL strings.
-- A SQL backend for the live-agent capture must exist (see E).
+- A SQL backend for the live-agent capture must exist (see D).
 
 After both, this function is a half-page rewrite: run each
 `kpi.sql` through `DuckDbBackend`, check non-empty.
 
-### D. Dashboard crate's `Tsdb` re-export + `DashboardData` impl
+### C. Dashboard crate's `Tsdb` re-export + `DashboardData` impl
 
 `crates/dashboard/src/lib.rs:11` re-exports `Tsdb`, and
 `data.rs:55` `impl DashboardData for Tsdb` (cfg-gated to
@@ -482,8 +473,8 @@ uses `Tsdb::default()` to drive the dashboard generators for
 schema dumps.
 
 These exist solely because `Tsdb` is still a live `DashboardData`.
-Once carve-outs A-C above land and the live-agent path migrates
-(see E), the cfg-gated `impl` and the re-export delete with no
+Once items A and B above land and the live-agent path migrates
+(see D), the cfg-gated `impl` and the re-export delete with no
 remaining consumer. The dump binary needs a synthetic
 `DashboardData` (an empty `SqlCapture`-shaped placeholder is the
 obvious shape) so the static schema dump survives.
@@ -495,7 +486,7 @@ synthetic `DashboardData` once the trait is the only contract.
 (`report-save/src/lib.rs` uses `Tsdb::load_from_bytes` rather than
 `Tsdb::default()`; same shape, same disposition.)
 
-### E. The live-agent ingest path (storage choice)
+### D. The live-agent ingest path (storage choice)
 
 This is the architectural question. Today
 `src/viewer/actions.rs::ingest_loop` polls `/metrics/binary` from
@@ -526,7 +517,7 @@ shortest path. The follow-on simplification — collapsing live
 mode and post-incident snapshot into one storage path with two
 viewers — is the long-term architectural win.
 
-### What deletes when A-E all land
+### What deletes when A-D all land
 
 - `promql-parser` dep goes.
 - `metriken-query/src/promql/` (4,716 LOC) goes.
@@ -540,8 +531,8 @@ viewers — is the long-term architectural win.
   `src/parquet_tools/mod.rs` go — the carve-out marker
   vanishes.
 
-The harness's land-or-delete (metriken-side) is a sub-decision of
-item B above (the report-save live-mode query embed): land it and
-B becomes "wire the existing PromQL strings through
-`harness::Engine`"; delete it and B becomes "rewrite to SQL". The
-build matrix simplifies to a single configuration either way.
+The harness's land-or-delete (metriken-side) collapses to **delete**
+once items A-D land: every previous candidate consumer (MCP,
+report-save column trim, `validate_service_extensions`, report-save
+live-mode trim) is going the SQL-rewrite route, not the harness route.
+The build matrix simplifies to a single configuration.

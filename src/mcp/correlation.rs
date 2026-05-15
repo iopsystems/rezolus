@@ -1,15 +1,6 @@
 use crate::mcp::backend::Series;
-// Legacy PromQL/Tsdb path — `calculate_correlation` and
-// `extract_matrix_samples` are cfg-gated to `live-mode` below. Once
-// no caller exists, this whole legacy entry point can be deleted.
-#[cfg(feature = "live-mode")]
-use crate::viewer::promql::{QueryEngine, QueryResult};
-#[cfg(feature = "live-mode")]
-use crate::viewer::tsdb::Tsdb;
 use rayon::prelude::*;
 use std::collections::HashMap;
-#[cfg(feature = "live-mode")]
-use std::sync::Arc;
 
 // Fixed time intervals optimized for system performance analysis
 // Balances coverage with computational efficiency
@@ -47,47 +38,6 @@ pub struct SeriesCorrelation {
     pub max_correlation: f64,
     pub optimal_lag: i64,
     pub sample_count: usize,
-}
-
-/// Calculate cross-correlation between two PromQL expressions
-///
-/// IMPORTANT: Counter metrics must be wrapped in rate() or irate() functions
-/// for meaningful correlation analysis. Raw counter values are monotonically
-/// increasing and will show spurious correlations.
-///
-/// This handles various cases:
-/// - Simple metrics: `cpu_usage` vs `memory_used` (for gauges)
-/// - Rate queries: `irate(cpu_cycles[5m])` vs `irate(instructions[5m])` (for counters)
-/// - Aggregations: `sum by (name) (irate(cgroup_cpu_usage[5m]))` vs `sum by (id) (irate(cpu_usage[5m]))`
-/// - Complex expressions: `cpu_usage / cpu_total` vs `memory_used / memory_total`
-///
-/// It also detects lag relationships - for example, if memory pressure leads to
-/// increased CPU usage due to garbage collection after a delay.
-///
-/// The time range and step are determined automatically from the underlying TSDB.
-///
-/// Note: Use describe_metrics tool to identify counter vs gauge metrics.
-#[cfg(feature = "live-mode")]
-pub fn calculate_correlation(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
-    expr1: &str,
-    expr2: &str,
-) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
-    let (start, end) = engine.get_time_range();
-    let step = tsdb.interval();
-
-    let result1 = engine.query_range(expr1, start, end, step)?;
-    let result2 = engine.query_range(expr2, start, end, step)?;
-
-    let samples1 = extract_matrix_samples(&result1)?;
-    let samples2 = extract_matrix_samples(&result2)?;
-
-    if samples1.is_empty() || samples2.is_empty() {
-        return Err("No data returned from queries".into());
-    }
-
-    correlate_samples(samples1, samples2, expr1, expr2, step)
 }
 
 /// Calculate cross-correlation between two specific time series
@@ -349,52 +299,9 @@ fn calculate_lag_correlations(
         .collect()
 }
 
-/// Extract matrix samples from a query result
-#[cfg(feature = "live-mode")]
-fn extract_matrix_samples(
-    result: &QueryResult,
-) -> Result<Vec<Series>, Box<dyn std::error::Error>> {
-    match result {
-        QueryResult::Matrix { result } => Ok(result
-            .iter()
-            .map(|m| Series {
-                labels: m.metric.clone(),
-                values: m.values.clone(),
-            })
-            .collect()),
-        QueryResult::Vector { result } => {
-            // Convert vector to single-sample matrix
-            Ok(result
-                .iter()
-                .map(|s| Series {
-                    labels: s.metric.clone(),
-                    values: vec![s.value],
-                })
-                .collect())
-        }
-        QueryResult::Scalar { result } => {
-            // Convert scalar to single-sample matrix
-            Ok(vec![Series {
-                labels: HashMap::new(),
-                values: vec![*result],
-            }])
-        }
-        QueryResult::HistogramHeatmap { .. } => {
-            // Histogram heatmap data cannot be converted to matrix samples
-            Err(
-                "Histogram heatmap data is not suitable for correlation analysis. \
-                Use histogram_quantiles() instead."
-                    .into(),
-            )
-        }
-    }
-}
-
-/// SQL-backed entry point parallel to [`calculate_correlation`].
-/// Mirrors the legacy signature but takes a backend + capture + two
-/// SQL strings (each must project `t DOUBLE, v <numeric>, labels...`).
-/// Empty SQL inputs or queries that produce no rows return the same
-/// "no data" error the PromQL path emits.
+/// Calculate cross-correlation between two SQL queries. Each must
+/// project `t DOUBLE, v <numeric>, labels...`. Empty inputs or queries
+/// that produce no rows return a "no data" error.
 pub fn calculate_correlation_sql(
     backend: &metriken_query_sql::DuckDbBackend,
     capture: &crate::viewer::sql_capture::SqlCapture,
@@ -419,13 +326,8 @@ pub fn calculate_correlation_sql(
     correlate_samples(samples1, samples2, sql1, sql2, step)
 }
 
-/// Shared correlation body. Used by both the legacy PromQL entry
-/// point ([`calculate_correlation`]) — which translates QueryResult
-/// → `Vec<Series>` via [`extract_matrix_samples`] — and the SQL
-/// entry point ([`calculate_correlation_sql`]) — which gets
-/// `Vec<Series>` directly from `batches_to_series`. The algorithm
-/// is identical because `Series` and the legacy `MatrixSample`
-/// share the same `{labels, values}` shape.
+/// Cross-correlate two sets of `Series` (one per SQL input) across
+/// the fixed `TIME_LAGS` grid and return the best lag/correlation.
 fn correlate_samples(
     samples1: Vec<Series>,
     samples2: Vec<Series>,

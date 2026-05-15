@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -540,10 +540,12 @@ impl Server {
             .ok_or("Missing metric2")?;
 
         let capture = self.get_capture(parquet_file).await?;
-        let sql1 = super::resolve_query_to_sql(&capture, metric1)
-            .ok_or_else(|| format!("metric1 '{metric1}' is not a recognised metric and doesn't look like SQL"))?;
-        let sql2 = super::resolve_query_to_sql(&capture, metric2)
-            .ok_or_else(|| format!("metric2 '{metric2}' is not a recognised metric and doesn't look like SQL"))?;
+        let sql1 = super::resolve_query_to_sql(&capture, metric1).ok_or_else(|| {
+            format!("metric1 '{metric1}' is not a recognised metric and doesn't look like SQL")
+        })?;
+        let sql2 = super::resolve_query_to_sql(&capture, metric2).ok_or_else(|| {
+            format!("metric2 '{metric2}' is not a recognised metric and doesn't look like SQL")
+        })?;
 
         use crate::mcp::correlation::{calculate_correlation_sql, format_correlation_result};
         let result = calculate_correlation_sql(&self.backend, &capture, &sql1, &sql2)?;
@@ -560,9 +562,7 @@ impl Server {
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
         let capture = self.get_capture(parquet_file).await?;
-        Ok(crate::mcp::describe_metrics::format_metrics_description_sql(
-            &capture,
-        ))
+        Ok(crate::mcp::describe_metrics::format_metrics_description_sql(&capture))
     }
 
     /// Detect anomalies in time series data
@@ -636,10 +636,12 @@ mod tests {
         let args = json!({"query": "cpu_cores"});
         let result = server.execute_query(&args).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Missing parquet_file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing parquet_file")
+        );
     }
 
     #[tokio::test]
@@ -685,7 +687,10 @@ mod tests {
             "expected resultType:matrix in: {response}",
         );
         // The single-series projection should have one `result` entry.
-        assert!(response.contains("\"result\""), "no result field: {response}");
+        assert!(
+            response.contains("\"result\""),
+            "no result field: {response}"
+        );
     }
 
     /// Empty result projection still returns valid Prometheus matrix
@@ -727,7 +732,13 @@ mod tests {
             .describe_recording(&args)
             .await
             .expect("describe_recording");
-        assert!(response.contains("Recording Information"), "missing header: {response}");
-        assert!(response.contains("Source: rezolus"), "missing source: {response}");
+        assert!(
+            response.contains("Recording Information"),
+            "missing header: {response}"
+        );
+        assert!(
+            response.contains("Source: rezolus"),
+            "missing source: {response}"
+        );
     }
 }
