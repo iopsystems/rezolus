@@ -267,11 +267,10 @@ export function openEventBubble({ anchorPoint, event, onDelete, onClose }) {
             let left = anchorPoint.x - r.width / 2;
             if (left < 8) left = 8;
             if (left + r.width > window.innerWidth) left = window.innerWidth - r.width - 8;
-            // Default below the anchor; flip above if it would clip.
-            let top = anchorPoint.y + 10;
-            if (top + r.height > window.innerHeight - 8) {
-                top = Math.max(8, anchorPoint.y - r.height - 10);
-            }
+            // Default ABOVE the anchor (sits above the hairline); flip
+            // below if it would clip the top of the viewport.
+            let top = anchorPoint.y - r.height - 6;
+            if (top < 8) top = anchorPoint.y + 10;
             vnode.dom.style.left = left + 'px';
             vnode.dom.style.top = top + 'px';
         },

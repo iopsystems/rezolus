@@ -735,11 +735,18 @@ export class Chart {
             const tsMs = params.data.xAxis;
             const tsNs = Math.round(tsMs * 1_000_000);
             const description = params.data.name || '';
+            // Anchor the bubble at the top of the hairline (top of the
+            // plot grid at the marker's x), translated from canvas to
+            // viewport coords so position:fixed lands in the right spot.
+            const pixelX = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
+            const grid = this.echart.getModel()?.getComponent('grid', 0);
+            const gridRect = grid?.coordinateSystem?.getRect?.();
+            const pixelY = gridRect ? gridRect.y : 0;
+            const chartRect = this.domNode.getBoundingClientRect();
             const native = params.event?.event;
-            const anchorPoint = {
-                x: native?.clientX ?? 0,
-                y: native?.clientY ?? 0,
-            };
+            const anchorPoint = Number.isFinite(pixelX)
+                ? { x: chartRect.left + pixelX, y: chartRect.top + pixelY }
+                : { x: native?.clientX ?? 0, y: native?.clientY ?? 0 };
             this._suppressRegularTooltip();
             const evt = { timestamp: tsNs, description };
             openEventBubble({
