@@ -516,14 +516,14 @@ export class Chart {
         this._tooltipFrozen = freeze;
 
         if (freeze) {
-            // Stop tooltip from following the mouse
+            // enterable: true so link clicks land on the tooltip instead
+            // of passing through to the canvas (which would unfreeze).
             this.echart.setOption({
-                tooltip: { triggerOn: 'none' },
+                tooltip: { triggerOn: 'none', enterable: true },
             });
         } else {
-            // Restore normal tooltip behavior
             this.echart.setOption({
-                tooltip: { triggerOn: 'mousemove|click' },
+                tooltip: { triggerOn: 'mousemove|click', enterable: false },
             });
         }
 
@@ -536,9 +536,9 @@ export class Chart {
             const color = freeze ? COLORS.accent : COLORS.fgMuted;
             footer.style.color = color;
             const addLink = freeze
-                ? `<a href="#" class="tooltip-add-event" data-chart-id="${this.chartId}" style="color: ${COLORS.accent}; text-decoration: none; margin-right: 12px;">+ Add Event</a>`
+                ? `<a href="#" class="tooltip-add-event" data-chart-id="${this.chartId}" style="display: block; margin-top: 4px; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
                 : '';
-            footer.innerHTML = `${addLink}<span class="tooltip-freeze-state">${text}</span>`;
+            footer.innerHTML = `<span class="tooltip-freeze-state">${text}</span>${addLink}`;
         }
     }
 
