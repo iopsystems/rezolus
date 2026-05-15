@@ -23,7 +23,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                      list_sum([*COLUMNS('^rezolus_cpu_usage(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
-           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) / 1e9 AS v FROM agg"#.to_string(),
+           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) / 1e9 AS v FROM agg"#
+            .to_string(),
     );
     resources.plot_promql_with_sql(
         PlotOpts::gauge("Memory (RSS)", "memory", Unit::Bytes),
@@ -74,7 +75,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                      list_sum([*COLUMNS('^rezolus_bpf_run_time(/[^:]+)?$')]::UBIGINT[]) AS s
               FROM _src
            )
-           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) / 1e9 AS v FROM agg"#.to_string(),
+           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) / 1e9 AS v FROM agg"#
+            .to_string(),
     );
     bpf.plot_promql_with_sql(
         PlotOpts::counter(
@@ -98,7 +100,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                       LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
                       timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
                   ) / 1e9 AS v
-           FROM unp"#.to_string(),
+           FROM unp"#
+            .to_string(),
     );
     bpf.plot_promql_with_sql(
         PlotOpts::counter(

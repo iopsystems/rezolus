@@ -183,7 +183,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             gauge_by_id_div("^gpu_sm_utilization/[0-9]+$", 100.0),
         );
         sm.plot_promql_with_sql(
-            PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage).percentage_range(),
+            PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage)
+                .percentage_range(),
             "avg(gpu_sm_occupancy) / 100".to_string(),
             gauge_avg_div("^gpu_sm_occupancy/[0-9]+$", 100.0),
         );
@@ -220,7 +221,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut memory = Group::new("Memory", "memory");
 
     let capacity = memory.subgroup("Capacity");
-    capacity.describe("Total GPU memory used and free across all devices, plus overall utilization.");
+    capacity
+        .describe("Total GPU memory used and free across all devices, plus overall utilization.");
     capacity.plot_promql_with_sql(
         PlotOpts::gauge("Used", "mem-used", Unit::Bytes),
         "sum(gpu_memory{state=\"used\"})".to_string(),
@@ -428,7 +430,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     temps.describe("Per-device temperatures and the hottest GPU across the system.");
     if multi_gpu {
         temps.plot_promql_with_sql(
-            PlotOpts::gauge("Temperature (Per-GPU)", "temp-per-gpu", Unit::Count).with_axis_label("°C"),
+            PlotOpts::gauge("Temperature (Per-GPU)", "temp-per-gpu", Unit::Count)
+                .with_axis_label("°C"),
             "sum by (id) (gpu_temperature)".to_string(),
             gauge_by_id_div("^gpu_temperature/[0-9]+$", 1.0),
         );

@@ -18,15 +18,19 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         PlotOpts::counter("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
             .with_unit_system("bitrate"),
         "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
-        format!("WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
-            sql::irate_total("^network_bytes/transmit(/[^:]+)?$")),
+        format!(
+            "WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
+            sql::irate_total("^network_bytes/transmit(/[^:]+)?$")
+        ),
     );
     bandwidth.plot_promql_with_sql(
         PlotOpts::counter("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
             .with_unit_system("bitrate"),
         "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
-        format!("WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
-            sql::irate_total("^network_bytes/receive(/[^:]+)?$")),
+        format!(
+            "WITH t AS ({}) SELECT t.t AS t, t.v * 8 AS v FROM t",
+            sql::irate_total("^network_bytes/receive(/[^:]+)?$")
+        ),
     );
 
     let packets = traffic.subgroup("Packets");

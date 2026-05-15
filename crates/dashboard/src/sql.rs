@@ -365,11 +365,7 @@ fn cgroup_name_filter(side: CgroupSide) -> &'static str {
 
 fn cgroup_label_filter(filter: Option<(&str, &str)>) -> String {
     match filter {
-        Some((k, v)) => format!(
-            " AND idx.labels[{}] = {}",
-            sql_string(k),
-            sql_string(v),
-        ),
+        Some((k, v)) => format!(" AND idx.labels[{}] = {}", sql_string(k), sql_string(v),),
         None => String::new(),
     }
 }
@@ -378,7 +374,9 @@ fn sql_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for ch in s.chars() {
-        if ch == '\'' { out.push('\''); }
+        if ch == '\'' {
+            out.push('\'');
+        }
         out.push(ch);
     }
     out.push('\'');
@@ -551,11 +549,7 @@ pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide
 /// — `frequency-per-cpu` (tsc × aperf / mperf), `ipns-per-cpu`
 /// ((i/c) × (t·a/m) / 1e9). `ratio_by_id` covers the 2-arg case
 /// already.
-pub fn nway_ratio_by_id(
-    args: &[(&str, &str)],
-    id_extract_re: &str,
-    formula: &str,
-) -> String {
+pub fn nway_ratio_by_id(args: &[(&str, &str)], id_extract_re: &str, formula: &str) -> String {
     assert!(args.len() >= 2, "nway_ratio_by_id needs ≥ 2 inputs");
     // CTE per arg: UNPIVOT the matching columns into (timestamp, col, v).
     let mut sql = String::from("WITH ");

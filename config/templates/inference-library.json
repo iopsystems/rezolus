@@ -1,7 +1,10 @@
 {
   "service_name": "inference-library",
   "category": true,
-  "members": ["vllm", "sglang"],
+  "members": [
+    "vllm",
+    "sglang"
+  ],
   "kpis": [
     {
       "role": "load",
@@ -39,7 +42,10 @@
       "title": "Time to First Token (TTFT)",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -47,7 +53,10 @@
       "title": "Inter-Token Latency (ITL)",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -55,7 +64,10 @@
       "title": "Prefill Time",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -63,7 +75,10 @@
       "title": "End-to-End Request Latency",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     }
   ]

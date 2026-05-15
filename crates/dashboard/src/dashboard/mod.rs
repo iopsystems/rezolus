@@ -14,7 +14,7 @@ mod overview;
 mod query_explorer;
 mod rezolus;
 mod scheduler;
-mod service;
+pub mod service;
 mod softirq;
 mod syscall;
 

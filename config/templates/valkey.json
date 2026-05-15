@@ -1,6 +1,8 @@
 {
   "service_name": "valkey",
-  "aliases": ["redis"],
+  "aliases": [
+    "redis"
+  ],
   "service_metadata": {},
   "slo": null,
   "kpis": [
@@ -10,35 +12,40 @@
       "query": "sum(irate(redis/total_commands_processed{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
-      "denominator": true
+      "denominator": true,
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"redis/total_commands_processed\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Read Rate",
       "query": "sum(irate(redis/total_reads_processed{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"redis/total_reads_processed\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Write Rate",
       "query": "sum(irate(redis/total_writes_processed{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"redis/total_writes_processed\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Network Input Rate",
       "query": "sum(irate(redis/total_net_input_bytes{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "datarate"
+      "unit_system": "datarate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"redis/total_net_input_bytes\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Network Output Rate",
       "query": "sum(irate(redis/total_net_output_bytes{source=\"valkey\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "datarate"
+      "unit_system": "datarate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"redis/total_net_output_bytes\", timestamp) AS v FROM {{view}} ORDER BY t"
     }
   ]
 }

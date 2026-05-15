@@ -14,7 +14,11 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let totals = operations.subgroup("Totals");
     totals.describe("Throughput and operation rate aggregated across all block devices.");
     totals.plot_promql_with_sql(
-        PlotOpts::counter("Total Throughput", "blockio-throughput-total", Unit::Datarate),
+        PlotOpts::counter(
+            "Total Throughput",
+            "blockio-throughput-total",
+            Unit::Datarate,
+        ),
         "sum(irate(blockio_bytes[5m]))".to_string(),
         sql::irate_total("^blockio_bytes(/[^:]+)?$"),
     );

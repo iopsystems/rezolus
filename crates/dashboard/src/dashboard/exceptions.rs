@@ -183,7 +183,10 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                  write-only spike points at the controller / target.",
         ),
         "sum by (op) (irate(blockio_errors[5m]))".to_string(),
-        sql::irate_sum_by_id("^blockio_errors/[^/]+/[^/]+$", "^blockio_errors/[^/]+/([^/]+)$"),
+        sql::irate_sum_by_id(
+            "^blockio_errors/[^/]+/[^/]+$",
+            "^blockio_errors/[^/]+/([^/]+)$",
+        ),
     );
 
     let requeues = blockio.subgroup("Requeues");

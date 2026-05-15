@@ -1,6 +1,8 @@
 {
   "service_name": "llm-perf",
-  "aliases": ["llm-bench"],
+  "aliases": [
+    "llm-bench"
+  ],
   "service_metadata": {},
   "slo": null,
   "kpis": [
@@ -10,28 +12,32 @@
       "query": "sum(irate(tokens{direction=\"output\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
-      "denominator": true
+      "denominator": true,
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"tokens/output\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "load",
       "title": "Input Token Rate",
       "query": "sum(irate(tokens{direction=\"input\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"tokens/input\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "load",
       "title": "Requests In-Flight",
       "query": "requests_inflight{source=\"llm-perf\"}",
       "type": "gauge",
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"requests_inflight\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Request Rate",
       "query": "sum(irate(requests{status=\"success\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/success\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
@@ -45,21 +51,24 @@
       "title": "Error Request Rate",
       "query": "sum(irate(requests{status=\"error\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/error\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Timeout Request Rate",
       "query": "sum(irate(requests{status=\"timeout\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/timeout\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Canceled Request Rate",
       "query": "sum(irate(requests{status=\"canceled\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/canceled\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "latency",
@@ -67,7 +76,10 @@
       "query": "ttft{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -76,7 +88,10 @@
       "query": "tpot{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -85,7 +100,10 @@
       "query": "itl{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -94,7 +112,10 @@
       "query": "request_latency{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -103,7 +124,10 @@
       "query": "think_duration{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     }
   ]

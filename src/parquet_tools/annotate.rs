@@ -197,10 +197,13 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 
     for kpi in &mut ext.kpis {
         let has_data = match &kpi.sql {
-            Some(sql) => match backend.run_sql(sql, &path_str) {
-                Ok(batches) => kpi_has_data(&batches),
-                Err(_) => false,
-            },
+            Some(sql) => {
+                let resolved = dashboard::substitute_view(sql, &ext.service_name);
+                match backend.run_sql(&resolved, &path_str) {
+                    Ok(batches) => kpi_has_data(&batches),
+                    Err(_) => false,
+                }
+            }
             None => {
                 warn!(
                     "KPI {:?} (role={}) has no SQL; marking unavailable",
@@ -458,8 +461,8 @@ mod tests {
     use arrow::array::{Int64Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::metadata::KeyValue;
     use parquet::file::properties::WriterProperties;
     use parquet::file::reader::FileReader;

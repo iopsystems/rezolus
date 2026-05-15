@@ -2,7 +2,36 @@ use crate::data::DashboardData;
 use crate::plot::*;
 use crate::service_extension::ServiceExtension;
 
-pub fn generate(data: &dyn DashboardData, sections: Vec<Section>, service_ext: &ServiceExtension) -> View {
+/// Substitute `{{view}}` in a KPI SQL string with the source-specific
+/// view name (`_src_<sanitized-source>`). Mirrors the wasm viewer's
+/// `viewNameForSource` rule: non-`[a-zA-Z0-9_]` chars in the source
+/// name become `_`, so `vllm-prefill` resolves to `_src_vllm_prefill`
+/// on both backends. Authors write `{{view}}` once and the same KPI
+/// template renders correctly across every parquet that ships a
+/// matching source.
+///
+/// Shared between the dashboard emitter (here) and `parquet annotate`'s
+/// KPI validator (`src/parquet_tools/annotate.rs`), which both need to
+/// resolve the placeholder to a runnable SQL string against the same
+/// engine-side per-source view.
+pub fn substitute_view(sql: &str, source: &str) -> String {
+    let mut view = String::with_capacity(source.len() + 5);
+    view.push_str("_src_");
+    for ch in source.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            view.push(ch);
+        } else {
+            view.push('_');
+        }
+    }
+    sql.replace("{{view}}", &view)
+}
+
+pub fn generate(
+    data: &dyn DashboardData,
+    sections: Vec<Section>,
+    service_ext: &ServiceExtension,
+) -> View {
     let mut view = View::new(data, sections);
 
     // Embed service metadata in the view so the frontend can display it
@@ -83,10 +112,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>, service_ext: &
 
         match (kpi.sql.as_deref(), kpi.full_width) {
             (Some(sql), true) => {
-                sg.plot_promql_with_sql_full(opts, kpi.query.clone(), sql.to_string());
+                let sql = substitute_view(sql, &service_ext.service_name);
+                sg.plot_promql_with_sql_full(opts, kpi.query.clone(), sql);
             }
             (Some(sql), false) => {
-                sg.plot_promql_with_sql(opts, kpi.query.clone(), sql.to_string());
+                let sql = substitute_view(sql, &service_ext.service_name);
+                sg.plot_promql_with_sql(opts, kpi.query.clone(), sql);
             }
             (None, true) => {
                 sg.plot_promql_full(opts, kpi.query.clone());
@@ -114,8 +145,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>, service_ext: &
 #[cfg(all(test, feature = "live-mode"))]
 mod tests {
     use super::*;
-    use crate::service_extension::{Kpi, ServiceExtension};
     use crate::Tsdb;
+    use crate::service_extension::{Kpi, ServiceExtension};
     use std::collections::HashMap;
 
     fn kpi(title: &str, query: &str, sql: Option<&str>) -> Kpi {
@@ -153,7 +184,7 @@ mod tests {
             service_metadata: HashMap::new(),
             slo: None,
             kpis: vec![
-                kpi("Rate (SQL)",    "rate_promql",   Some("SELECT 1")),
+                kpi("Rate (SQL)", "rate_promql", Some("SELECT 1")),
                 kpi("Rate (legacy)", "legacy_promql", None),
             ],
         };
@@ -163,16 +194,78 @@ mod tests {
 
         // Both KPIs land in a single throughput group; both PromQL strings
         // are present.
-        assert!(json.contains("rate_promql"),   "SQL kpi's promql_query missing: {json}");
-        assert!(json.contains("legacy_promql"), "legacy kpi's promql_query missing: {json}");
+        assert!(
+            json.contains("rate_promql"),
+            "SQL kpi's promql_query missing: {json}"
+        );
+        assert!(
+            json.contains("legacy_promql"),
+            "legacy kpi's promql_query missing: {json}"
+        );
 
         // The SQL kpi's body is serialized; the legacy kpi's is absent.
         // `sql_query` uses `skip_serializing_if = Option::is_none`, so the
         // field key itself appears once (for the SQL kpi) and only once.
-        assert!(json.contains("\"sql_query\":\"SELECT 1\""),
-            "SQL kpi's sql_query body missing: {json}");
-        assert_eq!(json.matches("\"sql_query\"").count(), 1,
-            "expected exactly one sql_query field (the SQL kpi); got: {json}");
+        assert!(
+            json.contains("\"sql_query\":\"SELECT 1\""),
+            "SQL kpi's sql_query body missing: {json}"
+        );
+        assert_eq!(
+            json.matches("\"sql_query\"").count(),
+            1,
+            "expected exactly one sql_query field (the SQL kpi); got: {json}"
+        );
+    }
+
+    /// End-to-end: a KPI whose `sql` carries `{{view}}` lands in the
+    /// generated plot with the placeholder resolved to
+    /// `_src_<service_name>`. Pins the substitution wiring through the
+    /// service emitter.
+    #[test]
+    fn kpi_sql_view_placeholder_is_resolved() {
+        let ext = ServiceExtension {
+            service_name: "vllm-prefill".to_string(),
+            aliases: vec![],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: vec![kpi(
+                "Rate",
+                "metric{source=\"vllm-prefill\"}",
+                Some("SELECT t FROM {{view}}"),
+            )],
+        };
+        let view = generate(&Tsdb::default(), vec![], &ext);
+        let json = serde_json::to_string(&view).unwrap();
+        // Placeholder resolved (non-alphanumeric `-` → `_`).
+        assert!(
+            json.contains("FROM _src_vllm_prefill"),
+            "expected resolved view: {json}",
+        );
+        // Placeholder doesn't leak through.
+        assert!(!json.contains("{{view}}"), "placeholder leaked: {json}");
+    }
+
+    /// `{{view}}` is substituted to `_src_<source>` (wasm-compatible
+    /// sanitisation: non-`[a-zA-Z0-9_]` chars become `_`). Pinned so a
+    /// future change can't accidentally diverge the server's view-name
+    /// rule from `viewNameForSource` in `duckdb-registry.js`.
+    #[test]
+    fn substitute_view_mirrors_wasm_sanitisation() {
+        assert_eq!(
+            substitute_view("SELECT * FROM {{view}}", "cachecannon"),
+            "SELECT * FROM _src_cachecannon"
+        );
+        assert_eq!(
+            substitute_view("SELECT * FROM {{view}}", "vllm-prefill"),
+            "SELECT * FROM _src_vllm_prefill"
+        );
+        // Multiple occurrences all substitute.
+        assert_eq!(
+            substitute_view("a {{view}} b {{view}} c", "x"),
+            "a _src_x b _src_x c"
+        );
+        // No placeholder → pass-through.
+        assert_eq!(substitute_view("SELECT 1", "x"), "SELECT 1");
     }
 }
 

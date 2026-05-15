@@ -21,7 +21,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     capacity.plot_promql_with_sql(
         PlotOpts::gauge("Available", "available", Unit::Bytes),
         "memory_available".to_string(),
-        r#"SELECT timestamp::DOUBLE/1e9 AS t, "memory_available"::DOUBLE AS v FROM _src"#.to_string(),
+        r#"SELECT timestamp::DOUBLE/1e9 AS t, "memory_available"::DOUBLE AS v FROM _src"#
+            .to_string(),
     );
     capacity.plot_promql_with_sql(
         PlotOpts::gauge("Free", "free", Unit::Bytes),
@@ -46,7 +47,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         "memory_total - memory_available".to_string(),
         r#"SELECT timestamp::DOUBLE/1e9 AS t,
                   ("memory_total" - "memory_available")::DOUBLE AS v
-           FROM _src"#.to_string(),
+           FROM _src"#
+            .to_string(),
     );
     breakdown.plot_promql_with_sql(
         PlotOpts::gauge("Utilization %", "utilization-pct", Unit::Percentage).percentage_range(),

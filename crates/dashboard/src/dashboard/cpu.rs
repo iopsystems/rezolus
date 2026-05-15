@@ -229,7 +229,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             sql::concept_total(
                 "l3_hit_pct",
                 &[
-                    ("miss",   Arg::Sum("^cpu_l3_miss/[0-9]+$")),
+                    ("miss", Arg::Sum("^cpu_l3_miss/[0-9]+$")),
                     ("access", Arg::Sum("^cpu_l3_access/[0-9]+$")),
                 ],
             ),
@@ -253,7 +253,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             sql::concept_total(
                 "l3_hit_pct",
                 &[
-                    ("miss",   Arg::Sum("^cpu_l3_miss/[0-9]+$")),
+                    ("miss", Arg::Sum("^cpu_l3_miss/[0-9]+$")),
                     ("access", Arg::Sum("^cpu_l3_access/[0-9]+$")),
                 ],
             ),
@@ -320,11 +320,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         miss.plot_promql_with_sql(
             PlotOpts::counter("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
                 .percentage_range(),
-            "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))".to_string(),
+            "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))"
+                .to_string(),
             sql::concept_total(
                 "branch_miss_pct",
                 &[
-                    ("misses",   Arg::Sum("^cpu_branch_misses/[0-9]+$")),
+                    ("misses", Arg::Sum("^cpu_branch_misses/[0-9]+$")),
                     ("branches", Arg::Sum("^cpu_branch_instructions/[0-9]+$")),
                 ],
             ),
@@ -349,11 +350,12 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         miss.plot_promql_with_sql_full(
             PlotOpts::counter("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
                 .percentage_range(),
-            "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))".to_string(),
+            "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))"
+                .to_string(),
             sql::concept_total(
                 "branch_miss_pct",
                 &[
-                    ("misses",   Arg::Sum("^cpu_branch_misses/[0-9]+$")),
+                    ("misses", Arg::Sum("^cpu_branch_misses/[0-9]+$")),
                     ("branches", Arg::Sum("^cpu_branch_instructions/[0-9]+$")),
                 ],
             ),
@@ -435,7 +437,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                           LAG(s) OVER (PARTITION BY id ORDER BY timestamp),
                           timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)
                       ) AS v
-               FROM by_id"#.to_string(),
+               FROM by_id"#
+                .to_string(),
         );
     } else {
         misses.plot_promql_with_sql_full(
@@ -454,7 +457,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             sql::concept_total(
                 "dtlb_mpki",
                 &[
-                    ("misses",       Arg::Sum("^cpu_dtlb_miss(/[^:]+)?$")),
+                    ("misses", Arg::Sum("^cpu_dtlb_miss(/[^:]+)?$")),
                     ("instructions", Arg::Sum("^cpu_instructions/[0-9]+$")),
                 ],
             ),
@@ -513,7 +516,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             sql::concept_total(
                 "dtlb_mpki",
                 &[
-                    ("misses",       Arg::Sum("^cpu_dtlb_miss(/[^:]+)?$")),
+                    ("misses", Arg::Sum("^cpu_dtlb_miss(/[^:]+)?$")),
                     ("instructions", Arg::Sum("^cpu_instructions/[0-9]+$")),
                 ],
             ),
@@ -621,7 +624,10 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                     Unit::Rate,
                 ),
                 format!("sum by (id) (irate(cpu_tlb_flush{{reason=\"{reason_value}\"}}[5m]))"),
-                sql::irate_by_id(&format!("^cpu_tlb_flush/{reason_value}/[0-9]+$"), "/([0-9]+)$"),
+                sql::irate_by_id(
+                    &format!("^cpu_tlb_flush/{reason_value}/[0-9]+$"),
+                    "/([0-9]+)$",
+                ),
             );
         } else {
             sg.plot_promql_with_sql_full(

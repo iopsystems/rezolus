@@ -5,6 +5,7 @@ mod plot;
 mod service_extension;
 pub mod sql;
 
+pub use dashboard::service::substitute_view;
 pub use data::DashboardData;
 pub use events::{Event, Events};
 #[cfg(feature = "live-mode")]

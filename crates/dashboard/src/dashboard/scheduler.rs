@@ -80,7 +80,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
            SELECT s.timestamp::DOUBLE/1e9 AS t,
                   s.s / NULLIF(c."cpu_cores", 0) AS v
            FROM summed s
-              JOIN _src c ON c.timestamp = s.timestamp"#.to_string();
+              JOIN _src c ON c.timestamp = s.timestamp"#
+        .to_string();
     if multi_cpu {
         wait.plot_promql_with_sql(
             PlotOpts::counter("Wait", "scheduler-runqueue-wait", Unit::Time)

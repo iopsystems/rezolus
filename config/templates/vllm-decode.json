@@ -8,7 +8,8 @@
       "title": "Requests Running",
       "query": "vllm_num_requests_running{source=\"vllm-decode\"}",
       "type": "gauge",
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"vllm_num_requests_running\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "requests",
@@ -22,7 +23,8 @@
       "title": "Completed Rate",
       "query": "sum(irate(vllm_request_success_total{source=\"vllm-decode\",finished_reason=\"stop\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_request_success_total/stop\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "requests",
@@ -36,21 +38,24 @@
       "title": "Abort Rate",
       "query": "sum(irate(vllm_request_success_total{source=\"vllm-decode\",finished_reason=\"abort\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_request_success_total/abort\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "requests",
       "title": "Truncated Rate",
       "query": "sum(irate(vllm_request_success_total{source=\"vllm-decode\",finished_reason=\"length\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_request_success_total/length\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "requests",
       "title": "Evicted Rate",
       "query": "sum(irate(vllm_num_preemptions_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_num_preemptions_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "requests",
@@ -58,7 +63,10 @@
       "query": "vllm_request_prompt_tokens{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "count"
     },
     {
@@ -67,7 +75,10 @@
       "query": "vllm_request_generation_tokens{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "count"
     },
     {
@@ -75,7 +86,8 @@
       "title": "Prompt Token Rate",
       "query": "sum(irate(vllm_prompt_tokens_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_prompt_tokens_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "tokens",
@@ -83,7 +95,8 @@
       "query": "sum(irate(vllm_generation_tokens_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
-      "denominator": true
+      "denominator": true,
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_generation_tokens_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "latency",
@@ -91,7 +104,10 @@
       "query": "vllm_time_to_first_token_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -100,7 +116,10 @@
       "query": "vllm_inter_token_latency_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -109,7 +128,10 @@
       "query": "vllm_request_time_per_output_token_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -118,7 +140,10 @@
       "query": "vllm_e2e_request_latency_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -127,7 +152,10 @@
       "query": "vllm_request_prefill_time_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -136,7 +164,10 @@
       "query": "vllm_request_decode_time_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -145,7 +176,10 @@
       "query": "vllm_request_inference_time_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -153,7 +187,8 @@
       "title": "Requests Waiting",
       "query": "vllm_num_requests_waiting{source=\"vllm-decode\"}",
       "type": "gauge",
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"vllm_num_requests_waiting\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "queueing",
@@ -161,7 +196,10 @@
       "query": "vllm_request_queue_time_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -169,7 +207,8 @@
       "title": "KV Cache Usage",
       "query": "vllm_kv_cache_usage_perc{source=\"vllm-decode\"}",
       "type": "gauge",
-      "unit_system": "percentage"
+      "unit_system": "percentage",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"vllm_kv_cache_usage_perc\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "cache",
@@ -183,7 +222,8 @@
       "title": "Cached Token Rate",
       "query": "sum(irate(vllm_prompt_tokens_cached_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_prompt_tokens_cached_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "cache",
@@ -191,7 +231,10 @@
       "query": "vllm_request_prefill_kv_computed_tokens{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "count"
     },
     {
@@ -199,21 +242,24 @@
       "title": "Estimated FLOPS per GPU",
       "query": "sum(irate(vllm_estimated_flops_per_gpu_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_estimated_flops_per_gpu_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "gpu",
       "title": "Estimated Memory Read Bandwidth per GPU",
       "query": "sum(irate(vllm_estimated_read_bytes_per_gpu_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "datarate"
+      "unit_system": "datarate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_estimated_read_bytes_per_gpu_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "gpu",
       "title": "Estimated Memory Write Bandwidth per GPU",
       "query": "sum(irate(vllm_estimated_write_bytes_per_gpu_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "datarate"
+      "unit_system": "datarate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_estimated_write_bytes_per_gpu_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "disaggregation (nixl)",
@@ -221,7 +267,10 @@
       "query": "vllm_nixl_xfer_time_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -230,7 +279,10 @@
       "query": "vllm_nixl_post_time_seconds{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "time"
     },
     {
@@ -239,7 +291,10 @@
       "query": "vllm_nixl_bytes_transferred{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "bytes"
     },
     {
@@ -248,7 +303,10 @@
       "query": "vllm_nixl_num_descriptors{source=\"vllm-decode\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
+      "percentiles": [
+        0.5,
+        0.95
+      ],
       "unit_system": "count"
     },
     {
@@ -256,21 +314,24 @@
       "title": "NIXL Failed Transfer Rate",
       "query": "sum(irate(vllm_nixl_num_failed_transfers_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_nixl_num_failed_transfers_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "disaggregation (nixl)",
       "title": "NIXL Failed Notification Rate",
       "query": "sum(irate(vllm_nixl_num_failed_notifications_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_nixl_num_failed_notifications_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "disaggregation (nixl)",
       "title": "NIXL Expired KV Request Rate",
       "query": "sum(irate(vllm_nixl_num_kv_expired_reqs_total{source=\"vllm-decode\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"vllm_nixl_num_kv_expired_reqs_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     }
   ]
 }
