@@ -79,6 +79,17 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
     };
 
     const Form = {
+        // POPOVER_H_EST is a guess; once mounted, measure the real
+        // height and reseat the top edge so the Add button never falls
+        // off the bottom of the viewport.
+        oncreate: (vnode) => {
+            const h = vnode.dom.getBoundingClientRect().height;
+            const maxTop = window.innerHeight - h - 8;
+            if (top > maxTop) {
+                top = Math.max(8, maxTop);
+                vnode.dom.style.top = top + 'px';
+            }
+        },
         view: () => m('div.event-form', {
             style: `position: fixed; top: ${top}px; left: ${left}px; width: ${POPOVER_W}px; z-index: 10000;`,
         }, [
