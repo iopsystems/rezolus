@@ -12,8 +12,15 @@ export class EventsStore {
     }
 
     seedFromMetadata(fileMetadata) {
-        const arr = fileMetadata?.events;
-        this._events = Array.isArray(arr) ? arr.slice() : [];
+        const slot = fileMetadata?.events;
+        let arr = [];
+        if (Array.isArray(slot)) {
+            arr = slot;
+        } else if (slot && Array.isArray(slot.events)) {
+            // Actual parquet wire shape: {"events":[...]} wrapper object
+            arr = slot.events;
+        }
+        this._events = arr.slice();
         this._notify();
     }
 

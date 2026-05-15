@@ -24,6 +24,20 @@ test('seedFromMetadata: parses events array', () => {
     assert.equal(s.all()[1].chart_id, 'c1');
 });
 
+test('seedFromMetadata: parses wrapped {events:[...]} shape (actual parquet wire format)', () => {
+    const s = new EventsStore();
+    s.seedFromMetadata({
+        events: {
+            events: [
+                { timestamp: 1, description: 'a' },
+                { timestamp: 2, description: 'b', chart_id: 'c1' },
+            ],
+        },
+    });
+    assert.equal(s.all().length, 2);
+    assert.equal(s.all()[1].chart_id, 'c1');
+});
+
 test('seedFromMetadata: replaces prior contents (idempotent re-seed)', () => {
     const s = new EventsStore();
     s.add({ timestamp: 99, description: 'pre-existing' });
