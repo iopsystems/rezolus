@@ -111,6 +111,71 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>, service_ext: &
     view
 }
 
+#[cfg(all(test, feature = "live-mode"))]
+mod tests {
+    use super::*;
+    use crate::service_extension::{Kpi, ServiceExtension};
+    use crate::Tsdb;
+    use std::collections::HashMap;
+
+    fn kpi(title: &str, query: &str, sql: Option<&str>) -> Kpi {
+        Kpi {
+            role: "throughput".to_string(),
+            title: title.to_string(),
+            description: None,
+            query: query.to_string(),
+            sql: sql.map(str::to_string),
+            metric_type: "delta_counter".to_string(),
+            subtype: None,
+            unit_system: Some("rate".to_string()),
+            percentiles: None,
+            available: true,
+            denominator: false,
+            subgroup: None,
+            subgroup_description: None,
+            full_width: false,
+        }
+    }
+
+    /// `sql: None` KPIs must serialize a plot that carries `promql_query`
+    /// but no `sql_query`. The SQL-backed frontend dispatcher reads the
+    /// absence of `sql_query` as "render the not-yet-migrated placeholder"
+    /// — see REVIEWING.md "Known regressions" item 1 and the BACKEND='sql'
+    /// branch in `site/viewer/lib/data.js`. If a future change starts
+    /// emitting `sql_query: ""` or some other shape, the frontend would
+    /// silently try to run an empty SQL string instead of rendering the
+    /// placeholder; this test pins the contract.
+    #[test]
+    fn kpi_sql_none_emits_promql_query_only() {
+        let ext = ServiceExtension {
+            service_name: "vllm".to_string(),
+            aliases: vec![],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: vec![
+                kpi("Rate (SQL)",    "rate_promql",   Some("SELECT 1")),
+                kpi("Rate (legacy)", "legacy_promql", None),
+            ],
+        };
+
+        let view = generate(&Tsdb::default(), vec![], &ext);
+        let json = serde_json::to_string(&view).unwrap();
+
+        // Both KPIs land in a single throughput group; both PromQL strings
+        // are present.
+        assert!(json.contains("rate_promql"),   "SQL kpi's promql_query missing: {json}");
+        assert!(json.contains("legacy_promql"), "legacy kpi's promql_query missing: {json}");
+
+        // The SQL kpi's body is serialized; the legacy kpi's is absent.
+        // `sql_query` uses `skip_serializing_if = Option::is_none`, so the
+        // field key itself appears once (for the SQL kpi) and only once.
+        assert!(json.contains("\"sql_query\":\"SELECT 1\""),
+            "SQL kpi's sql_query body missing: {json}");
+        assert_eq!(json.matches("\"sql_query\"").count(), 1,
+            "expected exactly one sql_query field (the SQL kpi); got: {json}");
+    }
+}
+
 /// Convert a title into a kebab-case slug for use as a DOM id.
 pub(crate) fn slug(s: &str) -> String {
     s.to_lowercase()

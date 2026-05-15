@@ -116,6 +116,30 @@ fn non_finite_v_rows_dropped() {
 }
 
 #[test]
+fn all_nan_series_collapses_to_empty_matrix() {
+    // A series whose entire v column is NaN/Inf drops every row, leaving
+    // a series with zero values. Documented behavior: such a series is
+    // omitted from the result entirely (frontend has nothing to render),
+    // matching Prometheus "no data" semantics. Distinct from the mixed
+    // case in `non_finite_v_rows_dropped`, which preserves the series
+    // alongside surviving rows.
+    let batch = RecordBatch::try_new(
+        schema_t_v(),
+        vec![
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+            Arc::new(Float64Array::from(vec![
+                Some(f64::NAN),
+                Some(f64::INFINITY),
+                Some(f64::NEG_INFINITY),
+            ])),
+        ],
+    )
+    .unwrap();
+    let json = arrow_to_prom_matrix(&[batch]);
+    assert_eq!(json, EMPTY_PROM_MATRIX);
+}
+
+#[test]
 fn label_columns_group_into_series() {
     let batch = RecordBatch::try_new(
         schema_t_v_label(),
