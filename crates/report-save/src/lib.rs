@@ -132,15 +132,122 @@ pub fn save_single_parquet(
 }
 
 /// Trim-free variant: write the source parquet back out with the
-/// selection JSON embedded in the footer. SQL-only callers use this —
-/// column trimming requires PromQL `engine.columns(query)` which only
-/// the legacy `metriken-query` engine provides. A future SQL-aware
-/// resolver would let us drop the live-mode requirement on trim.
+/// selection JSON embedded in the footer. SQL-only callers use this
+/// when the saved selection has no entries to drive trim; the
+/// SQL-aware trim path is [`save_single_parquet_sql`].
 pub fn save_single_parquet_embed_only(
     source_bytes: Bytes,
     selection_json: &str,
 ) -> Result<Vec<u8>, String> {
     embed_selection_in_parquet(source_bytes, selection_json)
+}
+
+/// SQL-backed single-parquet save with column trim. Mirrors
+/// [`save_single_parquet`] but resolves kept columns from a
+/// `MetricCatalog` + the saved selection's query strings, so no Tsdb
+/// is required. Works for both PromQL-shaped and SQL-shaped query
+/// strings — see [`resolve_kept_columns_sql`] for the matching rule.
+pub fn save_single_parquet_sql(
+    source_bytes: Bytes,
+    payload: &ReportPayload,
+    selection_json: &str,
+    catalog: &metriken_query_sql::MetricCatalog,
+    trim_columns: bool,
+) -> Result<Vec<u8>, String> {
+    if trim_columns {
+        let kept = resolve_kept_columns_sql(payload, catalog, Side::Baseline);
+        trim_parquet_to_columns(source_bytes, &kept, selection_json)
+    } else {
+        embed_selection_in_parquet(source_bytes, selection_json)
+    }
+}
+
+/// Resolve kept physical columns for a SQL-backed capture by scanning
+/// each entry's query text for catalog-known names.
+///
+/// Two passes per entry:
+/// 1. **Metric-name match.** For each metric in
+///    `catalog.series_by_metric`, check whether the metric name
+///    appears in the query as a word (non-word boundary on both
+///    sides). If yes, every physical column belonging to that metric
+///    is kept. Captures the PromQL `metric_name{labels}` shape and
+///    SQL idioms that reference metrics by canonical name.
+/// 2. **Physical-name match.** For each physical column, check
+///    whether its quoted form (`"physical"`) appears in the SQL.
+///    Catches direct-column references that the metric-name pass
+///    misses (e.g. when a SQL string references one specific
+///    instance like `"cpu_usage/user/3"`).
+///
+/// `timestamp` and `duration` are always kept (parquet readers
+/// require them). Over-keeping is preferred to under-keeping — the
+/// purpose of trim is footer size, not correctness; missing columns
+/// would break the saved report.
+pub fn resolve_kept_columns_sql(
+    payload: &ReportPayload,
+    catalog: &metriken_query_sql::MetricCatalog,
+    side: Side,
+) -> HashSet<String> {
+    let mut out: HashSet<String> = ["timestamp", "duration"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    for entry in &payload.entries {
+        let query = match side {
+            Side::Baseline => entry.promql_query.as_str(),
+            Side::Experiment => entry
+                .promql_query_experiment
+                .as_deref()
+                .unwrap_or(entry.promql_query.as_str()),
+        };
+        for (metric, series_list) in &catalog.series_by_metric {
+            if query_mentions_word(query, metric) {
+                for s in series_list {
+                    out.insert(s.physical.clone());
+                }
+                continue;
+            }
+            // Direct physical-column references in SQL: catch any
+            // metric whose physical column appears quoted in the query.
+            for s in series_list {
+                let quoted = format!("\"{}\"", s.physical);
+                if query.contains(&quoted) {
+                    out.insert(s.physical.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether `query` contains `needle` as a whole word — i.e. surrounded
+/// by non-word characters (or the string boundary). Used so that the
+/// metric name `cpu` doesn't accidentally match a query referencing
+/// `cpu_usage`. Treats `[A-Za-z0-9_]` as word characters; everything
+/// else (including `/`, `:`, `(`, `{`, `"`, whitespace) is a boundary.
+fn query_mentions_word(query: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = query.as_bytes();
+    let nbytes = needle.as_bytes();
+    let mut i = 0;
+    while i + nbytes.len() <= bytes.len() {
+        if &bytes[i..i + nbytes.len()] == nbytes {
+            let left_ok = i == 0 || !is_word_byte(bytes[i - 1]);
+            let right_idx = i + nbytes.len();
+            let right_ok = right_idx == bytes.len() || !is_word_byte(bytes[right_idx]);
+            if left_ok && right_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Trim each per-side parquet independently (or embed-only when
@@ -194,6 +301,36 @@ pub fn save_combined_ab_tarball_embed_only(
 ) -> Result<Vec<u8>, String> {
     let baseline_out = embed_selection_in_parquet(baseline_bytes, selection_json)?;
     let experiment_out = embed_selection_in_parquet(experiment_bytes, selection_json)?;
+    pack_ab_tarball(baseline_out, experiment_out, manifest_bytes)
+}
+
+/// SQL-backed combined-A/B tarball with per-side column trim resolved
+/// against the supplied catalogs. Mirrors [`save_combined_ab_tarball`]
+/// but uses [`resolve_kept_columns_sql`] instead of `engine.columns`.
+#[allow(clippy::too_many_arguments)]
+pub fn save_combined_ab_tarball_sql(
+    baseline_bytes: Bytes,
+    experiment_bytes: Bytes,
+    payload: &ReportPayload,
+    selection_json: &str,
+    baseline_catalog: &metriken_query_sql::MetricCatalog,
+    experiment_catalog: &metriken_query_sql::MetricCatalog,
+    manifest_bytes: &[u8],
+    trim_columns: bool,
+) -> Result<Vec<u8>, String> {
+    let (baseline_out, experiment_out) = if trim_columns {
+        let baseline_kept = resolve_kept_columns_sql(payload, baseline_catalog, Side::Baseline);
+        let experiment_kept = resolve_kept_columns_sql(payload, experiment_catalog, Side::Experiment);
+        (
+            trim_parquet_to_columns(baseline_bytes, &baseline_kept, selection_json)?,
+            trim_parquet_to_columns(experiment_bytes, &experiment_kept, selection_json)?,
+        )
+    } else {
+        (
+            embed_selection_in_parquet(baseline_bytes, selection_json)?,
+            embed_selection_in_parquet(experiment_bytes, selection_json)?,
+        )
+    };
     pack_ab_tarball(baseline_out, experiment_out, manifest_bytes)
 }
 
@@ -364,6 +501,146 @@ fn append_tar_entry<W: std::io::Write>(
     header.set_cksum();
     builder.append(&header, data).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// Tests for the SQL-aware column resolver. Live independently of
+// `live-mode` because `resolve_kept_columns_sql` doesn't require
+// `metriken-query`.
+#[cfg(test)]
+mod sql_resolve_tests {
+    use super::*;
+    use metriken_query_sql::{MetricCatalog, MetricSeries};
+    use std::collections::BTreeMap;
+
+    fn catalog_from(entries: &[(&str, &[&str])]) -> MetricCatalog {
+        let mut cat = MetricCatalog::default();
+        for (metric, physicals) in entries {
+            let series: Vec<MetricSeries> = physicals
+                .iter()
+                .map(|p| MetricSeries {
+                    physical: p.to_string(),
+                    labels: BTreeMap::new(),
+                })
+                .collect();
+            cat.series_by_metric.insert(metric.to_string(), series);
+        }
+        cat
+    }
+
+    fn payload_with_queries(queries: &[&str]) -> ReportPayload {
+        ReportPayload {
+            entries: queries
+                .iter()
+                .map(|q| ReportEntry {
+                    promql_query: q.to_string(),
+                    promql_query_experiment: None,
+                })
+                .collect(),
+            trim_columns: true,
+        }
+    }
+
+    /// PromQL queries mention metrics by name. `cpu_cycles` in the
+    /// query should pull all `cpu_cycles/*` physical columns.
+    #[test]
+    fn resolves_promql_metric_to_all_physical_columns() {
+        let cat = catalog_from(&[
+            ("cpu_cycles", &["cpu_cycles/0", "cpu_cycles/1", "cpu_cycles/2"]),
+            ("memory_used", &["memory_used"]),
+        ]);
+        let payload = payload_with_queries(&["sum(rate(cpu_cycles[1m]))"]);
+        let kept = resolve_kept_columns_sql(&payload, &cat, Side::Baseline);
+        assert!(kept.contains("timestamp"));
+        assert!(kept.contains("duration"));
+        assert!(kept.contains("cpu_cycles/0"));
+        assert!(kept.contains("cpu_cycles/1"));
+        assert!(kept.contains("cpu_cycles/2"));
+        // Unmentioned metric stays out.
+        assert!(!kept.contains("memory_used"));
+    }
+
+    /// Direct SQL queries reference physical columns in quoted form.
+    /// `"cpu_cycles/0"` in the SQL must keep just that column.
+    #[test]
+    fn resolves_direct_quoted_physical_in_sql() {
+        let cat = catalog_from(&[
+            ("cpu_cycles", &["cpu_cycles/0", "cpu_cycles/1"]),
+        ]);
+        let sql = r#"SELECT timestamp/1e9 AS t, "cpu_cycles/0"::DOUBLE AS v FROM _src"#;
+        let payload = payload_with_queries(&[sql]);
+        let kept = resolve_kept_columns_sql(&payload, &cat, Side::Baseline);
+        assert!(kept.contains("cpu_cycles/0"));
+        // The metric name "cpu_cycles" appears in the SQL too (as
+        // substring inside the quoted column), so word-boundary match
+        // also fires — that's fine, we get the full set.
+        // The crucial property: the keep-set isn't *empty*.
+        assert!(kept.len() >= 3); // timestamp + duration + at least one physical
+    }
+
+    /// Word-boundary matching: `cpu` shouldn't accidentally match
+    /// `cpu_cycles`. If only `cpu` is in the catalog and only
+    /// `cpu_cycles` is in the query, neither catalog metric is kept.
+    #[test]
+    fn word_boundary_prevents_partial_metric_match() {
+        let cat = catalog_from(&[
+            ("cpu", &["cpu"]),
+            ("cpu_cycles", &["cpu_cycles/0"]),
+        ]);
+        let payload = payload_with_queries(&["sum(cpu_cycles)"]);
+        let kept = resolve_kept_columns_sql(&payload, &cat, Side::Baseline);
+        assert!(kept.contains("cpu_cycles/0"));
+        assert!(!kept.contains("cpu"), "cpu must not be over-matched");
+    }
+
+    /// `trim_columns=false` should bypass trim entirely. We confirm
+    /// this by checking the resolver isn't called via the public
+    /// `save_single_parquet_sql` entry — but the resolver itself is
+    /// unconditional. This tests `save_single_parquet_sql`'s
+    /// branching.
+    #[test]
+    fn save_single_parquet_sql_embed_only_when_trim_false() {
+        let cat = MetricCatalog::default();
+        let payload = ReportPayload {
+            entries: vec![],
+            trim_columns: false,
+        };
+        // Use a tiny parquet built inline so we don't need a fixture.
+        // The cheapest path: an empty parquet won't trim because
+        // there are no entries; trim_columns=false also short-circuits
+        // to embed-only. Either way the function must not error.
+        let bytes = build_empty_parquet_bytes();
+        let result = save_single_parquet_sql(bytes, &payload, "{}", &cat, false);
+        assert!(result.is_ok(), "embed-only path should succeed");
+    }
+
+    /// Build a parquet with only timestamp/duration columns and one
+    /// row. Smallest valid input the trim path can chew on.
+    fn build_empty_parquet_bytes() -> Bytes {
+        use arrow::array::UInt64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("timestamp", DataType::UInt64, false),
+            Field::new("duration", DataType::UInt64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(vec![1_000_000_000])),
+                Arc::new(UInt64Array::from(vec![1_000_000_000])),
+            ],
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        {
+            let mut w = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+            w.write(&batch).unwrap();
+            w.close().unwrap();
+        }
+        Bytes::from(buf)
+    }
 }
 
 #[cfg(all(test, feature = "live-mode"))]

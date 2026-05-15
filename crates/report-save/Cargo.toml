@@ -17,7 +17,13 @@ path = "src/lib.rs"
 # sql-only. Callers gate behind their own `live-mode` and force
 # `trim_columns = false`.
 default = ["live-mode"]
-live-mode = ["dep:metriken-query"]
+# `metriken-query/legacy` is required because the live-mode code path
+# imports `QueryEngine` and `Tsdb`, both of which only exist under
+# that crate's `legacy` feature. Rezolus's own `live-mode` feature
+# enables metriken-query with `ingest` (which pulls in `legacy`),
+# but a standalone `cargo build -p report-save --features live-mode`
+# would otherwise miss it.
+live-mode = ["dep:metriken-query", "metriken-query/legacy"]
 
 [dependencies]
 arrow = "58.2.0"
@@ -27,4 +33,5 @@ tar = { version = "0.4.45", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 metriken-query = { workspace = true, optional = true }
+metriken-query-sql.workspace = true
 tracing = "0.1"

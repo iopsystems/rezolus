@@ -790,9 +790,20 @@ fn save_single_dispatch(
         )
         .map_err(|e| e.to_string());
     }
-    // Under sql-only `state` and `payload` are unused — the embed-only
-    // path needs neither. Bind them to silence unused-warnings while
-    // keeping the call signature stable across feature configs.
+    // SQL-backed baselines get column trim via the catalog-driven
+    // resolver. Drops the `trim_columns=false` override that was
+    // active pre-migration (REVIEWING.md carve-out 4).
+    if let Some(sql) = state.captures.get_sql(crate::viewer::capture_registry::CaptureId::Baseline) {
+        let catalog = sql.read().catalog();
+        return report_save::save_single_parquet_sql(
+            path,
+            payload,
+            selection_json,
+            &catalog,
+            payload.trim_columns,
+        )
+        .map_err(|e| e.to_string());
+    }
     let _ = (state, payload);
     report_save::save_single_parquet_embed_only(path, selection_json).map_err(|e| e.to_string())
 }
@@ -822,6 +833,30 @@ fn save_combined_ab_dispatch(
             selection_json,
             &baseline_tsdb,
             &experiment_tsdb,
+            manifest,
+            payload.trim_columns,
+        )
+        .map_err(|e| e.to_string());
+    }
+    // SQL-backed A/B: pull both per-side catalogs and trim via the
+    // SQL-aware resolver.
+    if let (Some(baseline_sql), Some(experiment_sql)) = (
+        state
+            .captures
+            .get_sql(crate::viewer::capture_registry::CaptureId::Baseline),
+        state
+            .captures
+            .get_sql(crate::viewer::capture_registry::CaptureId::Experiment),
+    ) {
+        let baseline_catalog = baseline_sql.read().catalog();
+        let experiment_catalog = experiment_sql.read().catalog();
+        return report_save::save_combined_ab_tarball_sql(
+            baseline_path,
+            experiment_path,
+            payload,
+            selection_json,
+            &baseline_catalog,
+            &experiment_catalog,
             manifest,
             payload.trim_columns,
         )
