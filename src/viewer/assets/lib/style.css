@@ -2713,4 +2713,24 @@ main {
     border-color: transparent;
     color: #fff;
 }
+.event-form-actions button.danger {
+    background: var(--danger, #f85149);
+    border-color: transparent;
+    color: #fff;
+}
+
+.event-delete {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid var(--border-default, #333);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 12px;
+    font-family: var(--font-sans);
+    color: var(--fg, #e0e0e0);
+    font-size: 13px;
+}
+.event-delete-text {
+    margin-bottom: 10px;
+    word-wrap: break-word;
+}
 

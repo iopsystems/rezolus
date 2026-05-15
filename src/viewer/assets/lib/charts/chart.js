@@ -22,7 +22,7 @@ import { themeVersion } from '../theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
 import { eventsStore } from '../events_store.js';
 import { buildMarkLine } from './event_markers.js';
-import { openEventForm } from '../event_form.js';
+import { openEventForm, openEventDelete } from '../event_form.js';
 
 
 export class ChartsState {
@@ -727,7 +727,32 @@ export class Chart {
         // Escape also unfreezes.
         this._tooltipFrozen = false;
 
+        // Click on an event marker → open the delete-confirm popover.
+        // Set a one-shot flag so the zr handler below doesn't ALSO
+        // toggle freeze for the same physical click. xAxis-defined data
+        // entries are unique to event markers (scatter's OOB markLine
+        // uses yAxis), so this is a safe discriminator.
+        this.echart.on('click', (params) => {
+            if (params.componentType !== 'markLine' || !params.data) return;
+            if (!Number.isFinite(params.data.xAxis)) return;
+            this._suppressFreezeClick = true;
+            const native = params.event?.event;
+            const x = native?.clientX ?? 0;
+            const y = native?.clientY ?? 0;
+            const tsNs = Math.round(params.data.xAxis * 1_000_000);
+            const description = params.data.name || '';
+            openEventDelete({
+                anchorPoint: { x, y },
+                event: { timestamp: tsNs, description },
+                onConfirm: () => eventsStore.remove({ timestamp: tsNs, description }),
+            });
+        });
+
         this.echart.getZr().on('click', (e) => {
+            if (this._suppressFreezeClick) {
+                this._suppressFreezeClick = false;
+                return;
+            }
             // Only freeze when clicking within the plot area, not on legend/title
             if (this.echart.containPixel('grid', [e.offsetX, e.offsetY])) {
                 if (!this._tooltipFrozen) {

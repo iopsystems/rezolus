@@ -46,6 +46,30 @@ test('seedFromMetadata: replaces prior contents (idempotent re-seed)', () => {
     assert.equal(s.all()[0].description, 'a');
 });
 
+test('remove: drops the matching event by timestamp+description and notifies', () => {
+    const s = new EventsStore();
+    s.add({ timestamp: 1, description: 'a' });
+    s.add({ timestamp: 2, description: 'b' });
+    let calls = 0;
+    s.subscribe(() => { calls += 1; });
+    const removed = s.remove({ timestamp: 1, description: 'a' });
+    assert.equal(removed, true);
+    assert.equal(s.all().length, 1);
+    assert.equal(s.all()[0].description, 'b');
+    assert.equal(calls, 1);
+});
+
+test('remove: returns false when no match and does not notify', () => {
+    const s = new EventsStore();
+    s.add({ timestamp: 1, description: 'a' });
+    let calls = 0;
+    s.subscribe(() => { calls += 1; });
+    const removed = s.remove({ timestamp: 999, description: 'nope' });
+    assert.equal(removed, false);
+    assert.equal(s.all().length, 1);
+    assert.equal(calls, 0);
+});
+
 test('add: appends and notifies subscribers', () => {
     const s = new EventsStore();
     let calls = 0;

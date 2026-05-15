@@ -162,3 +162,62 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
     };
     m.mount(overlay, Form);
 }
+
+// Tiny confirmation popover anchored at a click point. Used when a user
+// clicks an event marker to delete it. `event` is just for display
+// ({timestamp, description}); `onConfirm` runs only if the user clicks
+// Delete, then the popover dismisses itself.
+export function openEventDelete({ anchorPoint, event, onConfirm }) {
+    if (!anchorPoint) return;
+    document.querySelectorAll('.event-form-overlay, .event-delete-overlay').forEach((n) => n.remove());
+
+    const overlay = document.createElement('div');
+    overlay.className = 'event-delete-overlay';
+    document.body.appendChild(overlay);
+
+    const POPOVER_W = 240;
+    let left = anchorPoint.x - POPOVER_W / 2;
+    if (left < 8) left = 8;
+    if (left + POPOVER_W > window.innerWidth) left = window.innerWidth - POPOVER_W - 8;
+    let top = anchorPoint.y + 12;
+
+    const close = () => {
+        document.removeEventListener('keydown', onKey, true);
+        document.removeEventListener('mousedown', onClickOutside, true);
+        m.mount(overlay, null);
+        overlay.remove();
+    };
+
+    const onKey = (e) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            close();
+        }
+    };
+    const onClickOutside = (e) => {
+        if (!overlay.contains(e.target)) close();
+    };
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('mousedown', onClickOutside, true);
+
+    const Confirm = {
+        oncreate: (vnode) => {
+            const h = vnode.dom.getBoundingClientRect().height;
+            const maxTop = window.innerHeight - h - 8;
+            if (top > maxTop) {
+                top = Math.max(8, maxTop);
+                vnode.dom.style.top = top + 'px';
+            }
+        },
+        view: () => m('div.event-delete', {
+            style: `position: fixed; top: ${top}px; left: ${left}px; width: ${POPOVER_W}px; z-index: 10000;`,
+        }, [
+            m('div.event-delete-text', `Delete "${event.description || '(no description)'}"?`),
+            m('div.event-form-actions', [
+                m('button', { onclick: close }, 'Cancel'),
+                m('button.danger', { onclick: () => { onConfirm(); close(); } }, 'Delete'),
+            ]),
+        ]),
+    };
+    m.mount(overlay, Confirm);
+}

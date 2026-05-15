@@ -29,6 +29,20 @@ export class EventsStore {
         this._notify();
     }
 
+    // Remove the first event matching timestamp + description. Match by
+    // value (not reference) so callers don't have to round-trip the
+    // exact object — ECharts' internal data clones, in particular, lose
+    // identity by the time we get a click event back.
+    remove({ timestamp, description }) {
+        const idx = this._events.findIndex(
+            (e) => e.timestamp === timestamp && (e.description || '') === (description || ''),
+        );
+        if (idx === -1) return false;
+        this._events.splice(idx, 1);
+        this._notify();
+        return true;
+    }
+
     all() {
         return this._events.slice();
     }
