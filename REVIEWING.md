@@ -26,12 +26,16 @@ retains `metriken-query` exclusively for the live-mode path.
 
 ## Branch shape
 
-75 commits ahead of `origin/main`, **+7,917 / −1,900 across 93
+81 commits ahead of `origin/main`, **+8,560 / −1,905 across 94
 files** (`git diff --shortstat origin/main...HEAD`,
 `git rev-list --count origin/main..HEAD`). Includes the 10
-review-pass commits documented under "Review pass" below.
-A second uncommitted pass adds ~90 LOC of defensive tests
-(see end of the Review pass section).
+review-pass commits documented under "Review pass" below, plus
+a second 6-commit pass (also tabled below) that closes the
+four pre-merge blockers — `ViewerApi.registry`, multi-source
+canonical aliasing, `_cgroup_index` server-side, and the
+`h2_combine` cross-backend mismatch — uncovered by the
+browser-driven audit captured in "Known regressions / deferred
+work".
 
 Migration arc (most recent first; see `git log origin/main..HEAD`
 for the full list):
@@ -71,21 +75,20 @@ fixes with tests (Bucket C):
 | `e826092` | B5 | Collapse `save_*_dispatch` cfg-pairs into single functions with internal `#[cfg]` blocks. |
 | `66292ff` | A | Doc accuracy: branch shape + JS test references. |
 
-A second uncommitted pass adds two defensive tests pinning
-user-visible carve-outs the first pass left implicit:
+A second 6-commit pass — driven by a chromium-headless audit of
+both `demo.parquet` and `cachecannon.parquet` against the
+server-backed viewer — closes the four pre-merge blockers, the
+sparse-metric binder-error class, and the `irate_lag(HUGEINT,
+…)` issue, then ships the docs:
 
-- `crates/prom-matrix/tests/projection.rs::all_nan_series_collapses_to_empty_matrix`
-  — series whose entire `v` column is non-finite are dropped
-  outright (rather than emitting an empty `values` array under
-  a surviving metric). The prior `non_finite_v_rows_dropped`
-  test only covered mixed-finite rows.
-- `crates/dashboard/src/dashboard/service.rs::tests::kpi_sql_none_emits_promql_query_only`
-  — when a service-extension `Kpi` has `sql: None` (the legacy
-  templates pending transcription, per "Known regressions" item
-  1), the generated `Plot` carries `promql_query` but **no**
-  `sql_query` field. The SQL frontend dispatcher reads that
-  absence as "render the not-yet-migrated placeholder"; this
-  test makes the contract regression-resistant.
+| Commit | What |
+|---|---|
+| `5f948f4` | `viewer/assets`: server-side adapter stubs (`registry()`, `setSelectedCgroups`, `getSelectedCgroups`) so the page doesn't TypeError on load (B1); skips `injectLabel` on SQL bodies; substitutes `__SELECTED_CGROUPS__` before `executeQuery`; switches section title + sidebar to `(N)` total / `(…)` while loading instead of flickering `(0) → (N)`. |
+| `7f8da05` | `viewer/routes`: translates DuckDB `No matching columns` / `not found in FROM clause` binder errors into an empty Prometheus matrix, restoring the legacy `Tsdb`+PromQL "unknown metric → empty series" behaviour on parquets that lack a particular metric (carve-out #5). |
+| `e5b66b7` | `dashboard`: switches `hist_percentile_series_combined` to emit `h2_combine_lol([*COLUMNS(...)])` (the shared cross-backend macro from upstream `metriken-query-sql/src/shared_macros.sql`), and casts `SUM(UBIGINT)` → `UBIGINT` at the four `irate_lag(…)` call sites in `sql.rs` + `cpu.rs` so DuckDB's HUGEINT promotion doesn't break the UDF (carve-out #6). |
+| `3543351` | `viewer-sql`: retires the wasm-only `MACRO h2_combine(lol)` now that the shared `h2_combine_lol` exists; renames the parity test from `h2_combine_sums_elementwise_widest_wins` to the new name. |
+| `0b4ecc0` | tests: `all_nan_series_collapses_to_empty_matrix` (prom-matrix) and `kpi_sql_none_emits_promql_query_only` (dashboard) pin the carve-outs the prior pass left implicit. |
+| `c852cb7` | docs: this REVIEWING.md refresh + new `TOMORROW.md` capturing the deferred work (service-extension KPI transcription with cachecannon as a worked example, multi-rezolus aggregation, MCP migration). |
 
 ## Architecture (post-migration)
 
@@ -217,13 +220,15 @@ through, and rebuilds numeric-encoded columns (e.g.
 `rezolus-client::10x0` with metadata `metric=cpu_cycles, id=0`)
 into `cpu_cycles/0`. Value labels sort with non-numeric first
 and numeric IDs last to match the named-column convention.
-Cachecannon empirics post-fix: 162 of 254 plots bind
-(`/overview`, `/memory`, `/network`, `/scheduler`, `/syscall`,
-`/blockio` all 100%; `/cgroups` 23/48; `/cpu`/`/softirq`
-partial — failures are sparse-metric cases, carve-out #5).
-**Multi-rezolus** captures (≥2 sources tagged `rezolus`) are
-not yet aggregated server-side — those would need the
-`COALESCE + sum` / `h2_combine` projection shape that wasm's
+Empirics with the full post-fix stack (B2 + carve-outs #5/#6):
+**254 of 254 plots bind on both demo and cachecannon** across
+all 12 built-in pages. Plots whose target metric isn't in the
+parquet return an empty Prometheus matrix instead of binder-
+erroring (carve-out #5), so the result mirrors the legacy
+`Tsdb`+PromQL "unknown metric → empty series" UX. **Multi-
+rezolus** captures (≥2 sources tagged `rezolus`) are not yet
+aggregated server-side — those would need the `COALESCE + sum`
+/ `h2_combine` projection shape that wasm's
 `_src_rezolus_combined` builds. Single-rezolus + arbitrary
 application-source captures (the cachecannon shape) work
 end-to-end.
@@ -231,18 +236,24 @@ end-to-end.
 **B3. ✅ Fixed — `/cgroups` section now binds on the server
 backend.** `_cgroup_index` is now created server-side by
 `metriken-query-sql/src/views.rs::create_cgroup_index`, called
-from `build_slot_connection` (`backend.rs:295`) immediately
+from `build_slot_connection` (`backend.rs:339`) immediately
 after `_src`. The shape (`metric`, `column_name`, `name`, `id`,
 `labels MAP(VARCHAR, VARCHAR)`) mirrors the wasm viewer's
 `buildCgroupIndex` so the dashboard's JOIN syntax binds
-identically on both. The render SQL is precomputed at pool
-cold-start (one `read_introspection`) and re-used on lazy slot
-rebuilds. Three unit tests pin the contract: empty parquet,
-synthetic cgroup column with split name/id/labels, and
-apostrophe-bearing cgroup names. On demo this turns the
-formerly-zero `/cgroups` count into 22 of 48 plots binding —
-the other 26 fail with the pre-existing "no matching columns"
-binder behaviour described below in carve-out 5.
+identically on both. On multi-source parquets `column_name`
+goes through `canonical_alias` so the JOIN keys actually match
+`_src` columns (which are also canonical-aliased). The render
+SQL is precomputed at pool cold-start (one `read_introspection`)
+and re-used on lazy slot rebuilds. Three unit tests pin the
+contract: empty parquet, synthetic cgroup column with split
+name/id/labels, and apostrophe-bearing cgroup names. After
+selecting a cgroup on cachecannon, **27 of 48 plots populate**
+(Total/User/System CPU Cores, Migrations, IPC, TLB Flushes, all
+16 Syscall variants aggregate-side, plus a few individual-side
+where the `/` cgroup carries per-state breakdown); the
+remaining 21 are sparse-metric (no `cgroup_cpu_throttled*`
+recorded in cachecannon, NULL-name rows lack per-`op` labels)
+and render as empty rather than as errors.
 
 **B4. ✅ Fixed — `h2_combine` cross-backend signature
 mismatch.** Resolved by introducing
