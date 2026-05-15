@@ -15,6 +15,8 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 SRC="$ROOT/src/viewer/assets/lib"
 SITE="$ROOT/site/viewer/lib"
+TEMPLATES_SRC="$ROOT/config/templates"
+TEMPLATES_SITE="$ROOT/site/viewer/templates"
 
 # Files in site/viewer/lib/ that are standalone (not symlinked)
 STANDALONE_TOP="script.js viewer_api.js"
@@ -92,6 +94,23 @@ check_symlinks() {
     done < <(find "$SRC" -type f \( -name '*.js' -o -name '*.css' \))
 }
 
+# ── 3b. Check template symlinks ────────────────────────────────────
+
+check_template_symlinks() {
+    # Every config/templates/*.json must have a matching symlink in
+    # site/viewer/templates/ so the static-site `cp -rL` step picks it
+    # up. Without this, the deployed manifest lists templates whose
+    # JSON files 404 in the browser.
+    for src_file in "$TEMPLATES_SRC"/*.json; do
+        [ -e "$src_file" ] || continue
+        base="$(basename "$src_file")"
+        link="$TEMPLATES_SITE/$base"
+        if [ ! -L "$link" ]; then
+            errors+=("missing symlink: site/viewer/templates/$base — run: ln -s ../../../config/templates/$base $link")
+        fi
+    done
+}
+
 # ── 4. Check capture script sync ──────────────────────────────────
 
 check_capture_sync() {
@@ -145,6 +164,7 @@ check_wasm() {
 check_formatting
 check_clippy
 check_symlinks
+check_template_symlinks
 check_capture_sync
 check_wasm
 
