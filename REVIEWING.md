@@ -134,13 +134,96 @@ sketched in _Removing Tsdb entirely_.
 The 11 templates in `config/templates/*.json` carry a PromQL
 `query` field but no `sql` field. With the frontend on
 `BACKEND='sql'`, plot bodies that need `plot.sql_query` see
-`null` and render "query not yet available" stubs. Fix path: add
-a server-side per-source view layer (mirror
-`site/viewer-sql/lib/duckdb-registry.js::buildSourceViews` in
-`SqlCapture::open`), then transcribe each template's KPIs to SQL
-against the aliased view. The dashboard's `service.rs::generate`
-already emits the SQL-aware path when `Kpi.sql` is `Some`; this
-is purely a template-content task.
+`null` and render "query not yet available" stubs. The dashboard's
+`service.rs::generate` already emits the SQL-aware path when
+`Kpi.sql` is `Some` — but populating `sql` is **not** purely a
+template-content task. There is a real architectural problem
+underneath, surfaced during the May 2026 migration attempt.
+
+**The architectural problem.** Service-extension parquets are
+multi-source (e.g., `source: ["cachecannon", "rezolus"]`), and
+each column is prefixed in the parquet schema:
+`0::bytes_rx` (cachecannon instance 0), `rezolus-client::cpu_usage`
+(rezolus node). Column metadata carries the `source` label
+(`source=cachecannon`, `source=rezolus`) plus an instance/node
+identifier.
+
+The current `_src` view in
+`metriken-query-sql/src/views.rs::render_src_sql` projects only
+`source=rezolus` columns under canonical names. Service columns
+(`source=cachecannon`, `source=vllm`, …) are **unreachable** from
+`_src`. A template KPI like
+`SELECT sum(irate_1s(bytes_rx, timestamp)) AS v FROM _src` would
+bind-error on a real cachecannon parquet, because `bytes_rx` is
+not a `_src` column.
+
+The WASM viewer at `site/viewer-sql/lib/duckdb-registry.js` has
+already solved this — `buildSourceViews` creates per-source views
+**keyed by physical column prefix**: `_src_0` (cachecannon instance
+0), `_src_rezolus_client` (rezolus node). But the prefix is an
+instance/node identifier, not a source name. The service-extension
+templates use `{source="cachecannon"}` PromQL filters — i.e., they
+think in source NAMES, not in instance prefixes. There is no clean
+1:1 mapping when a parquet has multiple instances of the same
+source.
+
+**Three design options** (none of which is "just transcribe SQL"):
+
+1. **Mirror the WASM convention to the server.** Add `buildSourceViews`
+   to `metriken-query-sql/src/views.rs` so `_src_<prefix>` views exist
+   on the native side too. Templates pick a view via dashboard-emitter
+   substitution (new mechanism in `crates/dashboard/src/dashboard/service.rs`
+   — currently `kpi.sql` is embedded literally; would need a
+   `{{view}}` token + per-render substitution). Cross-crate change in
+   metriken-query-sql + dashboard. Parity-wins by matching WASM exactly.
+
+2. **Add source-name-keyed views.** Create `_src_cachecannon`,
+   `_src_vllm`, etc., aggregating multiple instances at each
+   timestamp (`COALESCE + sum` for scalars, `h2_combine_lol` for
+   histograms — the same pattern WASM uses for `_src_rezolus_combined`).
+   Templates reference `_src_<source>` directly — no substitution
+   layer. Diverges from the WASM convention; means both backends
+   carry slightly different view sets. Closer to the PromQL mental
+   model the templates were authored in.
+
+3. **Materialise per-source views server-side, scoped per-capture.**
+   The view-set lives on the `SqlCapture` (one per loaded parquet)
+   rather than in `metriken-query-sql`. Lets the choice between (1)
+   and (2) be made per-template later. Adds plumbing through
+   `SqlCapture::open` and the `DuckDbBackend` cold-start path.
+
+Whatever route is chosen, the work breaks into pieces:
+
+- **Engine-side:** per-source view materialisation in
+  `metriken-query-sql/src/views.rs` (~150-250 LOC + tests),
+  parallel to `render_src_sql`. Must agree with the WASM viewer's
+  view-naming so dashboard SQL doesn't fork by backend.
+- **Dashboard-side:** if option 1, add a substitution mechanism in
+  `crates/dashboard/src/dashboard/service.rs:84-97` so the template's
+  `kpi.sql` is rewritten at emit time to reference the right view.
+- **Templates:** transcribe ~114 KPIs across 11 files (cachecannon 12,
+  vllm 13, vllm-prefill 13, vllm-decode 13, sglang 13, sglang-decode 12,
+  sglang-prefill 12, sglang-router 9, llm-perf 12, valkey 5,
+  inference-library 0). Keep the existing `query: PromQL` field so
+  live-mode still renders KPIs.
+- **Parity tests:** for each KPI, run the PromQL through the legacy
+  `metriken-query::QueryEngine` and the new SQL through `DuckDbBackend`
+  against the same fixture, compare numerically (within tolerance).
+  Pattern: adapt
+  `metriken-query/examples/sql_vs_promql.rs` to walk template KPIs
+  rather than catalogue entries. `parquet annotate`'s non-empty check
+  alone is insufficient — value drift would be silent.
+- **Cross-backend check:** the WASM viewer must render the same
+  KPIs correctly through the same SQL bodies. Don't ship a server-side
+  view convention WASM can't honour.
+
+**Status (May 2026):** deferred. Adding per-source views is a multi-PR
+effort and the view-naming design choice (options 1-3 above) is the
+gating decision. The MCP and report-save migrations (the actual
+parquet-based holdouts the user pivoted to) don't depend on this work
+— they consume `_src` directly for rezolus metrics. Templates remain
+PromQL-only until the architectural choice is made and the engine
+piece lands.
 
 ### 4. Save-as-Report column trim disabled on SQL-backed captures
 
