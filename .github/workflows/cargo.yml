@@ -101,16 +101,15 @@ jobs:
           rustup component add rustfmt
           cargo fmt --all -- --check
 
-  # WASM viewer is wasm32-only and excluded from the regular build
-  # matrix above. Build it from source here so Rust-side breakage in
-  # crates/viewer/ surfaces at PR time, then structurally validate the
-  # rebuilt WASM before the static-site deploy uses the same build path.
+  # SQL-backed WASM viewer (crates/viewer-sql/) is the cdylib half of
+  # the static site. It builds for wasm32-unknown-unknown via wasm-pack
+  # and produces site/viewer-sql/pkg/, which the static-site deploy
+  # consumes. Build it here so Rust-side breakage surfaces at PR time
+  # before pages.yml/release.yml run the same build.
   #
-  # Building with the wrong binaryen silently produces a broken WASM —
-  # e.g. binaryen 108 mis-orders the externref table so the
-  # `__wbindgen_externrefs` export points at the locked funcref table,
-  # and the JS shim then fails at instantiation with
-  # `Table.grow(): failed to grow table by 4`.
+  # The wasm-pack version pin (^0.14) also pins binaryen 117, which
+  # avoids the binaryen-108-era externref-table misorder bug that
+  # broke the previous WASM viewer at runtime.
   wasm-viewer:
     name: wasm-viewer
     runs-on: ubuntu-latest
@@ -122,46 +121,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install wasm-pack
         run: cargo install wasm-pack --version ^0.14 --locked
-      - name: Install wabt
-        run: sudo apt-get update && sudo apt-get -y install wabt
       - name: Rebuild WASM viewer
-        run: ./crates/viewer/build.sh
+        run: ./crates/viewer-sql/build.sh
       - name: Check template symlinks are committed
-        # build.sh self-heals missing symlinks under site/viewer/templates/
-        # so the deploy doesn't break, but the symlinks must also be in
-        # git so this isn't a CI-only fix. Fail PRs that add a template
-        # without the matching symlink.
+        # Every config/templates/*.json must have a matching symlink in
+        # site/viewer/templates/ so the static-site `cp -rL` step picks
+        # it up. Without this, the deployed manifest lists templates
+        # whose JSON files 404 in the browser. The pre-commit hook
+        # enforces this locally; CI re-checks here.
         run: |
           missing=$(git status --porcelain site/viewer/templates/ | awk '$1 == "??" {print $2}')
           if [ -n "$missing" ]; then
             echo "::error::config/templates/ entries are missing symlinks under site/viewer/templates/. Add them so the static-site viewer can serve the JSON:"
             echo "$missing" | sed 's/^/  /'
-            exit 1
-          fi
-      - name: Validate rebuilt WASM structure
-        run: |
-          wasm=site/viewer/pkg/wasm_viewer_bg.wasm
-          # Find which table index the JS shim's externref slot is
-          # exported from, then confirm that table is actually an
-          # externref table. binaryen 108 swaps these and routes the
-          # export at the locked funcref table.
-          export_idx=$(wasm-objdump -x "$wasm" \
-            | grep -E '__wbindgen_externrefs' \
-            | grep -oE 'table\[[0-9]+\]' \
-            | head -1 \
-            | grep -oE '[0-9]+')
-          if [ -z "$export_idx" ]; then
-            echo "::error file=$wasm::no __wbindgen_externrefs export found"
-            exit 1
-          fi
-          target_table=$(wasm-objdump -x "$wasm" | grep -E "^ - table\\[$export_idx\\] type=")
-          if ! echo "$target_table" | grep -q externref; then
-            echo "::error file=$wasm::__wbindgen_externrefs is exported from table[$export_idx], which is not an externref table."
-            echo ""
-            wasm-objdump -x "$wasm" | grep -E '^ - table\[|__wbindgen_externrefs' | sed 's/^/    /'
-            echo ""
-            echo "Rebuild with the canonical toolchain: ./crates/viewer/build.sh"
-            echo "(needs wasm-pack >= 0.14, which pins binaryen 117)."
             exit 1
           fi
 
@@ -219,21 +191,21 @@ jobs:
           sudo apt-get -y install libelf-dev
           rustup component add rustfmt
 
-      # viewer is a wasm32-only workspace member; it is built via
-      # crates/viewer/build.sh rather than in the main CI pipeline.
+      # viewer-sql is cdylib+rlib — host builds compile the rlib, the
+      # WASM cdylib is built separately in the wasm-viewer job above.
       - name: build
         shell: bash
         run: |
-          cargo build --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --all-targets --locked ${{ env.FLAGS }}
+          cargo build --workspace ${{ env.FEATURE_FLAGS }} --all-targets --locked ${{ env.FLAGS }}
       - name: test
         shell: bash
         run: |
-          cargo test --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --tests --bins --locked ${{ env.FLAGS }}
+          cargo test --workspace ${{ env.FEATURE_FLAGS }} --tests --bins --locked ${{ env.FLAGS }}
       - name: doctests
         if: ${{ matrix.profile == 'debug' }}
         shell: bash
         run: |
-          cargo test --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
+          cargo test --workspace ${{ env.FEATURE_FLAGS }} --locked -- --test-threads 16
       - name: smoketest
         if: ${{ matrix.profile == 'release' }}
         shell: bash
