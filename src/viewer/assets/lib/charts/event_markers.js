@@ -6,7 +6,7 @@
 // "merge into series[0]" decision because that depends on the chart's
 // current configured options.
 
-const EVENT_MARKER_COLOR = '#0d8b8b';
+const EVENT_MARKER_COLOR = '#cc6600';
 
 export function buildMarkLine(events) {
     if (!Array.isArray(events) || events.length === 0) return null;
@@ -29,13 +29,21 @@ export function buildMarkLine(events) {
             width: 1,
             opacity: 0.85,
         },
-        // Inline label is hidden until hover; emphasis flips it on so
-        // the description appears next to the line under the cursor.
+        // Hidden until hover; emphasis pins it at the top end of the line
+        // (above the plot grid) and renders horizontally so the
+        // description stays legible regardless of line direction.
         label: {
             show: false,
-            position: 'insideEndTop',
+            position: 'end',
+            distance: 4,
+            rotate: 0,
+            align: 'center',
+            verticalAlign: 'bottom',
             formatter: '{b}',
-            color: EVENT_MARKER_COLOR,
+            color: '#fff',
+            backgroundColor: EVENT_MARKER_COLOR,
+            padding: [2, 6],
+            borderRadius: 3,
             fontSize: 11,
         },
         emphasis: {
