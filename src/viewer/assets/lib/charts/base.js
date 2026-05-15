@@ -37,9 +37,16 @@ export function applyNoData(chart) {
     chart.domNode.classList.add('no-data');
 }
 
-// Event editing (the "+ Add Event" affordance in the freeze footer) is
-// only exposed inside Notebook so casual viewers can't mutate what
-// they're inspecting.
+// Events (hairlines + description bubbles) only render in the curated
+// Notebook / Report views, never in the raw metric sections.
+export function isEventDisplayAllowed() {
+    if (typeof m === 'undefined' || !m.route?.get) return false;
+    const route = m.route.get() || '';
+    return route.startsWith('/notebook') || route.startsWith('/report');
+}
+
+// Event editing (the "+ Add Event" affordance) is narrower still —
+// Notebook only — so casual viewers can't mutate what they inspect.
 export function isEventEditingAllowed() {
     if (typeof m === 'undefined' || !m.route?.get) return false;
     const route = m.route.get() || '';

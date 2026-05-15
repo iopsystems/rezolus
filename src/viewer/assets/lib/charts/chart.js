@@ -23,7 +23,7 @@ import { resolveStyle, resolvedStyle } from './metric_types.js';
 import { eventsStore } from '../events_store.js';
 import { buildMarkLine } from './event_markers.js';
 import { openEventForm, openEventInfo } from '../event_form.js';
-import { buildFreezeFooterContent, isEventEditingAllowed } from './base.js';
+import { buildFreezeFooterContent, isEventEditingAllowed, isEventDisplayAllowed } from './base.js';
 
 
 export class ChartsState {
@@ -944,10 +944,15 @@ export class Chart {
             this._chartStyleMarkLineSnapshot = ml ? JSON.parse(JSON.stringify(ml)) : null;
         }
 
-        const visible = eventsStore.filterForChart({
-            chartId: this.chartId,
-            scope: this._chartScope(),
-        });
+        // Outside Notebook/Report: no event markers at all (the base
+        // chart-style markLine, e.g. scatter's OOB separator, is still
+        // preserved via the empty-eventData merge below).
+        const visible = isEventDisplayAllowed()
+            ? eventsStore.filterForChart({
+                chartId: this.chartId,
+                scope: this._chartScope(),
+            })
+            : [];
         const eventMarkLine = buildMarkLine(visible);
         const opt = this.echart.getOption();
         const seriesArr = Array.isArray(opt?.series) ? opt.series : [];
@@ -974,6 +979,16 @@ export class Chart {
     // resize since each tag is positioned by its event's data-x.
     _renderEventBubbles() {
         if (!this.echart || !this.domNode) return;
+
+        // Only the curated Notebook/Report views show events. Elsewhere,
+        // tear down any existing layer and bail.
+        if (!isEventDisplayAllowed()) {
+            if (this._eventBubbleLayer) {
+                this._eventBubbleLayer.remove();
+                this._eventBubbleLayer = null;
+            }
+            return;
+        }
 
         let layer = this._eventBubbleLayer;
         if (!layer) {
