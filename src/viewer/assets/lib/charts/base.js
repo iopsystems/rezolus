@@ -37,19 +37,44 @@ export function applyNoData(chart) {
     chart.domNode.classList.add('no-data');
 }
 
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+// Inner HTML for the freeze footer. Three states:
+//   - frozen via marker click → description + × delete affordance
+//   - frozen via empty grid click → FROZEN + + Add Event
+//   - not frozen → click-to-freeze hint
+// Exported so chart.js can reuse the same HTML on freeze toggle without
+// duplicating the branch logic.
+export function buildFreezeFooterContent(chart) {
+    const frozen = chart && chart._tooltipFrozen;
+    const eventCtx = frozen ? chart._frozenEvent : null;
+    if (eventCtx) {
+        const desc = escapeHtml(eventCtx.description) || '(no description)';
+        return `<span class="tooltip-event-desc" style="color: ${COLORS.fg};">${desc}</span><a href="#" class="tooltip-delete-event" title="Delete event" style="margin-left: 12px; color: #f85149; text-decoration: none; font-weight: bold; cursor: pointer;">×</a>`;
+    }
+    if (frozen) {
+        const addLink = `<a href="#" class="tooltip-add-event" data-chart-id="${chart.chartId}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`;
+        return `<span class="tooltip-freeze-state">FROZEN · click to unfreeze</span>${addLink}`;
+    }
+    return `<span class="tooltip-freeze-state">click to freeze</span>`;
+}
+
 /**
- * Tooltip freeze footer HTML. Shows current freeze state + an
- * "Add Event" affordance stacked below it once frozen.
+ * Tooltip freeze footer HTML. Shows current freeze state + the
+ * appropriate per-state affordance (Add Event / Delete event).
  */
 export function getTooltipFreezeFooter(chart) {
     const frozen = chart && chart._tooltipFrozen;
-    const text = frozen ? 'FROZEN · click to unfreeze' : 'click to freeze';
-    const color = frozen ? COLORS.accent : COLORS.fgMuted;
-    const addLink = frozen
-        ? `<a href="#" class="tooltip-add-event" data-chart-id="${chart.chartId}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
-        : '';
+    const eventCtx = frozen ? chart._frozenEvent : null;
+    const color = eventCtx ? COLORS.fg : (frozen ? COLORS.accent : COLORS.fgMuted);
     return `<div class="tooltip-freeze-footer" style="border-top: 1px solid ${COLORS.borderMuted}; margin-top: 6px; padding-top: 4px; margin-bottom: -6px; font-size: ${FONTS.footnote.fontSize}px; color: ${color}; text-align: center;">
-        <span class="tooltip-freeze-state">${text}</span>${addLink}
+        ${buildFreezeFooterContent(chart)}
     </div>`;
 }
 
