@@ -9,6 +9,17 @@
 // description; chart_id is set when "Show only on this chart" stays
 // checked (defaulted ON per spec).
 
+const formatNsAsRfc3339 = (ns) => {
+    if (!Number.isFinite(ns)) return '';
+    return new Date(Math.round(ns / 1_000_000)).toISOString();
+};
+
+const parseRfc3339AsNs = (str) => {
+    const ms = Date.parse(str);
+    if (!Number.isFinite(ms)) return null;
+    return ms * 1_000_000;
+};
+
 export function openEventForm({ anchorEl, prefill, onSubmit }) {
     if (!anchorEl) return;
     document.querySelectorAll('.event-form-overlay').forEach((n) => n.remove());
@@ -26,7 +37,7 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
     if (left + POPOVER_W > window.innerWidth) left = window.innerWidth - POPOVER_W - 8;
     if (left < 8) left = 8;
 
-    const timestampNs = Number.isFinite(prefill.timestamp_ns) ? prefill.timestamp_ns : null;
+    let timestampStr = formatNsAsRfc3339(prefill.timestamp_ns);
     let description = '';
     let kind = '';
     let source = prefill.source || '';
@@ -60,13 +71,14 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
             m.redraw();
             return;
         }
-        if (timestampNs == null) {
-            formError = 'No timestamp captured — re-freeze on the chart and retry';
+        const ts = parseRfc3339AsNs(timestampStr);
+        if (ts == null) {
+            formError = 'Timestamp is not a valid RFC3339 / ISO-8601 string';
             m.redraw();
             return;
         }
         const event = {
-            timestamp: timestampNs,
+            timestamp: ts,
             description: description.trim(),
         };
         if (kind.trim()) event.kind = kind.trim();
@@ -93,6 +105,14 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
         view: () => m('div.event-form', {
             style: `position: fixed; top: ${top}px; left: ${left}px; width: ${POPOVER_W}px; z-index: 10000;`,
         }, [
+            m('div.event-form-row', [
+                m('label', 'Timestamp'),
+                m('input', {
+                    type: 'text',
+                    value: timestampStr,
+                    oninput: (e) => { timestampStr = e.target.value; formError = ''; },
+                }),
+            ]),
             m('div.event-form-row', [
                 m('label', 'Description'),
                 m('input', {
