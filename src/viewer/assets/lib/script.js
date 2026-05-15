@@ -125,6 +125,24 @@ const uploadParquet = async (file) => {
         const sectionsResponse = await ViewerApi.getSections();
         bootstrapSharedSections(sectionsResponse?.data?.sections || []);
 
+        // A trimmed Save-as-Report parquet has no section data (most
+        // columns are projected away) and the backend stamps its
+        // section list to []. Don't phantom-load /overview — go
+        // straight to the Report view, same as the cold-boot path.
+        let isReport = false;
+        try {
+            const mode = await ViewerApi.getMode();
+            isReport = mode?.report === true;
+        } catch (_) { /* fall through to overview */ }
+
+        if (isReport) {
+            if (m.route.get() !== '/report') {
+                m.route.set('/report');
+            }
+            m.redraw();
+            return;
+        }
+
         const data = await ViewerApi.getSection('overview');
         const processed = await processDashboardData(data, null, '/overview');
         cacheSectionResponse('overview', processed);
