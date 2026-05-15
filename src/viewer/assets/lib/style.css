@@ -2728,10 +2728,10 @@ main {
 }
 .event-bubble-tag {
     position: absolute;
-    top: 4px;
+    top: 3px;
     transform: translateX(-50%);
-    max-width: 160px;
-    padding: 1px 6px;
+    max-width: 180px;
+    padding: 5px 10px;
     font-family: var(--font-sans);
     font-size: 11px;
     line-height: 1.4;
