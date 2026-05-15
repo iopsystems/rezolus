@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::ops::Deref;
 
 use arrow::datatypes::Field;
+use dashboard::Event;
 use metriken_query::{Bytes, QueryEngine, Tsdb};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
@@ -21,7 +22,6 @@ use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
-use dashboard::Event;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -772,7 +772,14 @@ mod tests {
         let body = r#"{"entries":[]}"#;
         let manifest_bytes = br#"{"version":1,"baseline":{"alias":"a","sources":["svc"]},"experiment":{"alias":"b","sources":["svc"]}}"#;
         let out = save_combined_ab_tarball(
-            bytes_a, bytes_b, &payload, body, &tsdb_a, &tsdb_b, manifest_bytes, true,
+            bytes_a,
+            bytes_b,
+            &payload,
+            body,
+            &tsdb_a,
+            &tsdb_b,
+            manifest_bytes,
+            true,
         )
         .unwrap();
 
@@ -793,7 +800,10 @@ mod tests {
                 _ => {}
             }
         }
-        for (label, bytes) in [("baseline", &baseline_bytes), ("experiment", &experiment_bytes)] {
+        for (label, bytes) in [
+            ("baseline", &baseline_bytes),
+            ("experiment", &experiment_bytes),
+        ] {
             let kv = footer_kv(bytes);
             let val = kv
                 .iter()
