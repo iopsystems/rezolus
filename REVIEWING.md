@@ -26,11 +26,12 @@ retains `metriken-query` exclusively for the live-mode path.
 
 ## Branch shape
 
-75 commits ahead of `origin/main`, **+7,910 / −1,910 across 93
+75 commits ahead of `origin/main`, **+7,917 / −1,900 across 93
 files** (`git diff --shortstat origin/main...HEAD`,
 `git rev-list --count origin/main..HEAD`). Includes the 10
-review-pass commits documented under
-"Review pass" below.
+review-pass commits documented under "Review pass" below.
+A second uncommitted pass adds ~90 LOC of defensive tests
+(see end of the Review pass section).
 
 Migration arc (most recent first; see `git log origin/main..HEAD`
 for the full list):
@@ -69,6 +70,22 @@ fixes with tests (Bucket C):
 | `3436f64` | — | Fixup: `sql: None` on a missed `Kpi` test literal in `dashboard::dashboard::category::tests`. |
 | `e826092` | B5 | Collapse `save_*_dispatch` cfg-pairs into single functions with internal `#[cfg]` blocks. |
 | `66292ff` | A | Doc accuracy: branch shape + JS test references. |
+
+A second uncommitted pass adds two defensive tests pinning
+user-visible carve-outs the first pass left implicit:
+
+- `crates/prom-matrix/tests/projection.rs::all_nan_series_collapses_to_empty_matrix`
+  — series whose entire `v` column is non-finite are dropped
+  outright (rather than emitting an empty `values` array under
+  a surviving metric). The prior `non_finite_v_rows_dropped`
+  test only covered mixed-finite rows.
+- `crates/dashboard/src/dashboard/service.rs::tests::kpi_sql_none_emits_promql_query_only`
+  — when a service-extension `Kpi` has `sql: None` (the legacy
+  templates pending transcription, per "Known regressions" item
+  1), the generated `Plot` carries `promql_query` but **no**
+  `sql_query` field. The SQL frontend dispatcher reads that
+  absence as "render the not-yet-migrated placeholder"; this
+  test makes the contract regression-resistant.
 
 ## Architecture (post-migration)
 
@@ -134,11 +151,11 @@ subsequent requests hit the warm pool.
 | Layer | Where | Status |
 |---|---|---|
 | Rezolus binary | `cargo test --bin rezolus` | **160 / 160 pass** (was 158; +2 from the review pass — live→SQL swap regression test and concurrent-upload consistency test) |
-| Dashboard inline | `cargo test -p dashboard` (lib) | **34 / 34 pass** |
-| Dashboard SQL snapshots | `crates/dashboard/tests/sql_snapshots.rs` | **18 / 18 pass** |
-| viewer-sql macro parity | `crates/viewer-sql/tests/macros.rs` | **17 / 17 pass** |
-| prom-matrix projection | `crates/prom-matrix/tests/projection.rs` | **8 / 8 pass** (new; covers NULL drop, NaN/Inf drop, label grouping, multi-batch concat, UInt64 string round-trip) |
-| metriken-query-sql pool invalidate | upstream `metriken-query-sql/tests/pool_invalidate.rs` | **3 / 3 pass** (new; covers DuckDbBackend::invalidate) |
+| Dashboard inline | `cargo test -p dashboard` (lib) | **35 / 35 pass** (was 34; +1 from this pass — pins the `Kpi.sql=None` → plot has `promql_query` only contract used by the SQL frontend's "not-yet-migrated" placeholder branch) |
+| Dashboard SQL snapshots | `crates/dashboard/tests/sql_snapshots.rs` | **18 / 18 pass** (snapshot for `hist_percentile_series_combined` updated to pin the new `h2_combine_lol([*COLUMNS(...)])` emission) |
+| viewer-sql macro parity | `crates/viewer-sql/tests/macros.rs` | **17 / 17 pass** (the previously-named `h2_combine_sums_elementwise_widest_wins` test was renamed to `h2_combine_lol_sums_elementwise_widest_wins` and updated to call the shared macro under its new name) |
+| prom-matrix projection | `crates/prom-matrix/tests/projection.rs` | **9 / 9 pass** (was 8; +1 from this pass — pins the "all-NaN series collapses to empty matrix" case alongside the existing mixed-NaN/Inf row-drop test) |
+| metriken-query-sql pool invalidate | upstream `metriken-query-sql/tests/pool_invalidate.rs` | **4 / 4 pass** (was 3; +1 concurrent-stress test pins the `Arc<ConnState>` keep-alive contract when invalidate races with in-flight queries) |
 | Frontend JS | `node --test tests/*.mjs` | **76 / 82 pass** (6 failures — see below) |
 | End-to-end smoke | `tests/viewer_smoke.sh` | **Requires `jq`** (not in dev image); verified manually with `curl` |
 
@@ -164,8 +181,119 @@ subsequent requests hit the warm pool.
 
 ## Known regressions / deferred work
 
-These are deliberate carve-outs, called out so reviewers don't go
-hunting:
+An end-to-end audit (per-plot SQL execution on `demo.parquet`
+and `cachecannon.parquet`) surfaced four pre-merge blockers and
+several smaller follow-ups, all **fixed** on this branch by a
+follow-up implementation pass. **End-state: 254 / 254 plots
+bind on both parquets across all 12 built-in dashboard pages.**
+Many plots return empty matrices on small parquets that don't
+carry every metric (e.g. demo has no GPU), but no plot
+binder-errors — which is what the legacy `Tsdb`+PromQL path
+delivered. The only remaining limitation is multi-rezolus
+aggregation (≥2 rezolus sources in one parquet), which was not
+present in the migration's original scope.
+
+**B1. ✅ Fixed — `ViewerApi.registry is not a function`.**
+The server-side adapter at `src/viewer/assets/lib/viewer_api.js`
+was missing the `registry()` method that the source-picker code
+in `src/viewer/assets/lib/app.js:433,461,471` (added in commit
+`b099b97` "Stage 2c: source picker UI") calls. Without it the
+JS threw TypeError on first load and mithril halted before any
+chart rendered. Fix: a `registry()` stub returning `null`; the
+three call sites all already null-coalesce via `?.has?.(...)`
+patterns. Source-picker UI is a no-op on the server backend
+until full multi-source support lands — which is the deferred
+B2 work below.
+
+**B2. ✅ Fixed — multi-source parquets now bind the standard
+sections.** `metriken-query-sql/src/views.rs::render_src_sql`
+now detects `<prefix>::` columns and, when present, picks the
+rezolus-tagged columns (Arrow field metadata `source=rezolus`)
+and projects them under canonical names that match dashboard
+regexes. A new `canonical_alias` helper mirrors the wasm
+viewer's `canonicalAlias` (`duckdb-registry.js:124`): it strips
+the `<prefix>::` prefix, passes already-canonical column names
+through, and rebuilds numeric-encoded columns (e.g.
+`rezolus-client::10x0` with metadata `metric=cpu_cycles, id=0`)
+into `cpu_cycles/0`. Value labels sort with non-numeric first
+and numeric IDs last to match the named-column convention.
+Cachecannon empirics post-fix: 162 of 254 plots bind
+(`/overview`, `/memory`, `/network`, `/scheduler`, `/syscall`,
+`/blockio` all 100%; `/cgroups` 23/48; `/cpu`/`/softirq`
+partial — failures are sparse-metric cases, carve-out #5).
+**Multi-rezolus** captures (≥2 sources tagged `rezolus`) are
+not yet aggregated server-side — those would need the
+`COALESCE + sum` / `h2_combine` projection shape that wasm's
+`_src_rezolus_combined` builds. Single-rezolus + arbitrary
+application-source captures (the cachecannon shape) work
+end-to-end.
+
+**B3. ✅ Fixed — `/cgroups` section now binds on the server
+backend.** `_cgroup_index` is now created server-side by
+`metriken-query-sql/src/views.rs::create_cgroup_index`, called
+from `build_slot_connection` (`backend.rs:295`) immediately
+after `_src`. The shape (`metric`, `column_name`, `name`, `id`,
+`labels MAP(VARCHAR, VARCHAR)`) mirrors the wasm viewer's
+`buildCgroupIndex` so the dashboard's JOIN syntax binds
+identically on both. The render SQL is precomputed at pool
+cold-start (one `read_introspection`) and re-used on lazy slot
+rebuilds. Three unit tests pin the contract: empty parquet,
+synthetic cgroup column with split name/id/labels, and
+apostrophe-bearing cgroup names. On demo this turns the
+formerly-zero `/cgroups` count into 22 of 48 plots binding —
+the other 26 fail with the pre-existing "no matching columns"
+binder behaviour described below in carve-out 5.
+
+**B4. ✅ Fixed — `h2_combine` cross-backend signature
+mismatch.** Resolved by introducing
+`h2_combine_lol(lol)` as a shared pure-SQL macro in
+`metriken-query-sql/src/shared_macros.sql`. The dashboard's
+`hist_percentile_series_combined` emits the new name, the WASM
+viewer's single-arg `MACRO h2_combine(lol)` is retired, and
+the native variadic UDF stays as-is for fast direct-column
+callers. The duckdb-rs panic hazard at `udf.rs:515-525` (the
+reason the variadic UDF exists) is sidestepped entirely
+because the new shape is pure SQL. Verified on demo: `/syscall`
+"Overall Latency" returns 5 quantile series × 301 samples,
+parity with the WASM viewer.
+
+---
+
+### 5. ✅ Fixed — sparse-metric binder errors
+
+DuckDB's `COLUMNS('regex')` is a **binder-time** error when no
+column matches. On parquets lacking a metric (demo has no GPU,
+no `cpu_tsc`/`aperf`/`mperf`, incomplete softirq subtypes,
+etc.), the dashboard emits the plot's SQL anyway. To restore
+the legacy `Tsdb`+PromQL behaviour (unknown metric → empty
+series), the server's `run_sql` handler at
+`src/viewer/routes.rs::run_sql` now translates two binder-error
+classes — `No matching columns` and `not found in FROM clause`
+— into an `EMPTY_PROM_MATRIX` response. The frontend sees
+"no data" and renders an empty chart, which matches what
+PromQL would have produced. All other SQL errors continue to
+surface as `sql_error` so real bugs aren't swallowed.
+
+### 6. ✅ Fixed — `irate_lag(HUGEINT, ...)` binder errors
+
+DuckDB promotes `SUM(UBIGINT)` to `HUGEINT` to avoid u64
+overflow, but the native `irate_lag` UDF
+(`metriken-query-sql/src/udf.rs`) is typed `(UBIGINT,
+UBIGINT, BIGINT) -> DOUBLE`. The dashboard's cgroup_irate_by_name
+and cgroup_ratio_by_name emitters in
+`crates/dashboard/src/sql.rs`, plus the inline
+`Misses (Per-CPU)` and `MPKI (Per-CPU)` queries in
+`crates/dashboard/src/dashboard/cpu.rs`, all had
+`SUM(v) AS s` immediately followed by `irate_lag(s, ...)`.
+Fix: `CAST(SUM(v) AS UBIGINT)` at each of the four call
+sites. Per-CPU and per-cgroup counter sums fit u64 with
+extreme headroom; the cast is well-bounded and the comment
+at each site documents the overflow rationale.
+
+---
+
+These are deliberate carve-outs, called out so reviewers don't
+go hunting:
 
 1. **Service-extension KPIs render as "temporarily unavailable"
    placeholders** on the migrated server viewer (and the WASM
@@ -209,19 +337,19 @@ hunting:
 
 ## Decisions worth flagging at review
 
-- **`SqlCapture::empty()` constructor** (`src/viewer/sql_capture.rs`)
-  added for upload-only init. Slightly cleaner than introducing a
-  third `CaptureBackend::Empty` variant. The empty capture's
-  `DashboardData` impl returns sensible defaults (no time range, no
-  metric names) so `/api/v1/sections` and `/api/v1/mode` behave
-  correctly pre-upload.
+- **Upload-only init has no placeholder capture.** The registry
+  models "no baseline yet" with `baseline: RwLock<Option<CaptureSlot>>`
+  rather than a sentinel `SqlCapture::empty()`. The earlier placeholder
+  + its `DashboardData` impl were removed by `fe6bdc7` (B4) once the
+  registry's `Option` made them redundant. Pre-upload, `/api/v1/mode`
+  returns `loaded:false` and section handlers short-circuit on `None`.
 
-- **`CaptureSlot.backend: RwLock<CaptureBackend>`** instead of plain
-  `CaptureBackend`. The lock lets the upload / connect handlers swap
-  the backend in place without rebuilding the registry. Readers
-  clone the inner `Arc<RwLock<Tsdb>>` or `Arc<RwLock<SqlCapture>>`
-  out and release the registry lock before any real work — keeps
-  the slot-level lock fast.
+- **`CaptureSlot.backend` is a plain enum**, not `RwLock<CaptureBackend>`.
+  Swaps go through the outer `RwLock<Option<CaptureSlot>>` — the whole
+  slot is replaced atomically. The inner lock removed by `12f555a` (B2)
+  was redundant: any code path that needed to mutate the backend was
+  already holding the outer write lock through `replace_baseline_with_sql`
+  / `attach_experiment_sql`.
 
 - **`parquet_tools/mod.rs`** was edited by the live-mode-gating commit
   even though the plan said to leave `parquet_tools/` alone. Reason:
