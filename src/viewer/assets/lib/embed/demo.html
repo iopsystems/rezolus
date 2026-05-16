@@ -53,6 +53,10 @@
     <rezolus-chart id="chart"></rezolus-chart>
 
     <script type="module">
+        // Reuse the viewer's exact label-injection so the embed scopes
+        // the query to one node the same way the dashboard does.
+        import { injectLabel } from '../data.js';
+
         const chartEl = document.getElementById('chart');
         const statusEl = document.getElementById('status');
 
@@ -93,6 +97,22 @@
         // Series are produced by executing promql_query against
         // /api/v1/query_range — mirror executePromQLRangeQuery() in
         // data.js (same window / step recipe) to get real data here.
+        // The dashboard scopes a non-service plot's query to the selected
+        // node (pinned_node, else first node) before executing — see
+        // data.js::buildEffectiveQuery. Without that, a multi-node
+        // recording fans the query out across every node and the embed
+        // diverges from the viewer. Replicate that node pick + reuse the
+        // viewer's own injectLabel so the matcher is identical.
+        async function selectedNode() {
+            const res = await fetch('/api/v1/file_metadata', { cache: 'no-store' });
+            if (!res.ok) return null;
+            const fm = await res.json();
+            const nodes = Array.isArray(fm.nodes) ? fm.nodes : [];
+            if (nodes.length === 0) return null;
+            const pinned = fm.pinned_node;
+            return (pinned && nodes.includes(pinned)) ? pinned : nodes[0];
+        }
+
         async function runPlotQuery(plot) {
             const metaRes = await fetch('/api/v1/metadata', { cache: 'no-store' });
             if (!metaRes.ok) throw new Error(`metadata HTTP ${metaRes.status}`);
@@ -106,8 +126,13 @@
             const start = Math.max(minTime, maxTime - windowDuration);
             const step = Math.max(1, Math.floor(windowDuration / 500));
 
+            const node = await selectedNode();
+            const query = node
+                ? injectLabel(plot.promql_query, 'node', node)
+                : plot.promql_query;
+
             const qs = new URLSearchParams({
-                query: plot.promql_query,
+                query,
                 start: String(start),
                 end: String(maxTime),
                 step: String(step),
@@ -119,11 +144,15 @@
             if (!Array.isArray(series) || series.length === 0) return null;
 
             return {
-                ...plot,
-                data: [
-                    series.map((p) => Number(p[0])),
-                    series.map((p) => parseFloat(p[1])),
-                ],
+                node,
+                query,
+                plot: {
+                    ...plot,
+                    data: [
+                        series.map((p) => Number(p[0])),
+                        series.map((p) => parseFloat(p[1])),
+                    ],
+                },
             };
         }
 
@@ -136,12 +165,16 @@
                 if (!plot) throw new Error('CPU % plot not found in rezolus section');
                 if (!plot.promql_query) throw new Error('CPU plot descriptor has no promql_query');
 
-                const withData = await runPlotQuery(plot);
-                if (withData) {
-                    chartEl.plot = withData;
+                const result = await runPlotQuery(plot);
+                if (result) {
+                    chartEl.plot = result.plot;
                     statusEl.className = 'status ok';
-                    statusEl.innerHTML = `Executed <code>${plot.promql_query}</code> via
-                        <code>/api/v1/query_range</code> — ${withData.data[0].length} data points.`;
+                    const scope = result.node
+                        ? ` scoped to <code>node="${result.node}"</code>`
+                        : '';
+                    statusEl.innerHTML = `Executed <code>${result.query}</code> via
+                        <code>/api/v1/query_range</code>${scope} —
+                        ${result.plot.data[0].length} data points.`;
                     return;
                 }
 
