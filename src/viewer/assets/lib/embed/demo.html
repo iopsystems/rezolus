@@ -5,11 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>rezolus-chart embed spike</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
-    <!-- Linking style.css gives the page the rezolus tokens (and theme) the
-         component depends on via the shadow-root <link> to charts.css. -->
+    <!-- rezolus tokens the component (and charts.css) read. -->
     <link rel="stylesheet" href="/lib/style.css"/>
-    <!-- echarts + mithril as globals; <rezolus-chart> mounts the
-         viewer's real Chart component, which uses both. -->
+    <!-- globals the reused Chart needs -->
     <script src="/lib/charts/echarts.min.js"></script>
     <script src="/lib/mithril.js"></script>
     <script type="module" src="./rezolus-chart.js"></script>
@@ -53,16 +51,13 @@
     <rezolus-chart id="chart"></rezolus-chart>
 
     <script type="module">
-        // Reuse the viewer's exact label-injection so the embed scopes
-        // the query to one node the same way the dashboard does.
+        // Viewer's exact node-scoping label injection.
         import { injectLabel } from '../data.js';
 
         const chartEl = document.getElementById('chart');
         const statusEl = document.getElementById('status');
 
-        // Hand-authored descriptor matching what rezolus.rs emits for the
-        // first plot of the Rezolus → Resource Usage subgroup. Used as the
-        // standalone fallback so the demo renders even without a viewer.
+        // Standalone fallback: renders even without a viewer.
         const fallbackDescriptor = {
             opts: {
                 title: 'CPU %',
@@ -92,17 +87,8 @@
             return subgroup?.plots?.find(p => p.opts?.id === 'cpu') ?? null;
         }
 
-        // The rezolus viewer is query-driven: /data/rezolus.json carries
-        // plot DESCRIPTORS (opts + promql_query), never inline series.
-        // Series are produced by executing promql_query against
-        // /api/v1/query_range — mirror executePromQLRangeQuery() in
-        // data.js (same window / step recipe) to get real data here.
-        // The dashboard scopes a non-service plot's query to the selected
-        // node (pinned_node, else first node) before executing — see
-        // data.js::buildEffectiveQuery. Without that, a multi-node
-        // recording fans the query out across every node and the embed
-        // diverges from the viewer. Replicate that node pick + reuse the
-        // viewer's own injectLabel so the matcher is identical.
+        // Section JSON is descriptor-only (no inline series), so mirror
+        // data.js: pick the viewer's node, injectLabel, run query_range.
         async function selectedNode() {
             const res = await fetch('/api/v1/file_metadata', { cache: 'no-store' });
             if (!res.ok) return null;

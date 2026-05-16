@@ -1,32 +1,16 @@
-// <rezolus-chart> — Lit web component that renders a single Plot
-// descriptor (the shape produced by crates/dashboard/) inside Shadow DOM.
+// <rezolus-chart> — embeds one dashboard chart in shadow DOM.
 //
-// It does NOT reimplement chart configuration. It mounts the viewer's
-// real `Chart` mithril component (the same `configureChartByType`
-// dispatcher the dashboard uses), so every style — line, scatter,
-// heatmap, quantile, multi — renders byte-for-byte like the viewer:
-// unit-aware axes/tooltip, fonts, gridlines, dataZoom, OOB bands, etc.
-// Visual parity is structural, not chased.
-//
-// Card chrome (frame, title, sizing) comes from /lib/charts.css linked
-// into the shadow root. The viewer's COLORS read CSS tokens from
-// document.documentElement, so as long as the host page carries the
-// rezolus tokens (link /lib/style.css) chrome and chart contents theme
-// correctly. A data-theme MutationObserver remounts so a theme flip
-// re-reads the tokens (echarts bakes colors at setOption time).
-//
-// Requires, loaded as globals on the host page (the viewer provides
-// all of these): echarts (/lib/charts/echarts.min.js) and mithril
-// (/lib/mithril.js, which sets window.m). `plot` is a descriptor whose
-// `data` field is the viewer spec shape (e.g. [timestamps_s, values]
-// for a single line).
+// Mounts the viewer's real `Chart` (same configureChartByType path)
+// instead of reimplementing config, so every style renders identically.
+// Needs echarts + mithril (window.m) as host globals and the rezolus
+// CSS tokens on document.documentElement (link /lib/style.css), which
+// COLORS reads. `plot.data` is the viewer spec shape, e.g.
+// [timestamps_s, values].
 import { LitElement, html, css } from '../lit/lit.js';
 import { Chart, ChartsState } from '../charts/chart.js';
 
-// One throwaway ChartsState shared by all embedded charts on the page.
-// It only provides the zoom/cursor registry the Chart lifecycle needs;
-// nothing here drives cross-chart sync, so a single bare instance is
-// fine (Chart de-registers itself on unmount via its onremove).
+// Shared, inert: only supplies the zoom/cursor registry Chart's
+// lifecycle needs; no cross-chart sync is driven here.
 const embedChartsState = new ChartsState();
 
 class RezolusChart extends LitElement {
@@ -41,8 +25,7 @@ class RezolusChart extends LitElement {
             display: block;
             min-width: 0;
         }
-        /* charts.css collapses wrappers whose .chart has .no-data so
-           section grids fold; for embed show a visible placeholder. */
+        /* charts.css collapses .no-data wrappers; embed shows a placeholder. */
         :host .chart-wrapper:has(.no-data) {
             display: block;
         }
@@ -73,8 +56,7 @@ class RezolusChart extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        // A theme flip changes the CSS tokens; echarts baked the old
-        // colors at setOption time, so remount to re-read them.
+        // echarts bakes colors at setOption; remount to re-read tokens.
         this._themeObserver = new MutationObserver(() => this._remount());
         this._themeObserver.observe(document.documentElement, {
             attributes: true,
@@ -98,8 +80,7 @@ class RezolusChart extends LitElement {
     }
 
     _unmount() {
-        // m.mount(host, null) triggers Chart.onremove → echarts dispose
-        // + observer/listener cleanup + chartsState de-registration.
+        // null mount → Chart.onremove (dispose + cleanup + de-register).
         if (this._mounted && this._mountHost && window.m) {
             window.m.mount(this._mountHost, null);
         }
@@ -125,9 +106,7 @@ class RezolusChart extends LitElement {
             return;
         }
 
-        // Remount fresh so the new descriptor goes through the exact
-        // viewer construction path (Chart reads spec on construct, then
-        // configureChartByType dispatches by resolved style).
+        // Remount fresh: Chart reads spec on construct.
         this._unmount();
         const interval = this.interval;
         window.m.mount(this._mountHost, {
