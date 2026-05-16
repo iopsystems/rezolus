@@ -1,6 +1,6 @@
-import { ChartsState, Chart } from './charts/chart.js';
-import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from './data.js';
-import { isHistogramPlot, buildHistogramHeatmapSpec } from './charts/metric_types.js';
+import { ChartsState, Chart } from '../charts/chart.js';
+import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from '../data.js';
+import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
 
 // ── Unit selector ───────────────────────────────────────────────────

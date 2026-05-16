@@ -1,1 +1,0 @@
-../../../src/viewer/assets/lib/events_store.js

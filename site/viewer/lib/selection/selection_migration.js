@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/selection/selection_migration.js

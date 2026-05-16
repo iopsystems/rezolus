@@ -1,7 +1,7 @@
 import { TimeRangeBar, GranularitySelector } from './controls.js';
-import { notebookStore, reportStore, loadedSelectionStore, importSelection } from './selection.js';
+import { notebookStore, reportStore, loadedSelectionStore, importSelection } from '../selection/selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
-import { collectGroupPlots } from './group_utils.js';
+import { collectGroupPlots } from '../features/group_utils.js';
 
 // Format utilities
 const formatSize = (bytes) => {

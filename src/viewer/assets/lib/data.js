@@ -1,6 +1,6 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
-import { collectGroupPlots } from './group_utils.js';
+import { collectGroupPlots } from './features/group_utils.js';
 
 // Capture-id constants. Typos become grep-able; use these in place of
 // raw 'baseline' / 'experiment' string literals.

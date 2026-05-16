@@ -18,11 +18,11 @@ import {
     configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
-import { themeVersion } from '../theme.js';
+import { themeVersion } from '../ui/theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
-import { eventsStore } from '../events_store.js';
+import { eventsStore } from '../events/events_store.js';
 import { buildMarkLine } from './event_markers.js';
-import { openEventForm, openEventInfo } from '../event_form.js';
+import { openEventForm, openEventInfo } from '../events/event_form.js';
 import { buildFreezeFooterContent, isEventEditingAllowed, isEventDisplayAllowed } from './base.js';
 
 

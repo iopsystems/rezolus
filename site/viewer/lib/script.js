@@ -3,8 +3,8 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
-import { FileUpload, splitAlias } from './landing.js';
-import { setStorageScope, seedEventsFromMetadata } from './selection.js';
+import { FileUpload, splitAlias } from './ui/landing.js';
+import { setStorageScope, seedEventsFromMetadata } from './selection/selection.js';
 import { initDashboard, bootstrapSharedSections } from './app.js';
 
 // ── UI state ────────────────────────────────────────────────────────

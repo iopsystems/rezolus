@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventsStore } from '../src/viewer/assets/lib/events_store.js';
+import { EventsStore } from '../src/viewer/assets/lib/events/events_store.js';
 
 test('seedFromMetadata: empty / null / non-array all yield empty', () => {
     const s = new EventsStore();

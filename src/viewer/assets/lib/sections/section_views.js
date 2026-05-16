@@ -1,5 +1,5 @@
-import { expandLink, selectButton } from './chart_controls.js';
-import { collectGroupPlots } from './group_utils.js';
+import { expandLink, selectButton } from '../ui/chart_controls.js';
+import { collectGroupPlots } from '../features/group_utils.js';
 
 const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
     view({ attrs }) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { migrateSelection, SELECTION_SCHEMA_VERSION, defaultSelection } from '../src/viewer/assets/lib/selection_migration.js';
+import { migrateSelection, SELECTION_SCHEMA_VERSION, defaultSelection } from '../src/viewer/assets/lib/selection/selection_migration.js';
 
 test('schema version is 3', () => {
     assert.equal(SELECTION_SCHEMA_VERSION, 3);

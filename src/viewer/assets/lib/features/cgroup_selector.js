@@ -5,7 +5,7 @@
 //   substitutePattern: (query, pattern) => string — substitutes cgroup placeholder
 //   setActiveCgroupPattern: (pattern) => void — sets the global active cgroup pattern
 
-import globalColorMapper from './charts/util/colormap.js';
+import globalColorMapper from '../charts/util/colormap.js';
 import { collectGroupPlots } from './group_utils.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
