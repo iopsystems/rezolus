@@ -1,45 +1,48 @@
 // <rezolus-chart> — Lit web component that renders a single Plot
 // descriptor (the shape produced by crates/dashboard/) inside Shadow DOM.
 //
-// Card chrome (frame, title typography, sizing) comes from
-// /lib/charts.css linked into the shadow root, so the component looks
-// like a regular rezolus chart when embedded inside the viewer. The
-// echarts content (axes, gridlines, tooltip, series color) reads the
-// rezolus CSS tokens via getComputedStyle and feeds them to setOption
-// — echarts bakes color strings into its option and doesn't observe
-// CSS, so token changes (theme toggles) only land via a re-render. A
-// MutationObserver on <html> data-theme triggers that re-render.
+// It does NOT reimplement chart configuration. It mounts the viewer's
+// real `Chart` mithril component (the same `configureChartByType`
+// dispatcher the dashboard uses), so every style — line, scatter,
+// heatmap, quantile, multi — renders byte-for-byte like the viewer:
+// unit-aware axes/tooltip, fonts, gridlines, dataZoom, OOB bands, etc.
+// Visual parity is structural, not chased.
 //
-// CSS custom properties inherit into the shadow root from the host
-// page's :root, so inside the rezolus viewer everything works for
-// free. External embedders need to load the same tokens (or override
-// them per :host) for chrome and chart contents to render correctly.
+// Card chrome (frame, title, sizing) comes from /lib/charts.css linked
+// into the shadow root. The viewer's COLORS read CSS tokens from
+// document.documentElement, so as long as the host page carries the
+// rezolus tokens (link /lib/style.css) chrome and chart contents theme
+// correctly. A data-theme MutationObserver remounts so a theme flip
+// re-reads the tokens (echarts bakes colors at setOption time).
 //
-// Spike scope: inline-series adapter only. The component accepts a `plot`
-// property whose `data` field is [[timestamps_s], [values]] (PromQL's
-// seconds-since-epoch convention). Future adapters (HTTP, WASM, SSE)
-// will live alongside this file and feed the same property contract.
-//
-// Requires echarts to be loaded as a global (see lib/charts/echarts.min.js).
+// Requires, loaded as globals on the host page (the viewer provides
+// all of these): echarts (/lib/charts/echarts.min.js) and mithril
+// (/lib/mithril.js, which sets window.m). `plot` is a descriptor whose
+// `data` field is the viewer spec shape (e.g. [timestamps_s, values]
+// for a single line).
 import { LitElement, html, css } from '../lit/lit.js';
+import { Chart, ChartsState } from '../charts/chart.js';
+
+// One throwaway ChartsState shared by all embedded charts on the page.
+// It only provides the zoom/cursor registry the Chart lifecycle needs;
+// nothing here drives cross-chart sync, so a single bare instance is
+// fine (Chart de-registers itself on unmount via its onremove).
+const embedChartsState = new ChartsState();
 
 class RezolusChart extends LitElement {
     static properties = {
         plot: { type: Object },
+        // Sampling interval (s) — only feeds the Chart's min-zoom calc.
+        interval: { type: Number },
     };
 
-    // Component-local styles. The :host prefix on the overrides bumps
-    // specificity above charts.css so they win without !important
-    // (except for the `> div` selector, which charts.css already marks
-    // !important — must match).
     static styles = css`
         :host {
             display: block;
             min-width: 0;
         }
-        /* charts.css collapses chart wrappers whose .chart has .no-data
-           so section grids fold around missing data. For embed we want a
-           visible placeholder so the consumer can see the slot exists. */
+        /* charts.css collapses wrappers whose .chart has .no-data so
+           section grids fold; for embed show a visible placeholder. */
         :host .chart-wrapper:has(.no-data) {
             display: block;
         }
@@ -62,17 +65,17 @@ class RezolusChart extends LitElement {
     constructor() {
         super();
         this.plot = null;
-        this._chart = null;
-        this._observer = null;
+        this.interval = 1;
+        this._mountHost = null;
+        this._mounted = false;
         this._themeObserver = null;
     }
 
     connectedCallback() {
         super.connectedCallback();
-        // Re-render when the host page flips data-theme. Token reads in
-        // _readTokens() return the new values; setOption with notMerge
-        // applies them to axis/grid/tooltip/series.
-        this._themeObserver = new MutationObserver(() => this._render());
+        // A theme flip changes the CSS tokens; echarts baked the old
+        // colors at setOption time, so remount to re-read them.
+        this._themeObserver = new MutationObserver(() => this._remount());
         this._themeObserver.observe(document.documentElement, {
             attributes: true,
             attributeFilter: ['data-theme'],
@@ -80,128 +83,61 @@ class RezolusChart extends LitElement {
     }
 
     firstUpdated() {
-        const chartEl = this.renderRoot.querySelector('.chart');
-        this._observer = new ResizeObserver(() => this._chart?.resize());
-        if (chartEl) this._observer.observe(chartEl);
-        this._render();
+        this._mountHost = this.renderRoot.querySelector('.rz-chart-host');
+        this._remount();
     }
 
     updated(changed) {
-        if (changed.has('plot')) this._render();
+        if (changed.has('plot') || changed.has('interval')) this._remount();
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
         this._themeObserver?.disconnect();
-        this._observer?.disconnect();
-        this._chart?.dispose();
-        this._chart = null;
+        this._unmount();
     }
 
-    // Read the rezolus CSS tokens the chart contents (axis, grid, tooltip,
-    // series) depend on. echarts bakes color strings into its option at
-    // setOption time and doesn't observe CSS, so we read on each render
-    // and feed the values in.
-    _readTokens() {
-        const styles = getComputedStyle(this);
-        const v = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
-        return {
-            fg:            v('--fg', '#1a1a1a'),
-            fgSecondary:   v('--fg-secondary', '#6b7280'),
-            gridLine:      v('--chart-grid-line', 'rgba(48,54,61,0.5)'),
-            accent:        v('--accent', '#58a6ff'),
-            bgCard:        v('--bg-card', '#ffffff'),
-            borderDefault: v('--border-default', 'rgba(48,54,61,0.7)'),
-            chart1:        v('--chart-1', '#1f77b4'),
-        };
-    }
-
-    _isDarkTheme() {
-        return document.documentElement?.getAttribute('data-theme') !== 'light';
-    }
-
-    _render() {
-        const chartEl = this.renderRoot.querySelector('.chart');
-        if (!chartEl) return;
-
-        const data = this.plot?.data;
-        const hasData = Array.isArray(data) && data.length >= 2
-            && Array.isArray(data[0]) && data[0].length > 0;
-
-        if (!hasData) {
-            this._chart?.dispose();
-            this._chart = null;
-            return;
+    _unmount() {
+        // m.mount(host, null) triggers Chart.onremove → echarts dispose
+        // + observer/listener cleanup + chartsState de-registration.
+        if (this._mounted && this._mountHost && window.m) {
+            window.m.mount(this._mountHost, null);
         }
+        this._mounted = false;
+    }
 
+    _remount() {
+        if (!this._mountHost) return;
+        const m = window.m;
+        if (!m) { this._mountHost.textContent = 'mithril not loaded'; return; }
         if (typeof window.echarts === 'undefined') {
-            chartEl.textContent = 'echarts not loaded';
+            this._mountHost.textContent = 'echarts not loaded';
             return;
         }
 
-        if (!this._chart) {
-            this._chart = window.echarts.init(chartEl, null, { renderer: 'canvas' });
+        const spec = this.plot;
+        const hasData = Array.isArray(spec?.data) && spec.data.length >= 2
+            && Array.isArray(spec.data[0]) && spec.data[0].length > 0;
+        if (!spec || !spec.opts || !hasData) {
+            this._unmount();
+            this._mountHost.innerHTML =
+                '<div class="chart no-data"><div>no data</div></div>';
+            return;
         }
 
-        const [times, values] = data;
-        // PromQL convention: timestamps are seconds since epoch. echarts wants ms.
-        const seriesData = times.map((t, i) => [t * 1000, values[i]]);
-        const fmt = this.plot.opts?.format ?? {};
-        const t = this._readTokens();
-
-        this._chart.setOption({
-            backgroundColor: 'transparent',
-            darkMode: this._isDarkTheme(),
-            textStyle: { color: t.fg },
-            color: [t.chart1],
-            // Top clears the absolutely-positioned .chart-header (10px
-            // padding + 13px title with line-height).
-            grid: { left: 12, right: 17, top: 36, bottom: 24, containLabel: true },
-            xAxis: {
-                type: 'time',
-                axisLine: { show: false },
-                axisTick: { show: false },
-                axisLabel: { color: t.fgSecondary, fontSize: 10 },
-                splitLine: {
-                    show: true,
-                    lineStyle: { color: t.gridLine, type: 'dashed' },
-                },
-            },
-            yAxis: {
-                type: fmt.log_scale ? 'log' : 'value',
-                name: fmt.y_axis_label ?? '',
-                nameTextStyle: { fontSize: 11, color: t.fgSecondary },
-                axisLine: { show: false },
-                axisTick: { show: false },
-                axisLabel: { color: t.fgSecondary, fontSize: 10, margin: 12 },
-                splitLine: { lineStyle: { color: t.gridLine, type: 'dashed' } },
-            },
-            tooltip: {
-                trigger: 'axis',
-                confine: true,
-                backgroundColor: t.bgCard,
-                borderColor: t.borderDefault,
-                borderWidth: 1,
-                textStyle: { color: t.fg },
-                axisPointer: {
-                    type: 'line',
-                    snap: true,
-                    animation: false,
-                    lineStyle: { color: t.accent, opacity: 0.6, width: 1 },
-                },
-            },
-            series: [{
-                name: this.plot.opts?.title ?? '',
-                type: 'line',
-                showSymbol: false,
-                data: seriesData,
-            }],
-        }, { notMerge: true });
+        // Remount fresh so the new descriptor goes through the exact
+        // viewer construction path (Chart reads spec on construct, then
+        // configureChartByType dispatches by resolved style).
+        this._unmount();
+        const interval = this.interval;
+        window.m.mount(this._mountHost, {
+            view: () => m(Chart, { spec, chartsState: embedChartsState, interval }),
+        });
+        this._mounted = true;
     }
 
     render() {
         const title = this.plot?.opts?.title;
-        const hasData = this.plot?.data?.[0]?.length > 0;
         return html`
             <link rel="stylesheet" href="/lib/charts.css">
             <div class="chart-wrapper">
@@ -212,9 +148,7 @@ class RezolusChart extends LitElement {
                         </div>
                     </div>
                 ` : ''}
-                <div class="chart ${hasData ? '' : 'no-data'}">
-                    ${!hasData ? html`<div>no data</div>` : ''}
-                </div>
+                <div class="rz-chart-host"></div>
             </div>
         `;
     }

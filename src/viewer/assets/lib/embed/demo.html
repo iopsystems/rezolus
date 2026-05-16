@@ -8,7 +8,10 @@
     <!-- Linking style.css gives the page the rezolus tokens (and theme) the
          component depends on via the shadow-root <link> to charts.css. -->
     <link rel="stylesheet" href="/lib/style.css"/>
+    <!-- echarts + mithril as globals; <rezolus-chart> mounts the
+         viewer's real Chart component, which uses both. -->
     <script src="/lib/charts/echarts.min.js"></script>
+    <script src="/lib/mithril.js"></script>
     <script type="module" src="./rezolus-chart.js"></script>
     <style>
         body {
