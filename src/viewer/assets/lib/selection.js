@@ -11,6 +11,7 @@ import { isHistogramPlot } from './charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
 import { ViewerApi } from './viewer_api.js';
 import { eventsStore } from './events_store.js';
+import { renderMarkdown } from './markdown.js';
 
 const PIN_ICON_PATH = 'M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a5.927 5.927 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707-.195-.195.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a5.922 5.922 0 0 1 1.013.16l3.134-3.133a2.772 2.772 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146z';
 
@@ -82,6 +83,49 @@ const loadedSelectionStore = {
 // clearStore, and openInNotebook all need to clear it before the
 // view next mounts. UI-only state — never persisted.
 const expandedNotes = new Set();
+// Notes/preamble render as Markdown by default; entry.id (or the
+// sentinel below for the page preamble) is present here only while
+// that field is in raw-edit mode. UI-only, never persisted.
+const editingMarkdown = new Set();
+const PREAMBLE_KEY = '__preamble__';
+
+// A Markdown field with an Edit ⇄ Preview toggle. Preview renders
+// sanitized HTML via renderMarkdown; Edit shows a raw textarea.
+// `key` is the editingMarkdown identity (entry id or PREAMBLE_KEY).
+const markdownField = ({ key, cls, label, value, placeholder, onInput, onEmptyBlur }) => {
+    const editing = editingMarkdown.has(key);
+    const toggle = m('button.md-toggle', {
+        type: 'button',
+        onclick: () => {
+            if (editing) editingMarkdown.delete(key);
+            else editingMarkdown.add(key);
+            m.redraw();
+        },
+    }, editing ? 'Preview' : 'Edit');
+
+    const header = m('div.md-field-header', [
+        label ? m('label.md-field-label', label) : null,
+        toggle,
+    ]);
+
+    if (editing) {
+        return m('div', { class: cls }, [
+            header,
+            m('textarea.md-textarea', {
+                placeholder,
+                value,
+                oninput: (e) => onInput(e.target.value),
+                onblur: (e) => { if (!e.target.value && onEmptyBlur) onEmptyBlur(); },
+            }),
+        ]);
+    }
+    const body = value
+        ? m('div.md-rendered', m.trust(renderMarkdown(value)))
+        : m('div.md-empty', {
+            onclick: () => { editingMarkdown.add(key); m.redraw(); },
+        }, placeholder || 'Nothing here yet — click Edit');
+    return m('div', { class: cls }, [header, body]);
+};
 
 // Hydrate an entries list from a JSON payload. Used by all three
 // load paths (restoreStore, loadPayloadIntoStore, loadJsonIntoSelection)
@@ -378,6 +422,7 @@ const removeEntry = (store, id) => {
         store.entries.splice(idx, 1);
         if (store === notebookStore) {
             expandedNotes.delete(id);
+            editingMarkdown.delete(id);
             persistNotebook();
         } else if (store === reportStore) persistReport();
     }
@@ -446,6 +491,7 @@ const clearStore = (store) => {
         localStorage.removeItem(REPORT_STORAGE_KEY);
     } else if (store === notebookStore) {
         expandedNotes.clear();
+        editingMarkdown.clear();
         localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
         // Events are Notebook-scoped content — clear them alongside it.
         suspendEventsPersist = true;
@@ -473,6 +519,7 @@ const openInNotebook = (sourceStore, kindLabel) => {
     notebookStore.compare = sourceStore.compare ? { ...sourceStore.compare } : null;
     notebookStore.entries = sourceStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
     expandedNotes.clear();
+    editingMarkdown.clear();
     persistNotebook();
     notify('info', `${kindLabel} opened in Notebook`);
     m.route.set('/notebook');
@@ -788,11 +835,13 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     }, attrs.heatmapLoading ? 'LOADING...' : (attrs.heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
                 ]),
             ]),
-            m('input.selection-tagline', {
-                type: 'text',
-                placeholder: 'Add a tagline\u2026',
+            markdownField({
+                key: PREAMBLE_KEY,
+                cls: 'selection-preamble',
+                label: 'Overview',
                 value: notebookStore.tagline,
-                oninput: (e) => { notebookStore.tagline = e.target.value; persistNotebook(); },
+                placeholder: 'Add an overview / preamble (Markdown supported)\u2026',
+                onInput: (v) => { notebookStore.tagline = v; persistNotebook(); },
             }),
         ]);
 
@@ -833,6 +882,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         if (!confirm('Clear notes from all pinned charts? This cannot be undone.')) return;
                         notebookStore.entries.forEach(e => { e.note = ''; });
                         expandedNotes.clear();
+                        editingMarkdown.clear();
                         persistNotebook();
                         m.redraw();
                     },
@@ -964,24 +1014,26 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                             return m('button.notes-affordance', {
                                 onclick: () => {
                                     expandedNotes.add(entry.id);
+                                    // A freshly added note opens straight
+                                    // into raw edit mode.
+                                    editingMarkdown.add(entry.id);
                                     m.redraw();
                                 },
                             }, '+ Add note');
                         }
-                        return m('div.selection-card-notes', [
-                            m('label.selection-notes-label', 'Notes'),
-                            m('textarea.selection-notes', {
-                                placeholder: 'Add notes\u2026',
-                                value: entry.note,
-                                oninput: (e) => { entry.note = e.target.value; persistNotebook(); },
-                                onblur: (e) => {
-                                    if (!e.target.value) {
-                                        expandedNotes.delete(entry.id);
-                                        m.redraw();
-                                    }
-                                },
-                            }),
-                        ]);
+                        return markdownField({
+                            key: entry.id,
+                            cls: 'selection-card-notes',
+                            label: 'Notes',
+                            value: entry.note,
+                            placeholder: 'Add notes (Markdown supported)\u2026',
+                            onInput: (v) => { entry.note = v; persistNotebook(); },
+                            onEmptyBlur: () => {
+                                expandedNotes.delete(entry.id);
+                                editingMarkdown.delete(entry.id);
+                                m.redraw();
+                            },
+                        });
                     })(),
                 ]);
             }),
@@ -1046,7 +1098,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                     }, 'OPEN IN NOTEBOOK'),
                 ]),
             ]),
-            reportStore.tagline && m('p.selection-tagline-text', reportStore.tagline),
+            reportStore.tagline && m('div.selection-preamble-text.md-rendered', m.trust(renderMarkdown(reportStore.tagline))),
         ]);
 
         if (this.loading) {
@@ -1097,7 +1149,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                     ]),
                     entry.note && m('div.report-card-notes', [
                         m('label.report-notes-label', 'Notes'),
-                        m('p.report-notes-text', entry.note),
+                        m('div.report-notes-text.md-rendered', m.trust(renderMarkdown(entry.note))),
                     ]),
                 ]);
             }),
@@ -1129,7 +1181,7 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
             ]),
             loadedSelectionStore.loadedFrom && m('p.selection-source',
                 `Loaded from: ${loadedSelectionStore.loadedFrom}`),
-            loadedSelectionStore.tagline && m('p.selection-tagline-text', loadedSelectionStore.tagline),
+            loadedSelectionStore.tagline && m('div.selection-preamble-text.md-rendered', m.trust(renderMarkdown(loadedSelectionStore.tagline))),
         ]);
 
         if (this.loading) {
