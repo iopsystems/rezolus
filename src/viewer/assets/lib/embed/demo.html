@@ -85,9 +85,43 @@
             return subgroup?.plots?.find(p => p.opts?.id === 'cpu') ?? null;
         }
 
-        function hasSeriesData(plot) {
-            return Array.isArray(plot?.data) && plot.data.length >= 2
-                && Array.isArray(plot.data[0]) && plot.data[0].length > 0;
+        // The rezolus viewer is query-driven: /data/rezolus.json carries
+        // plot DESCRIPTORS (opts + promql_query), never inline series.
+        // Series are produced by executing promql_query against
+        // /api/v1/query_range — mirror executePromQLRangeQuery() in
+        // data.js (same window / step recipe) to get real data here.
+        async function runPlotQuery(plot) {
+            const metaRes = await fetch('/api/v1/metadata', { cache: 'no-store' });
+            if (!metaRes.ok) throw new Error(`metadata HTTP ${metaRes.status}`);
+            const meta = (await metaRes.json())?.data || {};
+            const minTime = meta.minTime;
+            const maxTime = meta.maxTime;
+            if (!Number.isFinite(minTime) || !Number.isFinite(maxTime) || maxTime <= minTime) {
+                throw new Error('no recording time range (no parquet loaded?)');
+            }
+            const windowDuration = Math.min(3600, maxTime - minTime);
+            const start = Math.max(minTime, maxTime - windowDuration);
+            const step = Math.max(1, Math.floor(windowDuration / 500));
+
+            const qs = new URLSearchParams({
+                query: plot.promql_query,
+                start: String(start),
+                end: String(maxTime),
+                step: String(step),
+            });
+            const qRes = await fetch(`/api/v1/query_range?${qs}`, { cache: 'no-store' });
+            if (!qRes.ok) throw new Error(`query_range HTTP ${qRes.status}`);
+            const body = await qRes.json();
+            const series = body?.status === 'success' ? body.data?.result?.[0]?.values : null;
+            if (!Array.isArray(series) || series.length === 0) return null;
+
+            return {
+                ...plot,
+                data: [
+                    series.map((p) => Number(p[0])),
+                    series.map((p) => parseFloat(p[1])),
+                ],
+            };
         }
 
         async function loadRealOrFallback() {
@@ -97,24 +131,25 @@
                 const view = await res.json();
                 const plot = findCpuPlot(view);
                 if (!plot) throw new Error('CPU % plot not found in rezolus section');
+                if (!plot.promql_query) throw new Error('CPU plot descriptor has no promql_query');
 
-                if (hasSeriesData(plot)) {
-                    chartEl.plot = plot;
+                const withData = await runPlotQuery(plot);
+                if (withData) {
+                    chartEl.plot = withData;
                     statusEl.className = 'status ok';
-                    statusEl.innerHTML = `Loaded real plot from <code>/data/rezolus.json</code>
-                        — ${plot.data[0].length} data points.`;
+                    statusEl.innerHTML = `Executed <code>${plot.promql_query}</code> via
+                        <code>/api/v1/query_range</code> — ${withData.data[0].length} data points.`;
                     return;
                 }
 
                 chartEl.plot = syntheticData(plot);
                 statusEl.className = 'status fallback';
-                statusEl.innerHTML = `Got real descriptor from <code>/data/rezolus.json</code>
-                    but no series data (no recording loaded). Showing synthetic series on the
-                    real descriptor.`;
+                statusEl.innerHTML = `Real descriptor from <code>/data/rezolus.json</code>, but the
+                    query returned no series. Showing synthetic series on the real descriptor.`;
             } catch (err) {
                 chartEl.plot = syntheticData(fallbackDescriptor);
                 statusEl.className = 'status fallback';
-                statusEl.innerHTML = `Fetch failed (<code>${err.message}</code>). Showing
+                statusEl.innerHTML = `Fetch/query failed (<code>${err.message}</code>). Showing
                     hand-authored fallback descriptor with synthetic series.`;
             }
         }
