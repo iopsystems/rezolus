@@ -343,8 +343,8 @@ const setChartToggle = chartToggleSetter(notebookStore, persistNotebook);
 const setReportChartToggle = chartToggleSetter(reportStore, persistReport);
 const setLoadedSelectionChartToggle = chartToggleSetter(loadedSelectionStore, null);
 
-// Stores are restored when setStorageScope() is called with a file fingerprint,
-// or eagerly here for the default (unscoped) keys as a fallback.
+// setStorageScope() re-restores with a file fingerprint; this eager
+// pass covers the default (unscoped) keys as a fallback.
 restoreStore(REPORT_STORAGE_KEY, reportStore);
 restoreStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 restoreEvents();
@@ -989,7 +989,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 const dropAttrs = {
                     ondragover: (e) => {
                         if (!_draggedEntryId || _draggedEntryId === entry.id) return;
-                        e.preventDefault(); // marks this card as a valid drop target
+                        e.preventDefault(); // required to mark a valid drop target
                         e.dataTransfer.dropEffect = 'move';
                         if (_dragOverEntryId !== entry.id) {
                             _dragOverEntryId = entry.id;

@@ -79,7 +79,6 @@ pub fn calculate_correlation(
         return Err("No data returned from queries".into());
     }
 
-    // Calculate cross-correlations between all series pairs in parallel
     let series_results: Vec<_> = samples1
         .par_iter()
         .flat_map(|s1| {
@@ -112,11 +111,10 @@ pub fn calculate_correlation(
         return Err("No valid correlations found (insufficient overlapping data)".into());
     }
 
-    // Find the best overall correlation (highest absolute value)
+    // Best overall correlation = highest absolute value
     let (max_correlation, optimal_lag, total_samples) = if all_correlations.len() == 1 {
         all_correlations[0]
     } else {
-        // For multiple series pairs, find the strongest correlation
         all_correlations
             .iter()
             .max_by(|a, b| {
@@ -264,7 +262,7 @@ fn detrend(data: &[f64]) -> Vec<f64> {
         return data.to_vec();
     }
 
-    // Calculate linear regression coefficients
+    // Linear regression coefficients
     let mut sum_x = 0.0;
     let mut sum_y = 0.0;
     let mut sum_xx = 0.0;
@@ -281,7 +279,6 @@ fn detrend(data: &[f64]) -> Vec<f64> {
     let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
     let intercept = (sum_y - slope * sum_x) / n;
 
-    // Remove the trend
     data.iter()
         .enumerate()
         .map(|(i, &y)| y - (slope * i as f64 + intercept))
@@ -503,7 +500,6 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
         interpret_correlation(result.max_correlation)
     ));
 
-    // Show correlation at different lags if available
     if !result.correlations_at_lag.is_empty() {
         output.push_str("\nCorrelation at different lags:\n");
         for lag_corr in &result.correlations_at_lag {
@@ -560,7 +556,6 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
             // Format labels compactly with deterministic ordering
             let format_labels = |labels: &HashMap<String, String>| -> String {
-                // Get the metric name first
                 let metric_name = labels
                     .get("metric")
                     .or_else(|| labels.get("__name__"))
@@ -571,12 +566,11 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
                 let mut label_parts = Vec::new();
 
-                // First add 'id' if present
+                // 'id' goes first if present
                 if let Some(id_value) = labels.get("id") {
                     label_parts.push(format!("id=\"{id_value}\""));
                 }
 
-                // Collect and sort remaining labels alphabetically
                 let mut remaining_labels: Vec<(String, String)> = labels
                     .iter()
                     .filter(|(k, _)| k.as_str() != "id" && !omit_labels.contains(&k.as_str()))
@@ -584,7 +578,6 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
                     .collect();
                 remaining_labels.sort_by(|a, b| a.0.cmp(&b.0));
 
-                // Add sorted labels with proper quoting for PromQL
                 for (k, v) in remaining_labels {
                     label_parts.push(format!("{k}=\"{v}\""));
                 }
@@ -629,7 +622,6 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
         }
     }
 
-    // Add interpretation note about the methodology
     output.push_str(
         "\nNote: Data has been detrended and normalized to detect non-linear relationships.\n",
     );

@@ -3,11 +3,9 @@ use crate::Url;
 
 #[derive(Deserialize)]
 pub struct General {
-    // how often to sample from the agent
     #[serde(default = "interval")]
     interval: String,
 
-    // duration for the ringbuffer
     #[serde(default = "duration")]
     duration: String,
 
@@ -15,7 +13,6 @@ pub struct General {
     #[serde(default = "source")]
     source: String,
 
-    // the path for output file
     #[serde(default = "output")]
     output: String,
 

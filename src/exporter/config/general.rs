@@ -3,11 +3,9 @@ use crate::Url;
 
 #[derive(Deserialize)]
 pub struct General {
-    // the exporter samples periodically, this controls that interval
     #[serde(default = "interval")]
     interval: String,
 
-    // the listen address of the exporter
     #[serde(default = "listen")]
     listen: String,
 

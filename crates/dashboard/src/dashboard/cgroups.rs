@@ -26,7 +26,6 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         }
     };
 
-    // CPU Total Cores
     group.plot_promql(
         PlotOpts::counter(
             "Total CPU Cores",
@@ -36,7 +35,6 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         format!("{} / 1000000000", rate("cgroup_cpu_usage")),
     );
 
-    // CPU User Cores
     group.plot_promql(
         PlotOpts::counter("User CPU Cores", format!("{prefix}-user-cores"), Unit::Count),
         if individual {
@@ -46,7 +44,6 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         },
     );
 
-    // CPU System Cores
     group.plot_promql(
         PlotOpts::counter(
             "System CPU Cores",
@@ -60,7 +57,6 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         },
     );
 
-    // CPU Migrations
     group.plot_promql(
         PlotOpts::counter(
             "CPU Migrations",
@@ -70,7 +66,6 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_cpu_migrations"),
     );
 
-    // CPU Throttled Time
     group.plot_promql(
         PlotOpts::counter(
             "CPU Throttled Time",
@@ -80,7 +75,6 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_cpu_throttled_time"),
     );
 
-    // IPC
     group.plot_promql(
         PlotOpts::counter("IPC", format!("{prefix}-ipc"), Unit::Count),
         if individual {
@@ -90,13 +84,11 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         },
     );
 
-    // TLB Flushes
     group.plot_promql(
         PlotOpts::counter("TLB Flushes", format!("{prefix}-tlb-flush"), Unit::Rate),
         rate("cgroup_cpu_tlb_flush"),
     );
 
-    // Syscalls
     group.plot_promql(
         PlotOpts::counter("Syscalls", format!("{prefix}-syscall"), Unit::Rate),
         rate("cgroup_syscall"),

@@ -222,7 +222,7 @@ async fn handle_binary(
     loop {
         let n = stream.read(&mut buf).await?;
         if n == 0 {
-            break; // Connection closed
+            break;
         }
 
         match binary::parse_and_ingest(&buf[..n], store, ctx, max_metrics_per_connection) {

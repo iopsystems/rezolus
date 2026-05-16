@@ -75,7 +75,6 @@ pub fn run(config: Config) {
         }
     };
 
-    // Fetch systeminfo from the agent
     let agent_systeminfo: Option<String> = {
         let mut info_url = url.clone();
         info_url.set_path("/systeminfo");
@@ -115,14 +114,12 @@ pub fn run(config: Config) {
         })
         .unwrap();
 
-    // Get the directory for temp files
     let temp_dir = {
         let mut path: PathBuf = config.general().output();
         path.pop();
         path
     };
 
-    // our writer will always be a new temporary file
     // Use NamedTempFile so we can get the path for sharing with HTTP handlers
     let writer = match tempfile::NamedTempFile::new_in(&temp_dir) {
         Ok(t) => t,
@@ -135,7 +132,6 @@ pub fn run(config: Config) {
     // Get the path before we convert to file handle
     let temp_path = writer.path().to_path_buf();
 
-    // Convert to regular file handle for writing
     let mut writer = writer.into_file();
 
     // estimate the snapshot size and latency
@@ -183,7 +179,6 @@ pub fn run(config: Config) {
         std::process::exit(1);
     });
 
-    // Create shared state for HTTP handlers
     let shared_state = Arc::new(SharedState::new(
         temp_path,
         snapshot_len,
@@ -193,10 +188,8 @@ pub fn run(config: Config) {
         config.general().output(),
     ));
 
-    // Create channel for dump-to-file requests
     let (dump_tx, mut dump_rx) = tokio::sync::mpsc::channel::<DumpToFileRequest>(8);
 
-    // Optionally spawn HTTP server
     if let Some(listen_addr) = config.general().listen() {
         let shared = shared_state.clone();
         let sysinfo = agent_systeminfo.clone();
@@ -217,7 +210,6 @@ pub fn run(config: Config) {
                 tokio::select! {
                     biased;
 
-                    // Check for dump-to-file requests from HTTP endpoint
                     Some(request) = dump_rx.recv() => {
                         debug!("received dump-to-file request via HTTP");
                         let response = perform_dump_to_file(
@@ -231,9 +223,7 @@ pub fn run(config: Config) {
                         let _ = request.response_tx.send(response);
                     }
 
-                    // Regular sampling tick
                     _ = interval.tick() => {
-                        // Check if we should exit the sampling loop
                         if STATE.load(Ordering::Relaxed) != RUNNING {
                             break;
                         }
@@ -378,13 +368,11 @@ fn perform_dump_to_file(
             continue;
         }
 
-        // Apply time filter if specified
         if time_range.start.is_some() || time_range.end.is_some() {
             if let Ok(Snapshot::V2(ref s)) = rmp_serde::from_slice::<Snapshot>(&buf) {
                 if !time_range.contains(s.systemtime) {
                     continue;
                 }
-                // Track timestamps
                 if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
                     let ts = dur.as_secs();
                     if first_timestamp.is_none() {

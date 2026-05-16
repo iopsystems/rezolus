@@ -1,5 +1,6 @@
 // Backend API adapter for src/viewer frontend.
-// Defines a transport abstraction that mirrors the site/viewer WASM adapter.
+// Transport abstraction mirrors the site/viewer WASM adapter — keep the
+// two in sync.
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB — must match server DefaultBodyLimit
 

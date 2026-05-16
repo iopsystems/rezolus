@@ -64,36 +64,30 @@ pub fn discover_correlations(
 ) -> Result<CorrelationDiscoveryResult, Box<dyn std::error::Error>> {
     let start_time = std::time::Instant::now();
     let params = params.unwrap_or_default();
-    
-    // Get curated queries
+
     let queries = get_curated_queries();
-    
+
     if queries.is_empty() {
         return Err("No curated queries available".into());
     }
-    
-    // Categorize queries by their category
+
     let categorized_queries = categorize_queries(&queries);
-    
-    // Generate query pairs, prioritizing cross-subsystem relationships
+
     let query_pairs = generate_query_pairs(&categorized_queries);
-    
+
     let total_pairs = query_pairs.len();
     println!("Testing {} correlation pairs...", total_pairs);
-    
-    // Calculate correlations for all pairs
+
     let mut discovered_correlations = Vec::new();
     let mut processed = 0;
     
     for (query1, query2, cat1, cat2) in query_pairs {
-        // Progress reporting every 50 pairs
         if processed % 50 == 0 {
             println!("Processed {}/{} pairs...", processed, total_pairs);
         }
         
         match calculate_correlation(engine, tsdb, &query1.query, &query2.query) {
             Ok(result) => {
-                // Filter by correlation strength
                 if result.max_correlation.abs() >= params.min_correlation {
                     let relationship_type = if cat1 == cat2 {
                         RelationshipType::SameSubsystem
@@ -112,7 +106,7 @@ pub fn discover_correlations(
                 }
             }
             Err(e) => {
-                // Skip failed correlations but log for debugging
+                // Skip failed correlations; log for debugging
                 eprintln!("Correlation failed for {} vs {}: {}", query1.query, query2.query, e);
             }
         }
@@ -120,10 +114,9 @@ pub fn discover_correlations(
         processed += 1;
     }
     
-    // Sort and categorize results
     let mut cross_subsystem = Vec::new();
     let mut same_subsystem = Vec::new();
-    
+
     for corr in discovered_correlations {
         match corr.relationship_type {
             RelationshipType::CrossSubsystem => cross_subsystem.push(corr),
@@ -131,7 +124,7 @@ pub fn discover_correlations(
             RelationshipType::Unknown => {}
         }
     }
-    
+
     // Sort by absolute correlation strength
     cross_subsystem.sort_by(|a, b| {
         b.correlation_result.max_correlation.abs()
@@ -144,8 +137,7 @@ pub fn discover_correlations(
             .partial_cmp(&a.correlation_result.max_correlation.abs())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    
-    // Limit results
+
     cross_subsystem.truncate(params.max_results_per_category);
     same_subsystem.truncate(params.max_results_per_category);
     
@@ -372,11 +364,10 @@ fn categorize_queries(queries: &[CuratedQuery]) -> HashMap<String, Vec<CuratedQu
 /// Generate query pairs, prioritizing cross-subsystem relationships
 fn generate_query_pairs(categorized_queries: &HashMap<String, Vec<CuratedQuery>>) -> Vec<(CuratedQuery, CuratedQuery, String, String)> {
     let mut pairs = Vec::new();
-    
-    // Get all category names
+
     let categories: Vec<String> = categorized_queries.keys().cloned().collect();
-    
-    // Generate cross-subsystem pairs first (these are most interesting)
+
+    // Cross-subsystem pairs first (these are most interesting)
     for (i, cat1) in categories.iter().enumerate() {
         for cat2 in categories.iter().skip(i + 1) {
             if let (Some(queries1), Some(queries2)) = 
@@ -419,7 +410,7 @@ fn generate_query_pairs(categorized_queries: &HashMap<String, Vec<CuratedQuery>>
 
 /// Extract a readable label value from a metric's labels
 fn extract_label_value(labels: &HashMap<String, String>) -> String {
-    // Try to find the most descriptive label
+    // Prefer the most descriptive label
     if let Some(name) = labels.get("name") {
         // For cgroups, extract just the service name
         if name.contains(".service") {
@@ -439,7 +430,7 @@ fn extract_label_value(labels: &HashMap<String, String>) -> String {
         return instance.clone();
     }
     
-    // If no good label found, show all labels
+    // No descriptive label: fall back to showing all labels
     if !labels.is_empty() {
         let label_str: Vec<String> = labels.iter()
             .map(|(k, v)| format!("{}={}", k, v))
@@ -498,21 +489,17 @@ pub fn format_discovery_result(result: &CorrelationDiscoveryResult) -> String {
                 corr.metric2
             ));
             
-            // Show top contributing series if this is a multi-series correlation
             if corr.series_pairs.len() > 1 {
                 output.push_str(&format!("   Top contributing series ({} total pairs):\n", corr.series_pairs.len()));
-                
-                // Sort series pairs by absolute correlation
+
                 let mut sorted_pairs = corr.series_pairs.clone();
                 sorted_pairs.sort_by(|a, b| {
                     b.max_correlation.abs()
                         .partial_cmp(&a.max_correlation.abs())
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
-                
-                // Show top 3 contributors
+
                 for (j, series_pair) in sorted_pairs.iter().take(3).enumerate() {
-                    // Extract container/label name if present
                     let label1 = extract_label_value(&series_pair.labels1);
                     let label2 = extract_label_value(&series_pair.labels2);
                     
@@ -531,7 +518,6 @@ pub fn format_discovery_result(result: &CorrelationDiscoveryResult) -> String {
                 }
             }
             
-            // Interpret the relationship
             if corr.optimal_lag > 0 {
                 output.push_str(&format!(
                     "   → {} activity leads {} activity by {}s\n",

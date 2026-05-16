@@ -69,11 +69,10 @@ pub(super) fn perform_cusum_analysis_with_allan(
     let window_change_points =
         detect_window_change_points(values, sample_interval, allan_window, allan_analysis);
 
-    // Detect cliffs using simple differencing
     let cliffs = detect_cliffs(values, mean, std_dev);
 
-    // Run multi-scale CUSUM with different sensitivities
-    // Adjusted thresholds to reduce false positives
+    // Multi-scale CUSUM with different sensitivities; thresholds raised to
+    // reduce false positives
     let sensitivity_configs = vec![
         ("High Sensitivity", 0.5, 5.0), // Detect small changes (was 0.25, 2.0)
         ("Medium Sensitivity", 1.0, 6.0), // Standard detection (was 0.5, 4.0)
@@ -162,7 +161,7 @@ fn interpolate_allan_dev(allan_analysis: &AllanAnalysis, target_tau: f64) -> f64
 
     match (below_idx, above_idx) {
         (Some(b_idx), Some(a_idx)) if b_idx != a_idx => {
-            // Linear interpolation in log-log space
+            // Interpolate in log-log space; Allan deviation is roughly power-law in tau
             let tau_b = allan_analysis.taus[b_idx];
             let tau_a = allan_analysis.taus[a_idx];
             let dev_b = allan_analysis.deviations[b_idx];

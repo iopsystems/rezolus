@@ -24,7 +24,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
                 let mut all_keys = std::collections::HashSet::new();
                 for labels in &labels_list {
                     for (key, _) in labels.inner.iter() {
-                        // Skip metadata labels
                         if key != "metric" && key != "unit" && key != "metric_type" {
                             all_keys.insert(key.clone());
                         }
@@ -56,7 +55,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
                 let mut all_keys = std::collections::HashSet::new();
                 for labels in &labels_list {
                     for (key, _) in labels.inner.iter() {
-                        // Skip metadata labels
                         if key != "metric" && key != "unit" && key != "metric_type" {
                             all_keys.insert(key.clone());
                         }
@@ -88,7 +86,6 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
                 let mut all_keys = std::collections::HashSet::new();
                 for labels in &labels_list {
                     for (key, _) in labels.inner.iter() {
-                        // Skip metadata labels
                         if key != "metric" && key != "unit" && key != "metric_type" {
                             all_keys.insert(key.clone());
                         }

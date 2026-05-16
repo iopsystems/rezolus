@@ -8,10 +8,6 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-// ---------------------------------------------------------------------------
-// TOML config file structs
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 struct TomlConfig {
     recording: RecordingSection,
@@ -27,10 +23,6 @@ struct RecordingSection {
     #[serde(default)]
     separate: Option<bool>,
 }
-
-// ---------------------------------------------------------------------------
-// Unified config used by run()
-// ---------------------------------------------------------------------------
 
 pub struct RecordingConfig {
     pub interval: humantime::Duration,
@@ -183,10 +175,6 @@ impl RecordingConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// --endpoint string parser
-// ---------------------------------------------------------------------------
-
 /// Parse `"http://host:port/path,source=name,role=agent,protocol=prometheus"`.
 /// URL is everything before the first comma. Key=value pairs after.
 pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
@@ -232,10 +220,6 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         protocol,
     })
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

@@ -39,7 +39,7 @@ pub(super) fn perform_mad_analysis(
         sorted_deviations[sorted_deviations.len() / 2]
     };
 
-    // Robust estimator of standard deviation
+    // 1.4826 scales MAD into a robust std-dev estimate (consistent for Gaussian data)
     let mad_std = mad * 1.4826;
     let threshold = threshold_multiplier * mad_std;
 

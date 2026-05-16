@@ -1,7 +1,5 @@
 // overlays.js — Overlay UI: toast notifications and save-as modal.
 
-// ── Toast Notifications ─────────────────────────────────────────────
-
 let toastContainer = null;
 
 const ensureContainer = () => {
@@ -38,8 +36,6 @@ const notify = (level, message, durationMs = 5000) => {
         setTimeout(() => el.remove(), 400);
     }
 };
-
-// ── Save-As Modal ───────────────────────────────────────────────────
 
 const modalState = {
     visible: false,

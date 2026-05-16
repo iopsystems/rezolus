@@ -63,7 +63,7 @@ pub enum CpuSmt {
     Unknown,
 }
 
-// Check whether the SMT is enabled, return Unknown if the file is not readable
+// Returns Unknown when /sys/devices/system/cpu/smt/active is not readable.
 pub fn get_cpu_smt() -> CpuSmt {
     match read_usize("/sys/devices/system/cpu/smt/active") {
         Ok(smt) => {

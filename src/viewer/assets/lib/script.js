@@ -9,10 +9,9 @@ import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEve
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
-// ── Splash ──────────────────────────────────────────────────────────
-// Mounted on body before any async bootstrap step so the page never
-// shows a blank document while we fetch state. Replaced by the route
-// mount inside initDashboard() once we're ready to render the dashboard.
+// Splash: mounted on body before any async bootstrap step so the page
+// never shows a blank document while we fetch state. Replaced by the
+// route mount inside initDashboard() once ready to render the dashboard.
 
 let splashLabel = 'Initializing';
 
@@ -30,8 +29,6 @@ const setSplashLabel = (label) => {
     splashLabel = label;
     m.redraw();
 };
-
-// ── Backend state fetching ─────────────────────────────────────────
 
 let systemInfo = null;
 let fileChecksum = null;
@@ -68,8 +65,6 @@ const fetchBackendState = async () => {
         fileMetadata = fmResult.value;
     }
 };
-
-// ── Transport controls ─────────────────────────────────────────────
 
 const startRecording = async () => {
     try {
@@ -109,8 +104,8 @@ const uploadParquet = async (file) => {
         if (fileChecksum) {
             setStorageScope({ filename: fileChecksum });
         }
-        // After scope is set (so a persisted working set wins): seed
-        // events from the footer when there's nothing persisted.
+        // Must run after setStorageScope so a persisted working set wins;
+        // only seeds footer events when nothing is persisted.
         seedEventsFromMetadata(fileMetadata);
 
         // If the uploaded parquet has an embedded selection/report, load
@@ -157,8 +152,6 @@ const uploadParquet = async (file) => {
     }
 };
 
-// ── Live refresh ───────────────────────────────────────────────────
-
 let liveRefreshInProgress = false;
 
 const refreshCurrentSection = async () => {
@@ -184,13 +177,11 @@ const refreshCurrentSection = async () => {
         cacheSectionResponse(section, processed);
         m.redraw();
     } catch (e) {
-        // Keep existing data on error
+        // Keep existing data on error.
     } finally {
         liveRefreshInProgress = false;
     }
 };
-
-// ── Landing page ───────────────────────────────────────────────────
 
 let landingState = {
     loading: false,
@@ -329,8 +320,6 @@ const showCompareLanding = () => {
         }),
     });
 };
-
-// ── Bootstrap ──────────────────────────────────────────────────────
 
 const bootstrap = async () => {
     let compareMode = false;
