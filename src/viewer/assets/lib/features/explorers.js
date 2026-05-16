@@ -276,7 +276,6 @@ export const QueryExplorer = {
                     : m('div.error-message', 'Query failed: ' + (st.result.error || 'Unknown error')),
             ]),
 
-            // Example queries
             m('div.example-queries', [
                 m('h3', 'Example Queries'),
                 m('ul', [
@@ -323,7 +322,6 @@ export const SingleChartView = {
         const applyResultToPlot = vnode.attrs.applyResultToPlot;
         if (!data) return m('div', 'Loading...');
 
-        // Find the plot by chart ID across all groups
         if (!vnode.state.plot) {
             for (const group of data.groups || []) {
                 for (const plot of collectGroupPlots(group)) {
