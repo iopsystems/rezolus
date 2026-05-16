@@ -155,6 +155,63 @@
     width: fit-content;
 }
 
+/* Inline-Markdown title override: strip block flow, keep it one line. */
+.chart-title.md-inline {
+    display: inline;
+}
+.chart-title.md-inline code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    padding: 0 3px;
+}
+.chart-title.md-inline a {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+/* Notebook: click-to-edit title affordance. */
+.chart-title-editable {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: text;
+}
+.chart-title-edit-btn {
+    background: transparent;
+    border: 0;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity var(--transition-base);
+}
+.chart-title-editable:hover .chart-title-edit-btn {
+    opacity: 1;
+}
+.chart-title-edit-btn:hover {
+    color: var(--accent);
+}
+.chart-title-edit {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-void);
+    border: 1px solid var(--accent-muted);
+    border-radius: 3px;
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 2px 6px;
+}
+.chart-title-edit:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 .chart-subtitle {
     font-family: var(--font-sans);
     font-size: 11px;
