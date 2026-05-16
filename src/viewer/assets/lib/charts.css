@@ -44,6 +44,14 @@
     gap: 2rem;
 }
 
+/* The narrow-viewport override has to live in charts.css (not style.css)
+ * because charts.css loads later and would otherwise override it. */
+@media (max-width: 1199px) {
+    .group .charts {
+        grid-template-columns: 1fr;
+    }
+}
+
 .chart-cell {
     display: flex;
     flex-direction: column;
@@ -1143,4 +1151,8 @@
     justify-content: center;
     color: var(--success);
     margin-bottom: 4px;
+}
+
+.tooltip-freeze-footer a.tooltip-add-event:hover {
+    text-decoration: underline;
 }

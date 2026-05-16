@@ -458,6 +458,11 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
 
 const SectionContent = {
     view({ attrs }) {
+        // No resolved section (route doesn't match a loaded section yet,
+        // e.g. mid-load or after a failed fetch): render nothing rather
+        // than throwing mid-render, which desyncs mithril's DOM and
+        // cascades into removeChild errors.
+        if (!attrs.section) return null;
         const sectionRoute = attrs.section.route;
         const sectionName = attrs.section.name;
         const interval = attrs.interval;

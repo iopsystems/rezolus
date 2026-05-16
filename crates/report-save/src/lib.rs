@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::ops::Deref;
 
 use arrow::datatypes::Field;
+use dashboard::Event;
 use metriken_query::{Bytes, QueryEngine, Tsdb};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
@@ -31,6 +32,7 @@ pub const KEY_REPORT: &str = "report";
 pub const REPORT_VALUE_TRIMMED: &str = "trimmed";
 pub const KEY_SELECTION: &str = "selection";
 pub const KEY_DESCRIPTIONS: &str = "descriptions";
+pub const KEY_EVENTS: &str = "events";
 
 /// Matches metriken-exposition's ParquetWriter default; row group sizing
 /// stays consistent with what the recorder produces.
@@ -48,6 +50,8 @@ pub struct ReportPayload {
     pub entries: Vec<ReportEntry>,
     #[serde(default = "default_trim_columns")]
     pub trim_columns: bool,
+    #[serde(default)]
+    pub events: Vec<Event>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,6 +71,20 @@ fn default_trim_columns() -> bool {
 pub enum Side {
     Baseline,
     Experiment,
+}
+
+/// Serializes `events` into the wire shape `{"events":[...]}` and
+/// returns the JSON string. Returns `None` for empty input so callers
+/// can skip the footer key entirely (matches the spec's "byte-identical
+/// output for empty events" guarantee).
+fn events_payload_json(events: &[Event]) -> Option<String> {
+    if events.is_empty() {
+        return None;
+    }
+    Some(
+        serde_json::to_string(&serde_json::json!({ "events": events }))
+            .expect("Event serializes deterministically"),
+    )
 }
 
 // ── Column resolution ────────────────────────────────────────────────
@@ -116,12 +134,13 @@ pub fn save_single_parquet(
     tsdb: &Tsdb,
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
+    let events_json = events_payload_json(&payload.events);
     if trim_columns {
         let engine = QueryEngine::new(tsdb);
         let kept = resolve_kept_columns(payload, &engine, Side::Baseline);
-        trim_parquet_to_columns(source_bytes, &kept, selection_json)
+        trim_parquet_to_columns(source_bytes, &kept, selection_json, events_json.as_deref())
     } else {
-        embed_selection_in_parquet(source_bytes, selection_json)
+        embed_selection_in_parquet(source_bytes, selection_json, events_json.as_deref())
     }
 }
 
@@ -141,6 +160,7 @@ pub fn save_combined_ab_tarball(
     manifest_bytes: &[u8],
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
+    let events_json = events_payload_json(&payload.events);
     let (baseline_out, experiment_out) = if trim_columns {
         let baseline_kept = {
             let engine = QueryEngine::new(baseline_tsdb);
@@ -151,13 +171,23 @@ pub fn save_combined_ab_tarball(
             resolve_kept_columns(payload, &engine, Side::Experiment)
         };
         (
-            trim_parquet_to_columns(baseline_bytes, &baseline_kept, selection_json)?,
-            trim_parquet_to_columns(experiment_bytes, &experiment_kept, selection_json)?,
+            trim_parquet_to_columns(
+                baseline_bytes,
+                &baseline_kept,
+                selection_json,
+                events_json.as_deref(),
+            )?,
+            trim_parquet_to_columns(
+                experiment_bytes,
+                &experiment_kept,
+                selection_json,
+                events_json.as_deref(),
+            )?,
         )
     } else {
         (
-            embed_selection_in_parquet(baseline_bytes, selection_json)?,
-            embed_selection_in_parquet(experiment_bytes, selection_json)?,
+            embed_selection_in_parquet(baseline_bytes, selection_json, events_json.as_deref())?,
+            embed_selection_in_parquet(experiment_bytes, selection_json, events_json.as_deref())?,
         )
     };
 
@@ -186,13 +216,20 @@ fn read_file_metadata(bytes: Bytes) -> Result<Vec<KeyValue>, String> {
 fn embed_selection_in_parquet(
     source_bytes: Bytes,
     selection_json: &str,
+    events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let mut kv_meta = read_file_metadata(source_bytes.clone())?;
-    kv_meta.retain(|kv| kv.key != KEY_SELECTION);
+    kv_meta.retain(|kv| kv.key != KEY_SELECTION && kv.key != KEY_EVENTS);
     kv_meta.push(KeyValue {
         key: KEY_SELECTION.to_string(),
         value: Some(selection_json.to_string()),
     });
+    if let Some(events) = events_json {
+        kv_meta.push(KeyValue {
+            key: KEY_EVENTS.to_string(),
+            value: Some(events.to_string()),
+        });
+    }
     rewrite_parquet_bytes(source_bytes, kv_meta, None)
 }
 
@@ -200,6 +237,7 @@ fn trim_parquet_to_columns(
     source_bytes: Bytes,
     kept: &HashSet<String>,
     selection_json: &str,
+    events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(source_bytes.clone())
         .map_err(|e| e.to_string())?;
@@ -218,7 +256,7 @@ fn trim_parquet_to_columns(
     }
 
     let mut kv_meta = read_file_metadata(source_bytes.clone())?;
-    kv_meta.retain(|kv| kv.key != KEY_SELECTION && kv.key != KEY_REPORT);
+    kv_meta.retain(|kv| kv.key != KEY_SELECTION && kv.key != KEY_REPORT && kv.key != KEY_EVENTS);
     kv_meta.push(KeyValue {
         key: KEY_REPORT.to_string(),
         value: Some(REPORT_VALUE_TRIMMED.to_string()),
@@ -227,6 +265,12 @@ fn trim_parquet_to_columns(
         key: KEY_SELECTION.to_string(),
         value: Some(selection_json.to_string()),
     });
+    if let Some(events) = events_json {
+        kv_meta.push(KeyValue {
+            key: KEY_EVENTS.to_string(),
+            value: Some(events.to_string()),
+        });
+    }
 
     let kept_names: BTreeSet<&str> = indices
         .iter()
@@ -413,6 +457,7 @@ mod tests {
                 promql_query_experiment: None,
             }],
             trim_columns: true,
+            events: vec![],
         };
         let kept = resolve_kept_columns(&payload, &engine, Side::Baseline);
         assert!(kept.contains("timestamp"));
@@ -431,6 +476,7 @@ mod tests {
                 promql_query_experiment: None,
             }],
             trim_columns: true,
+            events: vec![],
         };
         let kept = resolve_kept_columns(&payload, &engine, Side::Experiment);
         assert!(kept.contains("m_a"));
@@ -447,6 +493,7 @@ mod tests {
                 promql_query_experiment: Some("m_b".into()),
             }],
             trim_columns: true,
+            events: vec![],
         };
         let kept_b = resolve_kept_columns(&payload, &engine, Side::Baseline);
         let kept_e = resolve_kept_columns(&payload, &engine, Side::Experiment);
@@ -503,6 +550,7 @@ mod tests {
                 promql_query_experiment: None,
             }],
             trim_columns: true,
+            events: vec![],
         };
         let body = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
         let out = save_single_parquet(bytes, &payload, body, &tsdb, true).unwrap();
@@ -531,6 +579,7 @@ mod tests {
                 promql_query_experiment: None,
             }],
             trim_columns: false,
+            events: vec![],
         };
         let selection = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
         let out = save_single_parquet(bytes, &payload, selection, &tsdb, false).unwrap();
@@ -552,6 +601,29 @@ mod tests {
     }
 
     #[test]
+    fn events_default_to_empty() {
+        let json = r#"{"entries":[]}"#;
+        let payload: ReportPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.events.is_empty());
+    }
+
+    #[test]
+    fn events_round_trip_through_payload() {
+        let json = r#"{
+            "entries": [],
+            "events": [
+                {"timestamp": 1715625600000000000, "description": "deploy", "chart_id": "queue_depth"},
+                {"timestamp": 1715625900000000000, "description": "restart"}
+            ]
+        }"#;
+        let payload: ReportPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(payload.events.len(), 2);
+        assert_eq!(payload.events[0].description, "deploy");
+        assert_eq!(payload.events[0].chart_id.as_deref(), Some("queue_depth"));
+        assert_eq!(payload.events[1].chart_id, None);
+    }
+
+    #[test]
     fn combined_ab_round_trip_trims_each_side_and_repacks() {
         let (bytes_a, tsdb_a) = build_test(true);
         let (bytes_b, tsdb_b) = build_test(true);
@@ -561,6 +633,7 @@ mod tests {
                 promql_query_experiment: Some("m_b".into()),
             }],
             trim_columns: true,
+            events: vec![],
         };
         let body = r#"{"version":1,"entries":[]}"#;
         // Manifest bytes are opaque to this crate; just hand it a valid
@@ -612,5 +685,133 @@ mod tests {
             schema_names(&experiment_bytes),
             vec!["timestamp", "duration", "m_b"]
         );
+    }
+
+    #[test]
+    fn save_single_parquet_writes_key_events_when_payload_has_events() {
+        let (bytes, tsdb) = build_test(true);
+        let payload = ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: None,
+            }],
+            trim_columns: true,
+            events: vec![Event {
+                timestamp: 1_715_625_600_000_000_000,
+                description: "deploy".into(),
+                kind: Some("deploy".into()),
+                details: None,
+                source: Some("svc".into()),
+                node: None,
+                instance: None,
+                labels: Default::default(),
+                duration_ns: None,
+                id: None,
+                chart_id: Some("c1".into()),
+            }],
+        };
+        let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
+        let out = save_single_parquet(bytes, &payload, body, &tsdb, true).unwrap();
+        let kv = footer_kv(&out);
+        let events_value = kv
+            .iter()
+            .find(|kv| kv.key == "events")
+            .and_then(|kv| kv.value.as_deref())
+            .expect("KEY_EVENTS must be written when payload carries events");
+        let parsed: serde_json::Value = serde_json::from_str(events_value).unwrap();
+        let arr = parsed["events"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["description"], "deploy");
+        assert_eq!(arr[0]["chart_id"], "c1");
+    }
+
+    #[test]
+    fn save_single_parquet_skips_key_events_when_no_events() {
+        let (bytes, tsdb) = build_test(true);
+        let payload = ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: None,
+            }],
+            trim_columns: true,
+            events: vec![],
+        };
+        let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
+        let out = save_single_parquet(bytes, &payload, body, &tsdb, true).unwrap();
+        let kv = footer_kv(&out);
+        assert!(
+            !kv.iter().any(|kv| kv.key == "events"),
+            "KEY_EVENTS must not be written when payload has no events"
+        );
+    }
+
+    #[test]
+    fn combined_ab_writes_events_to_both_sides() {
+        let (bytes_a, tsdb_a) = build_test(true);
+        let (bytes_b, tsdb_b) = build_test(true);
+        let payload = ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: Some("m_b".into()),
+            }],
+            trim_columns: true,
+            events: vec![Event {
+                timestamp: 1,
+                description: "deploy".into(),
+                kind: None,
+                details: None,
+                source: None,
+                node: None,
+                instance: None,
+                labels: Default::default(),
+                duration_ns: None,
+                id: None,
+                chart_id: None,
+            }],
+        };
+        let body = r#"{"entries":[]}"#;
+        let manifest_bytes = br#"{"version":1,"baseline":{"alias":"a","sources":["svc"]},"experiment":{"alias":"b","sources":["svc"]}}"#;
+        let out = save_combined_ab_tarball(
+            bytes_a,
+            bytes_b,
+            &payload,
+            body,
+            &tsdb_a,
+            &tsdb_b,
+            manifest_bytes,
+            true,
+        )
+        .unwrap();
+
+        let mut archive = tar::Archive::new(std::io::Cursor::new(&out));
+        let mut baseline_bytes: Vec<u8> = Vec::new();
+        let mut experiment_bytes: Vec<u8> = Vec::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let p = entry.path().unwrap().to_path_buf();
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            match name.as_str() {
+                "baseline.parquet" => {
+                    std::io::copy(&mut entry, &mut baseline_bytes).unwrap();
+                }
+                "experiment.parquet" => {
+                    std::io::copy(&mut entry, &mut experiment_bytes).unwrap();
+                }
+                _ => {}
+            }
+        }
+        for (label, bytes) in [
+            ("baseline", &baseline_bytes),
+            ("experiment", &experiment_bytes),
+        ] {
+            let kv = footer_kv(bytes);
+            let val = kv
+                .iter()
+                .find(|kv| kv.key == "events")
+                .and_then(|kv| kv.value.as_deref())
+                .unwrap_or_else(|| panic!("{label} side missing KEY_EVENTS"));
+            let parsed: serde_json::Value = serde_json::from_str(val).unwrap();
+            assert_eq!(parsed["events"].as_array().unwrap().len(), 1);
+        }
     }
 }

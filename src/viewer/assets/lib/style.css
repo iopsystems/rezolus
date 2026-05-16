@@ -2209,10 +2209,8 @@ main {
    ========================================================================== */
 
 @media (max-width: 1199px) {
-    .group .charts {
-        grid-template-columns: 1fr;
-    }
-
+    /* `.group .charts` lives in charts.css (loaded later); the override
+     * for that selector at this breakpoint also lives there. */
     .sysinfo-grid {
         grid-template-columns: 1fr;
     }
@@ -2651,5 +2649,139 @@ main {
 .connect-input::placeholder {
     color: var(--fg-muted);
     opacity: 0.6;
+}
+
+.event-form {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid var(--border-default, #333);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 12px;
+    font-family: var(--font-sans);
+    color: var(--fg, #e0e0e0);
+    font-size: 13px;
+}
+.event-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 8px;
+}
+.event-form-row label {
+    font-size: 11px;
+    color: var(--fg-secondary, #a0a0a0);
+}
+.event-form-row input[type="text"] {
+    width: 100%;
+    padding: 4px 6px;
+    background: var(--bg, #111);
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 3px;
+    color: inherit;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+.event-form-error {
+    color: var(--danger, #f85149);
+    font-size: 11px;
+    margin: -4px 0 8px;
+}
+.event-form-checkbox {
+    margin: 4px 0 12px;
+}
+.event-form-checkbox input {
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.event-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.event-form-actions button {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border-default, #444);
+    border-radius: 3px;
+    color: inherit;
+    cursor: pointer;
+}
+.event-form-actions button.primary {
+    background: var(--accent, #1f77b4);
+    border-color: transparent;
+    color: #fff;
+}
+.event-form-actions button.danger {
+    background: var(--danger, #f85149);
+    border-color: transparent;
+    color: #fff;
+}
+
+/* Persistent description tag rendered in the band above the plot grid
+ * (inside the chart container but off the canvas data area). One per
+ * visible event, x-aligned to its hairline; chart.js positions them. */
+.event-bubble-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+.event-bubble-tag {
+    position: absolute;
+    /* `top` is set per-tag in JS to the plot-grid top; translateY(-100%)
+     * grows the tag upward so its bottom edge sits just above the
+     * hairline. width:max-content keeps the hit/cursor box the size of
+     * the visible bubble (not a full max-width block). */
+    transform: translate(-50%, -100%);
+    width: max-content;
+    max-width: 180px;
+    padding: 3px 9px;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    line-height: 1.4;
+    color: #fff;
+    background: #a85d23;
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    pointer-events: auto;
+    opacity: 0.85;
+}
+.event-bubble-tag:hover {
+    opacity: 1;
+}
+
+/* Read-only "more info" popover. */
+.event-info {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid var(--border-default, #333);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 12px;
+    font-family: var(--font-sans);
+    color: var(--fg, #e0e0e0);
+    font-size: 13px;
+}
+.event-info-row {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-bottom: 8px;
+}
+.event-info-label {
+    font-size: 11px;
+    color: var(--fg-secondary, #a0a0a0);
+}
+.event-info-value {
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+.event-info-confirm {
+    flex: 1;
+    align-self: center;
+    font-size: 12px;
+    color: var(--danger, #f85149);
 }
 

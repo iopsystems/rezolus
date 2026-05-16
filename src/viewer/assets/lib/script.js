@@ -5,7 +5,7 @@
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload, CompareLanding, splitAlias } from './landing.js';
 import { notify, showSaveModal } from './overlays.js';
-import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore } from './selection.js';
+import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
@@ -109,6 +109,9 @@ const uploadParquet = async (file) => {
         if (fileChecksum) {
             setStorageScope({ filename: fileChecksum });
         }
+        // After scope is set (so a persisted working set wins): seed
+        // events from the footer when there's nothing persisted.
+        seedEventsFromMetadata(fileMetadata);
 
         // If the uploaded parquet has an embedded selection/report, load
         // it into the reportStore so the "Report" sidebar link appears
@@ -121,6 +124,24 @@ const uploadParquet = async (file) => {
 
         const sectionsResponse = await ViewerApi.getSections();
         bootstrapSharedSections(sectionsResponse?.data?.sections || []);
+
+        // A trimmed Save-as-Report parquet has no section data (most
+        // columns are projected away) and the backend stamps its
+        // section list to []. Don't phantom-load /overview — go
+        // straight to the Report view, same as the cold-boot path.
+        let isReport = false;
+        try {
+            const mode = await ViewerApi.getMode();
+            isReport = mode?.report === true;
+        } catch (_) { /* fall through to overview */ }
+
+        if (isReport) {
+            if (m.route.get() !== '/report') {
+                m.route.set('/report');
+            }
+            m.redraw();
+            return;
+        }
 
         const data = await ViewerApi.getSection('overview');
         const processed = await processDashboardData(data, null, '/overview');
@@ -342,6 +363,7 @@ const bootstrap = async () => {
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
     }
+    seedEventsFromMetadata(fileMetadata);
 
     let experimentSystemInfo = null;
     let experimentFileMetadata = null;

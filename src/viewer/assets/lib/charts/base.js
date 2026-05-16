@@ -37,15 +37,47 @@ export function applyNoData(chart) {
     chart.domNode.classList.add('no-data');
 }
 
+// Events (hairlines + description bubbles) only render in the curated
+// Notebook / Report views, never in the raw metric sections.
+export function isEventDisplayAllowed() {
+    if (typeof m === 'undefined' || !m.route?.get) return false;
+    const route = m.route.get() || '';
+    return route.startsWith('/notebook') || route.startsWith('/report');
+}
+
+// Event editing (the "+ Add Event" affordance) is narrower still —
+// Notebook only — so casual viewers can't mutate what they inspect.
+export function isEventEditingAllowed() {
+    if (typeof m === 'undefined' || !m.route?.get) return false;
+    const route = m.route.get() || '';
+    return route.startsWith('/notebook');
+}
+
+// Inner HTML for the freeze footer. Two states:
+//   - frozen → FROZEN (+ + Add Event in Notebook)
+//   - not frozen → click-to-freeze hint
+// Exported so chart.js can reuse the same HTML on freeze toggle without
+// duplicating the branch logic.
+export function buildFreezeFooterContent(chart) {
+    const frozen = chart && chart._tooltipFrozen;
+    if (frozen) {
+        const addLink = isEventEditingAllowed()
+            ? `<a href="#" class="tooltip-add-event" data-chart-id="${chart.chartId}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
+            : '';
+        return `<span class="tooltip-freeze-state">FROZEN · click to unfreeze</span>${addLink}`;
+    }
+    return `<span class="tooltip-freeze-state">click to freeze</span>`;
+}
+
 /**
- * Tooltip freeze footer HTML. Shows current freeze state and hint.
+ * Tooltip freeze footer HTML. Shows current freeze state + (in Notebook)
+ * the "+ Add Event" affordance.
  */
 export function getTooltipFreezeFooter(chart) {
     const frozen = chart && chart._tooltipFrozen;
-    const text = frozen ? 'FROZEN · click to unfreeze' : 'click to freeze';
     const color = frozen ? COLORS.accent : COLORS.fgMuted;
     return `<div class="tooltip-freeze-footer" style="border-top: 1px solid ${COLORS.borderMuted}; margin-top: 6px; padding-top: 4px; margin-bottom: -6px; font-size: ${FONTS.footnote.fontSize}px; color: ${color}; text-align: center;">
-        ${text}
+        ${buildFreezeFooterContent(chart)}
     </div>`;
 }
 
