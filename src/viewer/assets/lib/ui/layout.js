@@ -3,7 +3,6 @@ import { notebookStore, reportStore, loadedSelectionStore, importSelection } fro
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
 
-// Format utilities
 const formatSize = (bytes) => {
     if (!bytes) return '';
     if (bytes < 1024) return bytes + ' B';
@@ -31,10 +30,8 @@ export const openParquetPicker = (onPick) => () => {
     input.click();
 };
 
-// Mobile sidebar drawer state
 let sidebarOpen = false;
 
-// Top navigation bar component
 const TopNav = {
     view({ attrs }) {
         const liveMode = attrs.liveMode;
@@ -170,7 +167,6 @@ const TopNav = {
                     }, m.trust('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8m0 0l-3-3m3 3l3-3"/><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/></svg>')),
                 ]),
             ]),
-            // Global time range bar (right-aligned, hidden on systeminfo)
             (attrs.start_time != null && attrs.end_time != null) &&
                 m(TimeRangeBar, {
                     start_time: attrs.start_time,
@@ -180,14 +176,12 @@ const TopNav = {
                     baselineAlias: attrs.baselineAlias,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
-            // Granularity (step) selector
             (attrs.start_time != null && attrs.end_time != null) &&
                 m(GranularitySelector, {
                     value: attrs.granularity,
                     onChange: attrs.onGranularityChange,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
-            // Theme toggle — rightmost element in navbar
             m('button.transport-btn.theme-toggle-btn', {
                 onclick: toggleTheme,
                 title: currentTheme() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
@@ -199,8 +193,6 @@ const TopNav = {
     },
 };
 
-// Count plots with non-empty data across groups and their subgroups.
-// `collectGroupPlots` is imported from ./group_utils.js.
 const countCharts = (groups) => {
     let total = 0;
     let withData = 0;
@@ -215,7 +207,6 @@ const countCharts = (groups) => {
     return { total, withData };
 };
 
-// Sidebar component
 const Sidebar = {
     view({ attrs }) {
         const sectionResponseCache = attrs.sectionResponseCache;
@@ -225,7 +216,6 @@ const Sidebar = {
             ? attrs.sections.filter((s) => s.route !== '/cgroups')
             : attrs.sections;
 
-        // Separate special sections from sampler sections
         const queryExplorer = visibleSections.find(
             (s) => s.name === 'Query Explorer',
         );
@@ -240,7 +230,6 @@ const Sidebar = {
         );
 
         return [
-        // Backdrop overlay for mobile drawer
         m('div.sidebar-backdrop', {
             class: sidebarOpen ? 'visible' : '',
             onclick: () => { sidebarOpen = false; },
@@ -252,7 +241,6 @@ const Sidebar = {
                 if (e.target.closest('a')) sidebarOpen = false;
             },
         }, [
-            // Report (shown only when imported)
             reportStore.entries.length > 0 && m(
                 m.route.Link,
                 {
@@ -264,7 +252,6 @@ const Sidebar = {
                 `Report (${reportStore.entries.length})`,
             ),
 
-            // Notebook section (shown only when entries exist)
             notebookStore.entries.length > 0 && m(
                 m.route.Link,
                 {
@@ -276,7 +263,6 @@ const Sidebar = {
                 `Notebook (${notebookStore.entries.length})`,
             ),
 
-            // Selection section (shown only when JSON loaded)
             loadedSelectionStore.entries.length > 0 && m(
                 m.route.Link,
                 {
@@ -288,7 +274,6 @@ const Sidebar = {
                 `Selection (${loadedSelectionStore.entries.length})`,
             ),
 
-            // Overview section first (if exists)
             overviewSection && m(
                 m.route.Link,
                 {
@@ -298,10 +283,8 @@ const Sidebar = {
                 overviewSection.name,
             ),
 
-            // Services group header (shown only when service sections exist)
             serviceSections.length > 0 && m('div.sidebar-label', 'Services'),
 
-            // Service sections (one per source)
             serviceSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
                 const cached = sectionResponseCache[sectionKey];
@@ -329,10 +312,8 @@ const Sidebar = {
                 exceptionsSection.name,
             ),
 
-            // Samplers label
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),
 
-            // Sampler sections
             samplerSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
                 const cached = sectionResponseCache[sectionKey];
@@ -349,7 +330,6 @@ const Sidebar = {
                 );
             }),
 
-            // Separator and Query Explorer if it exists
             queryExplorer && [
                 m('div.sidebar-separator'),
                 m(
@@ -365,7 +345,6 @@ const Sidebar = {
                 ),
             ],
 
-            // System Info link (below Query Explorer)
             attrs.hasSystemInfo && [
                 m('div.sidebar-separator'),
                 m(
@@ -381,7 +360,6 @@ const Sidebar = {
                 ),
             ],
 
-            // Metadata link (below System Info)
             attrs.hasFileMetadata && [
                 m(
                     m.route.Link,

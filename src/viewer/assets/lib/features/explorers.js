@@ -3,8 +3,6 @@ import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLa
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
 
-// ── Unit selector ───────────────────────────────────────────────────
-
 const UNIT_OPTIONS = [
     { value: '', label: 'Auto (none)' },
     { value: 'count', label: 'Count' },
@@ -37,8 +35,6 @@ const buildFormatOverride = (unit) => {
     if (unit === 'percentage') fmt.range = { min: 0, max: 1 };
     return fmt;
 };
-
-// ── Helpers ─────────────────────────────────────────────────────────
 
 /** Build a human-readable series label from a PromQL metric map. */
 const buildSeriesLabel = (metric, fallbackIdx) => {
@@ -161,8 +157,6 @@ const fieldRow = (label, value, oninput, onApply) =>
         ]),
     ]);
 
-// ── QueryExplorer ───────────────────────────────────────────────────
-
 // Attrs: { liveMode: boolean, isRecording: () => boolean }
 export const QueryExplorer = {
     oninit(vnode) {
@@ -193,7 +187,6 @@ export const QueryExplorer = {
 
             vnode.state.loading = false;
 
-            // Add to history if successful
             if (
                 !vnode.state.error &&
                 vnode.state.result &&
@@ -231,7 +224,6 @@ export const QueryExplorer = {
         const st = vnode.state;
 
         return m('div.query-explorer', [
-            // Input section
             m('div.query-input-section', [
                 m('h2', 'PromQL Query Explorer'),
                 m('div.query-input-wrapper', [
@@ -255,7 +247,6 @@ export const QueryExplorer = {
                     ]),
                 ]),
 
-                // Query history
                 st.queryHistory.length > 0 && m('div.query-history', [
                     m('h3', 'Recent Queries'),
                     m('select.history-select', {
@@ -269,10 +260,8 @@ export const QueryExplorer = {
                 ]),
             ]),
 
-            // Error
             st.error && m('div.error-message', [m('strong', 'Error: '), st.error]),
 
-            // Result
             st.result && m('div.query-result', [
                 m('h3', 'Result'),
                 st.result.status === 'success'
@@ -305,8 +294,6 @@ export const QueryExplorer = {
         ]);
     },
 };
-
-// ── SingleChartView ─────────────────────────────────────────────────
 
 // Expanded view for a single chart — opened in a new tab from the "Expand" link.
 // Shows one chart at full width with an editable PromQL query input below it.

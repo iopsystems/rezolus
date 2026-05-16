@@ -29,7 +29,6 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
 
     return m('div#section-content', [
         m('h1', headerTitle),
-        // Instance selector (only for multi-instance)
         hasMultiInstance && m('div.instance-selector', [
             m('select.instance-select', {
                 value: selectedInstance || '__all__',

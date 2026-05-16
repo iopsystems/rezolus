@@ -8,8 +8,6 @@
 import globalColorMapper from '../charts/util/colormap.js';
 import { collectGroupPlots } from './group_utils.js';
 
-// ── Helpers ─────────────────────────────────────────────────────────
-
 /** Extract cgroup names from a PromQL query result's metric labels. */
 const extractCgroupNames = (result) => {
     const names = new Set();
@@ -74,12 +72,9 @@ const transferBtn = (lrLabel, udLabel, title, disabled, onclick) =>
         m('span.arrow-ud', udLabel),
     ]);
 
-// ── Persisted state (survives component remount across navigations) ─
-
+// Persisted state — survives component remount across navigations.
 let persistedSelectedCgroups = new Set();
 let persistedOriginalQueries = null; // Map<string, string>
-
-// ── Component ───────────────────────────────────────────────────────
 
 export const CgroupSelector = {
     oninit(vnode) {
@@ -164,7 +159,6 @@ export const CgroupSelector = {
         vnode.state.updateInProgress = true;
         vnode.state.cancelUpdate = false;
 
-        // Build alternation pattern for the selected cgroups
         const selected = Array.from(vnode.state.selectedCgroups);
         const selectedPattern = selected.length > 1
             ? '(' + selected.join('|') + ')'
@@ -269,7 +263,6 @@ export const CgroupSelector = {
             m('h3', 'Cgroup Selection'),
             st.error && m('div.error-message', st.error),
             m('div.selector-container', [
-                // Available (aggregate) list
                 selectList(
                     'Available Cgroups (Aggregate)',
                     leftItems,
@@ -280,7 +273,6 @@ export const CgroupSelector = {
                     (item) => { st.lastClickedLeft = item; },
                 ),
 
-                // Transfer buttons
                 m('div.selector-controls', [
                     transferBtn('>', '↓', 'Move selected to individual',
                         st.leftSelected.size === 0,
@@ -296,7 +288,6 @@ export const CgroupSelector = {
                         () => this.transfer(vnode, st.rightSelected, 'remove')),
                 ]),
 
-                // Selected (individual) list
                 selectList(
                     'Individual Cgroups',
                     selected,

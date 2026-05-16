@@ -1,5 +1,3 @@
-// ── Formatters ──────────────────────────────────────────────────────
-
 const formatTime = (ms) => {
     const d = new Date(ms);
     const hh = String(d.getHours()).padStart(2, '0');
@@ -81,7 +79,6 @@ const TimeRangeBar = {
         const getBarZoom = () => ({ start: vnode.state.barStart, end: vnode.state.barEnd });
 
         vnode.state.applyZoom = (start, end) => {
-            // Enforce minimum 0.5% range
             if (end - start < 0.5) return;
             vnode.state.barStart = start;
             vnode.state.barEnd = end;
@@ -112,7 +109,6 @@ const TimeRangeBar = {
                 vnode.state.dragStartLeft = zoom.start;
                 vnode.state.dragStartRight = zoom.end;
             } else {
-                // Click outside selection — start creating a new one
                 vnode.state.dragging = 'create';
                 vnode.state.dragStartX = pct;
                 applyZoom(pct, pct + 0.5);
@@ -183,7 +179,6 @@ const TimeRangeBar = {
         const selectedStartMs = startTime + (start / 100) * totalDuration;
         const selectedEndMs = startTime + (end / 100) * totalDuration;
 
-        // Show date labels only when the selected start and end fall on different days
         const startDate = new Date(selectedStartMs);
         const endDate = new Date(selectedEndMs);
         const showDates = startDate.toDateString() !== endDate.toDateString();
@@ -193,9 +188,8 @@ const TimeRangeBar = {
             const refMs = which === 'start' ? selectedStartMs : selectedEndMs;
             const parsed = parseTimeInput(text, refMs);
             vnode.state.editing = null;
-            if (parsed === null) return; // invalid input, discard
+            if (parsed === null) return;
 
-            // Clamp to recording bounds
             const clampedMs = Math.max(startTime, Math.min(endTime, parsed));
             const pct = ((clampedMs - startTime) / totalDuration) * 100;
 
@@ -253,10 +247,8 @@ const TimeRangeBar = {
         }, [
             timeLabel('start', selectedStartMs),
             m('div.time-track', [
-                // Dimmed regions outside selection
                 start > 0 && m('div.time-dim', { style: { left: '0%', width: `${start}%` } }),
                 end < 100 && m('div.time-dim', { style: { left: `${end}%`, width: `${100 - end}%` } }),
-                // Selection window
                 m('div.time-selection', {
                     style: { left: `${start}%`, width: `${end - start}%` },
                 }, [

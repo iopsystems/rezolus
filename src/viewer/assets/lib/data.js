@@ -11,9 +11,7 @@ let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
-// ---------------------------------------------------------------------------
-// Query rewriting for non-default granularity (step override)
-// ---------------------------------------------------------------------------
+// Query rewriting for non-default granularity (step override).
 // When the user picks a coarser step (e.g. 15s instead of auto ~1s), raw
 // queries must be adjusted so that values are properly smoothed over the
 // wider window rather than just down-sampled.
@@ -22,7 +20,6 @@ const getStepOverride = () => _stepOverride;
 //   Gauge:     no rewrite needed (engine samples at step points)
 //   Histogram: stride parameter passed to histogram_quantiles / histogram_heatmap
 
-// Replace all irate(...[window]) with rate(...[Ns]) in a query string.
 const rewriteCounterQuery = (query, stepSecs) => {
     const window = stepSecs + 's';
     return query.replace(/\birate\s*\(([^)]*?)\[\d+[smhd]\]/g, `rate($1[${window}]`);
@@ -38,7 +35,6 @@ const defaultQueryRange = (query, start, end, step, captureId = 'baseline') =>
 export const queryRangeForCapture = (captureId, query, start, end, step) =>
     defaultQueryRange(query, start, end, step, captureId);
 
-// Module-level state for label injection
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }
 
@@ -50,7 +46,6 @@ const setSelectedInstance = (serviceName, instanceId) => {
 };
 const getSelectedInstance = (serviceName) => _selectedInstances[serviceName] || null;
 
-// Inject a label selector into all metric selectors in a query.
 const PROMQL_KEYWORDS = new Set([
     'by', 'without', 'on', 'ignoring', 'group_left', 'group_right',
     'bool', 'sum', 'avg', 'min', 'max', 'count', 'rate', 'irate', 'increase',
@@ -76,18 +71,16 @@ const injectLabel = (query, labelName, labelValue) => {
     //   (2) identifier       — bare identifier (metric, keyword, or other)
     // We handle both in one pass to avoid offset issues.
     return query.replace(/\b([a-z_]\w*)(\{[^}]*\})?/gi, (match, name, braces, offset) => {
-        // Skip keywords (functions, aggregation operators, modifiers)
         if (PROMQL_KEYWORDS.has(name)) return match;
 
         // Skip if starts with digit (not a valid metric name)
         if (/^\d/.test(name)) return match;
 
-        // If has braces: insert selector before closing brace
         if (braces) {
             return `${name}{${braces.slice(1, -1)},${selector}}`;
         }
 
-        // Bare identifier — check context to decide if it's a metric name
+        // Bare identifier — check context to decide if it's a metric name.
 
         // Skip short tokens without underscores — likely time units (m, s, h, d),
         // PromQL modifiers, or label fragments, not metric names
@@ -97,7 +90,6 @@ const injectLabel = (query, labelName, labelValue) => {
         const after = query.substring(offset + match.length);
         if (/^\s*\(/.test(after)) return match;
 
-        // Check context before the identifier
         const before = query.substring(0, offset);
 
         // Skip identifiers inside by(...) / without(...) grouping clauses —
@@ -116,7 +108,6 @@ const injectLabel = (query, labelName, labelValue) => {
         const quotesBefore = (before.match(/"/g) || []).length;
         if (quotesBefore % 2 !== 0) return match;
 
-        // It's a bare metric name — add label selector
         return `${name}{${selector}}`;
     });
 };
@@ -131,10 +122,9 @@ const substituteCgroupPattern = (query, pattern) => {
     return query;
 };
 
-// ── PromQL result → plot-data shape helpers (pure) ───────────────────
-// These are the same transforms the baseline path (applyResultToPlot)
-// and the compare path (extractExperimentCapture in viewer_core) apply.
-// Extracted so the two callers can't drift.
+// PromQL result → plot-data shape helpers. Same transforms the baseline
+// path (applyResultToPlot) and the compare path (extractExperimentCapture
+// in viewer_core) apply. Extracted so the two callers can't drift.
 
 const parseNumeric = (v) => {
     if (v === null || v === undefined) return null;
@@ -220,8 +210,8 @@ const applyResultToPlot = (plot, result) => {
         result.data.result &&
         result.data.result.length > 0
     ) {
-        // Resolve chart style from metric type (if present) or fall back to
-        // explicit style (used by query explorer dynamic specs).
+        // Explicit style (set by query explorer dynamic specs) wins;
+        // otherwise resolve from metric type.
         const style = plot.opts.style || resolveStyle(
             plot.opts.type,
             plot.opts.subtype,

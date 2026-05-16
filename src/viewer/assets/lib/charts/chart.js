@@ -328,7 +328,6 @@ export class Chart {
             const hasIntersection = entries.some(entry => entry.isIntersecting);
             if (hasIntersection) {
                 this.initEchart();
-                // Once initialized, we can stop observing
                 observer.unobserve(this.domNode);
             }
         }, {
@@ -337,7 +336,6 @@ export class Chart {
             threshold: 0.01 // Trigger when at least 1% visible
         });
 
-        // Start observing the chart element
         observer.observe(this.domNode);
 
         // Resize charts when their container size changes (window resize, zoom, etc.)
@@ -352,7 +350,6 @@ export class Chart {
     }
 
     onupdate(vnode) {
-        // Update the spec and interval references
         const oldSpec = this.spec;
         this.spec = vnode.attrs.spec;
         this.interval = vnode.attrs.interval;
@@ -419,7 +416,6 @@ export class Chart {
     }
 
     onremove() {
-        // Clean up chart instance and event handlers
         if (this.observer) {
             this.observer.disconnect();
         }
@@ -554,7 +550,6 @@ export class Chart {
             return;
         }
 
-        // Initialize the chart
         this.echart = echarts.init(this.domNode);
         // Only log initial chart creation in debug mode
         if (window.location.search.includes('debug')) {
@@ -594,7 +589,6 @@ export class Chart {
         // TimeRangeBar-style views).
         this.chartsState.charts.set(this.chartId, this);
 
-        // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
         this.configureChartByType();
         this._applyEventMarkers({ reconfigured: true });
         this._eventsUnsub = eventsStore.subscribe(() => {

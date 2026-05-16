@@ -16,7 +16,7 @@ import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
 
-// ── Normalization helpers for compare-mode captures ────────────────
+// Normalization helpers for compare-mode captures.
 
 // Convert the baseline plot spec's already-populated data into a
 // capture-shaped object keyed by `id: 'baseline'`. The shape depends on

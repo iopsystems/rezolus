@@ -1,5 +1,3 @@
-// ── Data transformation ──────────────────────────────────────────────
-
 const buildHierarchy = (topology) => {
     const packages = new Map();
     for (const entry of topology) {
@@ -37,15 +35,11 @@ const buildCacheStructures = (caches) => {
     return { l1dSize, l1iSize, levels };
 };
 
-// ── Toggle descriptions ──────────────────────────────────────────────
-
 const DESCRIPTIONS = {
     threads: 'Threads (SMT): Hardware threads sharing a physical core and its L1/L2 caches.',
     caches: 'Cache Hierarchy: Shared cache boundaries between cores at each level (L1d, L1i, L2, L3).',
     numa: 'NUMA Topology: Memory locality domains. Each node has local memory and a set of CPUs.',
 };
-
-// ── Layout helpers ───────────────────────────────────────────────────
 
 /**
  * Pick the best columns-per-row so cores divide evenly (no dangling last row).
@@ -60,8 +54,6 @@ const bestCols = (totalCores, maxCols) => {
     }
     return maxCols;
 };
-
-// ── Cache level helpers ──────────────────────────────────────────────
 
 const getCacheLevels = (levels) => {
     const sorted = Object.keys(levels).sort();
@@ -81,10 +73,8 @@ const buildTooltip = (coreId, cpus, l1dSize, l1iSize) => {
     return parts.join(' · ');
 };
 
-// ── Compute NUMA groups ─────────────────────────────────────────────
 // Regroup cores by NUMA node within a package, merging dies that share
 // the same NUMA node. Returns array of { numaNode, cores: Map<coreId, [entries]> }
-
 const groupByNuma = (dieMap) => {
     const numaMap = new Map();
     for (const [, coreMap] of dieMap) {
@@ -99,11 +89,6 @@ const groupByNuma = (dieMap) => {
         .map(([numaNode, cores]) => ({ numaNode, cores }));
 };
 
-// ── Layout sizing ────────────────────────────────────────────────────
-
-/**
- * Compute layout parameters from container width and core count.
- */
 const computeLayout = (numaGroups, numaPerRow, containerWidth) => {
     let maxCoresPerNuma = 0;
     for (const { cores } of numaGroups) {
@@ -125,11 +110,6 @@ const computeLayout = (numaGroups, numaPerRow, containerWidth) => {
     return { borderW: total > 32 ? 1 : 2, numaPerRow, maxCoresPerNuma, maxCols };
 };
 
-// ── Rendering ────────────────────────────────────────────────────────
-
-/**
- * Render a single NUMA group: cores grouped by LLC, stacked with cache bars.
- */
 const renderNumaGroup = ({ numaNode, cores }, opts) => {
     const { toggles, cacheStructs, layout } = opts;
     const { l1dSize, l1iSize, levels } = cacheStructs;
@@ -141,7 +121,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
     const groupData = groupLevel ? levels[groupLevel] : null;
     const llcData = llc ? levels[llc] : null;
 
-    // Sort cores
     const sortedCores = [...cores.entries()]
         .sort(([a], [b]) => a - b)
         .map(([coreId, cpus]) => ({
@@ -150,7 +129,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
             firstCpu: cpus[0]?.cpu,
         }));
 
-    // Sub-group cores by the grouping level (e.g. L2)
     let subGroups;
     if (groupData) {
         const grouped = new Map();
@@ -174,7 +152,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
         subGroups = [{ groupIdx: 0, cores: sortedCores, size: null }];
     }
 
-    // Group subgroups by LLC instance
     let llcGrouped;
     if (llcData && llc !== groupLevel) {
         const map = new Map();
@@ -248,7 +225,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
      */
     const renderLLCGroup = ({ llcIdx, allCores: llcCores, subGroups: sgs }) => {
         const numCols = llcCores.length;
-        // ── Wrapped layout: explicit row packing ──────────────────
         if (numCols > maxCols) {
             const rowCols = bestCols(numCols, maxCols);
 
@@ -264,7 +240,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
             const allRowDivs = [];
             let rowIdx = 0;
 
-            // Process each type, largest sub-groups first
             for (const [, typeSgs] of [...sgsByType.entries()].sort(([a], [b]) => b - a)) {
                 const totalTypeCores = typeSgs.reduce((s, sg) => s + sg.cores.length, 0);
                 const typeTarget = bestCols(totalTypeCores, rowCols);
@@ -300,7 +275,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
                     }
                 }
 
-                // Pack this type's elements into balanced rows
                 let curRow = [], curCols = 0;
                 for (const e of elems) {
                     if (e.cols === Infinity) {
@@ -318,7 +292,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
                 }
             }
 
-            // LLC bar (when separate from group level)
             if (showCaches && llc && llc !== groupLevel && llcData) {
                 allRowDivs.push(renderBar('topo-llc.topo-full-width',
                     llc.toUpperCase(), llcData.size,
@@ -328,7 +301,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
             return m('div.topo-llc-group-wrap', { key: llcIdx }, allRowDivs);
         }
 
-        // ── Flat layout: single grid with spanning cache bars ─────
         const coreColIdx = new Map();
         llcCores.forEach((c, i) => coreColIdx.set(c.coreId, i));
 
@@ -369,8 +341,6 @@ const renderNumaGroup = ({ numaNode, cores }, opts) => {
         class: toggles.numa ? 'numa-highlighted' : '',
     }, numaChildren);
 };
-
-// ── Component ────────────────────────────────────────────────────────
 
 const CpuTopology = {
     oninit() {

@@ -33,7 +33,6 @@ const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
             ]);
         }
 
-        // Single-node: render as before
         return m('div.systeminfo-section', [
             m('h1.section-title', 'System Info'),
             renderSingleNodeInfo(info, CpuTopology, formatBytes),
@@ -158,7 +157,6 @@ const createMetadataView = () => {
             return m('div.metadata-section', [
                 m('h1.section-title', 'Metadata'),
 
-                // Recording Info
                 m('div.sysinfo-group', [
                     m('h2.sysinfo-group-title', 'Recording Info'),
                     m('table.sysinfo-table', m('tbody', [
@@ -212,7 +210,6 @@ const createMetadataView = () => {
                     ]);
                 })(),
 
-                // Descriptions
                 descEntries.length > 0 && m('div.sysinfo-group', [
                     m('h2.sysinfo-group-title', `Metric Descriptions (${descEntries.length})`),
                     m('input.metadata-search', {
@@ -235,7 +232,6 @@ const createMetadataView = () => {
                     ]),
                 ]),
 
-                // Service Queries
                 serviceQueries.length > 0 && m('div.sysinfo-group', [
                     m('h2.sysinfo-group-title', 'Service Queries'),
                     ...serviceQueries.map(sq => [
@@ -253,7 +249,6 @@ const createMetadataView = () => {
                     ]),
                 ]),
 
-                // Raw Metadata
                 m('div.sysinfo-group', [
                     m('h2.sysinfo-group-title', {
                         onclick: () => { rawExpanded = !rawExpanded; },

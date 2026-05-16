@@ -36,7 +36,7 @@ export function configureMultiSeriesChart(chart) {
 
     const baseOption = getBaseOption();
 
-    // For multi-series charts, the first row contains timestamps, subsequent rows are series data
+    // First row is timestamps, subsequent rows are series data.
     const timeData = data[0];
     const lineCount = data.length - 1;
 
@@ -142,7 +142,6 @@ export function configureMultiSeriesChart(chart) {
                 val => val, null, chart),
         },
         series: series,
-        // Use the curated color palette
         color: cgroupColors,
     };
 
