@@ -32,16 +32,13 @@ pub fn analyze_resource_usage(
     description: &str,
     top_n: usize,
 ) -> Result<ResourceUsageResult, Box<dyn std::error::Error>> {
-    // Get time range from TSDB
     let (start, end) = engine.get_time_range();
     let step = tsdb.interval();
-    
-    // Execute the query
+
     let result = engine.query_range(query, start, end, step)?;
-    
-    // Extract samples from the result
+
     use crate::viewer::promql::{QueryResult, Sample};
-    
+
     let mut consumers = Vec::new();
     let mut total_sum = 0.0;
     
@@ -62,7 +59,6 @@ pub fn analyze_resource_usage(
                 let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                 let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
                 
-                // Extract a readable name from labels
                 let name = extract_consumer_name(&series.metric);
                 
                 consumers.push(ResourceConsumer {
@@ -104,8 +100,7 @@ pub fn analyze_resource_usage(
         b.avg_usage.partial_cmp(&a.avg_usage)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    
-    // Calculate percentages and take top N
+
     for consumer in &mut consumers {
         if total_sum > 0.0 {
             consumer.percent_of_total = (consumer.avg_usage / total_sum) * 100.0;
@@ -125,7 +120,7 @@ pub fn analyze_resource_usage(
 
 /// Extract a readable name from metric labels
 fn extract_consumer_name(labels: &HashMap<String, String>) -> String {
-    // Priority order for naming
+    // Labels checked in priority order
     if let Some(name) = labels.get("name") {
         return name.clone();
     }
@@ -142,7 +137,6 @@ fn extract_consumer_name(labels: &HashMap<String, String>) -> String {
         return format!("id:{}", id);
     }
     
-    // Show the metric name if no good labels
     if let Some(metric_name) = labels.get("__name__") {
         return metric_name.clone();
     }
@@ -173,7 +167,6 @@ pub fn format_resource_usage(result: &ResourceUsageResult) -> String {
         result.total_usage
     ));
     
-    // Header
     output.push_str(&format!(
         "{:<60} {:>10} {:>10} {:>10} {:>8}\n",
         "Consumer", "Avg", "Max", "Min", "% Total"
@@ -183,7 +176,6 @@ pub fn format_resource_usage(result: &ResourceUsageResult) -> String {
         "-".repeat(60), "-".repeat(10), "-".repeat(10), "-".repeat(10), "-".repeat(8)
     ));
     
-    // Data rows
     for (i, consumer) in result.top_consumers.iter().enumerate() {
         output.push_str(&format!(
             "{:2}. {:<57} {:>10.2} {:>10.2} {:>10.2} {:>7.1}%\n",
@@ -196,7 +188,6 @@ pub fn format_resource_usage(result: &ResourceUsageResult) -> String {
         ));
     }
     
-    // Show cumulative percentage
     let cumulative_percent: f64 = result.top_consumers.iter()
         .map(|c| c.percent_of_total)
         .sum();
@@ -207,7 +198,6 @@ pub fn format_resource_usage(result: &ResourceUsageResult) -> String {
         cumulative_percent
     ));
     
-    // Add interpretation
     if result.top_consumers.len() > 0 {
         let top = &result.top_consumers[0];
         if top.percent_of_total > 50.0 {
