@@ -83,22 +83,22 @@ const loadedSelectionStore = {
 // clearStore, and openInNotebook all need to clear it before the
 // view next mounts. UI-only state — never persisted.
 const expandedNotes = new Set();
-// Notes/preamble render as Markdown by default; entry.id (or the
-// sentinel below for the page preamble) is present here only while
-// that field is in raw-edit mode. UI-only, never persisted.
-const editingMarkdown = new Set();
+// Notes/preamble default to raw edit mode in the Notebook; entry.id
+// (or the page-preamble sentinel) is present here only while that
+// field is toggled to rendered preview. UI-only, never persisted.
+const previewMarkdown = new Set();
 const PREAMBLE_KEY = '__preamble__';
 
 // A Markdown field with an Edit ⇄ Preview toggle. Preview renders
 // sanitized HTML via renderMarkdown; Edit shows a raw textarea.
-// `key` is the editingMarkdown identity (entry id or PREAMBLE_KEY).
+// `key` is the previewMarkdown identity (entry id or PREAMBLE_KEY).
 const markdownField = ({ key, cls, label, value, placeholder, onInput, onEmptyBlur }) => {
-    const editing = editingMarkdown.has(key);
+    const editing = !previewMarkdown.has(key);
     const toggle = m('button.md-toggle', {
         type: 'button',
         onclick: () => {
-            if (editing) editingMarkdown.delete(key);
-            else editingMarkdown.add(key);
+            if (editing) previewMarkdown.add(key);
+            else previewMarkdown.delete(key);
             m.redraw();
         },
     }, editing ? 'Preview' : 'Edit');
@@ -122,7 +122,7 @@ const markdownField = ({ key, cls, label, value, placeholder, onInput, onEmptyBl
     const body = value
         ? m('div.md-rendered', m.trust(renderMarkdown(value)))
         : m('div.md-empty', {
-            onclick: () => { editingMarkdown.add(key); m.redraw(); },
+            onclick: () => { previewMarkdown.delete(key); m.redraw(); },
         }, placeholder || 'Nothing here yet — click Edit');
     return m('div', { class: cls }, [header, body]);
 };
@@ -422,7 +422,7 @@ const removeEntry = (store, id) => {
         store.entries.splice(idx, 1);
         if (store === notebookStore) {
             expandedNotes.delete(id);
-            editingMarkdown.delete(id);
+            previewMarkdown.delete(id);
             persistNotebook();
         } else if (store === reportStore) persistReport();
     }
@@ -491,7 +491,7 @@ const clearStore = (store) => {
         localStorage.removeItem(REPORT_STORAGE_KEY);
     } else if (store === notebookStore) {
         expandedNotes.clear();
-        editingMarkdown.clear();
+        previewMarkdown.clear();
         localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
         // Events are Notebook-scoped content — clear them alongside it.
         suspendEventsPersist = true;
@@ -519,7 +519,7 @@ const openInNotebook = (sourceStore, kindLabel) => {
     notebookStore.compare = sourceStore.compare ? { ...sourceStore.compare } : null;
     notebookStore.entries = sourceStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
     expandedNotes.clear();
-    editingMarkdown.clear();
+    previewMarkdown.clear();
     persistNotebook();
     notify('info', `${kindLabel} opened in Notebook`);
     m.route.set('/notebook');
@@ -882,7 +882,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         if (!confirm('Clear notes from all pinned charts? This cannot be undone.')) return;
                         notebookStore.entries.forEach(e => { e.note = ''; });
                         expandedNotes.clear();
-                        editingMarkdown.clear();
+                        previewMarkdown.clear();
                         persistNotebook();
                         m.redraw();
                     },
@@ -1013,10 +1013,9 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         if (!hasNote && !expanded) {
                             return m('button.notes-affordance', {
                                 onclick: () => {
+                                    // Edit is the default mode, so just
+                                    // surfacing the field is enough.
                                     expandedNotes.add(entry.id);
-                                    // A freshly added note opens straight
-                                    // into raw edit mode.
-                                    editingMarkdown.add(entry.id);
                                     m.redraw();
                                 },
                             }, '+ Add note');
@@ -1030,7 +1029,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                             onInput: (v) => { entry.note = v; persistNotebook(); },
                             onEmptyBlur: () => {
                                 expandedNotes.delete(entry.id);
-                                editingMarkdown.delete(entry.id);
+                                previewMarkdown.delete(entry.id);
                                 m.redraw();
                             },
                         });
