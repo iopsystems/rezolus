@@ -378,7 +378,10 @@ const cardTitle = (entry, spec, { editable = false } = {}) => {
 
     if (editable && editingTitle.has(entry.id)) {
         return m('input.chart-title-edit', {
-            value: entry.titleOverride || '',
+            // Prefill with the current effective title (override or
+            // derived) so the user edits from it instead of a blank
+            // box; persistence still treats empty as "use derived".
+            value: entry.titleOverride || derived,
             placeholder: derived,
             oninput: (e) => { entry.titleOverride = e.target.value; persistNotebook(); },
             onblur: () => { editingTitle.delete(entry.id); m.redraw(); },
