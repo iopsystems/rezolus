@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderMarkdown } from '../src/viewer/assets/lib/markdown.js';
+import { renderMarkdown, renderMarkdownInline } from '../src/viewer/assets/lib/markdown.js';
 
 test('empty / nullish input yields empty string', () => {
     assert.equal(renderMarkdown(''), '');
@@ -95,4 +95,41 @@ test('mixed document: heading, list, paragraph', () => {
         renderMarkdown(md),
         '<h1>Title</h1><ul><li>one</li><li>two</li></ul><p>some <strong>text</strong></p>',
     );
+});
+
+// ── inline mode (chart titles) ─────────────────────────────────────
+
+test('inline: no block wrapper, just formatted text', () => {
+    assert.equal(renderMarkdownInline('plain'), 'plain');
+    assert.equal(renderMarkdownInline('**b** and *i*'), '<strong>b</strong> and <em>i</em>');
+    assert.equal(renderMarkdownInline('`c`'), '<code>c</code>');
+});
+
+test('inline: escapes HTML (XSS)', () => {
+    const out = renderMarkdownInline('<b>x</b> & "q"');
+    assert.ok(!out.includes('<b>'));
+    assert.ok(out.includes('&lt;b&gt;'));
+    assert.ok(out.includes('&amp;'));
+});
+
+test('inline: newlines collapse to spaces, no block elements', () => {
+    assert.equal(renderMarkdownInline('a\nb'), 'a b');
+    // a leading "# " is NOT a heading in inline mode
+    assert.equal(renderMarkdownInline('# not a heading'), '# not a heading');
+    // list markers are literal
+    assert.equal(renderMarkdownInline('- not a list'), '- not a list');
+});
+
+test('inline: safe link, unsafe scheme neutered', () => {
+    assert.equal(
+        renderMarkdownInline('[r](https://rezolus.com)'),
+        '<a href="https://rezolus.com" target="_blank" rel="noopener noreferrer">r</a>',
+    );
+    assert.ok(!renderMarkdownInline('[x](javascript:alert(1))').includes('href="javascript'));
+});
+
+test('inline: empty/nullish yields empty string', () => {
+    assert.equal(renderMarkdownInline(''), '');
+    assert.equal(renderMarkdownInline(null), '');
+    assert.equal(renderMarkdownInline(undefined), '');
 });

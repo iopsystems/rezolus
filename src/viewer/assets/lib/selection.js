@@ -11,7 +11,7 @@ import { isHistogramPlot } from './charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
 import { ViewerApi } from './viewer_api.js';
 import { eventsStore } from './events_store.js';
-import { renderMarkdown } from './markdown.js';
+import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 
 const PIN_ICON_PATH = 'M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a5.927 5.927 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707-.195-.195.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a5.922 5.922 0 0 1 1.013.16l3.134-3.133a2.772 2.772 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146z';
 
@@ -88,6 +88,8 @@ const expandedNotes = new Set();
 // field is toggled to rendered preview. UI-only, never persisted.
 const previewMarkdown = new Set();
 const PREAMBLE_KEY = '__preamble__';
+// entry.id present while its chart title is being edited (Notebook).
+const editingTitle = new Set();
 
 // A Markdown field with an Edit ⇄ Preview toggle. Preview renders
 // sanitized HTML via renderMarkdown; Edit shows a raw textarea.
@@ -141,6 +143,8 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     promql_query_experiment: e.promql_query_experiment || null,
     category_members: e.category_members || null,
     note: e.note || '',
+    // Optional inline-Markdown title override; '' = use derived title.
+    titleOverride: e.titleOverride || '',
     chartOpts: e.chartOpts,
 }));
 
@@ -266,6 +270,7 @@ const persistStore = (key, store) => {
                 promql_query_experiment: e.promql_query_experiment || undefined,
                 category_members: e.category_members || undefined,
                 note: e.note,
+                titleOverride: e.titleOverride || undefined,
                 chartOpts: e.chartOpts,
             })),
         };
@@ -357,6 +362,48 @@ const selectionCardTitle = (entry, spec) => {
     return parts.join(': ');
 };
 
+// Plain-text effective title (override wins), for non-rendering
+// contexts like the unavailable-card placeholder.
+const plainCardTitle = (entry, spec) =>
+    (entry.titleOverride && entry.titleOverride.trim()) || selectionCardTitle(entry, spec);
+
+// Card title node. In Report/LoadedSelection it's read-only: an
+// override renders as inline Markdown, otherwise the derived
+// breadcrumb. In the Notebook (`editable`) clicking it (or the ✎)
+// swaps to a single-line input; blank clears the override and falls
+// back to the derived title.
+const cardTitle = (entry, spec, { editable = false } = {}) => {
+    const derived = selectionCardTitle(entry, spec);
+    const override = entry.titleOverride && entry.titleOverride.trim();
+
+    if (editable && editingTitle.has(entry.id)) {
+        return m('input.chart-title-edit', {
+            value: entry.titleOverride || '',
+            placeholder: derived,
+            oninput: (e) => { entry.titleOverride = e.target.value; persistNotebook(); },
+            onblur: () => { editingTitle.delete(entry.id); m.redraw(); },
+            onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
+            oncreate: (vnode) => vnode.dom.focus(),
+        });
+    }
+
+    const titleNode = override
+        ? m('span.chart-title.md-inline', m.trust(renderMarkdownInline(override)))
+        : m('span.chart-title', derived);
+
+    if (!editable) return titleNode;
+
+    const enterEdit = () => { editingTitle.add(entry.id); m.redraw(); };
+    return m('span.chart-title-editable', { onclick: enterEdit, title: 'Click to edit title (Markdown)' }, [
+        titleNode,
+        m('button.chart-title-edit-btn', {
+            type: 'button',
+            'aria-label': 'Edit title',
+            onclick: (e) => { e.stopPropagation(); enterEdit(); },
+        }, '✎'),
+    ]);
+};
+
 // Render a placeholder card for an entry whose chart can't render
 // in this capture (metric absent, query errored, no series matched).
 // Replaces the previous silent-collapse behavior where the chart's
@@ -366,7 +413,7 @@ const unavailableCard = (entry, spec, controls = null, dropAttrs = null) =>
     m('div.selection-card', dropAttrs || {}, [
         m('div.chart-wrapper.chart-wrapper-unavailable', [
             m('div.chart-unavailable', [
-                m('div.chart-unavailable-title', selectionCardTitle(entry, spec)),
+                m('div.chart-unavailable-title', plainCardTitle(entry, spec)),
                 m('div.chart-unavailable-message',
                     spec.unavailableReason
                         ? `Failed to load: ${spec.unavailableReason}`
@@ -423,6 +470,7 @@ const removeEntry = (store, id) => {
         if (store === notebookStore) {
             expandedNotes.delete(id);
             previewMarkdown.delete(id);
+            editingTitle.delete(id);
             persistNotebook();
         } else if (store === reportStore) persistReport();
     }
@@ -492,6 +540,7 @@ const clearStore = (store) => {
     } else if (store === notebookStore) {
         expandedNotes.clear();
         previewMarkdown.clear();
+        editingTitle.clear();
         localStorage.removeItem(NOTEBOOK_STORAGE_KEY);
         // Events are Notebook-scoped content — clear them alongside it.
         suspendEventsPersist = true;
@@ -520,6 +569,7 @@ const openInNotebook = (sourceStore, kindLabel) => {
     notebookStore.entries = sourceStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
     expandedNotes.clear();
     previewMarkdown.clear();
+    editingTitle.clear();
     persistNotebook();
     notify('info', `${kindLabel} opened in Notebook`);
     m.route.set('/notebook');
@@ -557,6 +607,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
         promql_query_experiment: e.promql_query_experiment || undefined,
         category_members: e.category_members || undefined,
         note: includeNotes ? e.note : '',
+        titleOverride: e.titleOverride || undefined,
         chartOpts: e.chartOpts,
     })),
     events: eventsStore.all(),
@@ -995,7 +1046,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('div.chart-title-row', [
-                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                cardTitle(entry, spec, { editable: true }),
                                 attrs.compareMode && compareToggle(spec, {
                                     compareMode: attrs.compareMode,
                                     toggles: attrs.toggles,
@@ -1135,7 +1186,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('div.chart-title-row', [
-                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                cardTitle(entry, spec),
                                 attrs.compareMode && compareToggle(spec, {
                                     compareMode: attrs.compareMode,
                                     toggles: reportStore.chartToggles,
@@ -1218,7 +1269,7 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('div.chart-title-row', [
-                                m('span.chart-title', selectionCardTitle(entry, spec)),
+                                cardTitle(entry, spec),
                                 attrs.compareMode && compareToggle(spec, {
                                     compareMode: attrs.compareMode,
                                     toggles: loadedSelectionStore.chartToggles,
