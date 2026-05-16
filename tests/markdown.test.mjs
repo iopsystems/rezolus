@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderMarkdown, renderMarkdownInline } from '../src/viewer/assets/lib/markdown.js';
+import { renderMarkdown, renderMarkdownInline } from '../src/viewer/assets/lib/ui/markdown.js';
 
 test('empty / nullish input yields empty string', () => {
     assert.equal(renderMarkdown(''), '');

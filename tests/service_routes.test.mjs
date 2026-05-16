@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServiceRoutes } from '../src/viewer/assets/lib/service.js';
+import { createServiceRoutes } from '../src/viewer/assets/lib/features/service.js';
 
 const setupGlobals = (overrides = {}) => {
     const previousM = globalThis.m;

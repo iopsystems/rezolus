@@ -2,23 +2,23 @@
 // Exports initDashboard(config) which sets up state and mounts the Mithril router.
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { QueryExplorer, SingleChartView } from './explorers.js';
-import { CgroupSelector } from './cgroup_selector.js';
+import { QueryExplorer, SingleChartView } from './features/explorers.js';
+import { CgroupSelector } from './features/cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
-import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
-import { collectGroupPlots } from './group_utils.js';
-import { CpuTopology } from './topology.js';
+import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
+import { collectGroupPlots } from './features/group_utils.js';
+import { CpuTopology } from './features/topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
-import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
-import { SaveModal } from './overlays.js';
+import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
+import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
-import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
-import { buildTopNavAttrs, createMainComponent } from './navigation.js';
-import { initTheme } from './theme.js';
+import { createSystemInfoView, createMetadataView, renderCgroupSection } from './sections/section_views.js';
+import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
+import { initTheme } from './ui/theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
-import { renderServiceSection, createServiceRoutes } from './service.js';
+import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
-import { renderSectionNotes } from './section_notes.js';
+import { renderSectionNotes } from './sections/section_notes.js';
 import {
     createSectionCacheState,
     storeSectionResponse,
@@ -30,7 +30,7 @@ import {
     resetSectionCacheState,
     setSectionCacheLimit,
     pinSectionKey,
-} from './section_cache.js';
+} from './sections/section_cache.js';
 
 // ── State ──────────────────────────────────────────────────────────
 

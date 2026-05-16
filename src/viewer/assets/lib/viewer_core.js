@@ -2,7 +2,7 @@
 // viewer (script.js) and the static site viewer (site script.js).
 
 import { Chart } from './charts/chart.js';
-import { expandLink, selectButton, compareToggle } from './chart_controls.js';
+import { expandLink, selectButton, compareToggle } from './ui/chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
 import {

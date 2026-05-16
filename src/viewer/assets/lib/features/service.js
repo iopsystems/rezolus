@@ -1,7 +1,7 @@
 // Shared service extension components and route builders.
 // Used by both the binary viewer and the static site viewer.
 
-import { renderSectionNotes } from './section_notes.js';
+import { renderSectionNotes } from '../sections/section_notes.js';
 
 /**
  * Render service section content (metadata table, KPI groups, unavailable list).

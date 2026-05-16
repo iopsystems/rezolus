@@ -3,9 +3,9 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
-import { FileUpload, CompareLanding, splitAlias } from './landing.js';
-import { notify, showSaveModal } from './overlays.js';
-import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection.js';
+import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
+import { notify, showSaveModal } from './ui/overlays.js';
+import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 

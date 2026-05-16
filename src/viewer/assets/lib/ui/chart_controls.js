@@ -1,8 +1,8 @@
 // Shared chart control buttons (Expand / Select) used by both the
 // regular Group component and the cgroup section renderer.
 
-import { isSelected, toggleSelection } from './selection.js';
-import { resolvedStyle } from './charts/metric_types.js';
+import { isSelected, toggleSelection } from '../selection/selection.js';
+import { resolvedStyle } from '../charts/metric_types.js';
 
 /**
  * Compact per-chart toggle rendered in the chart header when compare
