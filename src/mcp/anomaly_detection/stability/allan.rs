@@ -71,16 +71,13 @@ pub(in crate::mcp::anomaly_detection) fn perform_allan_analysis(
         }
     }
 
-    // Identify noise type from slope
     let noise_type = identify_noise_type(&taus_seconds, &deviations);
 
-    // Find local minima (indicates cyclic behavior)
+    // Local minima indicate cyclic behavior
     let minima = find_deviation_minima(&taus_seconds, &deviations);
 
-    // Check if we have strong cyclic patterns
     let has_cyclic_pattern = !minima.is_empty() && minima[0].confidence > 0.7;
 
-    // Detect noise characteristic transitions via sliding window analysis
     let noise_transitions = detect_noise_transitions(values, sample_interval)?;
 
     Ok(AllanAnalysis {

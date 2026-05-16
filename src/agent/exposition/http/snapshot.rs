@@ -36,23 +36,19 @@ impl SnapshotBuilder {
     async fn refresh(&mut self) {
         let last = Instant::now();
 
-        // get start timestamp
         let timestamp = SystemTime::now();
 
-        // collect the sampler futures
         let s: Vec<_> = self
             .samplers
             .iter()
             .map(|s| s.refresh_with_logging())
             .collect();
 
-        // refresh all samplers
         let start = Instant::now();
         futures::future::join_all(s).await;
         let duration = start.elapsed();
         debug!("sampling latency: {} us", duration.as_micros());
 
-        // cleanup expired external metrics and get active ones
         let external_metrics = if let Some(store) = &self.external_store {
             store.cleanup();
             store.get_active()
@@ -60,7 +56,6 @@ impl SnapshotBuilder {
             Vec::new()
         };
 
-        // update the cached snapshot
         self.cached = Some(CachedSnapshot {
             snapshot: create(timestamp, duration, external_metrics),
             timestamp: last,
@@ -200,7 +195,6 @@ fn create(
         }
     }
 
-    // Add external metrics
     for metric in external_metrics.into_iter() {
         let mut metadata: HashMap<String, String> = [
             ("metric".to_string(), metric.name.clone()),
@@ -208,7 +202,6 @@ fn create(
         ]
         .into();
 
-        // Add all labels as metadata
         for (k, v) in metric.labels {
             metadata.insert(k, v);
         }
@@ -235,7 +228,6 @@ fn create(
                 max_value_power,
                 buckets,
             } => {
-                // Try to create a histogram from the buckets
                 if let Ok(value) =
                     histogram::Histogram::from_buckets(grouping_power, max_value_power, buckets)
                 {

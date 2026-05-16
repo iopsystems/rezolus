@@ -282,7 +282,6 @@ where
         let (perf_sync_tx, perf_sync_rx) = sync_channel(cpus);
 
         let thread = std::thread::spawn(move || {
-            // log all messages from libbpf at debug level
             fn libbpf_print_fn(_level: PrintLevel, msg: String) {
                 debug!("libbpf: {}", msg.trim_end());
             }
@@ -295,11 +294,9 @@ where
             let mut open_skel = if let Some(ref btf_path) = self.btf_path {
                 debug!("Loading BPF program with external BTF from: {}", btf_path);
 
-                // Create C string for the BTF path
                 let btf_path_cstr = std::ffi::CString::new(btf_path.as_str())
                     .map_err(|_| libbpf_rs::Error::from_raw_os_error(libc::EINVAL))?;
 
-                // Create open options with custom BTF path
                 let open_opts = unsafe {
                     let mut opts: libbpf_sys::bpf_object_open_opts = std::mem::zeroed();
                     opts.sz = std::mem::size_of::<libbpf_sys::bpf_object_open_opts>()
@@ -308,7 +305,6 @@ where
                     opts
                 };
 
-                // Open with custom BTF path using open_opts
                 match (self.skel)().open_opts(open_opts, open_object) {
                     Ok(skel) => {
                         debug!("Successfully loaded external BTF from: {}", btf_path);
@@ -320,7 +316,6 @@ where
                     }
                 }
             } else {
-                // Open normally without custom BTF
                 (self.skel)().open(open_object)?
             };
 
@@ -461,7 +456,6 @@ where
                 // blocking wait until we are notified to start, no cpu consumed
                 sync.wait_trigger();
 
-                // consume all data from ringbuffers
                 if let Some(ref rb) = ringbuffer {
                     let _ = rb.consume();
                 }

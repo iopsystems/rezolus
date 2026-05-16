@@ -20,10 +20,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_cpu = has_multiple_cpus(data);
 
-    /*
-     * Utilization
-     */
-
     let mut utilization = Group::new("Utilization", "utilization");
 
     let busy = utilization.subgroup("Total CPU");
@@ -82,10 +78,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     }
 
     view.group(utilization);
-
-    /*
-     * Performance
-     */
 
     let mut performance = Group::new("Performance", "performance");
 
@@ -166,10 +158,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     view.group(performance);
 
-    /*
-     * Branch Prediction
-     */
-
     let mut branch = Group::new("Branch Prediction", "branch-prediction");
 
     let miss = branch.subgroup("Misprediction Rate");
@@ -229,14 +217,8 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     view.group(branch);
 
-    /*
-     * DTLB (Data Translation Lookaside Buffer)
-     * cpu_dtlb_miss aggregates all variants:
-     * - unlabeled (AMD/ARM combined)
-     * - op="load" (Intel)
-     * - op="store" (Intel)
-     */
-
+    // cpu_dtlb_miss aggregates all variants: unlabeled (AMD/ARM combined),
+    // op="load" (Intel), op="store" (Intel).
     let mut dtlb = Group::new("DTLB", "dtlb");
 
     let misses = dtlb.subgroup("DTLB Misses");
@@ -278,10 +260,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     view.group(dtlb);
 
-    /*
-     * Migrations
-     */
-
     let mut migrations = Group::new("Migrations", "migrations");
 
     let to = migrations.subgroup("Incoming Migrations");
@@ -321,10 +299,6 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     }
 
     view.group(migrations);
-
-    /*
-     * TLB Flush
-     */
 
     let mut tlb = Group::new("TLB Flush", "tlb-flush");
 

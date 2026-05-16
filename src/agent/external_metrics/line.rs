@@ -67,17 +67,14 @@ pub fn parse_line_with_context(
         return Ok(ParseResult::SessionSet);
     }
 
-    // Skip other comments
     if line.starts_with('#') {
         return Ok(ParseResult::Skipped);
     }
 
-    // Check per-connection limit before parsing
     if ctx.metric_count >= max_metrics_per_connection {
         return Err(LineError::ConnectionLimitExceeded);
     }
 
-    // Find the split between name+labels and value
     let (name_labels, value_str) = split_name_value(line)?;
 
     let (name, mut labels) = parse_name_labels(name_labels)?;
@@ -145,7 +142,6 @@ fn parse_name_labels(s: &str) -> Result<(String, HashMap<String, String>), LineE
 
         Ok((name.to_string(), labels))
     } else {
-        // No labels
         let name = s.trim();
         if name.is_empty() {
             return Err(LineError::EmptyName);
@@ -200,7 +196,6 @@ fn parse_single_label(s: &str) -> Result<(String, String), LineError> {
     let key = parts[0].trim().to_string();
     let mut value = parts[1].trim();
 
-    // Remove surrounding quotes if present
     if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
         value = &value[1..value.len() - 1];
     }
@@ -244,7 +239,6 @@ fn parse_histogram_value(s: &str) -> Result<ExternalMetricValue, LineError> {
     let config_part = &s[..colon_pos];
     let buckets_part = &s[colon_pos + 1..];
 
-    // Parse config
     let config_parts: Vec<&str> = config_part.split(',').collect();
     if config_parts.len() != 2 {
         return Err(LineError::InvalidHistogram);
@@ -259,12 +253,10 @@ fn parse_histogram_value(s: &str) -> Result<ExternalMetricValue, LineError> {
         .parse()
         .map_err(|_| LineError::InvalidHistogram)?;
 
-    // Validate config
     if grouping_power >= max_value_power || max_value_power > 64 {
         return Err(LineError::InvalidHistogram);
     }
 
-    // Parse buckets
     let buckets: Result<Vec<u64>, _> = buckets_part
         .split_whitespace()
         .map(|s| s.parse::<u64>())

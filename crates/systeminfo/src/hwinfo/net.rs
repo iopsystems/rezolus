@@ -52,7 +52,6 @@ fn get_interface(name: &OsStr) -> Result<Option<Interface>> {
 
     debug!("discovering network interface info for: {name}");
 
-    // skip any that aren't "up"
     let operstate = read_string(format!("/sys/class/net/{name}/operstate"))?;
     if operstate != "up" {
         return Ok(None);

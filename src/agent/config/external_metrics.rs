@@ -63,13 +63,11 @@ impl ExternalMetrics {
             return;
         }
 
-        // Validate metric_ttl
         if let Err(e) = self.metric_ttl.parse::<humantime::Duration>() {
             eprintln!("external_metrics.metric_ttl couldn't be parsed: {e}");
             std::process::exit(1);
         }
 
-        // Validate protocol
         let valid_protocols = ["binary", "line", "auto"];
         if !valid_protocols.contains(&self.protocol.to_lowercase().as_str()) {
             eprintln!(
@@ -79,25 +77,21 @@ impl ExternalMetrics {
             std::process::exit(1);
         }
 
-        // Validate max_connections
         if self.max_connections == 0 {
             eprintln!("external_metrics.max_connections must be greater than 0");
             std::process::exit(1);
         }
 
-        // Validate max_metrics
         if self.max_metrics == 0 {
             eprintln!("external_metrics.max_metrics must be greater than 0");
             std::process::exit(1);
         }
 
-        // Validate max_metrics_per_connection
         if self.max_metrics_per_connection == 0 {
             eprintln!("external_metrics.max_metrics_per_connection must be greater than 0");
             std::process::exit(1);
         }
 
-        // Validate socket_group
         if let Some(ref group) = self.socket_group {
             let c_group = match CString::new(group.as_str()) {
                 Ok(s) => s,
@@ -114,7 +108,6 @@ impl ExternalMetrics {
             }
         }
 
-        // Validate socket_mode
         if let Some(mode) = self.socket_mode {
             if mode > 0o777 {
                 eprintln!("external_metrics.socket_mode must be <= 0o777");

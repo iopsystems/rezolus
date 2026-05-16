@@ -17,7 +17,6 @@ pub fn format_recording_info(file_path: &str, tsdb: &Arc<Tsdb>, engine: &QueryEn
     let (start_time, end_time) = engine.get_time_range();
     let duration_seconds = end_time - start_time;
 
-    // Format duration nicely
     let hours = (duration_seconds / 3600.0) as u64;
     let minutes = ((duration_seconds % 3600.0) / 60.0) as u64;
     let seconds = (duration_seconds % 60.0) as u64;
@@ -30,7 +29,6 @@ pub fn format_recording_info(file_path: &str, tsdb: &Arc<Tsdb>, engine: &QueryEn
         format!("{seconds}s")
     };
 
-    // Convert Unix timestamps to UTC datetime strings
     let start_datetime = DateTime::from_timestamp(start_time as i64, 0)
         .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("{start_time:.0} (invalid timestamp)"));
@@ -77,10 +75,8 @@ pub fn run(config: Config) {
 }
 
 fn run_server(config: Config) {
-    // configure logging
     let _log_drain = configure_logging(verbosity_to_level(config.verbose));
 
-    // initialize async runtime
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("rezolus")
@@ -92,7 +88,6 @@ fn run_server(config: Config) {
     })
     .expect("failed to set ctrl-c handler");
 
-    // launch the server
     rt.block_on(async {
         let mut server = server::Server::new();
         if let Err(e) = server.run_stdio().await {
@@ -182,7 +177,6 @@ fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
         return;
     }
 
-    // No query provided - run exhaustive anomaly detection
     run_exhaustive_detection(engine, tsdb);
 }
 
@@ -286,7 +280,6 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
     let mut metrics_with_anomalies = Vec::new();
 
     for (metric_name, metric_type, custom_query) in &metrics_to_analyze {
-        // Use custom query if provided, otherwise construct based on type
         let query = if let Some(q) = custom_query {
             q.clone()
         } else {
@@ -443,7 +436,6 @@ fn format_query_result(result: &QueryResult) -> String {
                     writeln!(&mut output, "  First: {} = {}", first.0, first.1).unwrap();
                     writeln!(&mut output, "  Last:  {} = {}", last.0, last.1).unwrap();
 
-                    // Calculate basic stats
                     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
                     let min = values.iter().copied().fold(f64::INFINITY, f64::min);
                     let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);

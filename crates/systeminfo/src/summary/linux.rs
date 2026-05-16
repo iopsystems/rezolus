@@ -47,7 +47,6 @@ fn collect_cpu_info() -> (
     let cpu_ids = read_list("/sys/devices/system/cpu/online").unwrap_or_default();
     let cpus = cpu_ids.len();
 
-    // Deduplicate cores and packages from topology
     let mut core_set = HashSet::new();
     let mut package_set = HashSet::new();
 
@@ -78,7 +77,6 @@ fn collect_cpu_info() -> (
         .ok()
         .map(|v| v == 1);
 
-    // Model and vendor from /proc/cpuinfo (just first CPU)
     let (model, vendor) = read_cpuinfo();
 
     (model, vendor, cpus, cores, packages, smt)
@@ -144,7 +142,6 @@ fn collect_cpu_topology() -> Vec<CpuTopologyEntry> {
         Err(_) => return Vec::new(),
     };
 
-    // Build a map of CPU ID -> NUMA node
     let numa_map = build_numa_map();
 
     let mut entries = Vec::with_capacity(cpu_ids.len());
@@ -243,7 +240,6 @@ fn collect_caches() -> Vec<CacheSummary> {
             continue;
         }
 
-        // Map index + type to a level name
         let level = match cache_type.as_deref() {
             Some("Data") => format!("L{}d", index_to_level(index)),
             Some("Instruction") => format!("L{}i", index_to_level(index)),
@@ -288,12 +284,10 @@ fn collect_nics() -> Vec<NicSummary> {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip loopback and non-physical interfaces
         if name == "lo" {
             continue;
         }
 
-        // Only include interfaces that are "up"
         let operstate = match read_string(format!("/sys/class/net/{name}/operstate")) {
             Ok(s) => s,
             Err(_) => continue,
@@ -324,7 +318,6 @@ fn collect_gpus() -> Vec<GpuSummary> {
 }
 
 fn collect_nvidia_gpus() -> Vec<GpuSummary> {
-    // Try to detect NVIDIA GPUs by reading /proc/driver/nvidia/gpus/
     let gpu_dir = Path::new("/proc/driver/nvidia/gpus");
     if !gpu_dir.exists() {
         return Vec::new();
