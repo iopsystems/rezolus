@@ -131,20 +131,18 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
     // A bare range vector (e.g. "metric[5m]" with no enclosing function) is invalid
     if query.contains('[') && query.contains(']') {
         let has_function = range_vector_functions.iter().any(|f| query.contains(f));
-        if !has_function {
-            if !query.contains("(") {
-                return Err(format!(
-                    "Query '{}' appears to be a bare range vector selector.\n\
-                    \n\
-                    Range vectors must be used with a function.\n\
-                    For counters, use: rate({})\n\
-                    For gauges, use: avg_over_time({})\n\
-                    \n\
-                    Range vectors alone cannot be graphed or analyzed.",
-                    query, query, query
-                )
-                .into());
-            }
+        if !has_function && !query.contains("(") {
+            return Err(format!(
+                "Query '{}' appears to be a bare range vector selector.\n\
+                \n\
+                Range vectors must be used with a function.\n\
+                For counters, use: rate({})\n\
+                For gauges, use: avg_over_time({})\n\
+                \n\
+                Range vectors alone cannot be graphed or analyzed.",
+                query, query, query
+            )
+            .into());
         }
     }
 
