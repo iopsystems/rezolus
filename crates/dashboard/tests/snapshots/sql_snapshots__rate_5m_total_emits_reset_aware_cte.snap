@@ -32,17 +32,18 @@ WITH unp AS (
                   -- FIRST_VALUE(s_inc) to drop it. See
                   -- metriken-query/src/promql/streaming/rate.rs:CounterRate.
                   --
-                  -- One residual: PromQL's eval point can carry a
-                  -- sub-second offset (start_ns of the parquet's first
-                  -- raw timestamp), so its window_start sits at e.g.
-                  -- 638.0007 — strictly greater than the snapped 638e9
-                  -- sample and so excludes it. SQL's window starts at
-                  -- 638e9 exactly and INCLUDES that sample. On parquets
-                  -- where this misalignment lands, the very last few
-                  -- eval points show ~0.07% rate diffs. Not fixable by
-                  -- tightening the RANGE bound by a small constant —
-                  -- the offset varies parquet-to-parquet.
+                  -- The RANGE lower bound is `5m - 1ns` (not exactly
+                  -- 5m) so the row at `current - 5m` is *excluded* —
+                  -- matching PromQL, whose eval point carries a tiny
+                  -- sub-second offset (the parquet's start_ns mod
+                  -- sampling-interval) and so its `[t - 5m, t]` window
+                  -- starts strictly greater than the snapped sample at
+                  -- `t - 5m`. Without the 1-ns shift, SQL's inclusive
+                  -- lower bound picks up that boundary sample on every
+                  -- real parquet (start_ns is wall-clock-aligned, never
+                  -- a clean integer second) and the trailing-edge
+                  -- points diverge by ~one boundary increment / 300s.
                   (SUM(s_inc) OVER wr - COALESCE(FIRST_VALUE(s_inc) OVER wr, 0))
                     / NULLIF((timestamp - MIN(timestamp) OVER wr)::DOUBLE/1e9, 0) AS v
            FROM row_sum
-           WINDOW wr AS (ORDER BY timestamp RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW)
+           WINDOW wr AS (ORDER BY timestamp RANGE BETWEEN 299999999999 PRECEDING AND CURRENT ROW)

@@ -8,22 +8,20 @@ WITH unp AS (
                   ON COLUMNS('^cgroup_cpu_usage(/[^:]+)?$') INTO NAME col VALUE v
            ),
            joined AS (
-              SELECT u.timestamp, idx.name, u.v
+              SELECT u.timestamp, idx.name, u.col, u.v
               FROM unp u JOIN _cgroup_index idx
                   ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_usage'
               WHERE idx.name IN __SELECTED_CGROUPS__
            ),
-           by_name AS (
-              -- Cast SUM(v) back to UBIGINT: DuckDB promotes SUM(UBIGINT)
-              -- to HUGEINT to dodge u64 overflow, but `irate_lag` takes
-              -- UBIGINT. Single-server cgroup sums fit u64 with room to
-              -- spare (max ~1.8e19) so the explicit cast is safe.
-              SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
-              FROM joined GROUP BY timestamp, name
+           rates AS (
+              SELECT timestamp, name,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM joined
            )
-           SELECT timestamp::DOUBLE/1e9 AS t, name,
-                  irate_lag(s,
-                      LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
-                      timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
-                  ) AS v
-           FROM by_name
+           SELECT timestamp::DOUBLE/1e9 AS t, name, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp, name

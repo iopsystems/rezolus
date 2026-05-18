@@ -62,20 +62,21 @@ pub fn rate_5m_total(re: &str) -> String {
                   -- FIRST_VALUE(s_inc) to drop it. See
                   -- metriken-query/src/promql/streaming/rate.rs:CounterRate.
                   --
-                  -- One residual: PromQL's eval point can carry a
-                  -- sub-second offset (start_ns of the parquet's first
-                  -- raw timestamp), so its window_start sits at e.g.
-                  -- 638.0007 — strictly greater than the snapped 638e9
-                  -- sample and so excludes it. SQL's window starts at
-                  -- 638e9 exactly and INCLUDES that sample. On parquets
-                  -- where this misalignment lands, the very last few
-                  -- eval points show ~0.07% rate diffs. Not fixable by
-                  -- tightening the RANGE bound by a small constant —
-                  -- the offset varies parquet-to-parquet.
+                  -- The RANGE lower bound is `5m - 1ns` (not exactly
+                  -- 5m) so the row at `current - 5m` is *excluded* —
+                  -- matching PromQL, whose eval point carries a tiny
+                  -- sub-second offset (the parquet's start_ns mod
+                  -- sampling-interval) and so its `[t - 5m, t]` window
+                  -- starts strictly greater than the snapped sample at
+                  -- `t - 5m`. Without the 1-ns shift, SQL's inclusive
+                  -- lower bound picks up that boundary sample on every
+                  -- real parquet (start_ns is wall-clock-aligned, never
+                  -- a clean integer second) and the trailing-edge
+                  -- points diverge by ~one boundary increment / 300s.
                   (SUM(s_inc) OVER wr - COALESCE(FIRST_VALUE(s_inc) OVER wr, 0))
                     / NULLIF((timestamp - MIN(timestamp) OVER wr)::DOUBLE/1e9, 0) AS v
            FROM row_sum
-           WINDOW wr AS (ORDER BY timestamp RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW)"#
+           WINDOW wr AS (ORDER BY timestamp RANGE BETWEEN 299999999999 PRECEDING AND CURRENT ROW)"#
     )
 }
 
@@ -387,6 +388,16 @@ fn sql_string(s: &str) -> String {
 /// Joins the unpivoted `<metric>/...` columns against `_cgroup_index` to
 /// filter by the `name` label (and optionally one other label like `state`
 /// or `op`). Returns scalar `v` per timestamp.
+///
+/// Per-series irate first, then SUM — mirrors PromQL's
+/// `sum(irate(...))`. The earlier sum-then-rate form masked per-column
+/// counter resets (e.g. cgroup id recycling at boot: the same id slot
+/// gets reassigned to a different cgroup, every op-column's counter
+/// drops on the same sample, and the summed series climbs *up* across
+/// the reset — producing a bogus positive rate). With per-series irate
+/// each column detects its own reset and contributes the post-reset
+/// value, matching `irate_total` / `cpu_pct_total` which migrated to
+/// this shape in 2026-05.
 pub fn cgroup_irate_total(
     metric: &str,
     side: CgroupSide,
@@ -400,21 +411,37 @@ pub fn cgroup_irate_total(
                   ON COLUMNS('^{metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            joined AS (
-              SELECT u.timestamp, u.v
+              SELECT u.timestamp, u.col, u.v
               FROM unp u JOIN _cgroup_index idx
                   ON idx.column_name = u.col AND idx.metric = '{metric}'{extra}
               WHERE {name_clause}
            ),
-           agg AS (SELECT timestamp, SUM(v) AS s FROM joined GROUP BY timestamp)
-           SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) AS v FROM agg"#,
+           rates AS (
+              SELECT timestamp,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM joined
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp"#,
     )
 }
 
 /// Per-name cgroup rate fan-out. Each selected cgroup becomes one
 /// Prometheus matrix series with `metric:{name:value}`.
 ///
-/// Uses explicit `PARTITION BY name` LAG (not the `irate_1s` macro) because
-/// rows interleave across cgroups after the per-(timestamp,name) GROUP BY.
+/// Per-column irate (PARTITION BY col) then SUM-by-(timestamp, name) —
+/// mirrors PromQL's `sum by (name) (irate(<metric>{...}[5m]))`. Each
+/// underlying physical column is its own PromQL series; counter resets
+/// (cgroup id recycling, NULL gaps in one op while siblings keep
+/// climbing) are detected per-series before aggregation. The earlier
+/// SUM-then-irate form summed a stale-but-still-incrementing slot's
+/// counter into a fresh post-reset row and reported an arbitrary
+/// positive rate where PromQL reported the post-reset values.
 pub fn cgroup_irate_by_name(
     metric: &str,
     side: CgroupSide,
@@ -428,25 +455,23 @@ pub fn cgroup_irate_by_name(
                   ON COLUMNS('^{metric}(/[^:]+)?$') INTO NAME col VALUE v
            ),
            joined AS (
-              SELECT u.timestamp, idx.name, u.v
+              SELECT u.timestamp, idx.name, u.col, u.v
               FROM unp u JOIN _cgroup_index idx
                   ON idx.column_name = u.col AND idx.metric = '{metric}'{extra}
               WHERE {name_clause}
            ),
-           by_name AS (
-              -- Cast SUM(v) back to UBIGINT: DuckDB promotes SUM(UBIGINT)
-              -- to HUGEINT to dodge u64 overflow, but `irate_lag` takes
-              -- UBIGINT. Single-server cgroup sums fit u64 with room to
-              -- spare (max ~1.8e19) so the explicit cast is safe.
-              SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
-              FROM joined GROUP BY timestamp, name
+           rates AS (
+              SELECT timestamp, name,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM joined
            )
-           SELECT timestamp::DOUBLE/1e9 AS t, name,
-                  irate_lag(s,
-                      LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
-                      timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
-                  ) AS v
-           FROM by_name"#,
+           SELECT timestamp::DOUBLE/1e9 AS t, name, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp, name"#,
     )
 }
 
