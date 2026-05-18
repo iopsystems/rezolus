@@ -1,6 +1,6 @@
 # Reviewing `yv/sql-testing` — rezolus side
 
-Companion: `/work/metriken/REVIEWING.md` (engine side).
+Companion: `/work/metriken/review/review.md` (engine side).
 
 This branch finishes the migration of **`rezolus view <parquet>`**,
 **`rezolus mcp`**, and **Save-as-Report column trim** off the
