@@ -438,10 +438,15 @@ pub fn cgroup_irate_total(
 /// mirrors PromQL's `sum by (name) (irate(<metric>{...}[5m]))`. Each
 /// underlying physical column is its own PromQL series; counter resets
 /// (cgroup id recycling, NULL gaps in one op while siblings keep
-/// climbing) are detected per-series before aggregation. The earlier
-/// SUM-then-irate form summed a stale-but-still-incrementing slot's
-/// counter into a fresh post-reset row and reported an arbitrary
-/// positive rate where PromQL reported the post-reset values.
+/// climbing) are detected per-series before aggregation.
+///
+/// **NULL-tail handling.** `UNPIVOT` uses `INCLUDE NULLS` so the
+/// (timestamp, col) grid survives across cgroup-exit boundaries.
+/// `LAST_VALUE(rate IGNORE NULLS) OVER (RANGE 5min PRECEDING)` then
+/// carries the last computed per-col rate forward for 5 min — matching
+/// PromQL's `irate(c[5m])` lookback. Past 5 min the carry expires and
+/// the row drops. This was the previous regression-vs-PromQL: without
+/// it the per-name series ended at the cgroup's last non-NULL sample.
 pub fn cgroup_irate_by_name(
     metric: &str,
     side: CgroupSide,
@@ -451,8 +456,13 @@ pub fn cgroup_irate_by_name(
     let extra = cgroup_label_filter(label_filter);
     format!(
         r#"WITH unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{metric}(/[^:]+)?$') FROM _src)
-                  ON COLUMNS('^{metric}(/[^:]+)?$') INTO NAME col VALUE v
+              -- The SQL-standard `UNPIVOT … (v FOR col IN …)` form is
+              -- the one that accepts the `INCLUDE NULLS` modifier in
+              -- DuckDB's grammar; the friendlier `UNPIVOT t ON … INTO
+              -- NAME col VALUE v` form does not, as of duckdb 1.5.
+              SELECT * FROM (SELECT timestamp, COLUMNS('^{metric}(/[^:]+)?$') FROM _src)
+                  UNPIVOT INCLUDE NULLS
+                  (v FOR col IN (COLUMNS('^{metric}(/[^:]+)?$')))
            ),
            joined AS (
               SELECT u.timestamp, idx.name, u.col, u.v
@@ -461,16 +471,29 @@ pub fn cgroup_irate_by_name(
               WHERE {name_clause}
            ),
            rates AS (
-              SELECT timestamp, name,
+              SELECT timestamp, name, col,
                      irate_lag(
                          v,
                          LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
                          timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
                      ) AS rate
               FROM joined
+           ),
+           carried AS (
+              SELECT timestamp, name,
+                     COALESCE(
+                         rate,
+                         LAST_VALUE(rate IGNORE NULLS) OVER (
+                             PARTITION BY col
+                             ORDER BY timestamp
+                             RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW
+                         )
+                     ) AS rate
+              FROM rates
            )
            SELECT timestamp::DOUBLE/1e9 AS t, name, SUM(rate) AS v
-           FROM rates
+           FROM carried
+           WHERE rate IS NOT NULL
            GROUP BY timestamp, name"#,
     )
 }
@@ -512,16 +535,25 @@ pub fn cgroup_ratio_total(num_metric: &str, den_metric: &str, side: CgroupSide) 
 /// Per-name cgroup ratio fan-out: `sum by (name) (irate(<num>)) / sum by
 /// (name) (irate(<den>))`. Like `ratio_by_id` but joins on the `name`
 /// label via `_cgroup_index`.
+///
+/// Same NULL-tail handling as `cgroup_irate_by_name` — `INCLUDE NULLS`
+/// on UNPIVOT preserves the per-(col, timestamp) grid across cgroup
+/// exits, and a 5 min `LAST_VALUE(... IGNORE NULLS)` carry forward on
+/// each side's per-name rate matches PromQL's `irate(c[5m])` lookback.
 pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide) -> String {
     let name_clause = cgroup_name_filter(side);
     format!(
         r#"WITH n_unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{num_metric}(/[^:]+)?$') FROM _src)
-                  ON COLUMNS('^{num_metric}(/[^:]+)?$') INTO NAME col VALUE v
+              -- SQL-standard UNPIVOT for INCLUDE NULLS — see comment
+              -- on `cgroup_irate_by_name` for the grammar wart.
+              SELECT * FROM (SELECT timestamp, COLUMNS('^{num_metric}(/[^:]+)?$') FROM _src)
+                  UNPIVOT INCLUDE NULLS
+                  (v FOR col IN (COLUMNS('^{num_metric}(/[^:]+)?$')))
            ),
            d_unp AS (
-              UNPIVOT (SELECT timestamp, COLUMNS('^{den_metric}(/[^:]+)?$') FROM _src)
-                  ON COLUMNS('^{den_metric}(/[^:]+)?$') INTO NAME col VALUE v
+              SELECT * FROM (SELECT timestamp, COLUMNS('^{den_metric}(/[^:]+)?$') FROM _src)
+                  UNPIVOT INCLUDE NULLS
+                  (v FOR col IN (COLUMNS('^{den_metric}(/[^:]+)?$')))
            ),
            n_join AS (
               SELECT u.timestamp, idx.name, u.v
@@ -542,7 +574,7 @@ pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide
                     FROM n_join GROUP BY timestamp, name),
            d_by AS (SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
                     FROM d_join GROUP BY timestamp, name),
-           n_rate AS (
+           n_rate_raw AS (
               SELECT timestamp, name,
                      irate_lag(s,
                          LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
@@ -550,17 +582,34 @@ pub fn cgroup_ratio_by_name(num_metric: &str, den_metric: &str, side: CgroupSide
                      ) AS r
               FROM n_by
            ),
-           d_rate AS (
+           d_rate_raw AS (
               SELECT timestamp, name,
                      irate_lag(s,
                          LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
                          timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
                      ) AS r
               FROM d_by
+           ),
+           n_rate AS (
+              SELECT timestamp, name,
+                     COALESCE(r, LAST_VALUE(r IGNORE NULLS) OVER (
+                         PARTITION BY name ORDER BY timestamp
+                         RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW
+                     )) AS r
+              FROM n_rate_raw
+           ),
+           d_rate AS (
+              SELECT timestamp, name,
+                     COALESCE(r, LAST_VALUE(r IGNORE NULLS) OVER (
+                         PARTITION BY name ORDER BY timestamp
+                         RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW
+                     )) AS r
+              FROM d_rate_raw
            )
            SELECT n.timestamp::DOUBLE/1e9 AS t, n.name,
                   n.r / NULLIF(d.r, 0) AS v
-           FROM n_rate n JOIN d_rate d USING(timestamp, name)"#,
+           FROM n_rate n JOIN d_rate d USING(timestamp, name)
+           WHERE n.r IS NOT NULL OR d.r IS NOT NULL"#,
     )
 }
 

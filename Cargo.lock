@@ -1081,9 +1081,11 @@ dependencies = [
 name = "dashboard"
 version = "0.1.0"
 dependencies = [
+ "duckdb",
  "include_dir",
  "insta",
  "metriken-query",
+ "metriken-query-sql",
  "serde",
  "serde_json",
  "tempfile",
