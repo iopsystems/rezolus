@@ -185,7 +185,7 @@ for path in / /about /lib/style.css; do
 done
 
 echo "==> served JS bundle has the Notebook rename + new Selection sidebar"
-selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection.js")
+selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection/selection.js")
 # Use here-strings rather than `echo "$var" | grep -q`: with `pipefail`
 # enabled, grep's early exit (on match) sends SIGPIPE to echo, which
 # pipefail propagates as a non-zero pipeline status, defeating the `||

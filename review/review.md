@@ -332,6 +332,17 @@ path.
 4 new tests pin the resolver's metric-name expansion, direct-column
 matching, word-boundary safety, and `trim_columns=false` bypass.
 
+After the merge with `main` (commit `9b628c4`), the four save
+entrypoints (`save_single_parquet`, `save_single_parquet_sql`,
+`save_combined_ab_tarball`, `save_combined_ab_tarball_sql`) all
+thread the `events: Vec<Event>` field from `ReportPayload` through
+to the parquet footer via a `KEY_EVENTS` KeyValue. Closed the
+combined-AB `None` placeholder main's events feature left behind.
+`events_payload_json` returns `None` for empty events (byte-identical
+output to pre-events captures); both trim and embed paths
+`retain(|kv| kv.key != KEY_EVENTS)` before pushing so re-saves don't
+duplicate. 5 added/updated tests cover the round-trip on both engines.
+
 ### `9f66ce1` — MCP CLI end-to-end tests
 
 `tests/mcp_cli.rs` (276 LOC) spawns `target/debug/rezolus` as a
