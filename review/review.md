@@ -379,6 +379,7 @@ isn't built.
 | `cargo test --test mcp_cli`        | End-to-end MCP CLI smoke against `target/debug/rezolus` + `demo.parquet` (auto-skips when fixtures or binary are missing). |
 | `node --test tests/*.mjs`          | Frontend pure-JS tests.                                            |
 | `bash tests/viewer_smoke.sh`       | End-to-end (upload / file / A-B / proxy). Requires `jq`.           |
+| `bash scripts/viewer_chromium_smoke.sh <parquet>` | Headless-Chromium per-section smoke. Drives `rezolus view <parquet>` and navigates to every section in `/api/v1/sections`, then asserts each one either rendered a chart (`.chart-wrapper` with svg/canvas), reserved an `_unavailable` placeholder (`.chart-unavailable`), or displayed a "Charts with no data / Unavailable KPIs" notes section (`.section-notes`). Captures per-section screenshots, console errors, failed network requests, and HTTP 4xx/5xx responses. Surfaces the *silent* failure mode the API-only `viewer_smoke.sh` cannot — section returns 200 but renders nothing. Requires `chromium`, `jq`, `python3`, `python websockets` (`pip install --user websockets`). |
 
 Frontend JS has 6 pre-existing failures referencing the retired
 in-process WASM PromQL viewer (`crates/viewer/` deleted) and the
@@ -386,6 +387,41 @@ PromQL-side `buildEffectiveQuery` injection path that goes
 unreached on `BACKEND='sql'`. Both are dead code on the
 server-backed viewer; the tests should be retired in a follow-up
 cleanup, not fixed.
+
+### Chromium smoke — two silent-rendering bugs fixed
+
+Adding `viewer_chromium_smoke.sh` surfaced two latent bugs that the
+API-only `viewer_smoke.sh` could not see because both produced 200
+OK responses with empty rendered output:
+
+1. **`data.js::processDashboardData` stripped `_unavailable` KPIs.**
+   The "no-data" filter loop (`src/viewer/assets/lib/data.js`
+   line ~489) checked `plotHasData(plot)` but not `plot._unavailable`.
+   KPIs whose `sql` field was null (i.e. PromQL-only templates from
+   pre-`91ea72e` parquets) got flagged `_unavailable` upstream, then
+   silently dropped here, so the chart-unavailable placeholder
+   defined in `charts/chart.js` never reached the renderer. The
+   data.js filter now mirrors `viewer_core.js::plotHasData`, keeping
+   `_unavailable` plots through to the placeholder render.
+
+2. **`loadSection` cached the section payload before `data.metadata`
+   was initialized.** `storeSectionResponse` makes a shallow copy
+   (`const { sections, ...stored } = data`). `processDashboardData`
+   then ran `data.metadata = data.metadata || {}` after caching, so
+   the reassignment hit the *live* object but never propagated to
+   the cached `stored.metadata` — staying `undefined`. The route
+   view reads `attrs.metadata.unavailable_charts` off the cached
+   entry, so the "Charts with no data" notes never rendered.
+   `loadSection` (`src/viewer/assets/lib/app.js` line ~288) now
+   ensures `data.metadata = {}` *before* caching so both objects
+   share the same `metadata` reference and subsequent
+   `data.metadata.X` writes are visible through the cache.
+
+Net effect on a pre-`91ea72e` parquet (PromQL-only KPI definitions
+embedded): every service section now renders KPI placeholder slots
+instead of a blank page, and every sampler section that has no
+matching metrics in the recording renders the "Charts with no data"
+explanatory list instead of "(0)" + a void.
 
 ---
 

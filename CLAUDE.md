@@ -37,6 +37,14 @@ node --test tests/*.mjs
 # End-to-end viewer smoke (upload / file / A-B / proxy modes). Requires `jq`.
 bash tests/viewer_smoke.sh
 
+# Headless-Chromium per-section render check. Walks every section in
+# /api/v1/sections, asserts each renders a chart, an `_unavailable`
+# placeholder, or a `.section-notes` no-data callout. Catches the
+# silent-render regression the API-only smoke can't see.
+# Requires chromium, jq, python3, `pip install --user websockets`.
+bash scripts/viewer_chromium_smoke.sh <parquet>
+bash scripts/viewer_chromium_smoke.sh site/viewer/data/cachecannon.parquet
+
 # Format code (runs rustfmt and clang-format on .c/.h files)
 cargo xtask fmt
 

@@ -480,6 +480,12 @@ const createDataApi = ({
         // refetches them in place. Stripping them here would remove the
         // right-side "Individual Cgroups" group entirely on first load
         // and the cgroup selector would have nothing to repopulate.
+        // Plots flagged `_unavailable` (KPIs whose query lives in
+        // parquet metadata and isn't SQL-transcribed yet) also survive
+        // — viewer_core's plotHasData treats the flag as "render the
+        // placeholder card." Without that carve-out the placeholder
+        // never reaches the renderer and KPI-heavy service sections
+        // appear silently empty on pre-SQL-migration parquets.
         const unavailable = [];
         const plotHasData = (plot) =>
             Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
@@ -491,6 +497,7 @@ const createDataApi = ({
                 const surviving = [];
                 for (const plot of (sg.plots || [])) {
                     if (!plot.promql_query
+                        || plot._unavailable
                         || plotHasData(plot)
                         || isDeferredCgroupPlot(plot)) {
                         surviving.push(plot);

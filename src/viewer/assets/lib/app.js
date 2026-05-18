@@ -279,6 +279,14 @@ const loadSection = async (section) => {
     const data = await ViewerApi.getSection(section);
     if (!data) return null;
 
+    // Initialize `metadata` before caching so the cache's shallow copy
+    // shares the same `metadata` object reference as the live `data`.
+    // `processDashboardData` later mutates `data.metadata.unavailable_charts`
+    // to surface no-data notes; if it had to create `data.metadata`
+    // first, the cached entry's `metadata` would stay undefined and
+    // the section view would never see the notes.
+    if (!data.metadata) data.metadata = {};
+
     // Cache the bare section structure immediately so the route
     // resolves without the "Loading…" splash. Plot data fills in
     // progressively as `processDashboardData` mutates plots in place
