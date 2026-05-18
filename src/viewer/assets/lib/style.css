@@ -946,6 +946,20 @@ main {
     font-weight: 600;
 }
 
+/* Sections whose post-processed payload has no surviving plots.
+   Common in live mode without sudo/eBPF — the section still clicks
+   through (the "Charts with no data" notes are informative) but
+   visually de-emphasised so the populated sections stand out. */
+#sidebar a.empty-section {
+    color: var(--fg-muted);
+    opacity: 0.6;
+}
+
+#sidebar a.empty-section:hover {
+    opacity: 1;
+    color: var(--fg);
+}
+
 #sidebar a.selected::after {
     content: '';
     position: absolute;

@@ -30,6 +30,7 @@ import {
     resetSectionCacheState,
     setSectionCacheLimit,
     pinSectionKey,
+    recordSectionStatus,
 } from './sections/section_cache.js';
 
 let activeSectionRoute = null;
@@ -295,6 +296,11 @@ const loadSection = async (section) => {
     // a splash for the duration of N async query round-trips.
     cacheSectionResponse(section, data);
     await processDashboardData(data, activeCgroupPattern, `/${section}`);
+    // Record persistent section status (survives response-cache
+    // eviction). Drives the sidebar's "gray out empty sections"
+    // affordance: once a section has been visited, its renderable
+    // plot count sticks even if the body is evicted later.
+    recordSectionStatus(sectionCacheState, section, countCharts(data.groups));
     return data;
 };
 
@@ -772,6 +778,10 @@ const initDashboard = (config = {}) => {
         SaveModal,
         SectionContent,
         sectionResponseCache,
+        // Persistent per-section status map (survives response-cache
+        // eviction). Sidebar reads from this for the "gray out empty
+        // sections" affordance.
+        getSectionStatusMap: () => sectionCacheState.sectionStatus || {},
         getHasSystemInfo: () => systemInfoData,
         getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
         getCompareBadgeAttrs: () => ({

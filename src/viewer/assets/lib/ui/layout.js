@@ -236,6 +236,11 @@ const countCharts = (groups) => {
 const Sidebar = {
     view({ attrs }) {
         const sectionResponseCache = attrs.sectionResponseCache;
+        // Persistent per-section status map (`{total, withData}` per
+        // visited section). Survives response-cache eviction so the
+        // sidebar's "gray out empty" + label-suffix affordance sticks
+        // for the life of the viewer, not just the last 3 visits.
+        const sectionStatus = attrs.sectionStatus || {};
 
         // In compare mode, cgroup section is hidden from navigation (v1 scope).
         const visibleSections = attrs.compareMode
@@ -313,20 +318,30 @@ const Sidebar = {
 
             serviceSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
-                const cached = sectionResponseCache[sectionKey];
-                // Sidebar label: show the section's total plot count
-                // once its JSON is cached. `total` is stable (set by
-                // the dashboard generator), so the count doesn't
-                // flicker as per-plot data lands. No suffix until
-                // the section JSON itself is fetched.
-                const count = cached ? countCharts(cached.groups) : null;
+                // Persistent status is set after `processDashboardData`
+                // finishes — survives response-cache eviction. Until
+                // a section is first visited, no suffix and no gray
+                // (we don't yet know whether it has data).
+                const count = sectionStatus[sectionKey] || null;
                 const label = count
                     ? `${section.name} (${count.total})`
                     : section.name;
+                // Gray out sections whose post-processed payload has no
+                // surviving plots (`data.js::processDashboardData` strips
+                // unavailable plots and empties parent groups). Common
+                // in live mode without sudo/eBPF where most samplers
+                // can't run — the section JSON loads but every plot
+                // ends up in `metadata.unavailable_charts`. We keep
+                // the section clickable (the "Charts with no data"
+                // notes are still informative) but visually mark it
+                // as content-empty.
+                const classes = [];
+                if (attrs.activeSection?.route === section.route) classes.push('selected');
+                if (count && count.total === 0) classes.push('empty-section');
                 return m(
                     m.route.Link,
                     {
-                        class: attrs.activeSection?.route === section.route ? 'selected' : '',
+                        class: classes.join(' '),
                         href: section.route,
                     },
                     label,
@@ -349,21 +364,20 @@ const Sidebar = {
 
             samplerSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
-                const cached = sectionResponseCache[sectionKey];
-                // Sidebar label: show the section's total plot count
-                // once its JSON is cached. `total` is stable (set by
-                // the dashboard generator), so the count doesn't
-                // flicker as per-plot data lands. No suffix until
-                // the section JSON itself is fetched.
-                const count = cached ? countCharts(cached.groups) : null;
+                // See service-section block above for the rationale —
+                // persistent status drives both the `(N)` suffix and
+                // the empty-section gray-out.
+                const count = sectionStatus[sectionKey] || null;
                 const label = count
                     ? `${section.name} (${count.total})`
                     : section.name;
+                const classes = [];
+                if (attrs.activeSection === section) classes.push('selected');
+                if (count && count.total === 0) classes.push('empty-section');
                 return m(
                     m.route.Link,
                     {
-                        class:
-                            attrs.activeSection === section ? 'selected' : '',
+                        class: classes.join(' '),
                         href: section.route,
                     },
                     label,

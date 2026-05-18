@@ -54,6 +54,7 @@ const createMainComponent = ({
     SaveModal,
     SectionContent,
     sectionResponseCache,
+    getSectionStatusMap,
     getHasSystemInfo,
     getHasFileMetadata,
     getCompareBadgeAttrs,
@@ -86,6 +87,9 @@ const createMainComponent = ({
                     activeSection,
                     sections,
                     sectionResponseCache,
+                    sectionStatus: typeof getSectionStatusMap === 'function'
+                        ? getSectionStatusMap()
+                        : {},
                     compareMode,
                     hasSystemInfo: !!getHasSystemInfo(),
                     hasFileMetadata: !!(getHasFileMetadata && getHasFileMetadata()),
