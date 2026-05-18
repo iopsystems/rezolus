@@ -323,7 +323,18 @@ fn parquet_path_for(state: &AppState, capture: CaptureId) -> Option<PathBuf> {
 /// shared `DuckDbBackend`. Returns a Prometheus matrix-shape JSON
 /// envelope (success + matrix or success + empty matrix). Errors are
 /// surfaced as `ApiResponse::err` with a `sql_error` type tag.
-fn run_sql(state: &AppState, capture: Option<&str>, sql: &str) -> Response {
+///
+/// The DuckDB call and the Arrow→JSON projection are CPU/blocking
+/// work, so we offload to `spawn_blocking`. Calling synchronously
+/// from an axum handler holds a tokio worker thread for the full
+/// query duration — with 20+ chart queries firing in parallel on
+/// section load, that starves the runtime and serializes them onto
+/// the small worker pool regardless of the DuckDB backend's
+/// connection-pool size. spawn_blocking off-loads to tokio's
+/// blocking-task pool (default 512 threads), so all `pool_size`
+/// DuckDB slots can run concurrently and async handlers (static
+/// assets, sections nav, etc.) stay responsive.
+async fn run_sql(state: &Arc<AppState>, capture: Option<&str>, sql: String) -> Response {
     let capture = CaptureId::parse_opt(capture);
     let Some(path) = parquet_path_for(state, capture) else {
         // Live-agent mode (no parquet) or unattached experiment.
@@ -337,17 +348,30 @@ fn run_sql(state: &AppState, capture: Option<&str>, sql: &str) -> Response {
         .into_response();
     };
     let data_source = path.to_string_lossy().to_string();
-    match state.sql_backend.run_sql(sql, &data_source) {
-        Ok(batches) => {
-            let body = prom_matrix::arrow_to_prom_matrix(&batches);
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "application/json")],
-                body,
+    let backend = state.sql_backend.clone();
+    let outcome = tokio::task::spawn_blocking(move || match backend.run_sql(&sql, &data_source) {
+        Ok(batches) => Ok(prom_matrix::arrow_to_prom_matrix(&batches)),
+        Err(e) => Err(e.to_string()),
+    })
+    .await;
+    let outcome = match outcome {
+        Ok(o) => o,
+        Err(join_err) => {
+            return ApiResponse::<serde_json::Value>::err(
+                format!("query task panicked: {join_err}"),
+                "sql_error",
             )
-                .into_response()
+            .into_response();
         }
-        Err(e) => {
+    };
+    match outcome {
+        Ok(body) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            body,
+        )
+            .into_response(),
+        Err(msg) => {
             // "No matching columns" is DuckDB's binder error when a
             // `COLUMNS('regex')` spread matches zero columns — which
             // is "this metric is not in this parquet", not a SQL
@@ -355,7 +379,6 @@ fn run_sql(state: &AppState, capture: Option<&str>, sql: &str) -> Response {
             // renders the chart as "no data" instead of as an error.
             // Mirrors the legacy `Tsdb`+PromQL behaviour where an
             // unknown metric simply returned an empty result set.
-            let msg = e.to_string();
             if msg.contains("No matching columns")
                 || msg.contains("not found in FROM clause")
             {
@@ -375,14 +398,14 @@ async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    run_sql(&state, params.capture.as_deref(), &params.query)
+    run_sql(&state, params.capture.as_deref(), params.query).await
 }
 
 async fn range_query(
     Query(params): Query<RangeQueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    run_sql(&state, params.capture.as_deref(), &params.query)
+    run_sql(&state, params.capture.as_deref(), params.query).await
 }
 
 async fn label_names(State(_state): State<Arc<AppState>>) -> Json<ApiResponse<Vec<String>>> {

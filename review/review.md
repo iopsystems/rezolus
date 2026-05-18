@@ -343,6 +343,53 @@ output to pre-events captures); both trim and embed paths
 `retain(|kv| kv.key != KEY_EVENTS)` before pushing so re-saves don't
 duplicate. 5 added/updated tests cover the round-trip on both engines.
 
+### `6054fe2` — Chromium per-section smoke + two silent-render fixes
+
+`scripts/viewer_chromium_smoke.sh` (227 LOC bash + embedded Python
+CDP driver) is a headless-Chromium harness that walks every section
+in `/api/v1/sections` against a running `rezolus view <parquet>`
+and asserts each section either rendered a real chart, reserved an
+`_unavailable` placeholder, or displayed a `.section-notes` no-data
+callout. Captures per-section screenshots + console errors + HTTP
+4xx/5xx responses. Run with:
+
+```bash
+bash scripts/viewer_chromium_smoke.sh site/viewer/data/cachecannon.parquet
+```
+
+Requires `chromium`, `jq`, `python3`, and the python `websockets`
+package (`pip install --user websockets`). The script picks the
+more recently built debug/release binary automatically.
+
+Adding it surfaced two latent silent-render bugs the API-only
+`tests/viewer_smoke.sh` could not see because both produced 200 OK
+responses with empty rendered output. Both landed around May 7–8
+in the SQL-migration sprint and reinforced each other:
+
+1. **`data.js::processDashboardData` stripped `_unavailable` KPIs.**
+   The no-data filter loop at `src/viewer/assets/lib/data.js` ~L489
+   checked `plotHasData(plot)` but not `plot._unavailable`. KPIs
+   flagged unavailable upstream (`af867b5` "viewer: gate SQL/PromQL
+   query selection") got dropped here before reaching the
+   `chart-unavailable` placeholder render in `charts/chart.js`. The
+   filter now mirrors `viewer_core.js::plotHasData`, keeping
+   `_unavailable` plots through to the placeholder. Effect on a
+   pre-`91ea72e` parquet (PromQL-only KPI templates embedded):
+   service sections render placeholder slots instead of blank pages.
+
+2. **`loadSection` cached the section payload before
+   `data.metadata` was initialized.** `storeSectionResponse` makes
+   a shallow copy. `processDashboardData` (introduced by `29b2359`
+   "viewer: cache section structure synchronously, defer query
+   fetch") then ran `data.metadata = data.metadata || {}` and wrote
+   `unavailable_charts` there — but the cached copy's `metadata`
+   stayed `undefined`, so the "Charts with no data" notes never
+   rendered. `loadSection` (`src/viewer/assets/lib/app.js` ~L288)
+   now initializes `data.metadata = {}` *before* caching so both
+   objects share the metadata reference. Effect: sampler sections
+   with no matching metrics render the explanatory list of missing
+   charts instead of "(0)" + a void.
+
 ### `9f66ce1` — MCP CLI end-to-end tests
 
 `tests/mcp_cli.rs` (276 LOC) spawns `target/debug/rezolus` as a

@@ -107,6 +107,14 @@ reads `review.md`; the newcomer reads `architecture.md`.
   node --test tests/*.mjs                        # 116 pass / 6 fail (see below)
   bash tests/viewer_smoke.sh                     # requires jq
 
+  # Headless-Chromium per-section render check. Drives `rezolus view
+  # <parquet>` and asserts every section in /api/v1/sections rendered
+  # a chart, an `_unavailable` placeholder, or a `.section-notes`
+  # no-data callout. Catches the silent-render mode the API-only
+  # viewer_smoke.sh can't see (section returns 200 but body is blank).
+  # Requires chromium, jq, python3, `pip install --user websockets`.
+  bash scripts/viewer_chromium_smoke.sh site/viewer/data/cachecannon.parquet
+
   # Engine side
   cd /work/metriken && cargo test --workspace --all-features --all-targets
 
@@ -166,7 +174,13 @@ reads `review.md`; the newcomer reads `architecture.md`.
   - **Empty chart that shouldn't be.** Check the network tab for
     `/api/v1/query_range` — if `status: "error"` and `errorType:
     "sql_error"`, the binder-error shim didn't catch it; report
-    with the exact SQL.
+    with the exact SQL. For a *whole section* that looks blank,
+    run `bash scripts/viewer_chromium_smoke.sh <parquet>` — it
+    distinguishes "section silently empty" (real bug) from
+    "section rendered placeholders / no-data notes" (expected on
+    parquets missing matching metrics or pre-`91ea72e` KPI
+    templates). Per-section screenshots land in the printed
+    output dir.
   - **Slow first load.** Cold-start is expected (~hundreds of ms);
     multi-second pause on a small parquet is worth flagging.
   - **Events disappear.** Confirm with a `save_single_parquet_sql`
