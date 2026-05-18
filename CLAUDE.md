@@ -128,7 +128,7 @@ The binary operates in seven modes via subcommands:
      PromQL execution still happening in live mode is
      `validate_service_extensions` (KPI availability check on load).
    - Service-extension KPI sections still ship PromQL-only templates pending
-     transcription — see REVIEWING.md for the deferred work list.
+     transcription — see review/review.md for the deferred work list.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation,
    SQL queries). Runs against parquet files via
    `metriken_query_sql::DuckDbBackend` after the May-2026 migration. The
@@ -189,7 +189,7 @@ optional `sql` field (`fd285bb`). The dashboard's
 `sql` is present and `plot_promql{,_full}` otherwise. Templates live
 in `config/templates/{cachecannon,vllm,vllm-prefill,vllm-decode,sglang,sglang-decode,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`
 and currently ship PromQL-only — transcription to SQL is the next
-known piece of work (see REVIEWING.md). `parquet annotate` validates
+known piece of work (see review/review.md). `parquet annotate` validates
 each KPI's SQL by running it through `DuckDbBackend`; KPIs without
 SQL are marked `available: false` with a warn-level log.
 

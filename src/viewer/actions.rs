@@ -792,7 +792,7 @@ fn save_single_dispatch(
     }
     // SQL-backed baselines get column trim via the catalog-driven
     // resolver. Drops the `trim_columns=false` override that was
-    // active pre-migration (REVIEWING.md carve-out 4).
+    // active pre-migration (review/review.md carve-out 4).
     if let Some(sql) = state.captures.get_sql(crate::viewer::capture_registry::CaptureId::Baseline) {
         let catalog = sql.read().catalog();
         return report_save::save_single_parquet_sql(

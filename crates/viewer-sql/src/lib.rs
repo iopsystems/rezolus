@@ -1,7 +1,7 @@
 //! WASM bridge for the static viewer. Owns Arrow→Prometheus-matrix
 //! marshalling and dashboard metadata; the DuckDB instance lives in JS
 //! (duckdb-wasm) because `duckdb-rs` doesn't build for `wasm32`. See
-//! `REVIEWING.md` for the JS/Rust split rationale and `duckdb.md` for
+//! `review/review.md` for the JS/Rust split rationale and `duckdb.md` for
 //! the duckdb-wasm constraints that shaped it.
 //!
 //! Surface:

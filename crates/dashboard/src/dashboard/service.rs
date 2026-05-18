@@ -171,7 +171,7 @@ mod tests {
     /// `sql: None` KPIs must serialize a plot that carries `promql_query`
     /// but no `sql_query`. The SQL-backed frontend dispatcher reads the
     /// absence of `sql_query` as "render the not-yet-migrated placeholder"
-    /// — see REVIEWING.md "Known regressions" item 1 and the BACKEND='sql'
+    /// — see review/review.md "Known regressions" item 1 and the BACKEND='sql'
     /// branch in `site/viewer/lib/data.js`. If a future change starts
     /// emitting `sql_query: ""` or some other shape, the frontend would
     /// silently try to run an empty SQL string instead of rendering the
