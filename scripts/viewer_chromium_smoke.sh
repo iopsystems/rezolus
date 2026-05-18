@@ -11,6 +11,17 @@
 #                                              [--wait-ms 4000]
 #                                              [--keep-server]
 #                                              [--skip <route,route>]
+#   scripts/viewer_chromium_smoke.sh --live <agent-url> [--port 18510]
+#                                                       [--out DIR]
+#                                                       [--wait-ms 4000]
+#                                                       [--ingest-wait 5]
+#                                                       [--keep-server]
+#                                                       [--skip <route,route>]
+#
+# --live <url> connects the viewer to a running Rezolus agent
+# (e.g. http://localhost:4241) instead of opening a parquet file.
+# Waits --ingest-wait seconds (default 5) after viewer startup so
+# the live source has accumulated rows before chromium loads pages.
 #
 # Exit codes:
 #   0  all sections rendered cleanly
@@ -29,10 +40,12 @@
 set -euo pipefail
 
 PARQUET=""
+LIVE_URL=""
 PORT=18510
 OUT=""
 KEEP_SERVER=0
 WAIT_MS=4000
+INGEST_WAIT=5
 SKIP="/query,/metadata,/notebook,/selection,/report"
 
 usage() {
@@ -45,9 +58,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --live) LIVE_URL="$2"; shift 2;;
         --port) PORT="$2"; shift 2;;
         --out) OUT="$2"; shift 2;;
         --wait-ms) WAIT_MS="$2"; shift 2;;
+        --ingest-wait) INGEST_WAIT="$2"; shift 2;;
         --keep-server) KEEP_SERVER=1; shift;;
         --skip) SKIP="$2"; shift 2;;
         -h|--help) usage;;
@@ -58,8 +73,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$PARQUET" ]] || usage
-[[ -f "$PARQUET" ]] || { echo "no such file: $PARQUET" >&2; exit 2; }
+if [[ -n "$LIVE_URL" ]]; then
+    [[ -z "$PARQUET" ]] || { echo "cannot mix --live with a positional parquet" >&2; usage; }
+    # Verify the live agent is reachable so we fail fast (rather than
+    # spawning a viewer that exits with "could not connect").
+    if ! curl -fs --max-time 2 "$LIVE_URL/" >/dev/null 2>&1; then
+        echo "live agent not reachable at $LIVE_URL" >&2
+        exit 2
+    fi
+else
+    [[ -n "$PARQUET" ]] || usage
+    [[ -f "$PARQUET" ]] || { echo "no such file: $PARQUET" >&2; exit 2; }
+fi
 
 CHROMIUM=$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)
 [[ -n "$CHROMIUM" ]] || { echo "chromium not found in PATH" >&2; exit 2; }
@@ -89,7 +114,14 @@ echo "binary: $BIN"
 
 # --- launch rezolus ----------------------------------------------------
 SERVER_LOG="$OUT/rezolus.log"
-"$BIN" view "$PARQUET" --listen "127.0.0.1:$PORT" >"$SERVER_LOG" 2>&1 &
+if [[ -n "$LIVE_URL" ]]; then
+    INPUT_ARG="$LIVE_URL"
+    echo "input: live agent at $LIVE_URL"
+else
+    INPUT_ARG="$PARQUET"
+    echo "input: parquet $PARQUET"
+fi
+REZOLUS_NO_OPEN=1 "$BIN" view "$INPUT_ARG" --listen "127.0.0.1:$PORT" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 cleanup() {
@@ -113,6 +145,18 @@ if ! curl -fs "http://127.0.0.1:$PORT/api/v1/mode" >/dev/null; then
     echo "rezolus didn't come up — log:" >&2
     tail -40 "$SERVER_LOG" >&2
     exit 1
+fi
+
+# In live mode the viewer starts with an empty _src; let the ingest
+# loop accumulate at least a few rows so charts have data when
+# chromium loads them. Skip in file mode (data is already present).
+if [[ -n "$LIVE_URL" ]]; then
+    echo "live mode: waiting ${INGEST_WAIT}s for ingest to accumulate rows"
+    sleep "$INGEST_WAIT"
+    # Re-check metadata so we know how many seconds of data we have.
+    META=$(curl -fs "http://127.0.0.1:$PORT/api/v1/metadata?capture=baseline" 2>/dev/null || true)
+    SPAN_MS=$(echo "$META" | python3 -c "import json,sys; d=json.load(sys.stdin)['data']; print(d.get('maxTime',0)-d.get('minTime',0))" 2>/dev/null || echo "?")
+    echo "  accumulated span: ${SPAN_MS}ms"
 fi
 
 # --- discover sections -------------------------------------------------

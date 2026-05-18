@@ -12,7 +12,9 @@
 use std::collections::BTreeMap;
 
 use metriken_exposition::Snapshot;
-use metriken_query_sql::{LiveColumn, LiveColumnKind, LiveSource, LiveValue, SqlError};
+use metriken_query_sql::{
+    LiveColumn, LiveColumnKind, LiveSource, LiveValue, SqlError, canonical_column_name,
+};
 
 /// Metadata keys handled specially by `LiveColumn` construction —
 /// `metric_type`, `unit`, `grouping_power`, `max_value_power` describe
@@ -76,7 +78,7 @@ pub fn ingest_snapshot(live: &LiveSource, snapshot: Snapshot) -> Result<(), SqlE
             .and_then(|s| s.parse::<u8>().ok())
             .unwrap_or_else(|| h.value.config().grouping_power());
         let col = make_column_with_physical(
-            physical,
+            &physical,
             &h.name,
             &h.metadata,
             LiveColumnKind::Histogram { grouping_power },
@@ -87,20 +89,28 @@ pub fn ingest_snapshot(live: &LiveSource, snapshot: Snapshot) -> Result<(), SqlE
     live.append(timestamp_ns, duration_ns, &columns)
 }
 
-/// Build a `LiveColumn` whose physical name is the metric's `name`
+/// Build a `LiveColumn` whose raw incoming name is the metric's `name`
 /// field (counters and gauges).
 fn make_column(
     name: &str,
     metadata: &std::collections::HashMap<String, String>,
     kind: LiveColumnKind,
 ) -> LiveColumn {
-    make_column_with_physical(name.to_string(), name, metadata, kind)
+    make_column_with_physical(name, name, metadata, kind)
 }
 
-/// Build a `LiveColumn` with an explicit physical name (histograms
-/// override the physical name with `<name>:buckets`).
+/// Build a `LiveColumn` from the agent's emitted shape.
+///
+/// **Canonical-name derivation.** Rezolus agents emit per-metric
+/// metric NAMEs that may be numeric IDs (`"49"`, `"24x0"`) rather
+/// than the canonical dashboard names (`"cpu_usage/user/0"`). The
+/// parquet path applies `views::canonical_alias` at load time to
+/// rebuild the canonical name from `metric + labels`. The live path
+/// has to do the same so dashboard SQL targeting `_src` finds the
+/// columns it expects — otherwise everything binds to numeric column
+/// names that don't appear in any `COLUMNS('^cpu_usage…$')` regex.
 fn make_column_with_physical(
-    physical: String,
+    raw_physical: &str,
     name: &str,
     metadata: &std::collections::HashMap<String, String>,
     kind: LiveColumnKind,
@@ -119,6 +129,9 @@ fn make_column_with_physical(
         .filter(|(k, _)| !SHAPE_METADATA_KEYS.iter().any(|s| *s == k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    // Compute the canonical column name. For agents that already emit
+    // canonical-shape names this is a passthrough.
+    let physical = canonical_column_name(raw_physical, &metric, &labels, kind);
     LiveColumn {
         physical,
         metric,
