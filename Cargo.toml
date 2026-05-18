@@ -37,7 +37,7 @@ metriken-query = { path = "../metriken/metriken-query" }
 
 [package]
 name = "rezolus"
-version = "5.13.1-alpha.7"
+version = "5.13.1-alpha.12"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

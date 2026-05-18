@@ -93,8 +93,7 @@ pub enum CpuFreqBoosting {
     Unknown,
 }
 
-// Check whether the CPU frequency turbo/boosting is enabled or not, report Unknown if
-// the CPU frequency scaling driver doesn't expose the status
+// Returns Unknown when the cpufreq scaling driver doesn't expose boost status.
 pub fn get_cpu_boosting() -> CpuFreqBoosting {
     if let Ok(no_turbo) = read_usize("/sys/devices/system/cpu/intel_pstate/no_turbo") {
         if no_turbo == 0 {

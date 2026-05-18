@@ -63,7 +63,6 @@ pub(in crate::mcp::anomaly_detection) fn perform_modified_allan_analysis(
 
     let minima = find_deviation_minima(&taus_seconds, &deviations);
 
-    // Detect noise characteristic transitions via sliding window analysis
     let noise_transitions = detect_modified_allan_transitions(values, sample_interval)?;
 
     Ok(ModifiedAllanAnalysis {

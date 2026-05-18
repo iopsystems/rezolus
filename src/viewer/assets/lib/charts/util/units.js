@@ -191,15 +191,12 @@ const UNIT_SYSTEMS = {
  * @return {object} Object with formatted value and unit string
  */
 function formatWithUnit(value, unitSystem, precision = 2) {
-    // Handle invalid or zero values
     if (value === null || value === undefined || isNaN(value)) {
         return { value: '0', unit: UNIT_SYSTEMS[unitSystem]?.base || '' };
     }
 
-    // Get absolute value for scaling (we'll preserve sign later)
     const absValue = Math.abs(value);
 
-    // Get the unit system configuration
     const system = UNIT_SYSTEMS[unitSystem];
     if (!system) {
         // Fallback for unknown unit systems
@@ -209,10 +206,8 @@ function formatWithUnit(value, unitSystem, precision = 2) {
         };
     }
 
-    // Find the appropriate scale for this value
-    let scale = system.scales[0]; // Default to the smallest scale
-
-    // Start from the largest scale and work backwards
+    // Pick the largest scale whose threshold the value reaches.
+    let scale = system.scales[0];
     for (let i = system.scales.length - 1; i >= 0; i--) {
         if (absValue >= system.scales[i].threshold) {
             scale = system.scales[i];
@@ -220,10 +215,7 @@ function formatWithUnit(value, unitSystem, precision = 2) {
         }
     }
 
-    // Apply multiplier if needed (e.g., for percentages)
-    const multiplier = scale.multiplier || 1;
-
-    // Format the value with the selected scale and multiplier
+    const multiplier = scale.multiplier || 1; // e.g. percentages scale by 100
     const scaledValue = ((value * multiplier) / scale.divisor).toFixed(precision);
 
     // Remove trailing zeros after decimal point
@@ -244,7 +236,6 @@ function formatWithUnit(value, unitSystem, precision = 2) {
  */
 function createAxisLabelFormatter(unitSystem, precision = 2) {
     return function (value) {
-        // Skip formatting for empty values
         if (value === '' || value === null || value === undefined) return '';
 
         const formatted = formatWithUnit(value, unitSystem, precision);
@@ -252,7 +243,6 @@ function createAxisLabelFormatter(unitSystem, precision = 2) {
     };
 }
 
-// Export the utility functions
 export {
     UNIT_SYSTEMS,
     formatWithUnit,

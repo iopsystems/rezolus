@@ -56,7 +56,6 @@ fn collect_cpu_topology(cpus: usize, cores: usize) -> Vec<CpuTopologyEntry> {
 }
 
 fn collect_nics() -> Vec<NicSummary> {
-    // Use networksetup -listallhardwareports to get physical interfaces
     let output = match Command::new("ifconfig").arg("-l").output() {
         Ok(o) if o.status.success() => o.stdout,
         _ => return Vec::new(),
@@ -71,7 +70,6 @@ fn collect_nics() -> Vec<NicSummary> {
             continue;
         }
 
-        // Check if it has an active link by looking for an IPv4/IPv6 address
         let status = match Command::new("ifconfig").arg(name).output() {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
             _ => continue,
@@ -158,7 +156,6 @@ fn per_core_sharing(cores: usize, threads_per_core: usize) -> Vec<Vec<usize>> {
 }
 
 fn collect_gpus() -> Vec<GpuSummary> {
-    // Use system_profiler to get GPU information
     let output = match Command::new("system_profiler")
         .args(["SPDisplaysDataType", "-json"])
         .output()
@@ -192,7 +189,6 @@ fn collect_gpus() -> Vec<GpuSummary> {
                 .map(|s| s.to_lowercase())
                 .unwrap_or_else(|| "apple".to_string());
 
-            // Normalize vendor string
             let vendor = if vendor.contains("apple") {
                 "apple".to_string()
             } else if vendor.contains("nvidia") {

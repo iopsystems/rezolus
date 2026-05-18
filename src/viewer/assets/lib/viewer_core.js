@@ -2,7 +2,7 @@
 // viewer (script.js) and the static site viewer (site script.js).
 
 import { Chart } from './charts/chart.js';
-import { expandLink, selectButton, compareToggle } from './chart_controls.js';
+import { expandLink, selectButton, compareToggle } from './ui/chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
 import {
@@ -16,7 +16,7 @@ import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
 
-// ── Normalization helpers for compare-mode captures ────────────────
+// Normalization helpers for compare-mode captures.
 
 // Convert the baseline plot spec's already-populated data into a
 // capture-shaped object keyed by `id: 'baseline'`. The shape depends on

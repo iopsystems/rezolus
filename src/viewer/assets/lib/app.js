@@ -2,23 +2,23 @@
 // Exports initDashboard(config) which sets up state and mounts the Mithril router.
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { QueryExplorer, SingleChartView } from './explorers.js';
-import { CgroupSelector } from './cgroup_selector.js';
+import { QueryExplorer, SingleChartView } from './features/explorers.js';
+import { CgroupSelector } from './features/cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
-import { TopNav, Sidebar, countCharts, formatSize } from './layout.js';
-import { collectGroupPlots } from './group_utils.js';
-import { CpuTopology } from './topology.js';
+import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
+import { collectGroupPlots } from './features/group_utils.js';
+import { CpuTopology } from './features/topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
-import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection.js';
-import { SaveModal } from './overlays.js';
+import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
+import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
-import { createSystemInfoView, createMetadataView, renderCgroupSection } from './section_views.js';
-import { buildTopNavAttrs, createMainComponent } from './navigation.js';
-import { initTheme } from './theme.js';
+import { createSystemInfoView, createMetadataView, renderCgroupSection } from './sections/section_views.js';
+import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
+import { initTheme } from './ui/theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
-import { renderServiceSection, createServiceRoutes } from './service.js';
+import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
-import { renderSectionNotes } from './section_notes.js';
+import { renderSectionNotes } from './sections/section_notes.js';
 import {
     createSectionCacheState,
     storeSectionResponse,
@@ -30,9 +30,7 @@ import {
     resetSectionCacheState,
     setSectionCacheLimit,
     pinSectionKey,
-} from './section_cache.js';
-
-// ── State ──────────────────────────────────────────────────────────
+} from './sections/section_cache.js';
 
 let activeSectionRoute = null;
 let systemInfoData = null;
@@ -63,7 +61,6 @@ const bootstrapSharedSections = (sections) =>
 const withCachedSections = (data) => withSharedSections(sectionCacheState, data);
 const getCachedSections = () => getSections(sectionCacheState);
 
-// Compare-mode state (Stage 4 of A/B compare plan)
 let compareMode = false;
 let combinedAB = false;
 let reportMode = false;
@@ -90,7 +87,6 @@ export const getExperimentAlias = () => experimentAlias;
 // they persist across page reloads. See selection_migration.js for the
 // schema. The accessors below read-through to the store.
 
-// Config-driven state (set by initDashboard)
 let liveMode = false;
 let recording = false;
 let onStartRecording = null;
@@ -99,8 +95,6 @@ let onSaveCapture = null;
 let onUploadParquet = null;
 let onRefresh = null;
 let liveRefreshInterval = null;
-
-// ── Components (initialized once) ──────────────────────────────────
 
 let Main;
 let SystemInfoView;
@@ -127,11 +121,8 @@ const initComponents = () => {
     MetadataView = createMetadataView();
 };
 
-// ── Helpers ────────────────────────────────────────────────────────
-
-// Extract a capture's duration (milliseconds) from its file metadata.
-// Tries the structured field first; falls back to max_time - min_time when
-// present. Returns null when neither is available.
+// Tries the structured duration_ms field first; falls back to
+// max_time - min_time. Returns null when neither is available.
 const durationFromFileMetadata = (fileMeta) => {
     if (!fileMeta) return null;
     if (typeof fileMeta.duration_ms === 'number') return fileMeta.duration_ms;
@@ -144,7 +135,6 @@ const durationFromFileMetadata = (fileMeta) => {
     return null;
 };
 
-// Parse /api/v1/metadata response shape into a compare-mode query range.
 // /api/v1/metadata returns minTime/maxTime in PromQL-native seconds
 // (same scale as plot.data[0] timestamps). Returns null when the
 // response shape doesn't include a recognisable time range.
@@ -158,8 +148,6 @@ const queryRangeFromMeta = (meta) => {
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
     return { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
 };
-
-// ── Compare-mode actions ───────────────────────────────────────────
 
 const attachExperiment = async (file) => {
     const sysinfo = await ViewerApi.attachExperiment(file);
@@ -180,9 +168,6 @@ const attachExperiment = async (file) => {
     experimentAttached = true;
     compareMode = true;
 
-    // Refresh the multi-node dropdown with the union of baseline +
-    // experiment nodes. Preserves the user's prior node selection when
-    // it still exists in the union.
     applyMultiNodeInfo(expFileMeta);
     clearViewerCaches();
 
@@ -211,7 +196,6 @@ const detachExperiment = async () => {
     experimentAttached = false;
     compareMode = false;
 
-    // Drop experiment-only nodes from the dropdown.
     applyMultiNodeInfo(null);
     clearViewerCaches();
     m.redraw();
@@ -227,8 +211,6 @@ const loadExperiment = async (file) => {
     await attachExperiment(file);
 };
 
-// Thin passthrough to selection.js; kept because it reads cleanly at
-// the call sites in createGroupComponent.
 const setChartToggle = (chartId, key, value) => {
     setChartToggleInStore(chartId, key, value);
 };
@@ -291,8 +273,6 @@ const applyMultiNodeInfo = (experimentFileMetadata = null) => {
     }
 };
 
-// ── Section loading ────────────────────────────────────────────────
-
 const loadSection = async (section) => {
     if (sectionResponseCache[section]) return sectionResponseCache[section];
 
@@ -311,8 +291,8 @@ const loadSection = async (section) => {
 };
 
 const preloadSections = (allSections) => {
-    // Section bodies now load on demand. Keep this hook as a no-op so
-    // existing callers don't eagerly materialize every section payload.
+    // Intentional no-op: section bodies load on demand. Kept so existing
+    // callers don't eagerly materialize every section payload.
     void allSections;
 };
 
@@ -406,8 +386,6 @@ const changeGranularity = async (step) => {
     } catch (_) { /* keep existing view on error */ }
 };
 
-// ── Heatmap ────────────────────────────────────────────────────────
-
 const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     heatmapEnabled = !heatmapEnabled;
     const cached = heatmapDataCache.get(sectionRoute);
@@ -426,8 +404,6 @@ const fetchSectionHeatmapData = async (sectionRoute, groups) => {
     heatmapLoading = false;
     m.redraw();
 };
-
-// ── TopNav builder ─────────────────────────────────────────────────
 
 const changeSource = async (sourceName) => {
     if (!ViewerApi.registry()?.has?.('baseline')) return;
@@ -488,10 +464,13 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     },
 });
 
-// ── SectionContent component ───────────────────────────────────────
-
 const SectionContent = {
     view({ attrs }) {
+        // No resolved section (route doesn't match a loaded section yet,
+        // e.g. mid-load or after a failed fetch): render nothing rather
+        // than throwing mid-render, which desyncs mithril's DOM and
+        // cascades into removeChild errors.
+        if (!attrs.section) return null;
         const sectionRoute = attrs.section.route;
         const sectionName = attrs.section.name;
         const interval = attrs.interval;
@@ -715,8 +694,6 @@ const SectionContent = {
     },
 };
 
-// ── Synthetic sections ─────────────────────────────────────────────
-
 const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
 const metadataSection = { name: 'Metadata', route: '/metadata' };
 const notebookSection = { name: 'Notebook', route: '/notebook' };
@@ -732,13 +709,10 @@ const bootstrapCacheIfNeeded = () => {
     }).catch(() => {});
 };
 
-// ── initDashboard ──────────────────────────────────────────────────
-
 const initDashboard = (config = {}) => {
     initTheme();
     initComponents();
 
-    // Apply pre-fetched state
     systemInfoData = config.systemInfo || null;
     fileChecksum = config.fileChecksum || null;
     fileMetadata = config.fileMetadata || null;
@@ -776,7 +750,6 @@ const initDashboard = (config = {}) => {
 
     applyMultiNodeInfo(config.experimentFileMetadata);
 
-    // Apply capabilities
     liveMode = config.liveMode || false;
     recording = config.recording !== undefined ? config.recording : false;
     onStartRecording = config.onStartRecording || null;
@@ -785,7 +758,6 @@ const initDashboard = (config = {}) => {
     onUploadParquet = config.onUploadParquet || null;
     onRefresh = config.onRefresh || null;
 
-    // Build Main component
     Main = createMainComponent({
         TopNav,
         Sidebar,
@@ -810,15 +782,14 @@ const initDashboard = (config = {}) => {
         buildAttrs: topNavAttrs,
     });
 
-    // Start live refresh if applicable
     if (liveMode && onRefresh) {
         liveRefreshInterval = setInterval(onRefresh, 5000);
     }
 
-    // Mount router with hash-based routing. When the capture carries a
-    // service extension, default to that service's section instead of
-    // the generic overview — the service KPIs are usually what the
-    // user came to look at. In category mode the canonical section is
+    // When the capture carries a service extension, default to that
+    // service's section instead of the generic overview — the service
+    // KPIs are usually what the user came to look at. In category mode
+    // the canonical section is
     // the category itself (e.g. `/service/inference-library`); the
     // per-member sections from `serviceInstances` don't exist in the
     // rendered map at all.
@@ -1078,7 +1049,6 @@ document.addEventListener('dblclick', () => {
     }
 });
 
-// Getter/setter functions for mutable state shared with stubs
 const getHeatmapEnabled = () => heatmapEnabled;
 const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;

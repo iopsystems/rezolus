@@ -10,10 +10,6 @@ use crate::sql;
 pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
-    /*
-     * Network
-     */
-
     let mut network = Group::new("Network", "network");
 
     let drops = network.subgroup("Packet Drops & Transmit Errors");
@@ -34,10 +30,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     view.group(network);
 
-    /*
-     * TCP
-     */
-
     let mut tcp = Group::new("TCP", "tcp");
 
     let retransmits = tcp.subgroup("Retransmits");
@@ -53,15 +45,10 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     view.group(tcp);
 
-    /*
-     * Cloud (ENA) allowance limits
-     *
-     * AWS surfaces these counters when an instance hits a hardware-enforced
-     * rate limit. The metrics only appear on ENA-equipped hosts — on
-     * everything else the queries resolve to empty series and the panels
-     * stay blank, which is the right behavior.
-     */
-
+    // AWS surfaces these counters when an instance hits a hardware-enforced
+    // rate limit. The metrics only appear on ENA-equipped hosts — on
+    // everything else the queries resolve to empty series and the panels
+    // stay blank, which is the right behavior.
     let mut ena = Group::new("AWS ENA Allowance Exceeded", "ena");
 
     let bw = ena.subgroup("Bandwidth");
@@ -101,10 +88,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     );
 
     view.group(ena);
-
-    /*
-     * CPU throttling
-     */
 
     let mut throttle = Group::new("CPU Throttling", "cpu-throttling");
 
@@ -150,18 +133,13 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     view.group(throttle);
 
-    /*
-     * Block IO
-     *
-     * `blockio_errors` is labeled (op, error) where error buckets coarse
-     * blk_status_t classes: io / timeout / nospc / target / protection /
-     * unsupported / other. `blockio_requeues` counts requests the block
-     * layer put back on the queue (driver couldn't complete; SCSI EH or
-     * NVMe controller reset retried under the covers). Pairing them is
-     * diagnostic — high requeues with flat errors means recovery is
-     * absorbing the fault; both rising means real damage.
-     */
-
+    // `blockio_errors` is labeled (op, error) where error buckets coarse
+    // blk_status_t classes: io / timeout / nospc / target / protection /
+    // unsupported / other. `blockio_requeues` counts requests the block
+    // layer put back on the queue (driver couldn't complete; SCSI EH or
+    // NVMe controller reset retried under the covers). Pairing them is
+    // diagnostic — high requeues with flat errors means recovery is
+    // absorbing the fault; both rising means real damage.
     let mut blockio = Group::new("Block IO", "blockio");
 
     let errors = blockio.subgroup("Errors");

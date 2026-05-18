@@ -109,7 +109,6 @@ impl Server {
                 }
             };
 
-            // Try to parse as JSON-RPC message
             let message: Value = match serde_json::from_str(&line) {
                 Ok(msg) => msg,
                 Err(e) => {
@@ -118,7 +117,6 @@ impl Server {
                 }
             };
 
-            // Handle the message and get response
             if let Some(response) = self.handle_message(message).await? {
                 let response_str = serde_json::to_string(&response)?;
                 debug!("Sending response: {response_str}");

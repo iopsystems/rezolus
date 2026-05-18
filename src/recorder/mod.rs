@@ -101,10 +101,6 @@ pub fn command() -> Command {
         )
 }
 
-// ---------------------------------------------------------------------------
-// Probe and metadata helpers
-// ---------------------------------------------------------------------------
-
 /// Probe a single endpoint to detect its protocol and resolve the scrape URL.
 async fn probe_endpoint(
     client: &Client,
@@ -184,10 +180,6 @@ async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> (Option<String
     (systeminfo, descriptions)
 }
 
-// ---------------------------------------------------------------------------
-// Scrape helper
-// ---------------------------------------------------------------------------
-
 async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
     let response = client
         .get(url.clone())
@@ -203,10 +195,6 @@ async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
         .map(|b| b.to_vec())
         .map_err(|e| format!("{e}"))
 }
-
-// ---------------------------------------------------------------------------
-// Metadata injection for msgpack snapshots
-// ---------------------------------------------------------------------------
 
 fn inject_provenance(
     mut snapshot: metriken_exposition::Snapshot,
@@ -269,10 +257,6 @@ fn inject_provenance(
     snapshot
 }
 
-// ---------------------------------------------------------------------------
-// Output path helpers
-// ---------------------------------------------------------------------------
-
 fn separate_output_path(base: &Path, source: &str) -> PathBuf {
     let stem = base.file_stem().unwrap_or_default().to_string_lossy();
     let ext = base.extension().unwrap_or_default().to_string_lossy();
@@ -291,10 +275,6 @@ fn output_dir(output: &Path) -> PathBuf {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Parquet converter builder
-// ---------------------------------------------------------------------------
-
 fn build_parquet_converter(
     config: &RecordingConfig,
     ep: &EndpointState,
@@ -305,15 +285,12 @@ fn build_parquet_converter(
         config.interval.as_millis().to_string(),
     );
 
-    // Source metadata
     converter = converter.metadata("source".to_string(), ep.config.source_label().to_string());
 
-    // User-supplied metadata
     for (key, value) in &config.metadata {
         converter = converter.metadata(key.clone(), value.clone());
     }
 
-    // Agent systeminfo
     if let Some(ref json) = ep.systeminfo {
         converter = converter.metadata("systeminfo".to_string(), json.clone());
     }
@@ -399,18 +376,10 @@ fn build_per_source_metadata(
     serde_json::to_string(&psm).ok()
 }
 
-// ---------------------------------------------------------------------------
-// Per-endpoint writer state
-// ---------------------------------------------------------------------------
-
 struct EndpointWriter {
     writer: std::fs::File,
     converter: Option<prometheus::PrometheusConverter>,
 }
-
-// ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
 
 /// Runs the Rezolus `recorder` which pulls metrics from one or more endpoints
 /// and writes them to parquet file(s). Supports Rezolus msgpack and Prometheus
@@ -714,7 +683,6 @@ pub fn run(config: RecordingConfig) {
 
         match config.format {
             Format::Raw => {
-                // For raw format, copy temp files to destinations
                 for (idx, ew) in writers.iter_mut().enumerate() {
                     if let Some(ref mut ew) = ew {
                         if endpoints[idx].first_success_ns.is_none() {
@@ -742,7 +710,6 @@ pub fn run(config: RecordingConfig) {
                 debug!("finished (raw)");
             }
             Format::Parquet if config.separate => {
-                // Separate mode: convert each endpoint to its own parquet
                 info!("converting recordings to parquet (separate files)...");
                 for (idx, ew) in writers.iter_mut().enumerate() {
                     if let Some(ref mut ew) = ew {
@@ -881,10 +848,6 @@ pub fn run(config: RecordingConfig) {
         }
     });
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

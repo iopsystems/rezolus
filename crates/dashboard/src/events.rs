@@ -43,6 +43,10 @@ pub struct Event {
     pub duration_ns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// When set, the event only renders on charts whose `spec.opts.id`
+    /// matches. None = global within source/node/instance scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_id: Option<String>,
 }
 
 /// Wrapper for the JSON payload stored in the parquet footer. Lives as an
@@ -100,6 +104,7 @@ mod tests {
             labels: BTreeMap::from([("reason".into(), "OOM".into())]),
             duration_ns: Some(1000),
             id: Some("evt-1".into()),
+            chart_id: Some("c1".into()),
         };
         let json = serde_json::to_string(&e).unwrap();
         let parsed: Event = serde_json::from_str(&json).unwrap();
@@ -120,6 +125,7 @@ mod tests {
                 instance: None,
                 labels: BTreeMap::new(),
                 duration_ns: None,
+                chart_id: None,
             },
             Event {
                 timestamp: 10,
@@ -132,6 +138,7 @@ mod tests {
                 instance: None,
                 labels: BTreeMap::new(),
                 duration_ns: None,
+                chart_id: None,
             },
             Event {
                 timestamp: 20,
@@ -144,6 +151,7 @@ mod tests {
                 instance: None,
                 labels: BTreeMap::new(),
                 duration_ns: None,
+                chart_id: None,
             },
         ]);
         events.normalize();
@@ -168,6 +176,7 @@ mod tests {
             instance: None,
             labels: BTreeMap::new(),
             duration_ns: None,
+            chart_id: None,
         };
         let mut events = Events::new(vec![make(2, None), make(1, Some("")), make(3, Some(""))]);
         events.normalize();
@@ -181,5 +190,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
+    }
+
+    #[test]
+    fn chart_id_round_trips_when_set() {
+        let json = r#"{"timestamp":1,"description":"d","chart_id":"queue_depth"}"#;
+        let e: Event = serde_json::from_str(json).unwrap();
+        assert_eq!(e.chart_id.as_deref(), Some("queue_depth"));
+        assert_eq!(serde_json::to_string(&e).unwrap(), json);
+    }
+
+    #[test]
+    fn chart_id_absent_when_unset() {
+        let json = r#"{"timestamp":1,"description":"d"}"#;
+        let e: Event = serde_json::from_str(json).unwrap();
+        assert!(e.chart_id.is_none());
+        assert_eq!(serde_json::to_string(&e).unwrap(), json);
     }
 }

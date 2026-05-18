@@ -10,7 +10,7 @@ import {
     pinSectionKey,
     clearSectionResponses,
     clearNonServiceResponses,
-} from '../src/viewer/assets/lib/section_cache.js';
+} from '../src/viewer/assets/lib/sections/section_cache.js';
 
 test('storeSectionResponse strips duplicated sections and preserves shared section metadata', () => {
     const state = createSectionCacheState();

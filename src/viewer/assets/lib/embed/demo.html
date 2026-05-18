@@ -4,59 +4,60 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
     <title>rezolus-chart embed spike</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+    <!-- rezolus tokens the component (and charts.css) read. -->
+    <link rel="stylesheet" href="/lib/style.css"/>
+    <!-- globals the reused Chart needs -->
     <script src="/lib/charts/echarts.min.js"></script>
+    <script src="/lib/mithril.js"></script>
     <script type="module" src="./rezolus-chart.js"></script>
     <style>
         body {
-            font-family: 'Inter', system-ui, sans-serif;
             max-width: 960px;
             margin: 2rem auto;
             padding: 0 1rem;
-            color: #1a1a1a;
         }
-        h1 { font-weight: 600; }
-        h2 { font-weight: 600; font-size: 1.05rem; margin-top: 2rem; }
-        p { line-height: 1.5; }
-        code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 0.92em; }
+        h1 { font-weight: 600; margin-bottom: 0.5rem; }
+        p { line-height: 1.5; max-width: 70ch; color: var(--fg-secondary); }
+        code {
+            background: var(--bg-elevated);
+            color: var(--fg);
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 0.92em;
+        }
         .status {
             padding: 0.6rem 0.9rem;
             border-radius: 6px;
-            border: 1px solid #e5e7eb;
-            background: #f9fafb;
+            border: 1px solid var(--border-default);
+            background: var(--bg-elevated);
+            color: var(--fg-secondary);
             font-size: 0.9rem;
             margin: 0.5rem 0 1rem;
         }
-        .status.ok      { border-color: #bbf7d0; background: #f0fdf4; }
-        .status.fallback { border-color: #fde68a; background: #fffbeb; }
-        rezolus-chart {
-            background: #fff;
-            border: 1px solid #e5e7eb;
-            border-radius: 6px;
-            padding: 12px 14px;
-            box-sizing: border-box;
-        }
+        .status.ok       { border-color: var(--success); color: var(--fg); }
+        .status.fallback { border-color: var(--warning); color: var(--fg); }
     </style>
 </head>
 <body>
     <h1>&lt;rezolus-chart&gt; embed spike</h1>
     <p>Renders the <strong>Rezolus → Resource Usage → CPU %</strong> plot from the
-       <code>rezolus</code> self-report section. Plot descriptor (the JSON shape
-       produced by <code>crates/dashboard/src/dashboard/rezolus.rs</code>) and series
-       data are fetched from <code>/data/rezolus.json</code> served by a running
-       viewer with a recording loaded. Falls back to the same descriptor with
-       synthetic data when the fetch fails so the demo renders standalone too.</p>
+       <code>rezolus</code> self-report section. Card chrome, title typography
+       and sizing come from <code>/lib/charts.css</code> linked into the
+       component's shadow root, so it matches the rest of the rezolus viewer.</p>
 
     <div id="status" class="status">Loading from <code>/data/rezolus.json</code>…</div>
     <rezolus-chart id="chart"></rezolus-chart>
 
     <script type="module">
+        // Viewer's exact node-scoping label injection.
+        import { injectLabel } from '../data.js';
+
         const chartEl = document.getElementById('chart');
         const statusEl = document.getElementById('status');
 
-        // Hand-authored descriptor matching what rezolus.rs emits for the
-        // first plot of the Rezolus → Resource Usage subgroup. Used as the
-        // standalone fallback so the demo renders even without a viewer.
+        // Standalone fallback: renders even without a viewer.
         const fallbackDescriptor = {
             opts: {
                 title: 'CPU %',
@@ -86,9 +87,59 @@
             return subgroup?.plots?.find(p => p.opts?.id === 'cpu') ?? null;
         }
 
-        function hasSeriesData(plot) {
-            return Array.isArray(plot?.data) && plot.data.length >= 2
-                && Array.isArray(plot.data[0]) && plot.data[0].length > 0;
+        // Section JSON is descriptor-only (no inline series), so mirror
+        // data.js: pick the viewer's node, injectLabel, run query_range.
+        async function selectedNode() {
+            const res = await fetch('/api/v1/file_metadata', { cache: 'no-store' });
+            if (!res.ok) return null;
+            const fm = await res.json();
+            const nodes = Array.isArray(fm.nodes) ? fm.nodes : [];
+            if (nodes.length === 0) return null;
+            const pinned = fm.pinned_node;
+            return (pinned && nodes.includes(pinned)) ? pinned : nodes[0];
+        }
+
+        async function runPlotQuery(plot) {
+            const metaRes = await fetch('/api/v1/metadata', { cache: 'no-store' });
+            if (!metaRes.ok) throw new Error(`metadata HTTP ${metaRes.status}`);
+            const meta = (await metaRes.json())?.data || {};
+            const minTime = meta.minTime;
+            const maxTime = meta.maxTime;
+            if (!Number.isFinite(minTime) || !Number.isFinite(maxTime) || maxTime <= minTime) {
+                throw new Error('no recording time range (no parquet loaded?)');
+            }
+            const windowDuration = Math.min(3600, maxTime - minTime);
+            const start = Math.max(minTime, maxTime - windowDuration);
+            const step = Math.max(1, Math.floor(windowDuration / 500));
+
+            const node = await selectedNode();
+            const query = node
+                ? injectLabel(plot.promql_query, 'node', node)
+                : plot.promql_query;
+
+            const qs = new URLSearchParams({
+                query,
+                start: String(start),
+                end: String(maxTime),
+                step: String(step),
+            });
+            const qRes = await fetch(`/api/v1/query_range?${qs}`, { cache: 'no-store' });
+            if (!qRes.ok) throw new Error(`query_range HTTP ${qRes.status}`);
+            const body = await qRes.json();
+            const series = body?.status === 'success' ? body.data?.result?.[0]?.values : null;
+            if (!Array.isArray(series) || series.length === 0) return null;
+
+            return {
+                node,
+                query,
+                plot: {
+                    ...plot,
+                    data: [
+                        series.map((p) => Number(p[0])),
+                        series.map((p) => parseFloat(p[1])),
+                    ],
+                },
+            };
         }
 
         async function loadRealOrFallback() {
@@ -98,25 +149,29 @@
                 const view = await res.json();
                 const plot = findCpuPlot(view);
                 if (!plot) throw new Error('CPU % plot not found in rezolus section');
+                if (!plot.promql_query) throw new Error('CPU plot descriptor has no promql_query');
 
-                if (hasSeriesData(plot)) {
-                    chartEl.plot = plot;
+                const result = await runPlotQuery(plot);
+                if (result) {
+                    chartEl.plot = result.plot;
                     statusEl.className = 'status ok';
-                    statusEl.innerHTML = `Loaded real plot from <code>/data/rezolus.json</code>
-                        — ${plot.data[0].length} data points.`;
+                    const scope = result.node
+                        ? ` scoped to <code>node="${result.node}"</code>`
+                        : '';
+                    statusEl.innerHTML = `Executed <code>${result.query}</code> via
+                        <code>/api/v1/query_range</code>${scope} —
+                        ${result.plot.data[0].length} data points.`;
                     return;
                 }
 
-                // Descriptor available, but no recording loaded yet.
                 chartEl.plot = syntheticData(plot);
                 statusEl.className = 'status fallback';
-                statusEl.innerHTML = `Got real descriptor from <code>/data/rezolus.json</code>
-                    but no series data (no recording loaded). Showing synthetic series on the
-                    real descriptor.`;
+                statusEl.innerHTML = `Real descriptor from <code>/data/rezolus.json</code>, but the
+                    query returned no series. Showing synthetic series on the real descriptor.`;
             } catch (err) {
                 chartEl.plot = syntheticData(fallbackDescriptor);
                 statusEl.className = 'status fallback';
-                statusEl.innerHTML = `Fetch failed (<code>${err.message}</code>). Showing
+                statusEl.innerHTML = `Fetch/query failed (<code>${err.message}</code>). Showing
                     hand-authored fallback descriptor with synthetic series.`;
             }
         }

@@ -67,7 +67,7 @@ impl View {
         let version = data.version().to_string();
         let filename = data.filename().to_string();
 
-        // Compute time bounds as epoch milliseconds
+        // Epoch milliseconds (source is nanoseconds).
         let (start_time, end_time) = match data.time_range() {
             Some((min, max)) => (Some(min as f64 / 1e6), Some(max as f64 / 1e6)),
             None => (None, None),
@@ -558,28 +558,22 @@ pub struct Range {
 
 #[derive(Serialize, Clone)]
 pub struct FormatConfig {
-    // Axis labels
     x_axis_label: Option<String>,
     y_axis_label: Option<String>,
 
-    // Value formatting
     unit_system: Option<String>, // e.g., "percentage", "time", "bitrate"
-    precision: Option<u8>,       // Number of decimal places
+    precision: Option<u8>,       // decimal places
 
-    // Scale configuration
-    log_scale: Option<bool>, // Whether to use log scale for y-axis
+    log_scale: Option<bool>,
 
-    // Expected data range -- values outside are clamped at render time
+    // Values outside are clamped at render time.
     #[serde(skip_serializing_if = "Option::is_none")]
     range: Option<Range>,
 
-    // Additional customization
-    value_label: Option<String>, // Label used in tooltips for the value
+    value_label: Option<String>, // label used in tooltips for the value
 }
 
 impl PlotOpts {
-    // Constructors based on metric type
-
     /// A gauge metric represents a point-in-time value (e.g., memory usage, temperature).
     pub fn gauge<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
         Self {
@@ -641,7 +635,6 @@ impl PlotOpts {
         self.range(0.0, 1.0)
     }
 
-    // Builder methods
     pub fn with_unit_system<T: Into<String>>(mut self, unit_system: T) -> Self {
         self.format.unit_system = Some(unit_system.into());
         self

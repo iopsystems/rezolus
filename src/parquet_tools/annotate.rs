@@ -97,7 +97,6 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
 
     let mut ext: ServiceExtension = serde_json::from_str(&json).unwrap();
 
-    // Validate KPI queries against the parquet data and set available flags
     validate_kpis(path, &mut ext);
 
     let annotated_json =

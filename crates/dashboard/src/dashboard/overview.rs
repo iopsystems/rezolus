@@ -10,10 +10,6 @@ pub fn generate(
 ) -> View {
     let mut view = View::new(data, sections);
 
-    /*
-     * CPU
-     */
-
     let mut cpu = Group::new("CPU", "cpu");
 
     let busy = cpu.subgroup("CPU Busy");
@@ -36,10 +32,6 @@ pub fn generate(
     );
 
     view.group(cpu);
-
-    /*
-     * Network
-     */
 
     let mut network = Group::new("Network", "network");
 
@@ -97,10 +89,6 @@ pub fn generate(
 
     view.group(network);
 
-    /*
-     * Scheduler
-     */
-
     let mut scheduler = Group::new("Scheduler", "scheduler");
 
     let queueing = scheduler.subgroup("Runqueue Latency");
@@ -114,10 +102,6 @@ pub fn generate(
     );
 
     view.group(scheduler);
-
-    /*
-     * Syscall
-     */
 
     let mut syscall = Group::new("Syscall", "syscall");
 
@@ -135,10 +119,6 @@ pub fn generate(
     );
 
     view.group(syscall);
-
-    /*
-     * Softirq
-     */
 
     let mut softirq = Group::new("Softirq", "softirq");
 
@@ -173,10 +153,6 @@ pub fn generate(
     );
 
     view.group(softirq);
-
-    /*
-     * BlockIO
-     */
 
     let mut blockio = Group::new("BlockIO", "blockio");
 

@@ -32,6 +32,7 @@ parquet = { version = "58.2.0", default-features = false, features = ["arrow", "
 tar = { version = "0.4.45", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
+dashboard.workspace = true
 metriken-query = { workspace = true, optional = true }
 metriken-query-sql.workspace = true
 tracing = "0.1"

@@ -22,7 +22,6 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
         match value {
             Some(v) => {
-                // Always try to pretty-print if it's valid JSON
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(v) {
                     println!("{}", serde_json::to_string_pretty(&parsed)?);
                 } else {
@@ -42,7 +41,6 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
     let show_all = !schema_only && !geometry_only && !file_only;
 
-    // File-level metadata
     if show_all || file_only {
         if let Some(kv) = metadata.file_metadata().key_value_metadata() {
             println!("File Metadata:");
@@ -77,7 +75,6 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         );
         println!();
 
-        // Compute column widths for row group table
         let idx_w = row_groups.len().to_string().len().max(5);
         let rows_w = row_groups
             .iter()
@@ -120,7 +117,6 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
     // Column-level metadata (schema) - human-readable table
     if show_all || schema_only {
-        // Pre-compute rows: (name, type, metric_type, other_metadata)
         struct SchemaRow {
             name: String,
             dtype: String,
@@ -205,7 +201,6 @@ fn run_json(
                     continue;
                 }
                 let value = entry.value.as_deref().unwrap_or("");
-                // Try to parse as JSON to nest it properly
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(value) {
                     file_meta.insert(entry.key.clone(), parsed);
                 } else {

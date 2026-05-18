@@ -76,10 +76,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_gpu = has_multiple_gpus(data);
 
-    /*
-     * Utilization
-     */
-
     let mut utilization = Group::new("Utilization", "utilization");
 
     let gpu = utilization.subgroup("GPU Utilization");
@@ -214,10 +210,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     view.group(activity);
 
-    /*
-     * Memory
-     */
-
     let mut memory = Group::new("Memory", "memory");
 
     let capacity = memory.subgroup("Capacity");
@@ -302,10 +294,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     view.group(memory);
 
-    /*
-     * PCIe
-     */
-
     let mut pcie = Group::new("PCIe", "pcie");
 
     let rx = pcie.subgroup("Receive");
@@ -372,10 +360,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     view.group(pcie);
 
-    /*
-     * Power
-     */
-
     let mut power = Group::new("Power", "power");
 
     let draw = power.subgroup("Power Draw");
@@ -420,10 +404,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     view.group(power);
 
-    /*
-     * Temperature
-     */
-
     let mut thermal = Group::new("Temperature", "temperature");
 
     let temps = thermal.subgroup("Temperatures");
@@ -457,10 +437,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     }
 
     view.group(thermal);
-
-    /*
-     * Clocks
-     */
 
     let mut clocks = Group::new("Clocks", "clocks");
 

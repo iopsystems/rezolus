@@ -197,7 +197,6 @@ impl EthtoolInner {
 
         let mut interfaces = Vec::new();
 
-        // Discover network interfaces via /sys/class/net/
         let entries = match std::fs::read_dir("/sys/class/net") {
             Ok(entries) => entries,
             Err(e) => {
@@ -294,7 +293,6 @@ impl EthtoolInner {
             let name_bytes =
                 unsafe { std::slice::from_raw_parts(string_data.add(offset), ETH_GSTRING_LEN) };
 
-            // Find null terminator
             let name_len = name_bytes
                 .iter()
                 .position(|&b| b == 0)

@@ -101,12 +101,10 @@ impl<'a> Counters<'a> {
         // borrow the BPF counters map so we can read per-cpu values
         let counters = self.counter_map.values();
 
-        // iterate through and increment our local value for each cpu counter
         for cpu in 0..MAX_CPUS {
             for idx in 0..self.counters.len() {
                 let value = counters[idx + cpu * bank_width];
 
-                // add this CPU's counter to the combined value for this counter
                 self.values[idx] = self.values[idx].wrapping_add(value);
             }
         }
@@ -145,12 +143,10 @@ impl<'a> CpuCounters<'a> {
         // borrow the BPF counters map so we can read per-cpu values
         let counters = self.counter_map.values();
 
-        // iterate through and increment our local value for each cpu counter
         for cpu in 0..MAX_CPUS {
             for idx in 0..self.counters.len() {
                 let value = counters[idx + cpu * bank_width];
 
-                // set this CPU's counter to the new value
                 let _ = self.counters[idx].set(cpu, value);
             }
         }

@@ -1,5 +1,6 @@
 // Backend API adapter for src/viewer frontend.
-// Defines a transport abstraction that mirrors the site/viewer WASM adapter.
+// Transport abstraction mirrors the site/viewer WASM adapter — keep the
+// two in sync.
 
 // Tells data.js which of plot.{sql_query, promql_query} to prefer when
 // both are present. As of the Tsdb→DuckDB server migration, the server

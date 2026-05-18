@@ -84,7 +84,6 @@ export function configureHistogramHeatmap(chart) {
         ? Math.ceil(timeData.length / MAX_TIME_COLUMNS)
         : 1;
 
-    // Build downsampled time array
     const dsTimeData = [];
     for (let t = 0; t < timeData.length; t += factor) {
         dsTimeData.push(timeData[t]);
@@ -112,7 +111,6 @@ export function configureHistogramHeatmap(chart) {
         }
     }
 
-    // Initialize display mode (default: percentage)
     if (chart.histogramDisplayMode === undefined) {
         chart.histogramDisplayMode = 'percentage';
     }
@@ -141,7 +139,6 @@ export function configureHistogramHeatmap(chart) {
         }
     }
 
-    // Calculate min/max values for color scaling
     let colorMin = Infinity;
     let colorMax = -Infinity;
     for (const cellData of allCellsData) {
@@ -154,7 +151,6 @@ export function configureHistogramHeatmap(chart) {
     if (colorMin === Infinity) colorMin = 0;
     if (colorMax === -Infinity) colorMax = 1;
 
-    // Use log scale for color mapping
     const logMin = Math.log1p(colorMin);
     const logMax = Math.log1p(colorMax);
     const logRange = logMax - logMin || 1;
@@ -196,7 +192,6 @@ export function configureHistogramHeatmap(chart) {
         </div>`;
     };
 
-    // Custom render function for heatmap cells with proper log-scale sizing
     const renderItem = function (params, api) {
         const timestampMs = api.value(0);
         const lowerBound = api.value(1);
@@ -241,7 +236,6 @@ export function configureHistogramHeatmap(chart) {
         }
         if (width <= 0 || height <= 0) return;
 
-        // Map count to color using log scale
         const logCount = Math.log1p(count);
         const normalizedValue = Math.min(1, Math.max(0, (logCount - logMin) / logRange));
         const color = infernoColor(normalizedValue);

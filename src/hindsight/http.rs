@@ -170,7 +170,6 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
         0.0
     };
 
-    // Try to get timestamp bounds from the ring buffer
     let (oldest, newest) = get_timestamp_bounds(shared).unwrap_or((None, None));
 
     Json(StatusResponse {

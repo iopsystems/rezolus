@@ -5,10 +5,6 @@ use crate::sql;
 pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
-    /*
-     * Syscall
-     */
-
     let mut syscall = Group::new("Syscall", "syscall");
     syscall
         .metadata

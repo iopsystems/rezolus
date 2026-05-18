@@ -35,10 +35,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_cpu = has_multiple_cpus(data);
 
-    /*
-     * Scheduler
-     */
-
     let mut scheduler = Group::new("Scheduler", "scheduler");
 
     let queueing = scheduler.subgroup("Runqueue Latency");

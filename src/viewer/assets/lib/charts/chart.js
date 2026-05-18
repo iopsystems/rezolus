@@ -18,8 +18,12 @@ import {
     configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
-import { themeVersion } from '../theme.js';
+import { themeVersion } from '../ui/theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
+import { eventsStore } from '../events/events_store.js';
+import { buildMarkLine } from './event_markers.js';
+import { openEventForm, openEventInfo } from '../events/event_form.js';
+import { buildFreezeFooterContent, isEventEditingAllowed, isEventDisplayAllowed } from './base.js';
 
 
 export class ChartsState {
@@ -324,7 +328,6 @@ export class Chart {
             const hasIntersection = entries.some(entry => entry.isIntersecting);
             if (hasIntersection) {
                 this.initEchart();
-                // Once initialized, we can stop observing
                 observer.unobserve(this.domNode);
             }
         }, {
@@ -333,13 +336,13 @@ export class Chart {
             threshold: 0.01 // Trigger when at least 1% visible
         });
 
-        // Start observing the chart element
         observer.observe(this.domNode);
 
         // Resize charts when their container size changes (window resize, zoom, etc.)
         this.resizeObserver = new ResizeObserver(() => {
             if (this.echart) {
                 this.echart.resize();
+                this._renderEventBubbles();
             }
         });
         this.resizeObserver.observe(this.domNode);
@@ -347,7 +350,6 @@ export class Chart {
     }
 
     onupdate(vnode) {
-        // Update the spec and interval references
         const oldSpec = this.spec;
         this.spec = vnode.attrs.spec;
         this.interval = vnode.attrs.interval;
@@ -386,6 +388,7 @@ export class Chart {
         if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
+            this._applyEventMarkers({ reconfigured: true });
 
             // Restore zoom state after re-render (notMerge wipes the
             // dataZoom range). In compare mode each Mithril redraw
@@ -413,7 +416,6 @@ export class Chart {
     }
 
     onremove() {
-        // Clean up chart instance and event handlers
         if (this.observer) {
             this.observer.disconnect();
         }
@@ -423,9 +425,15 @@ export class Chart {
         }
 
         if (this._freezeKeyCleanup) this._freezeKeyCleanup();
+        if (this._tooltipClickCleanup) this._tooltipClickCleanup();
         if (this._pinCleanup) this._pinCleanup();
         if (this._compareCursorOff) this._compareCursorOff();
         if (this._compareCursorUnsub) this._compareCursorUnsub();
+        if (this._eventsUnsub) this._eventsUnsub();
+        if (this._eventBubbleLayer) {
+            this._eventBubbleLayer.remove();
+            this._eventBubbleLayer = null;
+        }
 
         // Remove ourselves from the charts registry so setZoom's fan-out,
         // resetAll, hasActiveSelection, etc. don't walk a stale entry
@@ -522,23 +530,30 @@ export class Chart {
         this._tooltipFrozen = freeze;
 
         if (freeze) {
-            // Stop tooltip from following the mouse
+            // enterable: true so link clicks land on the tooltip instead
+            // of passing through to the canvas (which would unfreeze).
             this.echart.setOption({
-                tooltip: { triggerOn: 'none' },
+                tooltip: { triggerOn: 'none', enterable: true },
             });
         } else {
-            // Restore normal tooltip behavior
             this.echart.setOption({
-                tooltip: { triggerOn: 'mousemove|click' },
+                tooltip: { triggerOn: 'mousemove|click', enterable: false },
             });
         }
 
-        // Directly patch the tooltip footer DOM since the formatter won't
-        // re-run on an already-visible tooltip.
         const footer = this.domNode.querySelector('.tooltip-freeze-footer');
         if (footer) {
-            footer.textContent = freeze ? 'FROZEN \u00b7 click to unfreeze' : 'click to freeze';
             footer.style.color = freeze ? COLORS.accent : COLORS.fgMuted;
+            footer.innerHTML = buildFreezeFooterContent(this);
+
+            // ECharts caches the tooltip wrapper's pointer-events:none and
+            // doesn't reapply it when enterable toggles mid-display. Walk
+            // up to the wrapper (direct child of chart.domNode) and patch.
+            let wrapper = footer.parentElement;
+            while (wrapper && wrapper.parentElement !== this.domNode) {
+                wrapper = wrapper.parentElement;
+            }
+            if (wrapper) wrapper.style.pointerEvents = freeze ? 'auto' : '';
         }
     }
 
@@ -547,7 +562,6 @@ export class Chart {
             return;
         }
 
-        // Initialize the chart
         this.echart = echarts.init(this.domNode);
         // Only log initial chart creation in debug mode
         if (window.location.search.includes('debug')) {
@@ -587,8 +601,11 @@ export class Chart {
         // TimeRangeBar-style views).
         this.chartsState.charts.set(this.chartId, this);
 
-        // Perform the main echarts configuration work, and set up any chart-specific dynamic behavior.
         this.configureChartByType();
+        this._applyEventMarkers({ reconfigured: true });
+        this._eventsUnsub = eventsStore.subscribe(() => {
+            this._applyEventMarkers();
+        });
 
         // Match existing zoom state on first mount. Equivalent to
         // replaying the last setZoom against only this chart.
@@ -598,6 +615,9 @@ export class Chart {
         }
 
         this.echart.on('datazoom', (event) => {
+            // Event bubbles are positioned by data-x; any zoom/pan moves
+            // them, so reposition on every datazoom (cheap DOM work).
+            this._renderEventBubbles();
             // Reconfigure (applyChartOption → setOption({notMerge:true}))
             // wipes and rebuilds the dataZoom component, which fires a
             // synthetic datazoom event with the default {0,100} range.
@@ -720,9 +740,40 @@ export class Chart {
         this.echart.getZr().on('click', (e) => {
             // Only freeze when clicking within the plot area, not on legend/title
             if (this.echart.containPixel('grid', [e.offsetX, e.offsetY])) {
+                if (!this._tooltipFrozen) {
+                    // Stash the cursor's data-coord x for the Add-Event form.
+                    // convertFromPixel returns the value in axis units; for
+                    // our time x-axis that's wall-clock ms. Stored in ns
+                    // for the form (which presents RFC3339 / ns-int).
+                    const xMs = this.echart.convertFromPixel(
+                        { xAxisIndex: 0 },
+                        e.offsetX,
+                    );
+                    this._frozenAxisNs = Number.isFinite(xMs)
+                        ? Math.round(xMs * 1_000_000)
+                        : null;
+                }
                 this._toggleTooltipFreeze();
             }
         });
+
+        // Delegate clicks on the in-tooltip "+ Add Event" link. The
+        // tooltip DOM is recreated by echarts on every render, so we
+        // intercept at the chart container level rather than binding
+        // to the link itself.
+        const onTooltipClick = (e) => {
+            if (!e.target.closest) return;
+            const addLink = e.target.closest('.tooltip-add-event');
+            if (addLink) {
+                e.preventDefault();
+                e.stopPropagation();
+                this._openAddEventForm(addLink);
+            }
+        };
+        this.domNode.addEventListener('click', onTooltipClick, true);
+        this._tooltipClickCleanup = () => {
+            this.domNode.removeEventListener('click', onTooltipClick, true);
+        };
 
         const onEscKey = (e) => {
             if (e.key === 'Escape' && this._tooltipFrozen) {
@@ -878,6 +929,159 @@ export class Chart {
                 max: yAxisMax,
             }
         });
+    }
+
+    _chartScope() {
+        const o = this.spec?.opts || {};
+        return { source: o.source, node: o.node, instance: o.instance };
+    }
+
+    _applyEventMarkers({ reconfigured = false } = {}) {
+        if (!this.echart) return;
+
+        if (reconfigured) {
+            // Capture the chart-style module's markLine BEFORE we overlay
+            // events on it. Several chart configurators (scatter's OOB
+            // separator, etc.) set series[0].markLine; we need to preserve
+            // them across event re-renders. Refresh on every reconfigure
+            // since the underlying data / chart type may change.
+            const opt = this.echart.getOption();
+            const ml = opt?.series?.[0]?.markLine;
+            this._chartStyleMarkLineSnapshot = ml ? JSON.parse(JSON.stringify(ml)) : null;
+        }
+
+        // Outside Notebook/Report: no event markers at all (the base
+        // chart-style markLine, e.g. scatter's OOB separator, is still
+        // preserved via the empty-eventData merge below).
+        const visible = isEventDisplayAllowed()
+            ? eventsStore.filterForChart({
+                chartId: this.chartId,
+                scope: this._chartScope(),
+            })
+            : [];
+        const eventMarkLine = buildMarkLine(visible);
+        const opt = this.echart.getOption();
+        const seriesArr = Array.isArray(opt?.series) ? opt.series : [];
+        if (seriesArr.length === 0) return;
+
+        const baseMl = this._chartStyleMarkLineSnapshot;
+        const baseData = Array.isArray(baseMl?.data) ? baseMl.data : [];
+        const eventData = eventMarkLine ? eventMarkLine.data : [];
+        const mergedData = baseData.concat(eventData);
+
+        // Use the chart-style markLine's config as the base when present;
+        // event-only markLines fall back to buildMarkLine's defaults.
+        const merged = baseMl
+            ? { ...baseMl, data: mergedData }
+            : (eventMarkLine ? { ...eventMarkLine, data: mergedData } : { data: [] });
+
+        this.echart.setOption({ series: [{ markLine: merged }] });
+        this._renderEventBubbles();
+    }
+
+    // Render one persistent HTML description tag per visible event in a
+    // layer above the plot grid (off the canvas data area, so it never
+    // collides with the hover tooltip). Re-run on every render / zoom /
+    // resize since each tag is positioned by its event's data-x.
+    _renderEventBubbles() {
+        if (!this.echart || !this.domNode) return;
+
+        // Only the curated Notebook/Report views show events. Elsewhere,
+        // tear down any existing layer and bail.
+        if (!isEventDisplayAllowed()) {
+            if (this._eventBubbleLayer) {
+                this._eventBubbleLayer.remove();
+                this._eventBubbleLayer = null;
+            }
+            return;
+        }
+
+        let layer = this._eventBubbleLayer;
+        if (!layer) {
+            layer = document.createElement('div');
+            layer.className = 'event-bubble-layer';
+            this.domNode.appendChild(layer);
+            this._eventBubbleLayer = layer;
+        }
+        layer.textContent = '';
+
+        const visible = eventsStore.filterForChart({
+            chartId: this.chartId,
+            scope: this._chartScope(),
+        });
+        if (visible.length === 0) return;
+
+        const grid = this.echart.getModel()?.getComponent('grid', 0);
+        const rect = grid?.coordinateSystem?.getRect?.();
+        if (!rect) return;
+        const left = rect.x;
+        const right = rect.x + rect.width;
+
+        for (const e of visible) {
+            if (!Number.isFinite(e.timestamp)) continue;
+            const tsMs = e.timestamp / 1_000_000;
+            const px = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
+            // Hide tags whose event is scrolled out of the zoom window.
+            if (!Number.isFinite(px) || px < left - 1 || px > right + 1) continue;
+
+            const tag = document.createElement('div');
+            tag.className = 'event-bubble-tag';
+            tag.style.left = px + 'px';
+            // Sit just above the hairline's top (the plot-grid top);
+            // the CSS translateY(-100%) grows the tag upward + a 4px gap.
+            tag.style.top = (rect.y - 4) + 'px';
+            tag.textContent = e.description || '(no description)';
+            tag.title = e.description || '';
+            tag.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const r = tag.getBoundingClientRect();
+                openEventInfo({
+                    anchorPoint: { x: r.left + r.width / 2, y: r.top },
+                    event: e,
+                    onDelete: isEventEditingAllowed()
+                        ? () => eventsStore.remove({
+                            timestamp: e.timestamp,
+                            description: e.description,
+                        })
+                        : null,
+                });
+            });
+            layer.appendChild(tag);
+        }
+    }
+
+    _openAddEventForm(anchorEl) {
+        if (!isEventEditingAllowed()) return;
+        const opts = this.spec?.opts || {};
+        openEventForm({
+            anchorEl,
+            prefill: {
+                timestamp_ns: this._frozenAxisNs,
+                source: opts.source || '',
+                node: opts.node || '',
+                instance: opts.instance || '',
+                chart_id: this.chartId || '',
+            },
+            onSubmit: (event) => {
+                eventsStore.add(event);
+                this._teardownFreezeAndAxisPointer();
+            },
+        });
+    }
+
+    // Drop freeze, hide tooltip, and clear the axis-pointer hairline.
+    // Runs once synchronously and once on the next frame because the
+    // tooltip option update needs a paint to flush — without the rAF
+    // pass, the axis-pointer line leaves a residual ghost after the
+    // popover unmounts and exposes the chart again.
+    _teardownFreezeAndAxisPointer() {
+        const tearDown = () => {
+            if (this._tooltipFrozen) this._toggleTooltipFreeze(false);
+            this.dispatchAction({ type: 'hideTip' });
+            this.dispatchAction({ type: 'updateAxisPointer', currTrigger: 'leave' });
+        };
+        tearDown();
+        requestAnimationFrame(tearDown);
     }
 
     configureChartByType() {

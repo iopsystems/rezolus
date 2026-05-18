@@ -1,1 +1,0 @@
-../../../src/viewer/assets/lib/cgroup_selector.js

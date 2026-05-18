@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/events/event_form.js

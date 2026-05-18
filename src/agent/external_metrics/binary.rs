@@ -118,12 +118,10 @@ fn parse_metrics(
             continue;
         }
 
-        // Check per-connection limit before processing metric
         if ctx.metric_count >= max_metrics_per_connection {
             return Err(BinaryError::ConnectionLimitExceeded);
         }
 
-        // Parse metric based on type
         let (value, remaining) = match msg_type {
             MSG_TYPE_COUNTER => parse_counter(data)?,
             MSG_TYPE_GAUGE => parse_gauge(data)?,
@@ -189,7 +187,6 @@ fn parse_histogram(data: &[u8]) -> Result<(ExternalMetricValue, &[u8]), BinaryEr
     let max_value_power = data[1];
     let bucket_count = u16::from_le_bytes([data[2], data[3]]) as usize;
 
-    // Validate histogram config
     if grouping_power >= max_value_power || max_value_power > 64 {
         return Err(BinaryError::InvalidHistogramConfig);
     }

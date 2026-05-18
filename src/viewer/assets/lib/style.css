@@ -2165,6 +2165,135 @@ main {
     white-space: pre-wrap;
 }
 
+/* ── Markdown notes / preamble (Edit ⇄ Preview) ─────────────────── */
+
+.md-field-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.md-field-label {
+    color: var(--fg-secondary);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.md-toggle {
+    background: transparent;
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    color: var(--fg-secondary);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 1px 8px;
+}
+.md-toggle:hover {
+    border-color: var(--accent-muted);
+    color: var(--fg);
+}
+.md-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 120px;
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    color: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 8px;
+    resize: vertical;
+    transition: border-color var(--transition-base);
+}
+.md-textarea:focus {
+    outline: none;
+    border-color: var(--accent-muted);
+}
+.md-empty {
+    color: var(--fg-muted);
+    font-size: 0.85rem;
+    font-style: italic;
+    cursor: text;
+    padding: 4px 0;
+}
+
+/* The preamble sits at the top of the page; give it more room. */
+.selection-preamble {
+    margin: 0.25rem 0 0.5rem 0;
+    flex: 1;
+}
+.selection-preamble .md-textarea {
+    min-height: 90px;
+}
+
+/* Rendered Markdown — scoped so element selectors don't leak. */
+.md-rendered {
+    color: var(--fg-default);
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    line-height: 1.55;
+}
+.selection-preamble-text.md-rendered {
+    color: var(--fg-secondary);
+    font-size: 0.95rem;
+    margin: 0.25rem 0 0 0;
+}
+.md-rendered > :first-child { margin-top: 0; }
+.md-rendered > :last-child { margin-bottom: 0; }
+.md-rendered p { margin: 0 0 0.5em 0; }
+.md-rendered h1,
+.md-rendered h2,
+.md-rendered h3,
+.md-rendered h4,
+.md-rendered h5,
+.md-rendered h6 {
+    margin: 0.6em 0 0.3em 0;
+    line-height: 1.25;
+    color: var(--fg);
+}
+.md-rendered h1 { font-size: 1.3em; }
+.md-rendered h2 { font-size: 1.18em; }
+.md-rendered h3 { font-size: 1.08em; }
+.md-rendered h4,
+.md-rendered h5,
+.md-rendered h6 { font-size: 1em; }
+.md-rendered ul,
+.md-rendered ol { margin: 0 0 0.5em 0; padding-left: 1.4em; }
+.md-rendered li { margin: 0.15em 0; }
+.md-rendered code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    padding: 0 4px;
+}
+.md-rendered pre {
+    background: var(--bg-void);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    padding: 8px;
+    overflow-x: auto;
+    margin: 0 0 0.5em 0;
+}
+.md-rendered pre code {
+    border: 0;
+    padding: 0;
+    background: transparent;
+}
+.md-rendered blockquote {
+    margin: 0 0 0.5em 0;
+    padding: 0.1em 0 0.1em 0.8em;
+    border-left: 3px solid var(--border-default);
+    color: var(--fg-secondary);
+}
+.md-rendered a {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
 .selection-link {
     font-weight: 600 !important;
 }
@@ -2550,10 +2679,8 @@ main {
    ========================================================================== */
 
 @media (max-width: 1199px) {
-    .group .charts {
-        grid-template-columns: 1fr;
-    }
-
+    /* `.group .charts` lives in charts.css (loaded later); the override
+     * for that selector at this breakpoint also lives there. */
     .sysinfo-grid {
         grid-template-columns: 1fr;
     }
@@ -2992,5 +3119,139 @@ main {
 .connect-input::placeholder {
     color: var(--fg-muted);
     opacity: 0.6;
+}
+
+.event-form {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid var(--border-default, #333);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 12px;
+    font-family: var(--font-sans);
+    color: var(--fg, #e0e0e0);
+    font-size: 13px;
+}
+.event-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 8px;
+}
+.event-form-row label {
+    font-size: 11px;
+    color: var(--fg-secondary, #a0a0a0);
+}
+.event-form-row input[type="text"] {
+    width: 100%;
+    padding: 4px 6px;
+    background: var(--bg, #111);
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 3px;
+    color: inherit;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+.event-form-error {
+    color: var(--danger, #f85149);
+    font-size: 11px;
+    margin: -4px 0 8px;
+}
+.event-form-checkbox {
+    margin: 4px 0 12px;
+}
+.event-form-checkbox input {
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.event-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.event-form-actions button {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border-default, #444);
+    border-radius: 3px;
+    color: inherit;
+    cursor: pointer;
+}
+.event-form-actions button.primary {
+    background: var(--accent, #1f77b4);
+    border-color: transparent;
+    color: #fff;
+}
+.event-form-actions button.danger {
+    background: var(--danger, #f85149);
+    border-color: transparent;
+    color: #fff;
+}
+
+/* Persistent description tag rendered in the band above the plot grid
+ * (inside the chart container but off the canvas data area). One per
+ * visible event, x-aligned to its hairline; chart.js positions them. */
+.event-bubble-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+.event-bubble-tag {
+    position: absolute;
+    /* `top` is set per-tag in JS to the plot-grid top; translateY(-100%)
+     * grows the tag upward so its bottom edge sits just above the
+     * hairline. width:max-content keeps the hit/cursor box the size of
+     * the visible bubble (not a full max-width block). */
+    transform: translate(-50%, -100%);
+    width: max-content;
+    max-width: 180px;
+    padding: 3px 9px;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    line-height: 1.4;
+    color: #fff;
+    background: #a85d23;
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    pointer-events: auto;
+    opacity: 0.85;
+}
+.event-bubble-tag:hover {
+    opacity: 1;
+}
+
+/* Read-only "more info" popover. */
+.event-info {
+    background: var(--bg-card, #1e1e1e);
+    border: 1px solid var(--border-default, #333);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 12px;
+    font-family: var(--font-sans);
+    color: var(--fg, #e0e0e0);
+    font-size: 13px;
+}
+.event-info-row {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-bottom: 8px;
+}
+.event-info-label {
+    font-size: 11px;
+    color: var(--fg-secondary, #a0a0a0);
+}
+.event-info-value {
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+.event-info-confirm {
+    flex: 1;
+    align-self: center;
+    font-size: 12px;
+    color: var(--danger, #f85149);
 }
 
