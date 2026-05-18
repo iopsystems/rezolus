@@ -307,7 +307,7 @@ struct RangeQueryParams {
 
 /// Resolve the parquet path for the requested capture. Returns `None`
 /// in live-agent mode (no parquet on disk) or when the experiment
-/// slot is empty — caller surfaces those as 503 / capture_not_found.
+/// slot is empty.
 fn parquet_path_for(state: &AppState, capture: CaptureId) -> Option<PathBuf> {
     match capture {
         CaptureId::Baseline => state.parquet_path.read().clone(),
@@ -317,6 +317,25 @@ fn parquet_path_for(state: &AppState, capture: CaptureId) -> Option<PathBuf> {
             .clone()
             .or_else(|| state.cli_experiment_path.read().clone()),
     }
+}
+
+/// Resolve the SQL backend's `data_source` string for the requested
+/// capture. For file / upload / A-B captures this is the parquet path;
+/// for live captures it's the live-source key registered with
+/// [`DuckDbBackend::create_live_source`]. Returns `None` for an
+/// unattached experiment slot or an upload-only viewer before its
+/// first upload.
+fn data_source_for(state: &AppState, capture: CaptureId) -> Option<String> {
+    // Live mode: only the baseline slot is ever live (live captures
+    // are single-source by construction). When `live_source` is `Some`
+    // for the baseline, route SQL queries there.
+    #[cfg(feature = "live-mode")]
+    if matches!(capture, CaptureId::Baseline)
+        && state.live_source.read().is_some()
+    {
+        return Some(super::state::LIVE_BASELINE_DATA_SOURCE.to_string());
+    }
+    parquet_path_for(state, capture).map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Run `sql` against the resolved capture's parquet through the
@@ -336,18 +355,14 @@ fn parquet_path_for(state: &AppState, capture: CaptureId) -> Option<PathBuf> {
 /// assets, sections nav, etc.) stay responsive.
 async fn run_sql(state: &Arc<AppState>, capture: Option<&str>, sql: String) -> Response {
     let capture = CaptureId::parse_opt(capture);
-    let Some(path) = parquet_path_for(state, capture) else {
-        // Live-agent mode (no parquet) or unattached experiment.
-        // Live mode is a known carve-out during the SQL migration —
-        // see plan stages 3-9. Surfaced as capture_not_found so users
-        // notice early.
+    let Some(data_source) = data_source_for(state, capture) else {
+        // Unattached experiment slot, or upload-only viewer pre-upload.
         return ApiResponse::<serde_json::Value>::err(
-            format!("capture '{capture:?}' has no parquet (live mode or unattached)"),
+            format!("capture '{capture:?}' not attached"),
             "capture_not_found",
         )
         .into_response();
     };
-    let data_source = path.to_string_lossy().to_string();
     let backend = state.sql_backend.clone();
     let outcome = tokio::task::spawn_blocking(move || match backend.run_sql(&sql, &data_source) {
         Ok(batches) => Ok(prom_matrix::arrow_to_prom_matrix(&batches)),
@@ -540,4 +555,141 @@ async fn lib(uri: Uri) -> impl IntoResponse {
         [(header::CONTENT_TYPE, content_type)],
         body.to_string(),
     )
+}
+
+#[cfg(all(test, feature = "live-mode"))]
+mod live_route_tests {
+    //! Routing + live source end-to-end. The L3 layer of the
+    //! regression net: build an `AppState` with a populated
+    //! `LiveSource`, exercise `data_source_for` + the backend's
+    //! routing, and assert query results flow back through.
+    //!
+    //! Bypasses axum (which would add ~100 lines of router-mounting
+    //! boilerplate) and calls the routing logic directly. The HTTP
+    //! plumbing — `instant_query` / `range_query` handlers — is
+    //! one-line wrappers that just forward into `run_sql`, and is
+    //! exercised end-to-end by `viewer_smoke.sh` / the chromium smoke.
+    //! What needs *specific* testing is the live-vs-parquet dispatch,
+    //! which lives in `data_source_for` and the backend's
+    //! `live_sources` map.
+
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use super::super::state::{AppState, LIVE_BASELINE_DATA_SOURCE};
+    use super::super::tsdb::Tsdb;
+    use super::{data_source_for, CaptureId};
+    use ::dashboard::TemplateRegistry;
+    use metriken_query_sql::{LiveColumn, LiveColumnKind, LiveValue};
+
+    /// Build an `AppState` in live mode with the sql_backend's
+    /// live-source slot populated; returns the appender so the test
+    /// can drive snapshots.
+    fn live_state() -> (Arc<AppState>, Arc<metriken_query_sql::LiveSource>) {
+        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let live = state
+            .sql_backend
+            .create_live_source(LIVE_BASELINE_DATA_SOURCE, "rezolus", 1000)
+            .expect("create_live_source");
+        *state.live_source.write() = Some(live.clone());
+        state
+            .live
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        (Arc::new(state), live)
+    }
+
+    fn col(physical: &str, metric: &str, kind: LiveColumnKind) -> LiveColumn {
+        LiveColumn {
+            physical: physical.into(),
+            metric: metric.into(),
+            kind,
+            labels: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn data_source_for_live_baseline_returns_live_key() {
+        let (state, _live) = live_state();
+        let data_source = data_source_for(&state, CaptureId::Baseline)
+            .expect("baseline should resolve");
+        assert_eq!(data_source, LIVE_BASELINE_DATA_SOURCE);
+    }
+
+    #[test]
+    fn data_source_for_live_experiment_is_none_when_unattached() {
+        // Live mode pins baseline only; experiment slot returns None
+        // (no parquet, no live source). Caller surfaces as
+        // capture_not_found.
+        let (state, _live) = live_state();
+        assert!(data_source_for(&state, CaptureId::Experiment).is_none());
+    }
+
+    #[test]
+    fn data_source_for_file_mode_returns_parquet_path() {
+        // No live source → falls through to parquet_path. Pin that
+        // the live carve-out doesn't shadow file-mode captures.
+        let state = AppState::new_empty(TemplateRegistry::empty());
+        *state.parquet_path.write() = Some(std::path::PathBuf::from("/tmp/test.parquet"));
+        let state = Arc::new(state);
+        let data_source = data_source_for(&state, CaptureId::Baseline)
+            .expect("file mode should resolve");
+        assert_eq!(data_source, "/tmp/test.parquet");
+    }
+
+    #[test]
+    fn backend_routes_live_data_source_to_live_source() {
+        // The contract: state.sql_backend.run_sql(sql, LIVE_BASELINE_DATA_SOURCE)
+        // dispatches to the LiveSource, not the parquet pool. Pin by
+        // appending a snapshot and observing the row through run_sql.
+        let (state, live) = live_state();
+
+        let c = col("requests", "requests", LiveColumnKind::Counter);
+        live.append(
+            1_000_000_000,
+            None,
+            &[(c.clone(), LiveValue::Counter(42))],
+        )
+        .expect("append");
+        live.append(
+            2_000_000_000,
+            None,
+            &[(c, LiveValue::Counter(100))],
+        )
+        .expect("append");
+
+        let batches = state
+            .sql_backend
+            .run_sql(
+                "SELECT timestamp, requests FROM _src ORDER BY timestamp",
+                LIVE_BASELINE_DATA_SOURCE,
+            )
+            .expect("run_sql via backend");
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 2);
+    }
+
+    #[test]
+    fn metadata_time_range_advances_as_snapshots_are_appended() {
+        // The metadata handler reads time range from
+        // `read_capture_scalar_meta`, which uses the Tsdb-backed
+        // DashboardData impl during the transition. Even without
+        // wiring Tsdb here, confirm the live source itself reports
+        // advancing time bounds — pinning the contract the eventual
+        // metadata-from-LiveSource migration will rely on.
+        let (_state, live) = live_state();
+        assert_eq!(live.time_range_ns().expect("range"), None);
+
+        let c = col("requests", "requests", LiveColumnKind::Counter);
+        live.append(1_000_000_000, None, &[(c.clone(), LiveValue::Counter(1))])
+            .expect("append 1");
+        let (lo1, hi1) = live.time_range_ns().expect("range").unwrap();
+        assert_eq!(lo1, 1_000_000_000);
+        assert_eq!(hi1, 1_000_000_000);
+
+        live.append(3_000_000_000, None, &[(c, LiveValue::Counter(3))])
+            .expect("append 2");
+        let (lo2, hi2) = live.time_range_ns().expect("range").unwrap();
+        assert_eq!(lo2, 1_000_000_000);
+        assert_eq!(hi2, 3_000_000_000);
+    }
 }

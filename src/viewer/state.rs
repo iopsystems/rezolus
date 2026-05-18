@@ -21,6 +21,8 @@ use super::sql_capture::SqlCapture;
 use super::tsdb::Tsdb;
 use ::dashboard::{self, TemplateRegistry};
 use metriken_query_sql::DuckDbBackend;
+#[cfg(feature = "live-mode")]
+use metriken_query_sql::LiveSource;
 
 /// Caches the navigation list (via the owned `DashboardContext`) and
 /// memoizes per-section JSON bodies. `/api/v1/sections` reads the nav
@@ -93,6 +95,14 @@ impl ProxyState {
     }
 }
 
+/// `data_source` key registered with [`DuckDbBackend::create_live_source`]
+/// for the baseline live capture. Routes layer passes this string to
+/// `sql_backend.run_sql(...)` for live captures so the backend dispatches
+/// to the right `LiveSource`. Kept short + namespaced so it can't
+/// collide with any real parquet path.
+#[cfg(feature = "live-mode")]
+pub const LIVE_BASELINE_DATA_SOURCE: &str = "live:baseline";
+
 pub struct AppState {
     pub sections: RwLock<LazySectionStore>,
     /// Per-capture TSDB + metadata. Single-capture callers always target
@@ -139,6 +149,13 @@ pub struct AppState {
     /// requests hit the warm pool. Used by the SQL query handlers and
     /// `SqlCapture` loading.
     pub sql_backend: Arc<DuckDbBackend>,
+    /// Live-mode in-memory DuckDB data source. `Some` when the viewer
+    /// was started against a live agent; `None` for file / upload /
+    /// A-B captures. The ingest loop calls `live_source.append(...)`
+    /// on every poll; query handlers route to it via the registered
+    /// data-source key (see [`LIVE_BASELINE_DATA_SOURCE`]).
+    #[cfg(feature = "live-mode")]
+    pub live_source: RwLock<Option<Arc<LiveSource>>>,
     /// Serializes baseline-ingest operations
     /// (`actions::ingest_baseline_from_path`). Without this, two
     /// concurrent `/api/v1/upload` calls can interleave their
@@ -200,6 +217,8 @@ impl AppState {
             combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
             sql_backend: Arc::new(DuckDbBackend::new()),
+            #[cfg(feature = "live-mode")]
+            live_source: RwLock::new(None),
             upload_mutex: Mutex::new(()),
         }
     }

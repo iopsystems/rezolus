@@ -36,10 +36,18 @@ use ::dashboard;
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
 
 /// Background task that polls a live agent and ingests snapshots.
+///
+/// Dual-ingest during the migration: every snapshot lands in the
+/// legacy `Tsdb` (used by `validate_service_extensions`, which still
+/// runs PromQL at viewer load) **and** the new `LiveSource` (used by
+/// `/api/v1/query{,_range}` via the SQL backend). When the PromQL
+/// shim is migrated to SQL the Tsdb call goes away and `metriken-query`
+/// can drop out of the dep tree.
 #[cfg(feature = "live-mode")]
 pub async fn ingest_loop(
     url: Url,
     tsdb: Arc<RwLock<Tsdb>>,
+    live: Arc<metriken_query_sql::LiveSource>,
     snapshots: Arc<Mutex<VecDeque<Vec<u8>>>>,
     source: String,
     version: String,
@@ -92,6 +100,18 @@ pub async fn ingest_loop(
                 continue;
             }
         };
+
+        // Dual-ingest: legacy Tsdb (for `validate_service_extensions`)
+        // and the new DuckDB live source (for `/api/v1/query{,_range}`).
+        // The Snapshot accessors take `&mut self` (`std::mem::take` the
+        // inner Vecs), so feed the live path a clone and let the
+        // original flow into Tsdb. Snapshot is ~tens of KB at typical
+        // metric counts; cloning at 1 Hz is negligible.
+        if let Err(e) =
+            super::live_ingest::ingest_snapshot(&live, snapshot.clone())
+        {
+            warn!("live source append failed: {e}");
+        }
 
         let mut tsdb = tsdb.write();
         tsdb.ingest(snapshot);
@@ -477,6 +497,24 @@ pub async fn connect_agent(
     state.captures.set_baseline_systeminfo(info.sysinfo);
     state.live.store(true, Ordering::Relaxed);
 
+    // Tear down any pre-existing live source (we're swapping baseline)
+    // and register a fresh one on the shared sql_backend.
+    state.sql_backend.invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
+    let live_source = match state.sql_backend.create_live_source(
+        super::state::LIVE_BASELINE_DATA_SOURCE,
+        &info.source,
+        1000,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return ApiResponse::err(
+                format!("failed to create live source: {e}"),
+                "internal_error",
+            );
+        }
+    };
+    *state.live_source.write() = Some(live_source.clone());
+
     let ingest_tsdb = state
         .baseline_tsdb()
         .expect("live mode baseline is Tsdb-backed");
@@ -487,6 +525,7 @@ pub async fn connect_agent(
     tokio::spawn(ingest_loop(
         ingest_url,
         ingest_tsdb,
+        live_source,
         ingest_snapshots,
         info.source.clone(),
         info.version.clone(),

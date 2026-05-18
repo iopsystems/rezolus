@@ -47,6 +47,8 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+#[cfg(feature = "live-mode")]
+mod live_ingest;
 mod metadata;
 mod report_save;
 mod routes;
@@ -675,6 +677,16 @@ fn init_live_mode(
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);
 
+    // Create the live DuckDB data source registered on the shared
+    // `sql_backend`. The same `Arc<LiveSource>` is parked on
+    // `state.live_source` so query handlers (via the `data_source_for`
+    // helper) and the ingest loop (below) both reach it.
+    let live_source = state
+        .sql_backend
+        .create_live_source(state::LIVE_BASELINE_DATA_SOURCE, &info.source, 1000)
+        .expect("create live source");
+    *state.live_source.write() = Some(live_source.clone());
+
     let ingest_tsdb = state
         .baseline_tsdb()
         .expect("live mode baseline is Tsdb-backed");
@@ -685,6 +697,7 @@ fn init_live_mode(
     rt.spawn(actions::ingest_loop(
         ingest_url,
         ingest_tsdb,
+        live_source,
         ingest_snapshots,
         info.source,
         info.version,
