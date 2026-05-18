@@ -140,7 +140,9 @@ echo "$overview" | jq -e '.groups | length > 0' >/dev/null \
     || fail "overview payload empty" "$(echo "$overview" | head -c 200)" "non-empty .groups" "$LOGDIR/file.log"
 
 echo "==> /api/v1/query_range returns matrix"
-rq=$(curl -fsS "http://127.0.0.1:$PORT_FILE/api/v1/query_range?query=cpu_cores&start=0&end=10000000000&step=60")
+rq=$(curl -fsS -G "http://127.0.0.1:$PORT_FILE/api/v1/query_range" \
+    --data-urlencode 'query=SELECT timestamp::DOUBLE/1e9 AS t, CAST(timestamp AS DOUBLE) AS v FROM _src LIMIT 10' \
+    --data-urlencode 'start=0' --data-urlencode 'end=99999999999' --data-urlencode 'step=60')
 eq "range query status" "$(echo "$rq" | jq -r .status)" "success" "$LOGDIR/file.log"
 
 echo "==> /api/v1/load_url forbidden when proxy disabled"
@@ -184,18 +186,22 @@ done
 
 echo "==> served JS bundle has the Notebook rename + new Selection sidebar"
 selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection.js")
-echo "$selection_js" | grep -q "notebookStore" \
+# Use here-strings rather than `echo "$var" | grep -q`: with `pipefail`
+# enabled, grep's early exit (on match) sends SIGPIPE to echo, which
+# pipefail propagates as a non-zero pipeline status, defeating the `||
+# fail` branch on a *successful* match.
+grep -q "notebookStore" <<< "$selection_js" \
     || fail "selection.js missing notebookStore identifier" "" "notebookStore present" "$LOGDIR/file.log"
-echo "$selection_js" | grep -q "loadedSelectionStore" \
+grep -q "loadedSelectionStore" <<< "$selection_js" \
     || fail "selection.js missing loadedSelectionStore identifier" "" "loadedSelectionStore present" "$LOGDIR/file.log"
-echo "$selection_js" | grep -q "LoadedSelectionView" \
+grep -q "LoadedSelectionView" <<< "$selection_js" \
     || fail "selection.js missing LoadedSelectionView" "" "LoadedSelectionView present" "$LOGDIR/file.log"
 # Sanity: the old identifiers should be gone (modulo the unrelated
 # `toggleSelection`, `isSelected`, `selectionCardTitle`, etc. which
 # stay — only the workspace-store identifiers were renamed).
-if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/null; then
+if grep -qE "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" <<< "$selection_js"; then
     fail "selection.js still has old workspace identifiers" \
-         "$(echo "$selection_js" | grep -nE '(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)' | head -3)" \
+         "$(grep -nE '(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)' <<< "$selection_js" | head -3)" \
          "no old store identifiers" "$LOGDIR/file.log"
 fi
 
