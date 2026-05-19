@@ -12,11 +12,20 @@ const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
-const defaultQueryRange = (query, start, end, step, captureId = 'baseline') =>
-    ViewerApi.queryRange(query, start, end, step, captureId);
+// Default queryRange threads the current `selectedNode` through to the
+// SQL backend so dashboard queries respect the node picker without
+// every callsite re-specifying it.
+const defaultQueryRange = (query, start, end, step, captureId = 'baseline', opts) => {
+    const merged = { ...(opts || {}) };
+    if (merged.node === undefined) {
+        const sel = getSelectedNode();
+        if (sel) merged.node = sel;
+    }
+    return ViewerApi.queryRange(query, start, end, step, captureId, merged);
+};
 
-export const queryRangeForCapture = (captureId, query, start, end, step) =>
-    defaultQueryRange(query, start, end, step, captureId);
+export const queryRangeForCapture = (captureId, query, start, end, step, opts) =>
+    defaultQueryRange(query, start, end, step, captureId, opts);
 
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }

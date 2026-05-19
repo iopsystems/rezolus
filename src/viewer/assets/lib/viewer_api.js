@@ -156,7 +156,7 @@ const ViewerApi = {
         });
     },
 
-    async queryRange(query, start, end, step, captureId = 'baseline') {
+    async queryRange(query, start, end, step, captureId = 'baseline', { node, strict } = {}) {
         const params = new URLSearchParams({
             query,
             start: String(start),
@@ -165,6 +165,12 @@ const ViewerApi = {
         });
         if (captureId && captureId !== 'baseline') {
             params.set('capture', captureId);
+        }
+        if (node) {
+            params.set('node', node);
+        }
+        if (strict) {
+            params.set('strict', 'true');
         }
         return backendRequest({
             method: 'GET',
