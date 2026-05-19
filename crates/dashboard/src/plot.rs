@@ -286,6 +286,50 @@ impl SubGroup {
             plot.width = PlotWidth::Full;
         }
     }
+
+    /// Append a half-width **rate** card then a half-width **mean**
+    /// card for a percentile histogram `selector`; they render side by
+    /// side. Call immediately before the percentile plot so the
+    /// subgroup reads rate | mean | <percentiles>.
+    ///
+    /// `mean_unit` is the mean card's `Unit` (`Time` for latency,
+    /// `Bytes` for size); `unit_system` is its formatter
+    /// (`"time"` / `"bytes"`). The rate card mirrors existing counter
+    /// rate cards (`Unit::Rate`, no unit system).
+    pub fn histogram_rate_mean(
+        &mut self,
+        title_stem: &str,
+        id_stem: &str,
+        selector: &str,
+        rate: RateSource,
+        mean_unit: Unit,
+        unit_system: &str,
+    ) {
+        let rate_query = match rate {
+            RateSource::Counter(q) => q,
+            RateSource::FromHistogram => {
+                format!("sum(irate(histogram_count({selector})[5m]))")
+            }
+        };
+        self.plot_promql(
+            PlotOpts::counter(
+                format!("{title_stem} Rate"),
+                format!("{id_stem}-rate"),
+                Unit::Rate,
+            ),
+            rate_query,
+        );
+        self.plot_promql(
+            PlotOpts::gauge(
+                format!("{title_stem} Mean"),
+                format!("{id_stem}-mean"),
+                mean_unit,
+            )
+            .with_unit_system(unit_system)
+            .with_axis_label("Mean"),
+            format!("histogram_mean({selector})"),
+        );
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -318,6 +362,16 @@ pub enum MetricType {
     Gauge,
     DeltaCounter,
     Histogram,
+}
+
+/// Where the "rate" half of a histogram's rate|mean card pair gets its
+/// data. Prefer `Counter` (an accurate standalone counter of exactly
+/// the histogrammed events); `FromHistogram` derives an approximate
+/// rate from the histogram column itself and is subject to lock-free
+/// snapshot undercount — use only when no such counter exists.
+pub enum RateSource {
+    Counter(String),
+    FromHistogram,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -660,6 +714,68 @@ mod tests {
             Labels::from([("other", "x")].as_slice()),
         ];
         assert_eq!(unique_label_count(&labels, "id"), 1);
+    }
+
+    #[test]
+    fn histogram_rate_mean_counter_source_emits_two_half_width_plots() {
+        let mut g = Group::new("G", "g");
+        let sg = g.subgroup("S");
+        sg.histogram_rate_mean(
+            "Read",
+            "latency-read",
+            "blockio_latency{op=\"read\"}",
+            RateSource::Counter("sum(irate(blockio_operations{op=\"read\"}[5m]))".to_string()),
+            Unit::Time,
+            "time",
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        let plots = json["subgroups"][0]["plots"].as_array().unwrap();
+        assert_eq!(plots.len(), 2);
+
+        assert_eq!(plots[0]["opts"]["title"], "Read Rate");
+        assert_eq!(plots[0]["opts"]["id"], "latency-read-rate");
+        assert_eq!(plots[0]["opts"]["type"], "delta_counter");
+        assert!(
+            plots[0].get("width").is_none(),
+            "half width is the serde default (omitted)"
+        );
+        assert_eq!(
+            plots[0]["promql_query"],
+            "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+        );
+
+        assert_eq!(plots[1]["opts"]["title"], "Read Mean");
+        assert_eq!(plots[1]["opts"]["id"], "latency-read-mean");
+        assert_eq!(plots[1]["opts"]["type"], "gauge");
+        assert_eq!(plots[1]["opts"]["format"]["unit_system"], "time");
+        assert_eq!(
+            plots[1]["promql_query"],
+            "histogram_mean(blockio_latency{op=\"read\"})"
+        );
+    }
+
+    #[test]
+    fn histogram_rate_mean_from_histogram_derives_rate_from_count() {
+        let mut g = Group::new("G", "g");
+        let sg = g.subgroup("S");
+        sg.histogram_rate_mean(
+            "Runqueue",
+            "scheduler-runqueue-latency",
+            "scheduler_runqueue_latency",
+            RateSource::FromHistogram,
+            Unit::Time,
+            "time",
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        let plots = json["subgroups"][0]["plots"].as_array().unwrap();
+        assert_eq!(
+            plots[0]["promql_query"],
+            "sum(irate(histogram_count(scheduler_runqueue_latency)[5m]))"
+        );
+        assert_eq!(
+            plots[1]["promql_query"],
+            "histogram_mean(scheduler_runqueue_latency)"
+        );
     }
 }
 
