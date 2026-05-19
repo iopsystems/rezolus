@@ -32,14 +32,18 @@ reads `review.md`; the newcomer reads `architecture.md`.
     per-source views and the `_cgroup_index` JOIN table. The same
     `shared_macros.sql` is `include_str!`d by both the native engine
     and the WASM viewer so emitters can't drift.
-  - **The emitters.** `crates/dashboard/src/sql.rs` (715 LOC, 16
-    helpers) is what ~180 plot call sites in `dashboard/*.rs` call
-    to produce each plot's `sql_query`. Every helper is
-    snapshot-tested in `tests/sql_snapshots.rs`; the two newest
-    (cgroup `irate_by_name`, `ratio_by_name`) also have a
-    behavioural integration test in `tests/cgroup_null_gap.rs`
-    that runs the SQL against a fabricated `_src` and asserts on
-    row counts after a NULL transition.
+  - **The emitters.** `crates/dashboard/src/sql.rs` (852 LOC, 21
+    `pub fn` helpers including `rate_5m_total`, `irate_total`,
+    `hist_percentile_series`, `cpu_pct_total`, `cgroup_irate_total`,
+    `cgroup_irate_by_name`, `cgroup_ratio_by_name`,
+    `bucket_heatmap_sql`, `quantile_spectrum_sql`,
+    `percentile_kpi_sql`, `multi_percentile_kpi_sql`) is what ~170
+    plot call sites in `dashboard/*.rs` call to produce each
+    plot's `sql_query`. `crates/dashboard/tests/sql_snapshots.rs`
+    pins 25 helper outputs as snapshots; `tests/cgroup_null_gap.rs`
+    runs cgroup `irate_by_name` / `ratio_by_name` SQL against a
+    fabricated `_src` and asserts on row counts after a NULL
+    transition.
   - **The viewer.** `Arc<DuckDbBackend>` lives on `AppState`
     (`src/viewer/state.rs`). Parquets are wrapped by `SqlCapture`
     (`sql_capture.rs`, 379 LOC) and held by `CaptureRegistry`
@@ -48,7 +52,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
     `DashboardData` shim for the live slot); the shared
     `Arc<LiveSource>` is registered with the backend under
     `LIVE_BASELINE_DATA_SOURCE = "live:baseline"`.
-    `data_source_for(state, capture)` in `routes.rs:522` resolves
+    `data_source_for(state, capture)` in `routes.rs:523` resolves
     the live key ahead of any parquet path, so
     `/api/v1/query{,_range}` dispatch is uniform across modes.
     `src/viewer/live_ingest.rs` (~358 LOC) is the
@@ -79,8 +83,11 @@ reads `review.md`; the newcomer reads `architecture.md`.
   `AB_base.parquet` reported **698 identical / 1 divergent / 0
   errors / 0 skipped**. The single divergence was `numa-local-rate`
   on `AB_base.parquet`, `rel ≈ 2.7e-5` — floating-point residual
-  from the 5-min RANGE arithmetic; sub-tolerance. Three behavioural
-  fixes landed in the SQL pipeline to align with PromQL semantics:
+  from the 5-min RANGE arithmetic; sub-tolerance. The harness and
+  PromQL evaluator are gone post-deletion; the L2 parquet↔live
+  parity tests in `metriken-query-sql/src/live.rs::tests` are the
+  current regression catch. Three behavioural fixes landed in the
+  SQL pipeline to align with PromQL semantics:
   - `rate_5m_total`: `RANGE 5m PRECEDING` → `5m − 1 ns` to exclude
     the boundary sample at `t − 5m` (PromQL's strict-greater
     semantics on parquets with sub-second start offsets).
@@ -119,10 +126,10 @@ reads `review.md`; the newcomer reads `architecture.md`.
   cargo tree -p rezolus | grep 'metriken-query ' # empty (only metriken-query-sql appears)
 
   # Native + frontend + smoke
-  cargo test --bin rezolus                       # ~184
+  cargo test --bin rezolus                       # 191 tests
   cargo test -p dashboard -p prom-matrix -p viewer-sql -p report-save
   cargo test --test mcp_cli                      # 8
-  node --test tests/*.mjs                        # 116 pass / 0 fail
+  node --test tests/*.mjs                        # 122 pass / 0 fail
   bash tests/viewer_smoke.sh                     # requires jq
 
   # Headless-Chromium per-section render check. Drives `rezolus view

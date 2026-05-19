@@ -131,10 +131,11 @@ The binary operates in seven modes via subcommands:
      `/api/v1/query{,_range}` dispatch is uniform across modes.
      `validate_service_extensions` runs each KPI's SQL through the
      same backend; no PromQL anywhere.
-   - Service-extension KPI sections: 128/218 templates ship `sql`
-     fields (`91ea72e`); the remaining 90 render as `_unavailable`
-     placeholder cards via the silent-render path (`6054fe2`). SQL
-     transcription continues post-merge.
+   - Service-extension KPI sections: 209/218 templates ship `sql`
+     fields (`91ea72e` + `9b9165f` + `9daefc6` + `cd92f18`); the
+     remaining 9 (all in `inference-library.json`, a placeholder
+     template) render as `_unavailable` cards via the silent-render
+     path (`6054fe2`).
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation,
    SQL queries). Runs against parquet files via
    `metriken_query_sql::DuckDbBackend` after the May-2026 migration. The
