@@ -16,6 +16,7 @@ import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
+import { QueryExplorer, SingleChartView } from './features/explorers.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import {
@@ -587,6 +588,22 @@ const SectionContent = {
             });
         }
 
+        if (sectionName === 'Query Explorer') {
+            // Pinned single-chart variant: `metadata.singleChart` is
+            // populated by the `/:section/chart/:chartId` resolver.
+            if (attrs.metadata?.singleChart) {
+                return m(SingleChartView, {
+                    section: attrs.metadata.singleChart.section,
+                    chartId: attrs.metadata.singleChart.chartId,
+                    sectionResponseCache,
+                    chartsState,
+                });
+            }
+            return m('div#section-content', [
+                m(QueryExplorer, { chartsState }),
+            ]);
+        }
+
         if (sectionName === 'Report') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(ReportView, {
@@ -712,6 +729,7 @@ const metadataSection = { name: 'Metadata', route: '/metadata' };
 const notebookSection = { name: 'Notebook', route: '/notebook' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
+const querySection = { name: 'Query Explorer', route: '/query' };
 
 const bootstrapCacheIfNeeded = () => {
     if (Object.keys(sectionResponseCache).length > 0) return;
@@ -863,6 +881,30 @@ const initDashboard = (config = {}) => {
             withSharedSections: withCachedSections,
             getDefaultRoute: () => defaultRoute,
         }),
+        '/chart/:section/:chartId': {
+            // Pinned single-chart route. Resolved off the section
+            // response cache — if the section data hasn't loaded
+            // yet, the user will see a "section not loaded" message.
+            onmatch(params) {
+                bootstrapCacheIfNeeded();
+                const anyCached = Object.values(sectionResponseCache)[0];
+                return {
+                    view() {
+                        return m(Main, {
+                            activeSection: querySection,
+                            groups: [],
+                            sections: getCachedSections(),
+                            compareMode,
+                            source: anyCached?.source,
+                            version: anyCached?.version,
+                            filename: anyCached?.filename,
+                            interval: anyCached?.interval,
+                            metadata: { singleChart: { section: params.section, chartId: params.chartId } },
+                        });
+                    },
+                };
+            },
+        },
         '/about': {
             render() {
                 return m('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem' },
@@ -944,6 +986,17 @@ const initDashboard = (config = {}) => {
                         sectionResponseCache,
                         getCachedSections,
                         reportSection,
+                        () => compareMode,
+                    );
+                }
+
+                if (params.section === 'query') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        querySection,
                         () => compareMode,
                     );
                 }
