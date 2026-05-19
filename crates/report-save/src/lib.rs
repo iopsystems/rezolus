@@ -53,8 +53,9 @@ pub struct ReportPayload {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportEntry {
+    #[serde(alias = "promql_query")]
     pub sql_query: String,
-    #[serde(default)]
+    #[serde(default, alias = "promql_query_experiment")]
     pub sql_query_experiment: Option<String>,
 }
 
@@ -554,6 +555,31 @@ mod sql_resolve_tests {
         let bytes = build_empty_parquet_bytes();
         let result = save_single_parquet_sql(bytes, &payload, "{}", &cat, false);
         assert!(result.is_ok(), "embed-only path should succeed");
+    }
+
+    /// Saved-report payloads created on `main` (pre-purge) used
+    /// `promql_query` / `promql_query_experiment` field names. The
+    /// alias deserializes those onto the canonical SQL-named fields
+    /// so older saved selections still round-trip.
+    #[test]
+    fn deserializes_legacy_promql_field_names() {
+        let json = r#"{
+            "entries": [
+                {
+                    "promql_query": "irate_1s(\"cpu_usage/user/0\", timestamp)",
+                    "promql_query_experiment": null
+                }
+            ],
+            "trim_columns": true,
+            "events": []
+        }"#;
+        let payload: ReportPayload = serde_json::from_str(json).expect("legacy payload deserializes");
+        assert_eq!(payload.entries.len(), 1);
+        assert_eq!(
+            payload.entries[0].sql_query,
+            "irate_1s(\"cpu_usage/user/0\", timestamp)"
+        );
+        assert!(payload.entries[0].sql_query_experiment.is_none());
     }
 
     /// Build a parquet with only timestamp/duration columns and one
