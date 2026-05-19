@@ -601,6 +601,7 @@ const SectionContent = {
                 return m(SingleChartView, {
                     section: attrs.metadata.singleChart.section,
                     chartId: attrs.metadata.singleChart.chartId,
+                    initialHeatmap: attrs.metadata.singleChart.initialHeatmap,
                     sectionResponseCache,
                     chartsState,
                 });
@@ -894,11 +895,14 @@ const initDashboard = (config = {}) => {
             // Resolves the chart from the section response cache; if
             // the section isn't cached yet (direct nav into a new tab),
             // kick off a load and let m.redraw refresh once data arrives.
+            // `?heatmap=1` carries the dashboard's heatmap-toggle state
+            // so histogram charts open in the right mode.
             onmatch(params) {
                 bootstrapCacheIfNeeded();
                 if (!sectionResponseCache[params.section]) {
                     loadSection(params.section).then(() => m.redraw()).catch(() => {});
                 }
+                const initialHeatmap = params.heatmap === '1' || params.heatmap === 'true';
                 return {
                     view() {
                         const anyCached = Object.values(sectionResponseCache)[0];
@@ -911,7 +915,7 @@ const initDashboard = (config = {}) => {
                             version: anyCached?.version,
                             filename: anyCached?.filename,
                             interval: anyCached?.interval,
-                            metadata: { singleChart: { section: params.section, chartId: params.chartId } },
+                            metadata: { singleChart: { section: params.section, chartId: params.chartId, initialHeatmap } },
                         });
                     },
                 };

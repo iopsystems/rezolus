@@ -335,6 +335,17 @@
     height: 500px;
 }
 
+.single-chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.single-chart-header h2 {
+    margin: 0;
+}
+
 .single-chart-fields {
     margin-top: 1.5rem;
     display: flex;

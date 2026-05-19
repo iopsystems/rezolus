@@ -2,7 +2,7 @@
 // regular Group component and the cgroup section renderer.
 
 import { isSelected, toggleSelection } from '../selection/selection.js';
-import { resolvedStyle } from '../charts/metric_types.js';
+import { resolvedStyle, isHistogramPlot } from '../charts/metric_types.js';
 
 /**
  * Compact per-chart toggle rendered in the chart header when compare
@@ -96,13 +96,18 @@ const EXPAND_ICON_PATH = 'M10 1h5v5h-1.5V3.56L9.78 7.28 8.72 6.22l3.72-3.72H10V1
 
 const PIN_ICON_PATH = 'M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a5.927 5.927 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707-.195-.195.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a5.922 5.922 0 0 1 1.013.16l3.134-3.133a2.772 2.772 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146z';
 
-export const expandLink = (spec, sectionRoute) => {
+export const expandLink = (spec, sectionRoute, opts = {}) => {
     if (!spec.sql_query) return null;
     const prefix = (typeof m !== 'undefined' && m.route && m.route.prefix) || '';
     // Encode the section path as a single param so multi-segment routes
     // like `/service/vllm` survive the route matcher's per-segment split.
     const sectionParam = encodeURIComponent(sectionRoute.replace(/^\//, ''));
-    const href = `${prefix}/chart/${sectionParam}/${encodeURIComponent(spec.opts.id)}`;
+    // Carry the section's current heatmap-toggle state in the URL so a
+    // mid-tab nav lands the single-chart view in the same mode as the
+    // dashboard the user clicked from. Only meaningful for histogram
+    // plots; for others the flag is a no-op.
+    const query = opts.heatmapMode && isHistogramPlot(spec) ? '?heatmap=1' : '';
+    const href = `${prefix}/chart/${sectionParam}/${encodeURIComponent(spec.opts.id)}${query}`;
     return m('a.chart-expand', {
         href, target: '_blank', title: 'Open in new tab',
         onclick: (e) => e.stopPropagation(),

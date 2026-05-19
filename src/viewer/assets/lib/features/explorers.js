@@ -7,7 +7,8 @@
 
 import { Chart } from '../charts/chart.js';
 import { ViewerApi } from '../viewer_api.js';
-import { applyResultToPlot } from '../data.js';
+import { applyResultToPlot, fetchHeatmapForPlot } from '../data.js';
+import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { readHistory, pushHistory } from './sql_history.js';
 
 // Re-export for tests + outside callers.
@@ -202,10 +203,22 @@ export const QueryExplorer = {
  * from the supplied cache and locates a plot by `opts.id`. Caller
  * routes here via `/chart/:section/:chartId`, where `section` is the
  * URL-encoded section path (single-segment or multi-segment).
+ *
+ * For histogram plots, mirrors the dashboard's "Show Heatmaps"
+ * affordance with a per-view toggle: percentile-line view by default,
+ * heatmap view when the user clicks the toggle.
  */
 export const SingleChartView = {
+    oninit(vnode) {
+        vnode.state.heatmapMode = false;
+        vnode.state.heatmapData = null;
+        vnode.state.heatmapLoading = false;
+        vnode.state.heatmapPrefetchKicked = false;
+    },
+
     view(vnode) {
-        const { section, chartId, sectionResponseCache, chartsState } = vnode.attrs;
+        const { section, chartId, sectionResponseCache, chartsState, initialHeatmap } = vnode.attrs;
+        const st = vnode.state;
         const cached = sectionResponseCache[section];
         if (!cached) {
             return m('div.single-chart-main', m('p', 'Section data not loaded.'));
@@ -241,11 +254,61 @@ export const SingleChartView = {
             opts: { ...target.opts },
             width: 'full',
         };
+        const isHistogram = isHistogramPlot(target);
+
+        // Honor `?heatmap=1` from the URL once per mount, after the
+        // target plot is resolved. We can't fetch in oninit because
+        // the section's data may still be loading at that point.
+        if (initialHeatmap && isHistogram && !st.heatmapPrefetchKicked) {
+            st.heatmapPrefetchKicked = true;
+            st.heatmapLoading = true;
+            (async () => {
+                try {
+                    st.heatmapData = await fetchHeatmapForPlot(target);
+                    if (st.heatmapData) st.heatmapMode = true;
+                } finally {
+                    st.heatmapLoading = false;
+                    m.redraw();
+                }
+            })();
+        }
+
+        const chartSpec = (st.heatmapMode && st.heatmapData)
+            ? buildHistogramHeatmapSpec(spec, st.heatmapData)
+            : spec;
+
+        const toggleHeatmap = async () => {
+            if (st.heatmapMode) {
+                st.heatmapMode = false;
+                m.redraw();
+                return;
+            }
+            if (!st.heatmapData) {
+                st.heatmapLoading = true;
+                m.redraw();
+                try {
+                    st.heatmapData = await fetchHeatmapForPlot(target);
+                } finally {
+                    st.heatmapLoading = false;
+                }
+            }
+            if (st.heatmapData) st.heatmapMode = true;
+            m.redraw();
+        };
+
         return m('div.single-chart-main',
             m('div.single-chart-view.single-chart-container', [
-                m('h2', spec.opts.title),
+                m('div.single-chart-header', [
+                    m('h2', spec.opts.title),
+                    isHistogram && m('button.section-action-btn', {
+                        onclick: toggleHeatmap,
+                        disabled: st.heatmapLoading,
+                    }, st.heatmapLoading
+                        ? 'LOADING...'
+                        : (st.heatmapMode ? 'SHOW PERCENTILES' : 'SHOW HEATMAP')),
+                ]),
                 spec.opts.description && m('p.chart-description', spec.opts.description),
-                m(Chart, { spec, chartsState, interval: cached.interval || 1 }),
+                m(Chart, { spec: chartSpec, chartsState, interval: cached.interval || 1 }),
             ]),
         );
     },

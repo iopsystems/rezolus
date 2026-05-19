@@ -497,7 +497,7 @@ export function createGroupComponent(getState) {
                     m('div.chart-wrapper', [
                         chartHeader(renderSpec.opts, renderSpec),
                         chartBody(renderSpec, spec),
-                        expandLink(spec, sectionRoute),
+                        expandLink(spec, sectionRoute, { heatmapMode: isHeatmapMode }),
                         selectButton(spec, sectionRoute, sectionName, attrs.name, compareMode ? {
                             baselineAlias: captureLabels.baseline,
                             experimentAlias: captureLabels.experiment,
