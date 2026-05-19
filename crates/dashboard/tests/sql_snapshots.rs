@@ -2,10 +2,11 @@
 //!
 //! These pin the exact SQL string each emitter produces for a
 //! representative argument set. They are the only direct unit signal
-//! on `crates/dashboard/src/sql.rs` (627 LOC, 16 functions, used by
-//! 130+ plot calls in `crates/dashboard/src/dashboard/*.rs`); without
-//! them the only feedback on emitter drift is the end-to-end
-//! `sql_vs_promql` harness against real parquets.
+//! on `crates/dashboard/src/sql.rs` (~715 LOC, 16 functions, used by
+//! ~180 plot calls in `crates/dashboard/src/dashboard/*.rs`); without
+//! them the only feedback on emitter drift is end-to-end integration
+//! tests against real parquets (chromium per-section smoke + the L2
+//! parity tests in `metriken-query-sql/src/live.rs::tests`).
 //!
 //! Running:
 //!   cargo test -p dashboard --test sql_snapshots

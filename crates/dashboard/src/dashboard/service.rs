@@ -50,7 +50,7 @@ pub fn generate(
     // Group KPIs by role. Within each role group, KPIs with the same
     // `subgroup` value land in a named subgroup; KPIs without a subgroup
     // land in the role's default unnamed subgroup (lazily created on
-    // first use by `Group::plot_promql*`).
+    // first use by `Group::plot_sql*`).
     let mut groups: Vec<(String, Group)> = Vec::new();
     let mut unavailable: Vec<serde_json::Value> = Vec::new();
 
@@ -59,10 +59,17 @@ pub fn generate(
             unavailable.push(serde_json::json!({
                 "title": kpi.title,
                 "role": kpi.role,
-                "query": kpi.query,
             }));
             continue;
         }
+
+        // KPIs without `sql` are skipped entirely — the frontend
+        // renders them as `_unavailable` placeholder cards via the
+        // silent-render path. Transcribe SQL in the template to make
+        // a KPI plot render.
+        let Some(sql) = kpi.sql.as_deref() else {
+            continue;
+        };
 
         let plot_id = format!("kpi-{}-{}", kpi.role, slug(&kpi.title));
 
@@ -110,21 +117,13 @@ pub fn generate(
             None => group.default_subgroup(),
         };
 
-        match (kpi.sql.as_deref(), kpi.full_width) {
-            (Some(sql), true) => {
-                let sql = substitute_view(sql, &service_ext.service_name);
-                sg.plot_promql_with_sql_full(opts, kpi.query.clone(), sql);
-            }
-            (Some(sql), false) => {
-                let sql = substitute_view(sql, &service_ext.service_name);
-                sg.plot_promql_with_sql(opts, kpi.query.clone(), sql);
-            }
-            (None, true) => {
-                sg.plot_promql_full(opts, kpi.query.clone());
-            }
-            (None, false) => {
-                sg.plot_promql(opts, kpi.query.clone());
-            }
+        // Resolve `{{view}}` against the service name and emit the
+        // plot (full-width or half).
+        let sql = substitute_view(sql, &service_ext.service_name);
+        if kpi.full_width {
+            sg.plot_sql_full(opts, sql);
+        } else {
+            sg.plot_sql(opts, sql);
         }
     }
 
@@ -154,7 +153,6 @@ mod tests {
             role: "throughput".to_string(),
             title: title.to_string(),
             description: None,
-            query: query.to_string(),
             sql: sql.map(str::to_string),
             metric_type: "delta_counter".to_string(),
             subtype: None,
@@ -168,16 +166,14 @@ mod tests {
         }
     }
 
-    /// `sql: None` KPIs must serialize a plot that carries `promql_query`
-    /// but no `sql_query`. The SQL-backed frontend dispatcher reads the
-    /// absence of `sql_query` as "render the not-yet-migrated placeholder"
-    /// — see review/review.md "Known regressions" item 1 and the BACKEND='sql'
-    /// branch in `site/viewer/lib/data.js`. If a future change starts
-    /// emitting `sql_query: ""` or some other shape, the frontend would
-    /// silently try to run an empty SQL string instead of rendering the
-    /// placeholder; this test pins the contract.
+    /// `sql: None` KPIs are skipped entirely after the P3 PromQL-emitter
+    /// purge — the frontend no longer renders PromQL, so a plot that
+    /// only carries `promql_query` produces nothing useful. KPIs pending
+    /// SQL transcription will reappear once their template gains a `sql`
+    /// field. SQL-bearing KPIs emit `sql_query` and never `promql_query`
+    /// (the field is reserved for a P4 struct deletion).
     #[test]
-    fn kpi_sql_none_emits_promql_query_only() {
+    fn kpi_sql_none_is_skipped() {
         let ext = ServiceExtension {
             service_name: "vllm".to_string(),
             aliases: vec![],
@@ -192,20 +188,8 @@ mod tests {
         let view = generate(&EmptyDashboardData, vec![], &ext);
         let json = serde_json::to_string(&view).unwrap();
 
-        // Both KPIs land in a single throughput group; both PromQL strings
-        // are present.
-        assert!(
-            json.contains("rate_promql"),
-            "SQL kpi's promql_query missing: {json}"
-        );
-        assert!(
-            json.contains("legacy_promql"),
-            "legacy kpi's promql_query missing: {json}"
-        );
-
-        // The SQL kpi's body is serialized; the legacy kpi's is absent.
-        // `sql_query` uses `skip_serializing_if = Option::is_none`, so the
-        // field key itself appears once (for the SQL kpi) and only once.
+        // The SQL kpi's body is serialized; the legacy kpi is absent
+        // from the JSON entirely (no plot, no promql_query reference).
         assert!(
             json.contains("\"sql_query\":\"SELECT 1\""),
             "SQL kpi's sql_query body missing: {json}"
@@ -214,6 +198,22 @@ mod tests {
             json.matches("\"sql_query\"").count(),
             1,
             "expected exactly one sql_query field (the SQL kpi); got: {json}"
+        );
+        // The PromQL-only KPI is gone; neither its title nor its query
+        // string should appear anywhere in the output.
+        assert!(
+            !json.contains("legacy_promql"),
+            "PromQL-only KPI leaked into emitted plot: {json}"
+        );
+        assert!(
+            !json.contains("Rate (legacy)"),
+            "PromQL-only KPI title leaked into emitted plot: {json}"
+        );
+        // The SQL KPI carries no promql_query — the field is `None` and
+        // therefore elided by `skip_serializing_if`.
+        assert!(
+            !json.contains("\"promql_query\""),
+            "no plot should serialize a promql_query field: {json}"
         );
     }
 

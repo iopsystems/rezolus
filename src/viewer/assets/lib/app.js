@@ -2,13 +2,12 @@
 // Exports initDashboard(config) which sets up state and mounts the Mithril router.
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { QueryExplorer, SingleChartView } from './features/explorers.js';
 import { CgroupSelector } from './features/cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
+import { applyResultToPlot, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, CAPTURE_EXPERIMENT } from './data.js';
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
 import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -79,9 +78,9 @@ let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
 let experimentFilename = null;
-// {start, end, step} in PromQL-native seconds, cached at compare-mode
-// entry so every CompareChartWrapper skips its per-chart
-// ViewerApi.getMetadata round-trip. Cleared on detach.
+// {start, end, step} in seconds (matches plot.data[0] timestamps),
+// cached at compare-mode entry so every CompareChartWrapper skips its
+// per-chart ViewerApi.getMetadata round-trip. Cleared on detach.
 let experimentQueryRange = null;
 export const getExperimentQueryRange = () => experimentQueryRange;
 
@@ -146,9 +145,9 @@ const durationFromFileMetadata = (fileMeta) => {
     return null;
 };
 
-// /api/v1/metadata returns minTime/maxTime in PromQL-native seconds
-// (same scale as plot.data[0] timestamps). Returns null when the
-// response shape doesn't include a recognisable time range.
+// /api/v1/metadata returns minTime/maxTime in seconds (same scale as
+// plot.data[0] timestamps). Returns null when the response shape
+// doesn't include a recognisable time range.
 const queryRangeFromMeta = (meta) => {
     const data = meta?.data ?? meta;
     const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
@@ -375,7 +374,6 @@ const CLIENT_ONLY_SECTIONS = new Set([
     'report',
     'systeminfo',
     'metadata',
-    'query_explorer',
 ]);
 
 const changeGranularity = async (step) => {
@@ -398,9 +396,9 @@ const changeGranularity = async (step) => {
     chartsState.globalZoom = null;
 
     // Data sections refetch themselves; client-only sections (Selection,
-    // Report, System Info, Metadata, Query Explorer) need overview
-    // primed so the sidebar + topnav meta stays populated after the
-    // cache wipe — otherwise the whole nav collapses.
+    // Report, System Info, Metadata) need overview primed so the
+    // sidebar + topnav meta stays populated after the cache wipe —
+    // otherwise the whole nav collapses.
     const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
 
     try {
@@ -420,11 +418,15 @@ const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     }
 };
 
-const fetchSectionHeatmapData = async (sectionRoute, groups) => {
+// Heatmap fetching previously round-tripped through a now-deleted
+// histogram_heatmap wrapper. Keep the API surface (toggleGlobalHeatmap
+// callers and reloadCurrentSection) but no longer populate
+// per-section heatmap data — the histograms the dashboard ships
+// render via their existing SQL heatmap projections.
+const fetchSectionHeatmapData = async (sectionRoute, _groups) => {
     heatmapLoading = true;
     m.redraw();
-    const heatmapData = await fetchHeatmapsForGroups(groups);
-    heatmapDataCache.set(sectionRoute, heatmapData);
+    heatmapDataCache.set(sectionRoute, new Map());
     heatmapLoading = false;
     m.redraw();
 };
@@ -522,12 +524,6 @@ const SectionContent = {
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => chartsState.replayZoom());
             });
-        }
-
-        if (sectionName === 'Query Explorer') {
-            return m('div#section-content', [
-                m(QueryExplorer, { liveMode, isRecording: () => recording }),
-            ]);
         }
 
         if (sectionName === 'System Info') {
@@ -630,41 +626,25 @@ const SectionContent = {
                 chartsState,
                 Chart,
                 CgroupSelector,
-                executePromQLRangeQuery: (query, ...args) => {
-                    // 1) `injectLabel` is PromQL-shaped (wraps tokens
-                    //    in `{label="value"}` braces). Applying it to
-                    //    a SELECT/WITH body produces invalid SQL — e.g.
-                    //    `SELECT 0::DOUBLE AS t, name AS name, COUNT(*)::DOUBLE AS v`
-                    //    → `SELECT{node=…} 0::DOUBLE{node=…} AS t…`,
-                    //    which DuckDB binder-errors on. Skip the
-                    //    injector for SQL bodies; node filtering for
-                    //    multi-node parquets on SQL is a deferred
-                    //    carve-out.
-                    // 2) `__SELECTED_CGROUPS__` substitution. On the
-                    //    WASM viewer the registry layer substitutes
-                    //    inside duckdb-wasm; on the server backend
-                    //    the placeholder otherwise reaches DuckDB and
-                    //    binder-errors. Build a SQL IN-list literal
-                    //    `('name1','name2')` from the current
-                    //    `activeCgroupPattern` (set by
-                    //    `setActiveCgroupPattern` below from the
-                    //    selector's emitted names) and substitute
-                    //    before send. Empty selection → IN-list with
-                    //    a single empty string (`('')`) which matches
-                    //    nothing on the individual side and (via the
-                    //    `NOT IN` filter) matches everything on the
-                    //    aggregate side, matching legacy behaviour.
-                    const node = getSelectedNode();
-                    const isSqlQuery = /^\s*(?:WITH|SELECT)\b/i.test(query);
-                    if (node && !isSqlQuery) query = injectLabel(query, 'node', node);
-                    if (query.includes('__SELECTED_CGROUPS__')) {
-                        const pattern = activeCgroupPattern || "('')";
-                        query = substituteCgroupPattern(query, pattern);
+                executeQuery: async (query) => {
+                    // Server backend resolves `__SELECTED_CGROUPS__`
+                    // server-side from the capture registry; the
+                    // wrapper here only needs to forward the SQL
+                    // verbatim alongside the auto-derived range/step
+                    // (matches the dashboard fetch path).
+                    const meta = (await ViewerApi.getMetadata())?.data;
+                    const minTime = meta?.minTime;
+                    const maxTime = meta?.maxTime;
+                    if (minTime == null || maxTime == null) {
+                        return { status: 'error', error: 'missing metadata' };
                     }
-                    return executePromQLRangeQuery(query, ...args);
+                    const duration = maxTime - minTime;
+                    const windowDuration = Math.min(3600, duration);
+                    const start = Math.max(minTime, maxTime - windowDuration);
+                    const step = getStepOverride() || Math.max(1, Math.floor(windowDuration / 500));
+                    return ViewerApi.queryRange(query, start, maxTime, step);
                 },
                 applyResultToPlot,
-                substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
                 globalColorMapper,
             });
@@ -691,10 +671,9 @@ const SectionContent = {
                     // Hide the percentile↔heatmap toggle in compare
                     // mode — the compare adapter's histogram-heatmap
                     // side-by-side path doesn't yet populate experiment
-                    // bucket data through fetchHeatmapsForGroups, so
-                    // toggling renders the baseline heatmap next to an
-                    // empty experiment pane. Re-enable when that gap
-                    // is closed.
+                    // bucket data, so toggling renders the baseline
+                    // heatmap next to an empty experiment pane.
+                    // Re-enable when that gap is closed.
                     !compareMode && m('button.section-action-btn', {
                         onclick: () => toggleGlobalHeatmap(sectionRoute, attrs.groups),
                         disabled: heatmapLoading || !hasHistogramCharts,
@@ -860,46 +839,6 @@ const initDashboard = (config = {}) => {
 
     m.route.prefix = '#';
     m.route(document.body, defaultRoute, {
-        '/:section/chart/:chartId': {
-            onmatch(params) {
-                const sectionKey = params.section;
-                const makeSingleChartView = () => ({
-                    view() {
-                        const data = sectionResponseCache[sectionKey];
-                        const activeSection = getCachedSections()
-                            .find(s => s.route === `/${sectionKey}`);
-                        if (!data) {
-                            return m('div#splash', m('div.card', [
-                                m('h1', activeSection?.name || 'Loading'),
-                                m('p.subtitle', 'Loading…'),
-                                m('div.progress-bar',
-                                    m('div.progress-fill.indeterminate'),
-                                ),
-                            ]));
-                        }
-                        return m('div', [
-                            m(TopNav, topNavAttrs(data, activeSection?.route)),
-                            m('main.single-chart-main', [
-                                m(SingleChartView, {
-                                    data,
-                                    chartId: decodeURIComponent(params.chartId),
-                                    applyResultToPlot,
-                                }),
-                            ]),
-                        ]);
-                    },
-                });
-
-                // Resolve synchronously regardless of cache state — see
-                // the matching comment in '/:section' below for rationale.
-                if (!sectionResponseCache[sectionKey]) {
-                    loadSection(sectionKey)
-                        .then(() => m.redraw())
-                        .catch(() => {});
-                }
-                return makeSingleChartView();
-            },
-        },
         ...createServiceRoutes({
             sectionResponseCache,
             loadSection,
@@ -908,7 +847,6 @@ const initDashboard = (config = {}) => {
             Main,
             TopNav,
             topNavAttrs,
-            SingleChartView,
             applyResultToPlot,
             getCompareMode: () => compareMode,
             getSections: getCachedSections,

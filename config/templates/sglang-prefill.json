@@ -6,7 +6,6 @@
     {
       "role": "requests",
       "title": "Requests Running",
-      "query": "sglang_num_running_reqs{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "count",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"sglang_num_running_reqs\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
@@ -14,7 +13,6 @@
     {
       "role": "requests",
       "title": "Request Rate",
-      "query": "sum(irate(sglang_num_requests_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_num_requests_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -22,7 +20,6 @@
     {
       "role": "requests",
       "title": "Abort Rate",
-      "query": "sum(irate(sglang_num_aborted_requests_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_num_aborted_requests_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -30,7 +27,6 @@
     {
       "role": "tokens",
       "title": "Prompt Token Rate",
-      "query": "sum(irate(sglang_prompt_tokens_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "denominator": true,
@@ -39,7 +35,6 @@
     {
       "role": "tokens",
       "title": "Realtime Token Rate (Prefill Compute)",
-      "query": "sum(irate(sglang_realtime_tokens_total{source=\"sglang-prefill\",mode=\"prefill_compute\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_realtime_tokens_total/prefill_compute\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -47,7 +42,6 @@
     {
       "role": "tokens",
       "title": "Realtime Token Rate (Prefill Cache)",
-      "query": "sum(irate(sglang_realtime_tokens_total{source=\"sglang-prefill\",mode=\"prefill_cache\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_realtime_tokens_total/prefill_cache\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -55,7 +49,6 @@
     {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
-      "query": "sglang_time_to_first_token_seconds{source=\"sglang-prefill\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -67,7 +60,6 @@
     {
       "role": "latency",
       "title": "Prefill Time",
-      "query": "sglang_per_stage_req_latency_seconds{stage=\"prefill_forward\",source=\"sglang-prefill\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -79,7 +71,6 @@
     {
       "role": "latency",
       "title": "End-to-End Request Latency",
-      "query": "sglang_e2e_request_latency_seconds{source=\"sglang-prefill\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -91,7 +82,6 @@
     {
       "role": "queueing",
       "title": "Requests Waiting",
-      "query": "sglang_num_queue_reqs{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "count",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"sglang_num_queue_reqs\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
@@ -99,7 +89,6 @@
     {
       "role": "queueing",
       "title": "Queue Time",
-      "query": "sglang_queue_time_seconds{source=\"sglang-prefill\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -111,7 +100,6 @@
     {
       "role": "queueing",
       "title": "Prefill Prealloc Queue Requests",
-      "query": "sglang_num_prefill_prealloc_queue_reqs{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "count",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"sglang_num_prefill_prealloc_queue_reqs\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
@@ -119,7 +107,6 @@
     {
       "role": "queueing",
       "title": "Prefill Inflight Queue Requests",
-      "query": "sglang_num_prefill_inflight_queue_reqs{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "count",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"sglang_num_prefill_inflight_queue_reqs\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
@@ -127,7 +114,6 @@
     {
       "role": "cache",
       "title": "Cache Hit Rate",
-      "query": "sglang_cache_hit_rate{source=\"sglang-prefill\"}",
       "type": "gauge",
       "unit_system": "percentage",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"sglang_cache_hit_rate\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
@@ -135,7 +121,6 @@
     {
       "role": "cache",
       "title": "Cached Token Rate",
-      "query": "sum(irate(sglang_cached_tokens_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_cached_tokens_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -143,7 +128,6 @@
     {
       "role": "cache",
       "title": "Evicted Token Rate",
-      "query": "sum(irate(sglang_evicted_tokens_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_evicted_tokens_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -151,7 +135,6 @@
     {
       "role": "gpu",
       "title": "Estimated FLOPS per GPU",
-      "query": "sum(irate(sglang_estimated_flops_per_gpu_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_estimated_flops_per_gpu_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -159,7 +142,6 @@
     {
       "role": "gpu",
       "title": "Estimated Memory Read Bandwidth per GPU",
-      "query": "sum(irate(sglang_estimated_read_bytes_per_gpu_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "datarate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_estimated_read_bytes_per_gpu_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -167,7 +149,6 @@
     {
       "role": "gpu",
       "title": "Estimated Memory Write Bandwidth per GPU",
-      "query": "sum(irate(sglang_estimated_write_bytes_per_gpu_total{source=\"sglang-prefill\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "datarate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"sglang_estimated_write_bytes_per_gpu_total\", timestamp) AS v FROM {{view}} ORDER BY t"

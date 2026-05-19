@@ -39,11 +39,10 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
 
     let queueing = scheduler.subgroup("Runqueue Latency");
     queueing.describe("How long tasks waited on the runqueue before getting CPU time.");
-    queueing.plot_promql_with_sql_full(
+    queueing.plot_sql_full(
         PlotOpts::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
             .with_axis_label("Latency")
             .with_unit_system("time"),
-        "scheduler_runqueue_latency".to_string(),
         hist_percentile_series_sql("scheduler_runqueue_latency"),
     );
 
@@ -79,45 +78,40 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
               JOIN _src c ON c.timestamp = s.timestamp"#
         .to_string();
     if multi_cpu {
-        wait.plot_promql_with_sql(
+        wait.plot_sql(
             PlotOpts::counter("Wait", "scheduler-runqueue-wait", Unit::Time)
                 .with_unit_system("time"),
-            "sum(irate(scheduler_runqueue_wait[5m])) / cpu_cores".to_string(),
             wait_avg_sql,
         );
-        wait.plot_promql_with_sql(
+        wait.plot_sql(
             PlotOpts::counter(
                 "Wait (Per-CPU)",
                 "scheduler-runqueue-wait-per-cpu",
                 Unit::Time,
             )
             .with_unit_system("time"),
-            "sum by (id) (irate(scheduler_runqueue_wait[5m]))".to_string(),
             sql::irate_by_id("^scheduler_runqueue_wait/[0-9]+$", "/([0-9]+)$"),
         );
     } else {
-        wait.plot_promql_with_sql_full(
+        wait.plot_sql_full(
             PlotOpts::counter("Wait", "scheduler-runqueue-wait", Unit::Time)
                 .with_unit_system("time"),
-            "sum(irate(scheduler_runqueue_wait[5m])) / cpu_cores".to_string(),
             wait_avg_sql,
         );
     }
 
     let timing = scheduler.subgroup("Task Timing");
     timing.describe("Time tasks spent off-CPU (blocked, waiting) and on-CPU (running).");
-    timing.plot_promql_with_sql(
+    timing.plot_sql(
         PlotOpts::histogram_latency("Off CPU Time", "off-cpu-time")
             .with_axis_label("Time")
             .with_unit_system("time"),
-        "scheduler_offcpu".to_string(),
         hist_percentile_series_sql("scheduler_offcpu"),
     );
-    timing.plot_promql_with_sql(
+    timing.plot_sql(
         PlotOpts::histogram_latency("Running Time", "running-time")
             .with_axis_label("Time")
             .with_unit_system("time"),
-        "scheduler_running".to_string(),
         hist_percentile_series_sql("scheduler_running"),
     );
 
@@ -132,22 +126,19 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
            SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(s, timestamp) AS v FROM agg"#
         .to_string();
     if multi_cpu {
-        switches.plot_promql_with_sql(
+        switches.plot_sql(
             PlotOpts::counter("Context Switch", "cswitch", Unit::Rate),
-            "sum(irate(scheduler_context_switch[5m]))".to_string(),
             cswitch_total_sql,
         );
-        switches.plot_promql_with_sql(
+        switches.plot_sql(
             PlotOpts::counter("Context Switch (Per-CPU)", "cswitch-per-cpu", Unit::Rate),
-            "sum by (id) (irate(scheduler_context_switch[5m]))".to_string(),
             // scheduler_context_switch has variant-suffixed columns
             // (multiple kinds per id); collapse per id, then irate.
             sql::irate_sum_by_id("^scheduler_context_switch(/[^:]+)?$", "/([0-9]+)$"),
         );
     } else {
-        switches.plot_promql_with_sql_full(
+        switches.plot_sql_full(
             PlotOpts::counter("Context Switch", "cswitch", Unit::Rate),
-            "sum(irate(scheduler_context_switch[5m]))".to_string(),
             cswitch_total_sql,
         );
     }

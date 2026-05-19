@@ -315,14 +315,11 @@ impl ViewerSql {
 
     /// Accept a JSON array of templates and (re)build the dashboard
     /// context so service/category sections show in `get_sections`.
-    /// Mirrors `Viewer::init_templates` in `crates/viewer/src/lib.rs:270`,
-    /// minus the Tsdb-backed KPI availability validation. viewer-sql
-    /// has no Tsdb; KPIs flow through with their default `available =
-    /// true`. Their plots emit `promql_query` only (no `sql_query`)
-    /// until `parquet annotate` learns to translate KPI PromQL → SQL,
-    /// so the frontend renders them as "query not yet available"
-    /// placeholders. The section nav structure is identical to the
-    /// legacy viewer's.
+    /// KPI availability validation runs at parquet-build time
+    /// (`parquet annotate`) on the server side; the WASM viewer
+    /// passes KPIs through with their default `available = true`.
+    /// KPIs without a transcribed `sql` field render as
+    /// `_unavailable` placeholders through the silent-render path.
     pub fn init_templates(&mut self, templates_json: &str) -> Result<(), JsValue> {
         let templates = parse_service_templates(templates_json)?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
@@ -343,9 +340,9 @@ impl ViewerSql {
 
     /// Detect this capture's matching service extensions from the
     /// parquet's `per_source_metadata` (or fall back to the simple
-    /// `source` field). Mirrors the structure of
-    /// `Viewer::detect_and_validate_service_exts` minus the Tsdb
-    /// validation step.
+    /// `source` field). The WASM viewer doesn't run the SQL
+    /// validation step — `parquet annotate` (server-side) has
+    /// already stamped `available: true/false` into the footer.
     fn detect_service_exts(
         &self,
         registry: &dashboard::TemplateRegistry,

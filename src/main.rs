@@ -19,11 +19,10 @@ mod agent;
 mod exporter;
 mod hindsight;
 // MCP runs against parquet files via `metriken_query_sql::DuckDbBackend`
-// (post-May-2026 migration). Builds unconditionally in default and
-// sql-only configurations. `parquet_tools` is also unconditional —
-// `annotate` runs KPI SQL through `DuckDbBackend`, `filter` reuses
-// `annotate::extract_metric_selectors` (a regex-only helper), and
-// neither path needs Tsdb.
+// (post-May-2026 migration). `parquet_tools::annotate` runs KPI SQL
+// through the same backend; `filter` reuses
+// `annotate::extract_metric_selectors` (a regex-only helper). Single
+// build configuration — no feature gates.
 mod mcp;
 mod parquet_metadata;
 mod parquet_tools;

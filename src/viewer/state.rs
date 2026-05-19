@@ -101,7 +101,8 @@ pub const LIVE_BASELINE_DATA_SOURCE: &str = "live:baseline";
 
 pub struct AppState {
     pub sections: RwLock<LazySectionStore>,
-    /// Per-capture TSDB + metadata. Single-capture callers always target
+    /// Per-capture data store + metadata (`SqlCapture` for file/upload/A-B,
+    /// `LiveCapture` for live agent). Single-capture callers always target
     /// `CaptureId::Baseline`; the experiment slot is empty unless a
     /// compare-mode hand-off has attached one.
     pub captures: Arc<CaptureRegistry>,
@@ -262,9 +263,9 @@ impl AppState {
     }
 
     /// True when the input artifact was a combined-A/B tarball
-    /// (extracted at startup into two per-side TSDBs). The frontend uses
-    /// this to distinguish a single-file compare from a two-file compare
-    /// in download / save flows.
+    /// (extracted at startup into two per-side `SqlCapture`s). The
+    /// frontend uses this to distinguish a single-file compare from a
+    /// two-file compare in download / save flows.
     pub fn combined_ab(&self) -> bool {
         self.combined_ab_marker.read().is_some()
     }
@@ -291,9 +292,9 @@ impl AppState {
         drop(store);
 
         // Pull scalar metadata + series count from whichever backend
-        // the baseline slot is using (Tsdb or SqlCapture); the
-        // DashboardData trait abstracts both. Default to zeros when
-        // no baseline is loaded yet (upload-only mode pre-upload).
+        // the baseline slot is using (`SqlCapture` or `LiveCapture`);
+        // the `DashboardData` trait abstracts both. Default to zeros
+        // when no baseline is loaded yet (upload-only mode pre-upload).
         let (interval, source, version, filename, start_time, end_time, num_series) = self
             .with_baseline_data(|data| {
                 let (start_time, end_time) = data

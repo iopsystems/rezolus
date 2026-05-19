@@ -1,4 +1,5 @@
 use crate::data::DashboardData;
+use crate::dashboard::service::substitute_view;
 use crate::plot::*;
 use crate::service_extension::{CategoryExtension, ServiceExtension};
 
@@ -125,17 +126,26 @@ pub fn generate(
             None => group.default_subgroup(),
         };
 
-        let baseline_query = kpi.effective_query(&baseline_kpi.query);
-        let experiment_query = kpi.effective_query(&experiment_kpi.query);
+        // Both sides must carry a SQL body; if either side is
+        // PromQL-only, skip the KPI entirely — the frontend no longer
+        // renders PromQL plots (P3 PromQL-emitter purge). KPIs will
+        // reappear once both members ship a `sql` field.
+        let (Some(baseline_sql), Some(experiment_sql)) =
+            (baseline_kpi.sql.as_deref(), experiment_kpi.sql.as_deref())
+        else {
+            continue;
+        };
+        let baseline_sql = substitute_view(baseline_sql, &baseline_ext.service_name);
+        let experiment_sql = substitute_view(experiment_sql, &experiment_ext.service_name);
         if kpi.full_width {
-            sg.plot_promql_full(opts, baseline_query.clone());
+            sg.plot_sql_full(opts, baseline_sql.clone());
         } else {
-            sg.plot_promql(opts, baseline_query.clone());
+            sg.plot_sql(opts, baseline_sql.clone());
         }
-        if experiment_query != baseline_query
+        if experiment_sql != baseline_sql
             && let Some(plot) = sg.plots_mut_last()
         {
-            plot.promql_query_experiment = Some(experiment_query);
+            plot.sql_query_experiment = Some(experiment_sql);
         }
     }
 
@@ -164,7 +174,6 @@ mod tests {
             role: role.to_string(),
             title: title.to_string(),
             description: None,
-            query: query.to_string(),
             sql: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
@@ -176,6 +185,12 @@ mod tests {
             subgroup_description: None,
             full_width: false,
         }
+    }
+
+    fn kpi_sql(role: &str, title: &str, query: &str, sql: &str) -> Kpi {
+        let mut k = kpi(role, title, query);
+        k.sql = Some(sql.to_string());
+        k
     }
 
     fn ext(name: &str, kpis: Vec<Kpi>) -> ServiceExtension {
@@ -211,11 +226,21 @@ mod tests {
 
         let vllm_ext = ext(
             "vllm",
-            vec![kpi("throughput", "Generation Token Rate", "vllm_q")],
+            vec![kpi_sql(
+                "throughput",
+                "Generation Token Rate",
+                "vllm_q",
+                "SELECT 1 AS t, 1 AS v FROM {{view}}",
+            )],
         );
         let sglang_ext = ext(
             "sglang",
-            vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
+            vec![kpi_sql(
+                "throughput",
+                "Generation Token Rate",
+                "sglang_q",
+                "SELECT 2 AS t, 2 AS v FROM {{view}}",
+            )],
         );
 
         let data = EmptyDashboardData;
@@ -244,8 +269,20 @@ mod tests {
             .expect("has plots");
         assert_eq!(plots.len(), 1);
         let plot = &plots[0];
-        assert_eq!(plot["promql_query"].as_str(), Some("vllm_q"));
-        assert_eq!(plot["promql_query_experiment"].as_str(), Some("sglang_q"));
+        // Baseline lands in `sql_query`; experiment lands in
+        // `sql_query_experiment`. `{{view}}` is resolved per-member.
+        assert_eq!(
+            plot["sql_query"].as_str(),
+            Some("SELECT 1 AS t, 1 AS v FROM _src_vllm")
+        );
+        assert_eq!(
+            plot["sql_query_experiment"].as_str(),
+            Some("SELECT 2 AS t, 2 AS v FROM _src_sglang")
+        );
+        // No promql_query field anywhere — the P3 emitter only writes
+        // SQL.
+        assert!(plot.get("promql_query").is_none());
+        assert!(plot.get("promql_query_experiment").is_none());
         assert_eq!(
             plot["opts"]["title"].as_str(),
             Some("Generation Token Rate")

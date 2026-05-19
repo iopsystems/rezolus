@@ -2,13 +2,6 @@
 // Transport abstraction mirrors the site/viewer WASM adapter — keep the
 // two in sync.
 
-// Tells data.js which of plot.{sql_query, promql_query} to prefer when
-// both are present. As of the Tsdb→DuckDB server migration, the server
-// runs SQL through metriken-query-sql::DuckDbBackend; sending the
-// PromQL form would parse-error. The static (WASM) viewer is also on
-// SQL via duckdb-wasm, so both deployments speak SQL uniformly.
-const BACKEND = 'sql';
-
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB — must match server DefaultBodyLimit
 
 const formatMB = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
@@ -36,13 +29,14 @@ const ViewerApi = {
         return null;
     },
 
-    // Server-backed viewer: cgroup selection is round-tripped through
-    // the client-side `activeCgroupPattern` (see `data.js` for the
-    // `__SELECTED_CGROUPS__` substitution). The static-viewer adapter
-    // overrides this to push the selection into the duckdb-wasm
-    // CaptureRegistry so each fresh capture-load also re-applies it.
-    // Server-side captures live in `AppState.captures` and don't need
-    // that round-trip, so this is a no-op stub.
+    // Server-backed viewer: cgroup selection is resolved server-side
+    // — SQL queries carry an `__SELECTED_CGROUPS__` placeholder the
+    // server / registry substitutes per request from its own selection
+    // state. The static-viewer adapter overrides this to push the
+    // selection into the duckdb-wasm CaptureRegistry so each fresh
+    // capture-load also re-applies it. Server-side captures live in
+    // `AppState.captures` and don't need a client-side push, so this
+    // is a no-op stub.
     setSelectedCgroups(_names, _captureId = 'baseline') {},
 
     // Mirror the static-viewer surface so any caller using
@@ -210,8 +204,6 @@ const ViewerApi = {
     async detachExperiment() {
         return backendRequest({ method: 'DELETE', url: '/api/v1/captures/experiment' });
     },
-
-    backend() { return BACKEND; },
 
     // POST the selection payload and stream the resulting parquet (or
     // *.parquet.ab.tar in compare mode) back as bytes. Mirrors the

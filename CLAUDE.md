@@ -185,15 +185,17 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 
 Service-level KPI dashboards are defined in
 `crates/dashboard/src/service_extension.rs` (`ServiceExtension`/`Kpi`
-structs). Each `Kpi` carries both `query` (PromQL, legacy) and an
-optional `sql` field (`fd285bb`). The dashboard's
-`service.rs::generate` calls `plot_promql_with_sql{,_full}` when
-`sql` is present and `plot_promql{,_full}` otherwise. Templates live
-in `config/templates/{cachecannon,vllm,vllm-prefill,vllm-decode,sglang,sglang-decode,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`
-and currently ship PromQL-only — transcription to SQL is the next
-known piece of work (see review/review.md). `parquet annotate` validates
-each KPI's SQL by running it through `DuckDbBackend`; KPIs without
-SQL are marked `available: false` with a warn-level log.
+structs). Each `Kpi` carries a single `sql: Option<String>` query
+body — DuckDB SQL with `{{view}}` substituted to `_src_<source>` at
+emit time. Templates live in
+`config/templates/{cachecannon,vllm,vllm-prefill,vllm-decode,sglang,sglang-decode,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`.
+KPIs without a transcribed `sql` field render as `_unavailable`
+placeholder cards via the silent-render path; custom templates
+must ship SQL, not PromQL (the PromQL surface was purged on this
+branch — see `review/review.md`'s _PromQL purge — completed_
+section). `parquet annotate` validates each KPI by running its SQL
+through `DuckDbBackend`; KPIs without SQL are marked
+`available: false` with a warn-level log.
 
 ### Static Site Viewer (WASM)
 

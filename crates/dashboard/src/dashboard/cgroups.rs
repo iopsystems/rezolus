@@ -13,24 +13,10 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         "aggregate"
     };
 
-    let filter = if individual {
-        "name=~\"__SELECTED_CGROUPS__\""
-    } else {
-        "name!~\"__SELECTED_CGROUPS__\""
-    };
-
     let side = if individual {
         CgroupSide::Individual
     } else {
         CgroupSide::Aggregate
-    };
-
-    let promql_rate = |metric: &str| {
-        if individual {
-            format!("sum by (name) (irate({metric}{{{filter}}}[5m]))")
-        } else {
-            format!("sum(irate({metric}{{{filter}}}[5m]))")
-        }
     };
 
     let sql_rate = |metric: &str, label_filter: Option<(&str, &str)>| -> String {
@@ -42,72 +28,54 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     };
 
     // CPU Total Cores
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter(
             "Total CPU Cores",
             format!("{prefix}-total-cores"),
             Unit::Count,
         ),
-        format!("{} / 1000000000", promql_rate("cgroup_cpu_usage")),
         sql::scale_v(sql_rate("cgroup_cpu_usage", None), 1e9),
     );
 
     // CPU User Cores
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter("User CPU Cores", format!("{prefix}-user-cores"), Unit::Count),
-        if individual {
-            format!("sum by (name) (irate(cgroup_cpu_usage{{state=\"user\",{filter}}}[5m])) / 1000000000")
-        } else {
-            format!("sum(irate(cgroup_cpu_usage{{state=\"user\",{filter}}}[5m])) / 1000000000")
-        },
         sql::scale_v(sql_rate("cgroup_cpu_usage", Some(("state", "user"))), 1e9),
     );
 
     // CPU System Cores
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter(
             "System CPU Cores",
             format!("{prefix}-system-cores"),
             Unit::Count,
         ),
-        if individual {
-            format!("sum by (name) (irate(cgroup_cpu_usage{{state=\"system\",{filter}}}[5m])) / 1000000000")
-        } else {
-            format!("sum(irate(cgroup_cpu_usage{{state=\"system\",{filter}}}[5m])) / 1000000000")
-        },
         sql::scale_v(sql_rate("cgroup_cpu_usage", Some(("state", "system"))), 1e9),
     );
 
     // CPU Migrations
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter(
             "CPU Migrations",
             format!("{prefix}-cpu-migrations"),
             Unit::Rate,
         ),
-        promql_rate("cgroup_cpu_migrations"),
         sql_rate("cgroup_cpu_migrations", None),
     );
 
     // CPU Throttled Time
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter(
             "CPU Throttled Time",
             format!("{prefix}-cpu-throttled-time"),
             Unit::Time,
         ),
-        promql_rate("cgroup_cpu_throttled_time"),
         sql_rate("cgroup_cpu_throttled_time", None),
     );
 
     // IPC
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter("IPC", format!("{prefix}-ipc"), Unit::Count),
-        if individual {
-            format!("sum by (name) (irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{{{filter}}}[5m]))")
-        } else {
-            format!("sum(irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum(irate(cgroup_cpu_cycles{{{filter}}}[5m]))")
-        },
         if individual {
             sql::cgroup_ratio_by_name("cgroup_cpu_instructions", "cgroup_cpu_cycles", side)
         } else {
@@ -116,16 +84,14 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     );
 
     // TLB Flushes
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter("TLB Flushes", format!("{prefix}-tlb-flush"), Unit::Rate),
-        promql_rate("cgroup_cpu_tlb_flush"),
         sql_rate("cgroup_cpu_tlb_flush", None),
     );
 
     // Syscalls
-    group.plot_promql_with_sql(
+    group.plot_sql(
         PlotOpts::counter("Syscalls", format!("{prefix}-syscall"), Unit::Rate),
-        promql_rate("cgroup_syscall"),
         sql_rate("cgroup_syscall", None),
     );
 
@@ -149,17 +115,12 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         "Other",
     ] {
         let op_lower = op.to_lowercase();
-        group.plot_promql_with_sql(
+        group.plot_sql(
             PlotOpts::counter(
                 format!("Syscall {op}"),
                 format!("{prefix}-syscall-{op_lower}"),
                 Unit::Rate,
             ),
-            if individual {
-                format!("sum by (name) (irate(cgroup_syscall{{op=\"{op_lower}\",{filter}}}[5m]))")
-            } else {
-                format!("sum(irate(cgroup_syscall{{op=\"{op_lower}\",{filter}}}[5m]))")
-            },
             sql_rate("cgroup_syscall", Some(("op", &op_lower))),
         );
     }

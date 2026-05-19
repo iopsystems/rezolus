@@ -212,7 +212,9 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
             }
         };
         if !has_data {
-            missing_metrics.extend(extract_metric_selectors(&kpi.query));
+            if let Some(sql) = kpi.sql.as_deref() {
+                missing_metrics.extend(extract_metric_selectors(sql));
+            }
         }
         kpi.available = has_data;
         if has_data {

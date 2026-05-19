@@ -1,5 +1,6 @@
 ---
 source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 23
 expression: "sql::rate_5m_total(\"^cpu_usage$\")"
 ---
 WITH unp AS (
@@ -29,8 +30,7 @@ WITH unp AS (
                   -- sample just before `lo` and `lo` itself) is NOT
                   -- counted. SUM(s_inc) OVER wr includes that crossing
                   -- increment via LAG over the full partition; subtract
-                  -- FIRST_VALUE(s_inc) to drop it. See
-                  -- metriken-query/src/promql/streaming/rate.rs:CounterRate.
+                  -- FIRST_VALUE(s_inc) to drop it.
                   --
                   -- The RANGE lower bound is `5m - 1ns` (not exactly
                   -- 5m) so the row at `current - 5m` is *excluded* —

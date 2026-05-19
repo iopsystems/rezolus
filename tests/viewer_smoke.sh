@@ -255,10 +255,12 @@ PORT_REPORT=18505
 # Pin one chart and POST a tiny selection that touches one column.
 SELECTION=$(cat <<JSON
 {
-  "version": 1,
+  "version": 3,
   "saved_at": "2026-05-12T00:00:00Z",
+  "anchors": { "baseline": 0, "experiment": 0 },
+  "chartToggles": {},
   "entries": [
-    {"chartId": "cpu_cores", "section": "/cpu", "promql_query": "cpu_cores"}
+    {"chartId": "cpu_cores", "section": "/cpu", "sql_query": "SELECT timestamp::DOUBLE/1e9 AS t, \"cpu_cores\"::DOUBLE AS v FROM _src ORDER BY t"}
   ]
 }
 JSON

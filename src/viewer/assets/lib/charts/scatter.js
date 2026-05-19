@@ -22,8 +22,10 @@ import {
 import { SCATTER_PALETTE } from './util/colormap.js';
 import { DEFAULT_PERCENTILES } from './metric_types.js';
 import { configureQuantileHeatmap } from './quantile_heatmap.js';
-import { fetchQuantileSpectrumForPlot } from '../data.js';
-import { quantilesForKind } from './util/spectrum_quantiles.js';
+// Quantile-spectrum fetching (the Full / Tail toggles) ran through
+// the legacy PromQL histogram_quantiles wrapper. The SQL backend has
+// no replacement yet — kickOffSpectrumFetch below is a no-op until a
+// SQL-native spectrum fetch is wired up.
 
 /**
  * Configures the Chart based on Chart.spec
@@ -574,41 +576,10 @@ function ensureSpectrumCheckboxes(chart) {
 }
 
 function kickOffSpectrumFetch(chart, kind) {
-    if (chart._spectrumPending === kind) return;
-    const plotForFetch = {
-        promql_query: chart.spec.promql_query,
-        opts: chart.spec.opts,
-    };
-    if (!plotForFetch.promql_query) return;
-
-    chart._spectrumPending = kind;
+    // No SQL-native spectrum fetch yet. Clear any pending state and
+    // bail back to scatter so the checkbox un-sets itself.
+    if (chart._spectrumPending) chart._spectrumPending = null;
+    if (chart.spectrumKind === kind) chart.spectrumKind = null;
     refreshSpectrumCheckboxes(chart);
-
-    fetchQuantileSpectrumForPlot(plotForFetch, quantilesForKind(kind))
-        .then((res) => {
-            if (chart._spectrumPending === kind) chart._spectrumPending = null;
-            if (!res) {
-                // Fetch returned no usable data — bail back to scatter
-                // (only if the user hasn't switched to a different kind
-                // in the meantime).
-                if (chart.spectrumKind === kind) chart.spectrumKind = null;
-                refreshSpectrumCheckboxes(chart);
-                return;
-            }
-            chart._spectrumDataByKind = chart._spectrumDataByKind || {};
-            chart._spectrumDataByKind[kind] = {
-                data: res.data,
-                seriesNames: res.series_names,
-                colorMinAnchor: res.color_min_anchor,
-            };
-            if (chart.spectrumKind === kind) chart.configureChartByType();
-            else refreshSpectrumCheckboxes(chart);
-        })
-        .catch((err) => {
-            if (chart._spectrumPending === kind) chart._spectrumPending = null;
-            if (chart.spectrumKind === kind) chart.spectrumKind = null;
-            refreshSpectrumCheckboxes(chart);
-            console.error('Failed to fetch quantile spectrum:', err);
-        });
 }
 

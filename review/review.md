@@ -6,8 +6,9 @@ This branch unifies every viewer mode (file / upload / A-B / live
 agent), `rezolus mcp`, Save-as-Report column trim, and `parquet
 annotate` onto DuckDB-driven SQL through
 `metriken_query_sql::DuckDbBackend`, and **deletes the legacy
-`metriken-query` crate** (Tsdb + PromQL evaluator + harness, ~10,914
-LOC on the engine side) on the way out. The pivotal landings:
+`metriken-query` crate** (Tsdb + PromQL evaluator + harness; ~13K
+LOC in `src/{promql,tsdb,harness}`, ~16.7K LOC counting everything
+that left with the crate) on the way out. The pivotal landings:
 `LiveSource` (`17f1107` + `1d471cd`) put live captures on the same
 DuckDB engine the parquet path uses; the C2-C5 commit sequence on
 this branch then migrated `validate_service_extensions` to SQL,
@@ -45,31 +46,42 @@ src/viewer/
                         live_source:  RwLock<Option<Arc<LiveSource>>>   (live mode)
                         upload_mutex: Mutex<()>               (serializes uploads)
                         new_sql(capture, backend, templates)  (file mode)
-                        new(tsdb, templates)                  (live mode, cfg-gated; collapsed in C4)
                         new_empty(templates)                  (upload-only)
                         with_baseline_data(|&dyn DashboardData| ...)
                       const LIVE_BASELINE_DATA_SOURCE = "live:baseline"
+                      (No `new(tsdb, …)` constructor any more — the
+                      Tsdb-flavoured live-mode init collapsed in C4 to
+                      a SqlCapture-style init that swaps the baseline
+                      capture for a LiveCapture.)
 
   sql_capture.rs      SqlCapture { parquet_path, catalog,
                                    kind_by_metric, interval_seconds,
                                    time_range, source, version, filename }
                       impl DashboardData for SqlCapture
 
-  live_ingest.rs      Snapshot → LiveSource bridge (~343 LOC).
+  live_capture.rs     LiveCapture { live: Arc<LiveSource>,
+                                    schema cache, source, version, filename }
+                      impl DashboardData for LiveCapture — the
+                      `DashboardData` shim for the live-agent baseline
+                      slot. Reads route through to the shared LiveSource;
+                      schema-reflection reads use the cached observations.
+
+  live_ingest.rs      Snapshot → LiveSource bridge (~358 LOC).
                       Walks metriken_exposition::Snapshot, strips shape
                       metadata, calls canonical_column_name for shape-
                       identical _src column naming, then LiveSource::append.
 
   capture_registry.rs CaptureRegistry { baseline, experiment: RwLock<Option<CaptureSlot>> }
                       enum CaptureBackend { Sql(Arc<RwLock<SqlCapture>>),
-                                            #[cfg(live-mode)] Live(Arc<RwLock<Tsdb>>) }
-                      The Live variant is residue for non-query metadata
-                      reads; it collapses in C4 once a placeholder
-                      DashboardData replaces Tsdb in that role.
+                                            Live(Arc<RwLock<LiveCapture>>) }
+                      LiveCapture wraps Arc<LiveSource> plus a per-metric
+                      schema cache so DashboardData reads on live captures
+                      see what's been observed so far. Single-feed: no
+                      Tsdb anywhere (de77459).
 
-  routes.rs           data_source_for(state, capture) resolves the live
-                      key ahead of any parquet path, so /api/v1/query{,_range}
-                      dispatch is uniform across modes.
+  routes.rs           data_source_for(state, capture) at routes.rs:522
+                      resolves the live key ahead of any parquet path, so
+                      /api/v1/query{,_range} dispatch is uniform across modes.
                       run_sql is async; the backend call + Arrow projection
                       run under tokio::task::spawn_blocking so 20+ parallel
                       chart fetches don't starve the runtime (7fc2f4d).
@@ -81,9 +93,9 @@ src/viewer/
 
   actions.rs          ingest_baseline_from_path: SqlCapture::open + atomic swap
                       attach_experiment / detach_experiment: SqlCapture-backed
-                      connect_agent / ingest_loop / reset_tsdb: cfg-gated live-mode
-                      ingest_loop currently dual-feeds Tsdb + LiveSource;
-                      Tsdb side drops in C4.
+                      ingest_loop: single-feeds the LiveCapture via
+                      live_ingest::ingest_snapshot. No cfg gates; the
+                      Tsdb dual-feed arm dropped in C4 (de77459).
 
 crates/prom-matrix/   arrow_to_prom_matrix(&[RecordBatch]) -> String       (native)
                       js_arrow_to_prom_matrix(&JsValue)  -> JsValue        (wasm)
@@ -91,14 +103,16 @@ crates/prom-matrix/   arrow_to_prom_matrix(&[RecordBatch]) -> String       (nati
                       the JSON shape can't drift between server and browser.
 
 crates/dashboard/
-  data.rs             DashboardData trait — implemented by SqlCapture AND
-                      (cfg(live-mode)) Tsdb. Generators read schema through
-                      this; query execution is elsewhere.
+  data.rs             DashboardData trait — implemented by SqlCapture
+                      (file/upload/A-B), LiveCapture (live agent path), and
+                      EmptyDashboardData (the schema-dump binary + test
+                      fixtures). Generators read schema through this; query
+                      execution is elsewhere.
   sql.rs              16 SQL builder helpers (rate_5m_total, irate_total,
                       hist_percentile_series, cpu_pct_total, cgroup_irate_total,
                       …) that the per-section dashboard generators in
                       dashboard/*.rs call to produce each plot's `sql` argument.
-                      ~130 plot call sites route through these helpers.
+                      ~180 plot call sites route through these helpers.
   service_extension.rs Kpi.sql: Option<String>  (added; templates carry None
                                                   for now — see carve-outs)
   service.rs          plot_promql_with_sql{,_full} when kpi.sql is Some;
@@ -134,92 +148,13 @@ a warm slot.
 
 The structural gaps that remain post-deletion. Carve-outs 1 (live-
 agent query path) and 2 (validate_service_extensions PromQL
-holdout) closed in C2-C5 of this branch; carve-outs 3 and 4 are
-unchanged from pre-branch.
+holdout) closed in C2-C5 of this branch. What was carve-out 1 in
+prior drafts (the half-finished gauge/counter SQL transcription)
+is the launching point for the next purge — see _PromQL purge —
+planned (P1-P6)_ below. Carve-outs 3 and 4 are unchanged from
+pre-branch.
 
-### 1. Service-extension KPI templates: gauges/counters on SQL, histograms still PromQL-shaped
-
-Per-source views (`_src_<source>`) now exist on the engine side and
-128 of 218 template KPIs ship a `sql` field alongside their PromQL
-`query`. Plot bodies that need `plot.sql_query` no longer see `null`
-for gauges and counters; the SQL-only frontend renders them through
-the SQL pipeline. The remaining 90 KPIs split into histogram
-percentile fan-outs (skipped pending engine-side `grouping_power`
-plumbing into the substitution layer), compound expressions
-(`A - B`, `A / B` — non-trivial to translate), regex-multi-value
-selectors (`finished_reason=~"stop|length"` — needs an aggregate
-column expression), and 9 placeholder KPIs with no `query` field.
-
-**The architecture (option 2 from the previous version).** Each
-parquet column carries a `source` label in its field metadata.
-`metriken-query-sql/src/views.rs::render_per_source_views_sql`
-groups columns by that label value (not by `<prefix>::`) and emits
-`CREATE OR REPLACE TEMP VIEW _src_<source>` per source. Single-
-instance sources get a straight projection; multi-instance sources
-of the same name aggregate at each timestamp (`COALESCE + sum` for
-scalars, `h2_combine_lol` for histograms — the same shape
-`_src_rezolus_combined` uses on the wasm side for multi-rezolus).
-
-View names follow the wasm `viewNameForSource` rule (non-
-`[a-zA-Z0-9_]` chars become `_`) so `vllm-prefill` resolves to
-`_src_vllm_prefill` on both backends. The shared `view_name_for_source`
-helper is exposed at `metriken_query_sql::view_name_for_source`.
-
-**Template authoring.** KPI `sql` carries the placeholder `{{view}}`
-where the per-source view would otherwise be named. The dashboard
-emitter (`crates/dashboard/src/dashboard/service.rs::substitute_view`)
-resolves it to `_src_<service_name>` at emit time, using the
-template file's `service_name` field; `parquet annotate` performs
-the same substitution before running the SQL through `DuckDbBackend`
-to validate KPI data presence. The placeholder is also exposed via
-the public `dashboard::substitute_view` helper so consumers don't
-inline the sanitisation rule.
-
-**Transcription via script.** `/tmp/transcribe_kpis.py` (committed
-state lives in templates, not as a recurring tool) walks every
-KPI's PromQL and emits SQL for three patterns:
-
-  - `metric{labels}` → `SELECT t, CAST("<col>" AS DOUBLE) AS v FROM {{view}} ORDER BY t`
-  - `sum(metric{labels})` → same shape (sums collapse to a single
-    matching column once `source` is implied by the view).
-  - `sum(irate(metric{labels}[Ns]))` → `SELECT t, irate_1s("<col>", timestamp) AS v FROM {{view}} ORDER BY t`
-
-`<col>` is built via the same `canonical_alias` rule the engine
-uses: metric name + non-source value-label values appended as
-`/<v>`, non-numeric first then numeric. Histograms, regex selectors,
-and compound expressions don't translate — `kpi.sql` stays absent
-and the legacy PromQL path renders them.
-
-**Verification end-to-end.** `parquet annotate` against
-`site/viewer/data/cachecannon.parquet` reports 11/14 KPIs bind
-through the SQL pipeline (the 3 misses are histograms — sql=None);
-against `sglang_gemma3.parquet` with the `llm-perf` template,
-6/13 KPIs bind (the misses are 5 histograms + the regex Error Rate
-KPI + a sparse-metric absent from the recording). No false
-positives: every KPI marked `available=true` produced data through
-the new `_src_<source>` view.
-
-**What still lands as deferred Phase 2 follow-ups:**
-
-  - Histogram percentile transcription needs the engine to plumb
-    each histogram metric's `grouping_power` into the substitution
-    layer (or a per-metric `hist_p_p(buckets, ts, q, p)` macro
-    invocation). 33 KPIs across the templates.
-  - Compound expressions (ratio, subtraction) — write each by hand
-    using the layer-A SQL emitters. ~13 KPIs.
-  - Regex-multi-value selectors — UNPIVOT + `COLUMNS('regex')` or
-    explicit SUM across hand-listed columns. ~6 KPIs.
-  - A parity walker adapting `metriken-query/examples/sql_vs_promql.rs`
-    to compare PromQL vs SQL output per (KPI, fixture). Currently the
-    only check is `parquet annotate`'s non-empty data assertion.
-
-**Status (current commit):** 128/218 KPIs (59%) carry SQL via the
-auto-transcription. The remaining 90 stay PromQL-only — the
-dashboard emitter falls back to the PromQL path when `kpi.sql`
-is `None`, so live-mode and the legacy PromQL viewer continue
-to render them.
-
-### 2. Multi-node selection doesn't filter server-side
+### 1. Multi-node selection doesn't filter server-side
 
 The top-nav node picker injects `node="..."` only on the PromQL
 side; the SQL backend has no equivalent. WASM viewer has the
@@ -227,7 +162,7 @@ same gap. On multi-node parquets the server returns aggregated
 data regardless of selection. Future work; not unique to this
 branch.
 
-### 3. Multi-rezolus aggregation
+### 2. Multi-rezolus aggregation
 
 Two-or-more rezolus sources in one parquet is not yet aggregated
 server-side. The `COALESCE + sum` / `h2_combine_lol` projection
@@ -235,6 +170,271 @@ shape that the WASM viewer's `_src_rezolus_combined` builds isn't
 replicated in `SqlCapture::open`. Single-rezolus + arbitrary
 application-source captures (the cachecannon shape) work
 end-to-end.
+
+---
+
+## PromQL purge — completed (P1-P6)
+
+Sequenced after the C5 `metriken-query` crate deletion. Six commits
+land on top of the C-series; after P6 the codebase has no remaining
+PromQL surface anywhere — no helpers, no fallback emitters, no Kpi
+`query` field, no template `query` strings, no Plot `promql_query`
+serialization. 90 KPIs without transcribed SQL render as
+`_unavailable` placeholder cards via the silent-render path; the
+deferred follow-up work (engine-side `grouping_power` plumbing for
+histogram-percentile KPIs) brings them back as SQL plots one at a
+time.
+
+### What was removed
+
+  - **Frontend** — `features/explorers.js` (Query Explorer +
+    SingleChartView, 463 LOC) deleted entirely. PromQL helpers
+    (`rewriteCounterQuery`, `injectLabel`,
+    `substituteCgroupPattern`, `executePromQLRangeQuery`) gone from
+    `data.js`. Heatmap and quantile-spectrum fetch paths
+    (`fetchHeatmapForPlot`, `fetchSpectrumViaCapture`,
+    `fetchQuantileSpectrumForPlot`) gone — they emitted PromQL
+    `histogram_heatmap(...)` / `histogram_quantiles([...], ...)`
+    strings that DuckDB couldn't parse. `viewer_api.js::backend()`
+    retired (always returned `'sql'`). Selection JSON wire format
+    threads `sql_query` / `sql_query_experiment` (was
+    `promql_query` / `promql_query_experiment`).
+  - **Dashboard emitter** (`crates/dashboard/src/plot.rs`) —
+    `plot_promql{,_with_sql}{,_full}{,_with_descriptions}` family
+    deleted. Replaced by `plot_sql{,_full}{,_with_descriptions}`,
+    taking a single SQL string. ~180 call sites in
+    `dashboard/*.rs` mechanically converted; KPIs without SQL are
+    skipped instead of fallback-emitted. Description-attachment
+    scan now walks the SQL string for metric names instead of the
+    PromQL one.
+  - **Plot struct** — `promql_query` and `promql_query_experiment`
+    fields dropped. Plot JSON now carries `sql_query` exclusively.
+  - **`Kpi { query, sql }`** — `query: String` field dropped from
+    the struct; `sql: Option<String>` becomes the sole query body.
+    `Kpi::effective_query` and `ServiceExtension::throughput_query`
+    methods deleted (dead — the consumers either discarded the
+    return value or relied on PromQL semantics that no longer
+    apply). `CategoryKpi::effective_query` deleted for the same
+    reason. The `throughput_query` plumbing through
+    `DashboardContext` + `overview::generate` is gone.
+  - **Template JSON** — `"query":` field stripped from every KPI
+    in all 11 `config/templates/*.json` files. Templates ship SQL
+    or nothing.
+  - **`report-save` wire format** — `ReportEntry::promql_query` /
+    `promql_query_experiment` renamed to `sql_query` /
+    `sql_query_experiment` to match the new frontend payload
+    shape.
+  - **`routes.rs` section_status** — dropped the `promql_query`
+    fallback branch in plot counting; only `sql_query` is read.
+  - **`parquet annotate` / `parquet filter`** — switched from
+    `extract_metric_selectors(&kpi.query)` to
+    `extract_metric_selectors(kpi.sql.as_deref().unwrap_or(""))`.
+    The helper itself is regex-based and works on either dialect;
+    only the input source changed.
+  - **Frontend section view** — the per-source "Queries" table now
+    shows `kpi.sql` instead of `kpi.query`.
+  - **Tests** — `tests/data_spectrum_capture.test.mjs` deleted
+    (covered the deleted spectrum-fetch path).
+    `compare_node_filter.test.mjs` and
+    `wasm_viewer_histogram_kpis.test.mjs` (deleted earlier in C4)
+    confirmed clean.
+  - **Embed demo** — `src/viewer/assets/lib/embed/demo.html`
+    rewritten to fetch SQL from `plot.sql_query` and POST to
+    `/api/v1/query_range` directly (the `<rezolus-chart>` element
+    itself was already SQL-agnostic; only the demo's fetch glue
+    needed updating).
+
+### What survives intentionally
+
+  - **Comments that explain SQL semantics by comparing to PromQL
+    behavior** — `crates/dashboard/src/sql.rs:56,66`,
+    `crates/viewer-sql/tests/macros.rs:91`,
+    `src/mcp/backend.rs:154-203`, etc. These are educational hooks
+    for readers who arrive with PromQL intuition; keep.
+  - **Test assertions that `promql_query` is absent from JSON** —
+    `crates/dashboard/src/dashboard/{service,category}.rs::tests`
+    and `crates/dashboard/src/plot.rs::tests` carry guards that
+    fail loudly if the field ever reappears. Useful regression
+    catch.
+  - **JS helpers named `promqlResultTo*`** in `data.js` — they
+    transform Prometheus-matrix-shape JSON results into chart-ready
+    data, and the wire format is still Prometheus-matrix shape
+    (projected from SQL via the `prom-matrix` crate). Rename to
+    `matrixResultTo*` is a follow-up cosmetic pass.
+
+### Verification
+
+After P6, the gates pass:
+
+| Gate                                      | Result                  |
+| ----------------------------------------- | ----------------------- |
+| `cargo build --bin rezolus`               | clean                   |
+| `cargo test --workspace`                  | 184 + 18 + 4 + ...  all pass, 0 failed |
+| `node --test tests/*.mjs`                 | 111 pass / 0 fail       |
+| `grep -rn 'promql\|PromQL' src/ crates/`  | only comments / test guard assertions / `prom-matrix` crate name remain |
+| `cargo tree -p rezolus \| grep promql`    | empty (already was)     |
+
+### Known follow-ups (not part of the purge, deferred)
+
+The 90 SQL-less KPIs render as `_unavailable` placeholder cards
+after P5. To make them live charts:
+
+  - **~75 histogram-percentile KPIs** (incl. cachecannon's
+    `*_latency` selectors). Needs engine-side `grouping_power`
+    plumbing into `MetricCatalog` so `parquet annotate` can emit
+    `hist_p_p(buckets, ts, q, p)` calls per histogram metric.
+  - **~13 compound expressions** (`A / B`, `A - B`) — hand-write
+    each in SQL using the layer-A emitters in `dashboard::sql`.
+  - **~6 regex-multi-value selectors** (`finished_reason=~"stop|length"`)
+    — `UNPIVOT` + `COLUMNS('regex')` or explicit SUM across
+    hand-listed columns.
+  - **9 placeholder KPIs** with no `query` field either — replace
+    each with a SQL stub or drop entirely from the template.
+
+These deferred items can land incrementally — each KPI flips from
+placeholder to live in the next viewer reload.
+
+### Risks (now retired)
+
+  - **Old saved reports** captured before the purge contain plots
+    with `promql_query` strings but no `sql_query` for KPIs that
+    weren't transcribed; on reload, those plots render as
+    `_unavailable` cards (same visible state as a freshly captured
+    report against the same parquet). Acceptable degradation.
+  - **External custom service templates** that ship only `query`
+    (PromQL) — KPIs go all-placeholder post-purge. We own all 11
+    templates in-tree; downstream custom-template authors should
+    transcribe to SQL. CLAUDE.md updated to require `sql` for new
+    templates.
+  - **Query Explorer feature** retired. The Explorer was already
+    broken on the SQL backend; deletion is no functional loss. If
+    we want it back, build a fresh pure-SQL explorer (~100 LOC)
+    against the existing `/api/v1/query_range` SQL contract.
+
+---
+
+## PromQL purge — historical plan (P1-P6, retained for reviewers)
+
+The original plan, kept for reviewers who want to trace the
+purge against this branch's commits.
+
+  - **Frontend helpers** (`src/viewer/assets/lib/data.js`,
+    `viewer_core.js`, `viewer_api.js`, `features/explorers.js`) —
+    the `buildEffectiveQuery` PromQL branch, `rewriteCounterQuery`,
+    `injectLabel`, `substituteCgroupPattern`,
+    `executePromQLRangeQuery`, and the Query Explorer feature that
+    sends transformed PromQL strings to `/api/v1/query_range`.
+    Since the backend only speaks DuckDB SQL, the Explorer is
+    functionally dead today (every query → DuckDB binder error →
+    empty matrix via the shim).
+  - **Dashboard emitters** in `crates/dashboard/src/plot.rs` —
+    `plot_promql`, `plot_promql_full`, `*_with_descriptions`
+    variants, plus the dominant `plot_promql_with_sql` (~165 call
+    sites) that carries a PromQL string the runtime no longer
+    consumes.
+  - **Service extension `Kpi { query, sql }`** — 128/218 templates
+    ship SQL; the other 90 fall back to `plot_promql*` and surface
+    as `_unavailable` placeholder cards. The PromQL string travels
+    through plot JSON for no consumer left in tree.
+
+### Phase plan
+
+**P1 — Static audit (no code changes).** Confirm:
+  - `<rezolus-chart>` embed reads only `plot.data`, never
+    `plot.promql_query` (read-through of `embed/rezolus-chart.js`).
+  - Every `executePromQLRangeQuery` caller funnels into
+    `/api/v1/query_range`, which only accepts DuckDB SQL.
+  - All `promql_query` consumers enumerated in
+    `src/viewer/assets/lib/{data,viewer_core,viewer_api}.js` and
+    `features/explorers.js`.
+  - `cargo run -p dashboard` JSON dump's pre/post-purge diff is
+    only `promql_query{,_experiment}` field removals.
+
+**P2 — Frontend purge.** Delete `features/explorers.js` entirely
+(Query Explorer + SingleChartView), drop its import in `app.js`,
+strip the unreachable PromQL branch in `data.js::buildEffectiveQuery`
+plus the helpers (`rewriteCounterQuery`, `injectLabel`,
+`substituteCgroupPattern`, `executePromQLRangeQuery`), remove
+`viewer_core.js`'s `promql_query`-driven paths, retire
+`viewer_api.js::backend()` (always returns `'sql'`). Gates: `node
+--test tests/*.mjs` (116/0 today), `viewer_smoke.sh`, chromium
+per-section smoke.
+
+**P3 — Dashboard emitter purge.** Rename `plot_promql_with_sql →
+plot_sql`, dropping the PromQL string arg from ~180 call sites
+across `crates/dashboard/src/dashboard/*.rs`; delete
+`plot_promql{,_full}{,_with_descriptions}` variants; in
+`service.rs`, KPIs without `kpi.sql` either emit a placeholder or
+get skipped (no PromQL fallback). Refresh `sql_snapshots.rs` and
+`cargo insta accept`.
+
+**P4 — Plot struct cleanup.** Drop `promql_query` and
+`promql_query_experiment` from `dashboard::Plot`; rework the
+description-attachment logic that scans the PromQL string
+(`plot.rs:232` & `:317`) to scan the SQL string or attach by
+metric name. Verify `prom-matrix`, `viewer-sql`, MCP don't read
+the field.
+
+**P5 — Kpi struct + template JSON strip.** Drop `query:
+Option<String>` from `Kpi`; update `parquet annotate` to no
+longer look at PromQL; run a one-shot script to delete `"query":`
+fields from every `config/templates/*.json` (11 files). The 90
+SQL-less KPIs now render as `_unavailable` — same UX as today.
+Verify on cachecannon (11/14 bind) and sglang_gemma3 (6/13 bind).
+
+**P6 — Final sweep + docs.** `grep -rn 'promql\|PromQL'` should
+return only comments comparing SQL semantics to PromQL behavior
+(those are educational; keep). Refresh review docs, CLAUDE.md,
+embed-component docs. Carve-out 1 (history) folds into the
+historical roadmap section.
+
+### Risks
+
+  - **Old saved reports.** Reports captured before the purge
+    contain plots with `promql_query` but no `sql_query` for
+    KPIs that weren't transcribed; on reload, those plots
+    render as `_unavailable` cards. Acceptable degradation;
+    document in the release note.
+  - **External custom service templates** that ship only `query`
+    (PromQL) — their KPIs go all-placeholder post-purge. We own
+    all 11 templates in-tree, but a CLAUDE.md note ("custom
+    templates must ship `sql`, not `query`") will help downstream
+    authors.
+  - **Cgroup token substitution.** Today the dashboard SQL emits
+    `{{cgroup_pattern}}` placeholders resolved server-side from
+    capture-registry state; the `__SELECTED_CGROUPS__` /
+    `substituteCgroupPattern` flow in `data.js:493` was the
+    PromQL-side equivalent and dies in P2. Confirm in P1 that
+    nothing else depends on it.
+  - **Query Explorer regression.** The Explorer is dead today, so
+    deletion is no functional loss. If we later want it back as a
+    pure-SQL feature, it'll be a fresh build (~100 LOC) using the
+    existing `/api/v1/query_range` SQL contract.
+
+### Follow-up work (not part of the purge, deferred)
+
+The 90 SQL-less KPIs become `_unavailable` placeholders after P5
+unless transcribed. Categorized:
+
+  - **~75 histogram-percentile fan-outs** (incl. cachecannon's
+    `*_latency` KPIs that are raw histogram selectors PromQL wraps
+    in `histogram_quantile(...)`). Needs engine-side
+    `grouping_power` plumbing into the substitution layer OR a
+    per-metric `hist_p_p(buckets, ts, q, p)` macro invocation.
+    Target: `metriken-query-sql/src/views.rs::MetricCatalog` to
+    expose `grouping_power` per histogram metric; new SQL macro to
+    fan out percentiles over each metric's bucket layout.
+  - **~13 compound expressions** (`A / B`, `A - B`) — hand-write
+    each in SQL using the layer-A emitters.
+  - **~6 regex-multi-value selectors** (`finished_reason=~"stop|length"`)
+    — `UNPIVOT` + `COLUMNS('regex')` or explicit SUM across
+    hand-listed columns.
+  - **9 placeholder KPIs** with no `query` field — replace each
+    with a SQL stub or drop entirely.
+
+These deferred items can land incrementally without touching the
+purge sequence — KPIs gain SQL one at a time, each one flips from
+placeholder to live in the next viewer reload.
 
 ---
 
@@ -270,7 +470,9 @@ entirely_.
 (`describe-recording`, `describe-metrics`, `detect-anomalies`,
 `analyze-correlation`, `query`) and the stdio server run through
 `metriken_query_sql::DuckDbBackend` via `SqlCapture`. `mod mcp;` is
-unconditional in `src/main.rs`; MCP builds in `--features sql-only`.
+unconditional in `src/main.rs`; with the `sql-only` / `live-mode`
+feature seams gone (C4), MCP builds in the single default
+configuration.
 
 New `src/mcp/backend.rs` (488 LOC) is the shared helper layer:
 
@@ -326,11 +528,12 @@ footer size, not correctness.
 `src/viewer/actions.rs::save_single_dispatch` and
 `save_combined_ab_dispatch` route SQL-backed baselines (and
 SQL-backed experiments for A/B) through
-`save_single_parquet_sql` / `save_combined_ab_tarball_sql`. The
-legacy Tsdb branch stays for live-mode. `metriken-query/legacy` is
-declared on report-save's `live-mode` feature only, so
-`cargo build -p report-save` works standalone with the SQL trim
-path.
+`save_single_parquet_sql` / `save_combined_ab_tarball_sql`. Live
+mode bypasses these dispatchers entirely — `save_with_selection`
+short-circuits to `snapshots_to_parquet` when no parquet path is
+attached. No Tsdb branch survives, and `report-save` has no
+feature flags (its `Cargo.toml` declares one runtime dep on
+`metriken-query-sql`, no optionals).
 
 4 new tests pin the resolver's metric-name expansion, direct-column
 matching, word-boundary safety, and `trim_columns=false` bypass.
@@ -513,19 +716,17 @@ uniform.
 strips shape-keys (`metric_type`, `unit`, `grouping_power`,
 `max_value_power`) from labels, builds `LiveColumn` descriptors
 canonicalised via `canonical_column_name`, and issues one
-`LiveSource::append` per snapshot. The Snapshot is cloned for the
-live path so the legacy `tsdb.ingest` continues to consume the
-original — Snapshot accessors take `&mut self` and `std::mem::take`
-the inner Vecs. Clone of ~tens of KB at 1 Hz is negligible; the
-clone drops alongside the Tsdb feed in C4 of this branch.
+`LiveSource::append` per snapshot. Post-C4 the Tsdb dual-feed is
+gone, so `ingest_snapshot` consumes the snapshot directly — no
+clone, no `std::mem::take` dance.
 
 `f5482ff` adds chromium smoke `--live <agent-url> [--ingest-wait N]`
 mode for end-to-end coverage.
 
 **Test coverage added.** L1: 10 tests in
-`metriken-query-sql/tests/live.rs` (round-trip, schema growth,
-NULL semantics, cgroup_index rebuild, timestamp snap, per-source
-view, concurrent read+write, bad-SQL surfacing). L2: 5 tests in
+`metriken-query-sql/tests/live.rs` (round-trip, time-range bounds,
+schema growth, NULL semantics, cgroup_index rebuild, timestamp snap,
+per-source view, concurrent read+write, bad-SQL surfacing). L2: 5 tests in
 `metriken-query-sql/src/live.rs::tests` (cross-engine parity —
 replay parquet rows into a LiveSource, assert byte-identical Arrow
 output for SELECT/COUNT/MIN/MAX/SUM/irate_1s/h2_*). L3: 5 tests in
@@ -534,8 +735,11 @@ metadata time-range advances as snapshots accumulate). L4: 2 tests
 in `src/viewer/live_ingest::tests` (snapshot round-trip, cgroup
 label propagation).
 
-What's NOT migrated: `validate_service_extensions`. That's C3 of
-this branch.
+`validate_service_extensions` (formerly the last PromQL holdout) migrated
+to SQL in C3 (`6805ab4`) — runs each KPI's `sql` field through the same
+`DuckDbBackend`. KPIs without `sql` (90/218 templates) keep their
+default `available = true` and render as `_unavailable` placeholder
+cards via the silent-render path (`6054fe2`).
 
 ---
 
@@ -548,21 +752,17 @@ this branch.
 | `cargo test -p prom-matrix`        | Arrow → Prometheus matrix projection (incl. NaN/Inf row-dropping). |
 | `cargo test -p viewer-sql`         | WASM crate's SHARED_MACROS parity against the native engine.       |
 | `cargo test -p metriken-query-sql` | UDFs, backend pool, LiveSource parquet↔live parity. **Run from `/work/metriken/`** — the crate lives in the sibling repo, not in the rezolus workspace. |
-| `cargo test -p report-save`        | Column-trim resolvers (SQL via `MetricCatalog`; live-mode via `Tsdb` — live-mode path drops in C2). |
+| `cargo test -p report-save`        | Column-trim resolvers (SQL via `MetricCatalog`).                   |
 | `cargo test --test mcp_cli`        | End-to-end MCP CLI smoke against `target/debug/rezolus` + `demo.parquet` (auto-skips when fixtures or binary are missing). |
 | `node --test tests/*.mjs`          | Frontend pure-JS tests.                                            |
 | `bash tests/viewer_smoke.sh`       | End-to-end (upload / file / A-B / proxy). Requires `jq`.           |
 | `bash scripts/viewer_chromium_smoke.sh <parquet>` | Headless-Chromium per-section smoke. Drives `rezolus view <parquet>` and navigates to every section in `/api/v1/sections`, then asserts each one either rendered a chart (`.chart-wrapper` with svg/canvas), reserved an `_unavailable` placeholder (`.chart-unavailable`), or displayed a "Charts with no data / Unavailable KPIs" notes section (`.section-notes`). Captures per-section screenshots, console errors, failed network requests, and HTTP 4xx/5xx responses. Surfaces the *silent* failure mode the API-only `viewer_smoke.sh` cannot — section returns 200 but renders nothing. Requires `chromium`, `jq`, `python3`, `python websockets` (`pip install --user websockets`). |
 | `bash scripts/viewer_chromium_smoke.sh --live <agent-url> [--ingest-wait N]` | Same per-section render check, against a running agent. Waits N seconds after viewer startup (default 5) so `_src` accumulates rows before sections are exercised. Post-LiveSource (`1d471cd` + `f5482ff`) live-mode renders the same dashboards as file mode. |
 
-Frontend JS has 6 pre-existing failures: 5 in
-`compare_node_filter.test.mjs` (PromQL-side `buildEffectiveQuery`
-paths unreached on `BACKEND='sql'`) + 1 in
-`wasm_viewer_histogram_kpis.test.mjs` (ENOENT on the retired
-pre-2026 `site/viewer/pkg/wasm_viewer.js` artifact path). Both
-files target code paths that no longer exist on the server-backed
-viewer; they're slated for deletion in C4 of this branch alongside
-the rest of the Tsdb plumbing.
+Frontend JS: `node --test tests/*.mjs` reports 116 pass / 0 fail.
+The pre-existing failures from `compare_node_filter.test.mjs` (5) and
+`wasm_viewer_histogram_kpis.test.mjs` (1) were dropped in C4 along
+with the rest of the Tsdb plumbing.
 
 ---
 
@@ -616,10 +816,10 @@ End state:
 
 C2-C5 sequence:
 - **C2 — Phase 0 prune.** `parquet annotate` / `filter` un-gated
-  (already SQL-driven). `report-save` Tsdb-flavoured trim path
-  deleted (live captures route through `LiveSource::catalog()` +
-  `save_*_sql` instead). `attach_experiment` (Tsdb variant) deleted
-  as unreachable.
+  (already SQL-driven). `report-save`'s Tsdb-flavoured trim path
+  deleted; live captures skip the trim entirely (the live-mode save
+  flow short-circuits to `snapshots_to_parquet`). `attach_experiment`
+  (Tsdb variant) deleted as unreachable.
 - **C3 — `validate_service_extensions` SQL migration.** Rewrote
   the KPI availability check to run `kpi.sql` through
   `DuckDbBackend`. KPIs without SQL (90/218 templates) keep their
@@ -637,8 +837,8 @@ C2-C5 sequence:
   features deleted. Dropped 6 dead JS tests
   (`compare_node_filter` × 5 + `wasm_viewer_histogram_kpis` × 1).
 - **C5 — delete `metriken-query`.** Removed
-  `metriken-query/src/{promql, tsdb, harness}` (~10,914 LOC),
-  `queries.toml`, the three harness-feature examples, the crate's
-  Cargo.toml, and the workspace member entry. `promql-parser`
-  drops out of the dep graph.
+  `metriken-query/src/{promql, tsdb, harness}` (~13,000 LOC across
+  the three subdirs; ~16,700 LOC counting `queries.toml`, the three
+  harness-feature examples, the crate's Cargo.toml, and the workspace
+  member entry). `promql-parser` drops out of the dep graph.
 

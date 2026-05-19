@@ -91,11 +91,9 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
  * @param {object} deps.Main - Main layout component
  * @param {object} deps.TopNav - TopNav component
  * @param {Function} deps.topNavAttrs - (data, route) => attrs
- * @param {object} deps.SingleChartView
- * @param {Function} deps.applyResultToPlot
  * @param {Function} deps.getSections - () => shared sections array
  * @param {Function} deps.withSharedSections - (data) => data + shared sections
- * @returns {object} route map with '/service/:serviceName' and '/service/:serviceName/chart/:chartId'
+ * @returns {object} route map with '/service/:serviceName'
  */
 const createServiceRoutes = (deps) => {
     const {
@@ -106,8 +104,6 @@ const createServiceRoutes = (deps) => {
         Main,
         TopNav,
         topNavAttrs,
-        SingleChartView,
-        applyResultToPlot,
         getCompareMode,
         getSections,
         withSharedSections,
@@ -173,51 +169,6 @@ const createServiceRoutes = (deps) => {
     };
 
     return {
-        '/service/:serviceName/chart/:chartId': {
-            onmatch(params) {
-                const svcKey = `service/${params.serviceName}`;
-                const sectionRoute = `/service/${params.serviceName}`;
-
-                const makeView = () => ({
-                    view() {
-                        const data = sectionResponseCache[svcKey];
-                        const sections = readSections(data || {});
-                        const activeSection = sections.find(s => s.route === sectionRoute)
-                            || { name: params.serviceName, route: sectionRoute };
-                        if (!data) {
-                            return m('div#splash', m('div.card', [
-                                m('h1', activeSection.name),
-                                m('p.subtitle', 'Loading…'),
-                                m('div.progress-bar',
-                                    m('div.progress-fill.indeterminate'),
-                                ),
-                            ]));
-                        }
-                        const viewData = hydrateSections(data);
-                        return m('div', [
-                            m(TopNav, topNavAttrs(viewData, activeSection.route, { compareMode: readCompareMode() })),
-                            m('main.single-chart-main', [
-                                m(SingleChartView, {
-                                    data: viewData,
-                                    chartId: decodeURIComponent(params.chartId),
-                                    applyResultToPlot,
-                                }),
-                            ]),
-                        ]);
-                    },
-                });
-
-                // Resolve synchronously regardless of cache state so the
-                // previous section's chart canvases unmount immediately
-                // and the splash placeholder renders without a stall.
-                if (!sectionResponseCache[svcKey]) {
-                    loadSection(svcKey)
-                        .then(() => m.redraw())
-                        .catch((err) => recoverFromMissingSection(svcKey, err));
-                }
-                return makeView();
-            },
-        },
         '/service/:serviceName': {
             onmatch(params, requestedPath) {
                 if (m.route.get() === requestedPath) {

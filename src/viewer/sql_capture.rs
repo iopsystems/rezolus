@@ -1,4 +1,4 @@
-//! `SqlCapture` — the DuckDB-backed replacement for `Tsdb` in the
+//! `SqlCapture` — the DuckDB-backed capture handle for the
 //! file/upload/A-B viewer paths.
 //!
 //! Owns a parquet path, a cached `MetricCatalog` (from
@@ -43,9 +43,9 @@ enum MetricKind {
     Histogram,
 }
 
-/// File-mode capture handle. Held by `CaptureRegistry` slots in place
-/// of the legacy `Arc<RwLock<Tsdb>>`. `Arc<MetricCatalog>` is cloned
-/// (cheap) into every handler that needs catalog reads.
+/// File-mode capture handle. Held by `CaptureRegistry` slots.
+/// `Arc<MetricCatalog>` is cloned (cheap) into every handler that
+/// needs catalog reads.
 pub struct SqlCapture {
     /// Absolute path to the parquet on disk. Doubles as the
     /// `DuckDbBackend` pool key.

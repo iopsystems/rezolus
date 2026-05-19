@@ -59,8 +59,7 @@ pub fn rate_5m_total(re: &str) -> String {
                   -- sample just before `lo` and `lo` itself) is NOT
                   -- counted. SUM(s_inc) OVER wr includes that crossing
                   -- increment via LAG over the full partition; subtract
-                  -- FIRST_VALUE(s_inc) to drop it. See
-                  -- metriken-query/src/promql/streaming/rate.rs:CounterRate.
+                  -- FIRST_VALUE(s_inc) to drop it.
                   --
                   -- The RANGE lower bound is `5m - 1ns` (not exactly
                   -- 5m) so the row at `current - 5m` is *excluded* —

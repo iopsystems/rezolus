@@ -348,10 +348,8 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     // File mode goes DuckDB-only. Build the SqlCapture through a fresh
     // backend, then thread that backend onto AppState via new_sql so
     // subsequent handler calls hit the warmed per-source connection
-    // pool. Building a parallel Tsdb is no longer needed for queries
-    // (those run SQL through state.sql_backend); KPI validation against
-    // a Tsdb is skipped for SQL captures until plan stage 8 brings the
-    // SQL-aware validator alongside SQL-bearing templates.
+    // pool. KPI validation runs each `kpi.sql` through the same backend
+    // (`validate_service_extensions_sql`); no PromQL anywhere.
     let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
     let capture = sql_capture::SqlCapture::open(path, &backend).unwrap_or_else(|e| {
         eprintln!("failed to load data from parquet: {e}");
@@ -396,10 +394,10 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
 }
 
 /// Combined-A/B file mode: extract the tar, load each per-side parquet
-/// as its own Tsdb, and wire them into the baseline/experiment slots.
-/// CLI baseline alias still wins over the manifest-supplied alias.
-/// The CLI experiment-path flag is ignored — combined-A/B carries both
-/// sides in a single artifact.
+/// as its own `SqlCapture`, and wire them into the baseline/experiment
+/// slots. CLI baseline alias still wins over the manifest-supplied
+/// alias. The CLI experiment-path flag is ignored — combined-A/B
+/// carries both sides in a single artifact.
 fn init_file_mode_combined_ab(
     config: &Config,
     path: &Path,

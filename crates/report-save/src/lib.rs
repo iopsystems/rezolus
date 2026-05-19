@@ -5,10 +5,9 @@
 //! by a saved selection's queries (the "trim"), stamp the selection
 //! JSON in the footer, and optionally repack a combined-A/B tarball.
 //! The only API difference between the two is path-in vs bytes-in;
-//! this crate operates uniformly on [`bytes::Bytes`] (the type
-//! `metriken-query`'s `Tsdb::load_from_bytes` already uses), so the
-//! server reads its parquet from disk into bytes before calling
-//! through, and the WASM viewer reuses the bytes it already holds.
+//! this crate operates uniformly on [`bytes::Bytes`], so the server
+//! reads its parquet from disk into bytes before calling through, and
+//! the WASM viewer reuses the bytes it already holds.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -54,17 +53,17 @@ pub struct ReportPayload {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportEntry {
-    pub promql_query: String,
+    pub sql_query: String,
     #[serde(default)]
-    pub promql_query_experiment: Option<String>,
+    pub sql_query_experiment: Option<String>,
 }
 
 fn default_trim_columns() -> bool {
     true
 }
 
-/// Per-entry: pick `promql_query` (Baseline) or `promql_query_experiment`
-/// with fallback to `promql_query` (Experiment).
+/// Per-entry: pick `sql_query` (Baseline) or `sql_query_experiment`
+/// with fallback to `sql_query` (Experiment).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Side {
     Baseline,
@@ -98,10 +97,8 @@ pub fn save_single_parquet_embed_only(
     embed_selection_in_parquet(source_bytes, selection_json, None)
 }
 
-/// SQL-backed single-parquet save with column trim. Mirrors
-/// [`save_single_parquet`] but resolves kept columns from a
-/// `MetricCatalog` + the saved selection's query strings, so no Tsdb
-/// is required. Works for both PromQL-shaped and SQL-shaped query
+/// SQL-backed single-parquet save with column trim. Resolves kept
+/// columns from a `MetricCatalog` + the saved selection's SQL
 /// strings — see [`resolve_kept_columns_sql`] for the matching rule.
 pub fn save_single_parquet_sql(
     source_bytes: Bytes,
@@ -127,8 +124,8 @@ pub fn save_single_parquet_sql(
 ///    `catalog.series_by_metric`, check whether the metric name
 ///    appears in the query as a word (non-word boundary on both
 ///    sides). If yes, every physical column belonging to that metric
-///    is kept. Captures the PromQL `metric_name{labels}` shape and
-///    SQL idioms that reference metrics by canonical name.
+///    is kept. Captures SQL idioms that reference metrics by
+///    canonical name.
 /// 2. **Physical-name match.** For each physical column, check
 ///    whether its quoted form (`"physical"`) appears in the SQL.
 ///    Catches direct-column references that the metric-name pass
@@ -151,11 +148,11 @@ pub fn resolve_kept_columns_sql(
 
     for entry in &payload.entries {
         let query = match side {
-            Side::Baseline => entry.promql_query.as_str(),
+            Side::Baseline => entry.sql_query.as_str(),
             Side::Experiment => entry
-                .promql_query_experiment
+                .sql_query_experiment
                 .as_deref()
-                .unwrap_or(entry.promql_query.as_str()),
+                .unwrap_or(entry.sql_query.as_str()),
         };
         for (metric, series_list) in &catalog.series_by_metric {
             if query_mentions_word(query, metric) {
@@ -447,9 +444,9 @@ fn append_tar_entry<W: std::io::Write>(
     Ok(())
 }
 
-// Tests for the SQL-aware column resolver. Live independently of
-// `live-mode` because `resolve_kept_columns_sql` doesn't require
-// `metriken-query`.
+// Tests for the SQL-aware column resolver. `resolve_kept_columns_sql`
+// works off a `MetricCatalog` + query strings only — no DuckDB
+// connection required.
 #[cfg(test)]
 mod sql_resolve_tests {
     use super::*;
@@ -476,8 +473,8 @@ mod sql_resolve_tests {
             entries: queries
                 .iter()
                 .map(|q| ReportEntry {
-                    promql_query: q.to_string(),
-                    promql_query_experiment: None,
+                    sql_query: q.to_string(),
+                    sql_query_experiment: None,
                 })
                 .collect(),
             trim_columns: true,
@@ -485,15 +482,15 @@ mod sql_resolve_tests {
         }
     }
 
-    /// PromQL queries mention metrics by name. `cpu_cycles` in the
+    /// SQL queries mention metrics by name. `cpu_cycles` in the
     /// query should pull all `cpu_cycles/*` physical columns.
     #[test]
-    fn resolves_promql_metric_to_all_physical_columns() {
+    fn resolves_metric_name_to_all_physical_columns() {
         let cat = catalog_from(&[
             ("cpu_cycles", &["cpu_cycles/0", "cpu_cycles/1", "cpu_cycles/2"]),
             ("memory_used", &["memory_used"]),
         ]);
-        let payload = payload_with_queries(&["sum(rate(cpu_cycles[1m]))"]);
+        let payload = payload_with_queries(&["SELECT t, irate_1s(COLUMNS('^cpu_cycles(/[^:]+)?$'), timestamp) FROM _src"]);
         let kept = resolve_kept_columns_sql(&payload, &cat, Side::Baseline);
         assert!(kept.contains("timestamp"));
         assert!(kept.contains("duration"));

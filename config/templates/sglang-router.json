@@ -6,7 +6,6 @@
     {
       "role": "load",
       "title": "Request Rate",
-      "query": "sum(irate(smg_http_requests_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"smg_http_requests_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -14,7 +13,6 @@
     {
       "role": "load",
       "title": "Active Requests",
-      "query": "sum(smg_worker_requests_active{source=\"sglang-router\"})",
       "type": "gauge",
       "unit_system": "count",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"smg_worker_requests_active\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
@@ -22,7 +20,6 @@
     {
       "role": "throughput",
       "title": "Token Rate",
-      "query": "sum(irate(smg_router_tokens_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "denominator": true,
@@ -31,7 +28,6 @@
     {
       "role": "throughput",
       "title": "Upstream Response Rate",
-      "query": "sum(irate(smg_router_upstream_responses_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"smg_router_upstream_responses_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -39,7 +35,6 @@
     {
       "role": "error",
       "title": "Request Error Rate",
-      "query": "sum(irate(smg_router_request_errors_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"smg_router_request_errors_total\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -47,7 +42,6 @@
     {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
-      "query": "smg_router_ttft_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -59,7 +53,6 @@
     {
       "role": "latency",
       "title": "Time per Output Token (TPOT)",
-      "query": "smg_router_tpot_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -71,7 +64,6 @@
     {
       "role": "latency",
       "title": "Generation Duration",
-      "query": "smg_router_generation_duration_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -83,7 +75,6 @@
     {
       "role": "latency",
       "title": "HTTP Request Duration",
-      "query": "smg_http_request_duration_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [

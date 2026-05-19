@@ -7,10 +7,11 @@ repository.workspace = true
 homepage.workspace = true
 publish = false
 
-# Browser-side viewer that drives duckdb-wasm via JS instead of running an
-# in-memory PromQL/Tsdb engine in WASM. Sibling to `viewer` (which keeps the
-# legacy path); both consume the same `dashboard` crate (the DashboardData
-# trait abstracts the metadata source).
+# Browser-side viewer that drives duckdb-wasm via JS. Mirrors the
+# native server viewer (`metriken-query-sql` + `DuckDbBackend`) by
+# registering the same `shared_macros.sql` plus pure-SQL substitutes
+# for the H2 histogram primitives, since WASM can't register
+# scalar UDFs.
 [lib]
 # rlib so integration tests in tests/ can link against the crate on the host
 # target. Build script (build.sh) still produces the cdylib for wasm32.

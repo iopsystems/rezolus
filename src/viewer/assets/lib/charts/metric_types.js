@@ -90,15 +90,12 @@ export function buildHistogramQuery(baseQuery, subtype, percentiles, strideSecs)
 
 /**
  * Returns true if the given plot spec represents a histogram chart.
- * Checks the semantic type first, with a legacy fallback for specs that
- * still use the histogram_quantiles query format.
  *
- * @param {object} plot - A plot spec with opts and optional promql_query
+ * @param {object} plot - A plot spec with opts
  * @returns {boolean}
  */
 export function isHistogramPlot(plot) {
-    return plot.opts?.type === 'histogram' ||
-        (plot.promql_query && plot.promql_query.includes('histogram_quantiles'));
+    return plot.opts?.type === 'histogram';
 }
 
 /**

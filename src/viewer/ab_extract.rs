@@ -1,6 +1,6 @@
 //! Extract a combined-A/B tar archive (produced by `parquet combine --ab`)
-//! into two per-side parquets on disk so the viewer can load each with
-//! `Tsdb::load`.
+//! into two per-side parquets on disk so the viewer can load each
+//! through `SqlCapture::open`.
 //!
 //! Wire format (see `src/parquet_tools/combine.rs::write_ab_tarball`):
 //! a POSIX/USTAR-style tar containing exactly three entries —

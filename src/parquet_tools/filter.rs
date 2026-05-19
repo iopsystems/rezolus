@@ -115,7 +115,8 @@ pub(super) fn filter_parquet_file(
 fn extract_column_names(ext: &ServiceExtension) -> BTreeSet<String> {
     ext.kpis
         .iter()
-        .flat_map(|kpi| extract_metric_selectors(&kpi.query))
+        .filter_map(|kpi| kpi.sql.as_deref())
+        .flat_map(extract_metric_selectors)
         .map(|selector| {
             // Strip label selectors: "tokens{direction=\"output\"}" -> "tokens"
             selector.split('{').next().unwrap_or(&selector).to_string()
@@ -254,8 +255,7 @@ mod tests {
                     role: "test".to_string(),
                     title: "test".to_string(),
                     description: None,
-                    query: q.to_string(),
-                    sql: None,
+                    sql: Some(q.to_string()),
                     metric_type: "gauge".to_string(),
                     subtype: None,
                     unit_system: None,

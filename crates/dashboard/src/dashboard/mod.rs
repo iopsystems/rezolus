@@ -52,7 +52,6 @@ pub struct DashboardContext {
     /// difference is whether `category` below is set.
     pub service_exts: Vec<(String, ServiceExtension)>,
     pub category: Option<(String, CategoryExtension)>,
-    pub throughput_query: Option<String>,
 }
 
 /// Build the navigation list and other shared state needed to render
@@ -116,11 +115,6 @@ pub fn build_dashboard_context(
         }
     }
 
-    let throughput_query = unique_service_exts
-        .first()
-        .and_then(|(_, e)| e.throughput_query())
-        .map(str::to_string);
-
     let owned_service_exts: Vec<(String, ServiceExtension)> = unique_service_exts
         .iter()
         .map(|(name, ext)| ((*name).to_string(), (*ext).clone()))
@@ -137,7 +131,6 @@ pub fn build_dashboard_context(
         filesize,
         service_exts: owned_service_exts,
         category: owned_category,
-        throughput_query,
     }
 }
 
@@ -152,7 +145,7 @@ pub fn generate_section(
     ctx: &DashboardContext,
 ) -> Option<View> {
     let view = if route == "/overview" {
-        overview::generate(data, ctx.sections.clone(), ctx.throughput_query.as_deref())
+        overview::generate(data, ctx.sections.clone())
     } else if let Some((_, _, generator)) = SECTION_META.iter().find(|(_, r, _)| *r == route) {
         generator(data, ctx.sections.clone())
     } else if let Some(name) = route.strip_prefix("/service/") {
@@ -210,7 +203,6 @@ mod tests {
         assert_eq!(actual, expected);
         assert!(ctx.service_exts.is_empty());
         assert!(ctx.category.is_none());
-        assert!(ctx.throughput_query.is_none());
         assert!(ctx.filesize.is_none());
     }
 
@@ -248,7 +240,6 @@ mod tests {
             role: role.to_string(),
             title: title.to_string(),
             description: None,
-            query: query.to_string(),
             sql: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
@@ -327,7 +318,6 @@ mod tests {
             role: role.to_string(),
             title: title.to_string(),
             description: None,
-            query: query.to_string(),
             sql: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
@@ -401,7 +391,6 @@ mod tests {
             role: "throughput".to_string(),
             title: "Generation Token Rate".to_string(),
             description: None,
-            query: "vllm_q".to_string(),
             sql: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,

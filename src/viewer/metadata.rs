@@ -418,9 +418,9 @@ pub fn regenerate_dashboards(state: &AppState) {
         .clone()
         .or_else(|| state.cli_experiment_path.read().clone());
 
-    // Validate baseline exts against the baseline tsdb and experiment
-    // exts against the experiment tsdb so a KPI present only in one
-    // recording isn't wrongly marked unavailable.
+    // Validate baseline exts against the baseline capture and
+    // experiment exts against the experiment capture so a KPI present
+    // only in one recording isn't wrongly marked unavailable.
     let mut baseline_exts: Vec<(String, ServiceExtension)> = baseline_path
         .as_ref()
         .map(|p| extract_service_extension_metadata(p, registry))
@@ -518,7 +518,6 @@ mod validate_sql_tests {
             role: "service".into(),
             title: title.into(),
             description: None,
-            query: String::new(),
             sql: sql.map(|s| s.to_string()),
             metric_type: "counter".into(),
             subtype: None,

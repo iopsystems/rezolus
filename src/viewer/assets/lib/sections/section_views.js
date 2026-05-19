@@ -238,12 +238,12 @@ const createMetadataView = () => {
                     ...serviceQueries.map(sq => [
                         m('h3', sq.source),
                         sq.queries.kpis && m('table.sysinfo-table', [
-                            m('thead', m('tr', [m('th', 'Title'), m('th', 'Type'), m('th', 'Query')])),
+                            m('thead', m('tr', [m('th', 'Title'), m('th', 'Type'), m('th', 'SQL')])),
                             m('tbody', sq.queries.kpis.map(kpi =>
                                 m('tr', [
                                     m('td', kpi.title || ''),
                                     m('td', kpi.metric_type || kpi.type || ''),
-                                    m('td', m('code', kpi.query || '')),
+                                    m('td', m('code', kpi.sql || '')),
                                 ])
                             )),
                         ]),
@@ -269,9 +269,8 @@ const renderCgroupSection = ({
     chartsState,
     Chart,
     CgroupSelector,
-    executePromQLRangeQuery,
+    executeQuery,
     applyResultToPlot,
-    substituteCgroupPattern,
     setActiveCgroupPattern,
     globalColorMapper,
 }) => {
@@ -316,19 +315,19 @@ const renderCgroupSection = ({
         m('h1.section-title', titleText),
         m(CgroupSelector, {
             groups: attrs.groups,
-            executeQuery: executePromQLRangeQuery,
+            executeQuery,
             applyResultToPlot: applyResultToPlot,
             // The cgroup_selector emits the picked names as a string[].
             // Two consumers need that:
             //   1. The wasm-viewer registry (substitutes inside
             //      duckdb-wasm). On the server build this is a no-op
             //      stub but we still call it for cross-build symmetry.
-            //   2. The server build's `__SELECTED_CGROUPS__`
-            //      substitution wrapper around `executePromQLRangeQuery`
-            //      in `app.js` — it reads `activeCgroupPattern` and
-            //      inserts it before every executeQuery call. We
-            //      convert names → SQL IN-list literal here and push
-            //      it through `setActiveCgroupPattern`.
+            //   2. The server build's `__SELECTED_CGROUPS__` literal
+            //      substitution path — `activeCgroupPattern` carries
+            //      the SQL IN-list and the registry / server runs the
+            //      substitution before query execution. We convert
+            //      names → SQL IN-list literal here and push it
+            //      through `setActiveCgroupPattern`.
             setSelectedCgroups: (names) => {
                 ViewerApi.setSelectedCgroups(names);
                 if (setActiveCgroupPattern) {

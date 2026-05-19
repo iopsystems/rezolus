@@ -28,7 +28,7 @@ pub fn save_single_parquet_embed_only(
 
 /// SQL-backed single-parquet save with column trim. Path-shaped
 /// adapter over `report_save::save_single_parquet_sql`. Works with
-/// any `SqlCapture` — no Tsdb required.
+/// any `SqlCapture`.
 pub fn save_single_parquet_sql(
     source_path: &Path,
     payload: &ReportPayload,

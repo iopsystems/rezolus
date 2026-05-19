@@ -33,7 +33,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
     `shared_macros.sql` is `include_str!`d by both the native engine
     and the WASM viewer so emitters can't drift.
   - **The emitters.** `crates/dashboard/src/sql.rs` (715 LOC, 16
-    helpers) is what 110 plot call sites in `dashboard/*.rs` call
+    helpers) is what ~180 plot call sites in `dashboard/*.rs` call
     to produce each plot's `sql_query`. Every helper is
     snapshot-tested in `tests/sql_snapshots.rs`; the two newest
     (cgroup `irate_by_name`, `ratio_by_name`) also have a
@@ -43,13 +43,15 @@ reads `review.md`; the newcomer reads `architecture.md`.
   - **The viewer.** `Arc<DuckDbBackend>` lives on `AppState`
     (`src/viewer/state.rs`). Parquets are wrapped by `SqlCapture`
     (`sql_capture.rs`, 379 LOC) and held by `CaptureRegistry`
-    (`capture_registry.rs`, 305 LOC). Live captures attach via
-    `live_source: RwLock<Option<Arc<LiveSource>>>` on the same
-    `AppState`, registered under `LIVE_BASELINE_DATA_SOURCE =
-    "live:baseline"`. `data_source_for(state, capture)` in
-    `routes.rs:527` resolves the live key ahead of any parquet path,
-    so `/api/v1/query{,_range}` dispatch is uniform across modes.
-    `src/viewer/live_ingest.rs` (~343 LOC) is the
+    (`capture_registry.rs`, 265 LOC). Live captures wrap a
+    `LiveSource` in a `LiveCapture` (`live_capture.rs`, 177 LOC; the
+    `DashboardData` shim for the live slot); the shared
+    `Arc<LiveSource>` is registered with the backend under
+    `LIVE_BASELINE_DATA_SOURCE = "live:baseline"`.
+    `data_source_for(state, capture)` in `routes.rs:522` resolves
+    the live key ahead of any parquet path, so
+    `/api/v1/query{,_range}` dispatch is uniform across modes.
+    `src/viewer/live_ingest.rs` (~358 LOC) is the
     `metriken_exposition::Snapshot` → `LiveSource::append` bridge.
     The SQL handler runs through `spawn_blocking` so 20+ parallel
     chart fetches don't starve the tokio runtime. A binder-error →

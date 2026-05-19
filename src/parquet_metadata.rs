@@ -11,9 +11,9 @@ pub const MAX_ROW_GROUP_SIZE: usize = 50_000;
 
 // ── Top-level parquet footer keys ───────────────────────────────────────
 
-/// Top-level parquet footer keys. These are read by `Tsdb::load` or shared
-/// infrastructure and must remain flat strings in both single-source and
-/// combined files.
+/// Top-level parquet footer keys. These are read by `SqlCapture::open`,
+/// `report-save`, MCP, and `parquet annotate`, and must remain flat
+/// strings in both single-source and combined files.
 /// Identifies the recording source(s).
 /// Single file: `"llm-perf"`.  Combined: `["rezolus", "llm-perf"]`.
 pub const KEY_SOURCE: &str = "source";

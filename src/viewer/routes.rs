@@ -75,7 +75,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
 
     // Live-mode-only routes.
     let api_routes = api_routes
-        .route("/reset", axum::routing::post(actions::reset_tsdb))
+        .route("/reset", axum::routing::post(actions::reset_baseline_live_source))
         .route("/connect", axum::routing::post(actions::connect_agent));
 
     let api_routes = api_routes.layer(axum::middleware::map_response(
@@ -330,10 +330,6 @@ fn count_section_plots(
             .chain(direct_plots.into_iter())
             .flatten();
         for plot in plot_iter {
-            let promql = plot
-                .get("promql_query")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
             let sql = plot
                 .get("sql_query")
                 .and_then(|v| v.as_str())
@@ -346,24 +342,17 @@ fn count_section_plots(
             // join) or return empty. Without any cgroups, the
             // section's body renders a "no cgroup data found" note
             // and the 48 placeholder counts were misleading.
-            if sql.contains("__SELECTED_CGROUPS__")
-                || promql.contains("__SELECTED_CGROUPS__")
-            {
+            if sql.contains("__SELECTED_CGROUPS__") {
                 if has_cgroups {
                     total += 1;
                 }
                 continue;
             }
-            // No queries at all: a static / template plot.
-            if promql.is_empty() && sql.is_empty() {
-                total += 1;
-                continue;
-            }
-            // PromQL-only on the SQL backend: would render as a
-            // `_unavailable` placeholder (May-18 commit `6054fe2`),
-            // so the section is content-bearing even if not
-            // chart-rendering.
-            if !promql.is_empty() && sql.is_empty() {
+            // No SQL: a static / template plot, or a KPI with no
+            // transcribed SQL — renders as an `_unavailable` placeholder
+            // card. Counts toward `total` so the section is content-
+            // bearing.
+            if sql.is_empty() {
                 total += 1;
                 continue;
             }
@@ -585,8 +574,8 @@ async fn run_sql(state: &Arc<AppState>, capture: Option<&str>, sql: String) -> R
             // is "this metric is not in this parquet", not a SQL
             // bug. Translate it to an empty matrix so the frontend
             // renders the chart as "no data" instead of as an error.
-            // Mirrors the legacy `Tsdb`+PromQL behaviour where an
-            // unknown metric simply returned an empty result set.
+            // Preserves the pre-migration "unknown metric → empty
+            // series" UX from the PromQL-era viewer.
             if msg.contains("No matching columns")
                 || msg.contains("not found in FROM clause")
             {
@@ -682,8 +671,8 @@ async fn metadata(
 
 /// Shared helper for the metadata endpoint: pull (min_time_ns,
 /// max_time_ns, filename) from a capture slot regardless of whether
-/// it's backed by a Tsdb or a SqlCapture. Returns `None` for an
-/// unattached experiment slot.
+/// it's backed by `SqlCapture` (file/upload/A-B) or `LiveCapture`
+/// (live agent). Returns `None` for an unattached experiment slot.
 fn read_capture_scalar_meta(
     state: &AppState,
     capture: CaptureId,
@@ -870,11 +859,9 @@ mod live_route_tests {
     #[test]
     fn metadata_time_range_advances_as_snapshots_are_appended() {
         // The metadata handler reads time range from
-        // `read_capture_scalar_meta`, which uses the Tsdb-backed
-        // DashboardData impl during the transition. Even without
-        // wiring Tsdb here, confirm the live source itself reports
-        // advancing time bounds — pinning the contract the eventual
-        // metadata-from-LiveSource migration will rely on.
+        // `read_capture_scalar_meta`, which delegates to the
+        // `DashboardData` impl on the capture (`LiveCapture` here).
+        // Confirm the live source reports advancing time bounds.
         let (_state, live) = live_state();
         assert_eq!(live.time_range_ns().expect("range"), None);
 

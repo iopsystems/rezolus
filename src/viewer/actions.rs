@@ -292,7 +292,7 @@ pub fn ingest_baseline_from_path(
     // `/api/v1/connect`) reject further requests with a clean
     // `bad_request` instead of hitting the
     // `expect("live mode baseline is LiveCapture-backed")` panic in
-    // `reset_tsdb` (the baseline is now SQL-backed).
+    // `reset_baseline_live_source` (the baseline is now SQL-backed).
     state.captures.replace_baseline_with_sql(capture);
     state.live.store(false, Ordering::Relaxed);
     *state.sections.write() = LazySectionStore::new(context);
@@ -519,7 +519,7 @@ pub async fn connect_agent(
 
 /// Reset the live capture — clears all in-memory data and buffered
 /// snapshots.
-pub async fn reset_tsdb(
+pub async fn reset_baseline_live_source(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     use ::dashboard::DashboardData;
@@ -791,17 +791,11 @@ fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
         .unwrap()
 }
 
-/// Pick the right report-save entry point for the single-parquet case.
-/// With `live-mode` on: respect the payload's `trim_columns` flag when
-/// the baseline is Tsdb-backed (column trim resolved via PromQL).
-/// SQL-backed baselines and SQL-only builds skip the trim and just
-/// embed the selection JSON.
-/// Single-parquet save-as-report dispatch. Trim requires a Tsdb
-/// (PromQL drives column resolution in report-save), so under
-/// `live-mode` we attempt that path when the baseline is Tsdb-backed.
-/// SQL-backed baselines and `--features sql-only` builds always
-/// fall through to `embed_only`, which packs the selection JSON
-/// into the footer without dropping columns.
+/// Single-parquet save-as-report dispatch. File / upload / A-B
+/// baselines are `SqlCapture`-backed and run column trim through the
+/// SQL-aware resolver against the capture's `MetricCatalog`. The
+/// `embed_only` fallback (no trim) is for callers that don't have a
+/// SqlCapture attached.
 fn save_single_dispatch(
     state: &AppState,
     path: &std::path::Path,

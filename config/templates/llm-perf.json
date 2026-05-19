@@ -9,7 +9,6 @@
     {
       "role": "throughput",
       "title": "Output Token Rate",
-      "query": "sum(irate(tokens{direction=\"output\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "denominator": true,
@@ -18,7 +17,6 @@
     {
       "role": "load",
       "title": "Input Token Rate",
-      "query": "sum(irate(tokens{direction=\"input\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"tokens/input\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -26,7 +24,6 @@
     {
       "role": "load",
       "title": "Requests In-Flight",
-      "query": "requests_inflight{source=\"llm-perf\"}",
       "type": "gauge",
       "unit_system": "count",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"requests_inflight\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
@@ -34,7 +31,6 @@
     {
       "role": "throughput",
       "title": "Request Rate",
-      "query": "sum(irate(requests{status=\"success\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/success\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -42,14 +38,12 @@
     {
       "role": "error",
       "title": "Error Rate",
-      "query": "sum(irate(requests{status=\"error\",source=\"llm-perf\"}[5s])) / sum(irate(requests{status=\"sent\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "percentage"
     },
     {
       "role": "error",
       "title": "Error Request Rate",
-      "query": "sum(irate(requests{status=\"error\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/error\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -57,7 +51,6 @@
     {
       "role": "error",
       "title": "Timeout Request Rate",
-      "query": "sum(irate(requests{status=\"timeout\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/timeout\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -65,7 +58,6 @@
     {
       "role": "error",
       "title": "Canceled Request Rate",
-      "query": "sum(irate(requests{status=\"canceled\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/canceled\", timestamp) AS v FROM {{view}} ORDER BY t"
@@ -73,7 +65,6 @@
     {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
-      "query": "ttft{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -85,7 +76,6 @@
     {
       "role": "latency",
       "title": "Time per Output Token (TPOT)",
-      "query": "tpot{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -97,7 +87,6 @@
     {
       "role": "latency",
       "title": "Inter-Token Latency (ITL)",
-      "query": "itl{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -109,7 +98,6 @@
     {
       "role": "latency",
       "title": "Request Latency",
-      "query": "request_latency{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
@@ -121,7 +109,6 @@
     {
       "role": "latency",
       "title": "Think Duration",
-      "query": "think_duration{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "percentiles": [
