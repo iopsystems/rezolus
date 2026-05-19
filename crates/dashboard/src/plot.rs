@@ -293,9 +293,9 @@ impl SubGroup {
     /// subgroup reads rate | mean | <percentiles>.
     ///
     /// `mean_unit` is the mean card's `Unit` (`Time` for latency,
-    /// `Bytes` for size); `unit_system` is its formatter
-    /// (`"time"` / `"bytes"`). The rate card mirrors existing counter
-    /// rate cards (`Unit::Rate`, no unit system).
+    /// `Bytes` for size); its formatter unit-system is derived from it.
+    /// The rate card mirrors existing counter rate cards (`Unit::Rate`,
+    /// no unit system).
     pub fn histogram_rate_mean(
         &mut self,
         title_stem: &str,
@@ -303,8 +303,16 @@ impl SubGroup {
         selector: &str,
         rate: RateSource,
         mean_unit: Unit,
-        unit_system: &str,
     ) {
+        let unit_system = match mean_unit {
+            Unit::Time => "time",
+            Unit::Bytes => "bytes",
+            // This helper is only used for latency/size means; guard
+            // anything else loudly rather than mis-format silently.
+            other => panic!(
+                "histogram_rate_mean: unsupported mean unit {other:?}; only Time/Bytes"
+            ),
+        };
         let rate_query = match rate {
             RateSource::Counter(q) => q,
             RateSource::FromHistogram => {
@@ -365,10 +373,16 @@ pub enum MetricType {
 }
 
 /// Where the "rate" half of a histogram's rate|mean card pair gets its
-/// data. Prefer `Counter` (an accurate standalone counter of exactly
-/// the histogrammed events); `FromHistogram` derives an approximate
-/// rate from the histogram column itself and is subject to lock-free
-/// snapshot undercount — use only when no such counter exists.
+/// data.
+///
+/// - `Counter(query)`: a verbatim rate query over a *separate, accurate*
+///   counter column (e.g. `sum(irate(blockio_operations…[5m]))`) — it
+///   is deliberately independent of the histogram `selector`, since the
+///   accurate event count lives in a different metric.
+/// - `FromHistogram`: derive an approximate rate from the histogram
+///   column itself; subject to lock-free snapshot undercount — use only
+///   when no accurate counter exists.
+#[derive(Debug)]
 pub enum RateSource {
     Counter(String),
     FromHistogram,
@@ -546,6 +560,7 @@ impl FormatConfig {
     }
 }
 
+#[derive(Debug)]
 pub enum Unit {
     Count,
     Rate,
@@ -726,7 +741,6 @@ mod tests {
             "blockio_latency{op=\"read\"}",
             RateSource::Counter("sum(irate(blockio_operations{op=\"read\"}[5m]))".to_string()),
             Unit::Time,
-            "time",
         );
         let json = serde_json::to_value(&g).unwrap();
         let plots = json["subgroups"][0]["plots"].as_array().unwrap();
@@ -764,10 +778,10 @@ mod tests {
             "scheduler_runqueue_latency",
             RateSource::FromHistogram,
             Unit::Time,
-            "time",
         );
         let json = serde_json::to_value(&g).unwrap();
         let plots = json["subgroups"][0]["plots"].as_array().unwrap();
+        assert_eq!(plots.len(), 2);
         assert_eq!(
             plots[0]["promql_query"],
             "sum(irate(histogram_count(scheduler_runqueue_latency)[5m]))"
