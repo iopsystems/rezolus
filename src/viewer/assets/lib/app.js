@@ -881,7 +881,7 @@ const initDashboard = (config = {}) => {
             withSharedSections: withCachedSections,
             getDefaultRoute: () => defaultRoute,
         }),
-        '/chart/:section/:chartId': {
+        '/:section/chart/:chartId': {
             // Pinned single-chart route. Resolved off the section
             // response cache — if the section data hasn't loaded
             // yet, the user will see a "section not loaded" message.

@@ -207,7 +207,7 @@ export const SingleChartView = {
         const { section, chartId, sectionResponseCache, chartsState } = vnode.attrs;
         const cached = sectionResponseCache[section];
         if (!cached) {
-            return m('div.single-chart', m('p', 'Section data not loaded.'));
+            return m('div.single-chart-main', m('p', 'Section data not loaded.'));
         }
         let target = null;
         for (const g of cached.groups || []) {
@@ -226,17 +226,19 @@ export const SingleChartView = {
             if (target) break;
         }
         if (!target) {
-            return m('div.single-chart', m('p', `Chart "${chartId}" not found in section "${section}".`));
+            return m('div.single-chart-main', m('p', `Chart "${chartId}" not found in section "${section}".`));
         }
         const spec = {
             ...target,
             opts: { ...target.opts },
             width: 'full',
         };
-        return m('div.single-chart', [
-            m('h2', spec.opts.title),
-            spec.opts.description && m('p.chart-description', spec.opts.description),
-            m(Chart, { spec, chartsState, interval: cached.interval || 1 }),
-        ]);
+        return m('div.single-chart-main',
+            m('div.single-chart-view.single-chart-container', [
+                m('h2', spec.opts.title),
+                spec.opts.description && m('p.chart-description', spec.opts.description),
+                m(Chart, { spec, chartsState, interval: cached.interval || 1 }),
+            ]),
+        );
     },
 };

@@ -2,6 +2,28 @@
 
 Workflows for AI agents (Claude Code, etc.) operating on this repo.
 
+## Always verify viewer fixes in chromium before claiming success
+
+For any change to `src/viewer/assets/`, dashboard generators, SQL
+emitters, or HTTP routes that affects what a user sees in the
+browser, **drive the page in headless chromium and confirm the
+expected element rendered** before reporting the fix done. Type
+checks, unit tests, and `curl`-ing the API are not enough — a viewer
+can return HTTP 200 while rendering nothing, redirect silently, or
+fail in JS after the HTML loads. The console error or missing DOM
+node is the ground truth.
+
+Minimal probe (no smoke harness):
+
+```bash
+# Drive a specific route, dump rendered DOM + console errors.
+# Requires chromium, python3, `pip install --user websockets`.
+python3 scripts/chromium_probe.py http://127.0.0.1:8080/#/overview/chart/cpu_busy
+```
+
+For broader pixel-diff verification (refactors), use the full
+screenshot-identity workflow below.
+
 ## Screenshot-identity check vs. pre-change baseline
 
 When refactoring the viewer's chart pipeline, dashboard generators, or
