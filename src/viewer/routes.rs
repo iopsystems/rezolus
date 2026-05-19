@@ -277,7 +277,11 @@ struct SectionCounts {
 ///
 /// A plot is "kept" when any of these is true:
 ///   - Carries `__SELECTED_CGROUPS__` in its SQL or PromQL (deferred
-///     cgroup plot — the cgroup_selector refetches it on demand).
+///     cgroup plot) **and** the source has at least one cgroup in
+///     `_cgroup_index`. Without cgroups the deferred placeholders
+///     have nothing to fill in — surfacing as `(48)` on the sidebar
+///     was misleading the user into expecting content where the
+///     section actually renders "no cgroups found".
 ///   - Carries no PromQL query at all (legacy template plot that
 ///     would render as static markup).
 ///   - PromQL-only KPI with no SQL on the SQL backend (would render
@@ -298,6 +302,26 @@ fn count_section_plots(
     let Some(groups) = body.get("groups").and_then(|v| v.as_array()) else {
         return SectionCounts { total: 0, with_data: 0 };
     };
+
+    // One-time probe: does the source have any cgroups at all?
+    // Drives the "skip deferred cgroup plots when there's nothing
+    // for them to defer to" rule. Failure → assume no cgroups
+    // (safer to under-count than over-count for the gray-out).
+    let has_cgroups = backend
+        .run_sql("SELECT 0::DOUBLE AS t, COUNT(*)::DOUBLE AS v FROM _cgroup_index", data_source)
+        .ok()
+        .and_then(|batches| {
+            batches.first().and_then(|b| {
+                if b.num_rows() == 0 { return None; }
+                let col = b
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float64Array>()?;
+                Some(col.value(0) > 0.0)
+            })
+        })
+        .unwrap_or(false);
+
     // Mirror the JS shape: groups → (subgroups → plots) | direct plots.
     for group in groups {
         let subgroups = group.get("subgroups").and_then(|v| v.as_array());
@@ -318,14 +342,19 @@ fn count_section_plots(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            // Cgroup deferred: keep without running. The selector
-            // splices in the picked cgroups before firing the query
-            // — running it as-is here would either bind-error or
-            // return empty.
+            // Cgroup deferred plots: keep only if cgroups exist in
+            // the source. The selector splices the picked cgroup
+            // names in before firing the query — running it as-is
+            // would either bind-error (no `_cgroup_index` rows to
+            // join) or return empty. Without any cgroups, the
+            // section's body renders a "no cgroup data found" note
+            // and the 48 placeholder counts were misleading.
             if sql.contains("__SELECTED_CGROUPS__")
                 || promql.contains("__SELECTED_CGROUPS__")
             {
-                total += 1;
+                if has_cgroups {
+                    total += 1;
+                }
                 continue;
             }
             // No queries at all: a static / template plot.
