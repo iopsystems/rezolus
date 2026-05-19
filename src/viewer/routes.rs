@@ -487,6 +487,17 @@ struct RangeQueryParams {
     step: f64,
     #[serde(default)]
     capture: Option<String>,
+    /// Optional node selector. When present, all bare `_src` references
+    /// in the SQL body are rewritten to `_src_node_<sanitized>` before
+    /// the query runs. Unknown values return HTTP 400.
+    #[serde(default)]
+    node: Option<String>,
+    /// When `true`, the handler does not translate empty-result binder
+    /// errors ("No matching columns") into empty matrices. Used by the
+    /// Query Explorer so users see raw error feedback. Default `false`
+    /// preserves the dashboard's silent-render UX.
+    #[serde(default)]
+    strict: bool,
 }
 
 /// Resolve the parquet path for the requested capture. Returns `None`
@@ -536,7 +547,13 @@ pub(super) fn data_source_for(state: &AppState, capture: CaptureId) -> Option<St
 /// blocking-task pool (default 512 threads), so all `pool_size`
 /// DuckDB slots can run concurrently and async handlers (static
 /// assets, sections nav, etc.) stay responsive.
-async fn run_sql(state: &Arc<AppState>, capture: Option<&str>, sql: String) -> Response {
+async fn run_sql(
+    state: &Arc<AppState>,
+    capture: Option<&str>,
+    sql: String,
+    node: Option<&str>,
+    strict: bool,
+) -> Response {
     let capture = CaptureId::parse_opt(capture);
     let Some(data_source) = data_source_for(state, capture) else {
         // Unattached experiment slot, or upload-only viewer pre-upload.
@@ -545,6 +562,40 @@ async fn run_sql(state: &Arc<AppState>, capture: Option<&str>, sql: String) -> R
             "capture_not_found",
         )
         .into_response();
+    };
+    // Apply the per-node rewrite, when requested. The rewrite is
+    // a token-aware regex substitution (`_src` not followed by a
+    // word-character) so already-namespaced references like
+    // `_src_cachecannon` survive untouched.
+    let sql = match node {
+        Some(node_name) => {
+            let catalog = match state.sql_backend.describe_parquet(&data_source) {
+                Ok(c) => c,
+                Err(e) => {
+                    return ApiResponse::<serde_json::Value>::err(
+                        format!("describe_parquet: {e}"),
+                        "sql_error",
+                    )
+                    .into_response();
+                }
+            };
+            let nodes: Vec<&str> = catalog.nodes();
+            if !nodes.iter().any(|&n| n == node_name) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    ApiResponse::<serde_json::Value>::err(
+                        format!(
+                            "unknown node '{node_name}' — known nodes: {}",
+                            nodes.join(", "),
+                        ),
+                        "unknown_node",
+                    ),
+                )
+                    .into_response();
+            }
+            rewrite_src_to_node_view(&sql, node_name)
+        }
+        None => sql,
     };
     let backend = state.sql_backend.clone();
     let outcome = tokio::task::spawn_blocking(move || match backend.run_sql(&sql, &data_source) {
@@ -576,9 +627,11 @@ async fn run_sql(state: &Arc<AppState>, capture: Option<&str>, sql: String) -> R
             // bug. Translate it to an empty matrix so the frontend
             // renders the chart as "no data" instead of as an error.
             // Preserves the pre-migration "unknown metric → empty
-            // series" UX from the PromQL-era viewer.
-            if msg.contains("No matching columns")
-                || msg.contains("not found in FROM clause")
+            // series" UX from the PromQL-era viewer. Query Explorer
+            // (strict=true) bypasses this shim so users see raw errors.
+            if !strict
+                && (msg.contains("No matching columns")
+                    || msg.contains("not found in FROM clause"))
             {
                 return (
                     StatusCode::OK,
@@ -592,18 +645,66 @@ async fn run_sql(state: &Arc<AppState>, capture: Option<&str>, sql: String) -> R
     }
 }
 
+/// Replace every bare `_src` reference in `sql` with
+/// `_src_node_<sanitized>`. "Bare" means the next character isn't a
+/// word character — so `_src_cachecannon` and `_src_node_alpha`
+/// survive untouched.
+///
+/// Caveat: a `_src` inside a single-quoted string literal will also
+/// be rewritten. Unusual in practice (Rezolus dashboard SQL never
+/// quotes `_src`), and Query Explorer users can always spell out
+/// `_src_node_<X>` themselves if they need the literal.
+pub(super) fn rewrite_src_to_node_view(sql: &str, node: &str) -> String {
+    use metriken_query_sql::view_name_for_node;
+    let replacement = view_name_for_node(node);
+    let needle = "_src";
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(needle.as_bytes()) {
+            let after = i + needle.len();
+            // Check the boundary character.
+            let boundary_ok = after == bytes.len()
+                || !is_sql_word_byte(bytes[after]);
+            // Check the *preceding* character so `__src` or
+            // `foo_src` (rare but possible) don't false-match.
+            let prev_ok = i == 0 || !is_sql_word_byte(bytes[i - 1]);
+            if boundary_ok && prev_ok {
+                out.push_str(&replacement);
+                i = after;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn is_sql_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
 async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    run_sql(&state, params.capture.as_deref(), params.query).await
+    run_sql(&state, params.capture.as_deref(), params.query, None, false).await
 }
 
 async fn range_query(
     Query(params): Query<RangeQueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    run_sql(&state, params.capture.as_deref(), params.query).await
+    run_sql(
+        &state,
+        params.capture.as_deref(),
+        params.query,
+        params.node.as_deref(),
+        params.strict,
+    )
+    .await
 }
 
 async fn label_names(State(_state): State<Arc<AppState>>) -> Json<ApiResponse<Vec<String>>> {
@@ -737,6 +838,56 @@ async fn lib(uri: Uri) -> impl IntoResponse {
         [(header::CONTENT_TYPE, content_type)],
         body.to_string(),
     )
+}
+
+#[cfg(test)]
+mod rewrite_tests {
+    use super::rewrite_src_to_node_view;
+
+    #[test]
+    fn rewrites_bare_src_token() {
+        let sql = "SELECT t, v FROM _src ORDER BY t";
+        let out = rewrite_src_to_node_view(sql, "alpha");
+        assert_eq!(out, "SELECT t, v FROM _src_node_alpha ORDER BY t");
+    }
+
+    #[test]
+    fn leaves_namespaced_views_untouched() {
+        // `_src_cachecannon` and `_src_node_alpha` are already
+        // node/source-prefixed; rewriting them would produce nonsense.
+        let sql = "SELECT t FROM _src JOIN _src_cachecannon USING(timestamp)";
+        let out = rewrite_src_to_node_view(sql, "alpha");
+        assert_eq!(
+            out,
+            "SELECT t FROM _src_node_alpha JOIN _src_cachecannon USING(timestamp)",
+        );
+    }
+
+    #[test]
+    fn handles_multiple_occurrences() {
+        let sql = "WITH a AS (SELECT * FROM _src) SELECT * FROM _src, a";
+        let out = rewrite_src_to_node_view(sql, "alpha");
+        assert_eq!(
+            out,
+            "WITH a AS (SELECT * FROM _src_node_alpha) SELECT * FROM _src_node_alpha, a",
+        );
+    }
+
+    #[test]
+    fn sanitizes_node_name() {
+        let sql = "SELECT * FROM _src";
+        let out = rewrite_src_to_node_view(sql, "host-01");
+        assert_eq!(out, "SELECT * FROM _src_node_host_01");
+    }
+
+    #[test]
+    fn does_not_match_inside_other_words() {
+        // `my_src` shouldn't accidentally match (the leading `_`
+        // is a word character, so the boundary check rejects).
+        let sql = "SELECT my_src FROM _src";
+        let out = rewrite_src_to_node_view(sql, "alpha");
+        assert_eq!(out, "SELECT my_src FROM _src_node_alpha");
+    }
 }
 
 #[cfg(test)]

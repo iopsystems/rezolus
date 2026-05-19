@@ -44,11 +44,10 @@ pub struct HeatmapRangeParams {
     /// Capture slot — `baseline` (default) or `experiment`.
     #[serde(default)]
     pub capture: Option<String>,
-    /// Optional node selector (R4 hook — wired by N2). When set, the
-    /// SQL runs against the per-node view rather than the aggregate
-    /// `_src`.
+    /// Optional node selector. When set, the SQL runs against the
+    /// per-node view rather than the aggregate `_src`. Unknown values
+    /// return HTTP 400.
     #[serde(default)]
-    #[allow(dead_code)]
     pub node: Option<String>,
 }
 
@@ -123,6 +122,30 @@ pub async fn handler(
         .into_response();
     };
 
+    // Validate the node selector (when present). Unknown nodes are a
+    // 400, not a silent fallthrough — the frontend caller should be
+    // working from a catalog-derived list.
+    let node = match params.node.as_deref() {
+        Some(name) => {
+            let nodes: Vec<&str> = catalog.nodes();
+            if !nodes.iter().any(|&n| n == name) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    ApiResponse::<serde_json::Value>::err(
+                        format!(
+                            "unknown node '{name}' — known nodes: {}",
+                            nodes.join(", "),
+                        ),
+                        "unknown_node",
+                    ),
+                )
+                    .into_response();
+            }
+            Some(name.to_string())
+        }
+        None => None,
+    };
+
     let backend = state.sql_backend.clone();
     let metric = params.metric.clone();
     let kind = params.kind;
@@ -140,6 +163,14 @@ pub async fn handler(
             HeatmapKind::QuantileSpectrum => {
                 sql::quantile_spectrum_sql(&metric, &quantiles, p, None)
             }
+        };
+        // Rewrite `_src` → `_src_node_<X>` when a node was requested.
+        // The emitters always target `_src` by default; the rewrite is
+        // the same one `range_query` uses so the two paths stay in
+        // lockstep.
+        let sql_text = match node.as_deref() {
+            Some(n) => super::routes::rewrite_src_to_node_view(&sql_text, n),
+            None => sql_text,
         };
         let batches = backend
             .run_sql(&sql_text, &data_source)
