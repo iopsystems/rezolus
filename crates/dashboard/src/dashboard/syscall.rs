@@ -72,7 +72,7 @@ mod tests {
         let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
         // Overall: rate query preserved verbatim, plus mean.
         assert!(json.contains("sum(irate(syscall[5m]))"));
-        assert!(json.contains("histogram_mean(syscall_latency)"));
+        assert!(json.contains("histogram_mean(syscall_latency)\""));
         // Per-op (read): rate preserved, mean added.
         assert!(json.contains("sum(irate(syscall{op=\"read\"}[5m]))"));
         assert!(json.contains("histogram_mean(syscall_latency{op=\"read\"})"));
