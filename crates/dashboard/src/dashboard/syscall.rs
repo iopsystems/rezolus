@@ -45,7 +45,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
         let sg = syscall.subgroup(*op);
         sg.histogram_rate_mean(
             op,
-            &format!("syscall-{op}"),
+            &format!("syscall-{op_lower}"),
             &format!("syscall_latency{{op=\"{op_lower}\"}}"),
             RateSource::Counter(format!("sum(irate(syscall{{op=\"{op_lower}\"}}[5m]))")),
             Unit::Time,
