@@ -13,15 +13,20 @@ can return HTTP 200 while rendering nothing, redirect silently, or
 fail in JS after the HTML loads. The console error or missing DOM
 node is the ground truth.
 
-Minimal probe (no smoke harness):
+Two harnesses live next to each other:
 
-```bash
-# Drive a specific route, dump rendered DOM + console errors.
-# Requires chromium, python3, `pip install --user websockets`.
-python3 scripts/chromium_probe.py http://127.0.0.1:8080/#/overview/chart/cpu_busy
-```
+- **Section-level smoke** — `scripts/viewer_chromium_smoke.sh <parquet>`.
+  Walks every sidebar route and confirms each section either renders
+  a chart or explains why it can't.
+- **Chart-detail sweep** — `scripts/chart_route_sweep.py [URL]`.
+  Walks the pinned single-chart route `/#/chart/<section>/<id>` for
+  every chart in the dashboard JSON. Catches route-shape and
+  cache-shape regressions the section smoke can't see (links from
+  the section page resolve to this route, but the section view
+  itself never visits it).
 
-For broader pixel-diff verification (refactors), use the full
+Pick the right one for the surface you changed. For broader
+pixel-diff verification of refactors, use the full
 screenshot-identity workflow below.
 
 ## Screenshot-identity check vs. pre-change baseline

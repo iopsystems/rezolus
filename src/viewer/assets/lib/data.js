@@ -301,6 +301,14 @@ const createDataApi = ({
         // placeholder card." Without that carve-out the placeholder
         // never reaches the renderer and KPI-heavy service sections
         // appear silently empty on pre-SQL-migration parquets.
+        //
+        // Filtered-out plots are still kept in `data._allPlots` so the
+        // pinned single-chart view (`/chart/:section/:chartId`) can
+        // resolve any chart the user has a deep link to, even when
+        // the parquet carries no data for it. The array is
+        // pre-allocated by `loadSection` so it survives the shallow
+        // copy `storeSectionResponse` takes before this function runs.
+        if (!data._allPlots) data._allPlots = [];
         const unavailable = [];
         const plotHasData = (plot) =>
             Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
@@ -308,6 +316,7 @@ const createDataApi = ({
             for (const sg of group.subgroups || []) {
                 const surviving = [];
                 for (const plot of (sg.plots || [])) {
+                    data._allPlots.push(plot);
                     if (!plot.sql_query
                         || plot._unavailable
                         || plotHasData(plot)) {

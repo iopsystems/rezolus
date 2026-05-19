@@ -200,7 +200,8 @@ export const QueryExplorer = {
 /**
  * Mithril component: pinned single-chart view. Reads section data
  * from the supplied cache and locates a plot by `opts.id`. Caller
- * routes here via `/:section/chart/:chartId`.
+ * routes here via `/chart/:section/:chartId`, where `section` is the
+ * URL-encoded section path (single-segment or multi-segment).
  */
 export const SingleChartView = {
     view(vnode) {
@@ -209,21 +210,28 @@ export const SingleChartView = {
         if (!cached) {
             return m('div.single-chart-main', m('p', 'Section data not loaded.'));
         }
-        let target = null;
-        for (const g of cached.groups || []) {
-            const subgroups = Array.isArray(g.subgroups)
-                ? g.subgroups
-                : [{ plots: g.plots || [] }];
-            for (const sg of subgroups) {
-                for (const plot of (sg.plots || [])) {
-                    if (plot?.opts?.id === chartId) {
-                        target = plot;
-                        break;
+        // Prefer the unfiltered plot index that `processDashboardData`
+        // stashes on the section payload — that way a deep link
+        // resolves even when the parquet has no data for the chart.
+        // Fall back to walking the visible group tree for sections
+        // whose payload predates the `_allPlots` field.
+        let target = (cached._allPlots || []).find((p) => p?.opts?.id === chartId) || null;
+        if (!target) {
+            for (const g of cached.groups || []) {
+                const subgroups = Array.isArray(g.subgroups)
+                    ? g.subgroups
+                    : [{ plots: g.plots || [] }];
+                for (const sg of subgroups) {
+                    for (const plot of (sg.plots || [])) {
+                        if (plot?.opts?.id === chartId) {
+                            target = plot;
+                            break;
+                        }
                     }
+                    if (target) break;
                 }
                 if (target) break;
             }
-            if (target) break;
         }
         if (!target) {
             return m('div.single-chart-main', m('p', `Chart "${chartId}" not found in section "${section}".`));

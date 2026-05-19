@@ -99,7 +99,10 @@ const PIN_ICON_PATH = 'M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .70
 export const expandLink = (spec, sectionRoute) => {
     if (!spec.sql_query) return null;
     const prefix = (typeof m !== 'undefined' && m.route && m.route.prefix) || '';
-    const href = `${prefix}${sectionRoute}/chart/${encodeURIComponent(spec.opts.id)}`;
+    // Encode the section path as a single param so multi-segment routes
+    // like `/service/vllm` survive the route matcher's per-segment split.
+    const sectionParam = encodeURIComponent(sectionRoute.replace(/^\//, ''));
+    const href = `${prefix}/chart/${sectionParam}/${encodeURIComponent(spec.opts.id)}`;
     return m('a.chart-expand', {
         href, target: '_blank', title: 'Open in new tab',
         onclick: (e) => e.stopPropagation(),

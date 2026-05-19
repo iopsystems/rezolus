@@ -297,6 +297,12 @@ const loadSection = async (section) => {
     // first, the cached entry's `metadata` would stay undefined and
     // the section view would never see the notes.
     if (!data.metadata) data.metadata = {};
+    // Pre-allocate the unfiltered plot index for the same reason. The
+    // pinned single-chart view (`/chart/:section/:chartId`) consumes
+    // `_allPlots` to resolve deep links even when a chart has no data
+    // in this parquet; the shallow copy that `storeSectionResponse`
+    // takes only sees keys present before caching.
+    if (!data._allPlots) data._allPlots = [];
 
     // Cache the bare section structure immediately so the route
     // resolves without the "Loading…" splash. Plot data fills in
@@ -881,15 +887,21 @@ const initDashboard = (config = {}) => {
             withSharedSections: withCachedSections,
             getDefaultRoute: () => defaultRoute,
         }),
-        '/:section/chart/:chartId': {
-            // Pinned single-chart route. Resolved off the section
-            // response cache — if the section data hasn't loaded
-            // yet, the user will see a "section not loaded" message.
+        '/chart/:section/:chartId': {
+            // Pinned single-chart route. Section may be multi-segment
+            // (`service/vllm`); the link generator URL-encodes it so
+            // mithril's per-segment matcher receives a single param.
+            // Resolves the chart from the section response cache; if
+            // the section isn't cached yet (direct nav into a new tab),
+            // kick off a load and let m.redraw refresh once data arrives.
             onmatch(params) {
                 bootstrapCacheIfNeeded();
-                const anyCached = Object.values(sectionResponseCache)[0];
+                if (!sectionResponseCache[params.section]) {
+                    loadSection(params.section).then(() => m.redraw()).catch(() => {});
+                }
                 return {
                     view() {
+                        const anyCached = Object.values(sectionResponseCache)[0];
                         return m(Main, {
                             activeSection: querySection,
                             groups: [],
