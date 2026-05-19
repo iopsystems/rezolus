@@ -46,6 +46,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
     let api_routes = Router::new()
         .route("/query", get(instant_query))
         .route("/query_range", get(range_query))
+        .route("/heatmap_range", get(super::heatmap_range::handler))
         .route("/labels", get(label_names))
         .route("/label/{name}/values", get(label_values))
         .route("/metadata", get(metadata))

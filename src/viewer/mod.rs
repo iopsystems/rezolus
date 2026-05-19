@@ -35,6 +35,7 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+mod heatmap_range;
 pub mod live_capture;
 mod live_ingest;
 mod metadata;
