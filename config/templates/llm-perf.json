@@ -39,7 +39,8 @@
       "role": "error",
       "title": "Error Rate",
       "type": "delta_counter",
-      "unit_system": "percentage"
+      "unit_system": "percentage",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t,\n       irate_1s(\"requests/error\", timestamp)\n         / NULLIF(irate_1s(\"requests/sent\", timestamp), 0) AS v\nFROM {{view}} ORDER BY t"
     },
     {
       "role": "error",

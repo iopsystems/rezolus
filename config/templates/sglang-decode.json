@@ -14,7 +14,8 @@
       "role": "requests",
       "title": "Request Completion Rate",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t,\n       irate_1s(\"sglang_num_requests_total\", timestamp)\n         - irate_1s(\"sglang_num_aborted_requests_total\", timestamp) AS v\nFROM {{view}} ORDER BY t"
     },
     {
       "role": "requests",

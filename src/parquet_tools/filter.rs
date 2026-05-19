@@ -256,6 +256,7 @@ mod tests {
                     title: "test".to_string(),
                     description: None,
                     sql: Some(q.to_string()),
+                    metric: None,
                     metric_type: "gauge".to_string(),
                     subtype: None,
                     unit_system: None,

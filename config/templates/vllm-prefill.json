@@ -14,7 +14,8 @@
       "role": "requests",
       "title": "Request Throughput",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "WITH unp AS (\n  UNPIVOT (SELECT timestamp, COLUMNS('^vllm_request_success_total/(stop|length)$') FROM {{view}})\n      ON COLUMNS('^vllm_request_success_total/(stop|length)$') INTO NAME col VALUE v\n),\nrates AS (\n  SELECT timestamp,\n         irate_lag(v,\n                   LAG(v) OVER (PARTITION BY col ORDER BY timestamp),\n                   timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)) AS rate\n  FROM unp\n)\nSELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v\nFROM rates GROUP BY timestamp"
     },
     {
       "role": "requests",
@@ -27,7 +28,8 @@
       "role": "requests",
       "title": "Failed Rate",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "WITH unp AS (\n  UNPIVOT (SELECT timestamp, COLUMNS('^vllm_request_success_total/(error|repetition)$') FROM {{view}})\n      ON COLUMNS('^vllm_request_success_total/(error|repetition)$') INTO NAME col VALUE v\n),\nrates AS (\n  SELECT timestamp,\n         irate_lag(v,\n                   LAG(v) OVER (PARTITION BY col ORDER BY timestamp),\n                   timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)) AS rate\n  FROM unp\n)\nSELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v\nFROM rates GROUP BY timestamp"
     },
     {
       "role": "requests",
@@ -213,7 +215,8 @@
       "role": "cache",
       "title": "Prefix Cache Hit Rate",
       "type": "gauge",
-      "unit_system": "percentage"
+      "unit_system": "percentage",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t,\n       irate_1s(\"vllm_prefix_cache_hits_total\", timestamp)\n         / NULLIF(irate_1s(\"vllm_prefix_cache_queries_total\", timestamp), 0) AS v\nFROM {{view}} ORDER BY t"
     },
     {
       "role": "cache",

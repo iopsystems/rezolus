@@ -519,6 +519,7 @@ mod validate_sql_tests {
             title: title.into(),
             description: None,
             sql: sql.map(|s| s.to_string()),
+            metric: None,
             metric_type: "counter".into(),
             subtype: None,
             unit_system: None,
