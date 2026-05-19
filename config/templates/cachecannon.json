@@ -48,21 +48,27 @@
       "subtype": "percentiles",
       "unit_system": "time",
       "subgroup": "Response Latency",
-      "full_width": true
+      "full_width": true,
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"response_latency:buckets\",\n                  LAG(\"response_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "response_latency"
     },
     {
       "role": "latency",
       "title": "GET Latency",
       "type": "histogram",
       "subtype": "percentiles",
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"get_latency:buckets\",\n                  LAG(\"get_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "get_latency"
     },
     {
       "role": "latency",
       "title": "SET Latency",
       "type": "histogram",
       "subtype": "percentiles",
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"set_latency:buckets\",\n                  LAG(\"set_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "set_latency"
     },
     {
       "role": "error",

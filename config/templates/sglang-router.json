@@ -48,7 +48,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_router_ttft_seconds:buckets\",\n                  LAG(\"smg_router_ttft_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_router_ttft_seconds"
     },
     {
       "role": "latency",
@@ -59,7 +61,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_router_tpot_seconds:buckets\",\n                  LAG(\"smg_router_tpot_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_router_tpot_seconds"
     },
     {
       "role": "latency",
@@ -70,7 +74,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_router_generation_duration_seconds:buckets\",\n                  LAG(\"smg_router_generation_duration_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_router_generation_duration_seconds"
     },
     {
       "role": "latency",
@@ -81,7 +87,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_http_request_duration_seconds:buckets\",\n                  LAG(\"smg_http_request_duration_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_http_request_duration_seconds"
     }
   ]
 }

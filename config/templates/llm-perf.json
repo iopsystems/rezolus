@@ -71,7 +71,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"ttft:buckets\",\n                  LAG(\"ttft:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "ttft"
     },
     {
       "role": "latency",
@@ -82,7 +84,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"tpot:buckets\",\n                  LAG(\"tpot:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "tpot"
     },
     {
       "role": "latency",
@@ -93,7 +97,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"itl:buckets\",\n                  LAG(\"itl:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "itl"
     },
     {
       "role": "latency",
@@ -104,7 +110,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"request_latency:buckets\",\n                  LAG(\"request_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "request_latency"
     },
     {
       "role": "latency",
@@ -115,7 +123,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"think_duration:buckets\",\n                  LAG(\"think_duration:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "think_duration"
     }
   ]
 }

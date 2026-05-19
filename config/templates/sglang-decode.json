@@ -61,7 +61,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"sglang_inter_token_latency_seconds:buckets\",\n                  LAG(\"sglang_inter_token_latency_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "sglang_inter_token_latency_seconds"
     },
     {
       "role": "latency",
@@ -72,7 +74,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"sglang_per_stage_req_latency_seconds/decode_forward:buckets\",\n                  LAG(\"sglang_per_stage_req_latency_seconds/decode_forward:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "sglang_per_stage_req_latency_seconds/decode_forward"
     },
     {
       "role": "latency",
@@ -83,7 +87,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"sglang_e2e_request_latency_seconds:buckets\",\n                  LAG(\"sglang_e2e_request_latency_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "sglang_e2e_request_latency_seconds"
     },
     {
       "role": "queueing",
@@ -101,7 +107,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"sglang_queue_time_seconds:buckets\",\n                  LAG(\"sglang_queue_time_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "sglang_queue_time_seconds"
     },
     {
       "role": "queueing",

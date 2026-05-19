@@ -59,7 +59,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_prompt_tokens:buckets\",\n                  LAG(\"vllm_request_prompt_tokens:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_prompt_tokens"
     },
     {
       "role": "requests",
@@ -70,7 +72,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_generation_tokens:buckets\",\n                  LAG(\"vllm_request_generation_tokens:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_generation_tokens"
     },
     {
       "role": "tokens",
@@ -96,7 +100,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_time_to_first_token_seconds:buckets\",\n                  LAG(\"vllm_time_to_first_token_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_time_to_first_token_seconds"
     },
     {
       "role": "latency",
@@ -107,7 +113,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_inter_token_latency_seconds:buckets\",\n                  LAG(\"vllm_inter_token_latency_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_inter_token_latency_seconds"
     },
     {
       "role": "latency",
@@ -118,7 +126,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_time_per_output_token_seconds:buckets\",\n                  LAG(\"vllm_request_time_per_output_token_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_time_per_output_token_seconds"
     },
     {
       "role": "latency",
@@ -129,7 +139,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_e2e_request_latency_seconds:buckets\",\n                  LAG(\"vllm_e2e_request_latency_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_e2e_request_latency_seconds"
     },
     {
       "role": "latency",
@@ -140,7 +152,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_prefill_time_seconds:buckets\",\n                  LAG(\"vllm_request_prefill_time_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_prefill_time_seconds"
     },
     {
       "role": "latency",
@@ -151,7 +165,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_decode_time_seconds:buckets\",\n                  LAG(\"vllm_request_decode_time_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_decode_time_seconds"
     },
     {
       "role": "latency",
@@ -162,7 +178,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_inference_time_seconds:buckets\",\n                  LAG(\"vllm_request_inference_time_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_inference_time_seconds"
     },
     {
       "role": "queueing",
@@ -180,7 +198,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_queue_time_seconds:buckets\",\n                  LAG(\"vllm_request_queue_time_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_queue_time_seconds"
     },
     {
       "role": "cache",
@@ -211,7 +231,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_request_prefill_kv_computed_tokens:buckets\",\n                  LAG(\"vllm_request_prefill_kv_computed_tokens:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_request_prefill_kv_computed_tokens"
     },
     {
       "role": "gpu",
@@ -243,7 +265,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_nixl_xfer_time_seconds:buckets\",\n                  LAG(\"vllm_nixl_xfer_time_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_nixl_xfer_time_seconds"
     },
     {
       "role": "disaggregation (nixl)",
@@ -254,7 +278,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_nixl_post_time_seconds:buckets\",\n                  LAG(\"vllm_nixl_post_time_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_nixl_post_time_seconds"
     },
     {
       "role": "disaggregation (nixl)",
@@ -265,7 +291,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "bytes"
+      "unit_system": "bytes",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_nixl_bytes_transferred:buckets\",\n                  LAG(\"vllm_nixl_bytes_transferred:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_nixl_bytes_transferred"
     },
     {
       "role": "disaggregation (nixl)",
@@ -276,7 +304,9 @@
         0.5,
         0.95
       ],
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"vllm_nixl_num_descriptors:buckets\",\n                  LAG(\"vllm_nixl_num_descriptors:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "vllm_nixl_num_descriptors"
     },
     {
       "role": "disaggregation (nixl)",
