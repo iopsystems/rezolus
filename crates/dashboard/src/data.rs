@@ -1,19 +1,14 @@
 //! Trait abstraction over the data source the dashboard renders against.
 //!
-//! Section generators only need *metadata* about the underlying data (sampling
-//! interval, time bounds, metric names, label fan-out per metric) to construct
-//! `View`s — actual query execution happens elsewhere (the viewer wires up the
-//! query engine separately and runs the PromQL/SQL strings emitted on plots).
-//!
-//! Decoupling this from a concrete `Tsdb` lets the same dashboard generators
-//! drive both the legacy in-memory PromQL backend and the upcoming DuckDB/SQL
-//! backend (which will read parquet column metadata to satisfy the same
-//! questions).
-#[cfg(feature = "live-mode")]
-use metriken_query::Tsdb;
+//! Section generators only need *metadata* about the underlying data
+//! (sampling interval, time bounds, metric names, label fan-out per
+//! metric) to construct `View`s — actual query execution happens
+//! elsewhere (the viewer wires up the DuckDB-backed query engine
+//! separately and runs the SQL strings emitted on plots).
 
-/// Read-only metadata about a loaded recording. Implemented for `Tsdb`
-/// (legacy) and, when the SQL viewer lands, the DuckDB-backed adapter.
+/// Read-only metadata about a loaded recording. Implemented for
+/// `SqlCapture` (file mode) and `EmptyDashboardData` (the schema-dump
+/// placeholder used by `crates/dashboard/src/main.rs` and tests).
 ///
 /// All methods are cheap — they describe the schema, not the data.
 pub trait DashboardData {
@@ -51,42 +46,49 @@ pub trait DashboardData {
     fn unique_label_values(&self, metric: &str, key: &str) -> usize;
 }
 
-#[cfg(feature = "live-mode")]
-impl DashboardData for Tsdb {
+/// Empty `DashboardData` for the schema-dump binary and test fixtures.
+/// Reports zero metrics and an undefined time range — enough for
+/// section generators to emit dashboard JSON without binding to any
+/// concrete data source. Production code uses `SqlCapture` (via the
+/// `metriken-query-sql` engine).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EmptyDashboardData;
+
+impl DashboardData for EmptyDashboardData {
     fn interval(&self) -> f64 {
-        Tsdb::interval(self)
+        1.0
     }
     fn time_range(&self) -> Option<(u64, u64)> {
-        Tsdb::time_range(self)
+        None
     }
     fn source(&self) -> &str {
-        Tsdb::source(self)
+        ""
     }
     fn version(&self) -> &str {
-        Tsdb::version(self)
+        ""
     }
     fn filename(&self) -> &str {
-        Tsdb::filename(self)
+        ""
     }
     fn counter_names(&self) -> Vec<&str> {
-        Tsdb::counter_names(self)
+        Vec::new()
     }
     fn gauge_names(&self) -> Vec<&str> {
-        Tsdb::gauge_names(self)
+        Vec::new()
     }
     fn histogram_names(&self) -> Vec<&str> {
-        Tsdb::histogram_names(self)
+        Vec::new()
     }
-    fn counter_label_count(&self, name: &str) -> usize {
-        Tsdb::counter_labels(self, name).map_or(0, |l| l.len())
+    fn counter_label_count(&self, _name: &str) -> usize {
+        0
     }
-    fn gauge_label_count(&self, name: &str) -> usize {
-        Tsdb::gauge_labels(self, name).map_or(0, |l| l.len())
+    fn gauge_label_count(&self, _name: &str) -> usize {
+        0
     }
-    fn histogram_label_count(&self, name: &str) -> usize {
-        Tsdb::histogram_labels(self, name).map_or(0, |l| l.len())
+    fn histogram_label_count(&self, _name: &str) -> usize {
+        0
     }
-    fn unique_label_values(&self, metric: &str, key: &str) -> usize {
-        crate::plot::metric_unique_label_count(self, metric, key)
+    fn unique_label_values(&self, _metric: &str, _key: &str) -> usize {
+        0
     }
 }

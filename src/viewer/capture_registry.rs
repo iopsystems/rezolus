@@ -4,18 +4,15 @@
 //! comparison.
 //!
 //! A capture slot is either SQL-backed (`SqlCapture`, used by file /
-//! upload / A-B paths going forward) or Tsdb-backed (the legacy live-
-//! agent ingest path, which keeps the in-memory TSDB during the
-//! Tsdb→DuckDB migration). The two paths are mutually exclusive per
-//! slot — see [`CaptureBackend`]. As of this commit the file-mode
-//! init paths still construct Tsdb; commit 7 flips them to SqlCapture.
+//! upload / A-B paths) or live-backed (`LiveCapture` wrapping a
+//! `LiveSource` for the live-agent ingest path). The two paths are
+//! mutually exclusive per slot — see [`CaptureBackend`].
 
 use std::sync::Arc;
 
-#[cfg(feature = "live-mode")]
-use metriken_query::Tsdb;
 use parking_lot::RwLock;
 
+use super::live_capture::LiveCapture;
 use super::sql_capture::SqlCapture;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash, serde::Deserialize)]
@@ -42,25 +39,18 @@ impl CaptureId {
     }
 }
 
-/// Per-slot data store. Each slot is either SQL-backed (the new
-/// DuckDB-driven path for file / upload / A-B captures) or
-/// Tsdb-backed (the legacy live-agent ingest path). The `Live`
-/// variant only exists when the `live-mode` feature is on — SQL-only
-/// builds drop both the variant and the `metriken-query` link.
+/// Per-slot data store. Each slot is either SQL-backed (file / upload
+/// / A-B captures) or live-backed (the live-agent ingest path
+/// wrapping a `LiveSource`).
 pub enum CaptureBackend {
     Sql(Arc<RwLock<SqlCapture>>),
-    #[cfg(feature = "live-mode")]
-    Live(Arc<RwLock<Tsdb>>),
+    Live(Arc<RwLock<LiveCapture>>),
 }
 
 impl CaptureBackend {
-    /// Shorthand for `match self { Live(tsdb) => Some(tsdb), _ => None }`.
-    /// Lets legacy callers continue to ask for a Tsdb specifically; SQL
-    /// slots silently return `None`.
-    #[cfg(feature = "live-mode")]
-    pub fn as_live(&self) -> Option<Arc<RwLock<Tsdb>>> {
+    pub fn as_live(&self) -> Option<Arc<RwLock<LiveCapture>>> {
         match self {
-            CaptureBackend::Live(tsdb) => Some(tsdb.clone()),
+            CaptureBackend::Live(live) => Some(live.clone()),
             CaptureBackend::Sql(_) => None,
         }
     }
@@ -68,7 +58,6 @@ impl CaptureBackend {
     pub fn as_sql(&self) -> Option<Arc<RwLock<SqlCapture>>> {
         match self {
             CaptureBackend::Sql(cap) => Some(cap.clone()),
-            #[cfg(feature = "live-mode")]
             CaptureBackend::Live(_) => None,
         }
     }
@@ -102,7 +91,7 @@ impl CaptureRegistry {
     /// registry; `Some(backend)` wraps it in a fresh `CaptureSlot`
     /// with empty metadata (set systeminfo / file_metadata / alias
     /// afterwards via the dedicated setters). The experiment slot
-    /// starts `None` regardless — call `attach_experiment[_sql]` to
+    /// starts `None` regardless — call `attach_experiment_sql` to
     /// populate.
     pub fn new(baseline: Option<CaptureBackend>) -> Self {
         Self {
@@ -116,11 +105,10 @@ impl CaptureRegistry {
         }
     }
 
-    /// Returns the baseline/experiment slot's Tsdb handle, if the slot
-    /// is Tsdb-backed (live mode). SQL-backed slots and an
-    /// unpopulated baseline (upload-only pre-upload) return `None`.
-    #[cfg(feature = "live-mode")]
-    pub fn get(&self, id: CaptureId) -> Option<Arc<RwLock<Tsdb>>> {
+    /// Returns the baseline/experiment slot's LiveCapture handle, if
+    /// the slot is live-backed. SQL-backed slots and an unpopulated
+    /// baseline (upload-only pre-upload) return `None`.
+    pub fn get_live(&self, id: CaptureId) -> Option<Arc<RwLock<LiveCapture>>> {
         match id {
             CaptureId::Baseline => self.baseline.read().as_ref()?.backend.as_live(),
             CaptureId::Experiment => self.experiment.read().as_ref()?.backend.as_live(),
@@ -128,7 +116,7 @@ impl CaptureRegistry {
     }
 
     /// Returns the baseline/experiment slot's SqlCapture handle, if
-    /// the slot is SQL-backed. Tsdb-backed slots and unpopulated
+    /// the slot is SQL-backed. Live-backed slots and unpopulated
     /// slots return `None`.
     pub fn get_sql(&self, id: CaptureId) -> Option<Arc<RwLock<SqlCapture>>> {
         match id {
@@ -152,27 +140,23 @@ impl CaptureRegistry {
         handle
     }
 
-    /// Reset the baseline Tsdb in place (live-mode reset handler).
-    /// Panics if the baseline is SQL-backed or unpopulated — live
-    /// reset doesn't make sense outside an established live session.
-    /// State.live gates the caller, so the panic is unreachable in
-    /// production (it would mean a live-only handler ran against a
-    /// non-live AppState).
-    #[cfg(feature = "live-mode")]
-    pub fn reset_baseline_live(&self, tsdb: Tsdb) {
+    /// Reset the baseline LiveCapture in place (live-mode reset
+    /// handler). Panics if the baseline is SQL-backed or unpopulated
+    /// — live reset doesn't make sense outside an established live
+    /// session.
+    pub fn reset_baseline_live(&self, live: LiveCapture) {
         let guard = self.baseline.read();
         let slot = guard
             .as_ref()
             .expect("reset_baseline_live called with no baseline");
         match &slot.backend {
             CaptureBackend::Live(handle) => {
-                *handle.write() = tsdb;
+                *handle.write() = live;
             }
             CaptureBackend::Sql(_) => {
                 panic!("reset_baseline_live called on a SQL-backed capture");
             }
         }
-        // guard drops here; the inner Arc<RwLock<Tsdb>> is unchanged.
         drop(guard);
     }
 
@@ -273,13 +257,6 @@ mod tests {
 
     #[test]
     fn registry_experiment_attached_toggles() {
-        // Building a real Tsdb requires a parquet on disk (Tsdb::load(path)).
-        // Exercise only the boolean state transitions that do not need a
-        // backing store. Full attach/get is covered by manual verification
-        // in Task 29.
-        //
-        // Compile-only smoke: the types exist and the method signatures
-        // are reachable.
         #[allow(dead_code)]
         fn _compile_only(reg: &CaptureRegistry) -> bool {
             reg.experiment_attached()

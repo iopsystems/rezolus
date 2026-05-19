@@ -6,7 +6,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-#[cfg(feature = "live-mode")]
 use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
@@ -14,43 +13,33 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json, Response};
 use http::{header, StatusCode};
-use parking_lot::Mutex;
-#[cfg(feature = "live-mode")]
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use reqwest::{Client, Url};
-#[cfg(feature = "live-mode")]
-use tracing::debug;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::capture_registry::CaptureId;
 use super::metadata::{
     build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
     extract_service_extension_metadata, regenerate_dashboards,
 };
+use super::live_capture::LiveCapture;
 use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
-#[cfg(feature = "live-mode")]
-use super::tsdb::Tsdb;
 use ::dashboard;
 
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
 
-/// Background task that polls a live agent and ingests snapshots.
-///
-/// Dual-ingest during the migration: every snapshot lands in the
-/// legacy `Tsdb` (used by `validate_service_extensions`, which still
-/// runs PromQL at viewer load) **and** the new `LiveSource` (used by
-/// `/api/v1/query{,_range}` via the SQL backend). When the PromQL
-/// shim is migrated to SQL the Tsdb call goes away and `metriken-query`
-/// can drop out of the dep tree.
-#[cfg(feature = "live-mode")]
+/// Background task that polls a live agent and appends each snapshot
+/// to the shared `LiveCapture`. The capture's underlying `LiveSource`
+/// is what `/api/v1/query{,_range}` queries through the DuckDB
+/// backend; the capture also caches per-metric schema observations
+/// for the `DashboardData` impl.
 pub async fn ingest_loop(
     url: Url,
-    tsdb: Arc<RwLock<Tsdb>>,
-    live: Arc<metriken_query_sql::LiveSource>,
+    live: Arc<RwLock<LiveCapture>>,
     snapshots: Arc<Mutex<VecDeque<Vec<u8>>>>,
-    source: String,
-    version: String,
+    _source: String,
+    _version: String,
 ) {
     let client = match Client::builder().http1_only().build() {
         Ok(c) => c,
@@ -59,14 +48,6 @@ pub async fn ingest_loop(
             return;
         }
     };
-
-    {
-        let mut tsdb = tsdb.write();
-        tsdb.set_sampling_interval_ms(1000);
-        tsdb.set_source(source);
-        tsdb.set_version(version);
-        tsdb.set_filename(url.to_string());
-    }
 
     let interval_duration = Duration::from_secs(1);
     let mut interval = crate::common::aligned_interval(interval_duration);
@@ -101,31 +82,24 @@ pub async fn ingest_loop(
             }
         };
 
-        // Dual-ingest: legacy Tsdb (for `validate_service_extensions`)
-        // and the new DuckDB live source (for `/api/v1/query{,_range}`).
-        // The Snapshot accessors take `&mut self` (`std::mem::take` the
-        // inner Vecs), so feed the live path a clone and let the
-        // original flow into Tsdb. Snapshot is ~tens of KB at typical
-        // metric counts; cloning at 1 Hz is negligible.
-        if let Err(e) =
-            super::live_ingest::ingest_snapshot(&live, snapshot.clone())
         {
-            warn!("live source append failed: {e}");
+            let mut live = live.write();
+            if let Err(e) = super::live_ingest::ingest_snapshot(&mut live, snapshot) {
+                warn!("live source append failed: {e}");
+            }
         }
-
-        let mut tsdb = tsdb.write();
-        tsdb.ingest(snapshot);
         sample_count += 1;
 
         snapshots.lock().push_back(body.to_vec());
 
         if sample_count <= 5 || sample_count.is_multiple_of(60) {
+            let live = live.read();
             debug!(
                 "ingested {} samples, counters: {}, gauges: {}, histograms: {}",
                 sample_count,
-                tsdb.counter_names().len(),
-                tsdb.gauge_names().len(),
-                tsdb.histogram_names().len(),
+                <LiveCapture as ::dashboard::DashboardData>::counter_names(&live).len(),
+                <LiveCapture as ::dashboard::DashboardData>::gauge_names(&live).len(),
+                <LiveCapture as ::dashboard::DashboardData>::histogram_names(&live).len(),
             );
         }
     }
@@ -133,7 +107,6 @@ pub async fn ingest_loop(
 
 /// Fetch the agent banner (`source version`) and `/systeminfo`. Used by
 /// CLI startup and the runtime `/api/v1/connect` handler.
-#[cfg(feature = "live-mode")]
 pub async fn fetch_agent_info(client: &Client, url: &Url) -> Result<AgentInfo, String> {
     let resp = client
         .get(url.clone())
@@ -165,7 +138,6 @@ pub async fn fetch_agent_info(client: &Client, url: &Url) -> Result<AgentInfo, S
     })
 }
 
-#[cfg(feature = "live-mode")]
 pub struct AgentInfo {
     pub source: String,
     pub version: String,
@@ -315,11 +287,11 @@ pub fn ingest_baseline_from_path(
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
-    // Swap the baseline backend from Live(empty Tsdb) to Sql(capture).
+    // Swap the baseline backend from Live(LiveCapture) to Sql(capture).
     // Clear `state.live` so live-only handlers (`/api/v1/reset`,
     // `/api/v1/connect`) reject further requests with a clean
     // `bad_request` instead of hitting the
-    // `expect("live mode baseline is Tsdb-backed")` panic in
+    // `expect("live mode baseline is LiveCapture-backed")` panic in
     // `reset_tsdb` (the baseline is now SQL-backed).
     state.captures.replace_baseline_with_sql(capture);
     state.live.store(false, Ordering::Relaxed);
@@ -452,7 +424,6 @@ pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
 // ── Live agent connect / reset ────────────────────────────────────────
 
 /// Connect to a live Rezolus agent at runtime.
-#[cfg(feature = "live-mode")]
 pub async fn connect_agent(
     State(state): State<Arc<AppState>>,
     body: Bytes,
@@ -485,18 +456,6 @@ pub async fn connect_agent(
         Err(e) => return ApiResponse::err(e, "connection_error"),
     };
 
-    let mut tsdb = Tsdb::default();
-    tsdb.set_sampling_interval_ms(1000);
-    tsdb.set_source(info.source.clone());
-    tsdb.set_version(info.version.clone());
-    tsdb.set_filename(url.to_string());
-    let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
-
-    state.captures.reset_baseline_live(tsdb);
-    *state.sections.write() = LazySectionStore::new(context);
-    state.captures.set_baseline_systeminfo(info.sysinfo);
-    state.live.store(true, Ordering::Relaxed);
-
     // Tear down any pre-existing live source (we're swapping baseline)
     // and register a fresh one on the shared sql_backend.
     state.sql_backend.invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
@@ -513,19 +472,33 @@ pub async fn connect_agent(
             );
         }
     };
+
+    let live_capture = LiveCapture::new(
+        live_source.clone(),
+        1000,
+        info.source.clone(),
+        info.version.clone(),
+        url.to_string(),
+    );
+    let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
+
+    state.captures.reset_baseline_live(live_capture);
+    *state.sections.write() = LazySectionStore::new(context);
+    state.captures.set_baseline_systeminfo(info.sysinfo);
+    state.live.store(true, Ordering::Relaxed);
     *state.live_source.write() = Some(live_source.clone());
 
-    let ingest_tsdb = state
-        .baseline_tsdb()
-        .expect("live mode baseline is Tsdb-backed");
+    let live_capture_handle = state
+        .captures
+        .get_live(crate::viewer::capture_registry::CaptureId::Baseline)
+        .expect("live mode baseline is LiveCapture-backed");
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
 
     tokio::spawn(ingest_loop(
         ingest_url,
-        ingest_tsdb,
-        live_source,
+        live_capture_handle,
         ingest_snapshots,
         info.source.clone(),
         info.version.clone(),
@@ -544,34 +517,51 @@ pub async fn connect_agent(
     }))
 }
 
-/// Reset the TSDB — clears all data and buffered snapshots.
-#[cfg(feature = "live-mode")]
+/// Reset the live capture — clears all in-memory data and buffered
+/// snapshots.
 pub async fn reset_tsdb(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<serde_json::Value>> {
+    use ::dashboard::DashboardData;
+
     if !state.live.load(Ordering::Relaxed) {
         return ApiResponse::err("reset is only available in live mode", "bad_request");
     }
 
-    let tsdb_handle = state
-        .baseline_tsdb()
-        .expect("live mode baseline is Tsdb-backed");
+    let live_handle = state
+        .captures
+        .get_live(crate::viewer::capture_registry::CaptureId::Baseline)
+        .expect("live mode baseline is LiveCapture-backed");
     let (source, version, filename) = {
-        let tsdb = tsdb_handle.read();
+        let live = live_handle.read();
         (
-            tsdb.source().to_string(),
-            tsdb.version().to_string(),
-            tsdb.filename().to_string(),
+            live.source().to_string(),
+            live.version().to_string(),
+            live.filename().to_string(),
         )
     };
-    let mut fresh = Tsdb::default();
-    fresh.set_sampling_interval_ms(1000);
-    fresh.set_source(source);
-    fresh.set_version(version);
-    fresh.set_filename(filename);
+
+    // Drop the old live source from the backend and create a fresh one.
+    state.sql_backend.invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
+    let fresh_source = match state.sql_backend.create_live_source(
+        super::state::LIVE_BASELINE_DATA_SOURCE,
+        &source,
+        1000,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return ApiResponse::err(
+                format!("failed to create live source: {e}"),
+                "internal_error",
+            );
+        }
+    };
+    let fresh = LiveCapture::new(fresh_source.clone(), 1000, source, version, filename);
+
     state.captures.reset_baseline_live(fresh);
+    *state.live_source.write() = Some(fresh_source);
     state.snapshots.lock().clear();
-    info!("TSDB reset by user");
+    info!("Live capture reset by user");
     ApiResponse::ok(serde_json::json!({ "ok": true }))
 }
 
@@ -878,19 +868,17 @@ fn save_combined_ab_dispatch(
     .map_err(|e| e.to_string())
 }
 
-#[cfg(all(test, feature = "live-mode"))]
+#[cfg(test)]
 mod live_to_sql_swap_tests {
     //! Regression: pre-fix, an upload during a live-mode session left
-    //! `state.live = true` but the baseline backend swapped from Tsdb
-    //! to SqlCapture. The next live-only handler hit
-    //! `baseline_tsdb().expect("live mode baseline is Tsdb-backed")`
-    //! and panicked. Fix: `ingest_baseline_from_path` clears
-    //! `state.live` after the swap.
+    //! `state.live = true` but the baseline backend swapped from
+    //! LiveCapture to SqlCapture. Live-only handlers then panicked on
+    //! `expect("live mode baseline is LiveCapture-backed")`. Fix:
+    //! `ingest_baseline_from_path` clears `state.live` after the swap.
 
     use super::*;
     use std::sync::atomic::Ordering;
     use ::dashboard::TemplateRegistry;
-    use metriken_query::Tsdb;
 
     /// Demo parquet bundled at site/viewer/data/demo.parquet — small
     /// (1.2 MB) and exercises the SqlCapture load path end-to-end.
@@ -905,12 +893,28 @@ mod live_to_sql_swap_tests {
         dst
     }
 
+    /// Build a LiveCapture-backed AppState the way `init_live_mode` does.
+    fn live_state() -> AppState {
+        let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
+        let live_source = backend
+            .create_live_source(super::super::state::LIVE_BASELINE_DATA_SOURCE, "rezolus", 1000)
+            .expect("create_live_source");
+        let live = LiveCapture::new(
+            live_source.clone(),
+            1000,
+            "rezolus",
+            "test",
+            "http://test",
+        );
+        let mut state = AppState::new_live(live, backend, TemplateRegistry::empty());
+        *state.live_source.write() = Some(live_source);
+        state.live.store(true, Ordering::Relaxed);
+        state
+    }
+
     #[test]
     fn upload_during_live_mode_clears_live_flag() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
-        // Simulate the in-flight live-mode session: state.live = true,
-        // baseline is the empty Tsdb constructed by `AppState::new`.
-        state.live.store(true, Ordering::Relaxed);
+        let state = live_state();
         assert!(state.live.load(Ordering::Relaxed));
 
         let parquet = copy_demo_to_tempdir();
@@ -918,10 +922,10 @@ mod live_to_sql_swap_tests {
 
         // After the swap the baseline is SqlCapture-backed. Live-only
         // handlers must see `state.live = false` or they'll panic on
-        // their `expect("live mode baseline is Tsdb-backed")`.
+        // their `expect("live mode baseline is LiveCapture-backed")`.
         assert!(!state.live.load(Ordering::Relaxed));
         assert!(state.captures.get_sql(CaptureId::Baseline).is_some());
-        assert!(state.captures.get(CaptureId::Baseline).is_none());
+        assert!(state.captures.get_live(CaptureId::Baseline).is_none());
     }
 
     /// Two threads call `ingest_baseline_from_path` simultaneously.

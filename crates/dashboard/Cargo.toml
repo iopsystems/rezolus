@@ -7,19 +7,7 @@ repository.workspace = true
 homepage.workspace = true
 publish = false
 
-[features]
-# Default-on during the Tsdb→DuckDB migration. Off => no metriken-query
-# linkage, and the `Tsdb` adapter / Tsdb-flavoured label helpers
-# disappear. The DashboardData trait stays unconditional — the SQL
-# viewer impls it on its own capture type.
-default = ["live-mode"]
-live-mode = ["dep:metriken-query"]
-
 [dependencies]
-# Dashboard re-exports Tsdb (the legacy in-memory store) so consumers
-# that want it can stay on the legacy path. Optional because the
-# DuckDB/SQL-only configuration drops it entirely.
-metriken-query = { workspace = true, features = ["legacy"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

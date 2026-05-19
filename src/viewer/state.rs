@@ -15,14 +15,11 @@ use reqwest::Client;
 use tracing::error;
 
 use super::capture_registry::{CaptureBackend, CaptureId, CaptureRegistry};
+use super::live_capture::LiveCapture;
 use super::proxy_allow;
 use super::sql_capture::SqlCapture;
-#[cfg(feature = "live-mode")]
-use super::tsdb::Tsdb;
 use ::dashboard::{self, TemplateRegistry};
-use metriken_query_sql::DuckDbBackend;
-#[cfg(feature = "live-mode")]
-use metriken_query_sql::LiveSource;
+use metriken_query_sql::{DuckDbBackend, LiveSource};
 
 /// Caches the navigation list (via the owned `DashboardContext`) and
 /// memoizes per-section JSON bodies. `/api/v1/sections` reads the nav
@@ -100,7 +97,6 @@ impl ProxyState {
 /// `sql_backend.run_sql(...)` for live captures so the backend dispatches
 /// to the right `LiveSource`. Kept short + namespaced so it can't
 /// collide with any real parquet path.
-#[cfg(feature = "live-mode")]
 pub const LIVE_BASELINE_DATA_SOURCE: &str = "live:baseline";
 
 pub struct AppState {
@@ -154,7 +150,6 @@ pub struct AppState {
     /// A-B captures. The ingest loop calls `live_source.append(...)`
     /// on every poll; query handlers route to it via the registered
     /// data-source key (see [`LIVE_BASELINE_DATA_SOURCE`]).
-    #[cfg(feature = "live-mode")]
     pub live_source: RwLock<Option<Arc<LiveSource>>>,
     /// Serializes baseline-ingest operations
     /// (`actions::ingest_baseline_from_path`). Without this, two
@@ -168,12 +163,19 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Live-agent init constructor. Baseline starts Tsdb-backed; the
-    /// ingest loop will populate it on each poll.
-    #[cfg(feature = "live-mode")]
-    pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
-        let backend = CaptureBackend::Live(Arc::new(RwLock::new(tsdb)));
-        Self::with_registry(CaptureRegistry::new(Some(backend)), templates)
+    /// Live-agent init constructor. Baseline carries a `LiveCapture`
+    /// wrapping the shared `LiveSource` (also registered on the
+    /// supplied `DuckDbBackend`'s `live_sources` map under
+    /// `LIVE_BASELINE_DATA_SOURCE`).
+    pub fn new_live(
+        live: LiveCapture,
+        backend: Arc<DuckDbBackend>,
+        templates: TemplateRegistry,
+    ) -> Self {
+        let inner = CaptureBackend::Live(Arc::new(RwLock::new(live)));
+        let mut state = Self::with_registry(CaptureRegistry::new(Some(inner)), templates);
+        state.sql_backend = backend;
+        state
     }
 
     /// Upload-only init constructor. The registry starts with no
@@ -217,7 +219,6 @@ impl AppState {
             combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
             sql_backend: Arc::new(DuckDbBackend::new()),
-            #[cfg(feature = "live-mode")]
             live_source: RwLock::new(None),
             upload_mutex: Mutex::new(()),
         }
@@ -241,24 +242,10 @@ impl AppState {
         }
     }
 
-    /// Shorthand for the baseline Tsdb handle. Returns `None` when
-    /// the baseline slot is SQL-backed (file / upload / A-B captures)
-    /// or unpopulated (upload-only pre-upload). Live mode and the
-    /// save-dispatch trim path are the only consumers.
-    ///
-    /// SQL callers wanting the SqlCapture handle reach directly into
-    /// the registry via `self.captures.get_sql(CaptureId::Baseline)`,
-    /// or — far more common — use `with_baseline_data` for the
-    /// backend-agnostic `&dyn DashboardData` view.
-    #[cfg(feature = "live-mode")]
-    pub fn baseline_tsdb(&self) -> Option<Arc<RwLock<Tsdb>>> {
-        self.captures.get(CaptureId::Baseline)
-    }
-
     /// Run `f` against the baseline slot's `DashboardData` view —
-    /// either a `Tsdb` (live mode) or a `SqlCapture` (file / upload
-    /// / A-B). Wraps the read-guard lifetime so handlers don't have
-    /// to branch on backend type for the common metadata reads.
+    /// either a `SqlCapture` (file / upload / A-B) or a `LiveCapture`
+    /// (live agent). Wraps the read-guard lifetime so handlers don't
+    /// have to branch on backend type for the common metadata reads.
     /// Returns `None` when no baseline is loaded yet (upload-only
     /// mode pre-upload).
     pub fn with_baseline_data<R>(
@@ -268,8 +255,7 @@ impl AppState {
         if let Some(handle) = self.captures.get_sql(CaptureId::Baseline) {
             return Some(f(&*handle.read()));
         }
-        #[cfg(feature = "live-mode")]
-        if let Some(handle) = self.captures.get(CaptureId::Baseline) {
+        if let Some(handle) = self.captures.get_live(CaptureId::Baseline) {
             return Some(f(&*handle.read()));
         }
         None
@@ -436,32 +422,20 @@ impl<T: serde::Serialize> ApiResponse<T> {
     }
 }
 
-#[cfg(feature = "live-mode")]
-pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
-    use super::promql::QueryError::*;
-    match e {
-        ParseError(_) => "bad_data",
-        EvaluationError(_) => "execution",
-        Unsupported(_) => "unsupported",
-        MetricNotFound(_) => "not_found",
-    }
-}
-
-#[cfg(all(test, feature = "live-mode"))]
+#[cfg(test)]
 mod report_marker_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;
-    use metriken_query::Tsdb;
 
     #[test]
     fn default_is_not_a_trimmed_report() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let state = AppState::new_empty(TemplateRegistry::empty());
         assert!(!state.is_trimmed_report());
     }
 
     #[test]
     fn setting_marker_flips_predicate() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let state = AppState::new_empty(TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         assert!(state.is_trimmed_report());
     }

@@ -458,15 +458,14 @@ pub fn regenerate_dashboards(state: &AppState) {
     *state.sections.write() = LazySectionStore::new(context);
 }
 
-#[cfg(all(test, feature = "live-mode"))]
+#[cfg(test)]
 mod report_mode_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;
-    use super::super::tsdb::Tsdb;
 
     #[test]
     fn regenerate_returns_empty_sections_for_trimmed_report() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let state = AppState::new_empty(TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         regenerate_dashboards(&state);
         let sections = state.sections.read();

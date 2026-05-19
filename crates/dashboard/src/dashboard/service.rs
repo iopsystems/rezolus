@@ -142,10 +142,10 @@ pub fn generate(
     view
 }
 
-#[cfg(all(test, feature = "live-mode"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Tsdb;
+    use crate::EmptyDashboardData;
     use crate::service_extension::{Kpi, ServiceExtension};
     use std::collections::HashMap;
 
@@ -189,7 +189,7 @@ mod tests {
             ],
         };
 
-        let view = generate(&Tsdb::default(), vec![], &ext);
+        let view = generate(&EmptyDashboardData, vec![], &ext);
         let json = serde_json::to_string(&view).unwrap();
 
         // Both KPIs land in a single throughput group; both PromQL strings
@@ -234,7 +234,7 @@ mod tests {
                 Some("SELECT t FROM {{view}}"),
             )],
         };
-        let view = generate(&Tsdb::default(), vec![], &ext);
+        let view = generate(&EmptyDashboardData, vec![], &ext);
         let json = serde_json::to_string(&view).unwrap();
         // Placeholder resolved (non-alphanumeric `-` → `_`).
         assert!(

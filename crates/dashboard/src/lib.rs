@@ -6,10 +6,8 @@ mod service_extension;
 pub mod sql;
 
 pub use dashboard::service::substitute_view;
-pub use data::DashboardData;
+pub use data::{DashboardData, EmptyDashboardData};
 pub use events::{Event, Events};
-#[cfg(feature = "live-mode")]
-pub use metriken_query::Tsdb;
 pub use plot::*;
 pub use service_extension::{CategoryExtension, Kpi, ServiceExtension, TemplateRegistry};
 

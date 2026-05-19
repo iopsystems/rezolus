@@ -30,24 +30,12 @@ use notify::Watcher;
 pub use dashboard::Kpi;
 pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
-// PromQL + Tsdb re-exports survive only when the live-mode feature
-// is on. The legacy ingest path consumes them, as do the
-// not-yet-migrated `mcp` and `parquet annotate` subcommands. SQL-only
-// builds drop the whole `metriken-query` crate.
-#[cfg(feature = "live-mode")]
-pub use metriken_query::promql;
-#[cfg(feature = "live-mode")]
-pub use metriken_query::tsdb;
-
-#[cfg(feature = "live-mode")]
-use tsdb::*;
-
 pub mod capture_registry;
 mod proxy_allow;
 
 mod ab_extract;
 mod actions;
-#[cfg(feature = "live-mode")]
+pub mod live_capture;
 mod live_ingest;
 mod metadata;
 mod report_save;
@@ -640,7 +628,6 @@ fn log_service_exts(exts: &[(String, ServiceExtension)], capture: &str) {
     }
 }
 
-#[cfg(feature = "live-mode")]
 fn init_live_mode(
     rt: &tokio::runtime::Runtime,
     url: &Url,
@@ -666,60 +653,46 @@ fn init_live_mode(
         version = info.version
     );
 
-    let mut tsdb = Tsdb::default();
-    tsdb.set_sampling_interval_ms(1000);
-    tsdb.set_source(info.source.clone());
-    tsdb.set_version(info.version.clone());
-    tsdb.set_filename(url.to_string());
-    let state = AppState::new(tsdb, registry.clone());
+    // Create the live DuckDB data source registered on the shared
+    // `sql_backend`. The same `Arc<LiveSource>` is parked on
+    // `state.live_source` and inside the `LiveCapture` so query
+    // handlers (via `data_source_for`) and the ingest loop both reach it.
+    let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
+    let live_source = backend
+        .create_live_source(state::LIVE_BASELINE_DATA_SOURCE, &info.source, 1000)
+        .expect("create live source");
+    let live_capture = live_capture::LiveCapture::new(
+        live_source.clone(),
+        1000,
+        info.source.clone(),
+        info.version.clone(),
+        url.to_string(),
+    );
+
+    let state = AppState::new_live(live_capture, backend, registry.clone());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);
-
-    // Create the live DuckDB data source registered on the shared
-    // `sql_backend`. The same `Arc<LiveSource>` is parked on
-    // `state.live_source` so query handlers (via the `data_source_for`
-    // helper) and the ingest loop (below) both reach it.
-    let live_source = state
-        .sql_backend
-        .create_live_source(state::LIVE_BASELINE_DATA_SOURCE, &info.source, 1000)
-        .expect("create live source");
     *state.live_source.write() = Some(live_source.clone());
 
-    let ingest_tsdb = state
-        .baseline_tsdb()
-        .expect("live mode baseline is Tsdb-backed");
+    let live_capture_handle = state
+        .captures
+        .get_live(capture_registry::CaptureId::Baseline)
+        .expect("live mode baseline is LiveCapture-backed");
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
 
     rt.spawn(actions::ingest_loop(
         ingest_url,
-        ingest_tsdb,
-        live_source,
+        live_capture_handle,
         ingest_snapshots,
         info.source,
         info.version,
     ));
 
     state
-}
-
-/// SQL-only stub. The CLI argument parser still accepts `http://…` so
-/// scripts that depend on argument shape don't change unexpectedly,
-/// but actually initialising a live agent connection requires the
-/// `live-mode` feature.
-#[cfg(not(feature = "live-mode"))]
-fn init_live_mode(
-    _rt: &tokio::runtime::Runtime,
-    url: &Url,
-    _registry: &TemplateRegistry,
-) -> AppState {
-    eprintln!(
-        "live-agent input ({url}) requires the `live-mode` feature; this binary was built with --no-default-features."
-    );
-    std::process::exit(1);
 }
 
 async fn serve(listener: std::net::TcpListener, state: AppState) {

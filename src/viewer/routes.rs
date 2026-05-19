@@ -73,10 +73,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         )
         .route("/load_url", axum::routing::post(actions::load_url));
 
-    // Live-only routes — present only when the live-agent path is
-    // compiled in. SQL-only builds reject `/api/v1/connect` and
-    // `/api/v1/reset` with the framework's default 404.
-    #[cfg(feature = "live-mode")]
+    // Live-mode-only routes.
     let api_routes = api_routes
         .route("/reset", axum::routing::post(actions::reset_tsdb))
         .route("/connect", axum::routing::post(actions::connect_agent));
@@ -526,7 +523,6 @@ pub(super) fn data_source_for(state: &AppState, capture: CaptureId) -> Option<St
     // Live mode: only the baseline slot is ever live (live captures
     // are single-source by construction). When `live_source` is `Some`
     // for the baseline, route SQL queries there.
-    #[cfg(feature = "live-mode")]
     if matches!(capture, CaptureId::Baseline)
         && state.live_source.read().is_some()
     {
@@ -700,8 +696,7 @@ fn read_capture_scalar_meta(
     if let Some(handle) = state.captures.get_sql(capture) {
         return Some(read(&*handle.read()));
     }
-    #[cfg(feature = "live-mode")]
-    if let Some(handle) = state.captures.get(capture) {
+    if let Some(handle) = state.captures.get_live(capture) {
         return Some(read(&*handle.read()));
     }
     None
@@ -754,7 +749,7 @@ async fn lib(uri: Uri) -> impl IntoResponse {
     )
 }
 
-#[cfg(all(test, feature = "live-mode"))]
+#[cfg(test)]
 mod live_route_tests {
     //! Routing + live source end-to-end. The L3 layer of the
     //! regression net: build an `AppState` with a populated
@@ -773,21 +768,28 @@ mod live_route_tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
+    use super::super::live_capture::LiveCapture;
     use super::super::state::{AppState, LIVE_BASELINE_DATA_SOURCE};
-    use super::super::tsdb::Tsdb;
     use super::{data_source_for, CaptureId};
     use ::dashboard::TemplateRegistry;
-    use metriken_query_sql::{LiveColumn, LiveColumnKind, LiveValue};
+    use metriken_query_sql::{DuckDbBackend, LiveColumn, LiveColumnKind, LiveValue};
 
     /// Build an `AppState` in live mode with the sql_backend's
     /// live-source slot populated; returns the appender so the test
     /// can drive snapshots.
     fn live_state() -> (Arc<AppState>, Arc<metriken_query_sql::LiveSource>) {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
-        let live = state
-            .sql_backend
+        let backend = Arc::new(DuckDbBackend::new());
+        let live = backend
             .create_live_source(LIVE_BASELINE_DATA_SOURCE, "rezolus", 1000)
             .expect("create_live_source");
+        let cap = LiveCapture::new(
+            live.clone(),
+            1000,
+            "rezolus",
+            "test",
+            "http://test",
+        );
+        let mut state = AppState::new_live(cap, backend, TemplateRegistry::empty());
         *state.live_source.write() = Some(live.clone());
         state
             .live

@@ -13,8 +13,10 @@ use std::collections::BTreeMap;
 
 use metriken_exposition::Snapshot;
 use metriken_query_sql::{
-    LiveColumn, LiveColumnKind, LiveSource, LiveValue, SqlError, canonical_column_name,
+    LiveColumn, LiveColumnKind, LiveValue, SqlError, canonical_column_name,
 };
+
+use super::live_capture::LiveCapture;
 
 /// Metadata keys handled specially by `LiveColumn` construction —
 /// `metric_type`, `unit`, `grouping_power`, `max_value_power` describe
@@ -30,14 +32,12 @@ const SHAPE_METADATA_KEYS: &[&str] = &[
     "max_value_power",
 ];
 
-/// Apply a snapshot to a live source. Builds the column descriptors
-/// and values once, then issues a single `append` (which acquires the
-/// LiveSource mutex once and runs ALTER + INSERT under it).
-pub fn ingest_snapshot(live: &LiveSource, snapshot: Snapshot) -> Result<(), SqlError> {
-    // `metriken_exposition::Snapshot` takes `&mut self` on its
-    // accessors (they `std::mem::take` the inner Vecs); clone the
-    // snapshot so the original can also flow through to the legacy
-    // `Tsdb::ingest` path during the transition period.
+/// Apply a snapshot to the live capture: build column descriptors,
+/// run `LiveSource::append` to grow `_src`, and update the capture's
+/// `DashboardData` schema cache (`counter_metrics` / `gauge_metrics`
+/// / `histogram_metrics`) so subsequent metadata queries reflect the
+/// newly-seen metrics.
+pub fn ingest_snapshot(live: &mut LiveCapture, snapshot: Snapshot) -> Result<(), SqlError> {
     let mut snap = snapshot;
 
     let timestamp_ns: u64 = snap
@@ -86,7 +86,15 @@ pub fn ingest_snapshot(live: &LiveSource, snapshot: Snapshot) -> Result<(), SqlE
         columns.push((col, LiveValue::Histogram(&hist_buckets[i])));
     }
 
-    live.append(timestamp_ns, duration_ns, &columns)
+    live.live()
+        .append(timestamp_ns, duration_ns, &columns)?;
+
+    // Update the schema cache so `DashboardData::*_names` and
+    // `*_label_count` reflect the newly-observed columns. Borrows
+    // a `LiveColumn` slice without copying.
+    let descriptors: Vec<LiveColumn> = columns.into_iter().map(|(c, _)| c).collect();
+    live.observe_columns(&descriptors);
+    Ok(())
 }
 
 /// Build a `LiveColumn` whose raw incoming name is the metric's `name`
@@ -219,12 +227,19 @@ mod tests {
         })
     }
 
+    fn fresh_capture() -> LiveCapture {
+        let live = metriken_query_sql::LiveSource::new("rezolus", 1000)
+            .expect("LiveSource::new");
+        LiveCapture::new(live, 1000, "rezolus", "test", "http://test")
+    }
+
     #[test]
     fn snapshot_to_live_source_round_trip() {
-        let live = LiveSource::new("rezolus", 1000).expect("LiveSource::new");
+        let mut cap = fresh_capture();
         for ts in [1u64, 2, 3] {
-            ingest_snapshot(&live, synthetic_snapshot(ts)).expect("ingest");
+            ingest_snapshot(&mut cap, synthetic_snapshot(ts)).expect("ingest");
         }
+        let live = cap.live().clone();
 
         // Query the data back.
         let batches = live
@@ -290,7 +305,7 @@ mod tests {
         // also pins that the `name` / `id` labels survive
         // `make_column`'s metadata filtering (they're not in
         // SHAPE_METADATA_KEYS so they should pass through).
-        let live = LiveSource::new("rezolus", 1000).expect("new");
+        let mut cap = fresh_capture();
 
         let mut meta = HashMap::new();
         meta.insert("metric".to_string(), "cgroup_cpu_usage".to_string());
@@ -310,10 +325,10 @@ mod tests {
             gauges: vec![],
             histograms: vec![],
         });
-        ingest_snapshot(&live, snap).expect("ingest");
+        ingest_snapshot(&mut cap, snap).expect("ingest");
 
         use arrow::array::StringArray;
-        let batches = live
+        let batches = cap.live()
             .run_sql("SELECT metric, name, id FROM _cgroup_index")
             .expect("cgroup index");
         let b = &batches[0];

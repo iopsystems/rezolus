@@ -188,7 +188,7 @@ pub fn generate_section(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Tsdb;
+    use crate::EmptyDashboardData;
 
     #[test]
     fn build_context_produces_full_navigation() {
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn generate_section_renders_known_routes_returns_none_for_unknown() {
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
         let ctx = build_dashboard_context(None, &[], None);
 
         // Overview renders.
@@ -275,7 +275,7 @@ mod tests {
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
         };
 
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
 
         // Per-service flow (no category).
         let ctx = build_dashboard_context(None, &[("vllm", &vllm)], None);
@@ -386,7 +386,7 @@ mod tests {
         assert!(!routes.contains(&"/service/sglang"));
 
         // generate_section honors the same: category route renders, members 404.
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
         assert!(generate_section(&data, "/service/inference-library", &ctx).is_some());
         assert!(generate_section(&data, "/service/vllm", &ctx).is_none());
         assert!(generate_section(&data, "/service/sglang", &ctx).is_none());
@@ -438,7 +438,7 @@ mod tests {
         // The deduped service ext list also collapses to one entry, so
         // generate_section can still render the route.
         assert_eq!(ctx.service_exts.len(), 1);
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
         assert!(generate_section(&data, "/service/vllm", &ctx).is_some());
     }
 }
