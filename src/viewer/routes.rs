@@ -54,6 +54,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
         .route("/sections", get(sections_handler))
+        .route("/section_status", get(section_status))
         .route("/file_metadata", get(file_metadata_handler))
         .route(
             "/upload",
@@ -184,6 +185,173 @@ async fn data(State(state): State<Arc<AppState>>, AxumPath(path): AxumPath<Strin
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// Per-section status: total plot specs the dashboard generator
+/// produced + count whose SQL query actually returns data against
+/// the current capture. Drives the sidebar's "gray out empty
+/// sections" affordance on page load, before the user has clicked
+/// through to each section.
+///
+/// Server-driven so the frontend gets the whole picture in one
+/// request instead of triggering ~13 `loadSection` calls (each
+/// firing ~20 queries) just to populate sidebar status.
+async fn section_status(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<CaptureParam>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let capture = p.capture_id();
+    let Some(data_source) = data_source_for(&state, capture) else {
+        return ApiResponse::err("capture not attached", "capture_not_found");
+    };
+
+    let state_clone = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        // Clone the section list so we don't hold the sections-read
+        // lock across the per-section generation calls (each grabs
+        // the write lock).
+        let sections: Vec<dashboard::Section> = state_clone
+            .sections
+            .read()
+            .sections()
+            .to_vec();
+
+        let mut status = serde_json::Map::new();
+        for section in &sections {
+            // Skip non-data sections — they have no dashboard JSON to
+            // generate (the Query Explorer is a UI, not a plot page).
+            // Routes seen here: /overview, /cpu, /service/vllm, …
+            if !section.route.starts_with('/') {
+                continue;
+            }
+            // Get-or-generate the section body. Cached after first
+            // call, so /api/v1/section_status pays the dashboard-
+            // generation cost once and subsequent navigations to
+            // each section hit the cache.
+            let body = state_clone
+                .with_baseline_data(|data| {
+                    let mut store = state_clone.sections.write();
+                    store.get_or_generate(&section.route, data).cloned()
+                })
+                .flatten();
+            let Some(body) = body else { continue };
+
+            let counts = count_section_plots(&body, &state_clone.sql_backend, &data_source);
+
+            // Sidebar keys responses by the route without the leading slash
+            // (matches `sectionResponseCache` indexing in `app.js`).
+            let key = section.route.trim_start_matches('/').to_string();
+            status.insert(
+                key,
+                serde_json::json!({
+                    "total": counts.total,
+                    "withData": counts.with_data,
+                }),
+            );
+        }
+        serde_json::Value::Object(status)
+    })
+    .await;
+
+    match result {
+        Ok(v) => ApiResponse::ok(v),
+        Err(e) => ApiResponse::err(format!("task panicked: {e}"), "task_error"),
+    }
+}
+
+struct SectionCounts {
+    /// Plots the client-side renderer would keep — mirrors
+    /// `data.js::processDashboardData`. This is the number the
+    /// sidebar shows as `(N)` and uses for the gray-out threshold.
+    total: u32,
+    /// Subset of `total` whose SQL query actually returned data.
+    /// Exposed for future affordances; the sidebar currently treats
+    /// `total === 0` as "gray me out" since the renderer would emit
+    /// no chart wrappers at all in that case.
+    with_data: u32,
+}
+
+/// Server-side equivalent of `data.js::processDashboardData`'s
+/// plot-stripping pass. Walks a section's `groups → subgroups → plots`
+/// and counts which plots would survive on the client.
+///
+/// A plot is "kept" when any of these is true:
+///   - Carries `__SELECTED_CGROUPS__` in its SQL or PromQL (deferred
+///     cgroup plot — the cgroup_selector refetches it on demand).
+///   - Carries no PromQL query at all (legacy template plot that
+///     would render as static markup).
+///   - PromQL-only KPI with no SQL on the SQL backend (would render
+///     a `_unavailable` placeholder card).
+///   - SQL query returned at least one non-empty Arrow batch.
+///
+/// Errors are swallowed and treated as "no data" — same end
+/// behaviour as the client's `processDashboardData`, which pushes
+/// failures into `unavailable_charts` (a separate notes list that
+/// the sidebar doesn't count).
+fn count_section_plots(
+    body: &serde_json::Value,
+    backend: &metriken_query_sql::DuckDbBackend,
+    data_source: &str,
+) -> SectionCounts {
+    let mut total = 0u32;
+    let mut with_data = 0u32;
+    let Some(groups) = body.get("groups").and_then(|v| v.as_array()) else {
+        return SectionCounts { total: 0, with_data: 0 };
+    };
+    // Mirror the JS shape: groups → (subgroups → plots) | direct plots.
+    for group in groups {
+        let subgroups = group.get("subgroups").and_then(|v| v.as_array());
+        let direct_plots = group.get("plots").and_then(|v| v.as_array());
+        let plot_iter = subgroups
+            .into_iter()
+            .flat_map(|sgs| sgs.iter())
+            .filter_map(|sg| sg.get("plots").and_then(|v| v.as_array()))
+            .chain(direct_plots.into_iter())
+            .flatten();
+        for plot in plot_iter {
+            let promql = plot
+                .get("promql_query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let sql = plot
+                .get("sql_query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            // Cgroup deferred: keep without running. The selector
+            // splices in the picked cgroups before firing the query
+            // — running it as-is here would either bind-error or
+            // return empty.
+            if sql.contains("__SELECTED_CGROUPS__")
+                || promql.contains("__SELECTED_CGROUPS__")
+            {
+                total += 1;
+                continue;
+            }
+            // No queries at all: a static / template plot.
+            if promql.is_empty() && sql.is_empty() {
+                total += 1;
+                continue;
+            }
+            // PromQL-only on the SQL backend: would render as a
+            // `_unavailable` placeholder (May-18 commit `6054fe2`),
+            // so the section is content-bearing even if not
+            // chart-rendering.
+            if !promql.is_empty() && sql.is_empty() {
+                total += 1;
+                continue;
+            }
+            // SQL is present — run it. Counts toward `total` only if
+            // there's actual data.
+            if let Ok(batches) = backend.run_sql(sql, data_source) {
+                if batches.iter().any(|b| b.num_rows() > 0) {
+                    total += 1;
+                    with_data += 1;
+                }
+            }
+        }
+    }
+    SectionCounts { total, with_data }
 }
 
 /// Drop the navigation `sections` array from a section payload before

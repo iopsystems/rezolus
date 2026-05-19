@@ -59,6 +59,16 @@ const cacheSectionResponse = (section, data) =>
     storeSectionResponse(sectionCacheState, section, data);
 const bootstrapSharedSections = (sections) =>
     storeSharedSections(sectionCacheState, sections);
+/// Pre-populate the persistent per-section status map from a
+/// `{[sectionKey]: {total, withData}}` payload (typically
+/// `ViewerApi.getSectionStatus()` at viewer init). Lets the sidebar
+/// gray out empty sections before the user has visited any of them.
+const bootstrapSectionStatus = (statusMap) => {
+    if (!statusMap || typeof statusMap !== 'object') return;
+    for (const [key, status] of Object.entries(statusMap)) {
+        recordSectionStatus(sectionCacheState, key, status);
+    }
+};
 const withCachedSections = (data) => withSharedSections(sectionCacheState, data);
 const getCachedSections = () => getSections(sectionCacheState);
 
@@ -1072,4 +1082,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, bootstrapSectionStatus, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

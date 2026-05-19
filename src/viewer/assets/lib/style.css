@@ -952,12 +952,21 @@ main {
    visually de-emphasised so the populated sections stand out. */
 #sidebar a.empty-section {
     color: var(--fg-muted);
-    opacity: 0.6;
+    opacity: 0.4;
+    font-style: italic;
 }
 
 #sidebar a.empty-section:hover {
-    opacity: 1;
+    opacity: 0.8;
     color: var(--fg);
+}
+
+/* Selected wins over empty — never let the gray-out steal the
+   accent highlight from a section the user has explicitly opened. */
+#sidebar a.empty-section.selected {
+    opacity: 1;
+    color: var(--accent);
+    font-style: normal;
 }
 
 #sidebar a.selected::after {

@@ -7,7 +7,7 @@ import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, bootstrapSectionStatus, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
 // never shows a blank document while we fetch state. Replaced by the
@@ -119,6 +119,15 @@ const uploadParquet = async (file) => {
 
         const sectionsResponse = await ViewerApi.getSections();
         bootstrapSharedSections(sectionsResponse?.data?.sections || []);
+
+        // Fetch per-section status server-side so the sidebar can
+        // gray out empty sections before the user clicks any of
+        // them. Don't block on it — the navigation list above is
+        // what gets the page rendering; status badges fill in async.
+        ViewerApi.getSectionStatus()
+            .then((resp) => bootstrapSectionStatus(resp?.data || {}))
+            .catch((e) => console.warn('section_status fetch failed:', e))
+            .finally(() => m.redraw());
 
         // A trimmed Save-as-Report parquet has no section data (most
         // columns are projected away) and the backend stamps its
@@ -349,6 +358,16 @@ const bootstrap = async () => {
     } catch (_) {
         bootstrapSharedSections([]);
     }
+
+    // Fetch per-section status server-side so the sidebar can gray
+    // out empty sections before the user has clicked any of them.
+    // Fire-and-forget — navigation is already rendering above; the
+    // status badges fill in async (~200ms on typical dashboards).
+    ViewerApi.getSectionStatus()
+        .then((resp) => bootstrapSectionStatus(resp?.data || {}))
+        .catch((e) => console.warn('section_status fetch failed:', e))
+        .finally(() => m.redraw());
+
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
     }

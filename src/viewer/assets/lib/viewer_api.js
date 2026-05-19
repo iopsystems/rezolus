@@ -142,6 +142,18 @@ const ViewerApi = {
         });
     },
 
+    /// Server-side per-section status (`{[key]: {total, withData}}`).
+    /// Fetched once at viewer init so the sidebar can gray out empty
+    /// sections from the start. Heavier than `getSections` (the
+    /// server runs each section's plot queries to compute `total`),
+    /// but bounded at ~200ms even on realistic dashboards.
+    async getSectionStatus(captureId = 'baseline') {
+        return backendRequest({
+            method: 'GET',
+            url: `/api/v1/section_status${captureQS(captureId)}`,
+        });
+    },
+
     async getSection(section, background = false) {
         return backendRequest({
             method: 'GET',
